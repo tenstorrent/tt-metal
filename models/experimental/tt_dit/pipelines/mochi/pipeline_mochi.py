@@ -625,16 +625,16 @@ class MochiPipeline(DiffusionPipeline):
         if self.transformer is None:
             logger.info("Recreating MochiTransformer3DModel")
             self.transformer = MochiTransformer3DModel(
-                patch_size=self.torch_transformer.config.patch_size,
-                num_attention_heads=self.torch_transformer.config.num_attention_heads,
-                attention_head_dim=self.torch_transformer.config.attention_head_dim,
-                num_layers=self.torch_transformer.config.num_layers,
-                pooled_projection_dim=self.torch_transformer.config.pooled_projection_dim,
-                in_channels=self.torch_transformer.config.in_channels,
-                text_embed_dim=self.torch_transformer.config.text_embed_dim,
-                time_embed_dim=self.torch_transformer.config.time_embed_dim,
-                activation_fn=self.torch_transformer.config.activation_fn,
-                mesh_device=mesh_device,
+                patch_size=self.transformer_config.patch_size,
+                num_attention_heads=self.transformer_config.num_attention_heads,
+                attention_head_dim=self.transformer_config.attention_head_dim,
+                num_layers=self.transformer_config.num_layers,
+                pooled_projection_dim=self.transformer_config.pooled_projection_dim,
+                in_channels=self.transformer_config.in_channels,
+                text_embed_dim=self.transformer_config.text_embed_dim,
+                time_embed_dim=self.transformer_config.time_embed_dim,
+                activation_fn=self.transformer_config.activation_fn,
+                mesh_device=self.mesh_device,
                 ccl_manager=self.ccl_manager,
                 parallel_config=self.parallel_config,
                 is_fsdp=True,
@@ -642,11 +642,11 @@ class MochiPipeline(DiffusionPipeline):
 
             # Load state dict into TT transformer
             logger.info("Loading MochiTransformer3DModel state_dict")
-            if use_cache:
+            if self.use_cache:
                 cache_path = get_cache_path(
                     model_name="mochi-1-preview",
                     subfolder="transformer",
-                    parallel_config=parallel_config,
+                    parallel_config=self.parallel_config,
                     dtype="bf16",
                 )
                 assert os.path.exists(

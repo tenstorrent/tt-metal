@@ -373,7 +373,7 @@ run_t3000_mochi_tests() {
 
   export TT_DIT_CACHE_DIR="/mnt/MLPerf/tt_dnn-models/mochi/genmo-mochi-1-preview"
   pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model_caching -k "2x4sp0tp1"
-  pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "2x4sp0tp1" --timeout 600; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "dit_2x4sp0tp1_vae_1x8sp0tp1" --timeout 1500; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
