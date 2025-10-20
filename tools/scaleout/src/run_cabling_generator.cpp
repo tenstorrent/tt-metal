@@ -30,7 +30,7 @@ bool file_exists(const std::string& path) {
 
 InputConfig parse_arguments(int argc, char** argv) {
     cxxopts::Options options("run_cabling_generator", "Generate factory system descriptor and cabling guide from cluster and deployment descriptors");
-    
+
     options.add_options()
         ("c,cluster", "Path to the cluster descriptor file (.textproto)", cxxopts::value<std::string>())
         ("d,deployment", "Path to the deployment descriptor file (.textproto)", cxxopts::value<std::string>())
