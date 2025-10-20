@@ -307,7 +307,10 @@ class TtGemmaImageAttention(LightweightModule):
         else:
             output_all_reduce = output_11SH
 
-        output_after_bias = ttnn.add(output_all_reduce, self.bo)
+        if self.bo is not None:
+            output_after_bias = ttnn.add(output_all_reduce, self.bo)
+        else:
+            output_after_bias = output_all_reduce
         ttnn.deallocate(output_all_reduce)
 
         return output_after_bias
