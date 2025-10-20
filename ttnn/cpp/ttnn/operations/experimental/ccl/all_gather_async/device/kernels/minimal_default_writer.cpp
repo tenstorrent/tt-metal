@@ -228,8 +228,8 @@ void kernel_main() {
     if constexpr (reverse) {
         position = (ring_size - 1) - my_chip_id;
     }
-    uint32_t tile_id_start;
 
+    uint32_t tile_id_start;
     if constexpr (gather_dim == 3) {
         tile_id_start = position * input_tensor_Wt;
     } else if constexpr (gather_dim == 2) {
