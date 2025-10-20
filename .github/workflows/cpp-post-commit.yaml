@@ -82,6 +82,7 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:/work/generated/test_reports/
+        TT_METAL_HOME: /work
         LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -91,11 +92,9 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    # tools in N300 is timing out on CIv2-viommu: https://github.com/tenstorrent/tt-metal/issues/29443
     runs-on: >-
       ${{
         (inputs.runner-label == 'P100' || inputs.runner-label == 'P150') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
-        || ((inputs.runner-label == 'N300' && matrix.test-group.name == 'tools') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     steps:

@@ -97,7 +97,7 @@ Node build_node(
     HostId host_id,
     const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
     std::unordered_map<std::string, Node>& node_templates,
-    std::unordered_map<tt::umd::BoardType, Board>& board_templates) {
+    std::unordered_map<BoardType, Board>& board_templates) {
     const std::string& node_type = node_descriptor_name;
     auto it = node_templates.find(node_type);
     if (it != node_templates.end()) {
@@ -207,7 +207,7 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
     const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
     const std::string& instance_name,
     std::unordered_map<std::string, Node>& node_templates,
-    std::unordered_map<tt::umd::BoardType, Board>& board_templates) {
+    std::unordered_map<BoardType, Board>& board_templates) {
     auto resolved = std::make_unique<ResolvedGraphInstance>();
     resolved->template_name = graph_instance.template_name();
     resolved->instance_name = instance_name;

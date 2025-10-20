@@ -206,7 +206,7 @@ protected:
     // DataMovement kernels have one binary each and Compute kernels have three binaries
     // Different set of binaries per device because kernel compilation is device dependent
     // TODO: break this dependency by https://github.com/tenstorrent/tt-metal/issues/3381
-    std::unordered_map<chip_id_t, std::vector<const ll_api::memory*>> binaries_;
+    std::unordered_map<ChipId, std::vector<const ll_api::memory*>> binaries_;
 
     std::vector<std::string> file_paths(IDevice& device) const;
 };
