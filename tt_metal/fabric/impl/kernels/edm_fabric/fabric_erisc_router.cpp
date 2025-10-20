@@ -28,6 +28,8 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_channel_traits.hpp"
 
+#include "tt_metal/fabric/hw/inc/edm_fabric/datastructures/elastic_channels.hpp"
+
 #include "noc_overlay_parameters.h"
 #include "tt_metal/hw/inc/utils/utils.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
@@ -1899,6 +1901,14 @@ void run_fabric_edm_main_loop(
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids_ordered) {
     size_t did_nothing_count = 0;
     *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
+
+    sender_channels_chunk_pool_t fwded_sender_elastic_channels;
+    fwded_sender_elastic_channels.init(
+        FWDED_SENDER_ELASTIC_CHANNELS_INFO::CHUNK_BASE_ADDRESSES,
+        buffer_slot::size_bytes,
+        buffer_slot::header_size_bytes);
+
+    std::array<tt::tt_fabric::elastic_sender_channel_t, NUM_FORWARDED_SENDER_CHANNELS> elastic_sender_channels;
 
     // May want to promote to part of the handshake but for now we just initialize in this standalone way
     // TODO: flatten all of these arrays into a single object (one array lookup) OR

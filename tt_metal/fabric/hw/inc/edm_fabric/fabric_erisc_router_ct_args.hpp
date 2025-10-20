@@ -8,6 +8,7 @@
 #include "dataflow_api.h"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_elastic_channels_ct_args.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_static_channels_ct_args.hpp"
@@ -496,6 +497,29 @@ constexpr uint32_t num_local_edms =
     conditional_get_compile_time_arg<wait_for_host_signal, HOST_SIGNAL_ARGS_START_IDX + 2>();
 constexpr uint32_t edm_channels_mask =
     conditional_get_compile_time_arg<wait_for_host_signal, HOST_SIGNAL_ARGS_START_IDX + 3>();
+
+template <size_t SLOT_SIZE_BYTES, size_t PACKET_HEADER_SIZE_BYTES>
+struct BufferSlot {
+    static constexpr size_t size_bytes = SLOT_SIZE_BYTES;
+    static constexpr size_t header_size_bytes = PACKET_HEADER_SIZE_BYTES;
+    static constexpr size_t max_payload_size_bytes = size_bytes - header_size_bytes;
+} using buffer_slot = BufferSlot<PACKET_HEADER_SIZE_BYTES, PACKET_HEADER_SIZE_BYTES>;
+
+constexpr uint32_t ELASTIC_CHANNELS_CT_ARG_START_IDX = HOST_SIGNAL_ARGS_START_IDX + 4;
+constexpr auto FWDED_SENDER_ELASTIC_CHANNELS_INFO =
+    RouterElasticChannelsCtArgs<ELASTIC_CHANNELS_CT_ARG_START_IDX, channel_buffer_size>;
+using sender_channels_chunk_pool_t = ChannelBuffersPool<
+    FWDED_SENDER_ELASTIC_CHANNELS_INFO::N_CHUNKS,
+    FWDED_SENDER_ELASTIC_CHANNELS_INFO::N_SLOTS_PER_CHUNK>;
+
+using elastic_sender_channel_t =
+    tt::tt_fabric::CircularBuffer<sender_channels_chunk_pool_t::chunk_t*, sender_channels_chunk_pool_t::N_CHUNKS>;
+
+constexpr size_t NUM_FORWARDED_SENDER_CHANNELS = NUM_SENDER_CHANNELS - 1;
+
+//////////////////////////////////////////////////////////////////////////////////////////
+////                CT ARGS FETCHING DONE
+//////////////////////////////////////////////////////////////////////////////////////////
 
 constexpr size_t VC1_RECEIVER_CHANNEL = 1;
 

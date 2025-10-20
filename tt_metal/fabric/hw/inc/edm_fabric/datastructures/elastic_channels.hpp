@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -189,7 +189,7 @@ struct ChannelBuffersPool {
         free_chunks.init(&all_buffers_ptrs[0]);
         for (const auto& chunk_base_address : buffer_regions) {
             ASSERT(idx < N_CHUNKS);
-            new (&all_buffers[idx]) chunk_t(chunk_base_address, buffer_size_bytes, header_size_bytes);
+            new (&all_buffers[idx]) chunk_t(chunk_base_address, buffer_size_bytes, header_size_bytes, idx);
             free_chunks.push(&all_buffers[idx]);
             idx++;
         }
@@ -211,41 +211,6 @@ template <typename T, size_t REQUESTED_SIZE>
 struct CircularBuffer {
     // we pad up to the next power of 2 to get nicer arithmetic
     static constexpr size_t CAPACITY = get_next_power_of_2(REQUESTED_SIZE);
-    static_assert(is_power_of_2(CAPACITY), "CAPACITY must be a power of 2");
-
-    std::array<T, CAPACITY> data;
-
-    ChannelBufferPointer<CAPACITY> wr_ptr;
-    ChannelBufferPointer<CAPACITY> rd_ptr;
-
-    CircularBuffer() = default;
-
-    FORCE_INLINE void push(const T value) {
-        data[wr_ptr.get_buffer_index()] = value;
-        wr_ptr.increment();
-    }
-
-    FORCE_INLINE T pop() {
-        T value = data[rd_ptr.get_buffer_index()];
-        rd_ptr.increment();
-        return value;
-    }
-
-    FORCE_INLINE T peek_front() const {
-        // The rd_ptr points to the oldest element in the CB (aka the front since we are
-        // pushing to the "back")
-        return data[rd_ptr.get_buffer_index()];
-    }
-
-    FORCE_INLINE bool is_empty() const { return rd_ptr.is_caught_up_to(wr_ptr); }
-
-    FORCE_INLINE bool is_full() const { return wr_ptr.distance_behind(rd_ptr) == 1; }
-};
-
-template <typename T, size_t REQUESTED_SIZE>
-struct WormholeEfficientCircularBuffer {
-    // we pad up to the next power of 2 to get nicer arithmetic
-    static constexpr size_t CAPACITY = get_next_power_of_2(REQUESTED_SIZE);
     static constexpr size_t CAPACITY_M1 = CAPACITY - 1;
     static_assert(is_power_of_2(CAPACITY), "CAPACITY must be a power of 2");
 
@@ -256,45 +221,16 @@ struct WormholeEfficientCircularBuffer {
     T* end_m1;
     uint8_t cnt;
 
-    WormholeEfficientCircularBuffer() :
+    CircularBuffer() :
         data({}), wrptr(&data[0]), rdptr(&data[0]), end(&data[CAPACITY]), end_m1(&data[CAPACITY - 1]), cnt(0) {}
 
     FORCE_INLINE void incr_wrap_ptr(T*& ptr) {
-        // ptr++;
-        // if (ptr == end) {
-        //     ptr = &data[0];
-        // }
-
-        // 2x faster for release?
         bool last = ptr == end_m1;
-        // ptr += last * -CAPACITY + !last;
         ptr += 1 - last * CAPACITY;
     }
 
     FORCE_INLINE void push(const T value) {  // acquire
         auto wrptr_old = wrptr;
-
-        // 6.5
-        // bool last = wrptr == end_m1;
-        // wrptr += !last - (last * CAPACITY_M1);
-
-        // 8.00
-        // bool last = wrptr == end_m1;
-        // wrptr += 1 - (last * CAPACITY);
-
-        // 7.00
-        // bool last = wrptr == end_m1;
-        // wrptr += !last + (last * -CAPACITY_M1);
-
-        // 7.00
-        // bool last = wrptr == end_m1;
-        // wrptr += (last * -CAPACITY_M1) + !last;
-
-        // 8.00
-        // bool last = wrptr == end_m1;
-        // wrptr = wrptr - (last * CAPACITY) + 1;
-
-        // 6.00
         bool last = wrptr == end_m1;
         wrptr = wrptr - (last * CAPACITY_M1) + !last;
 
@@ -302,29 +238,11 @@ struct WormholeEfficientCircularBuffer {
         *wrptr_old = value;
     }
 
-    FORCE_INLINE T pop() {  // release
-        // T value = *rdptr;
-        // incr_wrap_ptr(rdptr);
-        // cnt--;
-        // return value;
+    FORCE_INLINE T pop() {
         auto rdptr_old = rdptr;
 
-        // 9.5
         bool last = rdptr == end_m1;
         rdptr += 1 - last * CAPACITY;
-
-        // 9.5
-        // bool last = rdptr == end_m1;
-        // rdptr = rdptr - last * CAPACITY + 1;
-
-        // 9.00 (negatively affects push performance - from the store??? - up to 8.00)
-        // bool last = rdptr == end_m1;
-        // rdptr = rdptr - last * CAPACITY_M1 + !last;
-
-        // 9.50
-        // bool last = rdptr == end_m1;
-        // rdptr = rdptr - last * CAPACITY + 1;
-
         cnt--;
         return *rdptr_old;
     }
