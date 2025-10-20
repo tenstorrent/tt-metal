@@ -562,73 +562,74 @@ def main():
         except Exception as e:
             raise Exception(f"Failed to process downloaded image: {e}")
 
-    if __name__ == "__main__":
-        # Initialize TT-NN device for hardware acceleration
-        open_ttnn()
+    # Initialize TT-NN device for hardware acceleration
+    open_ttnn()
 
-        # Load pre-trained CLIP model and convert weights to TT-NN format
-        logger.info("Loading pre-trained CLIP model...")
+    # Load pre-trained CLIP model and convert weights to TT-NN format
+    logger.info("Loading pre-trained CLIP model...")
 
-        model = CLIPModel.from_pretrained(
-            "openai/clip-vit-base-patch32", cache_dir="ttnn_clip_zero_shot_image_classification/"
-        )
-        state_dict = convert_model_to_ttnn(model.state_dict())
+    model = CLIPModel.from_pretrained(
+        "openai/clip-vit-base-patch32", cache_dir="ttnn_clip_zero_shot_image_classification/"
+    )
+    state_dict = convert_model_to_ttnn(model.state_dict())
 
-        # Initialize our TT-NN CLIP implementation
-        clip = CLIP(state_dict)
+    # Initialize our TT-NN CLIP implementation
+    clip = CLIP(state_dict)
 
-        # Download and preprocess test image
-        logger.info("Downloading and preprocessing image...")
-        image_url = "https://media.githubusercontent.com/media/tenstorrent/tutorial-assets/refs/heads/main/media/clip_tutorial/CLIP.png"
-        image = download_image(image_url)
+    # Download and preprocess test image
+    logger.info("Downloading and preprocessing image...")
+    image_url = "https://media.githubusercontent.com/media/tenstorrent/tutorial-assets/refs/heads/main/media/clip_tutorial/CLIP.png"
+    image = download_image(image_url)
 
-        # Preprocess image to model requirements (224x224, normalized with ImageNet statistics)
-        # unsqueeze(0) adds batch dimension: [C, H, W] -> [1, C, H, W]
-        image = preprocess_image(image, 224).unsqueeze(0).to("cpu")
+    # Preprocess image to model requirements (224x224, normalized with ImageNet statistics)
+    # unsqueeze(0) adds batch dimension: [C, H, W] -> [1, C, H, W]
+    image = preprocess_image(image, 224).unsqueeze(0).to("cpu")
 
-        # Convert PyTorch image tensor to TT-NN tensor with bfloat16 precision
-        # bfloat16 provides good balance between precision and memory/compute efficiency
-        preferred_dtype = ttnn.bfloat16
-        tt_image = ttnn.from_torch(image, device=get_device(), layout=ttnn.TILE_LAYOUT, dtype=preferred_dtype)
+    # Convert PyTorch image tensor to TT-NN tensor with bfloat16 precision
+    # bfloat16 provides good balance between precision and memory/compute efficiency
+    preferred_dtype = ttnn.bfloat16
+    tt_image = ttnn.from_torch(image, device=get_device(), layout=ttnn.TILE_LAYOUT, dtype=preferred_dtype)
 
-        # Define text prompts for zero-shot classification
-        # The model will compute similarity between the image and each text description
-        prompts = ["a diagram", "a dog", "a cat"]
+    # Define text prompts for zero-shot classification
+    # The model will compute similarity between the image and each text description
+    prompts = ["a diagram", "a dog", "a cat"]
 
-        # Tokenize text prompts using CLIP's tokenizer
-        logger.info("Tokenizing text prompts...")
-        tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32", cache_dir="data/")
-        # padding="max_length" ensures all sequences are padded to context_length (77 tokens)
-        # return_tensors="pt" returns PyTorch tensors
-        tokenized_inputs = tokenizer(prompts, padding="max_length", max_length=clip.context_length, return_tensors="pt")
-        tokens_pretrained_host = tokenized_inputs["input_ids"]  # Shape: [num_prompts, context_length]
-        # Convert tokenized text to TT-NN tensors for device execution
-        tokens_pretrained = ttnn.from_torch(tokens_pretrained_host, device=get_device(), layout=ttnn.TILE_LAYOUT)
+    # Tokenize text prompts using CLIP's tokenizer
+    logger.info("Tokenizing text prompts...")
+    tokenizer = CLIPTokenizer.from_pretrained(
+        "openai/clip-vit-base-patch32", cache_dir="ttnn_clip_zero_shot_image_classification/"
+    )
+    # padding="max_length" ensures all sequences are padded to context_length (77 tokens)
+    # return_tensors="pt" returns PyTorch tensors
+    tokenized_inputs = tokenizer(prompts, padding="max_length", max_length=clip.context_length, return_tensors="pt")
+    tokens_pretrained_host = tokenized_inputs["input_ids"]  # Shape: [num_prompts, context_length]
+    # Convert tokenized text to TT-NN tensors for device execution
+    tokens_pretrained = ttnn.from_torch(tokens_pretrained_host, device=get_device(), layout=ttnn.TILE_LAYOUT)
 
-        # Perform CLIP inference: compute similarity between image and text
-        logger.info("Running CLIP inference...")
-        time_start = time.time()
-        logits_per_image, logits_per_text = clip.forward(tt_image, tokens_pretrained)
-        time_end = time.time()
-        logger.info(f"Time taken: {time_end - time_start:.3f} seconds")
+    # Perform CLIP inference: compute similarity between image and text
+    logger.info("Running CLIP inference...")
+    time_start = time.time()
+    logits_per_image, logits_per_text = clip.forward(tt_image, tokens_pretrained)
+    time_end = time.time()
+    logger.info(f"Time taken: {time_end - time_start:.3f} seconds")
 
-        # Convert logits (similarity scores) to probabilities using softmax
-        # Softmax normalizes scores so they sum to 1.0, representing a probability distribution
-        probs = ttnn.softmax(logits_per_image, dim=-1)
-        logger.info(f"\n==== Zero-shot Classification Results ====")
-        logger.info(f"Image: {image_url.split('/')[-1]}")
-        logger.info(f"\nClassification probabilities:")
+    # Convert logits (similarity scores) to probabilities using softmax
+    # Softmax normalizes scores so they sum to 1.0, representing a probability distribution
+    probs = ttnn.softmax(logits_per_image, dim=-1)
+    logger.info(f"\n==== Zero-shot Classification Results ====")
+    logger.info(f"Image: {image_url.split('/')[-1]}")
+    logger.info(f"\nClassification probabilities:")
 
-        # Display results sorted by probability (highest first)
-        probs_torch = ttnn.to_torch(probs)
-        results = [(prompt, probs_torch[0][i].item()) for i, prompt in enumerate(prompts)]
-        results.sort(key=lambda x: x[1], reverse=True)
+    # Display results sorted by probability (highest first)
+    probs_torch = ttnn.to_torch(probs)
+    results = [(prompt, probs_torch[0][i].item()) for i, prompt in enumerate(prompts)]
+    results.sort(key=lambda x: x[1], reverse=True)
 
-        for prompt, prob in results:
-            logger.info(f"  '{prompt}': {prob:.4f} ({prob*100:.2f}%)")
+    for prompt, prob in results:
+        logger.info(f"  '{prompt}': {prob:.4f} ({prob*100:.2f}%)")
 
-        # Clean up resources
-        close_ttnn()
+    # Clean up resources
+    close_ttnn()
 
 
 if __name__ == "__main__":
