@@ -70,7 +70,7 @@ class Generator:
         kv_cache=None,
         model_id=-1,
     ):
-        host_inputs = self.model[model_id].prepare_prefill_inputs_host(prefill_ids, page_table=page_table)
+        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
         # These matrices will actually be pointing to the whole cos_matrix and sin_matrix that was allocated on device in the RotarySetup class
         tt_rot_mats_prefill_global = host_inputs[1]
         tt_rot_mats_prefill_local = host_inputs[2]
@@ -149,7 +149,7 @@ class Generator:
         page_table=None,
         model_id=-1,
     ):
-        host_inputs = self.model[model_id].prepare_prefill_inputs_host(prefill_ids, page_table=page_table)
+        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
         host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
 
         device_inputs = copy_host_to_device(
@@ -168,7 +168,7 @@ class Generator:
         There is no support to pass them as a tensor, and then inside the trace read it as a number.
         # TODO: Support sliding window attention - This PR disabled tracing if a model uses sliding window attention, because this PR mainly covers models without sliding window attention. (for example,Llama-8B).
         """
-        if prefill_seq_len not in [128, 256, 512, 1024, 2048, 4096, 8192]:
+        if prefill_seq_len not in [128, 256, 512, 1024, 2048, 4096]:
             return False
         if prefill_seq_len > self.model_args[0].max_prefill_chunk_size:
             return False
