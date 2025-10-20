@@ -353,13 +353,6 @@ def device_context(test_module, output_queue):
 def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
     test_module = importlib.import_module("sweeps." + test_module_name)
     with device_context(test_module, output_queue) as (device, device_name):
-        # Disable program cache immediately for --perf measurements
-        # The cache is enabled by default during device initialization, so we must disable it here
-        # to ensure every test vector measures the full compilation + execution time
-        if config.measure_perf:
-            logger.info(f"Disabling program cache for --perf suite run on device {device.id()}")
-            device.disable_and_clear_program_cache()
-
         while True:
             try:
                 test_vector = input_queue.get(block=True, timeout=5)

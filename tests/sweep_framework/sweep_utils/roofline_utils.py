@@ -76,10 +76,10 @@ def get_updated_message(message, perf_result):
             logger.info(f"Processing message with {len(tokens)} tokens")
             for i in range(len(tokens)):
                 if tokens[i] == "ROOFLINE":
-                    if i + 1 < len(tokens):  # Bounds check
+                    if (i + 1) < len(tokens):  # Bounds check
                         message += f" ROOFLINE% {float(tokens[i+1])/value}"
                 if tokens[i] == "FLOP_COUNT":
-                    if i + 1 < len(tokens):  # Bounds check
+                    if (i + 1) < len(tokens):  # Bounds check
                         message += (
                             f" TFLOPS {float(tokens[i+1])/1e3/value}"  # flop_count / tera(10^12)*nano(10^-9) / ns
                         )
