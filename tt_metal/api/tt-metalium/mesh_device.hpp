@@ -335,7 +335,6 @@ public:
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
-    void synchronize();
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device);

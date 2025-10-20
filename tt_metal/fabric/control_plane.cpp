@@ -506,11 +506,6 @@ void ControlPlane::init_control_plane(
     if (routing_table_generator_->mesh_graph->is_legacy_mode()) {
         this->generate_intermesh_connectivity();
     }
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-
-    for (const auto chip : cluster.all_chip_ids()) {
-        std::cout << "Chip: " << chip << " Node: " << this->get_fabric_node_id_from_physical_chip_id(chip) << std::endl;
-    }
 
     // Printing, only enabled with log_debug
     this->routing_table_generator_->mesh_graph->print_connectivity();
@@ -2344,16 +2339,8 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
     std::vector<PortDescriptor> ports_to_neighbor;
 
     std::unordered_map<uint64_t, RoutingDirection> curr_exit_node_direction;
-    std::unordered_map<uint64_t, std::vector<tt::tt_metal::ExitNodeConnection>> grouped_exit_nodes;
 
     for (const auto& exit_node : exit_nodes) {
-        grouped_exit_nodes[*exit_node.src_exit_node].push_back(exit_node);
-    }
-
-    for (const auto& exit_node : exit_nodes) {
-        if (grouped_exit_nodes.at(*exit_node.src_exit_node).size() != 4) {
-            continue;
-        }
         FabricNodeId exit_node_fabric_node_id = this->get_fabric_node_id_from_asic_id(*exit_node.src_exit_node);
 
         TT_FATAL(exit_node_fabric_node_id.mesh_id == my_mesh_id, "Exit node is not on my mesh");
@@ -2616,7 +2603,7 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
                     if (dest_port.connection_hash == connection_hash) {
                         auto src_port_id = src_port.port_id;
                         auto dest_port_id = dest_port.port_id;
-                        log_info(
+                        log_debug(
                             tt::LogDistributed,
                             "Connecting Meshes {} {} over Logical Ports {} {}",
                             *src_mesh,

@@ -46,7 +46,6 @@
 #include "tracy/Tracy.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 #include "tt_metal/distributed/distributed_coordinate_translator.hpp"
-#include <tt-metalium/distributed_context.hpp>
 #include "llrt/hal.hpp"
 #include <env_lib.hpp>
 
@@ -183,12 +182,6 @@ uint8_t MeshDevice::num_hw_cqs() const {
         this->get_devices(), [](const auto* device) { return device->num_hw_cqs(); });
 }
 
-void MeshDevice::synchronize() {
-    for (uint8_t cq_id = 0; cq_id < num_hw_cqs(); ++cq_id) {
-        mesh_command_queue(cq_id).finish();
-    }
-}
-
 bool MeshDevice::is_initialized() const {
     // TODO: Revisit whether we can simplify this when `MeshDevice` initialization isn't so coupled
     // with individual device initialization.
@@ -295,12 +288,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     }
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
     DevicePool::instance().init_profiler();
-    std::cout << "Initialize fabric and dispatch fw" << std::endl;
     DevicePool::instance().initialize_fabric_and_dispatch_fw();
-    std::cout << "Initialize fabric and dispatch fw done" << std::endl;
-    auto& distributed_context = MetalContext::instance().global_distributed_context();
-    distributed_context.barrier();
-    std::cout << "Barrier done" << std::endl;
     return mesh_device;
 }
 

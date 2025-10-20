@@ -40,9 +40,9 @@ DEFAULT_MESH_IDS = [0, 0, 0, 0]
 # FABRIC_MESH_IDS = [4, 1, 3, 2, 0]
 # MESH_GRAPH_DESC_REL = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/new_nano_exabox_1x8_mesh_graph_descriptor.yaml"
 # FABRIC_MESH_IDS = [0, 1, 2, 3]
-FABRIC_MESH_IDS = [0, 1, 2, 3]
+FABRIC_MESH_IDS = [0, 1, 2, 3, 4]
 # MESH_GRAPH_DESC_REL = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_exabox_1x32_mesh_graph_descriptor.yaml"
-MESH_GRAPH_DESC_REL = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_exabox_1x32_mesh_graph_descriptor_3.yaml"
+MESH_GRAPH_DESC_REL = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_exabox_1x32_mesh_graph_descriptor.yaml"
 
 # FABRIC_MESH_IDS = [0, 1, 2, 3, 4]
 # MESH_GRAPH_DESC_REL = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_exabox_1x32_mesh_graph_descriptor_5boxes.yaml"

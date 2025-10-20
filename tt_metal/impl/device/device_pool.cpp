@@ -343,9 +343,7 @@ void DevicePool::initialize_fabric_and_dispatch_fw() const {
             tt::LogMetal, "Initializing Fabric and Dispatch Firmware for Galaxy cluster (this may take a few minutes)");
     }
     this->initialize_active_devices();
-    std::cout << "Wait for fabric router sync" << std::endl;
     this->wait_for_fabric_router_sync();
-    std::cout << "Fabric router sync done" << std::endl;
     log_trace(tt::LogMetal, "Fabric and Dispatch Firmware initialized");
 }
 

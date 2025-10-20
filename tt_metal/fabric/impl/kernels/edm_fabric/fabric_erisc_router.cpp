@@ -828,8 +828,6 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
     const tt_l1_ptr fabric_router_l1_config_t* routing_table =
         reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
 
-    volatile uint32_t* pdebug = reinterpret_cast<volatile uint32_t*>(0x9030);
-
     // Template version for constexpr edm_index
     auto get_downstream_interface = [&]<size_t edm_index>() -> auto& {
         if constexpr (enable_deadlock_avoidance) {
@@ -867,17 +865,9 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             cached_routing_fields,
             get_downstream_interface_runtime(edm_index),
             transaction_id);
-        auto temp = pdebug[2];
-        temp += 1;
-        temp |= 0xA0000000;
-        pdebug[2] = temp;
     } else {
         if (dest_chip_id == routing_table->my_device_id || mcast_active) {
             execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
-            auto temp = pdebug[2];
-            temp += 1;
-            temp |= 0xB0000000;
-            pdebug[2] = temp;
             if (mcast_active) {
                 // This packet is in an active mcast
                 if constexpr (my_direction == NORTH || my_direction == SOUTH) {
@@ -988,10 +978,6 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                 cached_routing_fields,
                 get_downstream_interface_runtime(edm_index),
                 transaction_id);
-            auto temp = pdebug[2];
-            temp += 1;
-            temp |= 0xC0000000;
-            pdebug[2] = temp;
         }
     }
 }
@@ -1693,10 +1679,7 @@ void run_receiver_channel_step_impl(
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     bool unwritten_packets = get_ptr_val<to_receiver_pkts_sent_id>() != 0;
 
-    volatile uint32_t* pdebug = reinterpret_cast<volatile uint32_t*>(0x9030);
-
     if (unwritten_packets) {
-        pdebug[0] += 1;
         invalidate_l1_cache();
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
         tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
@@ -1783,8 +1766,6 @@ void run_receiver_channel_step_impl(
             wr_sent_counter.increment();
             // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
-        } else {
-            pdebug[1] += 1;
         }
     }
 

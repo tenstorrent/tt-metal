@@ -36,8 +36,6 @@ bool is_wormhole_or_blackhole(tt::ARCH arch) { return arch == tt::ARCH::WORMHOLE
 
 void deallocate_buffers(IDevice* device) { device->allocator()->deallocate_buffers(); }
 
-void synchronize(std::shared_ptr<MeshDevice> device) { device->synchronize(); }
-
 }  // namespace device
 
 using namespace device;
