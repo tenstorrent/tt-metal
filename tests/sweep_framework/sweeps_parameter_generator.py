@@ -10,6 +10,7 @@ import datetime
 import os
 import hashlib
 import json
+import random
 
 from framework.permutations import *
 from framework.serialize import serialize, serialize_structured
@@ -58,6 +59,9 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
     EXPORT_PATH = EXPORT_DIR_PATH / str(module_name + ".json")
     if not EXPORT_DIR_PATH.exists():
         EXPORT_DIR_PATH.mkdir()
+
+    # Randomize the order of vectors while keeping their content (and thus input_hash) unchanged
+    random.shuffle(vectors)
 
     current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     serialized_vectors = dict()
