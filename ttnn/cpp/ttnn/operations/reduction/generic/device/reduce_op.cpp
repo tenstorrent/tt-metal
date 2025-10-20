@@ -143,16 +143,9 @@ Tensor reduce_min(
     if (input.layout() == Layout::ROW_MAJOR && input.storage_type() == StorageType::DEVICE) {
         input = ttnn::operations::unary_backward::change_layout_to_tile(input, output_mem_config);
     }
-    Tensor n_input_tensor = ttnn::neg(input, output_mem_config);
+    // Tensor n_input_tensor = ttnn::neg(input, output_mem_config);
     return reduce(
-        n_input_tensor,
-        ReduceOpMath::MAX,
-        reduce_dim,
-        scaler,
-        output_mem_config,
-        std::nullopt,
-        compute_kernel_config,
-        true);
+        input, ReduceOpMath::MAX, reduce_dim, scaler, output_mem_config, std::nullopt, compute_kernel_config, true);
 }
 
 Tensor reduce(
