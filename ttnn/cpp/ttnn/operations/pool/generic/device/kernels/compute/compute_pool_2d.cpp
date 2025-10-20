@@ -67,7 +67,6 @@ void MAIN {
     constexpr uint32_t eff_kernel_h = get_compile_time_arg_val(28);
     constexpr uint32_t eff_kernel_w = get_compile_time_arg_val(29);
     constexpr uint32_t pad_l = get_compile_time_arg_val(30);
-    constexpr uint32_t sync_cb_id = get_compile_time_arg_val(31);
 
     constexpr bool use_split_reader = split_reader && !return_indices;
 

@@ -392,7 +392,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t right_inc_tmp_cb_id = 32;
     uint32_t down_left_wrap_inc_tmp_cb_id = 32;
     uint32_t up_left_wrap_inc_tmp_cb_id = 32;
-    uint32_t sync_cb_id = 32;
     int32_t right_inc = 0;
     int32_t down_left_wrap_inc = 0;
     int32_t up_left_wrap_inc = 0;
@@ -423,20 +422,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(
             tt::LogOp, "CB {} :: PS = {}, NP = {}", up_left_wrap_inc_tmp_cb_id, params.index_nbytes * tile_elems, 1);
 
-        sync_cb_id = next_cb_index++;
-        tt::tt_metal::create_cb(sync_cb_id, program, all_cores, 2, 1, params.index_format);
-
         // compute increments for index tile population
         right_inc = stride_w;
         down_left_wrap_inc = in_w * stride_h + (1 - out_w) * stride_w;
         up_left_wrap_inc = (1 - out_h) * stride_h * in_w + (1 - out_w) * stride_w;
     }
-
-    printf(
-        "right_inc: %d, down_left_wrap_inc: %d, up_left_wrap_inc: %d\n",
-        right_inc,
-        down_left_wrap_inc,
-        up_left_wrap_inc);
 
     const bool is_output_tiled = output_layout == Layout::TILE;
     const bool is_output_block_format = is_block_float(outputs[0].dtype());
@@ -658,8 +648,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_w_padded,                    // 27
         eff_kernel_h,                   // 28
         eff_kernel_w,                   // 29
-        pad_l,                          // 30
-        sync_cb_id};                    // 31
+        pad_l};                         // 30
 
     // Get device arch for compute kernel config initialization
     auto device_arch = input.device()->arch();

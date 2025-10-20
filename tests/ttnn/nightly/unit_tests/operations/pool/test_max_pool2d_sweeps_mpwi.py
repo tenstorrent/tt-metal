@@ -55,8 +55,8 @@ import ttnn
         # [1, 832, 7, 7, 3, 3, 1, 1, 1, 1, 1, 1, True], # BFLOAT8 shard height must match physical height for width sharding
         # [1, 1024, 17, 17, 3, 3, 2, 2, 0, 0, 1, 1, False], # BFLOAT8 shard height must match physical height for width sharding
         # [1, 32, 256, 256, 2, 2, 2, 2, 0, 0, 1, 1, False], # input size exceeds uint16 limit
-        # [1, 64, 224, 224, 2, 2, 2, 2, 0, 0, 1, 1, False], # assertion errors
-        # [4, 64, 112, 112, 3, 3, 2, 2, 1, 1, 1, 1, False], # assertion errors
+        # [1, 64, 224, 224, 2, 2, 2, 2, 0, 0, 1, 1, False], # input size exceeds uint16 limit
+        # [4, 64, 112, 112, 3, 3, 2, 2, 1, 1, 1, 1, False], # input size exceeds uint16 limit
         # [1, 64, 300, 300, 2, 2, 2, 2, 0, 0, 1, 1, False], # input size exceeds uint16 limit
         # [1, 64, 360, 640, 3, 3, 2, 2, 1, 1, 1, 1, False], # OOM
     ],
