@@ -144,7 +144,7 @@ def test_mochi_pipeline_performance(
 
     frames = tt_pipe(
         prompts[0],
-        num_inference_steps=num_inference_steps,
+        num_inference_steps=2,  # Small number of steps to reduce test time.
         guidance_scale=guidance_scale,
         num_frames=num_frames,
         height=image_h,
@@ -270,17 +270,17 @@ def test_mochi_pipeline_performance(
     }
     if tuple(mesh_device.shape) == (2, 4) and vae_mesh_shape == (1, 8):
         expected_metrics = {
-            "text_encoding_time": 1e3,
-            "denoising_time": 1e3,
-            "vae_decoding_time": 1e3,
-            "total_time": 1e3,
+            "text_encoding_time": 4.07,
+            "denoising_time": 1320,
+            "vae_decoding_time": 55,
+            "total_time": 1385,
         }
     elif tuple(mesh_device.shape) == (4, 8) and vae_mesh_shape == (4, 8):
         expected_metrics = {
-            "text_encoding_time": 1e3,
-            "denoising_time": 1e3,
-            "vae_decoding_time": 1e3,
-            "total_time": 1e3,
+            "text_encoding_time": 1.0,
+            "denoising_time": 330,
+            "vae_decoding_time": 13.8,
+            "total_time": 346,
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
