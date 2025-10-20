@@ -5,8 +5,6 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
-#include "debug/dprint_pages.h"
-#include "debug/dprint.h"
 
 void kernel_main() {
     // Compile time args
@@ -36,7 +34,6 @@ void kernel_main() {
         const uint64_t dst_noc_addr = get_noc_addr(tile_id, dst_accessor);
         noc_async_write(l1_read_addr, dst_noc_addr, dst_tile_size);
         noc_async_write_barrier();
-        // tt::data_movement::common::print_bf16_pages(l1_read_addr, 32, 32);
         cb_pop_front(dst_cb, 1);
     }
 }
