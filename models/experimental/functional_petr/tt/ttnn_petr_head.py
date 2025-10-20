@@ -525,6 +525,11 @@ class ttnn_PETRHead:
         Returns:
             list[dict]: Decoded bbox, scores and labels after nms.
         """
+        if isinstance(preds_dicts["all_cls_scores"], ttnn.Tensor):
+            preds_dicts["all_cls_scores"] = ttnn.to_torch(preds_dicts["all_cls_scores"]).to(torch.bfloat16)
+
+        if isinstance(preds_dicts["all_bbox_preds"], ttnn.Tensor):
+            preds_dicts["all_bbox_preds"] = ttnn.to_torch(preds_dicts["all_bbox_preds"]).to(torch.bfloat16)
 
         preds_dicts = self.bbox_coder.decode(preds_dicts)
         num_samples = len(preds_dicts)
