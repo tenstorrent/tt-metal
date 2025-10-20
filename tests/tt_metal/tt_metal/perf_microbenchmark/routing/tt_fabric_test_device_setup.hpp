@@ -171,8 +171,8 @@ private:
     std::unordered_map<CoreCoord, TestReceiver> receivers_;
     std::unordered_map<CoreCoord, TestSender> sync_senders_;  // Separate sync cores
 
-    std::unordered_map<RoutingDirection, std::set<uint32_t>> used_fabric_connections_{};
-    std::unordered_map<RoutingDirection, std::set<uint32_t>> used_sync_fabric_connections_{};
+    std::unordered_map<RoutingDirection, std::set<uint32_t>> used_fabric_connections_;
+    std::unordered_map<RoutingDirection, std::set<uint32_t>> used_sync_fabric_connections_;
 
     bool benchmark_mode_ = false;
     bool global_sync_ = false;

@@ -299,7 +299,7 @@ private:
     std::optional<std::string> filter_value;
 };
 
-const std::string no_default_test_yaml_config = "";
+const std::string no_default_test_yaml_config;
 
 template <typename T>
 inline T YamlConfigParser::parse_scalar(const YAML::Node& yaml_node) {

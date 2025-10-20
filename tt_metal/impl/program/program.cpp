@@ -423,7 +423,7 @@ KernelGroup::KernelGroup(
     const CoreRangeSet& new_ranges,
     const dev_msgs::Factory& dev_msgs_factory) :
     programmable_core_type_index(programmable_core_type_index),
-    core_ranges(CoreRangeSet()),
+
     kernel_ids(std::move(kernel_ids)),
     launch_msg(dev_msgs_factory.create<dev_msgs::launch_msg_t>()),
     go_msg(dev_msgs_factory.create<dev_msgs::go_msg_t>()) {
@@ -970,7 +970,7 @@ void detail::ProgramImpl::set_remote_circular_buffer_init(const std::shared_ptr<
         TT_FATAL(
             kernel_defines.find(str) == kernel_defines.end(), "{} is a reserved define and can't be manually set", str);
     }
-    std::string align_code = "";
+    std::string align_code;
     std::unordered_set<CBHandle> initialized_cbs;
     std::unordered_set<uint8_t> remote_cb_indices;
     for (auto logical_cr : kernel->logical_coreranges()) {

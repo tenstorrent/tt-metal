@@ -411,7 +411,7 @@ private:
     void release_ethernet_cores_for_fabric_routers();
 
     // Tunnels setup in cluster
-    std::map<chip_id_t, std::vector<std::vector<chip_id_t>>> tunnels_from_mmio_device = {};
+    std::map<chip_id_t, std::vector<std::vector<chip_id_t>>> tunnels_from_mmio_device;
 
     // Currently, each device is mapped to its own channel in host memory to enable fast dispatch
     // Channels are unique within a group of devices all controlled by a particular MMIO device

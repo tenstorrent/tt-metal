@@ -99,7 +99,7 @@ struct SenderMemoryMap {
     uint32_t highest_usable_address;
 
     // Default constructor
-    SenderMemoryMap() : common(), packet_headers(0, 0), payload_buffers(0, 0), highest_usable_address(0) {}
+    SenderMemoryMap() : packet_headers(0, 0), payload_buffers(0, 0), highest_usable_address(0) {}
 
     SenderMemoryMap(uint32_t l1_unreserved_base, uint32_t l1_unreserved_size, uint32_t l1_alignment) :
         common(0, 0, 0, 0, 0, 0),  // Will be set below
@@ -205,7 +205,7 @@ struct ReceiverMemoryMap {
     uint32_t payload_chunk_size_;
 
     // Default constructor
-    ReceiverMemoryMap() : common(), payload_chunks(0, 0), atomic_counters(0, 0), payload_chunk_size_(0) {}
+    ReceiverMemoryMap() : payload_chunks(0, 0), atomic_counters(0, 0), payload_chunk_size_(0) {}
 
     ReceiverMemoryMap(
         uint32_t l1_unreserved_base,

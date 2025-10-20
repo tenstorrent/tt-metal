@@ -296,7 +296,7 @@ private:
     CommandQueue* last_used_command_queue_for_testing = nullptr;
 
     // Buffers temporarily owned by the program
-    std::vector<std::shared_ptr<Buffer>> owned_buffer_pool = {};
+    std::vector<std::shared_ptr<Buffer>> owned_buffer_pool;
 
     // The buffer that holds the kernel/binaries/etc for this program
     std::unordered_map<chip_id_t, std::shared_ptr<Buffer>> kernels_buffer_;
