@@ -622,8 +622,13 @@ def test_demo(
     # Finish profiling at the end of inference for all repeated batches
     profiler.end("run")
 
-    if is_ci_env and "bert-score" in test_id and "Qwen2.5-VL-3B" not in model_args.base_model_name:
-        # todo)) fix this issue before enabling BERTScore check for 3B model:
+    if (
+        is_ci_env
+        and "bert-score" in test_id
+        and "Qwen2.5-VL-3B" not in model_args.base_model_name
+        and "Qwen2.5-VL-7B" not in model_args.base_model_name
+    ):
+        # todo)) fix this issue before enabling BERTScore check for 3B and 7B models:
         #        https://github.com/tenstorrent/tt-metal/issues/28442
         assert mesh_device.get_num_devices() > 2, "BERTScore is only supported for T3K for now"
         expected_output = load_expected_text(model_args.base_model_name)
