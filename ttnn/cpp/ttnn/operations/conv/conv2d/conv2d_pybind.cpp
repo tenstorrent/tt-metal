@@ -38,8 +38,8 @@ void py_bind_conv2d(py::module& module) {
         :param ttnn.Tensor input_tensor: The input tensor in [N, H, W, C] format. The tensor can be on either the host or the device.
         :param ttnn.Tensor weight_tensor: The convolution weights, typically in [out_channels, in_channels // groups, kernel_height, kernel_width] format.
         :param ttnn.IDevice device: This is a Tenstorrent-specific parameter. The device which will run the operation.
-        :param int in_channels:  Number of channels in the input tensor.
-        :param int out_channels:  Number of channels produced by the convolution.
+        :param int in_channels: Number of channels in the input tensor.
+        :param int out_channels: Number of channels produced by the convolution.
         :param int batch_size: The batch size of the input tensor.
         :param int input_height: This is a Tenstorrent-specific parameter. The height of the input tensor.
         :param int input_width: This is a Tenstorrent-specific parameter. The width of the input tensor.
