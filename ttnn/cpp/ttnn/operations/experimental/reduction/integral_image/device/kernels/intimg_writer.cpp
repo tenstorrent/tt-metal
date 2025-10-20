@@ -92,7 +92,7 @@ FORCE_INLINE void broadcast_last_row_to_all_rows_in_cube(
     // make the axis 3 propagation tile
     // push back to the compute
     constexpr uint32_t LAST_ROW = 32 - 1;  // tile_height - 1
-    for (uint32_t column_read_i = 0; column_read_i < block_depth; ++column_read_i) {
+    for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
         ReadCBGuard propagation_upper_read_guard{axis_3_propagation_read_cb, ONE_TILE};
         WriteCBGuard propagation_upper_write_guard{axis_3_propagation_write_cb, ONE_TILE};
         uint32_t propagation_read_addr = get_read_ptr(axis_3_propagation_read_cb);
@@ -101,9 +101,11 @@ FORCE_INLINE void broadcast_last_row_to_all_rows_in_cube(
             reinterpret_cast<volatile tt_l1_ptr output_number_t*>(propagation_read_addr);
         volatile tt_l1_ptr output_number_t* propagation_write_ptr =
             reinterpret_cast<volatile tt_l1_ptr output_number_t*>(propagation_write_addr);
-        output_number_t value_to_broadcast = propagation_read_ptr[get_coord_from_tile_xy(column_read_i, LAST_ROW)];
-        for (uint32_t row_write_i = 0; row_write_i < 32 - 1; ++row_write_i) {
-            propagation_write_ptr[get_coord_from_tile_xy(column_read_i, row_write_i)] = value_to_broadcast;
+        for (uint32_t column_read_i = 0; column_read_i < 32; ++column_read_i) {
+            output_number_t value_to_broadcast = propagation_read_ptr[get_coord_from_tile_xy(column_read_i, LAST_ROW)];
+            for (uint32_t row_write_i = 0; row_write_i < 32 - 1; ++row_write_i) {
+                propagation_write_ptr[get_coord_from_tile_xy(column_read_i, row_write_i)] = value_to_broadcast;
+            }
         }
     }
 }
