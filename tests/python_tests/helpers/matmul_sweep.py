@@ -7,13 +7,13 @@ Helper functions for dimension-related calculations in matrix operations and Mat
 from dataclasses import dataclass
 from typing import List, NamedTuple, Tuple
 
-from helpers.format_arg_mapping import (
+from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
+from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     StochasticRounding,
     Transpose,
 )
-from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
 from helpers.param_config import get_max_dst_index
 
 

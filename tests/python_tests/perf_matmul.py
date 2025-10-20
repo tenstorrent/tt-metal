@@ -4,8 +4,8 @@
 from typing import List
 
 import pytest
-from helpers.format_arg_mapping import DestAccumulation, MathFidelity
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
+from helpers.llk_params import DestAccumulation, MathFidelity
 from helpers.matmul_sweep import (
     generate_matmul_dimension_combinations,
     generate_tile_dims,

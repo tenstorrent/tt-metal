@@ -4,7 +4,8 @@ import math
 from typing import Optional
 
 import torch
-from helpers.format_arg_mapping import (
+from helpers.format_config import DataFormat
+from helpers.llk_params import (
     DestAccumulation,
     MathFidelity,
     MathOperation,
@@ -12,7 +13,6 @@ from helpers.format_arg_mapping import (
     ReducePool,
     format_dict,
 )
-from helpers.format_config import DataFormat
 from helpers.tilize_untilize import tilize_block, untilize
 
 # Tile and face dimension constants
@@ -1250,7 +1250,7 @@ class UntilizeGolden:
 @register_golden
 class TilizeGolden:
     def __call__(self, operand, dimensions, data_format, num_faces=4):
-        from helpers.format_arg_mapping import format_dict
+        from helpers.llk_params import format_dict
         from helpers.tilize_untilize import tilize_block
 
         # Validate the number of faces

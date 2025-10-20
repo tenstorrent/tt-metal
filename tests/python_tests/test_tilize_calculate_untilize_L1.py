@@ -3,14 +3,14 @@
 
 import torch
 from helpers.device import collect_results, write_stimuli_to_l1
-from helpers.format_arg_mapping import (
+from helpers.format_config import DataFormat
+from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
+from helpers.llk_params import (
     DestAccumulation,
     MathFidelity,
     MathOperation,
     format_dict,
 )
-from helpers.format_config import DataFormat
-from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import run_test

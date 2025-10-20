@@ -245,3 +245,24 @@ class L1BufferLocations(Enum):
     srcA = 0x18FE0
     srcB = 0x18FE4
     Result = 0x18FE8
+
+
+class BroadcastType(Enum):
+    """
+    Enum for broadcast types in LLK kernels.
+    """
+
+    None_ = "NONE"
+    Column = "COL"
+    Row = "ROW"
+    Scalar = "SCALAR"
+
+
+class EltwiseBinaryReuseDestType(Enum):
+    """
+    Enum for destination reuse types in elementwise binary ops.
+    """
+
+    NONE = 0
+    DEST_TO_SRCA = 1
+    DEST_TO_SRCB = 2

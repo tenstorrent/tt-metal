@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from helpers.format_arg_mapping import Transpose
 from helpers.format_config import DataFormat
+from helpers.llk_params import Transpose
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf import PerfRunType, perf_benchmark, update_report
 
