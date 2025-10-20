@@ -353,6 +353,13 @@ def device_context(test_module, output_queue):
 def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
     test_module = importlib.import_module("sweeps." + test_module_name)
     with device_context(test_module, output_queue) as (device, device_name):
+        # Disable program cache immediately for --perf measurements
+        # The cache is enabled by default during device initialization, so we must disable it here
+        # to ensure every test vector measures the full compilation + execution time
+        if config.measure_perf:
+            logger.info(f"Disabling program cache for --perf suite run on device {device.id()}")
+            device.disable_and_clear_program_cache()
+
         while True:
             try:
                 test_vector = input_queue.get(block=True, timeout=5)
@@ -361,6 +368,24 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
                 return
             test_vector = deserialize_vector_structured(test_vector)
             try:
+                # Clear program cache per test vector for cache comparison measurements
+                if config.measure_perf_with_cache:
+                    # For cache comparison, clear before first run
+                    num_entries_before = (
+                        device.num_program_cache_entries()
+                        if hasattr(device, "num_program_cache_entries")
+                        else "unknown"
+                    )
+                    logger.info(f"Clearing program cache for --perf-with-cache (entries before: {num_entries_before})")
+                    device.disable_and_clear_program_cache()
+                    device.enable_program_cache()  # Re-enable for cache comparison
+                    num_entries_after = (
+                        device.num_program_cache_entries()
+                        if hasattr(device, "num_program_cache_entries")
+                        else "unknown"
+                    )
+                    logger.info(f"Program cache cleared and re-enabled (entries after: {num_entries_after})")
+
                 # Handle cache performance measurement
                 if config.measure_perf_with_cache:
                     # First run (without cache) - measure uncached performance
@@ -561,21 +586,6 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
             test_vector.pop("validity")
 
             try:
-                if config.measure_perf or config.measure_perf_with_cache:
-                    # Run one time before capturing result to deal with compile-time slowdown of perf measurement
-                    # Note: For cache measurement, this warmup run will also help populate the cache
-                    # Ensure a worker process is running if we're in child mode
-                    if child_mode and (p is None or not p.is_alive()):
-                        p = Process(target=run, args=(module_name, input_queue, output_queue, config))
-                        p.start()
-                    input_queue.put(test_vector)
-                    if p is None:
-                        perf_type = "cache perf" if config.measure_perf_with_cache else "e2e perf"
-                        logger.info(
-                            f"Executing test (first run, {perf_type} is enabled) on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
-                        )
-                        run(module_name, input_queue, output_queue, config)
-                    output_queue.get(block=True, timeout=timeout)
                 if child_mode and (p is None or not p.is_alive()):
                     p = Process(target=run, args=(module_name, input_queue, output_queue, config))
                     p.start()
