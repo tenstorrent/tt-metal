@@ -261,7 +261,9 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal, SupportsV0On
         self.max_gen_len = self.model_args[0].max_seq_len - 1  # TODO: double check what this should be
 
     @classmethod
-    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1):
+    def initialize_vllm_model(
+        cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations: str = None
+    ):
         from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
 
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
@@ -340,7 +342,14 @@ class LlamaForCausalLM(Generator):
 
     @classmethod
     def initialize_vllm_model(
-        cls, hf_config, mesh_device, max_batch_size, max_seq_len, n_layers=None, tt_data_parallel=1
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations: str = "performance",
     ):
         hf_model_name = hf_config._name_or_path
         if (
@@ -363,7 +372,7 @@ class LlamaForCausalLM(Generator):
             max_seq_len=max_seq_len,
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
-            optimizations=DecodersPrecision.performance,
+            optimizations=DecodersPrecision.from_string(optimizations) if optimizations is not None else None,
         )
         return cls(tt_model, model_args, mesh_device)
 
@@ -387,7 +396,14 @@ class QwenForCausalLM(Generator):
 
     @classmethod
     def initialize_vllm_model(
-        cls, hf_config, mesh_device, max_batch_size, max_seq_len, n_layers=None, tt_data_parallel=1
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations=DecodersPrecision.performance,
     ):
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
@@ -397,7 +413,7 @@ class QwenForCausalLM(Generator):
             max_seq_len=max_seq_len,
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
-            optimizations=DecodersPrecision.performance,
+            optimizations=DecodersPrecision.from_string(optimizations) if optimizations is not None else None,
         )
         return cls(tt_model, model_args, mesh_device)
 
@@ -421,7 +437,14 @@ class MistralForCausalLM(Generator):
 
     @classmethod
     def initialize_vllm_model(
-        cls, hf_config, mesh_device, max_batch_size, max_seq_len, n_layers=None, tt_data_parallel=1
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations=DecodersPrecision.performance,
     ):
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
@@ -431,7 +454,7 @@ class MistralForCausalLM(Generator):
             max_seq_len=max_seq_len,
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
-            optimizations=DecodersPrecision.performance,
+            optimizations=DecodersPrecision.from_string(optimizations) if optimizations is not None else None,
         )
         return cls(tt_model, model_args, mesh_device)
 
@@ -523,7 +546,14 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
 
     @classmethod
     def initialize_vllm_model(
-        cls, hf_config, mesh_device, max_batch_size, max_seq_len=131072, n_layers=None, tt_data_parallel=1
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len=131072,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations=None,
     ):
         from models.demos.gemma3.demo.vision_demo import create_multimodal_model
 
@@ -574,7 +604,14 @@ class GptOssForCausalLM(Generator):
 
     @classmethod
     def initialize_vllm_model(
-        cls, hf_config, mesh_device, max_batch_size, max_seq_len, n_layers=None, tt_data_parallel=1
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations: str = "performance",
     ):
         from models.demos.gpt_oss.tt.common import create_tt_model
 
@@ -590,7 +627,7 @@ class GptOssForCausalLM(Generator):
                 mesh_device=submesh,
                 instruct=True,
                 max_batch_size=max_batch_size // tt_data_parallel,
-                optimizations=lambda model_args: DecodersPrecision.performance(
+                optimizations=lambda model_args: DecodersPrecision.from_string(optimizations)(
                     model_args.n_layers, model_args.model_name
                 ),
                 max_seq_len=max_seq_len,

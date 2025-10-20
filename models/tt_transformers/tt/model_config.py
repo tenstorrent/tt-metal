@@ -2918,6 +2918,15 @@ class HfModelWrapper:
 
 class DecodersPrecision:
     @classmethod
+    def from_string(cls, optimizations: str):
+        if optimizations == "performance":
+            return cls.performance
+        elif optimizations == "accuracy":
+            return cls.accuracy
+        else:
+            raise ValueError(f"Invalid optimizations: {optimizations}")
+
+    @classmethod
     def accuracy(cls, num_decoders, model_name):
         inst = cls._precision_factory(num_decoders, model_name, ModelOptimizations.accuracy)
         inst.__name__ = "accuracy"
