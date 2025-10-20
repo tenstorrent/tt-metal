@@ -227,6 +227,9 @@ class TtGemmaImageAttention(LightweightModule):
         seq_len = x_11SH.shape[-2]
         batch_size = x_11SH.shape[0]
 
+        if len(x_11SH.shape) == 3:
+            x_11SH = ttnn.unsqueeze(x_11SH, 1)
+
         MAX_MM_SEQ_LEN = seq_len if self.configuration.is_gemma else self.configuration.VISION_MAX_MM_SEQ
 
         if seq_len > MAX_MM_SEQ_LEN:
@@ -242,7 +245,6 @@ class TtGemmaImageAttention(LightweightModule):
             program_config=self.qkv_program_config(seq_len, MAX_MM_SEQ_LEN),
         )
 
-        # Use nlp_create_qkv_heads to split and reshape QKV (more performant than reshape + transpose)
         q_heads_1QSD, k_heads_1KSD, v_heads_1VSD = ttnn.experimental.nlp_create_qkv_heads(
             xqkv_fused,
             num_heads=self.n_local_heads,
