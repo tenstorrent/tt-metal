@@ -207,7 +207,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadBankNumbers) {
     DataFormat l1_data_format = DataFormat::Float16_b;
     uint32_t page_size_bytes = tt::tile_size(l1_data_format);
     uint32_t max_num_banks = mesh_device->num_dram_channels();
-    uint32_t num_pages = 16;
+    uint32_t num_pages = 32;
     uint32_t max_transactions = 256;
 
     // Cores
