@@ -18,6 +18,15 @@ def reference_softmax_backward_output(y: torch.Tensor, grad: torch.Tensor, axis:
     return y * (grad - dot)
 
 
+def moreh_softmax_backward_reference(
+    softmax_output: ttnn.Tensor, grad: ttnn.Tensor, dim: int, device: ttnn.Device
+) -> torch.Tensor:
+    """Reference using moreh's softmax_backward implementation"""
+    # Use moreh softmax_backward operation
+    tt_output_moreh = ttnn.operations.moreh.softmax_backward(softmax_output, grad, dim)
+    return ttnn.to_torch(tt_output_moreh)
+
+
 # python3 -m pytest "tests/ttnn/unit_tests/operations/test_softmax_backward.py::test_bw_softmax[dim=3-range=200-dtype=DataType.BFLOAT16-input_shapes=torch.Size([1, 1, 32, 32])]" -v
 @pytest.mark.parametrize(
     "input_shapes",
@@ -53,6 +62,26 @@ def test_bw_softmax(input_shapes, dtype, range, dim, device):
     tt_output_tensor_fused = ttnn.softmax_backward(tt_softmax_tensor, grad_tensor, dim=dim)
     pt_output_tensor_fused = ttnn.to_torch(tt_output_tensor_fused)
     pt_output_tensor_reference = reference_softmax_backward_output(pt_softmax_tensor, grad_data, axis=dim)
+
+    # Test moreh reference implementation
+    pt_output_tensor_moreh = moreh_softmax_backward_reference(tt_softmax_tensor, grad_tensor, dim, device)
+
+    torch.set_printoptions(threshold=10_000)
+
+    # Write outputs to separate files for analysis
+    with open("softmax_backward_fused_output.txt", "w") as f:
+        f.write(f"pt_output_tensor_fused: {pt_output_tensor_fused}")
+
+    with open("softmax_backward_reference_output.txt", "w") as f:
+        f.write(f"pt_output_tensor_reference: {pt_output_tensor_reference}")
+
+    with open("softmax_backward_moreh_output.txt", "w") as f:
+        f.write(f"pt_output_tensor_moreh: {pt_output_tensor_moreh}")
+
+    with open("softmax_backward_diff.txt", "w") as f:
+        f.write(f"diff (fused vs reference): {pt_output_tensor_fused - pt_output_tensor_reference}")
+        f.write(f"\ndiff (fused vs moreh): {pt_output_tensor_fused - pt_output_tensor_moreh}")
+        f.write(f"\ndiff (reference vs moreh): {pt_output_tensor_reference - pt_output_tensor_moreh}")
 
     # Use multiply operator to compute the reference output for now
     # reference = ttnn.multiply(tt_softmax_tensor, grad_tensor)
