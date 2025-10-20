@@ -481,9 +481,7 @@ class MultiModalProcessor(BaseMultiModalProcessor):
         tokenization_kwargs: Optional[Mapping[str, object]] = None,
         return_mm_hashes: bool = False,
     ) -> MultiModalInputs:
-        # Getting mm kwargs from model config since hf_processor_mm_kwargs is empty (TODO: resolve this)
-        mm_processor_kwargs = getattr(self.info.ctx.model_config, "mm_processor_kwargs", None) or {}
-        input_processor = self.info.get_hf_processor(**mm_processor_kwargs)
+        input_processor = self.info.get_hf_processor(**hf_processor_mm_kwargs)
 
         # WORKAROUND
         # When using /v1/chat/completions endpoint prompt is already tokenized
@@ -520,7 +518,9 @@ class MultiModalProcessor(BaseMultiModalProcessor):
 
 
 @MULTIMODAL_REGISTRY.register_processor(
-    Gemma3MultiModalProcessor, info=Gemma3ProcessingInfo, dummy_inputs=Gemma3DummyInputsBuilder
+    Gemma3MultiModalProcessor if os.environ.get("VLLM_USE_V1", "0") == "1" else MultiModalProcessor,
+    info=Gemma3ProcessingInfo,
+    dummy_inputs=Gemma3DummyInputsBuilder,
 )
 class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
     def __init__(self, *args, **kwargs):
@@ -556,6 +556,12 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         return self.model_args[0].model_cache_path
 
     def prefill_forward(self, *args, **kwargs):
+        if os.environ.get("VLLM_USE_V1", "0") != "1":
+            data = kwargs.get("images", None)
+            kwargs["pixel_values"] = (
+                [im.pixel_values if hasattr(im, "pixel_values") else None for im in data] if data else None
+            )
+
         return super().prefill_forward_text(**kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
