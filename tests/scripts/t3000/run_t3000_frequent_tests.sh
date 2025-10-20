@@ -295,7 +295,7 @@ run_t3000_tteager_tests() {
   pytest -n auto tests/ttnn/unit_tests/operations/debug/test_apply_device_delay_t3000.py ; fail+=$?
 
   # distributed layernorm
-  pytest tests/ttnn/unit_tests/operations/test_distributed_layernorm.py ; fail+=$?
+  pytest tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -311,7 +311,7 @@ run_t3000_trace_stress_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_trace_stress_tests"
-  NUM_TRACE_LOOPS=15 pytest -n auto tests/ttnn/unit_tests/test_multi_device_trace.py ; fail+=$?
+  NUM_TRACE_LOOPS=15 pytest -n auto tests/ttnn/unit_tests/base_functionality/test_multi_device_trace.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
