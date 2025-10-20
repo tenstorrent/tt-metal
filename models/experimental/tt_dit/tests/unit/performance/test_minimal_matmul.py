@@ -252,6 +252,52 @@ def test_linear_padded_wan_shapes(device, M, K, N, M_block_size, K_block_size, N
     assert check_result["relative_rmse"] < 0.02
 
 
+def test_run_performance(device):
+    core_grid = ttnn.CoreCoord(8, 8)
+    M, K, N = 4096, 4096, 4096
+    M_block_size, K_block_size, N_block_size, subblock_h, subblock_w = 8, 8, 8, 2, 2
+    check_result = run_test_linear(
+        device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w, core_grid=core_grid
+    )
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
+
+
+def test_performance():
+    float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
+    cols = ["ATTRIBUTES"]
+    command = f"pytest models/experimental/tt_dit/tests/unit/performance/test_minimal_matmul.py::test_run_performance"
+
+    run_device_profiler(command, "ttnn_minimal_matmul_performance", device_analysis_types=["device_kernel_duration"])
+    r = post_process_ops_log(
+        "ttnn_minimal_matmul_performance",
+        float_columns=float_cols,
+        columns=cols,
+        op_name="",
+        sum_vals=False,
+        has_signposts=False,
+    )
+    core_count = int(r["CORE COUNT"][0])
+    duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].min())
+    expected_ns = perf_model(4096, 4096, 4096, core_count, 2)
+
+    util = expected_ns / duration_ns
+    logger.info(f"Utilization: {util*100:.1f}%")
+
+    if ttnn.device.is_blackhole():
+        expected_util = 0.5
+    else:
+        expected_util = 0.582
+
+    tolerance = 0.02
+    assert (
+        util > expected_util - tolerance
+    ), f"Utilization {util:.1f}% is less than expected {expected_util:.1f}% by more than {tolerance:.1f}%"
+    assert (
+        util < expected_util + tolerance
+    ), f"Utilization {util:.1f}% is greater than expected {expected_util:.1f}% by more than {tolerance:.1f}%"
+
+
 TABLE_CONFIGS = [
     (512, 512, 512),
     (512, 1024, 1024),
