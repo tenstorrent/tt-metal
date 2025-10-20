@@ -124,8 +124,8 @@ class EthChannelBufferInterface {
 public:
     explicit EthChannelBufferInterface() = default;
 
-    FORCE_INLINE void init(size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes) {
-        static_cast<DERIVED_T*>(this)->init_impl(channel_base_address, buffer_size_bytes, header_size_bytes);
+    FORCE_INLINE void init(size_t channel_base_address, size_t max_eth_payload_size_in_bytes, size_t header_size_bytes) {
+        static_cast<DERIVED_T*>(this)->init_impl(channel_base_address, max_eth_payload_size_in_bytes, header_size_bytes);
     }
 
     [[nodiscard]] FORCE_INLINE size_t get_buffer_address(const BufferIndex& buffer_index) const {
