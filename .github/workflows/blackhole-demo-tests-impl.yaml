@@ -49,7 +49,7 @@ jobs:
           { # This should be moved to a BH perf regression pipeline in the future
             name: "oft demo",
             arch: blackhole,
-            cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/demo/demo.py::test_demo_inference,
+            cmd: 'TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE:"4, 3" pytest models/experimental/oft/demo/demo.py::test_demo_inference',
             owner_id: U08AWRT6U3E # Boris Janjic
           }
         ]
