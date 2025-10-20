@@ -1041,7 +1041,13 @@ void generate_multi_input_command_stream_kernel_rt_args(
     std::optional<IDevice*> backward_device,
     std::optional<std::unordered_map<const Tensor*, IDevice*>> const& tensor_device_override,
     std::optional<std::vector<size_t>> const& tensor_indices,
-    ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider) {
+    ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider,
+    uint32_t trace_cb_idx1,
+    uint32_t trace_cb_idx2,
+    uint32_t trace_cb_idx3,
+    uint32_t trace_cb_idx4,
+    uint32_t trace_sync_sem_id,
+    CoreCoord trace_core) {
 
     bool fill_args_overrider = rt_args_overrider != nullptr;
 
@@ -1085,6 +1091,14 @@ void generate_multi_input_command_stream_kernel_rt_args(
     auto command_stream_start_arg_indices = std::vector<size_t>(num_command_streams, 0);
     std::vector<uint32_t> rt_args;
     rt_args.reserve(200);
+    rt_args.push_back(trace_cb_idx1);
+    rt_args.push_back(trace_cb_idx2);
+    rt_args.push_back(trace_cb_idx3);
+    rt_args.push_back(trace_cb_idx4);
+    rt_args.push_back(trace_sync_sem_id);            // trace sync sem
+    rt_args.push_back(trace_core.x);                 // trace core x
+    rt_args.push_back(trace_core.y);                 // trace core y
+
     for (size_t i = 0; i < tensors.size(); i++) {
         if (tensors[i]) {
             if (fill_args_overrider) {

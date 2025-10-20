@@ -111,7 +111,10 @@ void forward_data(
         invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
 
-        fabric_connection.wait_for_empty_write_slot();
+        {
+            DeviceZoneScopedN("WaitSlot");
+            fabric_connection.wait_for_empty_write_slot();
+        }
 
         fabric_connection.send_payload_flush_non_blocking_from_address(
             (uint32_t)packet_header, packet_header->get_payload_size_including_header());
@@ -223,54 +226,56 @@ void kernel_main() {
 #if defined(COMPILE_FOR_IDLE_ERISC)
     uint32_t heartbeat = 0;
 #endif
-    while (!got_immediate_termination_signal(termination_signal_ptr)) {
-        bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
-        if (got_graceful_termination) {
-            bool all_channels_drained = true;
-            for (uint8_t channel_id = 0; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
-                all_channels_drained &= get_ptr_val(channel_id) == NUM_BUFFERS_FULL_SIZE_CHANNEL;
-            }
-            for (uint8_t channel_id = 0; channel_id < NUM_HEADER_ONLY_CHANNELS; channel_id++) {
-                all_channels_drained &=
-                    get_ptr_val(channel_id + NUM_FULL_SIZE_CHANNELS) == NUM_BUFFERS_HEADER_ONLY_CHANNEL;
-            }
-
-            if (all_channels_drained) {
-                break;
-            }
-        }
-
-        for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
-            for (size_t iter = 0; iter < NUM_FULL_SIZE_CHANNELS_ITERS; iter++) {
+    {
+        DeviceZoneScopedN("mux_loop");
+        while (!got_immediate_termination_signal(termination_signal_ptr)) {
+            bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
+            if (got_graceful_termination) {
+                bool all_channels_drained = true;
                 for (uint8_t channel_id = 0; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
-                    forward_data<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
-                        full_size_channels[channel_id],
-                        full_size_channel_worker_interfaces[channel_id],
-                        fabric_connection,
-                        full_size_channel_connection_established[channel_id],
-                        StreamId{channel_stream_ids[channel_id]},
-                        channel_id);
+                    all_channels_drained &= get_ptr_val(channel_id) == NUM_BUFFERS_FULL_SIZE_CHANNEL;
+                }
+                for (uint8_t channel_id = 0; channel_id < NUM_HEADER_ONLY_CHANNELS; channel_id++) {
+                    all_channels_drained &=
+                        get_ptr_val(channel_id + NUM_FULL_SIZE_CHANNELS) == NUM_BUFFERS_HEADER_ONLY_CHANNEL;
+                }
+
+                if (all_channels_drained) {
+                    break;
                 }
             }
 
-            for (uint8_t channel_id = 0; channel_id < NUM_HEADER_ONLY_CHANNELS; channel_id++) {
-                forward_data<NUM_BUFFERS_HEADER_ONLY_CHANNEL>(
-                    header_only_channels[channel_id],
-                    header_only_channel_worker_interfaces[channel_id],
-                    fabric_connection,
-                    header_only_channel_connection_established[channel_id],
-                    StreamId{channel_stream_ids[channel_id + NUM_FULL_SIZE_CHANNELS]},
-                    channel_id + NUM_FULL_SIZE_CHANNELS);
-            }
-        }
-#if defined(COMPILE_FOR_IDLE_ERISC)
-        RISC_POST_HEARTBEAT(heartbeat);
-#endif
-    }
+            for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
+                for (size_t iter = 0; iter < NUM_FULL_SIZE_CHANNELS_ITERS; iter++) {
+                    for (uint8_t channel_id = 0; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
+                        forward_data<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
+                            full_size_channels[channel_id],
+                            full_size_channel_worker_interfaces[channel_id],
+                            fabric_connection,
+                            full_size_channel_connection_established[channel_id],
+                            StreamId{channel_stream_ids[channel_id]},
+                            channel_id);
+                    }
+                }
 
+                for (uint8_t channel_id = 0; channel_id < NUM_HEADER_ONLY_CHANNELS; channel_id++) {
+                    forward_data<NUM_BUFFERS_HEADER_ONLY_CHANNEL>(
+                        header_only_channels[channel_id],
+                        header_only_channel_worker_interfaces[channel_id],
+                        fabric_connection,
+                        header_only_channel_connection_established[channel_id],
+                        StreamId{channel_stream_ids[channel_id + NUM_FULL_SIZE_CHANNELS]},
+                        channel_id + NUM_FULL_SIZE_CHANNELS);
+                }
+            }
+    #if defined(COMPILE_FOR_IDLE_ERISC)
+            RISC_POST_HEARTBEAT(heartbeat);
+    #endif
+        }
+        noc_async_write_barrier();
+        noc_async_atomic_barrier();
+    }
     fabric_connection.close();
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
     set_l1_data_cache<false>();

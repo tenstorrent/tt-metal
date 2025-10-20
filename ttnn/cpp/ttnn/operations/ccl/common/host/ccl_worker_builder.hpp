@@ -77,7 +77,13 @@ void generate_multi_input_command_stream_kernel_rt_args(
     std::optional<IDevice*> backward_device,
     std::optional<std::unordered_map<const Tensor*, IDevice*>> const& tensor_device_override = std::nullopt,
     std::optional<std::vector<size_t>> const& tensor_indices = std::nullopt,
-    ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider = nullptr);
+    ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider = nullptr,
+    uint32_t trace_cb_idx1 = tt::CB::c_in1,
+    uint32_t trace_cb_idx2 = tt::CB::c_in2,
+    uint32_t trace_cb_idx3 = tt::CB::c_in3,
+    uint32_t trace_cb_idx4 = tt::CB::c_in4,
+    uint32_t trace_sync_sem_id = 0,
+    CoreCoord trace_core = CoreCoord{0, 0});
 tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
     tt::tt_metal::Program& program,
     const std::vector<uint32_t>& cb_indices,

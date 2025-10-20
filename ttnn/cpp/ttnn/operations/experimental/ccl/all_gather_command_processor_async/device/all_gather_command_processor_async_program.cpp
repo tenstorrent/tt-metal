@@ -129,6 +129,50 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_command_processor_async
             .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
 
+    log_info(tt::LogOp, "packet_size_bytes ={}, num_pages_per_packet={}", packet_size_bytes, num_pages_per_packet);
+    auto input_volume = input_tensor.padded_shape().volume();
+    auto num_input_tile = input_volume / TILE_HW;
+    auto trace_size = 16 + 56 * (num_input_tile * 2 + 16);
+    auto pkt_size = 32 * (num_input_tile * 2 + 16);
+    auto aligned_up_trace_size = ((trace_size + 1024 - 1) / 1024) * 1024;
+    auto aligned_up_pkt_size = ((pkt_size + 1024 - 1) / 1024) * 1024;
+
+    log_info(tt::LogOp, "num_input_tile: {}, aligned_up_trace_size: {}, aligned_up_pkt_size: {}", num_input_tile, aligned_up_trace_size, aligned_up_pkt_size);
+    log_info(tt::LogOp, "total_aligned_mb for_trace: {}mb", (aligned_up_trace_size + aligned_up_pkt_size) / 1024.0 / 1024.0);
+
+    const auto trace_cb_idx1 = tt::CB::c_in1;
+    tt::tt_metal::CircularBufferConfig cb_config1 =
+        tt::tt_metal::CircularBufferConfig(
+            aligned_up_trace_size,
+            {{trace_cb_idx1, tt::DataFormat::RawUInt8}})
+            .set_page_size(trace_cb_idx1, aligned_up_trace_size);
+    CreateCircularBuffer(program, sender_worker_core_range, cb_config1);
+    const auto trace_cb_idx2 = tt::CB::c_in2;
+    tt::tt_metal::CircularBufferConfig cb_config2 =
+        tt::tt_metal::CircularBufferConfig(
+            aligned_up_trace_size,
+            {{trace_cb_idx2, tt::DataFormat::RawUInt8}})
+            .set_page_size(trace_cb_idx2, aligned_up_trace_size);
+    CreateCircularBuffer(program, sender_worker_core_range, cb_config2);
+
+    const auto trace_cb_idx3 = tt::CB::c_in3;
+    tt::tt_metal::CircularBufferConfig cb_config3 =
+        tt::tt_metal::CircularBufferConfig(
+            aligned_up_pkt_size,
+            {{trace_cb_idx3, tt::DataFormat::RawUInt8}})
+            .set_page_size(trace_cb_idx3, aligned_up_pkt_size);
+    CreateCircularBuffer(program, sender_worker_core_range, cb_config3);
+
+    const auto trace_cb_idx4 = tt::CB::c_in4;
+    tt::tt_metal::CircularBufferConfig cb_config4 =
+        tt::tt_metal::CircularBufferConfig(
+            aligned_up_pkt_size,
+            {{trace_cb_idx4, tt::DataFormat::RawUInt8}})
+            .set_page_size(trace_cb_idx4, aligned_up_pkt_size);
+    CreateCircularBuffer(program, sender_worker_core_range, cb_config4);
+
+    auto trace_sync_sem = CreateSemaphore(program, sender_worker_core_range, 0);
+
     // Create Tensor slicer
     // read the entire input tensor (partition size = 1, partition index = 0)
     // write to the output tensor on its corresponding partition (partition size = ring_size, partition index =
@@ -205,6 +249,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_command_processor_async
 
     for (std::size_t link = 0; link < num_links; link++) {
         CoreCoord core = sender_worker_cores[link];
+        CoreCoord trace_core = mesh_device->worker_core_from_logical_core(core);
         if (link == 0) {
             // drain sync core is the first worker core
             drain_sync_core = mesh_device->worker_core_from_logical_core(core);
@@ -257,7 +302,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_command_processor_async
             std::nullopt,                                        // fabric bwd connection
             std::nullopt,                                        // tensor device override
             std::vector<size_t>{reader_tensor_command_map_idx},  // tensor indices
-            &reader_rt_args_overrider_map[core]);
+            &reader_rt_args_overrider_map[core],
+            trace_cb_idx1,
+            trace_cb_idx2,
+            trace_cb_idx3,
+            trace_cb_idx4,
+            trace_sync_sem,
+            trace_core);
 
         // WRITER COMMAND STREAM and RT ARGS
         std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> writer_cmd_stream;
@@ -312,7 +363,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_command_processor_async
             backward_device,
             std::nullopt,
             std::vector<size_t>{writer_tensor_command_map_idx},  // tensor indices
-            &writer_rt_args_overrider_map[core]);
+            &writer_rt_args_overrider_map[core],
+            trace_cb_idx1,
+            trace_cb_idx2,
+            trace_cb_idx3,
+            trace_cb_idx4,
+            trace_sync_sem,
+            trace_core);
     }
 
     auto override_runtime_arguments_callback =

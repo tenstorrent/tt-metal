@@ -370,6 +370,11 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     // for bfloat8_b, tile_num_per_link=6, we would need to send 2 packages, but they can be of size 3 instead of 4
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t num_tiles_to_write_per_packet = std::min(max_target_noc_addresses_per_packet, num_pages_per_packet);
+
+    log_info(tt::LogOp, "packet_size_bytes ={}, num_pages_per_packet={} num_tiles_to_write_per_packet={}",
+             packet_size_bytes,
+             num_pages_per_packet,
+             num_tiles_to_write_per_packet);
     uint32_t cb_num_pages = 3 * num_tiles_to_write_per_packet;  // triple buffering
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
