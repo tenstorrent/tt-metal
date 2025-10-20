@@ -18,7 +18,6 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
-#include "tools/profiler/kernel_profiler.hpp"
 
 template <uint32_t num_tiles>
 void max_block_inplace(uint32_t in0, uint32_t in1) {
@@ -382,7 +381,6 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
      *
      * Each input tile has only the first column containing valid data, so VectorMode::C is a useful optimization.
      */
-    DeviceZoneScopedN("sigmoid_sub");
 
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
@@ -406,7 +404,6 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
 
 void logsigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     // out_cb = logsigmoid(in0_cb - in1_cb)
-    DeviceZoneScopedN("logsigmoid_sub");
     // Implemented as softplus for numerical stability. logsigmoid(x) = -softplus(-x)
 
     cb_wait_front(in0_cb, num_tiles);
