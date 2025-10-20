@@ -19,12 +19,11 @@
 
 #include <gtest/gtest.h>
 #include <tt-metalium/distributed.hpp>
-#include "impl/context/metal_context.hpp"
 
 namespace {
 
 // We recursively scan this directory for kernels named '*.cpp'.
-constexpr auto KernelDir = "tests/tt_metal/tt_metal/test_kernels/sfpi";
+constexpr std::string_view KernelDir = "tests/tt_metal/tt_metal/test_kernels/sfpi";
 
 using namespace tt::tt_metal;
 
@@ -120,8 +119,14 @@ bool runTests(
 }
 
 bool runTestsuite(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const tt::tt_metal::CoreCoord coord) {
-    std::string path = tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir();
-    path += KernelDir;
+    std::string path;
+    if (auto* var = std::getenv("TT_METAL_HOME")) {
+        path.append(var);
+        if (!path.empty()) {
+            path.push_back('/');
+        }
+    }
+    path.append(KernelDir);
     return runTests(mesh_device, coord, path, path.find_last_of('/') + 1);
 }
 
