@@ -79,6 +79,13 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
+    uint32_t acc_cb_index = tt::CBIndex::c_4;
+    uint32_t num_acc_tiles = 1;
+    tt_metal::CircularBufferConfig cb_acc_config =
+        tt_metal::CircularBufferConfig(num_acc_tiles * dst_single_tile_size, {{acc_cb_index, dst_cb_data_format}})
+            .set_page_size(acc_cb_index, dst_single_tile_size);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_acc_config);
+
     std::map<std::string, std::string> reduce_defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::W);
     if (do_negate) {
         reduce_defines["DO_NEGATE"] = "1";
@@ -104,7 +111,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
 
     tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_w.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_w_neg.cpp",
         core_group_1,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -121,7 +128,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
 
         tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_w.cpp",
+            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_w_neg.cpp",
             core_group_2,
             tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity,

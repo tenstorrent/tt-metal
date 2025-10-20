@@ -14,6 +14,8 @@
 #include "compute_kernel_api/eltwise_unary/negative.h"
 #endif
 
+#include "debug/dprint.h"
+
 namespace NAMESPACE {
 
 void MAIN {
@@ -41,6 +43,7 @@ void MAIN {
             // in this case we just sequentially add to accumulator all the W-tiles in a row
             tile_regs_acquire();
             for (uint32_t wt = 0; wt < Wt; ++wt) {
+                MATH(DPRINT << "wt=" << wt << " ht=" << ht << ENDL());
                 cb_wait_front(tt::CBIndex::c_0, onetile);
                 // REDUCE_OP is expected to come from add_define
 #ifndef REDUCE_ROW_SUM_VIA_MM
