@@ -6,6 +6,7 @@ from typing import Any, Callable, Sequence
 
 import numpy as np
 import torch
+from tqdm.auto import tqdm
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -71,7 +72,9 @@ class RowPipelinedModel(SharedStateAddOn, AbstractModule):
                     output_path / f"mlp_decoder_block_{meta_layer_idx}",
                     mesh_device,
                 )
-                for meta_layer_idx, layer_indices in enumerate(mlp_meta_layer_indices)
+                for meta_layer_idx, layer_indices in enumerate(
+                    tqdm(mlp_meta_layer_indices, desc="Converting MLP multi-layer blocks")
+                )
             ],
             "moe_decoder_block": [
                 MoEDecoderBlock1D.convert_weights(
@@ -80,7 +83,9 @@ class RowPipelinedModel(SharedStateAddOn, AbstractModule):
                     output_path / f"moe_decoder_block_{meta_layer_idx}",
                     mesh_device,
                 )
-                for meta_layer_idx, layer_indices in enumerate(moe_meta_layer_indices)
+                for meta_layer_idx, layer_indices in enumerate(
+                    tqdm(moe_meta_layer_indices, desc="Converting MoE multi-layer blocks")
+                )
             ],
             "norm": DistributedRMSNorm.convert_weights(
                 hf_config,
@@ -292,9 +297,9 @@ class RowPipelinedModel(SharedStateAddOn, AbstractModule):
         for src_coord, dst_coord in zip(src_row, dst_row):
             ttnn.point_to_point(
                 x,
-                dst_coord,
                 src_coord,
-                optional_output_tensor=x,
+                dst_coord,
+                output_tensor=x,
                 topology=topology,
             )
 
