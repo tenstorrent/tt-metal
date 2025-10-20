@@ -91,7 +91,7 @@ FORCE_INLINE void broadcast_last_row_to_all_rows_in_cube(
     // get the output after processing previous row (the block right above the currently processed block)
     // make the axis 3 propagation tile
     // push back to the compute
-    constexpr uint32_t LAST_ROW = 32 - 1;  // tile_height - 1
+    constexpr uint32_t LAST_ROW_ORD = 32 - 1;  // tile_height - 1
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
         ReadCBGuard propagation_upper_read_guard{axis_3_propagation_read_cb, ONE_TILE};
         WriteCBGuard propagation_upper_write_guard{axis_3_propagation_write_cb, ONE_TILE};
@@ -102,8 +102,9 @@ FORCE_INLINE void broadcast_last_row_to_all_rows_in_cube(
         volatile tt_l1_ptr output_number_t* propagation_write_ptr =
             reinterpret_cast<volatile tt_l1_ptr output_number_t*>(propagation_write_addr);
         for (uint32_t column_read_i = 0; column_read_i < 32; ++column_read_i) {
-            output_number_t value_to_broadcast = propagation_read_ptr[get_coord_from_tile_xy(column_read_i, LAST_ROW)];
-            for (uint32_t row_write_i = 0; row_write_i < 32 - 1; ++row_write_i) {
+            output_number_t value_to_broadcast =
+                propagation_read_ptr[get_coord_from_tile_xy(column_read_i, LAST_ROW_ORD)];
+            for (uint32_t row_write_i = 0; row_write_i < 32; ++row_write_i) {
                 propagation_write_ptr[get_coord_from_tile_xy(column_read_i, row_write_i)] = value_to_broadcast;
             }
         }
@@ -116,7 +117,6 @@ void kernel_main() {
     const uint32_t output_base_addr = get_arg_val<uint32_t>(0);
     constexpr auto ctas = get_ctas();
     using output_number_type = std_type_t<get_dataformat(ctas.output_cb)>;
-    // constexpr uint32_t tensor_size = ctas.num_batches * ctas.input_depth * 32 * 32;
     const auto output_addr_gtor = TensorAccessor(ctas.output_args, output_base_addr, get_tile_size(ctas.output_cb));
     const uint32_t num_slices_along_channels = block_depth_ceil(
         ctas.num_channels, ctas.block_depth);  // block_depth is expected to be a power of 2 (the default is the regular
