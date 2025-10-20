@@ -30,12 +30,14 @@ jobs:
           # {
           #   name: "whisper performance",
           #   arch: blackhole,
+          #   runs-on: ["in-service", "${{ inputs.runner-label }}", "pipeline-perf"],
           #   cmd: pytest models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation",
           #   owner_id: U05RWH3QUPM # Salar Hosseini
           # },
           # {
           #   name: "llama3-8b performance",
           #   arch: blackhole,
+          #   runs-on: ["in-service", "${{ inputs.runner-label }}", "pipeline-perf"],
           #   # I think we can get rid of TT_CACHE_PATH here by using a NFS export
           #   cmd:  LLAMA_DIR=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci and not performance-ci-stress-1",
           #   owner_id: U03PUAKE719 # Miguel Tairum
@@ -43,21 +45,20 @@ jobs:
           # { # This should be moved to a BH perf regression pipeline in the future
           #   name: "unet-shallow performance",
           #   arch: blackhole,
+          #   runs-on: ["in-service", "${{ inputs.runner-label }}", "pipeline-perf"],
           #   cmd: pytest -sv models/experimental/functional_unet/tests/test_unet_perf.py -k "test_unet_trace_perf and not test_unet_trace_perf_multi_device",
           #   owner_id: U06ECNVR0EN # Evan Smal
           # },
           { # This should be moved to a BH perf regression pipeline in the future
             name: "oft demo",
             arch: blackhole,
+            runs-on: ["tt-ubuntu-2204-p150b-stable"],
             cmd: 'TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4, 3" pytest models/experimental/oft/demo/demo.py::test_demo_inference',
             owner_id: U08AWRT6U3E # Boris Janjic
           }
         ]
     name: ${{ matrix.test-group.name }}
-    runs-on:
-      - "in-service"
-      - "${{ inputs.runner-label }}"
-      - "pipeline-perf"
+    runs-on: ${{ matrix.test-group.runs-on }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved' }}
       env:
