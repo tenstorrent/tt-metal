@@ -1,11 +1,16 @@
 training_config:
-  batch_size: 4
+  batch_size: 64
   max_steps: 1000
   learning_rate: 0.0003
   gradient_accumulation_steps: 1
-  eval_every: 100
+  eval_every: 20
   transformer_config:
     max_sequence_length: 512
+    runner_type: default
 
 scheduler_config:
   warmup_steps: 20
+
+device_config:
+  enable_ddp: true
+  mesh_shape: [1, 32]

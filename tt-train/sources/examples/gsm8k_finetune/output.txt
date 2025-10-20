@@ -1,1 +1,1 @@
-LR: 1.00e-05, training_loss: 0.1012, val_loss: 0.0500, step: 999, epoch: 10
+LR: 0.000100, training_loss: 0.8938, val_loss: 0.0000, step: 20, epoch: 1

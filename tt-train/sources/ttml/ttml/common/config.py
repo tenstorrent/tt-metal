@@ -16,7 +16,7 @@ def get_config(path: str):
     Returns:
         Dictionary containing configuration
     """
-    path = f'{os.environ["TT_METAL_HOME"]}/tt-train/configs/{path}'
+    path = f'{os.environ["TT_METAL_HOME"]}/tt-train/configs/{path}' if not os.path.exists(path) else path
     with open(path, "r") as f:
         config = yaml.safe_load(f)
     return config

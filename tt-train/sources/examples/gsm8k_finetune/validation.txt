@@ -1,26 +1,2 @@
-Validation Results - Step 950, Epoch 10
-==================================================
-
-Question: If John has 5 apples and buys 8 more, how many does he have?
-Expected: 13
-Model Answer: 5 + 8 = 13
-
-Question: What is 15 + 27?
-Expected: 42
-Model Answer: 15 + 27 = 42
-
-Question: A train travels 60 miles in 2 hours. What is its average speed?
-Expected: 30 mph
-Model Answer: 60 / 2 = 30 mph
-
-Question: If a book costs $12 and you buy 3, what's the total?
-Expected: $36
-Model Answer: 12 × 3 = $36
-
-==================================================
-Validation Metrics:
-- Validation Loss: 0.3661
-- Accuracy: 91.4%
-- Total Examples: 4
-- Correct: 3
-==================================================
+Validation log
+===============

@@ -1,0 +1,138 @@
+{
+    "time": "2025-10-20T08:02:34.332993",
+    "host_name": "g15glx04",
+    "gs_tensix_reset": {
+        "pci_index": []
+    },
+    "wh_link_reset": {
+        "pci_index": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31
+        ]
+    },
+    "re_init_devices": true,
+    "wh_mobo_reset": [
+        {
+            "nb_host_pci_idx": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                30,
+                31
+            ],
+            "mobo": "<MOBO NAME>",
+            "credo": [
+                "<group id>:<credo id>",
+                "<group id>:<credo id>"
+            ],
+            "disabled_ports": [
+                "<group id>:<credo id>",
+                "<group id>:<credo id>"
+            ]
+        },
+        {
+            "nb_host_pci_idx": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                30,
+                31
+            ],
+            "mobo": "<MOBO NAME>",
+            "credo": [
+                "<group id>:<credo id>",
+                "<group id>:<credo id>"
+            ],
+            "disabled_ports": [
+                "<group id>:<credo id>",
+                "<group id>:<credo id>"
+            ]
+        }
+    ],
+    "disable_serial_report": false,
+    "disable_sw_version_report": false
+}
