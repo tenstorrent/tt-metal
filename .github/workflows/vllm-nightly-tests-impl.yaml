@@ -59,6 +59,7 @@ jobs:
             mesh-device: P150x2,
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"data_parallel\": 2}",
+            extra-args: "--data_parallel_size 2",
             multimodal: false,
             owner_id: U08GELBB1AP, # Ambrose Ling
           },
@@ -71,6 +72,7 @@ jobs:
             mesh-device: P150x4,
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"data_parallel\": 4}",
+            extra-args: "--data_parallel_size 4",
             multimodal: false,
             owner_id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
@@ -83,6 +85,7 @@ jobs:
             mesh-device: P150x8,
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"data_parallel\": 8}",
+            extra-args: "--data_parallel_size 8",
             multimodal: false,
             owner_id: U08GELBB1AP, # Ambrose Ling
           },
@@ -108,6 +111,7 @@ jobs:
             runner-label: topology-6u,
             mesh-device: TG,
             override-tt-config: "{\"data_parallel\": 16, \"fabric_config\": \"FABRIC_1D_RING\"}",
+            extra-args: "--data_parallel_size 16",
             tt-llama-text-ver: tt_transformers,
             multimodal: false,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
