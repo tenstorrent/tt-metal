@@ -2,13 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import re
+from typing import TYPE_CHECKING
 
 import torch
 import ttnn
 
-from ..parallel.config import vae_all_gather, estimate_mesh_axis
+from ..parallel.config import estimate_mesh_axis, vae_all_gather
+from ..parallel.manager import CCLManager
 from .module import Module, Parameter
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    import torch
+    from typing_extensions import Self
 
 
 # TODO: Add support for coll and row parallel conv2d
@@ -96,17 +106,19 @@ class Conv2d(Module):
     # TODO: Allow weight initilization?
     def __init__(
         self,
-        in_channels=None,
-        out_channels=None,
-        kernel_size=None,
-        stride=None,
-        padding=None,
-        dilation=None,
-        mesh_device=None,
-        mesh_axis=None,
-        ccl_manager=None,
-        torch_ref=None,
-    ):
+        in_channels: int | None,  # TODO: make manatory when torch_ref is removed
+        out_channels: int | None,  # TODO: make manatory when torch_ref is removed
+        *,
+        kernel_size: Sequence[int] | int | None = None,  # TODO: make manatory when torch_ref is removed
+        stride: Sequence[int] | int = 1,
+        padding: Sequence[int] | int = 0,
+        dilation: Sequence[int] | int = 1,
+        mesh_device: ttnn.MeshDevice,
+        mesh_axis: int | None = None,
+        ccl_manager: CCLManager | None = None,
+        # TODO: remove torch_ref, use from_torch instead
+        torch_ref: torch.nn.Conv2d | None = None,
+    ) -> None:
         """
         Initialize the Conv2d layer. Set mesh_axis to None to disable mesh parallelism. Only TP is supported currently.
 
@@ -121,23 +133,32 @@ class Conv2d(Module):
             mesh_axis: Axis to use for mesh parallelism.
             ccl_manager: CCL manager to use.
             torch_ref: Reference to the torch layer. Paramaters from this will be used to iniitialize the layer
-        Returns:
-            Conv2d layer.
         """
         super().__init__()
 
-        self.in_channels = in_channels or torch_ref.in_channels
-        self.out_channels = out_channels or torch_ref.out_channels
-        self.kernel_size = kernel_size or torch_ref.kernel_size
-        self.stride = stride or torch_ref.stride
-        self.padding = padding or torch_ref.padding
-        self.dilation = dilation or torch_ref.dilation
-        self.mesh_device = mesh_device
-        self.mesh_axis = mesh_axis
-        self.ccl_manager = ccl_manager
+        if torch_ref is not None:
+            assert not isinstance(torch_ref.padding, str)
+
+            in_channels = torch_ref.in_channels
+            out_channels = torch_ref.out_channels
+            kernel_size = torch_ref.kernel_size
+            stride = torch_ref.stride
+            padding = torch_ref.padding
+            dilation = torch_ref.dilation
+        else:
+            assert in_channels is not None, "in_channels must be provided if torch_ref is not provided"
+            assert out_channels is not None, "out_channels must be provided if torch_ref is not provided"
+            assert kernel_size is not None, "kernel_size must be provided if torch_ref is not provided"
+
+        kernel_size = (kernel_size,) * 2 if isinstance(kernel_size, int) else tuple(kernel_size)
+        stride = (stride,) * 2 if isinstance(stride, int) else tuple(stride)
+        padding = (padding,) * 2 if isinstance(padding, int) else tuple(padding)
+        dilation = (dilation,) * 2 if isinstance(dilation, int) else tuple(dilation)
+
+        assert dilation == (1, 1), "dilation other than 1 is not supported"
 
         self.weight = Parameter(
-            total_shape=[self.out_channels, self.in_channels, *self.kernel_size],
+            total_shape=[out_channels, in_channels, *kernel_size],
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             mesh_axes=[mesh_axis, None, None, None],
@@ -145,25 +166,52 @@ class Conv2d(Module):
         )
 
         self.bias = Parameter(
-            total_shape=[1, 1, 1, self.out_channels],
+            total_shape=[1, 1, 1, out_channels],
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             mesh_axes=[None, None, None, mesh_axis],
             on_host=True,
         )
 
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        self.dilation = dilation
+        self.mesh_device = mesh_device
+        self.mesh_axis = mesh_axis
+        self.ccl_manager = ccl_manager
+
         if torch_ref is not None:
             self.load_torch_state_dict(torch_ref.state_dict())
 
     @classmethod
-    def from_torch(cls, torch_ref, mesh_device, mesh_axis, ccl_manager):
-        layer = cls(
+    def from_torch(
+        cls,
+        torch_ref: torch.nn.Conv2d,
+        *,
+        mesh_device: ttnn.MeshDevice,
+        mesh_axis: int | None,
+        ccl_manager: CCLManager | None,
+    ) -> Self:
+        assert not isinstance(torch_ref.padding, str)
+
+        model = cls(
+            in_channels=torch_ref.in_channels,
+            out_channels=torch_ref.out_channels,
+            kernel_size=torch_ref.kernel_size,
+            stride=torch_ref.stride,
+            padding=torch_ref.padding,
+            dilation=torch_ref.dilation,
             mesh_device=mesh_device,
             mesh_axis=mesh_axis,
             ccl_manager=ccl_manager,
-            torch_ref=torch_ref,
         )
-        return layer
+
+        model.load_torch_state_dict(torch_ref.state_dict())
+
+        return model
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "bias" in state:
@@ -206,7 +254,7 @@ class Conv2d(Module):
         )
 
         try:
-            output_tensor, [_out_height, _out_width] = ttnn.conv2d(
+            output_tensor, [out_height, out_width] = ttnn.conv2d(
                 input_tensor=x,
                 weight_tensor=self.weight.data,
                 bias_tensor=self.bias.data if self.bias is not None else None,
@@ -236,4 +284,4 @@ class Conv2d(Module):
             )
             raise RuntimeError(msg) from e
 
-        return ttnn.reshape(output_tensor, (b, _out_height, _out_width, -1))
+        return ttnn.reshape(output_tensor, (b, out_height, out_width, -1))
