@@ -58,10 +58,10 @@ class TtGemmaImageFeedForward(LightweightModule):
         )
 
         # Sharded weights
-        self.c_fc_weight = as_interleaved_tensor("c_fc", "weight", dtype, dim=-1)
-        self.c_fc_bias = as_interleaved_tensor("c_fc", "bias", ttnn.bfloat16, dim=-1)
+        self.c_fc_weight = as_interleaved_tensor("c_fc", "weight", dtype, dim=None)
+        self.c_fc_bias = as_interleaved_tensor("c_fc", "bias", ttnn.bfloat16, dim=None)
         self.c_fc_bias = ttnn.reshape(self.c_fc_bias, [1, -1])
-        self.c_proj_weight = as_interleaved_tensor("c_proj", "weight", dtype, dim=-2)
+        self.c_proj_weight = as_interleaved_tensor("c_proj", "weight", dtype, dim=None)
         self.c_proj_bias = as_interleaved_tensor("c_proj", "bias", ttnn.bfloat16, dim=None)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -81,8 +81,6 @@ class TtGemmaImageFeedForward(LightweightModule):
         if seq_len >= MAX_MM_SEQ_LEN:  # Too big to compute. Set different program configs based on seqlen
             # Reshape input to to fit on device and parallelize computation
             x_in = ttnn.reshape(x_in, [batch_size, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
-        pc_1 = self.model_config["IMAGE_MLP_FC_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
-        pc_2 = self.model_config["IMAGE_MLP_PROJ_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
 
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
         c_fc_out = ttnn.linear(
@@ -107,11 +105,13 @@ class TtGemmaImageFeedForward(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        # TODO - unsqeeze samo?
         # NOTE: Need to reshape to 4D so that fast_reduce_nc hsa a dim1 to work on
         c_proj_out = ttnn.reshape(c_proj_out, [batch_size, 1, seq_len, -1])
 
+        DO_ALL_REDUCE = False
         # All reduce
-        if self.args.num_devices > 1:  # replace with reduce_scatter and all_gather
+        if self.args.num_devices > 1 and DO_ALL_REDUCE:  # replace with reduce_scatter and all_gather
             w2_out_gathered = ttnn.experimental.all_gather_async(
                 c_proj_out,
                 persistent_output_buffer=None,

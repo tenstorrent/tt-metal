@@ -104,6 +104,7 @@ class TtGemmaImageTransformerBlock(LightweightModule):
 
         attn_out = self.attn(self.ln_1(x_11SH), mask=mask)
         if self.gated:
+            assert False
             attn_out = ttnn.mul(attn_out, ttnn.tanh(self.gate_attn))
 
         # Align x_11SH shape with attn_out
@@ -113,6 +114,7 @@ class TtGemmaImageTransformerBlock(LightweightModule):
 
         mlp_out = self.mlp(self.ln_2(res))
         if self.gated:
+            assert False
             mlp_out = ttnn.mul(mlp_out, ttnn.tanh(self.gate_ffn))
         out = ttnn.add(res, mlp_out)
 
