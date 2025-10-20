@@ -197,7 +197,6 @@ jobs:
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_lb.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_p300.py \
             tests/ttnn/unit_tests/operations/ccl/test_ag_rs_llama_prefill_TG.py \
-            tests/ttnn/unit_tests/operations/ccl/test_all_gather_llama_perf_sweep.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_gather_matmul.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_reduce_async.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_reduce_t3000_frequent.py \
