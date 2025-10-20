@@ -747,7 +747,7 @@ class MochiTransformer3DModel:
         logger.info(f"Postprocessing spatial output with shape {spatial_1BND.shape}")
 
         assert (
-            self.mesh_device[self.parallel_config.sequence_parallel.mesh_axis] > 1
+            self.mesh_device.shape[self.parallel_config.sequence_parallel.mesh_axis] > 1
         ), "all_gather_async requires at least 1 device"
 
         # AllGather hanging for large seqlen
