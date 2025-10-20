@@ -181,6 +181,25 @@ while [[ "$found" == "false" ]]; do
   fi
   echo "::endgroup::"
 
+
+  detect_galaxy() {
+      local smi_output=$(tt-smi -ls 2>/dev/null)
+
+      if echo "$smi_output" | grep -q "Wormhole"; then
+          local device_count=$(echo "$smi_output" | grep -c "tt-galaxy-wh")
+          if [[ "$device_count" -ge 32 ]]; then
+              echo "topology-6u"
+              return 0
+          fi
+      fi
+
+      # Default for non-galaxy systems
+      echo ""
+  }
+
+  is_galaxy=$(detect_galaxy)
+  echo "Is Galaxy Detected: $is_galaxy"
+
   echo "::group::Testing $rev"
   output_file="bisect_test_output.log"
   if [ "$nd_mode" = true ]; then
@@ -191,8 +210,12 @@ while [[ "$found" == "false" ]]; do
     while [ $run_idx -le $retries ]; do
       echo "Attempt $run_idx/$retries on $(git rev-parse HEAD)"
       echo "Resetting devices..."
-      tt-smi -r >/dev/null 2>&1 || true
-      echo "Devices reset"
+      if [ "$is_galaxy" == "topology-6u" ]; then
+        echo "Using galaxy reset mode"
+        tt-smi -glx_reset_auto 2>&1 || true  # use galaxy reset mode
+      else
+        tt-smi -r >/dev/null 2>&1 || true  # use regular reset mode
+      fi
 
       echo "Run: $test"
       if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test" 2>&1 | tee "$output_file"; then
