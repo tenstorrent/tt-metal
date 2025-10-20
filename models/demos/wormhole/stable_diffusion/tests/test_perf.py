@@ -6,7 +6,6 @@ import os
 
 import pytest
 import torch
-from diffusers import AutoencoderKL, StableDiffusionPipeline
 from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
@@ -14,7 +13,12 @@ import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0, profiler
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE, SD_TRACE_REGION_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.demos.wormhole.stable_diffusion.sd_helper_funcs import run
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import (
+    STABLE_DIFFUSION_V1_4_MODEL_LOCATION,
+    get_reference_stable_diffusion_pipeline,
+    get_reference_vae,
+    run,
+)
 from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
@@ -49,7 +53,7 @@ def unsqueeze_all_params_to_4d(params):
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": SD_L1_SMALL_SIZE, "trace_region_size": SD_TRACE_REGION_SIZE}], indirect=True
 )
-def test_stable_diffusion_unet_trace(device):
+def test_stable_diffusion_unet_trace(device, is_ci_env, is_ci_v2_env, model_location_generator):
     assert is_wormhole_b0() or is_blackhole(), "SD 1.4 runs on Wormhole B0 or Blackhole"
 
     if is_wormhole_b0():
@@ -58,10 +62,7 @@ def test_stable_diffusion_unet_trace(device):
     profiler.clear()
     torch.manual_seed(0)
 
-    model_name = "CompVis/stable-diffusion-v1-4"
-    pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
-    torch_model = pipe.unet
-    torch_model.eval()
+    torch_model = get_reference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
     config = torch_model.config
 
     # Setup scheduler
@@ -71,7 +72,7 @@ def test_stable_diffusion_unet_trace(device):
     ttnn_scheduler.set_timesteps(4)
 
     parameters = preprocess_model_parameters(
-        model_name=model_name,
+        model_name=STABLE_DIFFUSION_V1_4_MODEL_LOCATION,
         initialize_model=lambda: torch_model,
         custom_preprocessor=custom_preprocessor,
         device=device,
@@ -177,14 +178,14 @@ def test_stable_diffusion_unet_trace(device):
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": SD_L1_SMALL_SIZE, "trace_region_size": SD_TRACE_REGION_SIZE}], indirect=True
 )
-def test_stable_diffusion_vae_trace(device):
+def test_stable_diffusion_vae_trace(device, is_ci_env, is_ci_v2_env, model_location_generator):
     if is_wormhole_b0():
         os.environ["TT_MM_THROTTLE_PERF"] = "5"
 
     profiler.clear()
     torch.manual_seed(0)
 
-    vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
+    vae = get_reference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
     ttnn_model = Vae(torch_vae=vae, device=device)
 
     input_channels = 4
@@ -254,7 +255,16 @@ def test_stable_diffusion_vae_trace(device):
         (1, 50, 3600, 6.31) if is_wormhole_b0() else (1, 50, 3600, 3.50),  # Wormhole B0 vs Blackhole performance
     ],
 )
-def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected_compile_time, expected_inference_time):
+def test_stable_diffusion_perf(
+    device,
+    batch_size,
+    num_inference_steps,
+    expected_compile_time,
+    expected_inference_time,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+):
     assert (
         num_inference_steps >= 4
     ), f"PNDMScheduler only supports num_inference_steps >= 4. Found num_inference_steps={num_inference_steps}"
@@ -273,11 +283,9 @@ def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected
 
     # setup pytorch model
     torch.manual_seed(0)
-    model_name = "CompVis/stable-diffusion-v1-4"
-    pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
-    model = pipe.unet
-    vae = pipe.vae
-    model.eval()
+    ref_model = get_reference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator)
+    model = ref_model.unet
+    vae = ref_model.vae
     config = model.config
 
     # setup scheduler
@@ -297,7 +305,10 @@ def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected
     ttnn_scheduler.set_timesteps(num_inference_steps)
 
     parameters = preprocess_model_parameters(
-        model_name=model_name, initialize_model=lambda: model, custom_preprocessor=custom_preprocessor, device=device
+        model_name=STABLE_DIFFUSION_V1_4_MODEL_LOCATION,
+        initialize_model=lambda: model,
+        custom_preprocessor=custom_preprocessor,
+        device=device,
     )
 
     # unsqueeze weight tensors to 4D for generating perf dump

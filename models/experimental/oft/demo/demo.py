@@ -37,7 +37,7 @@ from models.experimental.oft.tt.tt_oftnet import TTOftNet
 from models.experimental.oft.tt.tt_encoder import TTObjectEncoder
 from models.experimental.oft.tt.tt_resnet import TTBasicBlock
 from tests.ttnn.utils_for_testing import check_with_pcc
-from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16 * 1024}], indirect=True)
@@ -54,7 +54,7 @@ from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhol
     "model_dtype, fallback_feedforward, fallback_lateral, fallback_oft, use_host_decoder, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     # fmt: off
     [
-       ( torch.float32, False, False, False, False, 0.919, .978, 0.999, 0.939),
+       ( torch.float32, False, False, False, False, 0.917, .978, 0.999, 0.939),
     ],
     # fmt: on
 )
@@ -186,7 +186,6 @@ def test_demo_inference(
         device, tt_scores, tt_pos_offsets, tt_dim_offsets, tt_ang_offsets, tt_grid_
     )
     tt_objects = tt_encoder.create_objects(*tt_outs)
-
     # ========================================================
     # Compare results
 

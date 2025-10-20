@@ -180,15 +180,17 @@ def batch_encode_prompt_on_device(
             the output of the pre-final layer will be used for computing the prompt embeddings.
     """
     prompt = [prompt] if isinstance(prompt, str) else prompt
+    prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
 
     num_devices = ttnn_device.get_num_devices()
     num_prompts = len(prompt)
     if use_cfg_parallel and num_prompts < num_devices:
         # Pad prompts by appending empty strings to match num_devices
         prompt = prompt + [""] * (num_devices - len(prompt))
+        if prompt_2 is not None:
+            prompt_2 = prompt_2 + [""] * (num_devices - len(prompt_2))
 
     assert len(prompt) == num_devices, "Prompt length must be equal to number of devices"
-    assert prompt_2 is None, "Prompt 2 is not supported currently"
     assert lora_scale is None, "Lora scale is not supported currently with on device text encoders"
     assert clip_skip is None, "Clip skip is not supported currently with on device text encoders"
     assert prompt_embeds is None, "Prompt embeds is not supported currently with on device text encoders"
@@ -212,7 +214,6 @@ def batch_encode_prompt_on_device(
 
     if prompt_embeds is None:
         prompt_2 = prompt_2 or prompt
-        prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
 
         # textual inversion: process multi-vector tokens if necessary
         prompt_embeds_list = []
@@ -515,6 +516,7 @@ def run_tt_image_gen(
     tid_vae=None,
     capture_trace=False,
     use_cfg_parallel=False,
+    guidance_rescale=0.0,
 ):
     assert not (capture_trace and len(tt_timesteps) != 1), "Trace should capture only 1 iteration"
     profiler.start("image_gen")
@@ -560,15 +562,46 @@ def run_tt_image_gen(
             else:
                 noise_pred_uncond, noise_pred_text = unet_outputs
 
+            # ttnn.clone doesn't work with L1 sharded tensors
+            noise_pred_text_new = ttnn.to_memory_config(noise_pred_text, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(noise_pred_text)
+            noise_pred_text = noise_pred_text_new
+            noise_pred_text_orig = ttnn.clone(noise_pred_text)
+
             # perform guidance
             noise_pred_text = ttnn.sub_(noise_pred_text, noise_pred_uncond)
             noise_pred_text = ttnn.mul_(noise_pred_text, guidance_scale)
-            noise_pred = ttnn.add_(noise_pred_uncond, noise_pred_text)
-
-            tt_latents = tt_scheduler.step(noise_pred, None, tt_latents, **tt_extra_step_kwargs, return_dict=False)[0]
+            noise_pred = ttnn.add(noise_pred_uncond, noise_pred_text)
 
             ttnn.deallocate(noise_pred_uncond)
             ttnn.deallocate(noise_pred_text)
+
+            noise_pred_new = ttnn.to_memory_config(noise_pred, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(noise_pred)
+            noise_pred = noise_pred_new
+
+            # perform guidance rescale
+            std_text = ttnn.std(noise_pred_text_orig, dim=[1, 2, 3], keepdim=True)
+            std_cfg = ttnn.std(noise_pred, dim=[1, 2, 3], keepdim=True)
+
+            std_ratio = ttnn.div(std_text, std_cfg)
+
+            noise_pred_rescaled = ttnn.mul(noise_pred, std_ratio)
+
+            rescaled_term = ttnn.mul(noise_pred_rescaled, guidance_rescale)
+            original_term = ttnn.mul(noise_pred, (1.0 - guidance_rescale))
+            ttnn.deallocate(noise_pred)
+            noise_pred = ttnn.add(rescaled_term, original_term)
+            ttnn.deallocate(std_text)
+            ttnn.deallocate(std_cfg)
+            ttnn.deallocate(std_ratio)
+            ttnn.deallocate(noise_pred_rescaled)
+            ttnn.deallocate(rescaled_term)
+            ttnn.deallocate(original_term)
+            ttnn.deallocate(noise_pred_text_orig)
+            noise_pred = ttnn.move(noise_pred)
+
+            tt_latents = tt_scheduler.step(noise_pred, None, tt_latents, **tt_extra_step_kwargs, return_dict=False)[0]
 
             if capture_trace:
                 ttnn.end_trace_capture(ttnn_device, tid, cq_id=0)
