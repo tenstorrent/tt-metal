@@ -83,6 +83,11 @@ void kernel_main() {
     constexpr uint32_t stage_size = keepdim ? tile_height : logical_height;
     uint32_t accumulated_arg_max[stage_size] = {0};
 
+    constexpr uint32_t tile_height_rem = logical_height % tile_height;
+    constexpr uint32_t tile_width_rem = logical_width % tile_width;
+    constexpr uint32_t face_height_rem = logical_height % face_height;
+    constexpr uint32_t face_width_rem = logical_width % face_width;
+
     const InputContext input_ctx(
         tile_height,
         tile_width,
@@ -90,6 +95,10 @@ void kernel_main() {
         input_width,
         logical_height,
         logical_width,
+        tile_height_rem,
+        tile_width_rem,
+        face_height_rem,
+        face_width_rem,
         src_data_format,
         src_cb_addr);
 
@@ -109,12 +118,11 @@ void kernel_main() {
             }
 
             // Count output units to be generated in this iteration.
-            constexpr uint32_t height_rem = logical_height % tile_height;
             uint32_t units_generated = 0;
-            if (height_rem == 0 || i < input_height - 1) {
+            if (tile_height_rem == 0 || i < input_height - 1) {
                 units_generated = tile_height;
             } else {
-                units_generated = height_rem;
+                units_generated = tile_height_rem;
             }
 
             for (uint32_t j = 0; j < input_width; j++) {
@@ -154,13 +162,10 @@ void get_face_data_range(
     const bool is_right_most_tile = tile_x == (ctx.input_width - 1);
 
     // Initialize the range as full face
-    data_rows = face_width;
-    data_cols = face_height;
+    data_rows = face_height;
+    data_cols = face_width;
 
-    // Check if there is any padding data
-    const uint32_t height_rem = ctx.logical_height % ctx.tile_height;
-    const uint32_t width_rem = ctx.logical_width % ctx.tile_width;
-    if (height_rem == 0 && width_rem == 0) {
+    if (!ctx.has_padding) {
         return;
     }
 
@@ -172,48 +177,37 @@ void get_face_data_range(
     const bool is_right_face = (face_id == 1 || face_id == 3);
     const bool is_bottom_face = (face_id == 2 || face_id == 3);
 
-    int face_w_rem = 0;
-    int face_h_rem = 0;
-    if (is_bottom_tile || is_right_most_tile) {
-        if (width_rem != 0 || height_rem != 0) {
-            face_w_rem = ctx.logical_width % face_width;
-            face_h_rem = ctx.logical_height % face_height;
-        }
-    }
-
-    if (is_bottom_tile) {
+    const uint32_t height_rem = ctx.tile_h_rem;
+    if (is_bottom_tile && height_rem != 0) {
         if (is_bottom_face) {
-            const bool skip_bottom_face = height_rem != 0 && (height_rem < face_height);
+            const bool skip_bottom_face = height_rem < face_height;
             if (skip_bottom_face) {
                 data_rows = 0;
                 data_cols = 0;
                 return;
             }
-            if (height_rem != 0) {
-                data_rows = face_h_rem;
-            }
+            data_rows = ctx.face_h_rem;
         } else {
             // One of the upper faces
-            if (height_rem != 0 && height_rem < face_height) {
+            if (height_rem < face_height) {
                 data_rows = height_rem;
             }
         }
     }
 
-    if (is_right_most_tile) {
+    const uint32_t width_rem = ctx.tile_w_rem;
+    if (is_right_most_tile && width_rem != 0) {
         if (is_right_face) {
-            const bool skip_right_face = width_rem != 0 && (width_rem < face_width);
+            const bool skip_right_face = width_rem < face_width;
             if (skip_right_face) {
                 data_rows = 0;
                 data_cols = 0;
                 return;
             }
-            if (width_rem != 0) {
-                data_cols = face_w_rem;
-            }
+            data_cols = ctx.face_w_rem;
         } else {
-            if (width_rem != 0 && width_rem < face_width) {
-                data_cols = face_w_rem;
+            if (width_rem < face_width) {
+                data_cols = width_rem;
             }
         }
     }

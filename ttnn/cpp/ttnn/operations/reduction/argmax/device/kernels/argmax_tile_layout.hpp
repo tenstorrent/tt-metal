@@ -14,7 +14,6 @@ constexpr uint32_t face_size = face_width * face_height;
 /**
  * @brief Struct container that gathers parameters (e.g., shape, data format)
  * that are related to the input tensor
- *
  */
 struct InputContext {
     // Tensor tile shape
@@ -32,6 +31,14 @@ struct InputContext {
     const DataFormat data_format;
     const uint32_t cb_addr;
 
+    // Reminders for calculating padding offsets
+    const uint32_t tile_h_rem;
+    const uint32_t tile_w_rem;
+    const uint32_t face_h_rem;
+    const uint32_t face_w_rem;
+
+    // Convenience field to check
+    // whether input tensor contains any padding data
     const bool has_padding;
 
     InputContext() = delete;
@@ -44,6 +51,10 @@ struct InputContext {
         uint32_t tiles_w,
         uint32_t data_h,
         uint32_t data_w,
+        uint32_t t_h_rem,
+        uint32_t t_w_rem,
+        uint32_t f_h_rem,
+        uint32_t f_w_rem,
         DataFormat format,
         uint32_t l1_cb_addr) :
         tile_height(tile_h),
@@ -54,7 +65,11 @@ struct InputContext {
         logical_width(data_w),
         data_format(format),
         cb_addr(l1_cb_addr),
-        has_padding((input_height % tile_height != 0) || (input_width % tile_width != 0)) {}
+        tile_h_rem(t_h_rem),
+        tile_w_rem(t_w_rem),
+        face_h_rem(f_h_rem),
+        face_w_rem(f_w_rem),
+        has_padding((t_h_rem != 0) || (t_w_rem != 0)) {}
 };
 
 /**
@@ -158,6 +173,9 @@ void process_input_tile(
         // Update for when face intersects the boundary with padding
         if (has_padding) {
             get_face_data_range(rows_to_process, cols_to_process, tile_x, tile_y, face_id, ctx);
+            WAYPOINT("AST5");
+            ASSERT(rows_to_process <= face_height);
+            ASSERT(cols_to_process <= face_width);
         }
 
         if (rows_to_process == 0 && cols_to_process == 0) {
