@@ -14,7 +14,7 @@
 
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/common/constants.hpp"
-#include "ttnn/api/ttnn/types.hpp"
+#include "ttnn/types.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
