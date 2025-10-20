@@ -14,6 +14,8 @@ void MAIN {
     // -----------------
     constexpr auto total_batches_per_core = get_compile_time_arg_val(0);
     constexpr auto tiles_per_channel = get_compile_time_arg_val(1);
+    constexpr auto alpha_bits = get_compile_time_arg_val(2);
+    constexpr auto beta_bits = get_compile_time_arg_val(3);
 
     // CB indices
     // ----------
