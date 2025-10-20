@@ -24,8 +24,8 @@ namespace tt::tt_fabric::fabric_tests {
 // Device identifier that can be resolved later (used during parsing)
 using DeviceIdentifier = std::variant<
     FabricNodeId,                      // Already resolved
-    chip_id_t,                         // Physical chip ID
-    std::pair<MeshId, chip_id_t>,      // [mesh_id, chip_id]
+    ChipId,                            // Physical chip ID
+    std::pair<MeshId, ChipId>,         // [mesh_id, chip_id]
     std::pair<MeshId, MeshCoordinate>  // [mesh_id, [row, col]]
     >;
 
@@ -251,7 +251,7 @@ struct AllocatorPolicies {
 
 struct PhysicalMeshConfig {
     std::string mesh_descriptor_path;
-    std::vector<std::vector<eth_coord_t>> eth_coord_mapping;
+    std::vector<std::vector<EthCoord>> eth_coord_mapping;
 
     PhysicalMeshConfig() : eth_coord_mapping({}) {
         // Default path to the mesh descriptor.

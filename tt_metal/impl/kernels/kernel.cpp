@@ -47,8 +47,8 @@ namespace {
 // If the path is not an absolute path, then it must be resolved relative to:
 // 1. CWD
 // 2. TT_METAL_KERNEL_PATH
-// 3. System Kernel Directory
-// 4. TT_METAL_HOME / SetRootDir (API)
+// 3. TT_METAL_HOME / SetRootDir (API)
+// 4. System Kernel Directory
 fs::path resolve_path(const fs::path& given_file_name) {
     // Priority 0: Absolute path
     if (given_file_name.is_absolute()) {
@@ -73,18 +73,18 @@ fs::path resolve_path(const fs::path& given_file_name) {
         }
     }
 
-    // Priority 3: System kernel directory
-    auto system_kernel_dir_search_path = fs::absolute(fs::path(rtoptions.get_system_kernel_dir()) / given_file_name);
-    if (fs::exists(system_kernel_dir_search_path)) {
-        return system_kernel_dir_search_path;
-    }
-
-    // Priority 4: Root directory
-    {
+    // Priority 3: Root directory
+    if (rtoptions.is_root_dir_specified()) {
         auto root_dir_search_path = fs::absolute(fs::path(rtoptions.get_root_dir()) / given_file_name);
         if (fs::exists(root_dir_search_path)) {
             return root_dir_search_path;
         }
+    }
+
+    // Priority 4: System kernel directory
+    auto system_kernel_dir_search_path = fs::absolute(fs::path(rtoptions.get_system_kernel_dir()) / given_file_name);
+    if (fs::exists(system_kernel_dir_search_path)) {
+        return system_kernel_dir_search_path;
     }
 
     // Not found
