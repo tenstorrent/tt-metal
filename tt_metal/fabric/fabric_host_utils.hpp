@@ -8,7 +8,7 @@
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_graph.hpp>                   // FabricType
-#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include <llrt/tt_cluster.hpp>
 #include "erisc_datamover_builder.hpp"
 #include <set>
@@ -32,11 +32,13 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, RoutingDirection direction);
 
 // Helper: Build adjacency map and discover corners/edges using BFS
-using AdjacencyMap = std::unordered_map<chip_id_t, std::vector<chip_id_t>>;
+using AdjacencyMap = std::unordered_map<ChipId, std::vector<ChipId>>;
 struct IntraMeshAdjacencyMap {
     AdjacencyMap adjacency_map;
-    std::vector<chip_id_t> corners;  // Should always be size 2 for 1D meshes, 4 for 2D meshes, populated in order of closest to chip 0 by default
-    std::vector<chip_id_t> edges;    // Should always be size 2 for 1D meshes, 4 for 2D meshes, populated in order of closest to chip 0 by default
+    std::vector<ChipId> corners;  // Should always be size 2 for 1D meshes, 4 for 2D meshes, populated in order of
+                                  // closest to chip 0 by default
+    std::vector<ChipId> edges;  // Should always be size 2 for 1D meshes, 4 for 2D meshes, populated in order of closest
+                                // to chip 0 by default
     std::uint32_t ns_size{};         // North-South size (rows)
     std::uint32_t ew_size{};         // East-West size (columns)
 };
