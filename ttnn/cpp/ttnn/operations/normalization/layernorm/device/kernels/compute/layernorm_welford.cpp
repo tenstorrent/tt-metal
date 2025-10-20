@@ -17,6 +17,12 @@
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #include "compute_kernel_api/welford.h"
 #include "compute_kernel_api/transpose_wh.h"
+#include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/numeric.h"
+#include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/memory.h"
+
+#include <array>
+
+namespace kutil = norm::kernel_util;
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -50,6 +56,8 @@ void MAIN {
     constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // E[(x-E[x])^2]+eps
     constexpr auto cb_fusion = tt::CBIndex::c_22;  // stream gamma/beta
     constexpr auto cb_im_or_out = (do_gamma | do_beta) ? cb_fusion : cb_out;
+    constexpr auto cb_integers = tt::CBIndex::c_25;     // Tile containing consecutive integers [1, 2, ... TILE_HW]
+    constexpr auto cb_reciprocals = tt::CBIndex::c_26;  // Computed reciprocals for Welford's algorithm
 
     constexpr auto scaler0 = 0;
 
@@ -101,8 +109,12 @@ void MAIN {
         }
 
         // Simultaneous calculation of E[x] and Var[x] using Welford's algorithm
-        ACQ();
+        // Generate reciprocals
+        cb_wait_front(cb_integers, 1);
+        kutil::compute::numeric::sfpu::generate_consecutive_reciprocal_tiles<W>(cb_integers, cb_reciprocals);
+        auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<std::array<uint32_t, W>>(cb_reciprocals, 0);
 
+        // Run Welford's
         uint32_t start_N = 0;
         transpose_wh_init_short(cb_x);
         welford_init();
@@ -111,7 +123,7 @@ void MAIN {
             for (uint32_t j = 0; j < blk; j++) {
                 // Welford's needs transposed input tile
                 transpose_wh_tile(cb_x, wt + j, dst0);
-                welford_tile<dst0, dst1, dst2, true, 0>(start_N, W, 0, {});
+                welford_tile<dst0, dst1, dst2, true, W>(start_N, W, 0, *p_reciprocals);
                 start_N += tile_width;
             }
         }

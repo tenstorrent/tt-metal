@@ -18,7 +18,7 @@ file(
     layernorm/device/kernels/*
     layernorm_distributed/device/kernels/*
     softmax/device/kernels/*
-    kernel_util/compute/*
+    kernel_util/*
 )
 target_sources(
     ttnn_op_normalization

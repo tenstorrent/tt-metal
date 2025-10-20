@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * @file welford_combine_compute.h
+ * @file combine_welford.h
  * @brief Combines sets of Welford partial mean and variance
  *        results using the compute API (invoked from compute kernels)
  */
@@ -19,32 +19,9 @@
 #include "compute_kernel_api/eltwise_unary/fill.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/reg_api.h"
+#include "ttnn/cpp/ttnn/operations/normalization/kernel_util/generic/bit.h"
 
 namespace norm::kernel_util::compute {
-namespace detail {
-/**
- * @brief C++17 compatible bit_cast replacement using union
- * @tparam To The type to cast to
- * @tparam From The type to cast from
- * @param from The value to cast from
- * @return The casted value
- */
-template <typename To, typename From>
-inline To bit_cast(const From& from) noexcept {
-    static_assert(sizeof(To) == sizeof(From), "Types must have same size");
-    static_assert(std::is_trivially_copyable_v<From>, "From must be trivially copyable");
-    static_assert(std::is_trivially_copyable_v<To>, "To must be trivially copyable");
-
-    union {
-        From f;
-        To t;
-    } u;
-
-    u.f = from;
-    return u.t;
-}
-}  // namespace detail
-
 /**
  * @brief Policy used to optionally compute 1/sqrt(Var[x] + eps)
  *        when combining Welford partial results
@@ -115,11 +92,11 @@ inline void combine_welford_partials(
 
         // Multiply accumulated mean by n_a_norm
         binop_with_scalar_tile_init();
-        mul_unary_tile(mean_acc_dst, detail::bit_cast<uint32_t>(n_a_norm));
+        mul_unary_tile(mean_acc_dst, norm::kernel_util::generic::bit_cast<uint32_t>(n_a_norm));
 
         // Multiply x_b by n_b_norm
         binop_with_scalar_tile_init();
-        mul_unary_tile(tmp_dst1, detail::bit_cast<uint32_t>(n_b_norm));
+        mul_unary_tile(tmp_dst1, norm::kernel_util::generic::bit_cast<uint32_t>(n_b_norm));
 
         // Accumulate n_b_norm * x_b into mean
         add_binary_tile_init();
@@ -131,7 +108,7 @@ inline void combine_welford_partials(
 
         // Multiply delta^2 by n_a * n_b_norm
         binop_with_scalar_tile_init();
-        mul_unary_tile(tmp_dst0, detail::bit_cast<uint32_t>(n_a * n_b_norm));
+        mul_unary_tile(tmp_dst0, norm::kernel_util::generic::bit_cast<uint32_t>(n_a * n_b_norm));
 
         // Accumulate into M2
         add_binary_tile_init();
@@ -143,7 +120,7 @@ inline void combine_welford_partials(
 
         // Multiply var_b by n_b to get M2_b, store in dst0
         binop_with_scalar_tile_init();
-        mul_unary_tile(tmp_dst0, detail::bit_cast<uint32_t>(n_b));
+        mul_unary_tile(tmp_dst0, norm::kernel_util::generic::bit_cast<uint32_t>(n_b));
 
         // Accumulate into M2
         add_binary_tile_init();
@@ -155,7 +132,7 @@ inline void combine_welford_partials(
 
     // Convert final M2 to var
     binop_with_scalar_tile_init();
-    mul_unary_tile(m2_acc_dst, detail::bit_cast<uint32_t>(1.f / acc_n));
+    mul_unary_tile(m2_acc_dst, norm::kernel_util::generic::bit_cast<uint32_t>(1.f / acc_n));
 
     // Compute 1/sqrt(Var[x] + eps) if enabled
     if (rsqrt_policy.compute) {

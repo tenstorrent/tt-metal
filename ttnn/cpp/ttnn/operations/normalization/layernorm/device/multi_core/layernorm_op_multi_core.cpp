@@ -129,18 +129,25 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     tt::DataFormat beta_cb_data_format = beta.has_value()
                                              ? tt::tt_metal::datatype_to_dataformat_converter(beta.value().dtype())
                                              : tt::DataFormat::Float16_b;
+    tt::DataFormat integers_data_format = tt::DataFormat::Float32;
+    tt::DataFormat reciprocal_cb_data_format = tt::DataFormat::Float32;
+
     uint32_t in_single_tile_size = tt::tile_size(in_data_format);
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
     uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
     uint32_t gamma_single_tile_size = tt::tile_size(gamma_cb_data_format);
     uint32_t beta_single_tile_size = tt::tile_size(beta_cb_data_format);
+    uint32_t integers_single_tile_size = tt::tile_size(integers_data_format);
+    uint32_t reciprocal_single_tile_size = tt::tile_size(reciprocal_cb_data_format);
 
     log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
     log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
     log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
     log_debug(tt::LogOp, "gamma_cb_data_format: {}", gamma_cb_data_format);
     log_debug(tt::LogOp, "beta_cb_data_format: {}", beta_cb_data_format);
+    log_debug(tt::LogOp, "integers_data_format: {}", integers_data_format);
+    log_debug(tt::LogOp, "reciprocal_cb_data_format: {}", reciprocal_cb_data_format);
     log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
     log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
@@ -159,6 +166,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
     uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
+    uint32_t num_reciprocal_tiles = use_welford ? tt::div_up(W, TILE_HW) : 0;
+    uint32_t reciprocal_CB_size = num_reciprocal_tiles * reciprocal_single_tile_size;
 
     // For bert, tensor is packed as RM with width 32
     if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
@@ -289,7 +298,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         reader_compile_time_args.push_back(tile_size(datatype_to_dataformat_converter(a.dtype())));
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)block_size};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)block_size, (std::uint32_t)use_welford};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines;
@@ -459,6 +468,19 @@ operation::ProgramWithCallbacks layernorm_multi_core(
             CircularBufferConfig(in1_t * inb_single_tile_size, {{tt::CBIndex::c_1, inb_data_format}})
                 .set_page_size(tt::CBIndex::c_1, inb_single_tile_size);
         CreateCircularBuffer(program, all_cores, c_in1_config);
+    }
+    if (use_welford) {
+        // This is an integer tile of increasing values
+        CircularBufferConfig cb_integers_config =
+            CircularBufferConfig(integers_single_tile_size, {{tt::CBIndex::c_25, integers_data_format}})
+                .set_page_size(tt::CBIndex::c_25, integers_single_tile_size);
+        CreateCircularBuffer(program, all_cores, cb_integers_config);
+
+        // The reciprocal tiles
+        CircularBufferConfig cb_reciprocals_config =
+            CircularBufferConfig(reciprocal_CB_size, {{tt::CBIndex::c_26, reciprocal_cb_data_format}})
+                .set_page_size(tt::CBIndex::c_26, reciprocal_single_tile_size);
+        CreateCircularBuffer(program, all_cores, cb_reciprocals_config);
     }
 
     uint32_t curr_row = 0;
