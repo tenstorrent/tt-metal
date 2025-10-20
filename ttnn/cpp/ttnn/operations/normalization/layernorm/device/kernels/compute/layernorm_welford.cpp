@@ -114,16 +114,16 @@ void MAIN {
         auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<std::array<uint32_t, W>>(cb_reciprocals, 0);
 
         // Run Welford's
-        uint32_t start_N = 0;
+        reconfig_data_format_srca(cb_x);
         transpose_wh_init_short(cb_x);
         welford_init();
+        ACQ();
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_x, wt + blk);
             for (uint32_t j = 0; j < blk; j++) {
                 // Welford's needs transposed input tile
                 transpose_wh_tile(cb_x, wt + j, dst0);
-                welford_tile<dst0, dst1, dst2, true, W>(start_N, W, 0, *p_reciprocals);
-                start_N += tile_width;
+                welford_tile<dst0, dst1, dst2, true, W>((wt + j) * tile_width, W, 0, *p_reciprocals);
             }
         }
 
