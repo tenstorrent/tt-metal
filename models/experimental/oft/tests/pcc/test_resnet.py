@@ -61,7 +61,7 @@ def test_resnetfeatures_forward(device, input_image_path, input_shape, layers, e
     feats32 = feats32.reshape(1, 1, n * h * w, c)
 
     ttnn_input = torch_tensor.permute(0, 2, 3, 1)
-    ttnn_input = ttnn.from_torch(ttnn_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_input = ttnn.from_torch(ttnn_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     tt_module = TTResNetFeatures(
         device,
