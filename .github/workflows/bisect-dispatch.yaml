@@ -51,11 +51,21 @@ on:
         type: string
         default: "3"
         description: "Number of retries (default 3)"
+      download-artifacts:
+        required: false
+        type: boolean
+        default: true
+        description: "Download artifacts from GitHub for each commit (requires gh cli to be authenticated)"
       gist-url:
         required: false
         type: string
         default: ""
         description: "Optional GitHub gist URL for a .sh script to run instead of command"
+
+permissions:
+  actions: write
+  contents: write
+
 run-name: "Bisect on ${{ inputs.runner-label }}"
 jobs:
   test-dispatch:
@@ -66,8 +76,9 @@ jobs:
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
-      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest
+      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:dec9417e1b2b355d286ee299d80f97f587aa27ec
       env:
+        GH_TOKEN: ${{ github.token }}
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: DEBUG
         PYTHONPATH: /work
@@ -117,6 +128,46 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: 🔧 Setup GitHub CLI and jq
+        if: ${{ inputs.download-artifacts == true }}
+        run: |
+          echo "Checking GitHub CLI, jq, and zstd installation..."
+
+          # Check and install GitHub CLI
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "Installing GitHub CLI 2.81.0..."
+            apt-get update
+            wget -O gh_2.81.0_linux_amd64.deb https://github.com/cli/cli/releases/download/v2.81.0/gh_2.81.0_linux_amd64.deb
+            apt-get install -y --no-install-recommends ./gh_2.81.0_linux_amd64.deb
+            rm -f gh_2.81.0_linux_amd64.deb
+            echo "GitHub CLI 2.81.0 installed successfully"
+          else
+            echo "GitHub CLI is already installed"
+          fi
+
+          # Check and install jq and zstd
+          if ! command -v jq >/dev/null 2>&1 || ! command -v zstd >/dev/null 2>&1; then
+            echo "Installing jq and zstd..."
+            apt-get update
+            apt-get install -y --no-install-recommends jq zstd
+            echo "jq and zstd installed successfully"
+          else
+            echo "jq and zstd are already installed"
+          fi
+
+          # Verify installations
+          echo "Verifying installations:"
+          gh --version
+          jq --version
+          zstd --version
+
+          # Check GitHub CLI authentication (GH_TOKEN is provided via env)
+          echo "Checking GitHub CLI authentication status:"
+          gh auth status || echo "WARNING: Authentication check failed"
+
+          echo "Testing gh CLI with current repository:"
+          echo "Repository: $(gh repo view --repo tenstorrent/tt-metal --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo 'Failed to get repo info')"
+        shell: bash
       - name: Download Gist Script
         if: ${{ inputs.gist-url != '' }}
         shell: bash
@@ -167,6 +218,7 @@ jobs:
       - name: Run Git Bisect
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           GIT_COMMITTER_NAME: "GitHub Actions"
           GIT_COMMITTER_EMAIL: "actions@github.com"
         run: |
@@ -174,7 +226,9 @@ jobs:
           trap 'rm -rf ./build_bisect' EXIT
           mkdir -p ./build_bisect
           cp ./tests/scripts/tt_bisect.sh ./build_bisect/
+          cp ./tests/scripts/download_artifacts.sh ./build_bisect/
           chmod +x ./build_bisect/tt_bisect.sh
+          chmod +x ./build_bisect/download_artifacts.sh
 
           # Determine which script to run
           SCRIPT_PATH=""

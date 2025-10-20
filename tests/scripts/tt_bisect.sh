@@ -13,6 +13,7 @@ Usage:
   -p             : enable Tracy profiling
   -r RETRIES     : number of retries (default 3)
   -n             : enable non-deterministic detection mode (ND mode)
+  -a             : enable artifact download optimization (requires gh CLI)
 Note: Either -f or -s must be specified, but not both.
 END
 
@@ -24,6 +25,7 @@ bad_commit=""
 tracy_enabled=0
 retries=3
 nd_mode=false
+artifact_mode=false
 run_idx=0
 timeout_rc=1
 
@@ -32,7 +34,7 @@ echo "setting the compiler versions to clang-17"
 export CC=clang-17
 export CXX=clang++-17
 
-while getopts ":f:s:g:b:t:pr:n" opt; do
+while getopts ":f:s:g:b:t:pr:na" opt; do
   case "$opt" in
     f) test="$OPTARG" ;;
     s) script_path="$OPTARG" ;;
@@ -42,6 +44,7 @@ while getopts ":f:s:g:b:t:pr:n" opt; do
     p) tracy_enabled=1 ;;
     r) retries="$OPTARG" ;;
     n) nd_mode=true ;;
+    a) artifact_mode=true ;;
     \?) die "Invalid option: -$OPTARG" ;;
     :)  die "Option -$OPTARG requires an argument." ;;
   esac
@@ -62,7 +65,6 @@ if [ -n "$script_path" ] && [ ! -f "$script_path" ]; then
   die "Script not found: $script_path"
 fi
 
-
 echo "TT_METAL_HOME: $TT_METAL_HOME"
 echo "PYTHONPATH: $PYTHONPATH"
 echo "ARCH_NAME: ${ARCH_NAME:-}"
@@ -71,44 +73,18 @@ if [ "$tracy_enabled" -eq 1 ]; then
   echo "Tracy profiling enabled for builds."
 fi
 
-if [ -n "$script_path" ]; then
-  echo "script path is set: $script_path"
-else
-  echo "command is set: $test"
+if [ "$artifact_mode" = true ]; then
+  echo "Artifact download optimization enabled."
 fi
 
-# Creating virtual environment
-python3 -m venv python_env
-source ./python_env/bin/activate
-
-# Detect OS (like create_venv.sh does)
-# Temporarily disable unbound variable check for install_dependencies.sh
-set +u
-. ./install_dependencies.sh --source-only
-detect_os
-set -u
-
-# Match create_venv.sh pip/setuptools/wheel setup
-if [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "22.04" ]; then
-    echo "Ubuntu 22.04 detected: force pip/setuptools/wheel versions"
-    pip install --force-reinstall pip==25.1.1
-    python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
-    python3 -m pip install setuptools wheel==0.45.1
+# Set up environment (skip if already in CI container with pre-configured venv)
+if [ ! -d "$PYTHON_ENV_DIR" ]; then
+  echo "Creating virtual environment and installing dependencies..."
+  CXX=clang++-17 CC=clang-17 ./create_venv.sh
+  pip install -r models/tt_transformers/requirements.txt
 else
-    echo "$OS_ID $OS_VERSION detected: updating wheel and setuptools to latest"
-    python3 -m pip install --upgrade wheel setuptools
+  echo "Using existing virtual environment: $PYTHON_ENV_DIR"
 fi
-
-# Install dev dependencies (needed for building C++ extensions)
-python3 -m pip install -r $(pwd)/tt_metal/python_env/requirements-dev.txt
-
-# Install ttnn (builds wheel with C++ extensions)
-pip install -e .
-
-# Install additional test requirements
-pip install -r models/tt_transformers/requirements.txt
-
-
 
 git cat-file -e "$good_commit^{commit}" 2>/dev/null || die "Invalid good commit: $good_commit"
 git cat-file -e "$bad_commit^{commit}" 2>/dev/null  || die "Invalid bad commit: $bad_commit"
@@ -150,26 +126,67 @@ print("ttnn imported from:", ttnn.__file__)
 PY
 }
 
+# Try to download build artifacts from GitHub Actions using external script
+try_download_artifacts() {
+  local commit_sha="$1"
+  local download_script="./build_bisect/download_artifacts.sh"
+
+  if [ ! -f "$download_script" ]; then
+    echo "ERROR: Download artifacts script not found: $download_script"
+    return 1
+  fi
+
+  # Call the external script with appropriate flags
+  if [ "$tracy_enabled" -eq 1 ]; then
+    "$download_script" "$commit_sha" --tracy
+  else
+    "$download_script" "$commit_sha"
+  fi
+}
+
 echo "Starting git bisect…"
 git bisect start "$bad_commit" "$good_commit"
 
 found=false
 while [[ "$found" == "false" ]]; do
   rev="$(git rev-parse --short=12 HEAD)"
+  full_sha="$(git rev-parse HEAD)"
   echo "::group::Building $rev"
 
   fresh_clean
 
   build_rc=0
-  if [ "$tracy_enabled" -eq 1 ]; then
-    ./build_metal.sh \
-      --build-all \
-      --enable-ccache \
-      --enable-profiler || build_rc=$?
+
+  # Try to download artifacts first if artifact mode is enabled
+  if [ "$artifact_mode" = true ]; then
+    if try_download_artifacts "$full_sha"; then
+      echo "Using downloaded artifacts for $rev"
+      build_rc=0
+    else
+      echo "WARNING: Artifact download failed, falling back to local build"
+      if [ "$tracy_enabled" -eq 1 ]; then
+        ./build_metal.sh \
+          --build-all \
+          --enable-ccache \
+          --enable-profiler || build_rc=$?
+      else
+        ./build_metal.sh \
+          --build-all \
+          --enable-ccache || build_rc=$?
+      fi
+    fi
   else
-    ./build_metal.sh \
-      --build-all \
-      --enable-ccache || build_rc=$?
+    # Standard local build
+    if [ "$tracy_enabled" -eq 1 ]; then
+      ./build_metal.sh \
+        --build-all \
+        --enable-ccache \
+        --enable-profiler || build_rc=$?
+    else
+      ./build_metal.sh \
+        --build-all \
+        --enable-ccache || build_rc=$?
+    fi
   fi
 
   echo "::endgroup::"
