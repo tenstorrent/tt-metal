@@ -1720,7 +1720,8 @@ void generateAnalysesForDeviceMarkers(
 
     const std::filesystem::path analysis_configs_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tools/tracy/cpp_device_analyses.json";
+        "tt_metal/tools/profiler/cpp_device_analyses.json";
+    log_info(tt::LogMetal, "Loading analysis configs from {}", analysis_configs_path);
     const std::vector<AnalysisConfig> analysis_configs = loadAnalysisConfigsFromJSON(analysis_configs_path);
 
     const OpsPerfResults ops_perf_results = generatePerfResultsForOps(analysis_configs, device_markers, thread_pool);
