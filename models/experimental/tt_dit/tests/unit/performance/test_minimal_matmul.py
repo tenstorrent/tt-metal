@@ -304,7 +304,7 @@ def test_perf_table_sweep(device, M, K, N, fp32_acc, math_fidelity, dtype):
         packer_l1_acc=True,
     )
 
-    core_grid = ttnn.CoreCoord(8, 8)
+    core_grid = device.compute_with_storage_grid_size()
     subblocks = [(2, 2)] if fp32_acc else [(2, 4), (4, 2)]
 
     m_block_sizes = [2, 4, 8, 16]
@@ -317,6 +317,8 @@ def test_perf_table_sweep(device, M, K, N, fp32_acc, math_fidelity, dtype):
         m_block_sizes, k_block_sizes, n_block_sizes, subblocks
     ):
         if (M_block_size < subblock_h) or (N_block_size < subblock_w):
+            continue
+        if (M_block_size % subblock_h) != 0 or (N_block_size % subblock_w) != 0:
             continue
         logger.info(
             f"Running minimal_matmul with M_block_size={M_block_size}, K_block_size={K_block_size}, N_block_size={N_block_size}, subblock_h={subblock_h}, subblock_w={subblock_w}"
@@ -354,7 +356,10 @@ def perf_model(M, K, N, core_count, fidelity_div):
     core_flop_per_cycle_with_fidelity = core_flop_per_cycle / fidelity_div
     chip_flop_per_cycle = core_flop_per_cycle_with_fidelity * core_count
     ideal_cycles = mm_flops / chip_flop_per_cycle
-    return ideal_cycles
+    ideal_ns = ideal_cycles
+    if ttnn.device.is_blackhole():
+        ideal_ns = ideal_ns / 1.3
+    return ideal_ns
 
 
 def post_process_ops_log(
