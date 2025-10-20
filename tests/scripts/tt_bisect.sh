@@ -7,18 +7,23 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 Usage:
   -f TEST        : test command to run (quote if it has spaces)
   -s SCRIPT      : path to script to run instead of test command (optional)
+  -s SCRIPT      : path to script to run instead of test command (optional)
   -g GOOD_SHA    : known good commit
   -b BAD_SHA     : known bad commit
+  -t TIMEOUT     : per-iteration timeout in minutes (default 30)
   -t TIMEOUT     : per-iteration timeout in minutes (default 30)
   -p             : enable Tracy profiling
   -r RETRIES     : number of retries (default 3)
   -n             : enable non-deterministic detection mode (ND mode)
   -a             : enable artifact download optimization (requires gh CLI)
+  -c SKIP_LIST   : comma-separated list of commits to automatically skip
 Note: Either -f or -s must be specified, but not both.
 END
 
 timeout_duration_iteration="30"
+timeout_duration_iteration="30"
 test=""
+script_path=""
 script_path=""
 good_commit=""
 bad_commit=""
@@ -26,12 +31,14 @@ tracy_enabled=0
 retries=3
 nd_mode=false
 artifact_mode=false
+skip_commits=""
 run_idx=0
 timeout_rc=1
 
-while getopts ":f:s:g:b:t:pr:na" opt; do
+while getopts ":f:s:g:b:t:pr:nac:" opt; do
   case "$opt" in
     f) test="$OPTARG" ;;
+    s) script_path="$OPTARG" ;;
     s) script_path="$OPTARG" ;;
     g) good_commit="$OPTARG" ;;
     b) bad_commit="$OPTARG" ;;
@@ -40,10 +47,21 @@ while getopts ":f:s:g:b:t:pr:na" opt; do
     r) retries="$OPTARG" ;;
     n) nd_mode=true ;;
     a) artifact_mode=true ;;
+    c) skip_commits="$OPTARG" ;;
     \?) die "Invalid option: -$OPTARG" ;;
     :)  die "Option -$OPTARG requires an argument." ;;
   esac
 done
+
+export CXX=clang++-17
+export CC=clang-17
+
+# Either test or script_path must be specified, but not both
+if [ -n "$script_path" ] && [ -n "$test" ]; then
+  die "Cannot specify both -f TEST and -s SCRIPT. Use one or the other."
+elif [ -z "$script_path" ] && [ -z "$test" ]; then
+  die "Please specify either -f TEST or -s SCRIPT."
+fi
 
 export CXX=clang++-17
 export CC=clang-17
@@ -63,6 +81,11 @@ if [ -n "$script_path" ] && [ ! -f "$script_path" ]; then
   die "Script not found: $script_path"
 fi
 
+# Validate script exists if specified
+if [ -n "$script_path" ] && [ ! -f "$script_path" ]; then
+  die "Script not found: $script_path"
+fi
+
 echo "TT_METAL_HOME: $TT_METAL_HOME"
 echo "PYTHONPATH: $PYTHONPATH"
 echo "ARCH_NAME: ${ARCH_NAME:-}"
@@ -75,7 +98,11 @@ if [ "$artifact_mode" = true ]; then
   echo "Artifact download optimization enabled."
 fi
 
+if [ -n "$skip_commits" ]; then
+  echo "Auto-skip commits list: $skip_commits"
+fi
 
+# Create the virtual environment and install dependencies (including wheel)
 echo "Creating virtual environment and installing dependencies..."
 ./create_venv.sh
 pip install -r models/tt_transformers/requirements.txt
@@ -145,6 +172,30 @@ except Exception as e:
 PY
 }
 
+# Check if current commit should be auto-skipped
+should_skip_commit() {
+  local current_commit="$1"
+  local skip_list="$2"
+
+  if [ -z "$skip_list" ]; then
+    return 1  # Don't skip if no list provided
+  fi
+
+  # Split comma-separated list and check each commit
+  IFS=',' read -ra SKIP_ARRAY <<< "$skip_list"
+  for skip_sha in "${SKIP_ARRAY[@]}"; do
+    # Trim whitespace
+    skip_sha="$(echo "$skip_sha" | xargs)"
+
+    # Check if current commit starts with the skip SHA (supports short SHAs)
+    if [[ "$current_commit" == "$skip_sha"* ]]; then
+      return 0  # Should skip
+    fi
+  done
+
+  return 1  # Don't skip
+}
+
 # Try to download build artifacts from GitHub Actions using external script
 try_download_artifacts() {
   local commit_sha="$1"
@@ -162,6 +213,7 @@ try_download_artifacts() {
     "$download_script" "$commit_sha"
   fi
 }
+# START GIT BISECT
 # START GIT BISECT
 echo "Starting git bisect…"
 git bisect start "$bad_commit" "$good_commit"
@@ -184,6 +236,15 @@ while [[ "$found" == "false" ]]; do
       ;;
   esac
 
+
+  # Check if this commit should be auto-skipped
+  if should_skip_commit "$full_sha" "$skip_commits"; then
+    echo "Auto-skipping commit $rev (matches skip list)"
+    git bisect skip
+    continue
+  fi
+
+
   echo "::group::Building $rev"
 
   fresh_clean
@@ -191,6 +252,13 @@ while [[ "$found" == "false" ]]; do
   build_rc=0
 
   # Try to download artifacts first if artifact mode is enabled
+  if [ "$artifact_mode" = true ] && try_download_artifacts "$full_sha"; then
+    echo "Using downloaded artifacts for $rev"
+  else
+    [ "$artifact_mode" = true ] && echo "WARNING: Artifact download failed, falling back to local build"
+    build_args="--build-all --enable-ccache"
+    [ "$tracy_enabled" -eq 1 ] && build_args="$build_args --enable-profiler"
+    ./build_metal.sh $build_args || build_rc=$?
   if [ "$artifact_mode" = true ] && try_download_artifacts "$full_sha"; then
     echo "Using downloaded artifacts for $rev"
   else
@@ -209,6 +277,7 @@ while [[ "$found" == "false" ]]; do
   fi
 
   echo "::group::Import sanity ($rev)"
+  if ! verify_import_path 2>&1; then
   if ! verify_import_path 2>&1; then
     echo "Import path check failed; skipping this commit"
     git bisect skip
@@ -253,6 +322,15 @@ while [[ "$found" == "false" ]]; do
         tt-smi -r >/dev/null 2>&1 || true  # use regular reset mode
       fi
 
+      if [ -n "$script_path" ]; then
+        echo "Run: $script_path"
+        run_cmd="$script_path"
+      else
+        echo "Run: $test"
+        run_cmd="$test"
+      fi
+
+      if timeout -k 10s "${timeout_duration_iteration}m" bash -lc "$run_cmd" 2>&1 | tee "$output_file"; then
       if [ -n "$script_path" ]; then
         echo "Run: $script_path"
         run_cmd="$script_path"
@@ -337,6 +415,19 @@ while [[ "$found" == "false" ]]; do
     timeout_rc=1
     while [ $run_idx -le $retries ]; do
       echo "Attempt $run_idx/$retries on $(git rev-parse HEAD)"
+      echo "Resetting devices..."
+      tt-smi -r >/dev/null 2>&1 || true
+      echo "Devices reset"
+
+      if [ -n "$script_path" ]; then
+        echo "Run: $script_path"
+        run_cmd="$script_path"
+      else
+        echo "Run: $test"
+        run_cmd="$test"
+      fi
+
+      if timeout -k 10s "${timeout_duration_iteration}m" bash -lc "$run_cmd" 2>&1 | tee "$output_file"; then
       echo "Resetting devices..."
       tt-smi -r >/dev/null 2>&1 || true
       echo "Devices reset"

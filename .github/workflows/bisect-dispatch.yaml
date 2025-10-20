@@ -23,15 +23,18 @@ on:
           - config-t3000
           - config-BH-LoudBox
           - topology-6u-wormhole_b0
-          - topology-6u-blackhole
         description: "Runner Type Label"
+      commit-range:
       commit-range:
         required: true
         type: string
         description: "Good and bad commits (format: good,bad, e.g., abc1234,def5678)"
       test-script:
+        description: "Good and bad commits (format: good,bad, e.g., abc1234,def5678)"
+      test-script:
         required: true
         type: string
+        description: "GitHub gist URL (e.g., https://gist.github.com/user/id) or inline command to run"
         description: "GitHub gist URL (e.g., https://gist.github.com/user/id) or inline command to run"
       timeout:
         required: true
@@ -40,15 +43,23 @@ on:
         description: "Timeout for each test run in minutes (positive integer only)"
       attempts:
         required: true
+        default: "30"
+        description: "Timeout for each test run in minutes (positive integer only)"
+      attempts:
+        required: true
         type: string
         default: "3"
-        description: "Number of retry attempts for each test run"
+        description: "Number of retry attempts for each test run (default: 3)"
       download-artifacts:
         required: false
         type: boolean
         default: true
         description: "Download artifacts from GitHub for each commit (requires gh cli to be authenticated)"
-
+      skip-commits:
+        required: false
+        type: string
+        default: ""
+        description: "Comma-separated list of commits to automatically skip (e.g., abc123,def456)"
 
 permissions:
   actions: write
@@ -68,7 +79,9 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
         ARCH_NAME: ${{ (inputs.runner-label == 'N150' || inputs.runner-label == 'N300' || inputs.runner-label == 'P150' || inputs.runner-label == 'config-t3000' || contains(inputs.runner-label, 'wormhole_b0')) && 'wormhole_b0' || 'blackhole' }}
+        ARCH_NAME: ${{ (inputs.runner-label == 'N150' || inputs.runner-label == 'N300' || inputs.runner-label == 'P150' || inputs.runner-label == 'config-t3000' || contains(inputs.runner-label, 'wormhole_b0')) && 'wormhole_b0' || 'blackhole' }}
         LOGURU_LEVEL: DEBUG
+        PYTHONPATH: /work:/work/ttnn:/work/tools
         PYTHONPATH: /work:/work/ttnn:/work/tools
         LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:/work/generated/test_reports/
@@ -304,6 +317,154 @@ jobs:
           # Export parsed values as outputs for next step
           echo "good-commit=$GOOD_COMMIT" >> $GITHUB_OUTPUT
           echo "bad-commit=$BAD_COMMIT" >> $GITHUB_OUTPUT
+      - name: Download Gist Script
+        if: ${{ contains(inputs.test-script, 'gist.github.com') || contains(inputs.test-script, 'gist.githubusercontent.com') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Downloading gist from ${{ inputs.test-script }}"
+          GIST_URL="${{ inputs.test-script }}"
+
+          # Extract gist ID and filename from various URL formats
+          if [[ "$GIST_URL" =~ gist\.github\.com/([^/]+)/([a-f0-9]+) ]]; then
+            # Regular gist URL: https://gist.github.com/username/gist_id
+            GIST_USER="${BASH_REMATCH[1]}"
+            GIST_ID="${BASH_REMATCH[2]}"
+            # Get the filename from the end of URL if present, otherwise use default
+            if [[ "$GIST_URL" =~ /([^/]+\.sh)$ ]]; then
+              FILENAME="${BASH_REMATCH[1]}"
+            else
+              FILENAME=""
+            fi
+          elif [[ "$GIST_URL" =~ gist\.githubusercontent\.com/([^/]+)/([a-f0-9]+)/raw/[^/]+/(.+\.sh)$ ]]; then
+            # Raw gist URL with revision: https://gist.githubusercontent.com/username/gist_id/raw/revision/filename.sh
+            GIST_USER="${BASH_REMATCH[1]}"
+            GIST_ID="${BASH_REMATCH[2]}"
+            FILENAME="${BASH_REMATCH[3]}"
+          elif [[ "$GIST_URL" =~ gist\.githubusercontent\.com/([^/]+)/([a-f0-9]+)/raw/(.+\.sh)$ ]]; then
+            # Raw gist URL without revision: https://gist.githubusercontent.com/username/gist_id/raw/filename.sh
+            GIST_USER="${BASH_REMATCH[1]}"
+            GIST_ID="${BASH_REMATCH[2]}"
+            FILENAME="${BASH_REMATCH[3]}"
+          else
+            echo "ERROR: Could not parse gist URL format"
+            exit 1
+          fi
+
+          # Construct the raw URL without revision hash to always get latest
+          if [ -n "$FILENAME" ]; then
+            RAW_URL="https://gist.githubusercontent.com/${GIST_USER}/${GIST_ID}/raw/${FILENAME}"
+          else
+            # If no filename, try to get the first .sh file
+            RAW_URL="https://gist.githubusercontent.com/${GIST_USER}/${GIST_ID}/raw"
+          fi
+
+          echo "Fetching from: $RAW_URL"
+          curl -fsSL "$RAW_URL" -o /work/bisect_gist_script.sh
+          chmod +x /work/bisect_gist_script.sh
+          echo "Gist script downloaded and made executable"
+
+      - name: Validate Inputs
+        id: validate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Parse commit range from combined input
+          COMMIT_RANGE='${{ inputs.commit-range }}'
+          IFS=',' read -r GOOD_COMMIT BAD_COMMIT <<< "$COMMIT_RANGE"
+
+          # Validate parsed values
+          if [ -z "$GOOD_COMMIT" ] || [ -z "$BAD_COMMIT" ]; then
+            echo "ERROR: Invalid commit-range format. Expected 'good,bad' (e.g., 'abc1234,def5678')"
+            exit 1
+          fi
+
+          echo "✓ Parsed good commit: $GOOD_COMMIT"
+          echo "✓ Parsed bad commit: $BAD_COMMIT"
+
+          # Validate that commits exist
+          if ! git cat-file -e "$GOOD_COMMIT^{commit}" 2>/dev/null; then
+            echo "ERROR: Good commit does not exist: $GOOD_COMMIT"
+            exit 1
+          fi
+
+          if ! git cat-file -e "$BAD_COMMIT^{commit}" 2>/dev/null; then
+            echo "ERROR: Bad commit does not exist: $BAD_COMMIT"
+            exit 1
+          fi
+
+          echo "✓ Both commits exist in repository"
+
+          # Validate that good commit is an ancestor of bad commit
+          if ! git merge-base --is-ancestor "$GOOD_COMMIT" "$BAD_COMMIT" 2>/dev/null; then
+            echo "ERROR: Good commit ($GOOD_COMMIT) is not an ancestor of bad commit ($BAD_COMMIT)"
+            echo "This means the good commit does not come before the bad commit in git history."
+            echo "Please verify your commit range."
+            exit 1
+          fi
+
+          echo "✓ Good commit is an ancestor of bad commit"
+
+          # Validate timeout and attempts
+          TIMEOUT='${{ inputs.timeout }}'
+          ATTEMPTS='${{ inputs.attempts }}'
+
+          if [ -z "$TIMEOUT" ]; then
+            echo "ERROR: Timeout must be provided"
+            exit 1
+          fi
+
+          # Validate timeout is a positive integer
+          if ! [[ "$TIMEOUT" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: Timeout must be a positive integer (got: '$TIMEOUT')"
+            exit 1
+          fi
+
+          if [ "$TIMEOUT" -le 0 ]; then
+            echo "ERROR: Timeout must be greater than 0 (got: $TIMEOUT)"
+            exit 1
+          fi
+
+          if [ -z "$ATTEMPTS" ]; then
+            echo "ERROR: Attempts must be provided"
+            exit 1
+          fi
+
+          # Validate attempts is a positive integer
+          if ! [[ "$ATTEMPTS" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: Attempts must be a positive integer (got: '$ATTEMPTS')"
+            exit 1
+          fi
+
+          if [ "$ATTEMPTS" -le 0 ]; then
+            echo "ERROR: Attempts must be greater than 0 (got: $ATTEMPTS)"
+            exit 1
+          fi
+
+          echo "✓ Timeout: $TIMEOUT minutes"
+          echo "✓ Attempts: $ATTEMPTS"
+
+          # Validate test-script is provided
+          TEST_SCRIPT='${{ inputs.test-script }}'
+          if [ -z "$TEST_SCRIPT" ]; then
+            echo "ERROR: test-script must be provided"
+            exit 1
+          fi
+
+          # Determine if it's a gist or inline command
+          if [[ "$TEST_SCRIPT" == *"gist.github.com"* ]] || [[ "$TEST_SCRIPT" == *"gist.githubusercontent.com"* ]]; then
+            echo "✓ Detected gist URL: $TEST_SCRIPT"
+          else
+            echo "✓ Using inline command"
+          fi
+
+          echo ""
+          echo "All inputs validated successfully"
+
+          # Export parsed values as outputs for next step
+          echo "good-commit=$GOOD_COMMIT" >> $GITHUB_OUTPUT
+          echo "bad-commit=$BAD_COMMIT" >> $GITHUB_OUTPUT
 
       - name: Run Git Bisect
         shell: bash
@@ -360,6 +521,10 @@ jobs:
           fi
           if [[ "${{ inputs.download-artifacts }}" == 'true' ]]; then
             bisect_args+=(-a)
+          fi
+
+          if [[ "${{ inputs.skip-commits }}" != '' ]]; then
+            bisect_args+=(-c "${{ inputs.skip-commits }}")
           fi
 
           bisect_args+=(-s "$SCRIPT_PATH")
