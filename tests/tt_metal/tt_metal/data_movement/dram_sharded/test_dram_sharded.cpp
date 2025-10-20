@@ -154,7 +154,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadDirectedIdeal)
 
     // Test config
     unit_tests::dm::dram_sharded::DramShardedConfig test_config = {
-        .test_id = 1000,
+        .test_id = 84,
         .num_of_transactions = num_of_transactions,
         .num_banks = mesh_device->num_dram_channels(),
         .pages_per_bank = 32,
@@ -185,7 +185,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTileNumbers) {
         for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 2) {
             // Test config
             unit_tests::dm::dram_sharded::DramShardedConfig test_config = {
-                .test_id = 1001,
+                .test_id = 85,
                 .num_of_transactions = num_of_transactions,
                 .num_banks = num_banks,
                 .pages_per_bank = num_pages,
@@ -218,7 +218,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadBankNumbers) {
         for (uint32_t num_banks = 1; num_banks <= max_num_banks; num_banks++) {
             // Test config
             unit_tests::dm::dram_sharded::DramShardedConfig test_config = {
-                .test_id = 1002,
+                .test_id = 86,
                 .num_of_transactions = num_of_transactions,
                 .num_banks = num_banks,
                 .pages_per_bank = num_pages,
