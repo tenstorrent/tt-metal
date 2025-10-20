@@ -53,7 +53,7 @@ FORCE_INLINE void send_block(
             row_chunk_i,
             column_block_i,
             block_depth);
-        DPRINT << "sending tile id " << read_tile_id << ENDL();
+        // DPRINT << "sending tile id " << read_tile_id << ENDL();
         load_to_cb(cb_input, input_addr_gen, read_tile_id);
     }
 }
