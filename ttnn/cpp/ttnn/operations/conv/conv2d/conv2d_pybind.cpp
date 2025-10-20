@@ -33,7 +33,6 @@ void py_bind_conv2d(py::module& module) {
         ttnn::conv2d,
         R"doc(
         Performs a 2D convolution between the input tensor and weight tensor. A 2D kernel (weights tensor) traverses the image (4D input tensor) and a dot product is computed over the overlapping region.
-
         For more information, refer to [CNNs on Tenstorrent Architectures](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md) tech report.
 
         :param ttnn.Tensor input_tensor: The input tensor in [N, H, W, C] format. The tensor can be on either the host or the device.
@@ -45,14 +44,14 @@ void py_bind_conv2d(py::module& module) {
         :param int input_height: This is a Tenstorrent-specific parameter. The height of the input tensor.
         :param int input_width: This is a Tenstorrent-specific parameter. The width of the input tensor.
         :param tuple[int, int] kernel_size: The size of the convolving kernel.
-        :param tuple[int, int] stride: The stride of the convolution. Defaults to (1, 1).
-        :param tuple[int, int], optional padding: Zero-padding added to both sides of the input. Defaults to (0, 0). [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
-        :param tuple[int, int], optional dilation: The spacing between kernel elements. Defaults to (1, 1).
-        :param int groups: Number of blocked connections from input channels to output channels. Defaults to 1.
+        :param tuple[int, int] stride: The stride of the convolution. Default: (1, 1).
+        :param tuple[int, int], optional padding: Zero-padding added to both sides of the input. Default: (0, 0). [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
+        :param tuple[int, int], optional dilation: The spacing between kernel elements. Default: (1, 1).
+        :param int groups: Number of blocked connections from input channels to output channels. Default: 1.
         :param ttnn.DataType, optional dtype: The data type of the output tensor. If not provided, it is inferred from the input tensor.
-        :param ttnn.Tensor, optional bias_tensor: The bias tensor to be added. Defaults to None.
-        :param ttnn.Conv2dConfig, None conv_config: Configuration for convolution. Default: None
-        :param ttnn.DeviceComputeKernelConfig, None compute_config: Configuration for compute kernel. Default: None
+        :param ttnn.Tensor, optional bias_tensor: The bias tensor to be added. Default: None.
+        :param ttnn.Conv2dConfig, None conv_config: Configuration for convolution. Default: None.
+        :param ttnn.DeviceComputeKernelConfig, None compute_config: Configuration for compute kernel. Default: None.
         :param ttnn.MemoryConfig, None memory_config: Output Tensor's Memory Configuration. Default: None
         :param ttnn.Conv2dSliceConfig, None slice_config: Configuration for slicing input & output tensors in DRAM. If set to None input is in DRAM, DRAM slicing is automatically enabled. Default: None
     
@@ -61,7 +60,7 @@ void py_bind_conv2d(py::module& module) {
         :rtype: [ttnn.Tensor]: Default. The output tensor, when return_output_dim = False and return_weights_and_bias = False
         :rtype: [ttnn.Tensor, Tuple[int, int]]: The output tensor, and it's height and width, if return_output_dim = True
         :rtype: [ttnn.Tensor, Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]: The output tensor, and preprocessed weight and bias tensors that are  both on device, if return_weights_and_bias = True
-        :rtype: [ttnn.Tensor, Tuple[int, int], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]: If true, the op also returns the preprocessed weight and bias on the device. Weight and bias should be used for the same convolution next time it is called to avoid preparing weights and bias multiple times. Defaults to false.
+        :rtype: [ttnn.Tensor, Tuple[int, int], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]: If true, the op also returns the preprocessed weight and bias on the device. Weight and bias should be used for the same convolution next time it is called to avoid preparing weights and bias multiple times. Default: false.
 
         Note:
             The :attr: `input_tensor` supports the following data type and layout:
@@ -143,7 +142,6 @@ void py_bind_conv2d(py::module& module) {
                   - TILE
                 * - BFLOAT8_B
                   - TILE
-        
         )doc",
         
         ttnn::pybind_overload_t{
