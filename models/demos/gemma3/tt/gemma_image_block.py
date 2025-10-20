@@ -34,9 +34,11 @@ class TtGemmaImageTransformerBlock(LightweightModule):
         self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
-        self.num_devices = configuration.num_devices
+        self.num_devices = 1
         self.hidden_size = configuration.vision_dim
         self.gated = gated
+
+        weight_cache_path = None
 
         self.ln_1 = TtLayerNorm(
             device=mesh_device,
@@ -104,6 +106,7 @@ class TtGemmaImageTransformerBlock(LightweightModule):
 
         attn_out = self.attn(self.ln_1(x_11SH), mask=mask)
         if self.gated:
+            assert False
             attn_out = ttnn.mul(attn_out, ttnn.tanh(self.gate_attn))
 
         # Align x_11SH shape with attn_out
@@ -113,6 +116,7 @@ class TtGemmaImageTransformerBlock(LightweightModule):
 
         mlp_out = self.mlp(self.ln_2(res))
         if self.gated:
+            assert False
             mlp_out = ttnn.mul(mlp_out, ttnn.tanh(self.gate_ffn))
         out = ttnn.add(res, mlp_out)
 
