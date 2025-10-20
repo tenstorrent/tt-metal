@@ -39,7 +39,7 @@ protected:
         auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
 
         // Check to deal with TG systems
-        const chip_id_t device_id =
+        const ChipId device_id =
             (enable_remote_chip or tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster())
                 ? *tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids().begin()
                 : *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
@@ -71,10 +71,10 @@ protected:
         return dispatch_core_type;
     }
 
-    void create_device(const chip_id_t device_id, const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
+    void create_device(const ChipId device_id, const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        std::vector<chip_id_t> chip_id = {device_id};
+        std::vector<ChipId> chip_id = {device_id};
 
         auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
             chip_id, DEFAULT_L1_SMALL_SIZE, trace_region_size, 2, dispatch_core_config);
@@ -129,15 +129,15 @@ protected:
 
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        const chip_id_t mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
-        std::vector<chip_id_t> chip_ids;
+        const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
+        std::vector<ChipId> chip_ids;
         auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
 
         // Check to deal with TG systems
         if (enable_remote_chip or
             tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB or
             tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
-            for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
+            for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
                 chip_ids.push_back(id);
             }
         } else {

@@ -8,6 +8,6 @@
 #include <vector>
 
 namespace tt {
-void ClearNocData(chip_id_t device_id);
-void DumpNocData(const std::vector<chip_id_t>& device_ids);
+void ClearNocData(ChipId device_id);
+void DumpNocData(const std::vector<ChipId>& device_ids);
 }  // namespace tt

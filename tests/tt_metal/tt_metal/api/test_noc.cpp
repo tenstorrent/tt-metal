@@ -97,7 +97,7 @@ void read_translation_table(
 TEST(NOC, TensixSingleDeviceHarvestingPrints) {
     auto arch = tt::get_arch_from_string(get_umd_arch_name());
     std::shared_ptr<distributed::MeshDevice> mesh_device;
-    chip_id_t id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
+    ChipId id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
     const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
     mesh_device = distributed::MeshDevice::create_unit_mesh(
         id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
@@ -171,7 +171,7 @@ TEST(NOC, TensixVerifyNocIdentityTranslationTable) {
         GTEST_SKIP();
     }
     std::shared_ptr<distributed::MeshDevice> mesh_device;
-    chip_id_t id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
+    ChipId id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
     const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
     mesh_device = distributed::MeshDevice::create_unit_mesh(
         id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);

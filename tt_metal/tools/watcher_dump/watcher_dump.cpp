@@ -25,7 +25,7 @@ string output_dir_name = "generated/watcher/";
 string logfile_name = "cq_dump.txt";
 
 void dump_data(
-    vector<chip_id_t>& device_ids,
+    vector<ChipId>& device_ids,
     bool dump_watcher,
     bool dump_cqs,
     bool dump_cqs_raw_data,
@@ -46,7 +46,7 @@ void dump_data(
 
     // Only look at user-specified devices
     vector<std::unique_ptr<IDevice>> devices;
-    for (chip_id_t id : device_ids) {
+    for (ChipId id : device_ids) {
         string cq_fname = cq_dir.string() + fmt::format("device_{}_completion_q.txt", id);
         std::ofstream cq_file = std::ofstream(cq_fname);
         string iq_fname = cq_dir.string() + fmt::format("device_{}_issue_q.txt", id);
@@ -95,10 +95,10 @@ void print_usage(const char* exec_name) {
 int main(int argc, char* argv[]) {
     cout << "Running watcher dump tool..." << endl;
     // Default devices is all of them.
-    vector<chip_id_t> device_ids;
+    vector<ChipId> device_ids;
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     device_ids.reserve(num_devices);
-    for (chip_id_t id = 0; id < num_devices; id++) {
+    for (ChipId id = 0; id < num_devices; id++) {
         device_ids.push_back(id);
     }
 

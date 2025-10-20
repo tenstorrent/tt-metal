@@ -109,15 +109,15 @@ inline auto compute_program_hash(
 
 class RuntimeIDToOpName {
     using RuntimeID = uint32_t;
-    using KeyType = std::pair<chip_id_t, RuntimeID>;
+    using KeyType = std::pair<ChipId, RuntimeID>;
     using MapType = std::map<KeyType, std::string>;
 
 public:
-    MapType::iterator find(chip_id_t device_id, RuntimeID runtime_id) {
+    MapType::iterator find(ChipId device_id, RuntimeID runtime_id) {
         std::scoped_lock<std::mutex> lock(map_mutex);
         return map.find({device_id, runtime_id});
     }
-    std::string at(chip_id_t device_id, RuntimeID runtime_id) {
+    std::string at(ChipId device_id, RuntimeID runtime_id) {
         std::scoped_lock<std::mutex> lock(map_mutex);
         return map.at({device_id, runtime_id});
     }
@@ -139,7 +139,7 @@ private:
 inline RuntimeIDToOpName runtime_id_to_opname_{};
 
 class ProgramHashToOpName {
-    using KeyType = std::pair<chip_id_t, tt::stl::hash::hash_t>;
+    using KeyType = std::pair<ChipId, tt::stl::hash::hash_t>;
 
 public:
     std::string find_if_exists(const KeyType& key) {
@@ -203,7 +203,7 @@ inline void tracy_message(const std::string& source, uint32_t color = 0xf0f8ff) 
 inline void tracy_frame() { FrameMark; }
 
 #if defined(TRACY_ENABLE)
-static inline json get_kernels_json(chip_id_t device_id, const Program& program) {
+static inline json get_kernels_json(ChipId device_id, const Program& program) {
     std::vector<json> computeKernels;
     std::vector<json> datamovementKernels;
 

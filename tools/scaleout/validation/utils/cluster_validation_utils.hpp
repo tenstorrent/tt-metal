@@ -17,8 +17,8 @@
 
 namespace tt::scaleout_tools {
 
-using ::chip_id_t;
-using ::CoordSystem;
+using tt::ChipId;
+using tt::CoordSystem;
 using tt::tt_metal::CoreCoord;
 using tt::tt_metal::PhysicalSystemDescriptor;
 

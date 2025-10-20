@@ -83,10 +83,10 @@ std::vector<TrafficConfig> generate_sweep_traffic_configs() {
 
 void configure_local_kernels(
     const PhysicalSystemDescriptor& physical_system_descriptor,
-    std::unordered_map<uint64_t, chip_id_t>& asic_id_to_chip_id,
+    std::unordered_map<uint64_t, ChipId>& asic_id_to_chip_id,
     std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices,
     const std::vector<uint32_t>& inputs,
-    std::unordered_map<chip_id_t, tt::tt_metal::Program>& programs,
+    std::unordered_map<ChipId, tt::tt_metal::Program>& programs,
     size_t packet_size_bytes,
     size_t packet_size_words,
     size_t data_size) {
@@ -97,7 +97,7 @@ void configure_local_kernels(
     const size_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
     const size_t dst_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
-    std::unordered_map<chip_id_t, std::vector<CoreCoord>> kernel_coords;
+    std::unordered_map<ChipId, std::vector<CoreCoord>> kernel_coords;
 
     for (const auto& [asic_id, asic_connections] : asic_topology) {
         auto sender_chip_id = asic_id_to_chip_id[*asic_id];
@@ -178,10 +178,10 @@ void configure_local_kernels(
 
 void configure_cross_host_kernels(
     const PhysicalSystemDescriptor& physical_system_descriptor,
-    std::unordered_map<uint64_t, chip_id_t>& asic_id_to_chip_id,
+    std::unordered_map<uint64_t, ChipId>& asic_id_to_chip_id,
     std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices,
     const std::vector<uint32_t>& inputs,
-    std::unordered_map<chip_id_t, tt::tt_metal::Program>& programs,
+    std::unordered_map<ChipId, tt::tt_metal::Program>& programs,
     size_t packet_size_bytes,
     size_t packet_size_words,
     size_t data_size) {
@@ -232,9 +232,9 @@ void configure_cross_host_kernels(
 }
 
 void execute_workloads(
-    std::unordered_map<chip_id_t, tt::tt_metal::Program>& programs,
+    std::unordered_map<ChipId, tt::tt_metal::Program>& programs,
     std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& devices) {
-    std::unordered_map<chip_id_t, tt::tt_metal::distributed::MeshWorkload> mesh_workloads;
+    std::unordered_map<ChipId, tt::tt_metal::distributed::MeshWorkload> mesh_workloads;
 
     for (auto& [device_id, program] : programs) {
         mesh_workloads[device_id] = tt::tt_metal::distributed::MeshWorkload();
@@ -411,7 +411,7 @@ LinkMetricsResult process_link_statuses(
 void dump_link_stats(
     std::vector<uint32_t>& inputs,
     PhysicalSystemDescriptor& physical_system_descriptor,
-    std::unordered_map<uint64_t, chip_id_t>& asic_id_to_chip_id,
+    std::unordered_map<uint64_t, ChipId>& asic_id_to_chip_id,
     std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>>& statuses_per_link,
     std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices,
     size_t data_size,
@@ -497,7 +497,7 @@ LinkMetricsResult send_traffic_and_validate_links(
     bool sweep_traffic_configs,
     uint32_t packet_size_bytes,
     uint32_t data_size,
-    std::unordered_map<uint64_t, chip_id_t>& asic_id_to_chip_id) {
+    std::unordered_map<uint64_t, ChipId>& asic_id_to_chip_id) {
     std::vector<TrafficConfig> traffic_configs;
     if (sweep_traffic_configs) {
         traffic_configs = generate_sweep_traffic_configs();
@@ -513,7 +513,7 @@ LinkMetricsResult send_traffic_and_validate_links(
 
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
-    std::vector<chip_id_t> device_ids;
+    std::vector<ChipId> device_ids;
     for (auto chip : cluster.all_chip_ids()) {
         device_ids.push_back(chip);
     }
@@ -532,7 +532,7 @@ LinkMetricsResult send_traffic_and_validate_links(
             std::size_t pkt_size_words = pkt_size_bytes >> 4;
             std::size_t d_size = traffic_config.data_size;
 
-            std::unordered_map<chip_id_t, tt::tt_metal::Program> programs;
+            std::unordered_map<ChipId, tt::tt_metal::Program> programs;
             auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, d_size / sizeof(uint32_t));
 
             configure_local_kernels(
@@ -926,7 +926,7 @@ bool generate_link_metrics(
     uint32_t packet_size_bytes,
     uint32_t data_size,
     const std::filesystem::path& output_path) {
-    std::unordered_map<uint64_t, chip_id_t> asic_id_to_chip_id;
+    std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
     for (const auto& [chip_id, asic_id] : tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids()) {
         asic_id_to_chip_id[asic_id] = chip_id;
     }
