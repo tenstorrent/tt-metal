@@ -514,13 +514,16 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     timeout = get_timeout(module_name)
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     reset_util = tt_smi_util.ResetUtil(config.arch_name)
-    # child_mode is True unless we are in a dry run, with no vector_id, and not in verbose mode.
-    # In other words, child_mode is False only if all of the following are True:
-    #   - config.dry_run is True
-    #   - config.vector_id is falsy (None or False)
-    #   - config.main_proc_verbose is False
+    # child_mode is True unless:
+    #   - We are in a dry run with no vector_id and not in verbose mode, OR
+    #   - main_proc_verbose is True (for debugging/Tracy profiling)
+    #
+    # In other words, child_mode is False if:
+    #   - (dry_run AND no vector_id AND not verbose) OR
+    #   - main_proc_verbose is True
     dry_run_no_vector_no_verbose = config.dry_run and not config.vector_id and not config.main_proc_verbose
-    child_mode = not dry_run_no_vector_no_verbose
+    force_parent_for_debugging = config.main_proc_verbose
+    child_mode = not (dry_run_no_vector_no_verbose or force_parent_for_debugging)
     timeout_before_rejoin = 5
 
     if child_mode:
@@ -1109,7 +1112,7 @@ if __name__ == "__main__":
         "--main-proc-verbose",
         action="store_true",
         required=False,
-        help="Run tests on main process and print test exceptions to stdout",
+        help="Run tests in parent process (disables hang detection). Required for Tracy profiling and debugging. Prints test exceptions to stdout.",
     )
 
     args = parser.parse_args(sys.argv[1:])
