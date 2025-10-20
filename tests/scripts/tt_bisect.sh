@@ -45,23 +45,6 @@ done
 [ -n "$good_commit" ] || die "Please specify -g GOOD_SHA."
 [ -n "$bad_commit" ] || die "Please specify -b BAD_SHA."
 
-# Check required tools for artifact mode
-if [ "$artifact_mode" = true ]; then
-  if ! command -v gh >/dev/null 2>&1; then
-    echo "GitHub CLI (gh) not found, artifact mode disabled"
-    artifact_mode=false
-  elif ! command -v jq >/dev/null 2>&1; then
-    echo "jq not found, artifact mode disabled"
-    artifact_mode=false
-  elif ! gh auth status >/dev/null 2>&1; then
-    echo "GitHub CLI not authenticated, artifact mode disabled"
-    artifact_mode=false
-  else
-    echo "Artifact download mode enabled"
-  fi
-fi
-
-
 echo "TT_METAL_HOME: $TT_METAL_HOME"
 echo "PYTHONPATH: $PYTHONPATH"
 echo "ARCH_NAME: ${ARCH_NAME:-}"
