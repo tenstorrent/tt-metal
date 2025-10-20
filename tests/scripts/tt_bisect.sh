@@ -6,6 +6,7 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 : << 'END'
 Usage:
   -f TEST        : test command to run (quote if it has spaces)
+  -s SCRIPT      : path to script to run instead of test command (optional)
   -g GOOD_SHA    : known good commit
   -b BAD_SHA     : known bad commit
   -t TIMEOUT     : per-iteration timeout (default 30m)
@@ -13,10 +14,12 @@ Usage:
   -r RETRIES     : number of retries (default 3)
   -n             : enable non-deterministic detection mode (ND mode)
   -a             : enable artifact download optimization (requires gh CLI)
+Note: Either -f or -s must be specified, but not both.
 END
 
 timeout_duration_iteration="30m"
 test=""
+script_path=""
 good_commit=""
 bad_commit=""
 tracy_enabled=0
@@ -26,9 +29,15 @@ artifact_mode=false
 run_idx=0
 timeout_rc=1
 
-while getopts ":f:g:b:t:pr:na" opt; do
+echo "setting the compiler versions to clang-17"
+
+export CC=clang-17
+export CXX=clang++-17
+
+while getopts ":f:s:g:b:t:pr:na" opt; do
   case "$opt" in
     f) test="$OPTARG" ;;
+    s) script_path="$OPTARG" ;;
     g) good_commit="$OPTARG" ;;
     b) bad_commit="$OPTARG" ;;
     t) timeout_duration_iteration="$OPTARG" ;;
@@ -41,9 +50,20 @@ while getopts ":f:g:b:t:pr:na" opt; do
   esac
 done
 
-[ -n "$test" ] || die "Please specify -f TEST."
+# Either test or script_path must be specified, but not both
+if [ -n "$script_path" ] && [ -n "$test" ]; then
+  die "Cannot specify both -f TEST and -s SCRIPT. Use one or the other."
+elif [ -z "$script_path" ] && [ -z "$test" ]; then
+  die "Please specify either -f TEST or -s SCRIPT."
+fi
+
 [ -n "$good_commit" ] || die "Please specify -g GOOD_SHA."
 [ -n "$bad_commit" ] || die "Please specify -b BAD_SHA."
+
+# Validate script exists if specified
+if [ -n "$script_path" ] && [ ! -f "$script_path" ]; then
+  die "Script not found: $script_path"
+fi
 
 echo "TT_METAL_HOME: $TT_METAL_HOME"
 echo "PYTHONPATH: $PYTHONPATH"
@@ -94,7 +114,12 @@ fresh_clean() {
 
 # After building, verify we import from the workspace
 verify_import_path() {
-  python - <<'PY'
+  # Prefer the venv python if it exists so imports reflect the built workspace
+  PY_BIN="python"
+  if [ -x "./python_env/bin/python" ]; then
+    PY_BIN="./python_env/bin/python"
+  fi
+  "$PY_BIN" - <<'PY'
 import ttnn, sys
 print(ttnn.get_arch_name())
 print("ttnn imported from:", ttnn.__file__)
@@ -126,6 +151,20 @@ found=false
 while [[ "$found" == "false" ]]; do
   rev="$(git rev-parse --short=12 HEAD)"
   full_sha="$(git rev-parse HEAD)"
+
+  commit_msg="$(git log -1 --pretty=%s HEAD)"
+
+  echo "Commit message: $commit_msg"
+
+  # Check if commit message contains [skip-ci] or [skip ci] (case-insensitive) and skip if so
+  case "$commit_msg" in
+    *"[skip ci]"* | *"[skip CI]"* | *"[skip-ci]"* | *"[skip-CI]"* )
+      echo "Commit $rev contains [skip ci] or [skip-ci], skipping: $commit_msg"
+      git bisect skip
+      continue
+      ;;
+  esac
+
   echo "::group::Building $rev"
 
   fresh_clean
@@ -173,7 +212,7 @@ while [[ "$found" == "false" ]]; do
   fi
 
   echo "::group::Import sanity ($rev)"
-  if ! verify_import_path; then
+  if ! verify_import_path 2>&1; then
     echo "Import path check failed; skipping this commit"
     git bisect skip
     echo "::endgroup::"
@@ -194,8 +233,15 @@ while [[ "$found" == "false" ]]; do
       tt-smi -r >/dev/null 2>&1 || true
       echo "Devices reset"
 
-      echo "Run: $test"
-      if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test" 2>&1 | tee "$output_file"; then
+      if [ -n "$script_path" ]; then
+        echo "Run: $script_path"
+        run_cmd="$script_path"
+      else
+        echo "Run: $test"
+        run_cmd="$test"
+      fi
+
+      if timeout -k 10s "$timeout_duration_iteration" bash -lc "$run_cmd" 2>&1 | tee "$output_file"; then
         if grep -qiE "(^|[^a-zA-Z])(SKIP|SKIPPED)([^a-zA-Z]|$)" "$output_file"; then
           echo "Attempt $run_idx: detected skip (exit 0 with 'SKIP' in output)"
           skip_count=$((skip_count+1))
@@ -271,8 +317,19 @@ while [[ "$found" == "false" ]]; do
     timeout_rc=1
     while [ $run_idx -le $retries ]; do
       echo "Attempt $run_idx/$retries on $(git rev-parse HEAD)"
-      echo "Run: $test"
-      if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test" 2>&1 | tee "$output_file"; then
+      echo "Resetting devices..."
+      tt-smi -r >/dev/null 2>&1 || true
+      echo "Devices reset"
+
+      if [ -n "$script_path" ]; then
+        echo "Run: $script_path"
+        run_cmd="$script_path"
+      else
+        echo "Run: $test"
+        run_cmd="$test"
+      fi
+
+      if timeout -k 10s "$timeout_duration_iteration" bash -lc "$run_cmd" 2>&1 | tee "$output_file"; then
         timeout_rc=0
         echo "--- Logs (attempt $run_idx) ---"
         sed -n '1,200p' "$output_file" || true
