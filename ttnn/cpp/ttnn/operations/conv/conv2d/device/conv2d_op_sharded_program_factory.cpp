@@ -931,6 +931,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         if (split_reader_overlapped) {
             const tt::DataFormat halo_output_df =
                 get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).data_format;
+
+            const uint32_t halo_output_tile_size = tt::tile_size(halo_output_df);
             const uint32_t act_cb_id_stride =
                 skip_activation_mcast ? 1 : 1 + get_num_cores_channels_from_parallel_config(parallel_config);
             // get total number of blocks in the ACT CB so that we can compute the loop around when moving write
@@ -938,13 +940,18 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             const uint32_t act_cb_block_cnt = get_cb_info_by_name(cb_info, Conv2dCb::ACT).num_pages /
                                               (act_block_num_tiles_split + act_block_num_tiles_split_last);
 
+            // In cases where the overlapped buffer is double buffered and number of push_backs done on NCRISC is odd,
+            // there are two addresses that need to be written to on the BRISC side for the second reader.
+            const bool second_writer_two_addr = (act_cb_block_cnt > 1) && (act_cb_id_stride % 2 == 1);
+            const uint32_t act_write_offset = act_block_num_tiles_split * halo_output_tile_size;
+            const uint32_t act_write_offset_last =
+                second_writer_two_addr
+                    ? (act_block_num_tiles_split_last + 2 * act_block_num_tiles_split) * halo_output_tile_size
+                    : act_write_offset;
             split_reader_args.push_back(act_split_reader_sync_first_semaphore_id);
             split_reader_args.push_back(act_split_reader_sync_second_semaphore_id);
-            split_reader_args.push_back(act_block_num_tiles_split * tt::tile_size(halo_output_df));
-            split_reader_args.push_back(
-                (act_block_num_tiles_split_last + act_block_num_tiles_split) * tt::tile_size(halo_output_df));
-            split_reader_args.push_back(act_cb_id_stride);
-            split_reader_args.push_back(act_cb_block_cnt);
+            split_reader_args.push_back(act_write_offset);
+            split_reader_args.push_back(act_write_offset_last);
         }
 
         if (enable_activation_reuse && height_sharded) {

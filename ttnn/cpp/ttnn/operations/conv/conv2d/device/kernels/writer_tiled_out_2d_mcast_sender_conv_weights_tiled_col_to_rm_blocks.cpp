@@ -54,32 +54,30 @@ void kernel_main() {
     const uint32_t act_split_reader_sync_first_semaphore_addr = get_semaphore(get_compile_time_arg_val(28));
     const uint32_t act_split_reader_sync_second_semaphore_addr = get_semaphore(get_compile_time_arg_val(29));
     constexpr uint32_t act_write_offset = get_compile_time_arg_val(30);
-    constexpr uint32_t act_block_size = get_compile_time_arg_val(31);
-    constexpr uint32_t read_ind_stride = get_compile_time_arg_val(32);
-    constexpr uint32_t act_cb_block_cnt = get_compile_time_arg_val(33);
-
-    const uint32_t base_write_addr = get_write_ptr(cb_id_act_second_reader);
+    constexpr uint32_t act_write_offset_last = get_compile_time_arg_val(31);
 
     volatile tt_l1_ptr uint32_t* act_split_reader_sync_first_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_sync_first_semaphore_addr);
     volatile tt_l1_ptr uint32_t* act_split_reader_sync_second_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_sync_second_semaphore_addr);
 
-    constexpr uint32_t ct_arg_idx = 34;
+    constexpr uint32_t ct_arg_idx = 32;
 #else
     constexpr bool split_reader_overlapped = false;
     constexpr uint32_t act_write_offset = 0;
-    constexpr uint32_t act_block_size = 0;
-    constexpr uint32_t read_ind_stride = 0;
-    constexpr uint32_t act_cb_block_cnt = 0;
-
-    const uint32_t base_write_addr = 0;
+    constexpr uint32_t act_write_offset_last = 0;
 
     volatile tt_l1_ptr uint32_t* act_split_reader_sync_first_semaphore_addr_ptr = nullptr;
     volatile tt_l1_ptr uint32_t* act_split_reader_sync_second_semaphore_addr_ptr = nullptr;
     constexpr uint32_t ct_arg_idx = 28;
 #endif
+
+    const uint32_t split_reader_cb_write_addr = get_write_ptr(cb_id_act_second_reader) + act_write_offset;
+    // In case of double buffering the split reader can write to two different addresses
+    const uint32_t split_reader_cb_write_addr_last = get_write_ptr(cb_id_act_second_reader) + act_write_offset_last;
+    const uint32_t split_reader_cb_write_addr_sum = split_reader_cb_write_addr + split_reader_cb_write_addr_last;
 #else
+    const uint32_t split_reader_cb_write_addr = 0;
     constexpr bool split_reader_enabled = false;
     constexpr uint32_t ct_arg_idx = 18;
 #endif
@@ -174,7 +172,8 @@ void kernel_main() {
     // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.
     // Write out col major blocks in row major layout to output
     uint32_t weight_start_tile_id = out_start_tile_id_w;
-    uint32_t l1_write_addr_act = 0;
+    uint32_t l1_write_addr_act = split_reader_cb_write_addr;
+    uint32_t prev_addr = 0;
     for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
         for (uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
 #ifdef SPLIT_READER
@@ -190,7 +189,7 @@ void kernel_main() {
                     if constexpr (split_reader_overlapped) {
                         noc_semaphore_wait(act_split_reader_sync_first_semaphore_addr_ptr, VALID);
                         noc_semaphore_set(act_split_reader_sync_first_semaphore_addr_ptr, INVALID);
-                        l1_write_addr_act = get_write_ptr(cb_id_act_second_reader) + act_write_offset;
+                        prev_addr = l1_write_addr_act;
                     } else {
                         l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
                     }
@@ -213,9 +212,7 @@ void kernel_main() {
                         act_l1_read_addr,
                         stride_h_bytes);
                     if constexpr (split_reader_overlapped) {
-                        cb_ind_offset = (cb_ind_offset + read_ind_stride) % act_cb_block_cnt;
-                        get_local_cb_interface(cb_id_act_second_reader).fifo_wr_ptr =
-                            base_write_addr + cb_ind_offset * act_block_size;
+                        l1_write_addr_act = split_reader_cb_write_addr_sum - prev_addr;
                         noc_semaphore_set(act_split_reader_sync_second_semaphore_addr_ptr, VALID);
                     }
                 }

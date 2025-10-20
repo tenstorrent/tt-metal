@@ -5148,6 +5148,7 @@ def test_resnet50_conv_p150(
         (57, 24, 2, 32, 3, 3, 1, 1, 1, 1, 64),# weird shape example
     ),
 )
+@pytest.mark.parametrize("act_double_buffer", [True, False])
 @pytest.mark.parametrize("force_split_reader", [True, False])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_conv_block_sharding(
@@ -5167,6 +5168,7 @@ def test_conv_block_sharding(
     force_split_reader,
     full_inner_dim,
     act_block_h_override,
+    act_double_buffer
 ):
 
     run_conv(
@@ -5194,4 +5196,5 @@ def test_conv_block_sharding(
         force_split_reader=force_split_reader,
         config_tensors_in_dram=config_in_dram,
         bs_full_inner_dim=full_inner_dim,
+        enable_act_double_buffer=act_double_buffer,
     )
