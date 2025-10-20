@@ -41,9 +41,12 @@ elif ! gh auth status >/dev/null 2>&1; then
   die "GitHub CLI not authenticated"
 fi
 
+# Configuration
+WORKFLOW_RUNS_LIMIT="${WORKFLOW_RUNS_LIMIT:-1000}"
+
 # Look for workflow runs for this commit
 echo "Searching for workflow runs for commit $commit_sha..."
-runs="$(gh run list --repo tenstorrent/tt-metal --commit "$commit_sha" --json conclusion,databaseId,workflowName --limit 1000)"
+runs="$(gh run list --repo tenstorrent/tt-metal --commit "$commit_sha" --json conclusion,databaseId,workflowName --limit $WORKFLOW_RUNS_LIMIT)"
 
 # Check if gh command failed
 if [ $? -ne 0 ]; then
