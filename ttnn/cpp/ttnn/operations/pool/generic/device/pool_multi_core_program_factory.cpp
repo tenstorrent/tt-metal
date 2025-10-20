@@ -392,9 +392,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t right_inc_tmp_cb_id = 32;
     uint32_t down_left_wrap_inc_tmp_cb_id = 32;
     uint32_t up_left_wrap_inc_tmp_cb_id = 32;
-    int32_t right_inc = 0;
-    int32_t down_left_wrap_inc = 0;
-    int32_t up_left_wrap_inc = 0;
+    uint16_t right_inc = 0;
+    uint16_t down_left_wrap_inc = 0;
+    uint16_t up_left_wrap_inc = 0;
     if (return_indices) {
         uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
         idx_tmp_cb_id = next_cb_index++;
@@ -425,7 +425,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         // compute increments for index tile population
         right_inc = stride_w;
         down_left_wrap_inc = in_w * stride_h + (1 - out_w) * stride_w;
-        up_left_wrap_inc = (1 - out_h) * stride_h * in_w + (1 - out_w) * stride_w;
+        up_left_wrap_inc =
+            (1 - out_h) * stride_h * in_w + (1 - out_w) * stride_w;  // allow overflow for negative values
     }
 
     const bool is_output_tiled = output_layout == Layout::TILE;

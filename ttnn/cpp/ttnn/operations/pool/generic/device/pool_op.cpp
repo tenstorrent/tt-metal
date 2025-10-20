@@ -40,10 +40,10 @@ void validate_pool2d(
         auto input_h = sliding_window_config.input_hw.first;
         auto input_w = sliding_window_config.input_hw.second;
         TT_FATAL(
-            input_h * input_w <= std::numeric_limits<int16_t>::max(),
-            "Input HW {} will overflow int16 indices max {}",
+            input_h * input_w <= std::numeric_limits<uint16_t>::max(),
+            "Input HW {} will overflow uint16 indices max {}",
             input_h * input_w,
-            std::numeric_limits<int16_t>::max());
+            std::numeric_limits<uint16_t>::max());
         auto kernel_h = sliding_window_config.window_hw.first;
         auto kernel_w = sliding_window_config.window_hw.second;
         TT_FATAL(

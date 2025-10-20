@@ -321,9 +321,9 @@ void kernel_main() {
     constexpr bool return_indices = (bool)get_compile_time_arg_val(37);
     constexpr uint32_t pad_t = get_compile_time_arg_val(38);
     constexpr uint32_t pad_l = get_compile_time_arg_val(39);
-    constexpr int32_t right_inc = get_compile_time_arg_val(40);
-    constexpr int32_t down_left_wrap_inc = get_compile_time_arg_val(41);
-    constexpr int32_t up_left_wrap_inc = get_compile_time_arg_val(42);
+    constexpr uint16_t right_inc = get_compile_time_arg_val(40);
+    constexpr uint16_t down_left_wrap_inc = get_compile_time_arg_val(41);
+    constexpr uint16_t up_left_wrap_inc = get_compile_time_arg_val(42);
     constexpr bool zero_pages = (bool)get_compile_time_arg_val(43);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(44);
     constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(45);

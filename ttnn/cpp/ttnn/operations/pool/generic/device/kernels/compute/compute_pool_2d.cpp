@@ -224,6 +224,7 @@ void MAIN {
                             copy_tile(right_inc_tmp_cb_id, topk_cb_tile_idx, inc_dst_idx);
                         }
 
+                        // we allow overflow here for negative values as this only occurs in padding regions
                         add_int_tile_init();
                         add_uint16_tile(index_scratch_in_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
                     }
