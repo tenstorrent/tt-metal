@@ -1,10 +1,10 @@
 [build-system]
 requires = [
-    "scikit-build-core>=0.8.0",
-    "pybind11>=2.10.0",
-    "wheel",
+  "setuptools==70.1.0",
+  "setuptools-scm==8.1.0",
+  "wheel",
 ]
-build-backend = "scikit_build_core.build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "ttnn"
@@ -49,51 +49,6 @@ skip = ["__init__.py"]
 
 [tool.ruff]
 line-length = 120
-
-[tool.scikit-build]
-build-dir = "build/{wheel_tag}"
-
-[tool.scikit-build.cmake]
-version = ">=3.24"
-build-type = {env="CIBW_BUILD_TYPE", default="Release"}
-
-[tool.scikit-build.cmake.define]
-ENABLE_TRACY = {env="CIBW_ENABLE_TRACY", default="OFF"}
-CMAKE_BUILD_TYPE = {env="CIBW_BUILD_TYPE", default="Release"}
-BUILD_SHARED_LIBS = "ON"
-TT_INSTALL = "ON"
-TT_UNITY_BUILDS = "ON"
-TT_ENABLE_LIGHT_METAL_TRACE = "ON"
-WITH_PYTHON_BINDINGS = "ON"
-TT_USE_SYSTEM_SFPI = "ON"
-ENABLE_CCACHE = "TRUE"
-CMAKE_INSTALL_LIBDIR = "ttnn"
-CMAKE_INSTALL_LIBEXECDIR = "ttnn"
-
-[tool.scikit-build.wheel]
-# Package discovery - include all packages that were found by setup.py find_packages
-packages = [
-    "ttnn/tracy",
-    "ttnn/tt_lib",
-    "ttnn/ttnn",
-    "tools/tracy",
-    "tools/triage",
-]
-# Exclude examples from wheel
-exclude = ["ttnn/examples", "ttnn/examples/**"]
-
-[tool.scikit-build.install]
-# Use CMake install components for packaging
-components = ["umd-runtime", "metalium-runtime", "ttnn-runtime", "tracy"]
-
-# Conditionally add tracy component when enabled
-[[tool.scikit-build.overrides]]
-if.env.CIBW_ENABLE_TRACY = "ON"
-install.components = ["umd-runtime", "metalium-runtime", "ttnn-runtime", "tracy"]
-
-# Handle version from git via setuptools-scm-like behavior
-[tool.scikit-build.metadata.version]
-provider = "scikit_build_core.metadata.setuptools_scm"
 
 [tool.setuptools_scm]
 # Supported tag formats:
