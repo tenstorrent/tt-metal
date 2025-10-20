@@ -79,21 +79,9 @@ CPMAddPackage(
 
 CPMAddPackage(NAME nlohmann_json GITHUB_REPOSITORY nlohmann/json GIT_TAG v3.11.3 OPTIONS "JSON_BuildTests OFF")
 
-CPMAddPackage(
-    NAME xtl
-    GITHUB_REPOSITORY xtensor-stack/xtl
-    GIT_TAG 0.8.0
-    OPTIONS
-        "XTL_ENABLE_TESTS OFF"
-)
+CPMAddPackage(NAME xtl GITHUB_REPOSITORY xtensor-stack/xtl GIT_TAG 0.8.0 OPTIONS "XTL_ENABLE_TESTS OFF")
 
-CPMAddPackage(
-    NAME xtensor
-    GITHUB_REPOSITORY xtensor-stack/xtensor
-    GIT_TAG 0.26.0
-    OPTIONS
-        "XTENSOR_ENABLE_TESTS OFF"
-)
+CPMAddPackage(NAME xtensor GITHUB_REPOSITORY xtensor-stack/xtensor GIT_TAG 0.26.0 OPTIONS "XTENSOR_ENABLE_TESTS OFF")
 
 CPMAddPackage(
     NAME xtensor-blas
