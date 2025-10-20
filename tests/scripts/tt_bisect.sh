@@ -104,7 +104,7 @@ PY
 # Try to download build artifacts from GitHub Actions using external script
 try_download_artifacts() {
   local commit_sha="$1"
-  local download_script="./tests/scripts/download_artifacts.sh"
+  local download_script="./build_bisect/download_artifacts.sh"
 
   if [ ! -f "$download_script" ]; then
     echo "ERROR: Download artifacts script not found: $download_script"
