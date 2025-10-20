@@ -571,6 +571,10 @@ def main():
     model = CLIPModel.from_pretrained(
         "openai/clip-vit-base-patch32", cache_dir="ttnn_clip_zero_shot_image_classification/"
     )
+    tokenizer = CLIPTokenizer.from_pretrained(
+        "openai/clip-vit-base-patch32", cache_dir="ttnn_clip_zero_shot_image_classification/"
+    )
+
     state_dict = convert_model_to_ttnn(model.state_dict())
 
     # Initialize our TT-NN CLIP implementation
@@ -596,9 +600,6 @@ def main():
 
     # Tokenize text prompts using CLIP's tokenizer
     logger.info("Tokenizing text prompts...")
-    tokenizer = CLIPTokenizer.from_pretrained(
-        "openai/clip-vit-base-patch32", cache_dir="ttnn_clip_zero_shot_image_classification/"
-    )
     # padding="max_length" ensures all sequences are padded to context_length (77 tokens)
     # return_tensors="pt" returns PyTorch tensors
     tokenized_inputs = tokenizer(prompts, padding="max_length", max_length=clip.context_length, return_tensors="pt")
