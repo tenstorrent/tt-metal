@@ -27,6 +27,7 @@ struct LayerNormShardedMultiCoreProgramConfig {
     bool inplace{};
     bool legacy_reduction = false;
     bool legacy_rsqrt = false;
+    bool use_welford = false;
 };
 
 using LayerNormProgramConfig = std::variant<LayerNormDefaultProgramConfig, LayerNormShardedMultiCoreProgramConfig>;

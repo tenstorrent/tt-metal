@@ -104,6 +104,22 @@ int main() {
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
     risc_init();
     signal_subordinate_erisc_completion();
+#if defined(ENABLE_2_ERISC_MODE)
+    if (k_ProgrammableCoreType == ProgrammableCoreType::ACTIVE_ETH) {
+        while (true) {
+            // Wait for ERISC0 to signal that it has saved its state to L1
+            if (mailboxes->ncrisc_halt.stack_save != 0) {
+                // Trigger a soft reset of ERISC0. Wait 100 cycles, and then deassert
+                WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, RISCV_SOFT_RESET_0_BRISC);
+                riscv_wait(100);
+                WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, RISCV_SOFT_RESET_0_NONE);
+
+                break;
+            }
+            invalidate_l1_cache();
+        }
+    }
+#endif
 
     // Cleanup profiler buffer incase we never get the go message
     while (1) {

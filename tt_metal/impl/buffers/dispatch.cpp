@@ -683,8 +683,10 @@ void write_sharded_buffer_to_core(
     }
 
     dispatch_params.reset_params_for_core(core, core_page_mapping);
-    // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
-    uint32_t data_offset_bytes = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd));
+
+    DeviceCommandCalculator calculator;
+    calculator.add_dispatch_write_linear<true, false>(0);
+    uint32_t data_offset_bytes = calculator.write_offset_bytes();
     dispatch_params.calculate_issue_wait();
     update_offset_on_issue_wait_cmd(data_offset_bytes, dispatch_params.issue_wait, sub_device_ids.size());
 

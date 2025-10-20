@@ -78,7 +78,7 @@ def test_feedforward(
     tt_model = FeedForward(
         dim, dim_out, inner_dim=inner_dim, bias=bias, activation_fn=activation_fn, mesh_device=mesh_device
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch_input_tensor = torch.randn((1, B, seq, dim), dtype=torch_dtype)
 
@@ -162,7 +162,7 @@ def test_parallel_feedforward(
         fsdp_mesh_axis=fsdp_mesh_axis,
         ccl_manager=ccl_manager,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch_input_tensor = torch.randn((1, B, seq, dim), dtype=torch_dtype)
 
