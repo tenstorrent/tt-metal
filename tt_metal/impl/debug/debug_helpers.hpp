@@ -7,7 +7,7 @@
 #include <set>
 
 #include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/core_descriptor.hpp>
+#include "llrt/core_descriptor.hpp"
 #include "hostdevcommon/dprint_common.h"
 #include "impl/context/metal_context.hpp"
 #include "llrt.hpp"

@@ -8,7 +8,7 @@
 #include <tt_stl/indestructible.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/distributed_context.hpp>
-#include <tt-metalium/core_descriptor.hpp>
+#include "llrt/core_descriptor.hpp"
 #include <tt-metalium/hal_types.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <llrt/hal.hpp>
