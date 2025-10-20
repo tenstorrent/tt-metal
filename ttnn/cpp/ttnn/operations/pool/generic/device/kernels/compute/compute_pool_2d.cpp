@@ -204,7 +204,7 @@ void MAIN {
                     if (last_c_block) {
                         if (current_idx_col + right_inc + kernel_w > in_w_padded) {
                             // we reached the edge, wrap down and to the left
-                            current_idx_col = pad_l;
+                            current_idx_col = 0;
                             copy_tile(down_left_wrap_inc_tmp_cb_id, topk_cb_tile_idx, inc_dst_idx);
                         } else {
                             // we are still in the same row, move to the right
