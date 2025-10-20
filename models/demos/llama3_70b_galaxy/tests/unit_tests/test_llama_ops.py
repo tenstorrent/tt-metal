@@ -23,7 +23,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_nlp_create_qkv_hea
     run_test_create_min_width_shard,
 )
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_nlp_concat_heads_decode import run_test_concat_head
-from tests.ttnn.unit_tests.operations.fused.test_paged_fused_update_cache import (
+from tests.ttnn.unit_tests.operations.transformers.test_paged_fused_update_cache import (
     run_test_paged_fused_update_cache_decode,
 )
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_llama import (
