@@ -390,8 +390,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<size_t> num_preferred_links,
     std::optional<ttnn::ccl::Topology> topology) {
-    auto topology_ = topology.value_or(
-        ttnn::ccl::get_usable_topology(input_tensor, tt::tt_fabric::get_fabric_topology(), cluster_axis));
+    auto topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::optional<uint32_t>(cluster_axis));
     auto mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required");
     return ExecuteAllReduceAsync::invoke(
