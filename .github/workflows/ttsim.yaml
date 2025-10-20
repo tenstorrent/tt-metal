@@ -204,7 +204,6 @@ jobs:
             tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_t3000.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_6U.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_t3000.py \
-            tests/ttnn/unit_tests/operations/ccl/test_barrier_t3000_frequent.py \
             tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py \
             tests/ttnn/unit_tests/operations/ccl/test_fabric_ccl.py \
             tests/ttnn/unit_tests/operations/ccl/test_llama_prefill_ccl_ops.py \
