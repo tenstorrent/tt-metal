@@ -31,26 +31,20 @@ on:
           - topology-6u
           - config-t3000
         description: "Runner Type Label"
-      good-commit:
+      commit-range:
         required: true
         type: string
-      bad-commit:
-        required: true
-        type: string
+        description: "Good and bad commits (format: good,bad, e.g., abc1234,def5678)"
       command:
         required: false
         type: string
         default: ""
         description: "Test command to run (not needed if gist-url is provided)"
-      timeout:
+      timeout-retries:
         required: true
         type: string
-        description: "Timeout for one iteration (eg: 5m, 1h)"
-      retries:
-        required: false
-        type: string
-        default: "3"
-        description: "Number of retries (default 3)"
+        default: "30m,3"
+        description: "Timeout and retries (format: timeout,retries, e.g., 30m,3 or 1h,5)"
       download-artifacts:
         required: false
         type: boolean
@@ -230,6 +224,30 @@ jobs:
           chmod +x ./build_bisect/tt_bisect.sh
           chmod +x ./build_bisect/download_artifacts.sh
 
+          # Parse commit range from combined input
+          COMMIT_RANGE='${{ inputs.commit-range }}'
+          IFS=',' read -r GOOD_COMMIT BAD_COMMIT <<< "$COMMIT_RANGE"
+
+          # Validate parsed values
+          if [ -z "$GOOD_COMMIT" ] || [ -z "$BAD_COMMIT" ]; then
+            echo "ERROR: Invalid commit-range format. Expected 'good,bad' (e.g., 'abc1234,def5678')"
+            exit 1
+          fi
+
+          echo "Parsed good commit: $GOOD_COMMIT, bad commit: $BAD_COMMIT"
+
+          # Parse timeout and retries from combined input
+          TIMEOUT_RETRIES='${{ inputs.timeout-retries }}'
+          IFS=',' read -r TIMEOUT RETRIES <<< "$TIMEOUT_RETRIES"
+
+          # Validate parsed values
+          if [ -z "$TIMEOUT" ] || [ -z "$RETRIES" ]; then
+            echo "ERROR: Invalid timeout-retries format. Expected 'timeout,retries' (e.g., '30m,3')"
+            exit 1
+          fi
+
+          echo "Parsed timeout: $TIMEOUT, retries: $RETRIES"
+
           # Determine which script to run
           SCRIPT_PATH=""
 
@@ -262,10 +280,10 @@ jobs:
 
           # Build arguments in an array to avoid empty string issues
           declare -a bisect_args
-          bisect_args+=(-t "${{ inputs.timeout }}")
-          bisect_args+=(-b "${{ inputs.bad-commit }}")
-          bisect_args+=(-g "${{ inputs.good-commit }}")
-          bisect_args+=(-r "${{ inputs.retries }}")
+          bisect_args+=(-t "$TIMEOUT")
+          bisect_args+=(-b "$BAD_COMMIT")
+          bisect_args+=(-g "$GOOD_COMMIT")
+          bisect_args+=(-r "$RETRIES")
 
           if [[ "${{ inputs.tracy }}" == 'true' ]]; then
             bisect_args+=(-p)
