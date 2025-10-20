@@ -23,18 +23,38 @@ void create_ethernet_metrics(
     const tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd,
     const std::unique_ptr<TopologyHelper>& topology_translation,
     const std::unique_ptr<tt::tt_metal::Hal>& hal) {
+    log_info(tt::LogAlways, "Creating Ethernet metrics...");
+
     // Get all the Ethernet endpoints on this host that should be present in this cluster according
     // to its factory system descriptor
     std::vector<tt::scaleout_tools::fsd::proto::FactorySystemDescriptor_EndPoint> endpoints;
     for (const auto& connection : fsd.eth_connections().connection()) {
+        std::string hostname_a = fsd.hosts()[connection.endpoint_a().host_id()].hostname();
+        std::string hostname_b = fsd.hosts()[connection.endpoint_b().host_id()].hostname();
+        log_info(
+            tt::LogAlways,
+            "Found endpoint in FSD: A: hostname={}, tray_id={}, asic_location={}, channel={}",
+            hostname_a,
+            connection.endpoint_a().tray_id(),
+            connection.endpoint_a().asic_location(),
+            connection.endpoint_a().chan_id());
+        log_info(
+            tt::LogAlways,
+            "Found endpoint in FSD: B: hostname={}, tray_id={}, asic_location={}, channel={}",
+            hostname_b,
+            connection.endpoint_b().tray_id(),
+            connection.endpoint_b().asic_location(),
+            connection.endpoint_b().chan_id());
+
         // a and b are each unique (that is, nothing listed as b will ever appear as a)
-        if (fsd.hosts()[connection.endpoint_a().host_id()].hostname() == topology_translation->my_host_name) {
+        if (hostname_a == topology_translation->my_host_name) {
             endpoints.push_back(connection.endpoint_a());
         }
-        if (fsd.hosts()[connection.endpoint_b().host_id()].hostname() == topology_translation->my_host_name) {
+        if (hostname_b == topology_translation->my_host_name) {
             endpoints.push_back(connection.endpoint_b());
         }
     }
+    log_info(tt::LogAlways, "Found {} endpoints to monitor in factory system descriptor", endpoints.size());
 
     // For each, create a metric
     for (const auto& endpoint : endpoints) {
@@ -50,6 +70,13 @@ void create_ethernet_metrics(
             *tray_id);
         tt::ChipId chip_id = chip_id_optional.value();
 
+        log_info(
+            tt::LogAlways,
+            "Creating Ethernet metrics for tray_id={}, asic_location={}, channel={}, chip_id={}...",
+            *tray_id,
+            *asic_location,
+            channel,
+            chip_id);
         bool_metrics.push_back(
             std::make_unique<EthernetEndpointUpMetric>(tray_id, asic_location, chip_id, channel, hal));
         uint_metrics.push_back(

@@ -44,6 +44,8 @@ static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor load_fsd(const st
 
     if (!google::protobuf::TextFormat::ParseFromString(fsd_content, &fsd)) {
         throw std::runtime_error("Failed to parse FSD protobuf from file: " + fsd_filename);
+    } else {
+        log_info(tt::LogAlways, "Read FSD file from {}: {} bytes", fsd_filename, fsd_content.size());
     }
 
     return fsd;

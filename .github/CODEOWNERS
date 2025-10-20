@@ -357,6 +357,7 @@ tt-train/** @dmakoviichuk-tt @rfurko-tt @ayerofieiev-tt @tenstorrent/metalium-co
 
 # tt-telemetry
 tt_telemetry/** @btrzynadlowski-tt @tt-asaigal @kluongTT @cfjchu @tt-aho @omilyutin-tt @SeanNijjar @aliuTT @Riddy21 @agupta-tt @tenstorrent/metalium-codeowners-large-changes
+tt_telemetry/docker/ @btrzynadlowski-tt @kluongTT @tenstorrent/metalium-codeowners-large-changes @tenstorrent/metalium-developers-infra
 
 # .clang-tidy files - Metalium infra team owns all clang-tidy configuration files
 **/.clang-tidy @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
