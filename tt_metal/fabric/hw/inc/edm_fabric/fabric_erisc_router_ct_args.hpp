@@ -169,7 +169,7 @@ constexpr size_t CHANNEL_POOL_COLLECTION_IDX = ANOTHER_SPECIAL_TAG_IDX + 1;
 // Total: 1 + 1 + 23 = 25 args
 using channel_pools_args =
     ChannelPoolCollection<CHANNEL_POOL_COLLECTION_IDX, NUM_SENDER_CHANNELS, NUM_RECEIVER_CHANNELS>;
-
+constexpr size_t NUM_POOLS = channel_pools_args::num_channel_pools;
 /*
 // constexpr size_t NUM_POOLS = get_compile_time_arg_val(CHANNEL_POOL_COLLECTION_IDX);
 // constexpr std::array<FabricChannelPoolType, NUM_POOLS> POOL_TYPES =
@@ -224,31 +224,47 @@ constexpr size_t remote_sender_4_channel_address = get_compile_time_arg_val(STAT
 */
 
 // Parse channel-to-pool mappings (after all pool data)
-constexpr size_t CHANNEL_MAPPINGS_START_IDX = CHANNEL_POOL_COLLECTION_IDX + channel_pools_args::GET_NUM_ARGS_CONSUMED();
+constexpr size_t CHANNEL_MAPPINGS_START_SPECIAL_TAG_IDX = CHANNEL_POOL_COLLECTION_IDX + channel_pools_args::GET_NUM_ARGS_CONSUMED();
+static_assert(
+    get_compile_time_arg_val(CHANNEL_MAPPINGS_START_SPECIAL_TAG_IDX) == 0xabaddad8,
+    "CHANNEL_MAPPINGS_START_SPECIAL_TAG_IDX not found. This implies some arguments were misaligned between host and device. Double check the CT args.");
+
+constexpr size_t CHANNEL_MAPPINGS_START_IDX = CHANNEL_MAPPINGS_START_SPECIAL_TAG_IDX + 1;
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_TO_POOL_IDX =
     fill_array_with_next_n_args<size_t, CHANNEL_MAPPINGS_START_IDX, NUM_SENDER_CHANNELS>();
+static_assert(all_elements_satisfy(SENDER_TO_POOL_IDX, [](size_t pool_idx) { return pool_idx < NUM_POOLS; }));
 constexpr std::array<FabricChannelPoolType, NUM_SENDER_CHANNELS> SENDER_TO_POOL_TYPE = fill_array_with_next_n_args<
     FabricChannelPoolType,
     CHANNEL_MAPPINGS_START_IDX + NUM_SENDER_CHANNELS,
     NUM_SENDER_CHANNELS>();
+static_assert(all_elements_satisfy(SENDER_TO_POOL_TYPE, [](FabricChannelPoolType pool_type) { return pool_type <= FabricChannelPoolType::ELASTIC; }));
 constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> RECEIVER_TO_POOL_IDX = fill_array_with_next_n_args<
     size_t,
     CHANNEL_MAPPINGS_START_IDX + (2 * NUM_SENDER_CHANNELS),
     NUM_RECEIVER_CHANNELS>();
+static_assert(all_elements_satisfy(RECEIVER_TO_POOL_IDX, [](size_t pool_idx) { return pool_idx < NUM_POOLS; }));
 constexpr std::array<FabricChannelPoolType, NUM_RECEIVER_CHANNELS> RECEIVER_TO_POOL_TYPE = fill_array_with_next_n_args<
     FabricChannelPoolType,
     CHANNEL_MAPPINGS_START_IDX + (2 * NUM_SENDER_CHANNELS) + NUM_RECEIVER_CHANNELS,
     NUM_RECEIVER_CHANNELS>();
+static_assert(all_elements_satisfy(RECEIVER_TO_POOL_TYPE, [](FabricChannelPoolType pool_type) { return pool_type <= FabricChannelPoolType::ELASTIC; }));
+
+
+constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX = CHANNEL_MAPPINGS_START_IDX + (2 * NUM_SENDER_CHANNELS) + (2 * NUM_RECEIVER_CHANNELS);
+static_assert(
+    get_compile_time_arg_val(DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX) == 0xabaddad7,
+    "DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX not found. This implies some arguments were misaligned between host and device. Double check the CT args.");
 
 constexpr size_t NUM_DOWNSTREAM_CHANNELS = NUM_FORWARDING_PATHS;
 // Downstream sender num buffers comes after channel mappings
-constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_IDX =
-    CHANNEL_MAPPINGS_START_IDX + (2 * NUM_SENDER_CHANNELS) + (2 * NUM_RECEIVER_CHANNELS);
+constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX + 1;
 constexpr std::array<size_t, NUM_DOWNSTREAM_CHANNELS> DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY =
     fill_array_with_next_n_args<size_t, DOWNSTREAM_SENDER_NUM_BUFFERS_IDX, NUM_DOWNSTREAM_CHANNELS>();
 // TODO: remove DOWNSTREAM_SENDER_NUM_BUFFERS and use TMP on downstream sender channels.
 constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[0];
 constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[NUM_RECEIVER_CHANNELS - 1];
+
+// missing a bunch of ct args here -- connection args
 
 constexpr size_t ANOTHER_SPECIAL_TAG_2 = 0xabaddad9;
 constexpr size_t ANOTHER_SPECIAL_TAG_2_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_IDX + NUM_DOWNSTREAM_CHANNELS;

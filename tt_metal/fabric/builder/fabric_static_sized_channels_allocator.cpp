@@ -46,7 +46,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     const std::vector<MemoryRegion>& memory_regions) :
     FabricChannelAllocator(topology, options, memory_regions),
     num_used_sender_channels(num_used_sender_channels),
-    num_receiver_channels(num_used_receiver_channels),
+    num_used_receiver_channels(num_used_receiver_channels),
     channel_buffer_size_bytes(channel_buffer_size_bytes),
     available_channel_buffering_space(available_channel_buffering_space) {
     // Compute buffer region start from memory regions
@@ -306,7 +306,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
 
     auto fill_receiver_buffer_slots =
         [&](auto& num_buffer_slots, size_t channel_skip_idx, uint32_t extra_num_buffer_slots) {
-            for (size_t i = 0; i < this->num_receiver_channels; ++i) {
+            for (size_t i = 0; i < this->num_used_receiver_channels; ++i) {
                 if (i == channel_skip_idx) {
                     num_buffer_slots[i] = 0;
                 } else {
@@ -341,7 +341,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             get_optimal_num_slots(
                 default_with_tensix_buffer_slot_options[arch_index],
                 num_sender_channels,
-                this->num_receiver_channels,
+                this->num_used_receiver_channels,
                 default_num_sender_buffer_slots,
                 default_num_receiver_buffer_slots);
             // set default buffer slots.
@@ -363,7 +363,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         get_optimal_num_slots(
             ring_buffer_slot_options[arch_index],
             this->num_used_sender_channels,
-            this->num_receiver_channels,
+            this->num_used_receiver_channels,
             default_num_sender_buffer_slots,
             default_num_receiver_buffer_slots);
         // get the dateline buffer slots
@@ -372,7 +372,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         get_optimal_num_slots(
             ring_buffer_slot_options_dateline[arch_index][axis_index],
             this->num_used_sender_channels - 1,
-            this->num_receiver_channels - 1,
+            this->num_used_receiver_channels - 1,
             dateline_num_sender_buffer_slots,
             dateline_num_receiver_buffer_slots,
             default_num_sender_buffer_slots);
@@ -382,7 +382,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         get_optimal_num_slots(
             ring_buffer_slot_options_dateline_upstream[arch_index][axis_index],
             this->num_used_sender_channels - 1,
-            this->num_receiver_channels - 1,
+            this->num_used_receiver_channels - 1,
             dateline_upstream_num_sender_buffer_slots,
             dateline_upstream_num_receiver_buffer_slots,
             default_num_sender_buffer_slots);
@@ -392,7 +392,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         get_optimal_num_slots(
             ring_buffer_slot_options_dateline_upstream_adjcent[arch_index][axis_index],
             this->num_used_sender_channels - 1,
-            this->num_receiver_channels,
+            this->num_used_receiver_channels,
             dateline_upstream_adjcent_num_sender_buffer_slots,
             dateline_upstream_adjcent_num_receiver_buffer_slots,
             default_num_sender_buffer_slots);
@@ -485,7 +485,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         get_optimal_num_slots(
             torus_buffer_slot_options[arch_index],
             this->num_used_sender_channels,
-            this->num_receiver_channels,
+            this->num_used_receiver_channels,
             default_num_sender_buffer_slots,
             default_num_receiver_buffer_slots);
 
@@ -495,7 +495,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         get_optimal_num_slots(
             torus_buffer_slot_options_dateline[arch_index][axis_index],
             this->num_used_sender_channels - 1,
-            this->num_receiver_channels - 1,
+            this->num_used_receiver_channels - 1,
             dateline_num_sender_buffer_slots,
             dateline_num_receiver_buffer_slots,
             default_num_sender_buffer_slots);
@@ -534,7 +534,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         get_optimal_num_slots(
             get_num_buffer_slots(topology, arch_index),
             this->num_used_sender_channels,
-            this->num_receiver_channels,
+            this->num_used_receiver_channels,
             default_num_sender_buffer_slots,
             default_num_receiver_buffer_slots);
         // set default buffer slots.
@@ -549,21 +549,13 @@ void FabricStaticSizedChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_
     // NOTE: Special tag 0xabcd1234 is now emitted by MultiPoolChannelAllocator, not here
     // insert the sender channel num buffers - EMIT ALL channels for multi-pool support
 
-    size_t num_sender_channels = this->sender_channels_base_address.size();
-    size_t num_receiver_channels = this->receiver_channels_base_address.size();
-    TT_FATAL(
-        num_receiver_channels == this->remote_receiver_channels_num_buffers.size(),
-        "Receiver channels num buffers size mismatch");
-    TT_FATAL(
-        num_sender_channels == this->remote_sender_channels_num_buffers.size(),
-        "Remote sender channels num buffers size mismatch");
-    for (size_t i = 0; i < num_sender_channels; ++i) {
+    for (size_t i = 0; i < this->num_used_sender_channels; ++i) {
         ct_args.push_back(static_cast<uint32_t>(this->sender_channels_base_address[i]));
         ct_args.push_back(this->sender_channels_num_buffers[i]);
         ct_args.push_back(static_cast<uint32_t>(this->remote_sender_channels_base_address[i]));
         ct_args.push_back(this->remote_sender_channels_num_buffers[i]);
     }
-    for (size_t i = 0; i < num_receiver_channels; ++i) {
+    for (size_t i = 0; i < this->num_used_receiver_channels; ++i) {
         ct_args.push_back(static_cast<uint32_t>(this->receiver_channels_base_address[i]));
         ct_args.push_back(this->receiver_channels_num_buffers[i]);
         ct_args.push_back(static_cast<uint32_t>(this->remote_receiver_channels_base_address[i]));

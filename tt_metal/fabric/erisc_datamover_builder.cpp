@@ -993,8 +993,10 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         ct_args, config.num_fwd_paths, num_sender_channels, num_receiver_channels);
 
     // Emit channel-to-pool mappings (steps 5-8 of schema)
+    ct_args.push_back(0xabaddad8);
     config.channel_to_pool_mapping->emit_ct_args(ct_args);
 
+    ct_args.push_back(0xabaddad7);
     receiver_channel_to_downstream_adapter->emit_ct_args(ct_args, config.num_fwd_paths);
     ct_args.push_back(0xabaddad9);
 

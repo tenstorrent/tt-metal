@@ -65,7 +65,7 @@ public:
     size_t get_receiver_channel_base_address(size_t channel_id) const;
 
     size_t get_num_sender_channels() const { return num_used_sender_channels; }
-    size_t get_num_receiver_channels() const { return num_receiver_channels; }
+    size_t get_num_receiver_channels() const { return num_used_receiver_channels; }
 
 private:
     /*
@@ -82,7 +82,7 @@ private:
 
     // Configuration parameters
     size_t num_used_sender_channels = 0;
-    size_t num_receiver_channels = 0;
+    size_t num_used_receiver_channels = 0;
     size_t channel_buffer_size_bytes = 0;
     size_t available_channel_buffering_space = 0;
     size_t max_l1_loading_size = 0;
