@@ -262,69 +262,6 @@ jobs:
             echo "pr-exists=true" >> $GITHUB_OUTPUT
           fi
 
-  fetch-slack-users:
-    needs: [parse-comment, find-pr]
-    # Only fetch Slack users when notifications will be sent
-    if: |
-      always() &&
-      needs.find-pr.outputs.pr-exists == 'true' &&
-      (needs.parse-comment.outputs.send-slack-notification == 'true' ||
-       needs.parse-comment.outputs.is-direct-ping == 'true')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Fetch all Slack users
-        run: |
-          echo "Fetching all Slack users (this may take a moment)..."
-          ALL_SLACK_USERS=""
-          CURSOR=""
-          PAGE_COUNT=0
-
-          while true; do
-            if [ -n "$CURSOR" ]; then
-              API_URL="https://slack.com/api/users.list?limit=1000&cursor=$CURSOR"
-            else
-              API_URL="https://slack.com/api/users.list?limit=1000"
-            fi
-
-            USER_SEARCH_RESPONSE=$(curl -s -X GET \
-              -H "Authorization: Bearer ${{ secrets.CODEOWNERS_PING_BOT }}" \
-              -H "Content-Type: application/json" \
-              "$API_URL")
-
-            if [ "$(echo "$USER_SEARCH_RESPONSE" | jq -r '.ok')" = "true" ]; then
-              USERS_PAGE=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.members')
-              if [ "$ALL_SLACK_USERS" = "" ]; then
-                ALL_SLACK_USERS="$USERS_PAGE"
-              else
-                ALL_SLACK_USERS=$(echo "$ALL_SLACK_USERS $USERS_PAGE" | jq -s 'add')
-              fi
-
-              PAGE_COUNT=$((PAGE_COUNT + 1))
-              CURSOR=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.response_metadata.next_cursor // empty')
-              if [ -z "$CURSOR" ] || [ "$CURSOR" = "null" ]; then
-                break
-              fi
-            else
-              ERROR_MSG=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.error // "Unknown error"')
-              echo "Error: Failed to fetch Slack users: $ERROR_MSG"
-              break
-            fi
-          done
-
-          USER_COUNT=$(echo "$ALL_SLACK_USERS" | jq '. | length')
-          echo "✅ Successfully fetched $USER_COUNT Slack users across $PAGE_COUNT pages"
-
-          # Save to file for other jobs
-          mkdir -p /tmp
-          echo "$ALL_SLACK_USERS" > /tmp/slack_users.json
-          echo "Saved Slack users cache"
-
-      - name: Upload Slack users cache
-        uses: actions/upload-artifact@v4
-        with:
-          name: slack-users-cache
-          path: /tmp/slack_users.json
-          retention-days: 1
 
   get-reviews:
     needs: [find-pr]
@@ -770,7 +707,7 @@ jobs:
           ORG_READ_GITHUB_TOKEN: ${{ secrets.ORG_READ_GITHUB_TOKEN }}
 
   post-comment:
-    needs: [find-pr, analyze-codeowners, get-reviews, parse-comment, fetch-slack-users]
+    needs: [find-pr, analyze-codeowners, get-reviews, parse-comment]
     if: always() && needs.find-pr.outputs.pr-exists == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -1258,12 +1195,54 @@ jobs:
           rm -f "$TEMP_JSON_FILE"
           echo "Comment updated for PR #$PR_NUMBER"
 
-      - name: Download Slack users for direct ping
+      - name: Fetch Slack users for direct ping
         if: needs.parse-comment.outputs.is-direct-ping == 'true'
-        uses: actions/download-artifact@v4
-        with:
-          name: slack-users-cache
-          path: /tmp
+        run: |
+          # Fetch Slack users securely (kept in memory only)
+          echo "Fetching all Slack users..."
+          ALL_SLACK_USERS=""
+          CURSOR=""
+          PAGE_COUNT=0
+
+          while true; do
+            if [ -n "$CURSOR" ]; then
+              API_URL="https://slack.com/api/users.list?limit=1000&cursor=$CURSOR"
+            else
+              API_URL="https://slack.com/api/users.list?limit=1000"
+            fi
+
+            USER_SEARCH_RESPONSE=$(curl -s -X GET \
+              -H "Authorization: Bearer ${{ secrets.CODEOWNERS_PING_BOT }}" \
+              -H "Content-Type: application/json" \
+              "$API_URL")
+
+            if [ "$(echo "$USER_SEARCH_RESPONSE" | jq -r '.ok')" = "true" ]; then
+              USERS_PAGE=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.members')
+              if [ "$ALL_SLACK_USERS" = "" ]; then
+                ALL_SLACK_USERS="$USERS_PAGE"
+              else
+                ALL_SLACK_USERS=$(echo "$ALL_SLACK_USERS $USERS_PAGE" | jq -s 'add')
+              fi
+
+              PAGE_COUNT=$((PAGE_COUNT + 1))
+              CURSOR=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.response_metadata.next_cursor // empty')
+              if [ -z "$CURSOR" ] || [ "$CURSOR" = "null" ]; then
+                break
+              fi
+            else
+              ERROR_MSG=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.error // "Unknown error"')
+              echo "Error: Failed to fetch Slack users: $ERROR_MSG"
+              break
+            fi
+          done
+
+          USER_COUNT=$(echo "$ALL_SLACK_USERS" | jq '. | length')
+          echo "✅ Successfully fetched $USER_COUNT Slack users across $PAGE_COUNT pages"
+
+          # Save to GITHUB_ENV for next step in this job (secure, runner-only)
+          echo "SLACK_USERS_CACHE<<SLACK_EOF" >> $GITHUB_ENV
+          echo "$ALL_SLACK_USERS" >> $GITHUB_ENV
+          echo "SLACK_EOF" >> $GITHUB_ENV
 
       - name: Send direct ping notification
         if: needs.parse-comment.outputs.is-direct-ping == 'true'
@@ -1276,8 +1255,8 @@ jobs:
           REQUESTER_LOGIN="${{ needs.parse-comment.outputs.comment-author }}"
           REQUESTER_NAME="$REQUESTER_LOGIN"
 
-          # Load pre-fetched Slack users from shared cache
-          ALL_SLACK_USERS=$(cat /tmp/slack_users.json)
+          # Use Slack users from secure environment variable (set in previous step)
+          ALL_SLACK_USERS="$SLACK_USERS_CACHE"
           echo "Loaded $(echo "$ALL_SLACK_USERS" | jq '. | length') Slack users from cache"
 
           # Get full name for requester if available
@@ -1673,6 +1652,52 @@ jobs:
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
           PR_AUTHOR_LOGIN=$(echo "$PR_DATA" | jq -r '.user.login')
           PR_AUTHOR_NAME=$(echo "$PR_DATA" | jq -r '.user.name // .user.login')
+
+          # Fetch Slack users securely (kept in memory, never written to disk)
+          echo "Fetching all Slack users..."
+          export ALL_SLACK_USERS=""
+          CURSOR=""
+          PAGE_COUNT=0
+
+          while true; do
+            if [ -n "$CURSOR" ]; then
+              API_URL="https://slack.com/api/users.list?limit=1000&cursor=$CURSOR"
+            else
+              API_URL="https://slack.com/api/users.list?limit=1000"
+            fi
+
+            USER_SEARCH_RESPONSE=$(curl -s -X GET \
+              -H "Authorization: Bearer ${{ secrets.CODEOWNERS_PING_BOT }}" \
+              -H "Content-Type: application/json" \
+              "$API_URL")
+
+            if [ "$(echo "$USER_SEARCH_RESPONSE" | jq -r '.ok')" = "true" ]; then
+              USERS_PAGE=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.members')
+              if [ "$ALL_SLACK_USERS" = "" ]; then
+                ALL_SLACK_USERS="$USERS_PAGE"
+              else
+                ALL_SLACK_USERS=$(echo "$ALL_SLACK_USERS $USERS_PAGE" | jq -s 'add')
+              fi
+
+              PAGE_COUNT=$((PAGE_COUNT + 1))
+              CURSOR=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.response_metadata.next_cursor // empty')
+              if [ -z "$CURSOR" ] || [ "$CURSOR" = "null" ]; then
+                break
+              fi
+            else
+              ERROR_MSG=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.error // "Unknown error"')
+              echo "Error: Failed to fetch Slack users: $ERROR_MSG"
+              break
+            fi
+          done
+
+          USER_COUNT=$(echo "$ALL_SLACK_USERS" | jq '. | length')
+          echo "✅ Successfully fetched $USER_COUNT Slack users across $PAGE_COUNT pages"
+
+          # Save to GITHUB_ENV for subsequent steps in this job (secure, runner-only)
+          echo "SLACK_USERS_CACHE<<SLACK_EOF" >> $GITHUB_ENV
+          echo "$ALL_SLACK_USERS" >> $GITHUB_ENV
+          echo "SLACK_EOF" >> $GITHUB_ENV
 
           # Output for next steps
           {
@@ -2073,13 +2098,6 @@ jobs:
             echo "No pending owners to ping"
           fi
 
-      - name: Download Slack users cache
-        if: needs.parse-comment.outputs.is-direct-ping != 'true'
-        uses: actions/download-artifact@v4
-        with:
-          name: slack-users-cache
-          path: /tmp
-
       - name: Send Slack notifications
         if: needs.parse-comment.outputs.is-direct-ping != 'true'
         run: |
@@ -2098,8 +2116,8 @@ jobs:
           REQUESTER_LOGIN="${{ needs.parse-comment.outputs.comment-author || '' }}"
           REQUESTER_NAME="$REQUESTER_LOGIN"
 
-          # Load pre-fetched Slack users list from artifact
-          ALL_SLACK_USERS=$(cat /tmp/slack_users.json)
+          # Use Slack users from secure environment variable (set in Setup for notifications step)
+          ALL_SLACK_USERS="$SLACK_USERS_CACHE"
 
           echo "DEBUG Slack: SEND_SLACK='$SEND_SLACK'"
           echo "DEBUG Slack: SELECTED_OWNERS='$SELECTED_OWNERS'"
