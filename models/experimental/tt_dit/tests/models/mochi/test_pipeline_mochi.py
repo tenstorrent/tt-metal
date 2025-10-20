@@ -111,6 +111,7 @@ def test_mochi_diffusers_pipeline():
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, vae_mesh_shape, vae_sp_axis, vae_tp_axis, num_links",
     [
+        # VAE mesh shape = (1, 8) is more memory efficient.
         [(1, 8), 1, 0, (1, 8), 0, 1, 1],
         [(2, 4), 0, 1, (1, 8), 0, 1, 1],
         [(4, 8), 1, 0, (4, 8), 1, 0, 4],
@@ -158,8 +159,7 @@ def test_tt_mochi_pipeline(
         sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
     )
 
-    # TODO:Need to improve test parameterization.
-    if vae_mesh_shape[0] == 1:
+    if vae_mesh_shape[vae_sp_axis] == 1:
         w_parallel_factor = 1
     else:
         w_parallel_factor = 2

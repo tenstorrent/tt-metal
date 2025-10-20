@@ -168,7 +168,7 @@ class MochiPipeline(DiffusionPipeline):
         self.vae_parallel_config = vae_parallel_config
         self.num_links = num_links
         self.use_cache = use_cache
-        self.reload_dit_model = True  # TODO:Only required if VAE is memory-constrained.
+        self.reload_dit_model = self.mesh_device.get_num_devices() <= 8  # Only required if VAE is memory-constrained.
 
         # Create CCL manager
         self.ccl_manager = CCLManager(

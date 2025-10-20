@@ -80,7 +80,6 @@ def test_tt_conv3d_1x1x1(mesh_device, N, C_in, C_out, T, H, W, reset_seeds):
     """Test forward pass of TtConv1x1 against Conv3d with 1x1x1 kernel."""
     reference_model, tt_model = create_random_conv3d_models(mesh_device, C_in, C_out)
 
-    # TODO:Need to improve test parameterization.
     if mesh_device.shape[0] == 1:
         w_parallel_factor = 1
     else:
@@ -221,7 +220,6 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links)
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
 
-    # TODO:Need to improve test parameterization.
     if mesh_device.shape[0] == 1:
         w_parallel_factor = 1
     else:
@@ -450,11 +448,12 @@ def test_tt_upsample_forward(mesh_device, config, reset_seeds, num_links):
     N, C, T, H, W = input_shape
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
-    # TODO:Need to improve test parameterization.
+
     if mesh_device.shape[0] == 1:
         w_parallel_factor = 1
     else:
         w_parallel_factor = 2
+
     vae_parallel_config = MochiVAEParallelConfig(
         time_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
         w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=0),
@@ -651,18 +650,17 @@ decoder_test_configs = [
 ]
 
 
-def load_mochi_dit(
-        mesh_device: ttnn.MeshDevice,
-        ccl_manager: CCLManager,
-        use_cache: bool,
-        model_name: str = "genmo/mochi-1-preview",
+def load_dit(
+    mesh_device: ttnn.MeshDevice,
+    ccl_manager: CCLManager,
+    use_cache: bool,
+    model_name: str = "genmo/mochi-1-preview",
 ):
-
-    # Load pretrained Mochi Transformer (TT)
+    # Load pretrained Mochi Transformer
     # First load the torch version to get the config and state dict
     from diffusers import MochiTransformer3DModel as TorchMochiTransformer3DModel
     from ....models.transformers.transformer_mochi import MochiTransformer3DModel
-    from ....parallel.config import DiTParallelConfig, ParallelFactor
+    from ....parallel.config import DiTParallelConfig
     from ....utils.cache import get_cache_path, load_cache_dict
 
     torch_transformer = TorchMochiTransformer3DModel.from_pretrained(
@@ -734,15 +732,16 @@ def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, 
     if load_dit_weights:
         # Load DiT weights to device to account for real world DRAM usage, checking for OOM.
         logger.info("Loading DiT weights")
-        tt_model_dit = load_mochi_dit(mesh_device, ccl_manager, use_cache=False)
+        tt_model_dit = load_dit(mesh_device, ccl_manager, use_cache=False)
 
     # Create models
     logger.info("Creating VAE decoder models")
-    # TODO:Need to improve test parameterization.
+
     if mesh_device.shape[0] == 1:
         w_parallel_factor = 1
     else:
         w_parallel_factor = 2
+
     vae_parallel_config = MochiVAEParallelConfig(
         time_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
         w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=0),
