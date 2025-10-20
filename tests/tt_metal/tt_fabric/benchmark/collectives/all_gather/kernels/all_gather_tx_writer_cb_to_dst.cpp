@@ -65,6 +65,7 @@ void kernel_main() {
 
     constexpr uint32_t TAG_PAYLOAD = 0xEA000000u;
     constexpr uint32_t TAG_SEM = 0xEB000000u;
+    constexpr uint32_t TAG_HDR = 0xEE000000u;
     constexpr uint32_t BR_W = 0x01, BR_E = 0x02, BR_N = 0x04, BR_S = 0x08;
 
     DPRINT << "P0 pre: hops E/W/N/S=" << (uint32_t)e_hops << "/" << (uint32_t)w_hops << "/" << (uint32_t)n_hops << "/"
@@ -100,6 +101,11 @@ void kernel_main() {
     auto mh_E = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_E);
     auto mh_N = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_N);
     auto mh_S = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_S);
+    // Low-latency mesh header view for route programming
+    auto mh_W_ll = reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(hdr_W);
+    auto mh_E_ll = reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(hdr_E);
+    auto mh_N_ll = reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(hdr_N);
+    auto mh_S_ll = reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(hdr_S);
 
     const bool use_W = (w_hops > 0) && (leg_mask & 1u);
     const bool use_E = (e_hops > 0) && (leg_mask & 2u);
@@ -171,7 +177,18 @@ void kernel_main() {
             if (should_log(i)) {
                 DPRINT << "writer:N route&send page " << i << ENDL();
             }
-            fabric_set_mcast_route(mh_N, 0, 0, e_hops, w_hops, n_hops, 0);
+            fabric_set_mcast_route(mh_N_ll, 0, 0, e_hops, w_hops, n_hops, 0);
+            const uint32_t* __p = reinterpret_cast<const uint32_t*>(const_cast<PACKET_HEADER_TYPE*>(mh_N));
+            WATCHER_RING_BUFFER_PUSH(TAG_HDR | BR_N);
+            // Push first 8 words of header
+            WATCHER_RING_BUFFER_PUSH(__p[0]);
+            WATCHER_RING_BUFFER_PUSH(__p[1]);
+            WATCHER_RING_BUFFER_PUSH(__p[2]);
+            WATCHER_RING_BUFFER_PUSH(__p[3]);
+            WATCHER_RING_BUFFER_PUSH(__p[4]);
+            WATCHER_RING_BUFFER_PUSH(__p[5]);
+            WATCHER_RING_BUFFER_PUSH(__p[6]);
+            WATCHER_RING_BUFFER_PUSH(__p[7]);
             hdr_N->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
             conn_N.send_payload_without_header_non_blocking_from_address(page_l1_addr, PAGE_SIZE);
             conn_N.send_payload_flush_non_blocking_from_address((uint32_t)hdr_N, sizeof(PACKET_HEADER_TYPE));
@@ -185,7 +202,18 @@ void kernel_main() {
             if (should_log(i)) {
                 DPRINT << "writer:S route&send page " << i << ENDL();
             }
-            fabric_set_mcast_route(mh_S, 0, 0, e_hops, w_hops, 0, s_hops);
+            fabric_set_mcast_route(mh_S_ll, 0, 0, e_hops, w_hops, 0, s_hops);
+            const uint32_t* __p = reinterpret_cast<const uint32_t*>(const_cast<PACKET_HEADER_TYPE*>(mh_S));
+            WATCHER_RING_BUFFER_PUSH(TAG_HDR | BR_S);
+            // Push first 8 words of header
+            WATCHER_RING_BUFFER_PUSH(__p[0]);
+            WATCHER_RING_BUFFER_PUSH(__p[1]);
+            WATCHER_RING_BUFFER_PUSH(__p[2]);
+            WATCHER_RING_BUFFER_PUSH(__p[3]);
+            WATCHER_RING_BUFFER_PUSH(__p[4]);
+            WATCHER_RING_BUFFER_PUSH(__p[5]);
+            WATCHER_RING_BUFFER_PUSH(__p[6]);
+            WATCHER_RING_BUFFER_PUSH(__p[7]);
             hdr_S->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
             DPRINT << "writer:S route&send page " << i << ENDL();
             DPRINT << "S: header prepared" << ENDL();
@@ -200,11 +228,22 @@ void kernel_main() {
         // WEST branch on source row
         if (use_W) {
             conn_W.wait_for_empty_write_slot();
+            fabric_set_mcast_route(mh_W_ll, 0, 0, 0, w_hops, 0, 0);
+            hdr_W->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
             if (should_log(i)) {
                 DPRINT << "writer:W route&send page " << i << ENDL();
+                const uint32_t* __p = reinterpret_cast<const uint32_t*>(const_cast<PACKET_HEADER_TYPE*>(mh_W));
+                WATCHER_RING_BUFFER_PUSH(TAG_HDR | BR_W);
+                // Push first 8 words of header
+                WATCHER_RING_BUFFER_PUSH(__p[0]);
+                WATCHER_RING_BUFFER_PUSH(__p[1]);
+                WATCHER_RING_BUFFER_PUSH(__p[2]);
+                WATCHER_RING_BUFFER_PUSH(__p[3]);
+                WATCHER_RING_BUFFER_PUSH(__p[4]);
+                WATCHER_RING_BUFFER_PUSH(__p[5]);
+                WATCHER_RING_BUFFER_PUSH(__p[6]);
+                WATCHER_RING_BUFFER_PUSH(__p[7]);
             }
-            fabric_set_mcast_route(mh_W, 0, 0, 0, w_hops, 0, 0);
-            hdr_W->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
             conn_W.send_payload_without_header_non_blocking_from_address(page_l1_addr, PAGE_SIZE);
             conn_W.send_payload_flush_non_blocking_from_address((uint32_t)hdr_W, sizeof(PACKET_HEADER_TYPE));
 
@@ -219,7 +258,7 @@ void kernel_main() {
             if (should_log(i)) {
                 DPRINT << "writer:E route&send page " << i << ENDL();
             }
-            fabric_set_mcast_route(mh_E, 0, 0, e_hops, 0, 0, 0);
+            fabric_set_mcast_route(mh_E_ll, 0, 0, e_hops, 0, 0, 0);
             DPRINT << "writer:E after fabric_set_mcast_rout" << i << ENDL();
             hdr_E->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
             DPRINT << "writer:E after to_noc_unicast_write" << i << ENDL();
@@ -257,7 +296,7 @@ void kernel_main() {
     if (use_N) {
         conn_N.wait_for_empty_write_slot();
         DPRINT << "writer:N atomic_inc" << ENDL();
-        fabric_set_mcast_route(mh_N, 0, 0, e_hops, w_hops, n_hops, 0);
+        fabric_set_mcast_route(mh_N_ll, 0, 0, e_hops, w_hops, n_hops, 0);
         hdr_N->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
         conn_N.send_payload_flush_non_blocking_from_address((uint32_t)hdr_N, sizeof(PACKET_HEADER_TYPE));
         WATCHER_RING_BUFFER_PUSH(TAG_SEM | BR_N);
@@ -265,7 +304,7 @@ void kernel_main() {
     } else if (use_S) {
         conn_S.wait_for_empty_write_slot();
         DPRINT << "writer:S atomic_inc" << ENDL();
-        fabric_set_mcast_route(mh_S, 0, 0, e_hops, w_hops, 0, s_hops);
+        fabric_set_mcast_route(mh_S_ll, 0, 0, e_hops, w_hops, 0, s_hops);
         hdr_S->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
         conn_S.send_payload_flush_non_blocking_from_address((uint32_t)hdr_S, sizeof(PACKET_HEADER_TYPE));
         WATCHER_RING_BUFFER_PUSH(TAG_SEM | BR_S);
@@ -275,8 +314,20 @@ void kernel_main() {
         if (use_W) {
             conn_W.wait_for_empty_write_slot();
             DPRINT << "writer:W atomic_inc" << ENDL();
-            fabric_set_mcast_route(mh_W, 0, 0, 0, w_hops, 0, 0);
+            fabric_set_mcast_route(mh_W_ll, 0, 0, 0, w_hops, 0, 0);
             hdr_W->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
+            {
+                const uint32_t* __p = reinterpret_cast<const uint32_t*>(const_cast<PACKET_HEADER_TYPE*>(mh_W));
+                WATCHER_RING_BUFFER_PUSH(TAG_HDR | BR_W);
+                WATCHER_RING_BUFFER_PUSH(__p[0]);
+                WATCHER_RING_BUFFER_PUSH(__p[1]);
+                WATCHER_RING_BUFFER_PUSH(__p[2]);
+                WATCHER_RING_BUFFER_PUSH(__p[3]);
+                WATCHER_RING_BUFFER_PUSH(__p[4]);
+                WATCHER_RING_BUFFER_PUSH(__p[5]);
+                WATCHER_RING_BUFFER_PUSH(__p[6]);
+                WATCHER_RING_BUFFER_PUSH(__p[7]);
+            }
             conn_W.send_payload_blocking_from_address((uint32_t)hdr_W, sizeof(PACKET_HEADER_TYPE));
             WATCHER_RING_BUFFER_PUSH(TAG_SEM | BR_W);
             WATCHER_RING_BUFFER_PUSH(sem_l1_addr);
@@ -284,7 +335,7 @@ void kernel_main() {
         if (use_E) {
             conn_E.wait_for_empty_write_slot();
             DPRINT << "writer:E atomic_inc" << ENDL();
-            fabric_set_mcast_route(mh_E, 0, 0, e_hops, 0, 0, 0);
+            fabric_set_mcast_route(mh_E_ll, 0, 0, e_hops, 0, 0, 0);
             hdr_E->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
             // Use flush on the last send so fabric pushes promptly
             conn_E.send_payload_flush_non_blocking_from_address((uint32_t)hdr_E, sizeof(PACKET_HEADER_TYPE));
