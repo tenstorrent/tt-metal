@@ -97,8 +97,6 @@ def test_model_inference(
     request,
     device_params,
 ):
-    # This must be disabled if tracing is being used!
-    mesh_device.clear_program_cache()
     test_id = request.node.callspec.id
     num_layers = num_layers
     if is_ci_env:
@@ -222,7 +220,6 @@ def test_model_inference(
     start_pos = 0
     # Run TT model
     logger.info(f"Running TT model...")
-    mesh_device.clear_program_cache()
     tt_output_torch = generator.prefill_forward_text(
         tt_prefill_input,
         page_table=page_table,

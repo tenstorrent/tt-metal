@@ -167,7 +167,7 @@ class Transformer(LightweightModule):
         logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return logits
 
-    def prepare_prefill_inputs_host(self, tokens, page_table=None, chunk_page_table=None):
+    def prepare_prefill_inputs_trace(self, tokens, page_table=None, chunk_page_table=None):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on host.
@@ -185,7 +185,7 @@ class Transformer(LightweightModule):
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False):
         """
         Inputs are torch tensors or python types. This function returns ttnn
-        tensors on device.
+        tensors on device if trace is disabled or on host if trace is enabled.
         TODO: Debate whether this function is responsible for padding
         """
 
