@@ -13,7 +13,6 @@ FROM base AS release
 # Set up TT_METAL_HOME
 # (PYTHON_ENV_DIR is already set in the base image)
 ENV TT_METAL_HOME=/tt-metal
-ENV PYTHONPATH=/tt-metal
 
 # Clone tt-metal
 RUN /bin/bash -c "git clone --filter=blob:none --recurse-submodules --tags \
