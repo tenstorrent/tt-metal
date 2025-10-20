@@ -69,10 +69,6 @@ def get_updated_message(message, perf_result):
     message = str(message)
 
     key = "DEVICE FW DURATION [ns]"
-    # perf_result is a dictionary
-    logger.info(
-        f"perf_result type: {type(perf_result)}, keys: {list(perf_result.keys()) if isinstance(perf_result, dict) else 'N/A'}"
-    )
     if key in perf_result:
         try:
             value = float(perf_result[key])
