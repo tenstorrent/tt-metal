@@ -7,12 +7,22 @@ import torch
 import ttnn
 from loguru import logger
 
-from ....utils.check import assert_quality
+from models.common.utility_functions import comp_pcc
 
 from tracy.process_model_log import (
     get_latest_ops_log_filename,
     run_device_profiler,
 )
+
+
+def assert_quality(torch_output, tt_output):
+    pcc_passed, pcc_val = comp_pcc(torch_output, tt_output)
+    relative_rmse_val = torch.nn.functional.mse_loss(torch_output, tt_output).sqrt().item() / torch_output.std().item()
+    logger.info(f"PCC: {pcc_val:.7f}, Relative RMSE: {relative_rmse_val:.4f}")
+    return {
+        "pcc": pcc_val,
+        "relative_rmse": relative_rmse_val,
+    }
 
 
 def run_test_linear(
@@ -266,7 +276,9 @@ def test_run_performance(device):
 def test_performance():
     float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
     cols = ["ATTRIBUTES"]
-    command = f"pytest models/experimental/tt_dit/tests/unit/performance/test_minimal_matmul.py::test_run_performance"
+    command = (
+        f"pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_minimal_matmul.py::test_run_performance"
+    )
 
     run_device_profiler(command, "ttnn_minimal_matmul_performance", device_analysis_types=["device_kernel_duration"])
     r = post_process_ops_log(
@@ -485,7 +497,7 @@ def test_create_perf_table(fidelity, dtype, fp32_acc):
     for M, K, N in TABLE_CONFIGS:
         float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
         cols = ["ATTRIBUTES"]
-        command = f'pytest models/experimental/tt_dit/tests/unit/performance/test_minimal_matmul.py::test_perf_table_sweep -k "{M}-{K}-{N} and {fp32_acc} and {fidelity} and {dtype}"'
+        command = f'pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_minimal_matmul.py::test_perf_table_sweep -k "{M}-{K}-{N} and {fp32_acc} and {fidelity} and {dtype}"'
 
         run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
         r = post_process_ops_log(

@@ -30,6 +30,10 @@ on:
         required: false
         type: boolean
         default: true
+      run_experimental_tests:
+        required: false
+        type: boolean
+        default: true
       run_pool_tests:
         required: false
         type: boolean
@@ -155,6 +159,53 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U06Q7ESTFEV # Borys Bradel
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+
+  ttnn-experimental-tests:
+    if: ${{ inputs.run_experimental_tests }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    name: ttnn nightly experimental tests ${{ inputs.arch }} ${{ inputs.runner-label }}
+    runs-on: >-
+      ${{
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
+      }}
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: ttnn nightly experimental tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: pytest -n auto tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        # Only notify during failed scheduled runs
+        if: ${{ failure() && github.event_name == 'schedule' }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U03FJB5TM5Y # Colman Glagovich
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
