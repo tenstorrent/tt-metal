@@ -13,8 +13,11 @@ set_target_properties(
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
+    common/kernels/*
     kernel_common/*
     kernels/*
+    all_to_all_combine/device/kernels/*
+    all_to_all_dispatch/device/kernels/*
 )
 target_sources(
     ttnn_op_ccl
@@ -37,6 +40,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES
             ${kernels}
+            ccl_host_types.hpp
             shared_with_host/hetergeneous_data_structs.hpp
             shared_with_host/sharded_tensor_addr_gen.hpp
             common/types/ccl_types.hpp
@@ -67,6 +71,7 @@ target_sources(
         all_gather/all_gather.cpp
         all_gather/device/all_gather_device_operation.cpp
         all_gather/device/all_gather_program_factory.cpp
+        all_reduce/all_reduce.cpp
         all_to_all_combine/all_to_all_combine.cpp
         all_to_all_combine/device/all_to_all_combine_device_operation.cpp
         all_to_all_combine/device/all_to_all_combine_program_factory.cpp
