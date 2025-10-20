@@ -372,6 +372,18 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
                         status_uncached, message_uncached = results_uncached
                         e2e_perf_uncached = None
 
+                    # Gather device perf for uncached run if enabled
+                    device_perf_uncached = None
+                    if config.measure_device_perf:
+                        device_perf_uncached = gather_single_test_perf(device, status_uncached)
+                        # Clear the profiler log file for the next run
+                        from tracy.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
+                        import os
+
+                        device_log_path = os.path.join(PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG)
+                        if os.path.exists(device_log_path):
+                            os.remove(device_log_path)
+
                     # Second run (with cache) - measure cached performance
                     results_cached = test_module.run(**test_vector, device=device)
                     if type(results_cached) == list:
@@ -380,6 +392,11 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
                     else:
                         status_cached, message_cached = results_cached
                         e2e_perf_cached = None
+
+                    # Gather device perf for cached run if enabled
+                    device_perf_cached = None
+                    if config.measure_device_perf:
+                        device_perf_cached = gather_single_test_perf(device, status_cached)
 
                     # Check both run statuses and combine results
                     if not status_uncached:
@@ -416,6 +433,40 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
 
                     # Store both performance metrics
                     e2e_perf = {"uncached": e2e_perf_uncached, "cached": e2e_perf_cached}
+
+                    # Combine device perf results if available
+                    if config.measure_device_perf:
+                        device_perf = {"uncached": device_perf_uncached, "cached": device_perf_cached}
+                        # Update message with both device perf results
+                        if device_perf_uncached or device_perf_cached:
+                            message = get_updated_message(message, device_perf)
+                        # Simplify device_perf to only include essential metrics
+                        simplified_perf = {}
+                        if device_perf_uncached:
+                            simplified_perf["uncached"] = {}
+                            for key in [
+                                "DEVICE FW DURATION [ns]",
+                                "DEVICE KERNEL DURATION [ns]",
+                                "OP TO OP LATENCY [ns]",
+                                "DEVICE BRISC FW DURATION [ns]",
+                                "DEVICE NCRISC FW DURATION [ns]",
+                            ]:
+                                if key in device_perf_uncached:
+                                    simplified_perf["uncached"][key] = device_perf_uncached[key]
+                        if device_perf_cached:
+                            simplified_perf["cached"] = {}
+                            for key in [
+                                "DEVICE FW DURATION [ns]",
+                                "DEVICE KERNEL DURATION [ns]",
+                                "OP TO OP LATENCY [ns]",
+                                "DEVICE BRISC FW DURATION [ns]",
+                                "DEVICE NCRISC FW DURATION [ns]",
+                            ]:
+                                if key in device_perf_cached:
+                                    simplified_perf["cached"][key] = device_perf_cached[key]
+                        output_queue.put([status, message, e2e_perf, simplified_perf])
+                    else:
+                        output_queue.put([status, message, e2e_perf, None])
                 else:
                     # Standard single run
                     results = test_module.run(**test_vector, device=device)
@@ -425,28 +476,31 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
                     else:
                         status, message = results
                         e2e_perf = None
+
+                    if config.measure_device_perf:
+                        # Standard device perf measurement for single run
+                        perf_result = gather_single_test_perf(device, status)
+                        message = get_updated_message(message, perf_result)
+                        # Simplify perf_result to only include essential metrics to avoid serialization issues
+                        simplified_perf = {}
+                        if perf_result:
+                            for key in [
+                                "DEVICE FW DURATION [ns]",
+                                "DEVICE KERNEL DURATION [ns]",
+                                "OP TO OP LATENCY [ns]",
+                                "DEVICE BRISC FW DURATION [ns]",
+                                "DEVICE NCRISC FW DURATION [ns]",
+                            ]:
+                                if key in perf_result:
+                                    simplified_perf[key] = perf_result[key]
+                        output_queue.put([status, message, e2e_perf, simplified_perf])
+                    else:
+                        output_queue.put([status, message, e2e_perf, None])
             except Exception as e:
                 if config.main_proc_verbose:
                     logger.exception(e)
                 status, message = False, str(e)
                 e2e_perf = None
-            if config.measure_device_perf:
-                perf_result = gather_single_test_perf(device, status)
-                message = get_updated_message(message, perf_result)
-                # Simplify perf_result to only include essential metrics to avoid serialization issues
-                simplified_perf = {}
-                if perf_result:
-                    for key in [
-                        "DEVICE FW DURATION [ns]",
-                        "DEVICE KERNEL DURATION [ns]",
-                        "OP TO OP LATENCY [ns]",
-                        "DEVICE BRISC FW DURATION [ns]",
-                        "DEVICE NCRISC FW DURATION [ns]",
-                    ]:
-                        if key in perf_result:
-                            simplified_perf[key] = perf_result[key]
-                output_queue.put([status, message, e2e_perf, simplified_perf])
-            else:
                 output_queue.put([status, message, e2e_perf, None])
 
 
@@ -552,7 +606,14 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                             result["status"] = TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF
                         else:
                             result["status"] = TestStatus.PASS
-                            result["device_perf"] = device_perf
+                            # Handle both single run and cached/uncached device perf
+                            if config.measure_perf_with_cache and isinstance(device_perf, dict):
+                                # Store both cached and uncached device perf
+                                result["device_perf_uncached"] = device_perf.get("uncached")
+                                result["device_perf_cached"] = device_perf.get("cached")
+                            else:
+                                # Single run device perf
+                                result["device_perf"] = device_perf
                     else:
                         result["status"] = TestStatus.PASS
                 else:
