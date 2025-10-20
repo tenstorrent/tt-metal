@@ -1011,6 +1011,7 @@ class TT_CCL:
             topology=ttnn.Topology.Ring,
             subdevice_id=self.worker_sub_device_id,
             cluster_axis=cluster_axis,
+            num_workers_per_link=1,
         )
 
         # reshape input back
