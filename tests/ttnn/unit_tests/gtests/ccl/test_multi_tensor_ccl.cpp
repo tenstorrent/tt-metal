@@ -83,13 +83,13 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AllGatherCommandProcessorAsyn
     //     ttnn::ccl::Topology::Linear,
     //     /* cluster_axis */ std::nullopt,
     //     SubDeviceId(0));
-    for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
-        auto data = all_gathered[dev_idx].to_vector<bfloat16>();
-        for (int i = 0; i < data.size(); i++) {
-            float expected = static_cast<float>(i / tensor_spec.logical_shape().volume());
-            EXPECT_EQ(static_cast<float>(data[i]), expected);
-        }
-    }
+    // for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
+    //     auto data = all_gathered[dev_idx].to_vector<bfloat16>();
+    //     for (int i = 0; i < data.size(); i++) {
+    //         float expected = static_cast<float>(i / tensor_spec.logical_shape().volume());
+    //         EXPECT_EQ(static_cast<float>(data[i]), expected);
+    //     }
+    // }
 }
 
 // TODO: uncomment this once the composite implementation is completed (#28556)
