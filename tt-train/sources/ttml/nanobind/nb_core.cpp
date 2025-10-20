@@ -9,6 +9,7 @@
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/vector.h>
 
+#include <ttnn/distributed/distributed_tensor.hpp>
 #include "nanobind/nb_export_enum.hpp"
 #include "serialization/serializable.hpp"
 
@@ -33,6 +34,7 @@ void py_module_types(nb::module_& m) {
     nb::class_<ttnn::distributed::TensorToMesh>(py_distributed, "TensorToMesh");
     // Expose MeshToTensor composer for composing distributed tensors back to single tensor
     nb::class_<ttnn::distributed::MeshToTensor>(py_distributed, "MeshToTensor");
+    nb::class_<ttnn::distributed::MeshComposerConfig>(py_distributed, "MeshComposerConfig");
     // Expose SocketManager
     nb::class_<ttml::core::distributed::SocketManager>(py_distributed, "SocketManager");
     // Expose SocketType enum
@@ -70,6 +72,22 @@ void py_module(nb::module_& m) {
             nb::arg("mesh_device"),
             nb::arg("dim"));
 
+        py_distributed.def(
+            "create_mesh_composer",
+            &ttnn::distributed::create_mesh_composer,
+            nb::arg("mesh_device"),
+            nb::arg("config"));
+        py_distributed.def(
+            "create_mesh_composer_config",
+            [](nb::list dims, nb::list override) -> ttnn::distributed::MeshComposerConfig {
+                ttsl::SmallVector<int> sdims;
+                ttsl::SmallVector<uint32_t> soverride;
+                for (nb::handle h : dims) sdims.push_back(nb::cast<int>(h));
+                for (nb::handle h : override) soverride.push_back(nb::cast<int>(h));
+                return ttnn::distributed::MeshComposerConfig(sdims, tt::tt_metal::distributed::MeshShape{soverride});
+            },
+            nb::arg("dims"),
+            nb::arg("mesh_shape_override"));
         // Synchronize gradients across devices for DDP
         py_distributed.def(
             "synchronize_parameters", &ttml::core::distributed::synchronize_parameters, nb::arg("parameters"));
