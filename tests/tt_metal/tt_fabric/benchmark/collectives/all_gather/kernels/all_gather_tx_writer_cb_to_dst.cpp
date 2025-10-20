@@ -293,6 +293,9 @@ void kernel_main() {
         }
     }
 
+    noc_semaphore_inc(sem_noc, 1);
+    noc_async_atomic_barrier();
+
     if (use_W) {
         conn_W.close();
     }
