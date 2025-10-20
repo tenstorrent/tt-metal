@@ -461,6 +461,9 @@ def test_profiler_host_device_sync():
 
     syncinfoDF = pd.read_csv(syncInfoFile)
     devices = sorted(syncinfoDF["device id"].unique())
+    available_devices = sorted(int(device_id) for device_id in deviceData["data"]["devices"].keys())
+    missing_devices = [device_id for device_id in available_devices if device_id not in devices]
+    assert len(missing_devices) == 0, f"Missing sync info for devices {missing_devices}"
     for device in devices:
         deviceFreq = syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["frequency"]
         if not np.isnan(deviceFreq):  # host sync entry
@@ -485,6 +488,9 @@ def test_profiler_host_device_sync():
 
     syncinfoDF = pd.read_csv(syncInfoFile)
     devices = sorted(syncinfoDF["device id"].unique())
+    available_devices = sorted(int(device_id) for device_id in deviceData["data"]["devices"].keys())
+    missing_devices = [device_id for device_id in available_devices if device_id not in devices]
+    assert len(missing_devices) == 0, f"Missing sync info for devices {missing_devices}"
     for device in devices:
         deviceFreq = syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["frequency"]
         if not np.isnan(deviceFreq):  # host sync entry

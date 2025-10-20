@@ -153,8 +153,8 @@ def run(
                 start_time = start_measuring_time()
                 tt_out_tensor = ttnn.point_to_point(
                     tt_input,
-                    ttnn.MeshCoordinate(coord1),
                     ttnn.MeshCoordinate(coord0),
+                    ttnn.MeshCoordinate(coord1),
                     topology=topology,
                 )
                 e2e_perf = stop_measuring_time(start_time)
