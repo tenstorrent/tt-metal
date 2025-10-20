@@ -1198,9 +1198,10 @@ jobs:
       - name: Fetch Slack users for direct ping
         if: needs.parse-comment.outputs.is-direct-ping == 'true'
         run: |
-          # Fetch Slack users securely (kept in memory only)
+          # Fetch Slack users securely (using temp file to avoid ARG_MAX limits)
           echo "Fetching all Slack users..."
-          ALL_SLACK_USERS=""
+          TEMP_USERS_FILE=$(mktemp)
+          echo "[]" > "$TEMP_USERS_FILE"  # Initialize with empty array
           CURSOR=""
           PAGE_COUNT=0
 
@@ -1218,11 +1219,12 @@ jobs:
 
             if [ "$(echo "$USER_SEARCH_RESPONSE" | jq -r '.ok')" = "true" ]; then
               USERS_PAGE=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.members')
-              if [ "$ALL_SLACK_USERS" = "" ]; then
-                ALL_SLACK_USERS="$USERS_PAGE"
-              else
-                ALL_SLACK_USERS=$(echo "$ALL_SLACK_USERS $USERS_PAGE" | jq -s 'add')
-              fi
+
+              # Merge arrays using temp files to avoid ARG_MAX limits
+              echo "$USERS_PAGE" > "${TEMP_USERS_FILE}.page"
+              jq -s '.[0] + .[1]' "$TEMP_USERS_FILE" "${TEMP_USERS_FILE}.page" > "${TEMP_USERS_FILE}.new"
+              mv "${TEMP_USERS_FILE}.new" "$TEMP_USERS_FILE"
+              rm -f "${TEMP_USERS_FILE}.page"
 
               PAGE_COUNT=$((PAGE_COUNT + 1))
               CURSOR=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.response_metadata.next_cursor // empty')
@@ -1236,8 +1238,12 @@ jobs:
             fi
           done
 
+          ALL_SLACK_USERS=$(cat "$TEMP_USERS_FILE")
           USER_COUNT=$(echo "$ALL_SLACK_USERS" | jq '. | length')
           echo "✅ Successfully fetched $USER_COUNT Slack users across $PAGE_COUNT pages"
+
+          # Cleanup temp file
+          rm -f "$TEMP_USERS_FILE"
 
           # Save to GITHUB_ENV for next step in this job (secure, runner-only)
           echo "SLACK_USERS_CACHE<<SLACK_EOF" >> $GITHUB_ENV
@@ -1653,9 +1659,10 @@ jobs:
           PR_AUTHOR_LOGIN=$(echo "$PR_DATA" | jq -r '.user.login')
           PR_AUTHOR_NAME=$(echo "$PR_DATA" | jq -r '.user.name // .user.login')
 
-          # Fetch Slack users securely (kept in memory, never written to disk)
+          # Fetch Slack users securely (using temp file to avoid ARG_MAX limits)
           echo "Fetching all Slack users..."
-          export ALL_SLACK_USERS=""
+          TEMP_USERS_FILE=$(mktemp)
+          echo "[]" > "$TEMP_USERS_FILE"  # Initialize with empty array
           CURSOR=""
           PAGE_COUNT=0
 
@@ -1673,11 +1680,12 @@ jobs:
 
             if [ "$(echo "$USER_SEARCH_RESPONSE" | jq -r '.ok')" = "true" ]; then
               USERS_PAGE=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.members')
-              if [ "$ALL_SLACK_USERS" = "" ]; then
-                ALL_SLACK_USERS="$USERS_PAGE"
-              else
-                ALL_SLACK_USERS=$(echo "$ALL_SLACK_USERS $USERS_PAGE" | jq -s 'add')
-              fi
+
+              # Merge arrays using temp files to avoid ARG_MAX limits
+              echo "$USERS_PAGE" > "${TEMP_USERS_FILE}.page"
+              jq -s '.[0] + .[1]' "$TEMP_USERS_FILE" "${TEMP_USERS_FILE}.page" > "${TEMP_USERS_FILE}.new"
+              mv "${TEMP_USERS_FILE}.new" "$TEMP_USERS_FILE"
+              rm -f "${TEMP_USERS_FILE}.page"
 
               PAGE_COUNT=$((PAGE_COUNT + 1))
               CURSOR=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.response_metadata.next_cursor // empty')
@@ -1691,8 +1699,12 @@ jobs:
             fi
           done
 
+          ALL_SLACK_USERS=$(cat "$TEMP_USERS_FILE")
           USER_COUNT=$(echo "$ALL_SLACK_USERS" | jq '. | length')
           echo "✅ Successfully fetched $USER_COUNT Slack users across $PAGE_COUNT pages"
+
+          # Cleanup temp file
+          rm -f "$TEMP_USERS_FILE"
 
           # Save to GITHUB_ENV for subsequent steps in this job (secure, runner-only)
           echo "SLACK_USERS_CACHE<<SLACK_EOF" >> $GITHUB_ENV
