@@ -124,7 +124,7 @@ jobs:
       - name: 🔧 Setup GitHub CLI and jq
         if: ${{ inputs.download-artifacts == true }}
         run: |
-          echo "📦 Checking GitHub CLI, jq, and zstd installation..."
+          echo "Checking GitHub CLI, jq, and zstd installation..."
 
           # Check and install GitHub CLI
           if ! command -v gh >/dev/null 2>&1; then
@@ -133,9 +133,9 @@ jobs:
             wget -O gh_2.81.0_linux_amd64.deb https://github.com/cli/cli/releases/download/v2.81.0/gh_2.81.0_linux_amd64.deb
             apt-get install -y --no-install-recommends ./gh_2.81.0_linux_amd64.deb
             rm -f gh_2.81.0_linux_amd64.deb
-            echo "✅ GitHub CLI 2.81.0 installed successfully"
+            echo "GitHub CLI 2.81.0 installed successfully"
           else
-            echo "✅ GitHub CLI is already installed"
+            echo "GitHub CLI is already installed"
           fi
 
           # Check and install jq and zstd
@@ -143,28 +143,23 @@ jobs:
             echo "Installing jq and zstd..."
             apt-get update
             apt-get install -y --no-install-recommends jq zstd
-            echo "✅ jq and zstd installed successfully"
+            echo "jq and zstd installed successfully"
           else
-            echo "✅ jq and zstd are already installed"
+            echo "jq and zstd are already installed"
           fi
 
           # Verify installations
-          echo "🔍 Verifying installations:"
+          echo "Verifying installations:"
           gh --version
           jq --version
           zstd --version
 
           # Check GitHub CLI authentication (GH_TOKEN is provided via env)
-          echo "🔐 Checking GitHub CLI authentication status:"
-          gh auth status || echo "⚠️  Authentication check failed"
+          echo "Checking GitHub CLI authentication status:"
+          gh auth status || echo "WARNING: Authentication check failed"
 
-          echo "🔍 Testing gh CLI with current repository:"
+          echo "Testing gh CLI with current repository:"
           echo "Repository: $(gh repo view --repo tenstorrent/tt-metal --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo 'Failed to get repo info')"
-
-          echo "📋 Testing workflow run listing for current commit:"
-          CURRENT_COMMIT=$(git rev-parse HEAD)
-          echo "Current commit: 827addf2a449c516c0e3d33155c1e36c0f4c5e4d"
-          gh run list --repo tenstorrent/tt-metal --commit 827addf2a449c516c0e3d33155c1e36c0f4c5e4d --json conclusion,databaseId,workflowName || echo "⚠️  Failed to list runs for current commit"
         shell: bash
 
       - name: Run Git Bisect
