@@ -178,6 +178,9 @@ Tensor Tensor::from_vector(
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
+    if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
+        TT_FATAL(spec.layout() == Layout::TILE, "Block float types are only supported in TILE layout");
+    }
 
     // Create host tensor with DataType matching buffer
     auto buffer_dtype = convert_to_data_type<T>();
@@ -429,6 +432,13 @@ Tensor Tensor::reshape(const ttnn::Shape& new_shape) const { return tensor_ops::
 
 Tensor Tensor::reshape(const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape) const {
     return tensor_ops::tensor_reshape(*this, new_logical_shape, new_padded_shape);
+}
+
+Tensor Tensor::with_tensor_topology(TensorTopology tensor_topology) const {
+    Tensor result = *this;
+    result.tensor_attributes =
+        std::make_shared<TensorAttributes>(tensor_attributes->with_tensor_topology(std::move(tensor_topology)));
+    return result;
 }
 
 bool Tensor::is_allocated() const {

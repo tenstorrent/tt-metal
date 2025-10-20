@@ -72,6 +72,7 @@ jobs:
             {"model":"gemma-3-4b-it"},
             {"model":"ttt-mistral-7B-v0.3"},
             {"model":"stable_diffusion_xl_base","timeout":45},
+            {"model":"stable_diffusion_xl_refiner","timeout":45},
             {"model":"stable_diffusion","timeout":45}
           ]'
 
@@ -170,7 +171,7 @@ jobs:
         with:
           name: ${{ inputs.build-artifact-name }}
       - name: Extract files
-        run: tar -xvf ttm_any.tar
+        run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
@@ -192,6 +193,7 @@ jobs:
             -e GTEST_OUTPUT=xml:generated/test_reports/
             -e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
             ${{ matrix.test-config.model == 'stable_diffusion_xl_base' && '-e TT_MM_THROTTLE_PERF=5' || '' }}
+            ${{ matrix.test-config.model == 'stable_diffusion_xl_refiner' && '-e TT_MM_THROTTLE_PERF=5' || '' }}
             ${{ matrix.test-config.model == 'stable_diffusion' && '-e TT_MM_THROTTLE_PERF=5' || '' }}
           # TT-Transformer models have a single ci-dispatch test that contains all tests.
           # Due to host OOM issues in CI vm, we currently only run llama-1B (on TT-Transformers) in the model matrix.
@@ -237,7 +239,7 @@ jobs:
         with:
           name: ${{ inputs.build-artifact-name }}
       - name: Extract files
-        run: tar -xvf ttm_any.tar
+        run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
@@ -294,7 +296,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
