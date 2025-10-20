@@ -19,8 +19,8 @@ from ttexalens.tt_exalens_lib import (
     write_words_to_device,
 )
 
-from .format_arg_mapping import DestAccumulation, Mailbox
 from .format_config import DataFormat, FormatConfig
+from .llk_params import DestAccumulation, Mailbox
 from .pack import (
     pack_bfp8_b,
     pack_bfp16,

@@ -3,9 +3,9 @@
 
 import torch
 from helpers.device import collect_results, write_stimuli_to_l1
-from helpers.format_arg_mapping import DestAccumulation, Tilize, format_dict
 from helpers.format_config import DataFormat
 from helpers.golden_generators import DataCopyGolden, TilizeGolden, get_golden_generator
+from helpers.llk_params import DestAccumulation, Tilize, format_dict
 from helpers.param_config import (
     generate_tilize_aware_datacopy_combinations,
     input_output_formats,

@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from helpers.device import BootMode
-from helpers.format_arg_mapping import DestAccumulation, MathFidelity
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.hardware_controller import HardwareController
+from helpers.llk_params import DestAccumulation, MathFidelity
 from helpers.param_config import parametrize
 from test_matmul import test_matmul as run_matmul
 

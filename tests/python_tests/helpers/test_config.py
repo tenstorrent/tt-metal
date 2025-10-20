@@ -11,7 +11,8 @@ from .device import (
     run_elf_files,
     wait_for_tensix_operations_finished,
 )
-from .format_arg_mapping import (
+from .format_config import DataFormat, FormatConfig, InputOutputFormat
+from .llk_params import (
     FPU_BINARY_OPERATIONS,
     REDUCE_OPERATIONS,
     SFPU_BINARY_OPERATIONS,
@@ -26,7 +27,6 @@ from .format_arg_mapping import (
     Transpose,
     format_tile_sizes,
 )
-from .format_config import DataFormat, FormatConfig, InputOutputFormat
 from .matmul_sweep import validate_tile_dimensions
 from .utils import run_shell_command
 

@@ -7,8 +7,8 @@ from collections import namedtuple
 import numpy as np
 import torch
 
-from .format_arg_mapping import format_dict
 from .format_config import DataFormat, FormatConfig
+from .llk_params import format_dict
 
 torch.set_printoptions(linewidth=500, sci_mode=False, precision=2, threshold=10000)
 

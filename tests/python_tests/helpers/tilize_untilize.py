@@ -3,8 +3,8 @@
 
 import torch
 
-from .format_arg_mapping import format_dict
 from .format_config import DataFormat
+from .llk_params import format_dict
 
 
 def tilize_block(

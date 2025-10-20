@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from helpers.format_arg_mapping import (
+from helpers.format_config import DataFormat
+from helpers.llk_params import (
     DestAccumulation,
     MathOperation,
     ReduceDimension,
     ReducePool,
 )
-from helpers.format_config import DataFormat
 from helpers.param_config import (
     input_output_formats,
     parametrize,
