@@ -41,6 +41,9 @@ class Module(ABC):
     def named_parameters(self) -> Iterator[tuple[str, Parameter]]:
         yield from self._parameters.items()
 
+    def add_module(self, name: str, module: Module) -> None:
+        self._children[name] = module
+
     def __setattr__(self, name: str, value: Any) -> None:  # noqa: ANN401
         super().__setattr__(name, value)
 
@@ -218,11 +221,14 @@ class ModuleList(Module):
         super().__init__()
 
         for i, m in enumerate(modules):
-            self._children[str(i)] = m
+            self.add_module(str(i), m)
 
     def forward(self) -> None:
         msg = "forward() should not be called on ModuleList. Iterate over the modules instead."
         raise RuntimeError(msg)
+
+    def append(self, module: Module) -> None:
+        self.add_module(str(len(self)), module)
 
     def __len__(self) -> int:
         return len(self._children)

@@ -148,21 +148,28 @@ class DistributedRMSNorm(Module):
             packer_l1_acc=False,
         )
 
+        if embedding_dim % self.mesh_width != 0:
+            msg = f"embedding_dim {embedding_dim} must be divisible by mesh width {self.mesh_width}"
+            raise ValueError(msg)
+
         n = self.TILE_SIZE * self.mesh_width
+        use_packed_weight = embedding_dim % n == 0
 
         self.weight = (
             Parameter(
-                total_shape=[embedding_dim // n, n],
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                total_shape=[embedding_dim // n, n] if use_packed_weight else [embedding_dim],
+                layout=ttnn.ROW_MAJOR_LAYOUT if use_packed_weight else ttnn.TILE_LAYOUT,
                 device=mesh_device,
-                mesh_axes=[None, mesh_axis],
+                mesh_axes=[None, mesh_axis] if use_packed_weight else [mesh_axis],
             )
             if norm_elementwise_affine
             else None
         )
 
+        self._use_packed_weight = use_packed_weight
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        if "weight" in state:
+        if "weight" in state and self._use_packed_weight:
             state["weight"] = (
                 state["weight"]
                 .reshape(self.mesh_width, -1, self.TILE_SIZE)
@@ -198,10 +205,14 @@ class DistributedRMSNorm(Module):
         x = ttnn.rms_norm_post_all_gather(
             x,
             stats,
-            weight=self.weight.data if self.weight is not None else None,
+            weight=self.weight.data if self._use_packed_weight and self.weight is not None else None,
             epsilon=self.norm_eps,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
         )
+
+        if not self._use_packed_weight and self.weight is not None:
+            x = x * self.weight.data
+
         return x
 
 
