@@ -54,7 +54,7 @@ on:
         required: false
         type: string
         default: ""
-        description: "Optional GitHub gist URL for a .sh script to run instead of command"
+        description: "Optional GitHub gist URL for a .sh script to run instead of command (not needed if command is provided)"
 
 permissions:
   actions: write
