@@ -54,7 +54,7 @@ class TtGemmaImageFeedForward(LightweightModule):
             ),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=None,
+            cache_file_name=cache_name(name, suffix),
         )
 
         # Sharded weights

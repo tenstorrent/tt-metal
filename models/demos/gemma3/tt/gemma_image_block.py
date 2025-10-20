@@ -102,36 +102,9 @@ class TtGemmaImageTransformerBlock(LightweightModule):
         assert seq_len % 32 == 0 and seq_len > 0, "Seqlen must be divisible by 32"
         batch_size = x_11SH.shape[0]
 
-        if len(x_11SH.shape) == 3:
-            assert x_11SH.shape[0] == 1
-            x_11SH = ttnn.unsqueeze(x_11SH, 1)
-
-        #         # Sharded weights
-        # self.c_fc_weight = as_interleaved_tensor("c_fc", "weight", dtype, dim=-1)
-        # self.c_fc_bias = as_interleaved_tensor("c_fc", "bias", ttnn.bfloat16, dim=-1)
-        # self.c_fc_bias = ttnn.reshape(self.c_fc_bias, [1, -1])
-        # self.c_proj_weight = as_interleaved_tensor("c_proj", "weight", dtype, dim=-2)
-        # self.c_proj_bias = as_interleaved_tensor("c_proj", "bias", ttnn.bfloat16, dim=None)
-
         attn_out = self.attn(self.ln_1(x_11SH), mask=mask)
         if self.gated:
             attn_out = ttnn.mul(attn_out, ttnn.tanh(self.gate_attn))
-
-        # if self.num_devices > 1:
-        #     print("mstojko - before")
-        #     attn_out = ttnn.experimental.all_gather_async(
-        #         attn_out,
-        #         persistent_output_buffer=None,
-        #         dim=3,
-        #         multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-        #         num_links=1,
-        #         topology=ttnn.Topology.Linear,
-        #         barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-        #         chunks_per_sync=10,
-        #         num_workers_per_link=2,
-        #         num_buffers_per_channel=2,
-        #     )
-        #     print("mstojko - after")
 
         # Align x_11SH shape with attn_out
         x_11SH = ttnn.reshape(x_11SH, [batch_size, 1, seq_len, -1])

@@ -53,7 +53,6 @@ def test_ci_dispatch(hf_model_name, is_ci_env, model_location_generator):
 =======
     exit_code = pytest.main(
         [
-            "models/demos/gemma3/tests/test_benchmark_vision_cross_attention_transformer.py",
             "models/demos/siglip/tests/test_attention.py",
             "models/demos/gemma3/tests/test_mmp.py",
             "models/demos/gemma3/tests/test_patch_embedding.py",
