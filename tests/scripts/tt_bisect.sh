@@ -196,37 +196,6 @@ while [[ "$found" == "false" ]]; do
         --build-all \
         --enable-ccache || build_rc=$?
     fi
-
-  # Try to download artifacts first if artifact mode is enabled
-  if [ "$artifact_mode" = true ]; then
-    if try_download_artifacts "$full_sha"; then
-      echo "Using downloaded artifacts for $rev"
-      build_rc=0
-    else
-      echo "WARNING: Artifact download failed, falling back to local build"
-      if [ "$tracy_enabled" -eq 1 ]; then
-        ./build_metal.sh \
-          --build-all \
-          --enable-ccache \
-          --enable-profiler || build_rc=$?
-      else
-        ./build_metal.sh \
-          --build-all \
-          --enable-ccache || build_rc=$?
-      fi
-    fi
-  else
-    # Standard local build
-    if [ "$tracy_enabled" -eq 1 ]; then
-      ./build_metal.sh \
-        --build-all \
-        --enable-ccache \
-        --enable-profiler || build_rc=$?
-    else
-      ./build_metal.sh \
-        --build-all \
-        --enable-ccache || build_rc=$?
-    fi
   fi
 
   echo "::endgroup::"
