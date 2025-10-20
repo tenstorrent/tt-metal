@@ -203,7 +203,7 @@ class LazyParams:
         if self.empty:
             return torch.empty(*shape, device="meta", dtype=dtype)
         decompressed_tensor = const_meta["summary"]
-        if const_meta["summary"]["type"] == "dynamic_quantiles_stats":
+        if const_meta["summary"]["type"] == "dynamic_quantiles_stats" and self.data is None:
             assert (
                 const_meta["summary"]["type"] == "dynamic_quantiles_stats"
             ), f"Expected dynamic_quantiles_stats tensor type, got {const_meta['summary']['type']}"

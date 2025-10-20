@@ -383,13 +383,24 @@ class Trackable_Tensor(torch.Tensor):
         # The wrapping tensor (Trackable_Tensor) shouldn't hold any
         # memory for the class in question, but it should still
         # advertise the same device as before
+        output_shape = elem.size()
+        strides = elem.stride()
+        output_dtype = elem.dtype
+        if "output_shape" in kwargs:
+            output_shape = kwargs.get("output_shape", elem.size())
+            del kwargs["output_shape"]
+        if "output_dtype" in kwargs:
+            output_dtype = kwargs.get("output_dtype", elem.dtype)
+            del kwargs["output_dtype"]
+        if output_shape != elem.size() or output_dtype != elem.dtype:
+            strides = torch.ones(output_shape, dtype=output_dtype).stride()
         r = torch.Tensor._make_wrapper_subclass(  # type: ignore[attr-defined]
             cls,
-            elem.size(),
-            strides=elem.stride(),
+            output_shape,
+            strides=strides,
             storage_offset=elem.storage_offset(),
             # TODO: clone storage aliasing
-            dtype=elem.dtype,
+            dtype=output_dtype,
             layout=elem.layout,
             device=elem.device if Trackable_Tensor.tracer_data.save_original_tensors else "meta",
             requires_grad=elem.requires_grad,
@@ -422,7 +433,7 @@ class Trackable_Tensor(torch.Tensor):
 
     @classmethod
     def initialize_tracking_info(cls, args, kwargs, rs, func_name, func_module):
-        if "_." in func_name:
+        if "_." in func_name or func_name.endswith("_"):
             print(
                 f"Warning: found inplace operation {func_name}. Connections may be incorrect. Please rewrite to avoid inplace operation."
             )
@@ -592,20 +603,21 @@ class Trackable_Tensor(torch.Tensor):
         return rs
 
     def new_trackable_tensor(self, *args, func_name, func_module, output_shape, output_dtype, **kwargs):
+        kwargs["output_shape"] = output_shape
+        kwargs["output_dtype"] = output_dtype
         rs = Trackable_Tensor(*args, **kwargs)
+        kwargs = {k: v for k, v in kwargs.items() if k not in ["output_shape", "output_dtype"]}
         assert output_shape is not None, "output_shape must be provided"
         assert output_dtype is not None, "output_dtype must be provided"
-        rs.trackable_shape = output_shape
-        rs.trackable_dtype = output_dtype
         rs.elem = (
-            torch.ones(*rs.trackable_shape, dtype=rs.trackable_dtype)
-            if Trackable_Tensor.tracer_data.save_original_tensors
-            else None
+            torch.ones(output_shape, dtype=output_dtype) if Trackable_Tensor.tracer_data.save_original_tensors else None
         )
         rs.module_name = None  # Initialize module_name
         rs.id = "-1"
         rs.const_name = None
         self.initialize_tracking_info(args, kwargs, rs, func_name, func_module)
+        rs.trackable_shape = output_shape
+        rs.trackable_dtype = output_dtype
         return rs
 
     def to_frozen(self):
