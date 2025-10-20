@@ -102,10 +102,10 @@ docker push ghcr.io/btrzynadlowski-tt/tt-telemetry-dev:latest
 To pass in an FSD file, use `-v` to mount it and then pass it in as a commandline argument:
 
 ```
-docker run -h `hostname` --device /dev/tenstorrent -p 8080:8080 -p 8081:8081 -v /path/to/fsd.textproto:/path/inside/container/fsd.textproto -v /dev/hugepages-1G:/dev/hugepages-1G ghcr.io/btrzynadlowski-tt/tt-telemetry-dev:latest --fsd=/path/inside/container/fsd.textproto
+docker run -h `hostname` --device /dev/tenstorrent -p 8080:8080 -p 8081:8081 -v /path/to/fsd.textproto:/path/inside/container/fsd.textproto ghcr.io/btrzynadlowski-tt/tt-telemetry-dev:latest --fsd=/path/inside/container/fsd.textproto
 ```
 
-The container host name is set with `-h` to match the actual machine host name. Ports 8080 and 8081 must be exposed for the web server and intra-process communication, respectively. UMD requires `/dev/tenstorrent` to be passed through along with `/dev/hugepages-1G`. Lastly, `/var/telemetry` must be mounted to make the FSD file accessible.
+The container host name is set with `-h` to match the actual machine host name. Ports 8080 and 8081 must be exposed for the web server and intra-process communication, respectively. UMD requires `/dev/tenstorrent` to be passed through. For systems that require it (systems that do not use IOMMU for DMA), `-v /dev/hugepages-1G:/dev/hugepages-1G` will need to be added.
 
 # Generating Factory System Descriptors
 
