@@ -255,7 +255,15 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
     FactoryParameters params = get_factory_parameters(
-        num_shards_c, inputs[0].dtype(), outputs[0].dtype(), kernel_h, kernel_w, in_c, pool_type, return_indices, output_layout);
+        num_shards_c,
+        inputs[0].dtype(),
+        outputs[0].dtype(),
+        kernel_h,
+        kernel_w,
+        in_c,
+        pool_type,
+        return_indices,
+        output_layout);
     uint32_t pad_h = pad_t + pad_b;
     uint32_t pad_w = pad_l + pad_r;
     const bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
@@ -369,6 +377,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         if (params.is_wide_reduction) {
             in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * params.num_tilized_rows;
             in_nblocks_c = std::ceil((float)params.in_ntiles_c / params.MAX_TILES_PER_REDUCTION);
+        } else if (params.is_large_kernel && params.in_ntiles_c * 2 <= params.MAX_TILES_PER_REDUCTION) {
+            in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * params.num_tilized_rows;
         } else {
             in_cb_sz = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.num_tilized_rows;
         }
@@ -443,8 +453,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     if (is_output_tiled) {
         out_cb_pagesize = tt::tile_size(params.output_data_format);
-        out_cb_npages =
-            outputs[0].shard_spec().value().shape[0] * outputs[0].shard_spec().value().shape[1] / tt::constants::TILE_HW;
+        out_cb_npages = outputs[0].shard_spec().value().shape[0] * outputs[0].shard_spec().value().shape[1] /
+                        tt::constants::TILE_HW;
     } else {
         out_cb_pagesize =
             std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), outputs[0].shard_spec().value().shape[1]) *

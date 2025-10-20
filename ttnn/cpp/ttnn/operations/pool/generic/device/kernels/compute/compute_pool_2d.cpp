@@ -129,23 +129,31 @@ void MAIN {
     constexpr uint32_t data_dst_idx = 0;
     constexpr uint32_t index_dst_idx = 2;
 
+    // Use 4 sticks for reduction to better utilize output CB, allowing us to process more tiles at once
+    constexpr uint32_t num_out_sticks = 4;
     constexpr uint32_t face_r_dim = window_size_hw < FACE_HEIGHT && !return_indices ? window_size_hw : FACE_HEIGHT;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
-    constexpr uint32_t num_faces_in_input_tile =
-        (max_sticks_for_reduction < TILE_HEIGHT || window_size_hw <= FACE_HEIGHT) && !return_indices ? 2 : 4;
+    // With 4 output sticks, we always use 4 faces in input tile to match
+    constexpr uint32_t num_faces_in_input_tile = !return_indices ? 4 : 4;
     constexpr uint32_t num_faces_in_output_tile = 2;
     constexpr uint32_t num_faces_in_last_output_tile = last_tile_is_partial && in_c % TILE_WIDTH <= FACE_WIDTH ? 1 : 2;
-    constexpr uint32_t num_out_sticks = 1;
 
     constexpr bool is_avg_pool = REDUCE_OP == PoolType::SUM;
     // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
     // otherwise we can reduce 8 tiles at a time.
     constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
     constexpr uint32_t MAX_TILES_PER_REDUCTION = return_indices ? 1 : (is_avg_pool && is_large_kernel) ? 4 : 8;
+
+    constexpr uint32_t multi_chunk_factor =
+        in_nblocks_c == 1 && is_large_kernel && in_ntiles_c * 2 <= MAX_TILES_PER_REDUCTION
+            ? MAX_TILES_PER_REDUCTION / in_ntiles_c
+            : 1;
+
     constexpr uint32_t max_tiles_per_iter =
-        in_ntiles_c < MAX_TILES_PER_REDUCTION ? in_ntiles_c : MAX_TILES_PER_REDUCTION;
-    constexpr uint32_t partial_iter_output_tiles =
-        in_ntiles_c % MAX_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MAX_TILES_PER_REDUCTION;
+        in_ntiles_c < MAX_TILES_PER_REDUCTION ? in_ntiles_c * multi_chunk_factor : MAX_TILES_PER_REDUCTION;
+    constexpr uint32_t partial_iter_output_tiles = in_ntiles_c % MAX_TILES_PER_REDUCTION == 0
+                                                       ? max_tiles_per_iter
+                                                       : (in_ntiles_c % MAX_TILES_PER_REDUCTION) * multi_chunk_factor;
 
     static_assert(REDUCE_OP == PoolType::MAX || REDUCE_OP == PoolType::SUM, "Only supports REDUCE_OP = MAX or Sum");
     constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
@@ -195,6 +203,7 @@ void MAIN {
     }
 
     uint32_t tilize_stick_counter = 0;
+    DPRINT << "out_nhw: " << nsticks_per_core_by_nblocks << ENDL();
     for (uint32_t n = 0; n < nsticks_per_core_by_nblocks; ++n) {
         const bool reader0 = !(split_reader && (n & 0x1));
         const uint32_t curr_scalar_cb_id = (!reader0 && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
@@ -205,6 +214,9 @@ void MAIN {
         }
         if (is_output_tiled && !tilize_stick_counter) {
             cb_reserve_back(out_cb_id, in_ntiles_c);
+        }
+        if (n == 0) {
+            DPRINT << "nblocks: " << in_nblocks_c << ENDL();
         }
         for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
             const bool last_c_block = c_i == in_nblocks_c - 1;
@@ -226,8 +238,12 @@ void MAIN {
                 }
             }
             tile_regs_acquire();
+
+            if (n == 0) {
+                DPRINT << "chunks: " << interm_reduction_chunks << ENDL();
+            }
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
-                cb_wait_front(curr_in_cb_id, 1);
+                cb_wait_front(curr_in_cb_id, tiles_to_reduce);
                 if constexpr (return_indices) {
                     cb_wait_front(curr_in_idx_cb_id, 1);
 
@@ -264,6 +280,10 @@ void MAIN {
                         0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
                         num_faces_in_input_tile,
                         face_r_dim);
+
+                    if (n == 0) {
+                        DPRINT << "tiles_in_block: " << tiles_to_reduce << ENDL();
+                    }
                     for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
                         reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
                     }
@@ -326,7 +346,8 @@ void MAIN {
                         pack_untilize_dest<partial_iter_output_tiles>(
                             out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
                     } else {
-                        pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                        pack_untilize_dest<max_tiles_per_iter>(
+                            out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
                     }
                     cb_push_back(out_cb_id, output_faces);
                     tile_regs_release();

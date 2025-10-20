@@ -127,11 +127,13 @@ FactoryParameters get_factory_parameters(
     uint32_t index_nbytes = datum_size(index_format);
 
     uint32_t kernel_size_hw = kernel_h * kernel_w;  // number of valid rows, to read
-    // for medium kernels with sizes 16 < kernel_size_hw < 32 we tilize an entire tile even if some rows are unused,
-    // so the in_cb height must be equal to the TILE_HEIGHT, but for kernels spanning only one face we set the
-    // face_r_dim to only tilize the necessary number of rows, thus we can make the in_cb height smaller
-    uint32_t num_tilized_rows =
-        kernel_size_hw <= tt::constants::FACE_WIDTH ? kernel_size_hw : tt::constants::TILE_HEIGHT;
+    // With 4 output sticks, we can process up to 64 rows (4 faces). This allows better output CB utilization.
+    // For kernels <= 16: use exact size. For 16 < kernel_size_hw <= 64: use 64 rows (4 sticks).
+    // For larger kernels: use full TILE_HEIGHT (32 rows).
+    constexpr uint32_t FOUR_STICKS_HEIGHT = 4 * tt::constants::FACE_HEIGHT;  // 64 rows
+    uint32_t num_tilized_rows = kernel_size_hw <= tt::constants::FACE_WIDTH ? kernel_size_hw
+                                : kernel_size_hw <= FOUR_STICKS_HEIGHT      ? FOUR_STICKS_HEIGHT
+                                                                            : tt::constants::TILE_HEIGHT;
     uint32_t in_ntiles_c = (uint32_t)std::ceil((float)in_channels / num_shards_c / tt::constants::TILE_WIDTH);
     // For TILE_LAYOUT output, we need to align to TILE_WIDTH instead of FACE_WIDTH
     uint32_t effective_tile_width_for_output =
