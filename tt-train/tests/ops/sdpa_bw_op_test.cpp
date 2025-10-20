@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <sys/types.h>
 
+#include <cmath>
 #include <core/ttnn_all_includes.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -224,9 +225,11 @@ std::vector<ttnn::Tensor> composite_sdpa(
 
 TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     using namespace ttml;
-    const uint32_t B = 1U, qNH = 1U, kvNH = 1U, S = 64U, qD = 64U, kvD = 64U;
+    const uint32_t B = 1U, qNH = 1U, kvNH = 1U, S = 128U, qD = 128U, kvD = 128U;
     const float dropout_probability = 0.0F;
     const bool fp32_dest_acc_en = true;
+
+    auto* device = &autograd::ctx().get_device();
 
     std::mt19937 gen(42);
     auto& rng = ttml::autograd::ctx().get_generator();
@@ -260,11 +263,11 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
         []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
         seed);
 
-    auto query = core::from_xtensor(query_tensor, &autograd::ctx().get_device());
-    auto key = core::from_xtensor(key_tensor, &autograd::ctx().get_device());
-    auto value = core::from_xtensor(value_tensor, &autograd::ctx().get_device());
-    auto attn_mask = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
-    auto grad_output = core::from_xtensor(grad_output_tensor, &autograd::ctx().get_device());
+    auto query = core::from_xtensor(query_tensor, device);
+    auto key = core::from_xtensor(key_tensor, device);
+    auto value = core::from_xtensor(value_tensor, device);
+    auto attn_mask = core::from_xtensor(attn_mask_tensor, device);
+    auto grad_output = core::from_xtensor(grad_output_tensor, device);
 
     auto composite_output = composite_sdpa(query, key, value, grad_output, attn_mask, /*return_intermediate=*/true);
     auto attn_output = /* attn_output */ composite_output[0];
@@ -274,7 +277,13 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     auto dL_dK = /* dL_dK */ composite_output[4];
     auto dL_dV = /* dL_dV */ composite_output[5];
 
+    auto padded_interm = core::zeros(ttnn::Shape{B, qNH, S, 32U}, device, ttnn::DataType::BFLOAT16);
+    max_value = ttnn::add(padded_interm, max_value);
+    recip_sum_exp = ttnn::add(padded_interm, recip_sum_exp);
+
     auto forward_intermediates = ttnn::concat(std::vector<ttnn::Tensor>{max_value, recip_sum_exp}, 3);
+
+    fmt::print("Intermediates shape: {}\n", forward_intermediates.logical_shape());
 
     auto op_result = ttml::metal::sdpa_bw(
         grad_output,
@@ -287,11 +296,104 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
         dropout_probability,
         fp32_dest_acc_en);
 
-    auto sdpa_bw_dV = core::to_xtensor(op_result[2]);  // dL_dV
+    xt::xarray<float> sdpa_bw_dV = core::to_xtensor(op_result[2]);  // dL_dV
 
-    auto composite_dV = core::to_xtensor(dL_dV);
+    xt::xarray<float> composite_dV = core::to_xtensor(dL_dV);
 
     assert(sdpa_bw_dV.shape() == composite_dV.shape());
-    EXPECT_TRUE(xt::allclose(sdpa_bw_dV, composite_dV, 2e-2F, 2e-2F));
-    EXPECT_TRUE(false);
+
+    // Check if values are close enough
+    bool is_close = xt::allclose(sdpa_bw_dV, composite_dV, 2e-2F, 2e-2F);
+
+    if (!is_close) {
+        fmt::print("=== SDPA BW DEBUG: Values don't match ===\n");
+        fmt::print("Shape: {}\n", sdpa_bw_dV.shape());
+
+        // Compute differences manually to avoid fmt::print issues with xtensor expressions
+        float max_diff = 0.0f;
+        float mean_diff = 0.0f;
+        size_t total_elements = sdpa_bw_dV.size();
+
+        for (size_t i = 0; i < total_elements; ++i) {
+            float diff = std::abs(sdpa_bw_dV.flat(i) - composite_dV.flat(i));
+            max_diff = std::max(max_diff, diff);
+            mean_diff += diff;
+        }
+        mean_diff /= total_elements;
+
+        fmt::print("Max absolute difference: {:.6f}\n", max_diff);
+        fmt::print("Mean absolute difference: {:.6f}\n", mean_diff);
+
+        // Per-element comparison
+        fmt::print("\nPer-element comparison (index: sdpa_bw_dV, composite_dV, difference):\n");
+        auto shape = sdpa_bw_dV.shape();
+        size_t elements_to_show = std::min(total_elements, static_cast<size_t>(50));  // Show first 50 elements
+
+        for (size_t i = 0; i < elements_to_show; ++i) {
+            // Convert flat index to multi-dimensional index
+            std::vector<size_t> indices(shape.size());
+            size_t remaining = i;
+            for (int dim = shape.size() - 1; dim >= 0; --dim) {
+                indices[dim] = remaining % shape[dim];
+                remaining /= shape[dim];
+            }
+
+            float sdpa_val = sdpa_bw_dV.flat(i);
+            float comp_val = composite_dV.flat(i);
+            float diff = sdpa_val - comp_val;
+
+            // Format multi-dimensional index
+            std::string index_str = "[";
+            for (size_t j = 0; j < indices.size(); ++j) {
+                index_str += std::to_string(indices[j]);
+                if (j < indices.size() - 1)
+                    index_str += ",";
+            }
+            index_str += "]";
+
+            fmt::print("{}: {:.6f}, {:.6f}, {:.6f}\n", index_str, sdpa_val, comp_val, diff);
+        }
+
+        if (total_elements > elements_to_show) {
+            fmt::print("... (showing first {} of {} elements)\n", elements_to_show, total_elements);
+        }
+
+        // Show elements with largest differences
+        fmt::print("\nElements with largest differences:\n");
+
+        size_t count = 0;
+        for (size_t i = 0; i < total_elements && count < 10; ++i) {
+            float diff = std::abs(sdpa_bw_dV.flat(i) - composite_dV.flat(i));
+            if (std::abs(diff - max_diff) < 1e-8) {
+                // Convert flat index to multi-dimensional index
+                std::vector<size_t> indices(shape.size());
+                size_t remaining = i;
+                for (int dim = shape.size() - 1; dim >= 0; --dim) {
+                    indices[dim] = remaining % shape[dim];
+                    remaining /= shape[dim];
+                }
+
+                float sdpa_val = sdpa_bw_dV.flat(i);
+                float comp_val = composite_dV.flat(i);
+                float actual_diff = sdpa_val - comp_val;
+
+                // Format multi-dimensional index
+                std::string index_str = "[";
+                for (size_t j = 0; j < indices.size(); ++j) {
+                    index_str += std::to_string(indices[j]);
+                    if (j < indices.size() - 1)
+                        index_str += ",";
+                }
+                index_str += "]";
+
+                fmt::print("{}: {:.6f}, {:.6f}, {:.6f}\n", index_str, sdpa_val, comp_val, actual_diff);
+                count++;
+            }
+        }
+
+        fmt::print("=== END DEBUG ===\n");
+    }
+
+    EXPECT_TRUE(is_close);
+    // EXPECT_TRUE(false);
 }

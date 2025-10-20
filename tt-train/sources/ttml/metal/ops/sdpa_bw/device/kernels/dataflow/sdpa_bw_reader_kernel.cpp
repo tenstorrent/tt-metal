@@ -56,6 +56,9 @@ void kernel_main() {
     constexpr uint32_t cb_matmul_reduce = tt::CBIndex::c_7;
     constexpr uint32_t cb_reduction_scaler = tt::CBIndex::c_8;
 
+    // [DEBUG]: Used for debug, should be removed later
+    constexpr auto cb_masked_interm = tt::CBIndex::c_19;
+
     // Get compile-time arguments
     constexpr uint32_t qWt = get_compile_time_arg_val(0);              // query width in tiles
     constexpr uint32_t kWt = get_compile_time_arg_val(1);              // key/value width in tiles
@@ -94,7 +97,7 @@ void kernel_main() {
 
     constexpr uint16_t one = 0x00003F80;                          // (bfloat16)1.0 -> uint16_t
     generate_tile_with_bfloat16_value(cb_reduction_scaler, one);  // generate tile with bfloat16 value 1.0
-    generate_matmul_row_reduce_tile(cb_matmul_reduce);  // generate tile for matmul row reduce
+    generate_matmul_row_reduce_tile(cb_matmul_reduce);            // generate tile for matmul row reduce
 
     const float scaler = uint32_to_float(scaler_bits);
     const float minus_one = uint32_to_float(minus_one_bits);
@@ -112,6 +115,9 @@ void kernel_main() {
         uint32_t global_row_idx = start_row + i;
         uint32_t kv_start_idx = global_row_idx * kWt;
 
+        DPRINT << "Reader: Processing row " << i << ", global_row_idx=" << global_row_idx
+               << ", kv_start_idx=" << kv_start_idx << ENDL();
+
         read_row(kv_start_idx, kWt, cb_key, key_address_generator, tile_bytes);
         read_row(kv_start_idx, kWt, cb_value, value_address_generator, tile_bytes);
 
@@ -121,6 +127,9 @@ void kernel_main() {
         // the index of the first head in Q associated with this group of K and V
         uint32_t first_q_head_idx = group_idx * heads_per_group;
         uint32_t q_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * qWt;
+
+        DPRINT << "Reader: batch_idx=" << batch_idx << ", group_idx=" << group_idx
+               << ", first_q_head_idx=" << first_q_head_idx << ", q_offset=" << q_offset << ENDL();
 
         // the offset of attn_mask associated with this group of K and V
         // jump to relevent batch and head, then jump to the row in attn_mask associated with current row of K and V
@@ -155,6 +164,13 @@ void kernel_main() {
                     cb_intermediates,
                     intermediates_address_generator,
                     tile_bytes);
+
+                // [DEBUG]: Used for debug, should be removed later
+                // cb_wait_front(cb_masked_interm, num_of_interm_tiles);
+                // print_tile(cb_masked_interm, 0);
+                // print_tile(cb_masked_interm, 1);
+                // print_tile(cb_intermediates, 0);
+                // print_tile(cb_intermediates, 1);
             }
             // update offsets to point to the next head in attn_mask and intermediates
             mask_offset += Ht * Ht;  // jump to the next head in attn_mask associated with current Q head

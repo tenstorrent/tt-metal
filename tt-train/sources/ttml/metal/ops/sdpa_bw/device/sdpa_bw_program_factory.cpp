@@ -42,7 +42,7 @@ constexpr auto kAttnOutputCbIndex = tt::CBIndex::c_1;
 constexpr auto kQueryCbIndex = tt::CBIndex::c_2;
 constexpr auto kKeyCbIndex = tt::CBIndex::c_3;
 constexpr auto kValueCbIndex = tt::CBIndex::c_4;
-constexpr auto kMaskCbIndex = tt::CBIndex::c_5;
+constexpr auto kAttnMaskCbIndex = tt::CBIndex::c_5;
 constexpr auto kIntermediatesCbIndex = tt::CBIndex::c_6;
 constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_7;
 constexpr auto kReductionScalerCbIndex = tt::CBIndex::c_8;
@@ -52,11 +52,15 @@ constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_10;
 constexpr auto kGradAttentionCbIndex = tt::CBIndex::c_11;
 constexpr auto kGradScoresCbIndex = tt::CBIndex::c_12;
 constexpr auto kTransposeWhCbIndex = tt::CBIndex::c_13;
+constexpr auto kUScalarRowCbIndex = tt::CBIndex::c_14;
 
-constexpr auto kGradQueryCbIndex = tt::CBIndex::c_14;
-constexpr auto kGradKeyCbIndex = tt::CBIndex::c_15;
-constexpr auto kGradValueCbIndex = tt::CBIndex::c_16;
-constexpr auto kSyncOutputWriterCbIndex = tt::CBIndex::c_17;
+constexpr auto kGradQueryCbIndex = tt::CBIndex::c_15;
+constexpr auto kGradKeyCbIndex = tt::CBIndex::c_16;
+constexpr auto kGradValueCbIndex = tt::CBIndex::c_17;
+constexpr auto kSyncOutputWriterCbIndex = tt::CBIndex::c_18;
+
+// [DEBUG]: Used for debug, should be removed later
+constexpr auto kMaskedIntermCbIndex = tt::CBIndex::c_19;
 
 constexpr uint32_t kNumScalerTiles = 1U;
 constexpr uint32_t kSingleTileBuffer = 1U;
@@ -208,6 +212,8 @@ SDPABackwardProgramFactory::cached_program_t SDPABackwardProgramFactory::create(
     uint32_t kWt = kEmbd / tt::constants::TILE_WIDTH;
     uint32_t vWt = vEmbd / tt::constants::TILE_WIDTH;
 
+    TT_FATAL(qWt == kWt && qWt == vWt, "Query, Key and Value inner dims must be the same");
+
     // Scale factor for attention computation
     float per_head_dim = static_cast<float>(qEmbd) / static_cast<float>(qNH);
     uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(per_head_dim));
@@ -267,6 +273,9 @@ SDPABackwardProgramFactory::cached_program_t SDPABackwardProgramFactory::create(
     [[maybe_unused]] auto cb_value = create_circular_buffer(
         program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kWt);
 
+    [[maybe_unused]] auto cb_attn_mask = create_circular_buffer(
+        program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
+
     // Could we write intermediates in fp32 to improve numerical stability?
     [[maybe_unused]] auto cb_intermediates = create_circular_buffer(
         program, all_cores, kIntermediatesCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumOfIntermCBTiles);
@@ -295,6 +304,9 @@ SDPABackwardProgramFactory::cached_program_t SDPABackwardProgramFactory::create(
     [[maybe_unused]] auto cb_grad_scores = create_circular_buffer(
         program, all_cores, kGradScoresCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
 
+    [[maybe_unused]] auto cb_u_scaler_row = create_circular_buffer(
+        program, all_cores, kUScalarRowCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
+
     // Output gradient buffers
     [[maybe_unused]] auto cb_grad_query = create_circular_buffer(
         program, all_cores, kGradQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
@@ -307,6 +319,10 @@ SDPABackwardProgramFactory::cached_program_t SDPABackwardProgramFactory::create(
 
     [[maybe_unused]] auto cb_sync_output_writer = create_circular_buffer(
         program, all_cores, kSyncOutputWriterCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
+
+    // [DEBUG]: Used for debug, should be removed later
+    [[maybe_unused]] auto cb_masked_interm = create_circular_buffer(
+        program, all_cores, kMaskedIntermCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumOfIntermCBTiles);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels

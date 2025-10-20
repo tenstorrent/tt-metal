@@ -61,12 +61,16 @@ constexpr uint32_t cb_attention_weights = tt::CBIndex::c_10;  // Recomputed atte
 constexpr uint32_t cb_grad_attention = tt::CBIndex::c_11;     // Gradient w.r.t. attention
 constexpr uint32_t cb_grad_scores = tt::CBIndex::c_12;        // Gradient w.r.t. QK scores
 constexpr uint32_t cb_transpose_wh = tt::CBIndex::c_13;       // Transpose of attention weights
+constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_14;       // u_scalar per row
 
 // Output buffers
-constexpr uint32_t cb_grad_query = tt::CBIndex::c_14;          // Output: grad_Q
-constexpr uint32_t cb_grad_key = tt::CBIndex::c_15;            // Output: grad_K
-constexpr uint32_t cb_grad_value = tt::CBIndex::c_16;          // Output: grad_V
-constexpr uint32_t cb_sync_output_writer = tt::CBIndex::c_17;  // Used to sync with output writer kernel
+constexpr uint32_t cb_grad_query = tt::CBIndex::c_15;          // Output: grad_Q
+constexpr uint32_t cb_grad_key = tt::CBIndex::c_16;            // Output: grad_K
+constexpr uint32_t cb_grad_value = tt::CBIndex::c_17;          // Output: grad_V
+constexpr uint32_t cb_sync_output_writer = tt::CBIndex::c_18;  // Used to sync with output writer kernel
+
+// [DEBUG]: Used for debug, should be removed later
+constexpr auto cb_masked_interm = tt::CBIndex::c_19;
 
 const uint32_t onetile = 1U;
 
@@ -84,14 +88,15 @@ void MAIN {
     mm_init(cb_query, cb_key, cb_attention_weights);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
+        // DPRINT << "Processing row " << row << " of " << num_rows_per_core << ENDL();
         cb_wait_front(cb_key, tiles_per_row);
         cb_wait_front(cb_value, tiles_per_row);
 
         for (uint32_t head_idx = 0; head_idx < heads_per_group; ++head_idx) {
             const uint32_t matmul_accum_reg = 0;
-            const uint32_t mask_register = 1U;  // mask register should be next to data register
 
             for (uint32_t h = 0; h < Ht; ++h) {
+                DPRINT << "  Processing head " << head_idx << ", sequence tile " << h << ENDL();
                 // Wait for Q, dO, O, mask and intermediates for this K/V row
                 cb_wait_front(cb_query, tiles_per_row);
                 cb_wait_front(cb_grad_output, tiles_per_row);
@@ -125,10 +130,12 @@ void MAIN {
                 tile_regs_release();
                 cb_push_back(cb_attention_weights, onetile);
 
+                // mask intermediates inplace: keep column 0 of `intermediates`, zero everything else.
+                mask_intermediates(cb_intermediates, cb_mat_mul_reduction, cb_masked_interm, num_of_interm_tiles);
+
                 // apply statistics inplace: softmax(QK^T / sqrt(Et))
-                cb_wait_front(cb_intermediates, num_of_interm_tiles);
-                apply_statistics_inplace(cb_attention_weights, cb_intermediates);
-                cb_wait_front(cb_attention_weights, onetile);
+                apply_statistics_inplace(
+                    cb_attention_weights, cb_masked_interm, cb_mat_mul_reduction, num_of_interm_tiles);
 
                 // Step 2: Accumulate grad_V = Attention^T @ grad_output
                 update_grad_value(
@@ -139,19 +146,23 @@ void MAIN {
                     cb_grad_value,
                     tiles_per_row,
                     block_size,
-                    h > 0);
+                    h > 0);  // fix: accumulate after first row of first head
+
+                // Step 3: calculate u_scalar_row
+                compute_u_scalar_row(
+                    cb_grad_output, cb_attn_output, cb_u_scalar_row, cb_mat_mul_reduction, tiles_per_row);
 
                 cb_pop_front(cb_query, tiles_per_row);
                 cb_pop_front(cb_grad_output, tiles_per_row);
                 cb_pop_front(cb_attn_output, tiles_per_row);
-                cb_pop_front(cb_intermediates, num_of_interm_tiles);
                 cb_pop_front(cb_attention_weights, onetile);
+
+                cb_pop_front(cb_u_scalar_row, onetile);
             }
         }
 
         // update pointer ins cb_sync_output_writer to signal output writer that one row is done
-        cb_reserve_back(cb_sync_output_writer, onetile);
-        cb_push_back(cb_sync_output_writer, onetile);  // signal output writer that one row is done
+        sync_with_writer(cb_sync_output_writer);
 
         cb_pop_front(cb_key, tiles_per_row);
         cb_pop_front(cb_value, tiles_per_row);
