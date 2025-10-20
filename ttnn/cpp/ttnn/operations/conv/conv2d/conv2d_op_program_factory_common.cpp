@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <optional>
 #include <tuple>
-#include <umd/device/types/arch.hpp>
 #include <unordered_map>
 #include <vector>
 #include <tt_stl/assert.hpp>
