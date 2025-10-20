@@ -8,7 +8,7 @@ namespace norm::kernel_util::generic::policies {
 
 /**
  * @brief Policy to specify if an operation should wait
- * for the pushed tiles.
+ * for the tiles after it pushes them.
  */
 enum class CBWaitPolicy { Wait, NoWait };
 
