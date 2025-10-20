@@ -44,7 +44,7 @@ run_tg_tests() {
     ## The jit build also has different behaviour for IRAM enabled/disabled so we enable it globally.
     TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/distributed/test_data_parallel_example_TG.py --timeout=900 ; fail+=$?
     TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/distributed/test_multidevice_TG.py --timeout=900 ; fail+=$?
-    TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/test_multi_device_trace_TG.py --timeout=900 ; fail+=$?
+    TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/base_functionality/test_multi_device_trace_TG.py --timeout=900 ; fail+=$?
     #TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_6U.py --timeout=500 ; fail+=$? #See issue #30017
     #TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_6U.py --timeout=500 ; fail+=$? #See issue #30017
     pytest -n auto tests/nightly/tg/ccl/test_all_broadcast.py --timeout=200 ; fail+=$?
