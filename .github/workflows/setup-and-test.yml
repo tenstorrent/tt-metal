@@ -25,6 +25,11 @@ on:
         required: false
         default: 80
         type: number
+      random_order:
+        description: "Enable randomized test order"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   checks: write
@@ -81,6 +86,7 @@ jobs:
           SPLITS=$TEST_SPLITS
           cd tests/python_tests/
           pytest -m "${{ inputs.pytest_markers }}" \
+                ${{ inputs.random_order && '--random-order' || '' }} \
                 --splits $SPLITS --group ${{ matrix.test_group }} \
                 --override-ini="addopts=-v" --timeout=60 \
                 --junitxml=pytest-report-${CHIP_ARCH}-${{ matrix.test_group }}.xml .

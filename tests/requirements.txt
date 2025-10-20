@@ -20,6 +20,7 @@ pygments==2.19.2
 pytest==8.4.1
 pytest-cov==6.1.1
 pytest-github-actions-annotate-failures==0.3.0
+pytest-random-order==1.2.0
 pytest-repeat==0.9.4
 pytest-split==0.10.0
 pytest-sugar==1.0.0
