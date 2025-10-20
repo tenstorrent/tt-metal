@@ -139,7 +139,7 @@ void kernel_main() {
     uint32_t slices_expected = 0;
     uint32_t writes_expected = 0;
     if constexpr (topology == Topology::Linear) {
-        if (direction == 1) {
+        if constexpr (direction == 1) {
             slices_expected = num_targets_forward_direction;
             writes_expected = num_targets_backward_direction ? num_targets_forward_direction : 0;
         } else {
@@ -147,7 +147,7 @@ void kernel_main() {
             writes_expected = num_targets_forward_direction ? num_targets_backward_direction : 0;
         }
     } else if constexpr (topology == Topology::Ring) {
-        if (direction == 1) {
+        if constexpr (direction == 1) {
             slices_expected = num_targets_backward_direction;
             writes_expected = num_targets_backward_direction - 1;
         } else {
