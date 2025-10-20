@@ -43,8 +43,11 @@ void kernel_main() {
     constexpr uint32_t stride_w = get_compile_time_arg_val(26);
     constexpr uint32_t weight_size_h = get_compile_time_arg_val(27);  // Input filter window height
 
-#ifdef SPLIT_READER_OVERLAPPED
-    constexpr bool split_reader_overlapped = true;
+#ifdef SPLIT_READER_CB_SHARED
+    // When the split reader CB is shared, both readers write to the same circular buffer.
+    // Synchronization is required: the main reader signals when CB space is reserved,
+    // and the second reader signals when it has finished writing its portion.
+    constexpr bool split_reader_cb_shared = true;
     const uint32_t act_split_reader_reserve_done_semaphore_addr = get_semaphore(get_compile_time_arg_val(28));
     const uint32_t act_split_reader_write_done_semaphore_addr = get_semaphore(get_compile_time_arg_val(29));
     constexpr uint32_t act_write_offset = get_compile_time_arg_val(30);
@@ -55,7 +58,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* act_split_reader_write_done_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_write_done_semaphore_addr);
 #else
-    constexpr bool split_reader_overlapped = false;
+    constexpr bool split_reader_cb_shared = false;
     constexpr uint32_t act_write_offset = 0;
     constexpr uint32_t act_write_offset_last = 0;
 
@@ -126,12 +129,12 @@ void kernel_main() {
             for (uint32_t height_block_index = 0; height_block_index < num_blocks_weight_h; height_block_index++) {
 #ifdef SPLIT_READER
                 reader_idx = start_reader_idx;
-                if constexpr (!split_reader_overlapped) {
+                if constexpr (!split_reader_cb_shared) {
                     cb_reserve_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
                 }
 
                 if (is_sender_core) {
-                    if constexpr (split_reader_overlapped) {
+                    if constexpr (split_reader_cb_shared) {
                         wait_reserve_done(act_split_reader_reserve_done_semaphore_addr_ptr);
                         prev_addr = l1_write_addr_act;
                     } else {
@@ -155,12 +158,14 @@ void kernel_main() {
                         reader_idx,
                         act_l1_read_addr,
                         stride_h_bytes);
-                    if constexpr (split_reader_overlapped) {
+                    if constexpr (split_reader_cb_shared) {
+                        // in case of shared cb we update the write address (it will remain the same if double buffering
+                        // is not enabled)
                         l1_write_addr_act = split_reader_cb_write_addr_sum - prev_addr;
                         signal_write_done(act_split_reader_write_done_semaphore_addr_ptr);
                     }
                 }
-                if constexpr (!split_reader_overlapped) {
+                if constexpr (!split_reader_cb_shared) {
                     cb_push_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
                 }
 #endif

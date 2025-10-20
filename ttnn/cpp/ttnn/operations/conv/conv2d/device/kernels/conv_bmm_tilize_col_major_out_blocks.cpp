@@ -269,18 +269,20 @@ void MAIN {
 
 #ifdef SPLIT_READER
     constexpr bool split_reader = true;
-#ifndef SPLIT_READER_OVERLAPPED
+#ifndef SPLIT_READER_CB_SHARED
     constexpr uint32_t in0_num_subblocks_read_last = reader_num_h_subblocks / 2;
     constexpr uint32_t in0_num_subblocks_read = reader_num_h_subblocks - in0_num_subblocks_read_last;
-    constexpr bool split_reader_overlapped = false;
+    constexpr bool split_reader_cb_shared = false;
 #else
     constexpr uint32_t in0_num_subblocks_read_last = 0;
     constexpr uint32_t in0_num_subblocks_read = reader_num_h_subblocks;
-    constexpr bool split_reader_overlapped = true;
+    // When the split reader CB is shared, both readers write to the same circular buffer.
+    // The compute kernel reads from the combined data written by both readers.
+    constexpr bool split_reader_cb_shared = true;
 #endif
 #else
     constexpr bool split_reader = false;
-    constexpr bool split_reader_overlapped = false;
+    constexpr bool split_reader_cb_shared = false;
     constexpr uint32_t in0_num_subblocks_read = reader_num_h_subblocks;
     constexpr uint32_t in0_num_subblocks_read_last = 0;
 #endif
@@ -338,10 +340,10 @@ void MAIN {
                         pack_reconfig_data_format(curr_matmul_out_cb, tilized_in0_cb_id);
                         pack_reconfig_l1_acc(0);
 #endif
-                        tilize_in<true, !split_reader || split_reader_overlapped>(
+                        tilize_in<true, !split_reader || split_reader_cb_shared>(
                             in0_pretilize_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
 
-                        if constexpr (split_reader && !split_reader_overlapped) {
+                        if constexpr (split_reader && !split_reader_cb_shared) {
                             tilize_in<false, true>(
                                 in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
                         }

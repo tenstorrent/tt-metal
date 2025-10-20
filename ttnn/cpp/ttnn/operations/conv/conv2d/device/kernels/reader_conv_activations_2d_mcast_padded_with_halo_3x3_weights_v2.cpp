@@ -41,8 +41,11 @@ void kernel_main() {
     constexpr uint32_t cb_id_act_row_major_bfloat16 = get_compile_time_arg_val(25);
     constexpr uint32_t cb_l1_array = get_compile_time_arg_val(26);
 
-#ifdef SPLIT_READER_OVERLAPPED
-    constexpr bool split_reader_overlapped = true;
+#ifdef SPLIT_READER_CB_SHARED
+    // When the split reader CB is shared, both readers write to the same circular buffer.
+    // Synchronization is required: the main reader signals when CB space is reserved,
+    // and the second reader signals when it has finished writing its portion.
+    constexpr bool split_reader_cb_shared = true;
     const uint32_t act_split_reader_reserve_done_semaphore_addr = get_semaphore(get_compile_time_arg_val(30));
     const uint32_t act_split_reader_write_done_semaphore_addr = get_semaphore(get_compile_time_arg_val(31));
 
@@ -51,7 +54,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* act_split_reader_write_done_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_write_done_semaphore_addr);
 #else
-    constexpr bool split_reader_overlapped = false;
+    constexpr bool split_reader_cb_shared = false;
     volatile tt_l1_ptr uint32_t* act_split_reader_reserve_done_semaphore_addr_ptr = nullptr;
     volatile tt_l1_ptr uint32_t* act_split_reader_write_done_semaphore_addr_ptr = nullptr;
 #endif
@@ -109,7 +112,7 @@ void kernel_main() {
     // set_state uses just x/y from the get_noc_addr, addr is ignored
     uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
 
-    if constexpr (!split_reader_overlapped) {
+    if constexpr (!split_reader_cb_shared) {
         noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
     }
 
@@ -128,7 +131,7 @@ void kernel_main() {
             cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles_read);
             if (is_sender_core) {
                 uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
-                if constexpr (split_reader_overlapped) {
+                if constexpr (split_reader_cb_shared) {
                     signal_reserve_done(act_split_reader_reserve_done_semaphore_addr_ptr);
                     noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
                 }
@@ -149,7 +152,7 @@ void kernel_main() {
                     reader_idx,
                     act_l1_read_addr,
                     stride_h_bytes);
-                if constexpr (split_reader_overlapped) {
+                if constexpr (split_reader_cb_shared) {
                     wait_write_done(act_split_reader_write_done_semaphore_addr_ptr);
                 }
             }

@@ -668,7 +668,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
 
     const bool overlap_act_cb =
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).overlapped_by_cb.has_value();
-    const bool split_reader_overlapped = enable_split_reader && overlap_act_cb;
+    // When split reader is enabled with overlapped CBs, both readers write to the same circular buffer.
+    // This requires synchronization between the main reader and the second reader to prevent race conditions.
+    const bool split_reader_cb_shared = enable_split_reader && overlap_act_cb;
 
     if (block_sharded) {
         const CoreCoord out_bottom_right_core = {(std::size_t)num_cores_x - 1, (std::size_t)num_cores_y - 1};
@@ -690,7 +692,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         act_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
         act_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
-        if (split_reader_overlapped) {
+        if (split_reader_cb_shared) {
             weights_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
             weights_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
             act_split_reader_reserve_done_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
@@ -779,7 +781,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         (uint32_t)conv_act_c_read_bytes,
         (uint32_t)window_outer,
         (uint32_t)window_inner,
-        (uint32_t)(enable_split_reader && !split_reader_overlapped ? act_block_num_tiles_split : act_block_num_tiles),
+        (uint32_t)(enable_split_reader && !split_reader_cb_shared ? act_block_num_tiles_split : act_block_num_tiles),
         (uint32_t)filter_h,
         (uint32_t)filter_w,
         (uint32_t)conv_act_size_w + (pad_w),
@@ -834,7 +836,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         reader_compile_time_args.insert(
             reader_compile_time_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
     }
-    if (split_reader_overlapped) {
+    if (split_reader_cb_shared) {
         reader_compile_time_args.push_back(act_split_reader_reserve_done_semaphore_id);
         reader_compile_time_args.push_back(act_split_reader_write_done_semaphore_id);
     }
@@ -864,10 +866,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         writer_mcast_sender_defines["SPLIT_READER"] = "1";
         writer_defines["SPLIT_READER"] = "1";
         if (overlap_act_cb) {
-            compute_defines["SPLIT_READER_OVERLAPPED"] = "1";
-            reader_defines["SPLIT_READER_OVERLAPPED"] = "1";
-            writer_defines["SPLIT_READER_OVERLAPPED"] = "1";
-            writer_mcast_sender_defines["SPLIT_READER_OVERLAPPED"] = "1";
+            compute_defines["SPLIT_READER_CB_SHARED"] = "1";
+            reader_defines["SPLIT_READER_CB_SHARED"] = "1";
+            writer_defines["SPLIT_READER_CB_SHARED"] = "1";
+            writer_mcast_sender_defines["SPLIT_READER_CB_SHARED"] = "1";
         }
     }
 
@@ -896,7 +898,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,
         get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,
         (uint32_t)(bias_buffer == nullptr ? 0 : (bias_buffer->buffer_type() == BufferType::DRAM ? 1 : 0)),
-        get_cb_info_by_name(cb_info, (split_reader_overlapped ? Conv2dCb::ACT : Conv2dCb::ACT_SECOND_READER)).index,
+        get_cb_info_by_name(cb_info, (split_reader_cb_shared ? Conv2dCb::ACT : Conv2dCb::ACT_SECOND_READER)).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_SHARDED).index,
         get_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).index,
         num_blocks_act_w,
@@ -928,7 +930,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             (uint32_t)stride_w,
             (uint32_t)filter_h};
 
-        if (split_reader_overlapped) {
+        if (split_reader_cb_shared) {
             const tt::DataFormat halo_output_df =
                 get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).data_format;
 
