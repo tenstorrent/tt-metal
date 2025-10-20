@@ -112,6 +112,7 @@ enum class HighLevelTrafficPattern {
     FullDeviceRandomPairing,
     UnidirectionalLinear,
     PerimeterLinear,
+    NeighborExchange,
     FullRing,
     HalfRing,
     AllDevicesUniformPattern,
