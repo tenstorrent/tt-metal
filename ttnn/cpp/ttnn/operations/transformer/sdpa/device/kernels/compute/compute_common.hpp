@@ -407,27 +407,29 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
 void logsigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     // out_cb = logsigmoid(in0_cb - in1_cb)
     DeviceZoneScopedN("logsigmoid_sub");
-    // Implemented as softplus. logsigmoid(x) = -softplus(-x)
+    // Implemented as softplus for numerical stability. logsigmoid(x) = -softplus(-x)
 
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
     sub_tiles_init(in0_cb, in1_cb);
+    softplus_tile_init();
+    constexpr uint32_t const_1_fp32 = 0x3F800000;
+    constexpr uint32_t const_20_fp32 = 0x41A00000;
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
-        // Remove negate by swapping inputs
+        // Negate input to softplus by swapping inputs to sub
         sub_tiles(in1_cb, in0_cb, i, i, 0);
-        // negative_tile_init();
-        // negative_tile(0);
-        softplus_tile_init();
-        softplus_tile(0, 0x3F800000, 0x3F800000, 0x41A00000);  // beta, beta_reciprocal, threshold
-        negative_tile_init();
+        // softplus_tile(0, 0x3F800000, 0x3F800000, 0x41A00000);  // beta, beta_reciprocal, threshold
+        MATH((llk_math_eltwise_unary_sfpu_softplus<APPROX>(
+            0,
+            const_1_fp32 /*beta*/,
+            const_1_fp32 /*beta_reciprocal*/,
+            const_20_fp32 /*threshold*/,
+            (int)VectorMode::C)));
+        // Negate the output of softplus
         negative_tile(0);
-        // sigmoid_tile_init();
-        // sigmoid_tile(0);
-        // log_tile_init();
-        // log_tile(0);
         pack_tile(0, out_cb);
         release_dst();
     }
