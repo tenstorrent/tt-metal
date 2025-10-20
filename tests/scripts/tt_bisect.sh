@@ -57,9 +57,14 @@ if [ "$artifact_mode" = true ]; then
   echo "Artifact download optimization enabled."
 fi
 
-# Creating virtual environment where we can install ttnn
-CXX=clang++-17 CC=clang-17 ./create_venv.sh
-pip install -r models/tt_transformers/requirements.txt
+# Set up environment (skip if already in CI container with pre-configured venv)
+if [ ! -d "$PYTHON_ENV_DIR" ]; then
+  echo "Creating virtual environment and installing dependencies..."
+  CXX=clang++-17 CC=clang-17 ./create_venv.sh
+  pip install -r models/tt_transformers/requirements.txt
+else
+  echo "Using existing virtual environment: $PYTHON_ENV_DIR"
+fi
 
 git cat-file -e "$good_commit^{commit}" 2>/dev/null || die "Invalid good commit: $good_commit"
 git cat-file -e "$bad_commit^{commit}" 2>/dev/null  || die "Invalid bad commit: $bad_commit"
