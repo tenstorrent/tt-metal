@@ -201,7 +201,6 @@ jobs:
             tests/ttnn/unit_tests/operations/ccl/test_all_gather_N300_post_commit.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_gather_llama_perf_sweep.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_gather_matmul.py \
-            tests/ttnn/unit_tests/operations/ccl/test_all_gather_nightly.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_reduce_async.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_reduce_t3000_frequent.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_6U.py \
@@ -209,7 +208,6 @@ jobs:
             tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_6U.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_t3000.py \
             tests/ttnn/unit_tests/operations/ccl/test_barrier_t3000_frequent.py \
-            tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py \
             tests/ttnn/unit_tests/operations/ccl/test_fabric_ccl.py \
             tests/ttnn/unit_tests/operations/ccl/test_llama_prefill_ccl_ops.py \
             tests/ttnn/unit_tests/operations/ccl/test_llama_prefill_ccl_ops_perf_nightly_TG.py \
