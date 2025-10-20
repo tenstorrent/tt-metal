@@ -224,35 +224,4 @@ class UnitMeshCQMultiDeviceProgramFixture : public UnitMeshCQMultiDeviceFixture 
 
 class UnitMeshCQMultiDeviceBufferFixture : public UnitMeshCQMultiDeviceFixture {};
 
-class DISABLED_CQMultiDeviceOnFabricFixture
-    : public UnitMeshCQMultiDeviceFixture,
-      public ::testing::WithParamInterface<tt::tt_fabric::FabricConfig> {
-private:
-    inline static ARCH arch_ = tt::ARCH::Invalid;
-    inline static bool is_galaxy_ = false;
-
-protected:
-    // Multiple fabric configs so need to reset the devices for each test
-    static void SetUpTestSuite() {
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        is_galaxy_ = tt::tt_metal::IsGalaxyCluster();
-    }
-
-    static void TearDownTestSuite() {}
-
-    void SetUp() override {
-        // This will force dispatch init to inherit the FabricConfig param
-        tt::tt_fabric::SetFabricConfig(GetParam(), tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
-        UnitMeshCQMultiDeviceFixture::SetUp();
-    }
-
-    void TearDown() override {
-        if (::testing::Test::IsSkipped()) {
-            return;
-        }
-        UnitMeshCQMultiDeviceFixture::TearDown();
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
-    }
-};
-
 }  // namespace tt::tt_metal
