@@ -307,24 +307,26 @@ void kernel_main() {
     constexpr uint32_t tile_idx_tmp_cb_id = get_compile_time_arg_val(23);
     constexpr uint32_t right_inc_tmp_cb_id = get_compile_time_arg_val(24);
     constexpr uint32_t down_left_wrap_inc_tmp_cb_id = get_compile_time_arg_val(25);
-    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(26);
-    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(27);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(28);
-    constexpr uint32_t config_cb_id = get_compile_time_arg_val(29);
-    constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(30);
-    constexpr uint32_t shard_width_bytes = get_compile_time_arg_val(31);
-    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(32);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(33);
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(34);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(35);
-    constexpr bool return_indices = (bool)get_compile_time_arg_val(36);
-    constexpr uint32_t pad_t = get_compile_time_arg_val(37);
-    constexpr uint32_t pad_l = get_compile_time_arg_val(38);
-    constexpr uint32_t right_inc = get_compile_time_arg_val(39);
-    constexpr uint32_t down_left_wrap_inc = get_compile_time_arg_val(40);
-    constexpr bool zero_pages = (bool)get_compile_time_arg_val(41);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(42);
-    constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(43);
+    constexpr uint32_t up_left_wrap_inc_tmp_cb_id = get_compile_time_arg_val(26);
+    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(27);
+    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(28);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(29);
+    constexpr uint32_t config_cb_id = get_compile_time_arg_val(30);
+    constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(31);
+    constexpr uint32_t shard_width_bytes = get_compile_time_arg_val(32);
+    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(33);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(34);
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(35);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(36);
+    constexpr bool return_indices = (bool)get_compile_time_arg_val(37);
+    constexpr uint32_t pad_t = get_compile_time_arg_val(38);
+    constexpr uint32_t pad_l = get_compile_time_arg_val(39);
+    constexpr int32_t right_inc = get_compile_time_arg_val(40);
+    constexpr int32_t down_left_wrap_inc = get_compile_time_arg_val(41);
+    constexpr int32_t up_left_wrap_inc = get_compile_time_arg_val(42);
+    constexpr bool zero_pages = (bool)get_compile_time_arg_val(43);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(44);
+    constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(45);
 
     constexpr bool use_split_reader = split_reader && !return_indices;
     constexpr uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
@@ -438,6 +440,15 @@ void kernel_main() {
             down_left_ptr[i] = down_left_wrap_inc;
         }
         cb_push_back(down_left_wrap_inc_tmp_cb_id, 1);
+
+        // initialize the up left wrap inc tile
+        cb_reserve_back(up_left_wrap_inc_tmp_cb_id, 1);
+        volatile tt_l1_ptr uint16_t* up_left_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(up_left_wrap_inc_tmp_cb_id));
+        for (uint32_t i = 0; i < TILE_HEIGHT * TILE_WIDTH; ++i) {
+            up_left_ptr[i] = up_left_wrap_inc;
+        }
+        cb_push_back(up_left_wrap_inc_tmp_cb_id, 1);
     }
 
     // initialize the scalar CB

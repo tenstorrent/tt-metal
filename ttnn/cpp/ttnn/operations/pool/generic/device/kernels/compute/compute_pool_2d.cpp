@@ -52,19 +52,22 @@ void MAIN {
     constexpr uint32_t tile_idx_tmp_cb_id = get_compile_time_arg_val(13);
     constexpr uint32_t right_inc_tmp_cb_id = get_compile_time_arg_val(14);
     constexpr uint32_t down_left_wrap_inc_tmp_cb_id = get_compile_time_arg_val(15);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(16);
-    constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(17);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(18);
-    constexpr uint32_t pre_tilize_cb_id = get_compile_time_arg_val(19);
-    constexpr bool is_output_tiled = get_compile_time_arg_val(20);  // 1 = TILED, 0 = ROW_MAJOR
-    constexpr bool is_output_block_format = (bool)get_compile_time_arg_val(21);
-    constexpr bool return_indices = (bool)get_compile_time_arg_val(22);
-    constexpr uint32_t right_inc = get_compile_time_arg_val(23);
-    constexpr uint32_t down_left_wrap_inc = get_compile_time_arg_val(24);
-    constexpr uint32_t in_w_padded = get_compile_time_arg_val(25);
-    constexpr uint32_t eff_kernel_w = get_compile_time_arg_val(26);
-    constexpr uint32_t pad_l = get_compile_time_arg_val(27);
-    constexpr uint32_t sync_cb_id = get_compile_time_arg_val(28);
+    constexpr uint32_t up_left_wrap_inc_tmp_cb_id = get_compile_time_arg_val(16);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(17);
+    constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(18);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(19);
+    constexpr uint32_t pre_tilize_cb_id = get_compile_time_arg_val(20);
+    constexpr bool is_output_tiled = get_compile_time_arg_val(21);  // 1 = TILED, 0 = ROW_MAJOR
+    constexpr bool is_output_block_format = (bool)get_compile_time_arg_val(22);
+    constexpr bool return_indices = (bool)get_compile_time_arg_val(23);
+    constexpr uint32_t stride_h = get_compile_time_arg_val(24);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(25);
+    constexpr uint32_t in_h_padded = get_compile_time_arg_val(26);
+    constexpr uint32_t in_w_padded = get_compile_time_arg_val(27);
+    constexpr uint32_t eff_kernel_h = get_compile_time_arg_val(28);
+    constexpr uint32_t eff_kernel_w = get_compile_time_arg_val(29);
+    constexpr uint32_t pad_l = get_compile_time_arg_val(30);
+    constexpr uint32_t sync_cb_id = get_compile_time_arg_val(31);
 
     constexpr bool use_split_reader = split_reader && !return_indices;
 
@@ -129,13 +132,16 @@ void MAIN {
         cb_wait_front(in_scalar_cb_id_0, 1);
     }
     uint32_t current_idx_col;
+    uint32_t current_idx_row;
     if constexpr (return_indices) {
         const uint16_t start_row = (uint16_t)get_arg_val<uint32_t>(0);
         const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(1);
         current_idx_col = start_col;
+        current_idx_row = start_row;
 
         cb_wait_front(right_inc_tmp_cb_id, 1);
         cb_wait_front(down_left_wrap_inc_tmp_cb_id, 1);
+        cb_wait_front(up_left_wrap_inc_tmp_cb_id, 1);
         // idx_tmp_cb_id is populated by the reader, but this happens after the inc CBs are populated
         // so idx_tmp is protected here, and we intend to have PACK act as the sole producer, hence
         // why the reader cannot push_back here
@@ -202,13 +208,20 @@ void MAIN {
 
                     // update the current index column
                     if (last_c_block) {
-                        if (current_idx_col + right_inc + eff_kernel_w > in_w_padded) {
-                            // we reached the edge, wrap down and to the left
+                        if (current_idx_col + stride_w + eff_kernel_w > in_w_padded) {
+                            // we reached the right edge, wrap down and to the left
                             current_idx_col = 0;
-                            copy_tile(down_left_wrap_inc_tmp_cb_id, topk_cb_tile_idx, inc_dst_idx);
+                            if (current_idx_row + stride_h + eff_kernel_h > in_h_padded) {
+                                // we reached the bottom right corner, wrap to the top and to the left
+                                current_idx_row = 0;
+                                copy_tile(up_left_wrap_inc_tmp_cb_id, topk_cb_tile_idx, inc_dst_idx);
+                            } else {
+                                current_idx_row += stride_h;
+                                copy_tile(down_left_wrap_inc_tmp_cb_id, topk_cb_tile_idx, inc_dst_idx);
+                            }
                         } else {
                             // we are still in the same row, move to the right
-                            current_idx_col += right_inc;
+                            current_idx_col += stride_w;
                             copy_tile(right_inc_tmp_cb_id, topk_cb_tile_idx, inc_dst_idx);
                         }
 

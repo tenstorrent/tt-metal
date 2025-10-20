@@ -268,6 +268,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         pool_type,
         return_indices,
         output_layout);
+    uint32_t eff_kernel_h = (kernel_h - 1) * dilation_h + 1;
     uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
     uint32_t pad_h = pad_t + pad_b;
     uint32_t pad_w = pad_l + pad_r;
@@ -390,9 +391,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t tile_idx_tmp_cb_id = 32;
     uint32_t right_inc_tmp_cb_id = 32;
     uint32_t down_left_wrap_inc_tmp_cb_id = 32;
+    uint32_t up_left_wrap_inc_tmp_cb_id = 32;
     uint32_t sync_cb_id = 32;
-    uint32_t right_inc = 0;
-    uint32_t down_left_wrap_inc = 0;
+    int32_t right_inc = 0;
+    int32_t down_left_wrap_inc = 0;
+    int32_t up_left_wrap_inc = 0;
     if (return_indices) {
         uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
         idx_tmp_cb_id = next_cb_index++;
@@ -414,6 +417,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             down_left_wrap_inc_tmp_cb_id, program, all_cores, params.index_nbytes * tile_elems, 1, params.index_format);
         log_debug(
             tt::LogOp, "CB {} :: PS = {}, NP = {}", down_left_wrap_inc_tmp_cb_id, params.index_nbytes * tile_elems, 1);
+        up_left_wrap_inc_tmp_cb_id = next_cb_index++;
+        tt::tt_metal::create_cb(
+            up_left_wrap_inc_tmp_cb_id, program, all_cores, params.index_nbytes * tile_elems, 1, params.index_format);
+        log_debug(
+            tt::LogOp, "CB {} :: PS = {}, NP = {}", up_left_wrap_inc_tmp_cb_id, params.index_nbytes * tile_elems, 1);
 
         sync_cb_id = next_cb_index++;
         tt::tt_metal::create_cb(sync_cb_id, program, all_cores, 2, 1, params.index_format);
@@ -421,7 +429,14 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         // compute increments for index tile population
         right_inc = stride_w;
         down_left_wrap_inc = in_w * stride_h + (1 - out_w) * stride_w;
+        up_left_wrap_inc = (1 - out_h) * stride_h * in_w + (1 - out_w) * stride_w;
     }
+
+    printf(
+        "right_inc: %d, down_left_wrap_inc: %d, up_left_wrap_inc: %d\n",
+        right_inc,
+        down_left_wrap_inc,
+        up_left_wrap_inc);
 
     const bool is_output_tiled = output_layout == Layout::TILE;
     const bool is_output_block_format = is_block_float(outputs[0].dtype());
@@ -567,24 +582,26 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         tile_idx_tmp_cb_id,             // 23
         right_inc_tmp_cb_id,            // 24
         down_left_wrap_inc_tmp_cb_id,   // 25
-        clear_value_cb_id,              // 26
-        (uint32_t)pool_type,            // 27
-        one_scalar_per_core,            // 28
-        config_cb_id,                   // 29
-        in_nbytes_c,                    // 30
-        shard_width_bytes,              // 31
-        params.multi_buffering_factor,  // 32
-        stride_w,                       // 33
-        dilation_h,                     // 34
-        dilation_w,                     // 35
-        (uint32_t)return_indices,       // 36
-        pad_t,                          // 37
-        pad_l,                          // 38
-        right_inc,                      // 39
-        down_left_wrap_inc,             // 40
-        (uint32_t)zero_pages,           // 41
-        out_cb_id,                      // 42
-        out_idx_cb_id};                 // 43
+        up_left_wrap_inc_tmp_cb_id,     // 26
+        clear_value_cb_id,              // 27
+        (uint32_t)pool_type,            // 28
+        one_scalar_per_core,            // 29
+        config_cb_id,                   // 30
+        in_nbytes_c,                    // 31
+        shard_width_bytes,              // 32
+        params.multi_buffering_factor,  // 33
+        stride_w,                       // 34
+        dilation_h,                     // 35
+        dilation_w,                     // 36
+        (uint32_t)return_indices,       // 37
+        pad_t,                          // 38
+        pad_l,                          // 39
+        right_inc,                      // 40
+        down_left_wrap_inc,             // 41
+        up_left_wrap_inc,               // 42
+        (uint32_t)zero_pages,           // 43
+        out_cb_id,                      // 44
+        out_idx_cb_id};                 // 45
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
@@ -627,19 +644,22 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         tile_idx_tmp_cb_id,             // 13
         right_inc_tmp_cb_id,            // 14
         down_left_wrap_inc_tmp_cb_id,   // 15
-        out_cb_id,                      // 16
-        out_idx_cb_id,                  // 17
-        one_scalar_per_core,            // 18
-        pre_tilize_cb_id,               // 19
-        is_output_tiled,                // 20
-        is_output_block_format,         // 21
-        (uint32_t)return_indices,       // 22
-        right_inc,                      // 23
-        down_left_wrap_inc,             // 24
-        in_w_padded,                    // 25
-        eff_kernel_w,                   // 26
-        pad_l,                          // 27
-        sync_cb_id};                    // 28
+        up_left_wrap_inc_tmp_cb_id,     // 16
+        out_cb_id,                      // 17
+        out_idx_cb_id,                  // 18
+        one_scalar_per_core,            // 19
+        pre_tilize_cb_id,               // 20
+        is_output_tiled,                // 21
+        is_output_block_format,         // 22
+        (uint32_t)return_indices,       // 23
+        stride_h,                       // 24
+        stride_w,                       // 25
+        in_h_padded,                    // 26
+        in_w_padded,                    // 27
+        eff_kernel_h,                   // 28
+        eff_kernel_w,                   // 29
+        pad_l,                          // 30
+        sync_cb_id};                    // 31
 
     // Get device arch for compute kernel config initialization
     auto device_arch = input.device()->arch();
