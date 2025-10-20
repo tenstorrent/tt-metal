@@ -52,62 +52,23 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
         Shape{1, test_config.pages_per_bank},  // shard shape in pages
         corerange_to_cores(dram_bank_range));
 
-    // uint32_t single_tile_size = tt::tile_size(test_config.l1_data_format);
     uint32_t single_tile_size = test_config.page_size_bytes;
     distributed::DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = single_tile_size,
         .buffer_type = BufferType::DRAM,
-        .sharding_args = BufferShardingArgs(shard_spec),
-        .bottom_up = std::nullopt};  // idk what bottom up does
-    // const size_t total_size_bytes = test_config.num_pages * test_config.page_size_bytes;
-    // Shape2D global_shape = {32, 32 * test_config.num_pages};
+        .sharding_args = BufferShardingArgs(shard_spec)};
+
     Shape2D global_shape = {32, 32 * num_pages};
-    // Shape2D shard_shape = {32, 32};
-    // const size_t total_size_bytes = global_shape.height() * global_shape.width() * sizeof(bfloat16);
     distributed::ShardedBufferConfig sharded_buffer_config{
         .global_size = total_size_bytes,
         .global_buffer_shape = global_shape,
-        .shard_shape = global_shape,  // equal to global buffer shape since only one chip?
+        .shard_shape = global_shape,  // since test run on only one chip
         .shard_orientation = ShardOrientation::ROW_MAJOR,
     };
 
     auto mesh_buffer =
         distributed::MeshBuffer::create(sharded_buffer_config, per_device_buffer_config, mesh_device.get());
     uint32_t input_buffer_address = mesh_buffer->address();
-    // ShardSpecBuffer(
-    //     const CoreRangeSet& core_sets_,
-    //     const std::array<uint32_t, 2>& shard_shape_,
-    //     const ShardOrientation& shard_orientation_,
-    //     const std::array<uint32_t, 2>& page_shape,
-    //     const std::array<uint32_t, 2>& tensor2d_shape_in_pages)
-
-    // struct ShardedBufferConfig {
-    //     IDevice* device{};
-    //     DeviceAddr size{};       // Size in bytes
-    //     DeviceAddr page_size{};  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
-    //     BufferType buffer_type = BufferType::L1;
-    //     TensorMemoryLayout buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED;
-    //     ShardSpecBuffer shard_parameters;
-    // };
-
-    // ShardSpecBuffer shard_spec = ShardSpecBuffer(
-    //     test_config.cores,
-    //     {total_size_bytes / test_config.page_size_bytes, 1},
-    //     ShardOrientation::ROW_MAJOR,
-    //     {test_config.page_size_bytes, 1},
-    //     {total_size_bytes / test_config.page_size_bytes, 1});
-
-    // InterleavedBufferConfig interleaved_buffer_config{
-    //     .device = device,
-    //     .size = total_size_bytes,
-    //     .page_size = test_config.page_size_bytes,
-    //     .buffer_type = test_config.is_dram ? BufferType::DRAM : BufferType::L1};
-    // std::shared_ptr<Buffer> input_buffer;
-    // input_buffer = CreateBuffer(interleaved_buffer_config);
-    // uint32_t input_buffer_address = input_buffer->address();
-
-    // auto output_buffer = CreateBuffer(interleaved_buffer_config);
-    // uint32_t output_buffer_address = output_buffer->address();
 
     // Input
     // vector<uint32_t> packed_input = create_arange_vector_of_bfloat16(total_size_bytes, true);
@@ -118,14 +79,13 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
     // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
     vector<uint32_t> packed_golden = packed_input;
 
-    // Compile-time arguments for kernels
+    // Compile-time arguments for kernel
     vector<uint32_t> reader_compile_args = {
         (uint32_t)test_config.num_of_transactions,
         (uint32_t)test_config.num_banks,
         (uint32_t)test_config.pages_per_bank,
         (uint32_t)test_config.page_size_bytes,
         (uint32_t)test_config.test_id};
-    // tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_args);
 
     // Kernels
     auto reader_kernel = CreateKernel(
@@ -140,9 +100,6 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
     uint32_t l1_addr = get_l1_address_and_size(mesh_device, corerange_to_cores(test_config.cores)[0]).base_address;
     std::vector<uint32_t> reader_run_time_args = {input_buffer_address, l1_addr};
     tt::tt_metal::SetRuntimeArgs(program, reader_kernel, test_config.cores, reader_run_time_args);
-
-    // log_info(tt::LogTest, "Input buffer addr: {}, Output buffer addr: {}", input_buffer_address,
-    // output_buffer_address);
 
     // Assign unique id
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
@@ -182,18 +139,14 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
 }
 }  // namespace unit_tests::dm::dram_sharded
 
-/* ========== INTERLEAVED DRAM TESTS ========== */
-
-/* ========== Directed Ideal Test Case; Test id = 65 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadBaseCase) {
+/* ========== Directed Ideal Test Case; Test id = 84 ========== */
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadDirectedIdeal) {
     auto mesh_device = get_mesh_device();
-    // Physical Constraints
-    // auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-    //     tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+
     // Parameters
     DataFormat l1_data_format = DataFormat::Float16_b;
     uint32_t page_size_bytes = tt::tile_size(l1_data_format);
-    uint32_t num_of_transactions = 1;
+    uint32_t num_of_transactions = 256;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -204,7 +157,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadBaseCase) {
         .test_id = 1000,
         .num_of_transactions = num_of_transactions,
         .num_banks = mesh_device->num_dram_channels(),
-        .pages_per_bank = 2,
+        .pages_per_bank = 32,
         .page_size_bytes = page_size_bytes,
         .l1_data_format = l1_data_format,
         .cores = core_range_set};
@@ -213,12 +166,10 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadBaseCase) {
     EXPECT_TRUE(run_dm(mesh_device, test_config));
 }
 
-/* ========== Directed Ideal Test Case; Test id = 65 ========== */
+/* ========== Sweep over varying number of tiles per DRAM bank; Test id = 85 ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTileNumbers) {
     auto mesh_device = get_mesh_device();
-    // Physical Constraints
-    // auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-    //     tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+
     // Parameters
     DataFormat l1_data_format = DataFormat::Float16_b;
     uint32_t page_size_bytes = tt::tile_size(l1_data_format);
@@ -248,12 +199,10 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTileNumbers) {
     }
 }
 
-/* ========== Directed Ideal Test Case; Test id = 65 ========== */
+/* ========== Sweep over varying number of DRAM banks; Test id = 86 ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadBankNumbers) {
     auto mesh_device = get_mesh_device();
-    // Physical Constraints
-    // auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-    //     tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+
     // Parameters
     DataFormat l1_data_format = DataFormat::Float16_b;
     uint32_t page_size_bytes = tt::tile_size(l1_data_format);
