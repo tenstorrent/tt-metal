@@ -349,7 +349,7 @@ FORCE_INLINE void perform_intimg_along_row_chunk(
             ctas.input_cb,
             ctas.cumsum_stage_0_cb,
             ctas.axis_2_buffer_cb,
-            column_block_i == 0,
+            (column_block_i == 0) && (num_blocks_in_row > 1),
             block_depth);
         if (column_block_i > 0) {
             // axis 2/4's propagation...
@@ -359,7 +359,7 @@ FORCE_INLINE void perform_intimg_along_row_chunk(
                 ctas.axis_2_buffer_cb,
                 ctas.cumsum_stage_0_cb,
                 ctas.cumsum_stage_1_cb,
-                column_block_i != (num_blocks_in_row - 1),
+                (column_block_i != (num_blocks_in_row - 1)),
                 block_depth);  // working with cb_axis_2_buffer and cb_cumsum
             // consume: cb_cumsum_stage_1 32t
             // produce: axis_2_buffer_cb 1t, cb_cumsum_stage_2 32t
