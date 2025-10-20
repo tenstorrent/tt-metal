@@ -2,11 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
+#include <tt-metalium/fabric.hpp>
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/ccl/mesh_partition/mesh_partition.hpp"
 
 namespace composite_common {
+
+bool is_fabric_2d() {
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+
+    return (
+        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D ||
+        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+}
 
 bool use_composite_reduce_scatter(
     const ttnn::Tensor& input_tensor, const int32_t dim, std::optional<uint32_t> cluster_axis) {
@@ -213,6 +222,10 @@ bool use_composite_all_gather(
 
     auto input_memory_config = input_tensor.memory_config();
     auto output_memory_config = memory_config.value_or(input_memory_config);
+
+    if (is_fabric_2d()) {
+        return true;
+    }
 
     // Use composite for row-major tensors
     if (input_tensor.layout() == ttnn::Layout::ROW_MAJOR) {
