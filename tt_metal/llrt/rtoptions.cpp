@@ -264,6 +264,10 @@ RunTimeOptions::RunTimeOptions() {
         enable_fabric_telemetry = true;
     }
 
+    if (getenv("TT_FABRIC_PROFILE_RX_CH_FWD")) {
+        fabric_profiling_settings.enable_rx_ch_fwd = true;
+    }
+
     if (getenv("TT_METAL_FORCE_REINIT")) {
         force_context_reinit = true;
     }
@@ -281,8 +285,8 @@ RunTimeOptions::RunTimeOptions() {
         this->log_kernels_compilation_commands = true;
     }
 
-    if (getenv("TT_METAL_USE_MGD_2_0")) {
-        this->use_mesh_graph_descriptor_2_0 = true;
+    if (getenv("TT_METAL_USE_MGD_1_0")) {
+        this->use_mesh_graph_descriptor_1_0 = true;
     }
 
     const char* timeout_duration_for_operations_value = std::getenv("TT_METAL_OPERATION_TIMEOUT_SECONDS");
