@@ -102,7 +102,12 @@ template <
     uint32_t dilation_h,
     uint32_t dilation_w,
     bool return_indices,
-    bool zero_pages>
+    bool zero_pages,
+    uint32_t out_cb_id,
+    uint32_t out_idx_cb_id,
+    uint32_t reader_id,
+    uint32_t tile_tmp_cb_id,
+    uint32_t tile_idx_tmp_cb_id>
 ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
     // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
@@ -115,97 +120,118 @@ ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     uint32_t max_write_inc = wide_reduction ? MAX_BYTES_PER_REDUCTION : in_nbytes_leftover;
     if constexpr (return_indices) {
         static_assert(MAX_TILES_PER_REDUCTION == 1, "MAX_TILES_PER_REDUCTION must be 1 for return indices");
+        max_write_inc = TILE_WIDTH * BYTES_PER_ELEM;
     }
-#ifdef ARCH_BLACKHOLE
-    if constexpr (return_indices) {
-        if (in_c <= FACE_WIDTH) {
-            max_write_inc = FACE_WIDTH * BYTES_PER_ELEM;
-        }
-    }
-#endif
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
-        uint32_t read_bytes = in_nbytes_c;
-        if constexpr (wide_reduction) {
-            read_bytes =
-                (c_i == in_nblocks_c - 1) ? in_nbytes_c - c_i * MAX_BYTES_PER_REDUCTION : MAX_BYTES_PER_REDUCTION;
-        }
-
-        uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
-        cb_reserve_back(in_cb_id, 1);
-        uint32_t processed_sticks = 0;
-        // page zeroing is only necessary for tiled block output format so that scale is not affected by junk/padding
-        // data
-        if constexpr (zero_pages) {
-            if (c_i == in_nblocks_c - 1 && last_tile_is_partial) {
-                zero_out_page<in_cb_id>();
+        if constexpr (reader_id == 0 || !return_indices) {
+            uint32_t read_bytes = in_nbytes_c;
+            if constexpr (wide_reduction) {
+                read_bytes =
+                    (c_i == in_nblocks_c - 1) ? in_nbytes_c - c_i * MAX_BYTES_PER_REDUCTION : MAX_BYTES_PER_REDUCTION;
             }
-        }
-        for (uint32_t h = 0; h < window_h; ++h) {
-            auto process_h = [&](uint32_t w_offset, uint32_t w_multiple) __attribute__((always_inline)) {
-                const uint32_t stick_offset = ind + w_offset + h * dilation_h * in_w_padded;
-                const uint32_t read_offset =
-                    in_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
-                noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes * w_multiple);
-                // if compute is using tilize_reconfig we will only untilize the needed number of tiles rather
-                // than the entire MAX_TILES_PER_REDUCTION, thus we use a different offset for the write address
-                if constexpr (tilize_reconfig) {
-                    in_l1_write_addr += read_bytes * w_multiple;
-                } else {
-                    in_l1_write_addr += max_write_inc * w_multiple;
+
+            uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
+            cb_reserve_back(in_cb_id, 1);
+            uint32_t processed_sticks = 0;
+            // page zeroing is only necessary for tiled block output format so that scale is not affected by
+            // junk/padding data
+            if constexpr (zero_pages) {
+                if (c_i == in_nblocks_c - 1 && last_tile_is_partial) {
+                    zero_out_page<in_cb_id>();
                 }
-                processed_sticks += w_multiple;
-                if constexpr (is_large_kernel) {
-                    if ((processed_sticks % max_sticks_for_reduction) == 0 ||
-                        processed_sticks == total_elems_to_reduce) {
-                        noc_async_read_barrier();
-                        cb_push_back(in_cb_id, 1);
-                        cb_reserve_back(in_cb_id, 1);
-                        in_l1_write_addr = get_write_ptr(in_cb_id);
-                        // If next is last chunk, fill whole buffer with the init_value. note for max pool we do
-                        // not need to fill the CB for the partial chunk since as long as we have N>1 chunks we
-                        // are guaranteed that the junk data remaining from chunk N-1 will fill the entire CB and
-                        // cannot contain values greater than the max value, and if we have N=1 chunks we already
-                        // initialized the entire CB with the init value, but for avg pool we need to fill the
-                        // entire CB with the init value since the junk data will contribute to the average.
-                        if constexpr (is_avg_pool) {
-                            // clear the in CB
-                            if ((total_elems_to_reduce - processed_sticks) < max_sticks_for_reduction &&
-                                processed_sticks != total_elems_to_reduce) {
-                                clear_out_tiles<clear_value_cb_id, in_cb_ntiles>(
-                                    get_noc_addr(in_l1_write_addr), get_noc_addr(get_read_ptr(clear_value_cb_id)));
+            }
+            for (uint32_t h = 0; h < window_h; ++h) {
+                auto process_h = [&](uint32_t w_offset, uint32_t w_multiple) __attribute__((always_inline)) {
+                    const uint32_t stick_offset = ind + w_offset + h * dilation_h * in_w_padded;
+                    const uint32_t read_offset =
+                        in_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
+                    noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes * w_multiple);
+                    // if compute is using tilize_reconfig we will only untilize the needed number of tiles rather
+                    // than the entire MAX_TILES_PER_REDUCTION, thus we use a different offset for the write address
+                    if constexpr (tilize_reconfig) {
+                        in_l1_write_addr += read_bytes * w_multiple;
+                    } else {
+                        in_l1_write_addr += max_write_inc * w_multiple;
+                    }
+                    processed_sticks += w_multiple;
+                    if constexpr (is_large_kernel) {
+                        if ((processed_sticks % max_sticks_for_reduction) == 0 ||
+                            processed_sticks == total_elems_to_reduce) {
+                            noc_async_read_barrier();
+                            cb_push_back(in_cb_id, 1);
+                            cb_reserve_back(in_cb_id, 1);
+                            in_l1_write_addr = get_write_ptr(in_cb_id);
+                            // If next is last chunk, fill whole buffer with the init_value. note for max pool we do
+                            // not need to fill the CB for the partial chunk since as long as we have N>1 chunks we
+                            // are guaranteed that the junk data remaining from chunk N-1 will fill the entire CB and
+                            // cannot contain values greater than the max value, and if we have N=1 chunks we already
+                            // initialized the entire CB with the init value, but for avg pool we need to fill the
+                            // entire CB with the init value since the junk data will contribute to the average.
+                            if constexpr (is_avg_pool) {
+                                // clear the in CB
+                                if ((total_elems_to_reduce - processed_sticks) < max_sticks_for_reduction &&
+                                    processed_sticks != total_elems_to_reduce) {
+                                    clear_out_tiles<clear_value_cb_id, in_cb_ntiles>(
+                                        get_noc_addr(in_l1_write_addr), get_noc_addr(get_read_ptr(clear_value_cb_id)));
+                                }
                             }
                         }
                     }
+                };
+
+                // Case where in_nbytes_leftover and in_nbytes_c is different is when we are dealing with
+                // tesnors that have last tile as partial. Cb page size is multiple of tile but when the last
+                // tile is partial we have to read the smaller stick width. Therefore we need to write out the next
+                // stick right bellow the previous one and this is when increment of the write pointer and the read
+                // stick size is not compliant.
+                bool use_contiguous_read = !wide_reduction && in_nbytes_leftover == in_nbytes_c &&
+                                           dilation_w == 1;  // read entire row as one chunk (only if no width dilation)
+                if constexpr (is_large_kernel) {
+                    bool whole_row_remaining =
+                        window_w <= max_sticks_for_reduction - (processed_sticks % max_sticks_for_reduction);
+                    use_contiguous_read &= whole_row_remaining;
                 }
-            };
 
-            // Case where in_nbytes_leftover and in_nbytes_c is different is when we are dealing with
-            // tesnors that have last tile as partial. Cb page size is multiple of tile but when the last
-            // tile is partial we have to read the smaller stick width. Therefore we need to write out the next stick
-            // right bellow the previous one and this is when increment of the write pointer and the read stick size is
-            // not compliant.
-            bool use_contiguous_read = !wide_reduction && in_nbytes_leftover == in_nbytes_c &&
-                                       dilation_w == 1;  // read entire row as one chunk (only if no width dilation)
-            if constexpr (is_large_kernel) {
-                bool whole_row_remaining =
-                    window_w <= max_sticks_for_reduction - (processed_sticks % max_sticks_for_reduction);
-                use_contiguous_read &= whole_row_remaining;
-            }
-
-            if (use_contiguous_read) {
-                process_h(0, window_w);
-            } else {  // read rows stick by stick with dilation
-                for (uint32_t w = 0; w < window_w; ++w) {
-                    process_h(w * dilation_w, 1);
+                if (use_contiguous_read) {
+                    process_h(0, window_w);
+                } else {  // read rows stick by stick with dilation
+                    for (uint32_t w = 0; w < window_w; ++w) {
+                        process_h(w * dilation_w, 1);
+                    }
                 }
             }
         }
         if constexpr (!is_large_kernel) {
-            noc_async_read_barrier();
-            // if (in_cb_id == 5) {
-            //     tt::data_movement::common::print_bf16_pages(get_write_ptr(in_cb_id), 32, 32);
-            // }
-            cb_push_back(in_cb_id, 1);
+            if (reader_id == 0 || !return_indices) {
+                noc_async_read_barrier();
+                cb_push_back(in_cb_id, 1);
+            }
+            if constexpr (reader_id == 1 && return_indices) {
+                constexpr uint32_t num_faces_in_output_tile = 2;
+                constexpr uint32_t num_faces_in_last_output_tile =
+                    last_tile_is_partial && in_c % TILE_WIDTH <= FACE_WIDTH ? 1 : 2;
+                uint32_t output_faces =
+                    c_i == in_nblocks_c - 1 ? num_faces_in_last_output_tile : num_faces_in_output_tile;
+
+                cb_wait_front(tile_tmp_cb_id, 1);
+                noc_async_read_one_packet(
+                    get_noc_addr(get_read_ptr(tile_tmp_cb_id)),
+                    get_write_ptr(out_cb_id),
+                    output_faces * FACE_WIDTH * BYTES_PER_ELEM);
+                cb_wait_front(tile_idx_tmp_cb_id, 1);
+                noc_async_read_one_packet(
+                    get_noc_addr(get_read_ptr(tile_idx_tmp_cb_id)),
+                    get_write_ptr(out_idx_cb_id),
+                    output_faces * FACE_WIDTH * BYTES_PER_ELEM);
+                noc_async_read_barrier();
+                cb_pop_front(tile_tmp_cb_id, 1);
+                cb_pop_front(tile_idx_tmp_cb_id, 1);
+
+                cb_push_back(out_cb_id, output_faces);
+                if constexpr (return_indices) {
+                    cb_push_back(out_idx_cb_id, output_faces);
+                }
+            }
         }
     }
 }
@@ -277,24 +303,28 @@ void kernel_main() {
     constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(19);
     constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(20);
     constexpr uint32_t idx_tmp_cb_id = get_compile_time_arg_val(21);
-    constexpr uint32_t right_inc_tmp_cb_id = get_compile_time_arg_val(22);
-    constexpr uint32_t down_left_wrap_inc_tmp_cb_id = get_compile_time_arg_val(23);
-    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(24);
-    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(25);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(26);
-    constexpr uint32_t config_cb_id = get_compile_time_arg_val(27);
-    constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(28);
-    constexpr uint32_t shard_width_bytes = get_compile_time_arg_val(29);
-    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(30);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(31);
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(32);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(33);
-    constexpr bool return_indices = (bool)get_compile_time_arg_val(34);
-    constexpr uint32_t pad_t = get_compile_time_arg_val(35);
-    constexpr uint32_t pad_l = get_compile_time_arg_val(36);
-    constexpr uint32_t right_inc = get_compile_time_arg_val(37);
-    constexpr uint32_t down_left_wrap_inc = get_compile_time_arg_val(38);
-    constexpr bool zero_pages = (bool)get_compile_time_arg_val(39);
+    constexpr uint32_t tile_tmp_cb_id = get_compile_time_arg_val(22);
+    constexpr uint32_t tile_idx_tmp_cb_id = get_compile_time_arg_val(23);
+    constexpr uint32_t right_inc_tmp_cb_id = get_compile_time_arg_val(24);
+    constexpr uint32_t down_left_wrap_inc_tmp_cb_id = get_compile_time_arg_val(25);
+    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(26);
+    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(27);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(28);
+    constexpr uint32_t config_cb_id = get_compile_time_arg_val(29);
+    constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(30);
+    constexpr uint32_t shard_width_bytes = get_compile_time_arg_val(31);
+    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(32);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(33);
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(34);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(35);
+    constexpr bool return_indices = (bool)get_compile_time_arg_val(36);
+    constexpr uint32_t pad_t = get_compile_time_arg_val(37);
+    constexpr uint32_t pad_l = get_compile_time_arg_val(38);
+    constexpr uint32_t right_inc = get_compile_time_arg_val(39);
+    constexpr uint32_t down_left_wrap_inc = get_compile_time_arg_val(40);
+    constexpr bool zero_pages = (bool)get_compile_time_arg_val(41);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(42);
+    constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(43);
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
@@ -501,7 +531,12 @@ void kernel_main() {
                 dilation_h,
                 dilation_w,
                 return_indices,
-                zero_pages>(ind, in_l1_read_base_addr);
+                zero_pages,
+                out_cb_id,
+                out_idx_cb_id,
+                reader_id,
+                tile_tmp_cb_id,
+                tile_idx_tmp_cb_id>(ind, in_l1_read_base_addr);
             if (split_reader && ind == end) {
                 first_row_value = false;
             }
@@ -534,6 +569,11 @@ void kernel_main() {
             dilation_h,
             dilation_w,
             return_indices,
-            zero_pages>(0, in_l1_read_base_addr);
+            zero_pages,
+            out_cb_id,
+            out_idx_cb_id,
+            reader_id,
+            tile_tmp_cb_id,
+            tile_idx_tmp_cb_id>(0, in_l1_read_base_addr);
     }
 }  // kernel_main()

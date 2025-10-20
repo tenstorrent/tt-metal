@@ -34,6 +34,8 @@ void validate_pool2d(
     TT_FATAL(input.memory_config().is_sharded(), "Input needs to be sharded");
 
     if (return_indices) {
+        TT_FATAL(pool_type == Pool2DType::MAX_POOL2D, "Return_indices is only supported for MAX pool type");
+
         // generality constraints, see https://github.com/tenstorrent/tt-metal/issues/27845
         auto input_h = sliding_window_config.input_hw.first;
         auto input_w = sliding_window_config.input_hw.second;

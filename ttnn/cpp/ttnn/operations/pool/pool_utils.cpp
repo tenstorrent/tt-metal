@@ -116,8 +116,9 @@ FactoryParameters get_factory_parameters(
     Pool2DType pool_type,
     bool return_indices,
     const Layout& output_layout) {
-    uint32_t multi_buffering_factor = 1;
-    bool split_reader = false;
+    uint32_t multi_buffering_factor = 2;
+    bool split_reader = true;
+    TT_FATAL((split_reader && return_indices) || !return_indices, "split_reader must be true for MPWI");
 
     auto dtype = input_dtype == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_dtype;
     tt::DataFormat data_format = datatype_to_dataformat_converter(dtype);
@@ -294,7 +295,7 @@ uint32_t calculate_L1_usage(
     }
 
     return in_scalar_cb_size_0 + in_scalar_cb_size_1 + clear_value_cb_size + in_cb_config_0_size + in_cb_config_1_size +
-           3 * idx_tmp_cb_size + sync_cb_size + pre_tilize_cb_size + sliding_window::align_buffer(out_cb_config_size) +
+           5 * idx_tmp_cb_size + sync_cb_size + pre_tilize_cb_size + sliding_window::align_buffer(out_cb_config_size) +
            sliding_window::align_buffer(out_idx_cb_config_size);
 }
 
