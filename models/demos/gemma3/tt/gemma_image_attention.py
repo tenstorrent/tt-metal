@@ -301,14 +301,16 @@ class TtGemmaImageAttention(LightweightModule):
             output_11SH = ttnn.reshape(output_11SH, [batch_size, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
-        # Then in your forward method, replace the all_reduce_async code with:
         if self.num_devices > 1:
             output_all_reduce = _all_reduce_helper(self, output_11SH)
             ttnn.deallocate(output_11SH)
         else:
             output_all_reduce = output_11SH
 
-        output_after_bias = ttnn.add(output_all_reduce, self.bo)
+        if self.bo is not None:
+            output_after_bias = ttnn.add(output_all_reduce, self.bo)
+        else:
+            output_after_bias = output_all_reduce
         ttnn.deallocate(output_all_reduce)
 
         return output_after_bias
