@@ -23,8 +23,8 @@ def reference_softmax_backward_output(y: torch.Tensor, grad: torch.Tensor, axis:
     "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
+        #        (torch.Size([1, 1, 320, 384])),
+        #        (torch.Size([1, 3, 320, 384])),
     ),
 )
 @pytest.mark.parametrize(

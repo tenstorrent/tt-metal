@@ -50,6 +50,7 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
     const uint32_t height = shape[-2];
     const uint32_t width = shape[-1];
     const uint32_t height_tiles = height / constants::TILE_HEIGHT;
+    const uint32_t width_tiles = width / constants::TILE_WIDTH;
 
     // Calculate number of tiles to process
     const auto num_outer_dims = softmax_output.physical_volume() / height / width;
@@ -77,26 +78,32 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
     // Create circular buffers
     const uint32_t src0_cb_index = tt::CBIndex::c_0;        // softmax_output
     const uint32_t src1_cb_index = tt::CBIndex::c_1;        // upstream_grad
+    const uint32_t scaler_cb_index = tt::CBIndex::c_2;      // scaler for reduction (value = 1.0)
     const uint32_t out_cb_index = tt::CBIndex::c_7;         // output
     const uint32_t intermed0_cb_index = tt::CBIndex::c_13;  // y * grad
     const uint32_t intermed1_cb_index = tt::CBIndex::c_14;  // sum(y * grad)
     const uint32_t intermed2_cb_index = tt::CBIndex::c_15;  // grad - sum(y * grad)
 
-    // Create circular buffers for simplified implementation
-    auto c_in0_config = CircularBufferConfig(1 * input_tile_size, {{src0_cb_index, input_data_format}})
+    // Create circular buffers - sized to hold full rows
+    auto c_in0_config = CircularBufferConfig(width_tiles * input_tile_size, {{src0_cb_index, input_data_format}})
                             .set_page_size(src0_cb_index, input_tile_size);
     CreateCircularBuffer(program, all_cores, c_in0_config);
 
-    auto c_in1_config = CircularBufferConfig(1 * input_tile_size, {{src1_cb_index, input_data_format}})
+    auto c_in1_config = CircularBufferConfig(width_tiles * input_tile_size, {{src1_cb_index, input_data_format}})
                             .set_page_size(src1_cb_index, input_tile_size);
     CreateCircularBuffer(program, all_cores, c_in1_config);
 
-    auto c_out_config = CircularBufferConfig(1 * output_tile_size, {{out_cb_index, output_data_format}})
+    auto c_scaler_config = CircularBufferConfig(1 * intermed_tile_size, {{scaler_cb_index, intermed_data_format}})
+                               .set_page_size(scaler_cb_index, intermed_tile_size);
+    CreateCircularBuffer(program, all_cores, c_scaler_config);
+
+    auto c_out_config = CircularBufferConfig(width_tiles * output_tile_size, {{out_cb_index, output_data_format}})
                             .set_page_size(out_cb_index, output_tile_size);
     CreateCircularBuffer(program, all_cores, c_out_config);
 
-    auto c_intermed0_config = CircularBufferConfig(1 * intermed_tile_size, {{intermed0_cb_index, intermed_data_format}})
-                                  .set_page_size(intermed0_cb_index, intermed_tile_size);
+    auto c_intermed0_config =
+        CircularBufferConfig(width_tiles * intermed_tile_size, {{intermed0_cb_index, intermed_data_format}})
+            .set_page_size(intermed0_cb_index, intermed_tile_size);
     CreateCircularBuffer(program, all_cores, c_intermed0_config);
 
     auto c_intermed1_config = CircularBufferConfig(1 * intermed_tile_size, {{intermed1_cb_index, intermed_data_format}})
@@ -111,22 +118,24 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
     std::vector<uint32_t> reader_compile_time_args = {
         src0_cb_index,
         src1_cb_index,
-        1  // simplified to process one tile at a time
+        scaler_cb_index,
+        width_tiles  // num_tiles_per_row
     };
     TensorAccessorArgs(softmax_output.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(upstream_grad.buffer()).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {out_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {out_cb_index, width_tiles};
     TensorAccessorArgs(tensor_return_value.buffer()).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
-        src0_cb_index,
-        src1_cb_index,
-        out_cb_index,
-        intermed0_cb_index,
-        intermed1_cb_index,
-        intermed2_cb_index,
-        1  // simplified to process one tile at a time
+        src0_cb_index,       // 0: softmax_output
+        src1_cb_index,       // 1: upstream_grad
+        out_cb_index,        // 2: output
+        intermed0_cb_index,  // 3: y * grad
+        intermed1_cb_index,  // 4: sum(y * grad)
+        intermed2_cb_index,  // 5: grad - sum(y * grad)
+        scaler_cb_index,     // 6: scaler for reduction
+        width_tiles          // 7: num_tiles_per_row
     };
 
     // Create kernels
@@ -174,7 +183,7 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
             {tensor_return_value.buffer()->address(), start_tile, num_tiles_this_core});
 
         // Compute runtime args
-        SetRuntimeArgs(program, compute_kernel_id, core, {num_tiles_this_core});
+        SetRuntimeArgs(program, compute_kernel_id, core, {num_tiles_this_core, width_tiles});
     }
 
     return {
