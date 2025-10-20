@@ -15,5 +15,5 @@ if [ ! -d "$TT_METAL_HOME" ]; then
 fi
 
 
-# Build release-telemetry image (pulls from GitHub, uses TT_METAL_HOME only to locate Dockerfile)
-docker build --target release-telemetry -t ghcr.io/btrzynadlowski-tt/tt-telemetry-release:latest -f $TT_METAL_HOME/tt_telemetry/docker/Dockerfile .
+# Build release image (pulls from GitHub, uses TT_METAL_HOME only to locate Dockerfile)
+docker build --target release-t ghcr.io/btrzynadlowski-tt/tt-telemetry:latest -f $TT_METAL_HOME/tt_telemetry/docker/Dockerfile $TT_METAL_HOME

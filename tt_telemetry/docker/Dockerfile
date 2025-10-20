@@ -8,7 +8,7 @@ FROM ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest 
 
 #############################################################
 
-FROM base AS release-telemetry
+FROM base AS release
 
 # Set up TT_METAL_HOME
 # (PYTHON_ENV_DIR is already set in the base image)
@@ -31,20 +31,16 @@ RUN /bin/bash -c "./build_metal.sh --build-telemetry \
 # Port 8081: Intra-process websocket connections
 EXPOSE 8080 8081
 
-# Create volume mount points for telemetry data
-VOLUME ["/var/telemetry"]
-
 # Set the telemetry server as the entrypoint
 # This allows passing command line arguments directly to docker run
 ENTRYPOINT ["./build/tt_telemetry/tt_telemetry_server"]
 
 #############################################################
 
-FROM base AS dev-telemetry
+FROM base AS dev
 
 # Set up TT_METAL_HOME environment
 ENV TT_METAL_HOME=/tt-metal
-ENV PYTHONPATH=/tt-metal
 
 # Set working directory to TT_METAL_HOME
 WORKDIR ${TT_METAL_HOME}
@@ -68,9 +64,6 @@ RUN chmod +x ./build/tt_telemetry/tt_telemetry_server
 # Port 8080: Web server
 # Port 8081: Intra-process websocket connections
 EXPOSE 8080 8081
-
-# Create volume mount points for telemetry data
-VOLUME ["/var/telemetry"]
 
 # Set the telemetry server as the entrypoint
 # This allows passing command line arguments directly to docker run

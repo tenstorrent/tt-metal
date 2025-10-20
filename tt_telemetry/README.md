@@ -84,7 +84,7 @@ mpirun -x TT_METAL_HOME -hostfile hosts.txt /home/btrzynadlowski/tt-metal/run_te
 
 # Docker
 
-A Dockerfile is provided in `tt_telemetry/docker/Dockerfile` with two targets: `dev-telemetry` and `release-telemetry`. Currently, this is a work-in-progress and intended for internal Tenstorrent use.
+A Dockerfile is provided in `tt_telemetry/docker/Dockerfile` with two targets: `dev` and `release`. Currently, this is a work-in-progress and intended for internal Tenstorrent use.
 
 To build the development container, which assumes the tt-metal repo is in the context directory:
 
@@ -99,10 +99,10 @@ echo $GITHUB_TOKEN | docker login ghcr.io -u btrzynadlowski-tt --password-stdin
 docker push ghcr.io/btrzynadlowski-tt/tt-telemetry-dev:latest
 ```
 
-The Dockerfile currently mounts `/var/telemetry`, which is where the factory system descriptor (FSD) should be located. To run, use e.g.:
+To pass in an FSD file, use `-v` to mount it and then pass it in as a commandline argument:
 
 ```
-docker run -h `hostname` --device /dev/tenstorrent -p 8080:8080 -p 8081:8081 -v /var/telemetry:/var/telemetry -v /dev/hugepages-1G:/dev/hugepages-1G ghcr.io/btrzynadlowski-tt/tt-telemetry-dev:latest --fsd=/var/telemetry/factory_system_descriptor_16_n300_lb.textproto
+docker run -h `hostname` --device /dev/tenstorrent -p 8080:8080 -p 8081:8081 -v /path/to/fsd.textproto:/path/inside/container/fsd.textproto -v /dev/hugepages-1G:/dev/hugepages-1G ghcr.io/btrzynadlowski-tt/tt-telemetry-dev:latest --fsd=/path/inside/container/fsd.textproto
 ```
 
 The container host name is set with `-h` to match the actual machine host name. Ports 8080 and 8081 must be exposed for the web server and intra-process communication, respectively. UMD requires `/dev/tenstorrent` to be passed through along with `/dev/hugepages-1G`. Lastly, `/var/telemetry` must be mounted to make the FSD file accessible.

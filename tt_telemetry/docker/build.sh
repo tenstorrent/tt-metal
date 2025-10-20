@@ -33,6 +33,6 @@ fi
 echo "Local build successful. Creating minimal Docker image..."
 
 # Build minimal Docker image with just the binary
-docker build --target dev-telemetry \
+docker build --target dev \
     -t ghcr.io/btrzynadlowski-tt/tt-telemetry-dev:latest \
     -f $TT_METAL_HOME/tt_telemetry/docker/Dockerfile $TT_METAL_HOME
