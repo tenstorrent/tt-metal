@@ -38,23 +38,23 @@ void py_bind_conv2d(py::module& module) {
 
         :param ttnn.Tensor input_tensor: The input tensor in [N, H, W, C] format. The tensor can be on either the host or the device.
         :param ttnn.Tensor weight_tensor: The convolution weights, typically in [out_channels, in_channels // groups, kernel_height, kernel_width] format.
-        :param ttnn.Tensor, optional bias_tensor: The bias tensor to be added. Defaults to None.
+        :param ttnn.IDevice device: This is a Tenstorrent-specific parameter. The device which will run the operation.
         :param int in_channels:  Number of channels in the input tensor.
         :param int out_channels:  Number of channels produced by the convolution.
         :param int batch_size: The batch size of the input tensor.
+        :param int input_height: This is a Tenstorrent-specific parameter. The height of the input tensor.
+        :param int input_width: This is a Tenstorrent-specific parameter. The width of the input tensor.
         :param tuple[int, int] kernel_size: The size of the convolving kernel.
         :param tuple[int, int] stride: The stride of the convolution. Defaults to (1, 1).
         :param tuple[int, int], optional padding: Zero-padding added to both sides of the input. Defaults to (0, 0). [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
         :param tuple[int, int], optional dilation: The spacing between kernel elements. Defaults to (1, 1).
         :param int groups: Number of blocked connections from input channels to output channels. Defaults to 1.
         :param ttnn.DataType, optional dtype: The data type of the output tensor. If not provided, it is inferred from the input tensor.
+        :param ttnn.Tensor, optional bias_tensor: The bias tensor to be added. Defaults to None.
         :param ttnn.Conv2dConfig, None conv_config: Configuration for convolution. Default: None
         :param ttnn.DeviceComputeKernelConfig, None compute_config: Configuration for compute kernel. Default: None
         :param ttnn.MemoryConfig, None memory_config: Output Tensor's Memory Configuration. Default: None
         :param ttnn.Conv2dSliceConfig, None slice_config: Configuration for slicing input & output tensors in DRAM. If set to None input is in DRAM, DRAM slicing is automatically enabled. Default: None
-        :param ttnn.IDevice device: This is a Tenstorrent-specific parameter. The device which will run the operation.
-        :param int input_height: This is a Tenstorrent-specific parameter. The height of the input tensor.
-        :param int input_width: This is a Tenstorrent-specific parameter. The width of the input tensor.
     
         :return: The output tensor, output height and width, and the preprocessed weights and bias.
 
