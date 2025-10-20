@@ -723,6 +723,23 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(std::vector<ui
     }
 }
 
+enum class FabricChannelPoolType {
+    STATIC = 0,
+    ELASTIC = 1,
+};
+/*
+ * Channel ct args schema:
+ * 1) First arg: defines the number of "pools": `num_channel_pools`
+ * 2) The next `num_channel_pools` of compile time args is an array of `FabricChannelPoolType`: `channel_pool_types`
+ * 3) The next indeterminate number of args are the args for the individual pools. For each entry in `channel_pool_types`, you invoke the corresponding `Pool` class by passing the next CT arg index. After each `Pool`, you increment the compile time arg index by <type>::NUM_ARGS_USED.
+ * 4) All of the pools from step 3 should be placed into a constexprable tuple.
+ * 
+ * 5) a sender channel to pool index mapping is passed as compile time args
+ * 6) a sender channel to pool type mapping is passed as compile time args
+ * 7) a receiver channel to pool index mapping is passed as compile time args
+ * 8) a receiver channel to pool type mapping is passed as compile time args
+*/
+
 std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_t risc_id) const {
     TT_ASSERT(this->local_fabric_node_id != this->peer_fabric_node_id);
 

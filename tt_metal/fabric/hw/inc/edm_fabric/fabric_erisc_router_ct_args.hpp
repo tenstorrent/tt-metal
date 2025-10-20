@@ -40,6 +40,7 @@ constexpr uint32_t to_sender_1_pkts_completed_id = get_compile_time_arg_val(STRE
 constexpr uint32_t to_sender_2_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 9);
 constexpr uint32_t to_sender_3_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 10);
 constexpr uint32_t to_sender_4_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 11);
+// STATIC CHANNELS: RELOCATE
 constexpr uint32_t receiver_channel_0_free_slots_from_east_stream_id =
     get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 12);
 constexpr uint32_t receiver_channel_0_free_slots_from_west_stream_id =
@@ -167,12 +168,17 @@ constexpr size_t REMOTE_RECEIVER_NUM_BUFFERS_IDX = RECEIVER_NUM_BUFFERS_IDX + NU
 constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_ARRAY =
     fill_array_with_next_n_args<size_t, REMOTE_RECEIVER_NUM_BUFFERS_IDX, NUM_RECEIVER_CHANNELS>();
 
+constexpr std::array<FabricChannelType, NUM_SENDER_CHANNELS> SENDER_CHANNEL_TYPES = fill_array_with_next_n_args<FabricChannelType, SENDER_NUM_BUFFERS_IDX, NUM_SENDER_CHANNELS>();
+constexpr std::array<FabricChannelType, NUM_RECEIVER_CHANNELS> RECEIVER_CHANNEL_TYPES = fill_array_with_next_n_args<FabricChannelType, RECEIVER_NUM_BUFFERS_IDX, NUM_RECEIVER_CHANNELS>();
+
+// STATIC CHANNELS: RELOCATE
 constexpr size_t STATIC_CHANNEL_ADDRS_ARG_IDX_BASE = REMOTE_RECEIVER_NUM_BUFFERS_IDX + NUM_RECEIVER_CHANNELS;
 constexpr size_t local_sender_0_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE);
 constexpr size_t local_sender_1_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 1);
 constexpr size_t local_sender_2_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 2);
 constexpr size_t local_sender_3_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 3);
 constexpr size_t local_sender_4_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 4);
+// STATIC CHANNELS: RELOCATE
 constexpr size_t local_receiver_0_channel_buffer_address =
     get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 5);
 constexpr size_t remote_receiver_0_channel_buffer_address =
@@ -181,6 +187,7 @@ constexpr size_t local_receiver_1_channel_buffer_address =
     get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 7);
 constexpr size_t remote_receiver_1_channel_buffer_address =
     get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 8);
+// STATIC CHANNELS: RELOCATE
 constexpr size_t remote_sender_0_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 9);
 constexpr size_t remote_sender_1_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 10);
 constexpr size_t remote_sender_2_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 11);
@@ -188,6 +195,7 @@ constexpr size_t remote_sender_3_channel_address = get_compile_time_arg_val(STAT
 constexpr size_t remote_sender_4_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 13);
 
 constexpr size_t NUM_DOWNSTREAM_CHANNELS = NUM_FORWARDING_PATHS;
+// constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_IDX = REMOTE_RECEIVER_NUM_BUFFERS_IDX + NUM_RECEIVER_CHANNELS;
 constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_IDX = STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 14;
 constexpr std::array<size_t, NUM_DOWNSTREAM_CHANNELS> DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY =
     fill_array_with_next_n_args<size_t, DOWNSTREAM_SENDER_NUM_BUFFERS_IDX, NUM_DOWNSTREAM_CHANNELS>();
