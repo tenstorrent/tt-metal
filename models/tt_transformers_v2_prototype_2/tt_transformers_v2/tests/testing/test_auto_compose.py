@@ -63,6 +63,7 @@ def infer_mesh_composer_from_topology(
 
     # Prefer mesh_device from the tensor itself if present
     device = tensor.device() if hasattr(tensor, "device") else None
+    # tensor.device() returns None if the tensor is on the host (ttnn/core/tensor/tensor.cpp --> Tensor::device())
     if device is None:
         device = mesh_device
 
@@ -70,15 +71,19 @@ def infer_mesh_composer_from_topology(
         raise RuntimeError("infer_mesh_composer_from_topology: mesh_device is required when tensor has no device")
 
     # 1D: use the convenience composer
+    assert len(dist_shape) == len(
+        placements
+    )  # guaranteed by TT_FATAL check in ttnn/core/distributed/distributed_tensor.cpp
     if len(dist_shape) == 1:
         shard_dim = None
-        for p in placements:
-            if isinstance(p, ttnn.PlacementShard):
-                shard_dim = p.dim
-                break
+        p = placements[0]
+        if isinstance(p, ttnn.PlacementShard):
+            shard_dim = p.dim
+
         if shard_dim is None:
             # Fully replicated across 1D mesh; no concatenation necessary
             return None
+
         return ttnn.concat_mesh_to_tensor_composer(device, shard_dim)
 
     # ND: build dims vector and mesh_shape_override from topology
