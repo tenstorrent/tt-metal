@@ -177,7 +177,7 @@ int main(int argc, char **argv) {
     auto *device = &ttml::autograd::ctx().get_device();
     device->enable_program_cache();
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [num_features, num_targets, device](std::vector<DatasetSample> &&samples) {
+        [device](std::vector<DatasetSample> &&samples) {
             const uint32_t batch_size = samples.size();
             std::vector<float> data;
             std::vector<uint32_t> targets;
@@ -243,7 +243,7 @@ int main(int argc, char **argv) {
     LossAverageMeter loss_meter;
     int training_step = 0;
 
-    auto get_loss_value = [device](const TensorPtr &loss) {
+    auto get_loss_value = [](const TensorPtr &loss) {
         auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
         // sum of loss xtensors
         float loss_float =
