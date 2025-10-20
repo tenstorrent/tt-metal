@@ -56,11 +56,6 @@ on:
         default: ""
         description: "Optional GitHub gist URL for a .sh script to run instead of command"
 
-      download-artifacts:
-        required: false
-        type: boolean
-        default: true
-        description: "Download artifacts from GitHub for each commit (requires gh cli to be authenticated)"
 
 permissions:
   actions: write
