@@ -164,9 +164,6 @@ jobs:
     env:
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-      HF_HOME: /mnt/MLPerf/huggingface
-      HF_DATASETS_CACHE: ~/.cache/huggingface/datasets
-      HF_METRICS_CACHE: ~/.cache/huggingface/metrics
     runs-on: >-
       ${{
         matrix.test-group.civ2-compatible == true
@@ -246,9 +243,6 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e ARCH_NAME=${{ inputs.arch }}
-            -e HF_HOME=/mnt/MLPerf/huggingface
-            -e HF_DATASETS_CACHE=~/.cache/huggingface/datasets
-            -e HF_METRICS_CACHE=~/.cache/huggingface/metrics
             -v /mnt/MLPerf:/mnt/MLPerf:ro
           install_wheel: true
           run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py

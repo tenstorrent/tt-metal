@@ -18,7 +18,7 @@ BH_MODELS = [
 
 TG_MODELS = [
     "emrecan/bert-base-turkish-cased-mean-nli-stsb-tr",
-    # "deepseek-ai/DeepSeek-R1-0528",  # temporary commented
+    # "deepseek-ai/DeepSeek-R1-0528",  # weights loading is custom (not using transformers)
     "meta-llama/Llama-3.1-8B-Instruct",
     "meta-llama/Llama-3.3-70B-Instruct",
     # "openai/gpt-oss-20b",   # weights loading is custom (not using transformers)
