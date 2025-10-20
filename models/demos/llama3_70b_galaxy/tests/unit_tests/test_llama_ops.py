@@ -8,7 +8,7 @@ from models.common.utility_functions import comp_pcc
 
 from models.common.utility_functions import skip_for_blackhole
 from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import FF1_CRS_RS_OUT
-from tests.ttnn.unit_tests.operations.test_distributed_layernorm_sharded import (
+from tests.ttnn.unit_tests.operations.fused.test_distributed_layernorm_sharded import (
     create_input_and_weight_tensors,
     create_tt_tensors,
     create_output_memory_config,
@@ -23,7 +23,9 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_nlp_create_qkv_hea
     run_test_create_min_width_shard,
 )
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_nlp_concat_heads_decode import run_test_concat_head
-from tests.ttnn.unit_tests.operations.test_paged_fused_update_cache import run_test_paged_fused_update_cache_decode
+from tests.ttnn.unit_tests.operations.fused.test_paged_fused_update_cache import (
+    run_test_paged_fused_update_cache_decode,
+)
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_llama import (
     run_test_rotary_embedding_llama,
     run_test_row_major_rotary_embedding_llama,
