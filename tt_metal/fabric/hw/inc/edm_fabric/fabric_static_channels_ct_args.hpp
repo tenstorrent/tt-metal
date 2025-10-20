@@ -47,8 +47,11 @@ struct ElasticChannelPool : public CtArgConsumer<ElasticChannelPool<CT_ARG_IDX_B
 };
 
 // Helper to build pools tuple recursively - uses array of pool types
-template<size_t CT_ARG_IDX, size_t NumPools, typename PoolTypesArray, size_t... Indices>
-struct PoolsBuilderImpl;
+template <size_t CT_ARG_IDX, size_t NumPools, typename PoolTypesArray, size_t... Indices>
+struct PoolsBuilderImpl {
+    using type = std::tuple<>;
+    static constexpr size_t final_ct_arg_idx = CT_ARG_IDX;
+};
 
 template<size_t CT_ARG_IDX, size_t NumPools, typename PoolTypesArray, size_t CurrentIdx, size_t... RestIndices>
 struct PoolsBuilderImpl<CT_ARG_IDX, NumPools, PoolTypesArray, CurrentIdx, RestIndices...> {
@@ -116,28 +119,29 @@ struct PoolsBuilder<CT_ARG_IDX, NumPools, TypesBaseIdx, index_sequence<Indices..
 };
 
 template <size_t CT_ARG_IDX_BASE, size_t NumSenderChannels, size_t NumReceiverChannels>
-struct ChannelPoolCollection : public CtArgConsumer<ChannelPoolCollection<CT_ARG_IDX_BASE>> {
+struct ChannelPoolCollection
+    : public CtArgConsumer<ChannelPoolCollection<CT_ARG_IDX_BASE, NumSenderChannels, NumReceiverChannels>> {
     static constexpr size_t num_channel_pools = get_compile_time_arg_val(CT_ARG_IDX_BASE);
     static constexpr size_t channel_pool_types_base_idx = CT_ARG_IDX_BASE + 1;
+    static constexpr size_t pools_data_base_idx =
+        channel_pool_types_base_idx + num_channel_pools + NumSenderChannels + NumReceiverChannels;
 
     static constexpr std::array<size_t, num_channel_pools> channel_pool_types =
         fill_array_with_next_n_args<size_t, channel_pool_types_base_idx, num_channel_pools>();
 
     static constexpr std::array<size_t, NumSenderChannels> sender_channel_to_pool_index =
-        fill_array_with_next_n_args<size_t, pools_data_base_idx + num_channel_pools, NumSenderChannels>();
+        fill_array_with_next_n_args<size_t, channel_pool_types_base_idx + num_channel_pools, NumSenderChannels>();
     // static constexpr std::array<FabricChannelPoolType, NumSenderChannels> sender_channel_to_pool_type =
     //     fill_array_with_next_n_args<FabricChannelPoolType, pools_data_base_idx + NumSenderChannels,
     //     NumSenderChannels>();
     static constexpr std::array<size_t, NumReceiverChannels> receiver_channel_to_pool_index =
         fill_array_with_next_n_args<
             size_t,
-            pools_data_base_idx + num_channel_pools + NumSenderChannels,
+            channel_pool_types_base_idx + num_channel_pools + NumSenderChannels,
             NumReceiverChannels>();
     // static constexpr std::array<FabricChannelPoolType, NumReceiverChannels> receiver_channel_to_pool_type =
     //     fill_array_with_next_n_args<FabricChannelPoolType, pools_data_base_idx + NumSenderChannels +
     //     NumReceiverChannels, NumReceiverChannels>();
-    static constexpr size_t pools_data_base_idx =
-        pools_data_base_idx + num_channel_pools + NumSenderChannels + NumReceiverChannels;
 
     using PoolsTuple = typename PoolsBuilder<
         pools_data_base_idx,

@@ -167,7 +167,8 @@ constexpr size_t CHANNEL_POOL_COLLECTION_IDX = ANOTHER_SPECIAL_TAG_IDX + 1;
 //   - Static pool data (23 args): 5 sender buffers + 2 receiver buffers + 2 remote receiver buffers +
 //                                  5 sender addrs + 4 receiver addrs + 5 remote sender addrs
 // Total: 1 + 1 + 23 = 25 args
-using channel_pools_args = ChannelPoolCollection<CHANNEL_POOL_COLLECTION_IDX>;
+using channel_pools_args =
+    ChannelPoolCollection<CHANNEL_POOL_COLLECTION_IDX, NUM_SENDER_CHANNELS, NUM_RECEIVER_CHANNELS>;
 
 /*
 // constexpr size_t NUM_POOLS = get_compile_time_arg_val(CHANNEL_POOL_COLLECTION_IDX);
@@ -223,7 +224,7 @@ constexpr size_t remote_sender_4_channel_address = get_compile_time_arg_val(STAT
 */
 
 // Parse channel-to-pool mappings (after all pool data)
-constexpr size_t CHANNEL_MAPPINGS_START_IDX = CHANNEL_POOL_COLLECTION_IDX + CHANNEL_POOL_COLLECTION_NUM_ARGS;
+constexpr size_t CHANNEL_MAPPINGS_START_IDX = CHANNEL_POOL_COLLECTION_IDX + channel_pools_args::GET_NUM_ARGS_CONSUMED();
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_TO_POOL_IDX =
     fill_array_with_next_n_args<size_t, CHANNEL_MAPPINGS_START_IDX, NUM_SENDER_CHANNELS>();
 constexpr std::array<FabricChannelPoolType, NUM_SENDER_CHANNELS> SENDER_TO_POOL_TYPE = fill_array_with_next_n_args<
