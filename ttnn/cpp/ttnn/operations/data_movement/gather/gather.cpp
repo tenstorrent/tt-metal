@@ -64,18 +64,23 @@ Tensor post_gather_transform_tensor(
     const int8_t dim,
     const bool is_dim_last_idx,
     const Shape& original_lshape) {
-    const auto& input_shape = index_tensor.padded_shape();
+    const auto& input_shape = index_tensor.logical_shape();
     const auto orig_rank = input_shape.rank();
 
-    if (orig_rank < 4) {
+    if (orig_rank <= 4) {
         output_tensor = ttnn::squeeze_from_4D(output_tensor, orig_rank);
+        if (!is_dim_last_idx) {
+            output_tensor = ttnn::transpose(output_tensor, dim, -1, index_tensor.memory_config());
+        }
     } else if (orig_rank > 4) {
+        if (!is_dim_last_idx) {
+            const auto index_dim = (dim < 0) ? (orig_rank + dim) : dim;
+            const auto dim_adj =
+                (orig_rank <= 4) ? index_dim : (index_dim + (output_tensor.padded_shape().rank() - orig_rank));
+            output_tensor = ttnn::transpose(output_tensor, dim_adj, -1, index_tensor.memory_config());
+        }
         ttnn::SmallVector<uint32_t> result_shape(input_shape.cbegin(), input_shape.cend());
         output_tensor = ttnn::reshape(output_tensor, ttnn::Shape{result_shape});
-    }
-
-    if (!is_dim_last_idx) {
-        output_tensor = ttnn::transpose(output_tensor, dim, -1, index_tensor.memory_config());
     }
 
     TT_FATAL(
