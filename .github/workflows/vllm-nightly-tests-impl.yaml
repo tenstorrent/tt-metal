@@ -225,7 +225,7 @@ jobs:
             --model ${{ matrix.test-group.model }} \
             ${{ matrix.test-group.additional-args }} \
             "${OVERRIDE_TT_CONFIG[@]}" \
-            "${EXTRA_ARGS[@]}"
+            "${EXTRA_ARGS[@]}" \
             > "${FILE_SERVER_LOG}" 2>&1 &
 
           # Store server's pid for cleanup
