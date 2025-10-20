@@ -43,6 +43,14 @@ def load_inputs(user_input, batch):
     return in_prompt
 
 
+def post_process_on_device(logits, index):
+    next_token_logits = logits[:, index, :]
+    # argmax support only ROW_MAJOR layout
+    next_token_logits = ttnn.to_layout(next_token_logits, layout=ttnn.ROW_MAJOR_LAYOUT)
+    next_tokens = ttnn.argmax(next_token_logits, dim=-1)
+    return next_tokens
+
+
 def post_process(logits, index):
     next_token_logits = logits[:, index, :]
     next_tokens = torch.argmax(next_token_logits, dim=-1)
@@ -373,12 +381,14 @@ def run_falcon_demo_kv(
             else:
                 raise ValueError("Invalid type for tt_attention_mask")
 
-        logits = tt_tensors_to_torch_tensors(tt_logits, mesh_device, concat_dim=0).squeeze(1)
+        tt_logits = ttnn.squeeze(tt_logits, 1)
+        tt_user_output_ids = post_process_on_device(tt_logits, num_input_tokens - 1)
+        user_output_ids = tt_tensors_to_torch_tensors(tt_user_output_ids, mesh_device)
+        user_output_ids = user_output_ids[:, None]
 
         tt_prefill_input_ids.deallocate()
         tt_logits.deallocate()
 
-        user_output_ids = post_processor(logits=logits, index=num_input_tokens - 1)
         output_ids[user_id::batch_size] = user_output_ids
 
         if i >= N_warmup_prefill:
