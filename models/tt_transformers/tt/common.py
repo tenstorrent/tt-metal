@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 import re
 from enum import Enum
 from types import SimpleNamespace
@@ -659,7 +660,8 @@ def get_hf_model_name(model_path: str) -> str:
 
 def get_hf_tt_cache_path(model_path: str) -> str:
     model_name = get_hf_model_name(model_path)
-    return f"/mnt/MLPerf/huggingface/tt_cache/{model_name}"
+    tt_cache_home = os.getenv("TT_CACHE_HOME", "/mnt/MLPerf/huggingface/tt_cache/")
+    return os.path.join(tt_cache_home, model_name)
 
 
 def create_tt_model(
