@@ -1,0 +1,241 @@
+# models/experimental/retinanet/tt/regressionhead.py
+import ttnn
+from typing import List
+from typing import Optional
+
+
+class Conv2dNormActivation:
+    """
+    TTNN implementation of Conv2d + GroupNorm + ReLU block.
+
+    Encapsulates the pattern used in RetinaNet regression head:
+    - Conv2d with DRAM slicing
+    - GroupNorm with tile alignment padding
+    - ReLU activation
+    """
+
+    def __init__(
+        self,
+        parameters: dict,
+        device: ttnn.Device,
+        in_channels: int = 256,
+        out_channels: int = 256,
+        kernel_size: tuple = (3, 3),
+        stride: tuple = (1, 1),
+        padding: tuple = (1, 1),
+        num_groups: int = 32,
+        grid_size: Optional[ttnn.CoreGrid] = None,
+        input_mask: Optional[ttnn.Tensor] = None,
+    ):
+        """
+        Args:
+            parameters: Dict with keys 'weight', 'norm_weight', 'norm_bias'
+            device: TTNN device
+            in_channels: Number of input channels
+            out_channels: Number of output channels
+            kernel_size: Convolution kernel size
+            stride: Convolution stride
+            padding: Convolution padding
+            num_groups: Number of groups for GroupNorm
+            grid_size: CoreGrid for GroupNorm (defaults to 8x8)
+            input_mask: Pre-created input mask for GroupNorm
+        """
+        self.device = device
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        self.num_groups = num_groups
+
+        # Store parameters
+        self.conv_weight = parameters["weight"]
+        self.norm_weight = parameters["norm_weight"]
+        self.norm_bias = parameters["norm_bias"]
+
+        # Grid size for GroupNorm
+        self.grid_size = grid_size if grid_size is not None else ttnn.CoreGrid(y=8, x=8)
+
+        # Input mask for GroupNorm
+        self.input_mask = input_mask
+
+        # DRAM slicing config for conv2d
+        self.slice_config = ttnn.Conv2dSliceConfig(
+            slice_type=ttnn.Conv2dDRAMSliceHeight,
+        )
+
+    def __call__(
+        self,
+        x: ttnn.Tensor,
+        batch_size: int,
+        input_height: int,
+        input_width: int,
+    ) -> ttnn.Tensor:
+        """
+        Forward pass: Conv2d -> GroupNorm -> ReLU
+
+        Args:
+            x: Input tensor in NHWC format
+            batch_size: Batch size
+            input_height: Input height
+            input_width: Input width
+
+        Returns:
+            Output tensor after Conv2d + GroupNorm + ReLU
+        """
+        # Conv2d with DRAM slicing
+        x = ttnn.conv2d(
+            input_tensor=x,
+            weight_tensor=self.conv_weight,
+            in_channels=self.in_channels,
+            out_channels=self.out_channels,
+            device=self.device,
+            bias_tensor=None,
+            kernel_size=self.kernel_size,
+            stride=self.stride,
+            padding=self.padding,
+            batch_size=batch_size,
+            input_height=input_height,
+            input_width=input_width,
+            slice_config=self.slice_config,
+        )
+
+        # Get output shape after conv
+        N, H_out, W_out, C = x.shape
+
+        # Calculate padding needed for tile alignment
+        # GroupNorm requires H_out * W_out divisible by (grid_size.y * 32)
+        spatial_size = H_out * W_out
+        required_size = ((spatial_size + self.grid_size.y * 32 - 1) // (self.grid_size.y * 32)) * (
+            self.grid_size.y * 32
+        )
+
+        if spatial_size != required_size:
+            # Pad spatial dimension to required size
+            pad_amount = required_size - spatial_size
+
+            # Reshape to (N, 1, H*W, C) for padding
+            x_flat = ttnn.reshape(x, (N, 1, spatial_size, C))
+
+            # Pad along spatial dimension
+            x_padded = ttnn.pad(x_flat, padding=((0, 0), (0, 0), (0, pad_amount), (0, 0)), value=0.0)
+        else:
+            # Reshape to (N, 1, H*W, C) without padding
+            x_padded = ttnn.reshape(x, (N, 1, spatial_size, C))
+
+        # Apply GroupNorm
+        x_normalized = ttnn.group_norm(
+            x_padded,
+            num_groups=self.num_groups,
+            input_mask=self.input_mask,
+            weight=self.norm_weight,
+            bias=self.norm_bias,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            core_grid=self.grid_size,
+            inplace=False,
+        )
+
+        # Unpad
+        if spatial_size != required_size:
+            # Slice back to original spatial size
+            x_normalized = x_normalized[:, :, :spatial_size, :]
+
+        # Reshape back to (N, H, W, C)
+        x = ttnn.reshape(x_normalized, (N, H_out, W_out, C))
+
+        # ReLU activation
+        x = ttnn.relu(x)
+
+        return x
+
+
+def ttnn_retinanet_regression_head(
+    feature_maps: List[ttnn.Tensor],
+    parameters: dict,
+    device: ttnn.Device,
+    in_channels: int = 256,
+    num_anchors: int = 9,
+    batch_size: int = 1,
+    input_shapes: List[tuple] = None,
+) -> ttnn.Tensor:
+    """
+    TTNN implementation of RetinaNet regression head with all 4 conv layers + GroupNorm + ReLU.
+
+    Args:
+        feature_maps: List of FPN feature tensors in NHWC format
+        parameters: Dict containing 'conv' (list of 4 Conv2dNormActivation params) and 'bbox_reg'
+        device: TTNN device
+        in_channels: Number of input channels (256 for RetinaNet)
+        num_anchors: Number of anchors per location (9 for RetinaNet)
+        batch_size: Batch size
+        input_shapes: List of (H, W) tuples for each FPN level
+
+    Returns:
+        Concatenated bbox regressions in shape (N, total_anchors, 4)
+    """
+    all_bbox_regression = []
+
+    grid_size = ttnn.CoreGrid(y=8, x=8)
+
+    input_mask_tensor = ttnn.create_group_norm_input_mask(in_channels, 32, grid_size.y)
+    input_mask_tensor = ttnn.from_torch(
+        input_mask_tensor,
+        dtype=ttnn.DataType.BFLOAT8_B,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Initialize 4 Conv2dNormActivation blocks
+    conv_blocks = []
+    for conv_idx in range(4):
+        conv_block = Conv2dNormActivation(
+            parameters=parameters["conv"][conv_idx],
+            device=device,
+            in_channels=in_channels,
+            out_channels=in_channels,
+            kernel_size=(3, 3),
+            stride=(1, 1),
+            padding=(1, 1),
+            num_groups=32,
+            grid_size=grid_size,
+            input_mask=input_mask_tensor,
+        )
+        conv_blocks.append(conv_block)
+
+    for level_idx, x in enumerate(feature_maps):
+        H, W = input_shapes[level_idx]
+
+        # Apply 4 conv blocks (Conv2d + GroupNorm + ReLU)
+        for conv_block in conv_blocks:
+            x = conv_block(x, batch_size=batch_size, input_height=H, input_width=W)
+
+        # Final bbox_reg conv layer
+        bbox_reg_slice_config = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=4)
+
+        bbox_regression = ttnn.conv2d(
+            input_tensor=x,
+            weight_tensor=parameters["bbox_reg"]["weight"],
+            in_channels=in_channels,
+            out_channels=num_anchors * 4,
+            device=device,
+            bias_tensor=parameters["bbox_reg"]["bias"],
+            kernel_size=(3, 3),
+            stride=(1, 1),
+            padding=(1, 1),
+            batch_size=batch_size,
+            input_height=H,
+            input_width=W,
+            slice_config=bbox_reg_slice_config,
+        )
+
+        # Reshape to (N, H*W*num_anchors, 4)
+        N, H_final, W_final, C_final = bbox_regression.shape
+        bbox_regression = ttnn.reshape(bbox_regression, (N, H_final, W_final, num_anchors, 4))
+        bbox_regression = ttnn.reshape(bbox_regression, (N, H_final * W_final * num_anchors, 4))
+
+        all_bbox_regression.append(bbox_regression)
+
+    # Concatenate all FPN levels
+    output = ttnn.concat(all_bbox_regression, dim=1)
+    return output
