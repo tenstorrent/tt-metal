@@ -185,7 +185,7 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program_at(
         "incorrect");
 
     auto find_device = [](const std::vector<IDevice*>& devices,
-                          std::optional<chip_id_t> id) -> std::optional<IDevice*> {
+                          std::optional<tt::ChipId> id) -> std::optional<IDevice*> {
         if (id == std::nullopt) {
             return std::nullopt;
         }

@@ -147,7 +147,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             "input_memory_config": memory_config,
             "output_memory_config": memory_config,
             "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
-            "all_to_all_combine": AllToAllCombineConfig(axis=0, memory_config=memory_config),
+            "all_to_all_combine": AllToAllCombineConfig(cluster_axis=0, memory_config=memory_config),
             "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
                 cluster_axis=1,
                 dim=3,
@@ -216,8 +216,8 @@ class MoE(SharedStateAddOn, AbstractModule):
         )
         all_to_all_combine_output_tensors = ttnn.all_to_all_combine(
             experts_output,
-            cfg["expert_mapping_tensors"],
             all_to_all_dispatch_metadata_tensors,
+            cfg["expert_mapping_tensors"],
             **cfg["all_to_all_combine"],
         )
         post_combine_output_tensor = ttnn.reshape(

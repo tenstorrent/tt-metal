@@ -165,7 +165,11 @@ public:
     }
 
     std::string common_flags(const Params& params) const override {
-        std::string cflags = "-mcpu=tt-bh -fno-rvtt-sfpu-replay ";
+        std::string cflags = params.core_type == HalProgrammableCoreType::TENSIX &&
+                                     params.processor_class == HalProcessorClassType::COMPUTE
+                                 ? "-mcpu=tt-bh-tensix "
+                                 : "-mcpu=tt-bh ";
+        cflags += "-fno-rvtt-sfpu-replay ";
         if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
               params.processor_class == HalProcessorClassType::COMPUTE)) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
@@ -356,7 +360,6 @@ void Hal::initialize_bh() {
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
     this->eth_fw_is_cooperative_ = false;
-    this->intermesh_eth_links_enabled_ = false;  // Intermesh routing is not enabled on Blackhole
     this->virtualized_core_types_ = {
         dev_msgs::AddressableCoreType::TENSIX,
         dev_msgs::AddressableCoreType::ETH,
