@@ -5,15 +5,13 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
-#include "debug/dprint_pages.h"
-#include "debug/dprint.h"
 
 void kernel_main() {
     // Compile time args
     // -----------------
     constexpr uint32_t total_tiles_per_core = get_compile_time_arg_val(0);
     constexpr uint32_t src_tile_size = get_compile_time_arg_val(1);
-    constexpr auto s_src_args = TensorAccessorArgs<2>();
+    constexpr auto src_args = TensorAccessorArgs<2>();
 
     // Runtime args
     // ------------
@@ -22,7 +20,7 @@ void kernel_main() {
 
     // Tensor accessor
     // ---------------
-    const auto src_accessor = TensorAccessor(s_src_args, src_base_addr, src_tile_size);
+    const auto src_accessor = TensorAccessor(src_args, src_base_addr, src_tile_size);
 
     // CB indices
     // ----------
@@ -36,7 +34,6 @@ void kernel_main() {
         const uint64_t src_noc_addr = get_noc_addr(tile_id, src_accessor);
         noc_async_read(src_noc_addr, l1_write_addr, src_tile_size);
         noc_async_read_barrier();
-        // tt::data_movement::common::print_bf16_pages(l1_write_addr, 32, 32);
         cb_push_back(src_cb, 1);
     }
 }

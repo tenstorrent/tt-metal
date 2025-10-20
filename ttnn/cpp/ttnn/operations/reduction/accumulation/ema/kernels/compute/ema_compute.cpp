@@ -5,8 +5,6 @@
 #include <cstdint>
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/ema.h"
-#include "debug/dprint_pages.h"
-#include "debug/dprint_tensix.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -40,8 +38,6 @@ void MAIN {
             tile_regs_acquire();
             transpose_wh_tile(src_cb, 0, inp_dst_index);
             ema_tile<inp_dst_index>((tile_id == 0));
-            dprint_tensix_dest_reg(inp_dst_index);
-            dprint_tensix_dest_reg(output_dst_index);
             tile_regs_commit();
             cb_pop_front(src_cb, 1);
 
