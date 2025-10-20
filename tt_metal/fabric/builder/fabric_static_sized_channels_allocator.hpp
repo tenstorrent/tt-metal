@@ -64,6 +64,9 @@ public:
      */
     size_t get_receiver_channel_base_address(size_t channel_id) const;
 
+    size_t get_num_sender_channels() const { return num_used_sender_channels; }
+    size_t get_num_receiver_channels() const { return num_receiver_channels; }
+
 private:
     /*
      * Helper function that decides the number of buffer slots for each channel.

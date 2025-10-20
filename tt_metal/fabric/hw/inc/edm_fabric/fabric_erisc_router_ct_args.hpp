@@ -10,6 +10,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_static_channels_ct_args.hpp"
 
 #include <array>
 #include <utility>
@@ -155,23 +156,49 @@ static_assert(
     get_compile_time_arg_val(ANOTHER_SPECIAL_TAG_IDX) == ANOTHER_SPECIAL_TAG,
     "ANOTHER_SPECIAL_TAG not found. This implies some arguments were misaligned between host and device. Double check the CT args.");
 
-constexpr size_t SENDER_NUM_BUFFERS_IDX = ANOTHER_SPECIAL_TAG_IDX + 1;
-constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_NUM_BUFFERS_ARRAY =
-    fill_array_with_next_n_args<size_t, SENDER_NUM_BUFFERS_IDX, NUM_SENDER_CHANNELS>();
+// ========== NEW MULTI-POOL CHANNEL PARSING ==========
+// Parse channel pool collection (replaces old static-only parsing)
+constexpr size_t CHANNEL_POOL_COLLECTION_IDX = ANOTHER_SPECIAL_TAG_IDX + 1;
 
-// dateline edm recv channel 0 has 0 buffer slots, dateline upstream channel 1 has 0 buffer.
-constexpr size_t RECEIVER_NUM_BUFFERS_IDX = SENDER_NUM_BUFFERS_IDX + NUM_SENDER_CHANNELS;
-constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> RECEIVER_NUM_BUFFERS_ARRAY =
-    fill_array_with_next_n_args<size_t, RECEIVER_NUM_BUFFERS_IDX, NUM_RECEIVER_CHANNELS>();
+// For now, we only support single static pool configuration for backward compatibility
+// Pool CT args structure:
+//   - num_pools (1 arg)
+//   - pool_types[] (1 arg for single pool)
+//   - Static pool data (23 args): 5 sender buffers + 2 receiver buffers + 2 remote receiver buffers +
+//                                  5 sender addrs + 4 receiver addrs + 5 remote sender addrs
+// Total: 1 + 1 + 23 = 25 args
+using channel_pools_args = ChannelPoolCollection<CHANNEL_POOL_COLLECTION_IDX>;
 
-constexpr size_t REMOTE_RECEIVER_NUM_BUFFERS_IDX = RECEIVER_NUM_BUFFERS_IDX + NUM_RECEIVER_CHANNELS;
-constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_ARRAY =
-    fill_array_with_next_n_args<size_t, REMOTE_RECEIVER_NUM_BUFFERS_IDX, NUM_RECEIVER_CHANNELS>();
+/*
+// constexpr size_t NUM_POOLS = get_compile_time_arg_val(CHANNEL_POOL_COLLECTION_IDX);
+// constexpr std::array<FabricChannelPoolType, NUM_POOLS> POOL_TYPES =
+//     fill_array_with_next_n_args<FabricChannelPoolType, CHANNEL_POOL_COLLECTION_IDX + 1, NUM_POOLS>();
 
-constexpr std::array<FabricChannelType, NUM_SENDER_CHANNELS> SENDER_CHANNEL_TYPES = fill_array_with_next_n_args<FabricChannelType, SENDER_NUM_BUFFERS_IDX, NUM_SENDER_CHANNELS>();
-constexpr std::array<FabricChannelType, NUM_RECEIVER_CHANNELS> RECEIVER_CHANNEL_TYPES = fill_array_with_next_n_args<FabricChannelType, RECEIVER_NUM_BUFFERS_IDX, NUM_RECEIVER_CHANNELS>();
+// static_assert(NUM_POOLS == 1, "Only single pool configuration is supported for now");
+// static_assert(static_cast<size_t>(POOL_TYPES[0]) == static_cast<size_t>(FabricChannelPoolType::STATIC),
+//     "Pool 0 must be a STATIC pool for the time being. Multi-pool and elastic channel pool parsing is not supported
+yet.");
 
+// // For backward compatibility with existing code, expose the static pool 0 data
+// // Assumes pool 0 is a static pool (validated by recipe on host side)
+// // Index = CHANNEL_POOL_COLLECTION_IDX + num_pools (1) + pool_types (1) = CHANNEL_POOL_COLLECTION_IDX + 2
+// constexpr size_t SENDER_NUM_BUFFERS_IDX = CHANNEL_POOL_COLLECTION_IDX + 1 + NUM_POOLS;
+// constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_NUM_BUFFERS_ARRAY =
+//     fill_array_with_next_n_args<size_t, SENDER_NUM_BUFFERS_IDX, NUM_SENDER_CHANNELS>();
+
+// // dateline edm recv channel 0 has 0 buffer slots, dateline upstream channel 1 has 0 buffer.
+// constexpr size_t RECEIVER_NUM_BUFFERS_IDX = SENDER_NUM_BUFFERS_IDX + NUM_SENDER_CHANNELS;
+// constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> RECEIVER_NUM_BUFFERS_ARRAY =
+//     fill_array_with_next_n_args<size_t, RECEIVER_NUM_BUFFERS_IDX, NUM_RECEIVER_CHANNELS>();
+
+// constexpr size_t REMOTE_RECEIVER_NUM_BUFFERS_IDX = RECEIVER_NUM_BUFFERS_IDX + NUM_RECEIVER_CHANNELS;
+// constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_ARRAY =
+//     fill_array_with_next_n_args<size_t, REMOTE_RECEIVER_NUM_BUFFERS_IDX, NUM_RECEIVER_CHANNELS>();
+*/
+
+/*
 // STATIC CHANNELS: RELOCATE
+// Channel addresses come right after the buffer counts within the static pool data
 constexpr size_t STATIC_CHANNEL_ADDRS_ARG_IDX_BASE = REMOTE_RECEIVER_NUM_BUFFERS_IDX + NUM_RECEIVER_CHANNELS;
 constexpr size_t local_sender_0_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE);
 constexpr size_t local_sender_1_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 1);
@@ -193,10 +220,29 @@ constexpr size_t remote_sender_1_channel_address = get_compile_time_arg_val(STAT
 constexpr size_t remote_sender_2_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 11);
 constexpr size_t remote_sender_3_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 12);
 constexpr size_t remote_sender_4_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 13);
+*/
+
+// Parse channel-to-pool mappings (after all pool data)
+constexpr size_t CHANNEL_MAPPINGS_START_IDX = CHANNEL_POOL_COLLECTION_IDX + CHANNEL_POOL_COLLECTION_NUM_ARGS;
+constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_TO_POOL_IDX =
+    fill_array_with_next_n_args<size_t, CHANNEL_MAPPINGS_START_IDX, NUM_SENDER_CHANNELS>();
+constexpr std::array<FabricChannelPoolType, NUM_SENDER_CHANNELS> SENDER_TO_POOL_TYPE = fill_array_with_next_n_args<
+    FabricChannelPoolType,
+    CHANNEL_MAPPINGS_START_IDX + NUM_SENDER_CHANNELS,
+    NUM_SENDER_CHANNELS>();
+constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> RECEIVER_TO_POOL_IDX = fill_array_with_next_n_args<
+    size_t,
+    CHANNEL_MAPPINGS_START_IDX + (2 * NUM_SENDER_CHANNELS),
+    NUM_RECEIVER_CHANNELS>();
+constexpr std::array<FabricChannelPoolType, NUM_RECEIVER_CHANNELS> RECEIVER_TO_POOL_TYPE = fill_array_with_next_n_args<
+    FabricChannelPoolType,
+    CHANNEL_MAPPINGS_START_IDX + (2 * NUM_SENDER_CHANNELS) + NUM_RECEIVER_CHANNELS,
+    NUM_RECEIVER_CHANNELS>();
 
 constexpr size_t NUM_DOWNSTREAM_CHANNELS = NUM_FORWARDING_PATHS;
-// constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_IDX = REMOTE_RECEIVER_NUM_BUFFERS_IDX + NUM_RECEIVER_CHANNELS;
-constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_IDX = STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 14;
+// Downstream sender num buffers comes after channel mappings
+constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_IDX =
+    CHANNEL_MAPPINGS_START_IDX + (2 * NUM_SENDER_CHANNELS) + (2 * NUM_RECEIVER_CHANNELS);
 constexpr std::array<size_t, NUM_DOWNSTREAM_CHANNELS> DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY =
     fill_array_with_next_n_args<size_t, DOWNSTREAM_SENDER_NUM_BUFFERS_IDX, NUM_DOWNSTREAM_CHANNELS>();
 // TODO: remove DOWNSTREAM_SENDER_NUM_BUFFERS and use TMP on downstream sender channels.

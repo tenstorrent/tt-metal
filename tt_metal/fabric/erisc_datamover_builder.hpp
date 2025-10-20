@@ -16,7 +16,6 @@
 #include <tt-metalium/edm_fabric_counters.hpp>
 #include <tt-metalium/routing_table_generator.hpp>  // for FabricNodeId
 #include <hostdevcommon/fabric_common.h>
-#include <unordered_map>
 #include <optional>
 #include <cstdint>
 #include <vector>
@@ -33,6 +32,8 @@ namespace tt::tt_fabric {
 struct FabricRiscConfig;
 class FabricEriscDatamoverBuilder;
 class FabricTensixDatamoverBuilder;
+class MultiPoolChannelAllocator;
+class ChannelToPoolMapping;
 
 // Type alias for any fabric datamover builder
 using FabricDatamoverBuilder = std::
@@ -351,7 +352,15 @@ struct FabricEriscDatamoverConfig {
     std::size_t edm_noc_vc = 0;
 
     // Fabric channel allocator for L1 memory management
+    // Points to the primary allocator (typically static allocator for single-pool configs)
     std::shared_ptr<FabricChannelAllocator> channel_allocator;
+
+    // Multi-pool allocator coordinator - manages all pool allocators
+    // Emits pool metadata and delegates to individual pools for CT args
+    std::shared_ptr<MultiPoolChannelAllocator> multi_pool_allocator;
+
+    // Channel-to-pool mapping for multi-pool support
+    std::shared_ptr<ChannelToPoolMapping> channel_to_pool_mapping;
 
 private:
     void configure_skip_connection_flags(Topology topology, FabricEriscDatamoverOptions const& options);

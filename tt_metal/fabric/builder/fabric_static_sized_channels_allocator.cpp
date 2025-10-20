@@ -546,55 +546,75 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
 }
 
 void FabricStaticSizedChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_args, size_t num_fwd_paths, size_t num_used_sender_channels, size_t num_used_receiver_channels) const {
-    // insert the sender channel num buffers
-    ct_args.push_back(0xabcd1234);
-    ct_args.insert(
-        ct_args.end(),
-        this->sender_channels_num_buffers.begin(),
-        this->sender_channels_num_buffers.begin() + num_used_sender_channels);
-    // insert the receiver channel num buffers
-    ct_args.insert(
-        ct_args.end(),
-        this->receiver_channels_num_buffers.begin(),
-        this->receiver_channels_num_buffers.begin() + num_used_receiver_channels);
-    // insert the remote receiver channel num buffers
-    ct_args.insert(
-        ct_args.end(),
-        this->remote_receiver_channels_num_buffers.begin(),
-        this->remote_receiver_channels_num_buffers.begin() + num_used_receiver_channels);
+    // NOTE: Special tag 0xabcd1234 is now emitted by MultiPoolChannelAllocator, not here
+    // insert the sender channel num buffers - EMIT ALL channels for multi-pool support
 
-    // Add sender and receiver channel base addresses
-    for (size_t i = 0; i < builder_config::num_sender_channels; ++i) {
-        if (i < this->sender_channels_base_address.size()) {
-            ct_args.push_back(static_cast<uint32_t>(this->sender_channels_base_address[i]));
-        } else {
-            ct_args.push_back(0);
-        }
+    size_t num_sender_channels = this->sender_channels_base_address.size();
+    size_t num_receiver_channels = this->receiver_channels_base_address.size();
+    TT_FATAL(
+        num_receiver_channels == this->remote_receiver_channels_num_buffers.size(),
+        "Receiver channels num buffers size mismatch");
+    TT_FATAL(
+        num_sender_channels == this->remote_sender_channels_num_buffers.size(),
+        "Remote sender channels num buffers size mismatch");
+    for (size_t i = 0; i < num_sender_channels; ++i) {
+        ct_args.push_back(static_cast<uint32_t>(this->sender_channels_base_address[i]));
+        ct_args.push_back(this->sender_channels_num_buffers[i]);
+        ct_args.push_back(static_cast<uint32_t>(this->remote_sender_channels_base_address[i]));
+        ct_args.push_back(this->remote_sender_channels_num_buffers[i]);
     }
+    for (size_t i = 0; i < num_receiver_channels; ++i) {
+        ct_args.push_back(static_cast<uint32_t>(this->receiver_channels_base_address[i]));
+        ct_args.push_back(this->receiver_channels_num_buffers[i]);
+        ct_args.push_back(static_cast<uint32_t>(this->remote_receiver_channels_base_address[i]));
+        ct_args.push_back(this->remote_receiver_channels_num_buffers[i]);
+    }
+    // ct_args.insert(
+    //     ct_args.end(),
+    //     this->sender_channels_num_buffers.begin(),
+    //     this->sender_channels_num_buffers.end());
+    // insert the receiver channel num buffers - EMIT ALL channels for multi-pool support
+    // ct_args.insert(
+    //     ct_args.end(),
+    //     this->receiver_channels_num_buffers.begin(),
+    //     this->receiver_channels_num_buffers.end());
+    // // insert the remote receiver channel num buffers - EMIT ALL channels for multi-pool support
+    // ct_args.insert(
+    //     ct_args.end(),
+    //     this->remote_receiver_channels_num_buffers.begin(),
+    //     this->remote_receiver_channels_num_buffers.end());
 
-    // Add receiver channel base addresses (local and remote interleaved)
-    for (size_t i = 0; i < builder_config::num_receiver_channels; ++i) {
-        if (i < this->receiver_channels_base_address.size()) {
-            ct_args.push_back(static_cast<uint32_t>(this->receiver_channels_base_address[i]));
-        } else {
-            ct_args.push_back(0);
-        }
-        if (i < this->remote_receiver_channels_base_address.size()) {
-            ct_args.push_back(static_cast<uint32_t>(this->remote_receiver_channels_base_address[i]));
-        } else {
-            ct_args.push_back(0);
-        }
-    }
+    // // Add sender and receiver channel base addresses
+    // for (size_t i = 0; i < builder_config::num_sender_channels; ++i) {
+    //     if (i < this->sender_channels_base_address.size()) {
+    //         ct_args.push_back(static_cast<uint32_t>(this->sender_channels_base_address[i]));
+    //     } else {
+    //         ct_args.push_back(0);
+    //     }
+    // }
+
+    // // Add receiver channel base addresses (local and remote interleaved)
+    // for (size_t i = 0; i < builder_config::num_receiver_channels; ++i) {
+    //     if (i < this->receiver_channels_base_address.size()) {
+    //         ct_args.push_back(static_cast<uint32_t>(this->receiver_channels_base_address[i]));
+    //     } else {
+    //         ct_args.push_back(0);
+    //     }
+    //     if (i < this->remote_receiver_channels_base_address.size()) {
+    //         ct_args.push_back(static_cast<uint32_t>(this->remote_receiver_channels_base_address[i]));
+    //     } else {
+    //         ct_args.push_back(0);
+    //     }
+    // }
 
     // Add remote sender channel base addresses
-    for (size_t i = 0; i < builder_config::num_sender_channels; ++i) {
-        if (i < this->remote_sender_channels_base_address.size()) {
-            ct_args.push_back(static_cast<uint32_t>(this->remote_sender_channels_base_address[i]));
-        } else {
-            ct_args.push_back(0);
-        }
-    }
-
+    // for (size_t i = 0; i < builder_config::num_sender_channels; ++i) {
+    //     if (i < this->remote_sender_channels_base_address.size()) {
+    //         ct_args.push_back(static_cast<uint32_t>(this->remote_sender_channels_base_address[i]));
+    //     } else {
+    //         ct_args.push_back(0);
+    //     }
+    // }
 }
 
 };  // namespace tt::tt_fabric
