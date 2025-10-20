@@ -80,7 +80,101 @@ Tests:
       - type: one_to_all
         iterations: 3
 
+  - name: "PerimeterLinearUnicast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 20000
+
+    patterns:
+      - type: perimeter_linear
+        iterations: 3
+
+  - name: "NeighborExchangeLinearUnicast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 20000
+
+    patterns:
+      - type: neighbor_exchange
+        iterations: 3
+
   # Ring tests
+  - name: "FullRingMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Ring
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      num_packets: 100000
+
+    patterns:
+      - type: full_ring
+        iterations: 3
+
+  - name: "FullRingUnicast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Ring
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 100000
+
+    patterns:
+      - type: full_ring
+        iterations: 3
+
+  - name: "HalfRingMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Ring
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      num_packets: 100000
+
+    patterns:
+      - type: half_ring
+        iterations: 3
 
   # Mesh tests
   - name: "MeshMulticast"
@@ -111,7 +205,7 @@ Tests:
     parametrization_params:
       num_links: [1, 2, 3, 4]
       ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [2048, 4096]
+      size: [16, 2048, 4096]
 
     defaults:
       ftype: mcast
@@ -159,6 +253,44 @@ Tests:
       - type: one_to_all
         iterations: 3
 
+  - name: "PerimeterMeshUnicast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 20000
+
+    patterns:
+      - type: perimeter_linear
+        iterations: 3
+
+  - name: "NeighborExchangeMeshUnicast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 20000
+
+    patterns:
+      - type: neighbor_exchange
+        iterations: 3
+
   - name: "MeshMulticastDynamic"
     benchmark_mode: true
     sync: true
@@ -175,6 +307,251 @@ Tests:
       ftype: mcast
       ntype: unicast_write
       num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+        iterations: 3
+
+  # Torus tests
+  - name: "TorusAllToAllMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+        iterations: 3
+
+  # Torus fused_atomic_inc tests are more inconsistent, so run them for extra iterations
+  - name: "TorusAllToAllMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      ntype: fused_atomic_inc
+      num_packets: 100000
+
+    patterns:
+      - type: all_to_all
+        iterations: 3
+
+  - name: "TorusFullRingMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      num_packets: 100000
+
+    patterns:
+      - type: full_ring
+        iterations: 3
+
+  - name: "TorusFullRingUnicast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 100000
+
+    patterns:
+      - type: full_ring
+        iterations: 3
+
+  - name: "TorusHalfRingMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      num_packets: 100000
+
+    patterns:
+      - type: half_ring
+        iterations: 3
+
+  - name: "UnidirTorusMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      num_packets: 20000
+
+    patterns:
+      - type: unidirectional_linear
+        iterations: 3
+
+  - name: "SingleSenderTorusUnicastAllDevices"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 20000
+
+    patterns:
+      - type: one_to_all
+        iterations: 3
+
+  - name: "SingleSenderTorusMulticastAllDevices"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      num_packets: 20000
+
+    patterns:
+      - type: one_to_all
+        iterations: 3
+
+  - name: "PerimeterTorusUnicast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 20000
+
+    patterns:
+      - type: perimeter_linear
+        iterations: 3
+
+  - name: "NeighborExchangeTorusUnicast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 20000
+
+    patterns:
+      - type: neighbor_exchange
+        iterations: 3
+
+  - name: "TorusAllToAllMulticastDynamic"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+      routing_type: Dynamic
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+        iterations: 3
+
+  # Torus fused_atomic_inc tests are more inconsistent, so run them for extra iterations
+  - name: "TorusAllToAllMulticastDynamic"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+      routing_type: Dynamic
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      ntype: fused_atomic_inc
+      num_packets: 100000
 
     patterns:
       - type: all_to_all
