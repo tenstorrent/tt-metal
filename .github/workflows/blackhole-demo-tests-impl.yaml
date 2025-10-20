@@ -71,7 +71,7 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
         - "/localdev/blackhole_demos/huggingface_data:/localdev/blackhole_demos/huggingface_data${{ inputs.regenerate-ttnn-cache == true && ':rw' || ':ro' }}"
-      options: "--device /dev/tenstorrent"
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
       run:
         shell: bash
