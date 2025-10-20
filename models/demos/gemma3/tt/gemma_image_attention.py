@@ -91,15 +91,14 @@ class TtGemmaImageAttention(LightweightModule):
         wv_padded = pad_head_dim(self.state_dict[wv_str])
         wo_padded = pad_head_dim(self.state_dict[wo_str], heads_out=False)
 
+        wq_chunked, wk_chunked, wv_chunked = (
+            torch.chunk(w, configuration.num_devices) for w in [wq_padded, wk_padded, wv_padded]
+        )
+
         self.qkv_program_config = lambda seq_len, MAX_MM_SEQ_LEN: (
             None
             if self.configuration.is_gemma
             else self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
-        )
-
-        # Create merged QKV weight for fused operation
-        wq_chunked, wk_chunked, wv_chunked = (
-            torch.chunk(w, configuration.num_devices) for w in [wq_padded, wk_padded, wv_padded]
         )
 
         self.wqkv = ttnn.as_tensor(
@@ -134,15 +133,13 @@ class TtGemmaImageAttention(LightweightModule):
             dtype=self.dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
-            # cache_file_name=cache_name("wqkv_sharded"),
+            cache_file_name=cache_name("wqkv_sharded"),
         )
 
         bq_str = f"{state_dict_prefix}wq.bias"
         bk_str = f"{state_dict_prefix}wk.bias"
         bv_str = f"{state_dict_prefix}wv.bias"
         bo_str = f"{state_dict_prefix}wo.bias"
-
-        self.state_dict_prefix = state_dict_prefix
 
         if bq_str in self.state_dict:
 
@@ -168,7 +165,6 @@ class TtGemmaImageAttention(LightweightModule):
             bk_padded = pad_head_dim_bias(self.state_dict[bk_str])
             bv_padded = pad_head_dim_bias(self.state_dict[bv_str])
 
-            # Create merged QKV bias for fused operation
             bq_chunked, bk_chunked, bv_chunked = (
                 torch.chunk(b, configuration.num_devices) for b in [bq_padded, bk_padded, bv_padded]
             )
@@ -193,7 +189,7 @@ class TtGemmaImageAttention(LightweightModule):
                 dtype=self.dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
-                # cache_file_name=cache_name("bqkv_sharded"),
+                cache_file_name=cache_name("bqkv_sharded"),
             )
         else:
             self.bqkv = None
@@ -209,19 +205,18 @@ class TtGemmaImageAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
-            # cache_file_name=cache_name("wo_sharded"),
+            cache_file_name=cache_name("wo_sharded"),
         )
 
         if bo_str in self.state_dict:
             self.bo = ttnn.as_tensor(
                 self.state_dict[bo_str],
                 device=self.mesh_device,
-                # mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-2),
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),  # Replicate
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=self.dtype,
                 layout=ttnn.TILE_LAYOUT,
-                # cache_file_name=cache_name("bo_sharded"),
+                cache_file_name=cache_name("bo_replicated"),
             )
         else:
             self.bo = None
@@ -271,7 +266,6 @@ class TtGemmaImageAttention(LightweightModule):
             program_config=sdpa_cfg,
             compute_kernel_config=self.compute_kernel_config_sdpa,
         )
-        # mstojko - attn_output_1QSD is split per chip (device sharded ig.)
 
         # deallocate keys and values
         ttnn.deallocate(q_heads_1QSD)
@@ -293,35 +287,6 @@ class TtGemmaImageAttention(LightweightModule):
                 attn_output_11SH, [batch_size, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1]
             )
 
-        # mstojko - attn_output_11SH is sharded
-
-        # if self.num_devices > 1:
-        #     attn_output_11SH = ttnn.experimental.all_gather_async(
-        #         attn_output_11SH,
-        #         persistent_output_buffer=None,
-        #         dim=3,
-        #         multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-        #         num_links=1,
-        #         topology=ttnn.Topology.Ring,
-        #         barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-        #         chunks_per_sync=10,
-        #         num_workers_per_link=2,
-        #         num_buffers_per_channel=2,
-        #     )
-
-        """
-        (a := ttnn.as_tensor(
-                self.state_dict[bo_str],
-                device=self.mesh_device,
-                # mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-2),
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),  # Replicate
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                dtype=self.dtype,
-                layout=ttnn.TILE_LAYOUT,
-                # cache_file_name=cache_name("bo_sharded"),
-            ))
-        """
-
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
@@ -336,7 +301,7 @@ class TtGemmaImageAttention(LightweightModule):
 
         # Then in your forward method, replace the all_reduce_async code with:
         if self.num_devices > 1:
-            output_all_reduce = custom_all_reduce(self, output_11SH)
+            output_all_reduce = _all_reduce_helper(self, output_11SH)
             ttnn.deallocate(output_11SH)
         else:
             output_all_reduce = output_11SH
@@ -347,7 +312,7 @@ class TtGemmaImageAttention(LightweightModule):
         return output_after_bias
 
 
-def custom_all_reduce(caller, input_tensor):
+def _all_reduce_helper(caller, input_tensor):
     w2_out_gathered = ttnn.experimental.all_gather_async(
         input_tensor,
         persistent_output_buffer=None,
