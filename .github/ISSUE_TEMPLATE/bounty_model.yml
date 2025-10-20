@@ -82,21 +82,24 @@ body:
         - Help the developer avoid analysis paralysis (i.e., “too many options, not sure what to do”).
 
 
-  - type: markdown
+  - type: textarea
+    id: result_submission
     attributes:
+      label: "📊 Result Submission Guidelines"
+      description: "These guidelines will be included in the final issue."
       value: |
-        ### 📊 Result Submission Guidelines
         Beyond the model implementation itself. Contributors must submit the following material as a proof of work. However, feel free to open a PR at any time if you want us checking you are on the right track. Just understand that payout is only made after **all 3 stages** are completed.
 
         **Deliverables:**
-        - Functional model implementation
-        - Validation logs (output correctness)
-        - Performance report + header for final review
+        - Functional model implementation  
+        - Validation logs (output correctness)  
+        - Performance report + header for final review  
 
         **Links:**
-        - [Performance Sheet](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/TTNN-model-bringup.md#41-performance-sheet)
+        - [Performance Sheet](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/TTNN-model-bringup.md#41-performance-sheet)  
         - [Perf Header Docs](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/profiling_ttnn_operations.html#perf-report-headers)
-
+    validations:
+      required: false
 
   - type: textarea
     id: resources
