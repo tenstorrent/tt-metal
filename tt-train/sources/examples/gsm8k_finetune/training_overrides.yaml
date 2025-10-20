@@ -11,6 +11,6 @@ training_config:
 scheduler_config:
   warmup_steps: 20
 
-device_config:
-  enable_ddp: true
-  mesh_shape: [1, 32]
+# device_config:
+#   enable_ddp: true
+#   mesh_shape: [1, 32]

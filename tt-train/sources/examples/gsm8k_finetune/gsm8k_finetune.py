@@ -515,10 +515,10 @@ def train():
 
     max_sequence_length = tt_model_factory.transformer_config.max_sequence_length
 
-    print("Creating model...")
-    tt_model = tt_model_factory.create_model()
-    print("Loading from safetensors...")
-    tt_model.load_from_safetensors(safetensors_path)
+    # print("Creating model...")
+    # tt_model = tt_model_factory.create_model()
+    # print("Loading from safetensors...")
+    # tt_model.load_from_safetensors(safetensors_path)
 
     padded_vocab_size = round_up_to_tile(orig_vocab_size, 32)
 
@@ -560,20 +560,20 @@ def train():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    optim = create_optimizer(tt_model, yaml_config)
-    causal_mask = build_causal_mask(max_sequence_length)
+    # optim = create_optimizer(tt_model, yaml_config)
+    # causal_mask = build_causal_mask(max_sequence_length)
 
-    causal_mask = ttml.autograd.Tensor.from_numpy(causal_mask, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.BFLOAT16)
+    # causal_mask = ttml.autograd.Tensor.from_numpy(causal_mask, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.BFLOAT16)
 
-    logits_mask_tensor = build_logits_mask(orig_vocab_size, padded_vocab_size)
+    # logits_mask_tensor = build_logits_mask(orig_vocab_size, padded_vocab_size)
 
-    loss_fn = ttml.ops.loss.cross_entropy_loss
-    reduce = ttml.ops.ReduceType.NONE
+    # loss_fn = ttml.ops.loss.cross_entropy_loss
+    # reduce = ttml.ops.ReduceType.NONE
 
-    # Training setup
-    tt_model.train()
-    train_losses = []
-    val_losses = []
+    # # Training setup
+    # tt_model.train()
+    # train_losses = []
+    # val_losses = []
 
     train_batch_generator = get_batch_generator(
         training_dataloader, batch_size, max_sequence_length, padded_vocab_size, tokenizer, device_config
