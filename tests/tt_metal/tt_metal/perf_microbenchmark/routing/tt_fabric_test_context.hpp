@@ -25,6 +25,7 @@
 #include "tt_fabric_test_memory_map.hpp"
 #include "tt_fabric_telemetry.hpp"
 #include "tt_fabric_test_results.hpp"
+#include "tt_fabric_test_eth_readback.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -410,7 +411,8 @@ public:
 
     void initialize_bandwidth_results_csv_file() {
         // Create output directory
-        std::filesystem::path tt_metal_home = std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
+        std::filesystem::path tt_metal_home =
+            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
         std::filesystem::path bandwidth_results_path = tt_metal_home / output_dir;
 
         if (!std::filesystem::exists(bandwidth_results_path)) {
@@ -454,6 +456,11 @@ public:
 
     bool get_telemetry_enabled() { return telemetry_enabled_; }
 
+    // Code profiling getters/setters
+    bool get_code_profiling_enabled() const { return code_profiling_enabled_; }
+    void set_code_profiling_enabled(bool enabled) { code_profiling_enabled_ = enabled; }
+    const std::vector<CodeProfilingEntry>& get_code_profiling_entries() const { return code_profiling_entries_; }
+
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
 
     void set_global_sync_val(uint32_t val) { global_sync_val_ = val; }
@@ -496,8 +503,9 @@ public:
         return 0.0;
     }
 
-    void setup_ci_artifacts(){
-        std::filesystem::path tt_metal_home = std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
+    void setup_ci_artifacts() {
+        std::filesystem::path tt_metal_home =
+            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
         std::filesystem::path bandwidth_results_path = tt_metal_home / output_dir;
         std::filesystem::path ci_artifacts_path = tt_metal_home / ci_artifacts_dir;
         // Create CI artifacts directory if it doesn't exist
@@ -505,7 +513,10 @@ public:
             try {
                 std::filesystem::create_directories(ci_artifacts_path);
             } catch (const std::filesystem::filesystem_error& e) {
-                log_error(tt::LogTest, "Failed to create CI artifacts directory, skipping CI artifacts creation: {}", e.what());
+                log_error(
+                    tt::LogTest,
+                    "Failed to create CI artifacts directory, skipping CI artifacts creation: {}",
+                    e.what());
                 return;
             }
         }
@@ -517,10 +528,13 @@ public:
                 std::filesystem::copy_file(
                     csv_filepath,
                     ci_artifacts_path / csv_filepath.filename(),
-                    std::filesystem::copy_options::overwrite_existing
-                );
+                    std::filesystem::copy_options::overwrite_existing);
             } catch (const std::filesystem::filesystem_error& e) {
-                log_debug(tt::LogTest, "Failed to copy CSV file {} to CI artifacts directory: {}", csv_filepath.filename().string(), e.what());
+                log_debug(
+                    tt::LogTest,
+                    "Failed to copy CSV file {} to CI artifacts directory: {}",
+                    csv_filepath.filename().string(),
+                    e.what());
             }
         }
         log_trace(tt::LogTest, "Copied CSV files to CI artifacts directory: {}", ci_artifacts_path.string());
@@ -534,6 +548,13 @@ public:
 
     void dump_raw_telemetry_csv(const TestConfig& config);
 
+    // Code profiling methods
+    void read_code_profiling_results();
+
+    void clear_code_profiling_buffers();
+
+    void report_code_profiling_results();
+
 private:
     void reset_local_variables() {
         benchmark_mode_ = false;
@@ -543,6 +564,7 @@ private:
         device_direction_cycles_.clear();
         device_core_cycles_.clear();
         bandwidth_results_.clear();
+        code_profiling_entries_.clear();
         // Note: has_test_failures_ is NOT reset here to preserve failures across tests
         // Note: golden_csv_entries_ is kept loaded for reuse across tests
     }
@@ -843,7 +865,8 @@ private:
     unsigned int get_device_frequency_mhz(const FabricNodeId& device_id) {
         if (!device_freq_mhz_map_.contains(device_id)) {
             auto& metal_context = tt::tt_metal::MetalContext::instance();
-            auto physical_chip_id = metal_context.get_control_plane().get_physical_chip_id_from_fabric_node_id(device_id);
+            auto physical_chip_id =
+                metal_context.get_control_plane().get_physical_chip_id_from_fabric_node_id(device_id);
             device_freq_mhz_map_[device_id] = metal_context.get_cluster().get_device_aiclk(physical_chip_id);
         }
         auto freq_mhz = device_freq_mhz_map_.at(device_id);
@@ -926,16 +949,14 @@ private:
 
                     // Use cache lookup instead of triply nested loop (O(1) vs O(n³))
                     std::string cache_key = std::to_string(device_id.chip_id) + "_" +
-                                            std::to_string(static_cast<int>(direction)) + "_" +
-                                            std::to_string(link_id);
+                                            std::to_string(static_cast<int>(direction)) + "_" + std::to_string(link_id);
 
                     TT_FATAL(
                         config_cache.contains(cache_key),
                         "Config not found in cache for device {} direction {} link {}",
                         device_id.chip_id,
                         static_cast<int>(direction),
-                        link_id
-                    );
+                        link_id);
                     auto [payload_size_bytes, num_packets_val, packet_size_val] = config_cache.at(cache_key);
                     num_packets = num_packets_val;
                     packet_size = packet_size_val;
@@ -1002,21 +1023,22 @@ private:
             uint32_t packet_size_first_pattern = fetch_pattern_packet_size(first_pattern);
 
             // Create a new entry that represents all iterations of the same test
-            bandwidth_results_summary_.emplace_back(BandwidthResultSummary{
-                .test_name = test_name,
-                .num_iterations = 1,
-                .ftype = ftype_str,
-                .ntype = ntype_str,
-                .topology = std::string(enchantum::to_string(config.fabric_setup.topology)),
-                .num_links = config.fabric_setup.num_links,
-                .num_packets = num_packets_first_pattern,
-                .num_devices = std::vector<uint32_t>(num_devices_set.begin(), num_devices_set.end()),
-                .packet_size = packet_size_first_pattern,
-                // Push in results for the first iteration
-                .cycles_vector = {static_cast<double>(max_cycles)},
-                .bandwidth_vector_GB_s = {bandwidth_GB_s},
-                .packets_per_second_vector = {packets_per_second},
-            });
+            bandwidth_results_summary_.emplace_back(
+                BandwidthResultSummary{
+                    .test_name = test_name,
+                    .num_iterations = 1,
+                    .ftype = ftype_str,
+                    .ntype = ntype_str,
+                    .topology = std::string(enchantum::to_string(config.fabric_setup.topology)),
+                    .num_links = config.fabric_setup.num_links,
+                    .num_packets = num_packets_first_pattern,
+                    .num_devices = std::vector<uint32_t>(num_devices_set.begin(), num_devices_set.end()),
+                    .packet_size = packet_size_first_pattern,
+                    // Push in results for the first iteration
+                    .cycles_vector = {static_cast<double>(max_cycles)},
+                    .bandwidth_vector_GB_s = {bandwidth_GB_s},
+                    .packets_per_second_vector = {packets_per_second},
+                });
         }
         // Case 2: This is not the first iteration of a test.
         // Multi-iteration tests are executed sequentially, so we can just append to the last-created test entry
@@ -1060,8 +1082,7 @@ private:
         stat_order_.push_back(BandwidthStatistics::BandwidthMin);
         for (auto& result : bandwidth_results_summary_) {
             result.statistics_vector.push_back(
-                *std::min_element(result.bandwidth_vector_GB_s.begin(), result.bandwidth_vector_GB_s.end())
-            );
+                *std::min_element(result.bandwidth_vector_GB_s.begin(), result.bandwidth_vector_GB_s.end()));
         }
     }
 
@@ -1070,8 +1091,7 @@ private:
         stat_order_.push_back(BandwidthStatistics::BandwidthMax);
         for (auto& result : bandwidth_results_summary_) {
             result.statistics_vector.push_back(
-                *std::max_element(result.bandwidth_vector_GB_s.begin(), result.bandwidth_vector_GB_s.end())
-            );
+                *std::max_element(result.bandwidth_vector_GB_s.begin(), result.bandwidth_vector_GB_s.end()));
         }
     }
 
@@ -1140,14 +1160,13 @@ private:
 
         csv_stream.close();
         log_info(tt::LogTest, "Bandwidth results appended to CSV file: {}", csv_file_path_.string());
-
     }
 
     std::vector<GoldenCsvEntry>::iterator fetch_corresponding_golden_entry(const BandwidthResultSummary& test_result);
 
     void generate_bandwidth_summary_csv() {
-        // Bandwidth summary CSV file is generated separately from Bandwidth CSV because we need to wait for all multirun tests to complete
-        // Generate detailed CSV filename
+        // Bandwidth summary CSV file is generated separately from Bandwidth CSV because we need to wait for all
+        // multirun tests to complete Generate detailed CSV filename
         std::ostringstream summary_oss;
         auto arch_name = tt::tt_metal::hal::get_arch_name();
         summary_oss << "bandwidth_summary_results_" << arch_name << ".csv";
@@ -1177,14 +1196,9 @@ private:
         for (const auto& result : bandwidth_results_summary_) {
             // Convert vector of num_devices to a string representation
             std::string num_devices_str = convert_num_devices_to_string(result.num_devices);
-            summary_csv_stream
-                << result.test_name << ","
-                << result.ftype << ","
-                << result.ntype << ","
-                << result.topology << ",\"" << num_devices_str << "\","
-                << result.num_links << ","
-                << result.packet_size << ","
-                << result.num_iterations;
+            summary_csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << ","
+                               << result.topology << ",\"" << num_devices_str << "\"," << result.num_links << ","
+                               << result.packet_size << "," << result.num_iterations;
             for (double stat : result.statistics_vector) {
                 summary_csv_stream << "," << std::fixed << std::setprecision(6) << stat;
             }
@@ -1326,7 +1340,11 @@ private:
 
     std::string convert_num_devices_to_string(const std::vector<uint32_t>& num_devices);
 
-    std::string generate_failed_test_format_string(const BandwidthResultSummary& test_result, double test_result_avg_bandwidth, double difference_percent, double acceptable_tolerance);
+    std::string generate_failed_test_format_string(
+        const BandwidthResultSummary& test_result,
+        double test_result_avg_bandwidth,
+        double difference_percent,
+        double acceptable_tolerance);
 
     void compare_summary_results_with_golden() {
         if (golden_csv_entries_.empty()) {
@@ -1446,7 +1464,9 @@ private:
     std::map<FabricNodeId, std::map<CoreCoord, uint64_t>> device_core_cycles_;
     std::vector<BandwidthResult> bandwidth_results_;
     std::vector<BandwidthResultSummary> bandwidth_results_summary_;
-    std::vector<TelemetryEntry> telemetry_entries_;  // Per-test raw data
+    std::vector<TelemetryEntry> telemetry_entries_;           // Per-test raw data
+    std::vector<CodeProfilingEntry> code_profiling_entries_;  // Per-test code profiling data
+    bool code_profiling_enabled_ = false;
 
     // Device frequency cache to avoid repeated calculations
     std::unordered_map<FabricNodeId, uint32_t> device_freq_mhz_map_;
@@ -1467,4 +1487,15 @@ private:
 
     // Golden CSV comparison statistics
     std::filesystem::path comparison_statistics_csv_file_path_;
+
+    // Ethernet core buffer readback helper
+    std::unique_ptr<EthCoreBufferReadback> eth_readback_;
+
+    // Getter for lazy initialization of eth_readback_
+    EthCoreBufferReadback& get_eth_readback() {
+        if (!eth_readback_) {
+            eth_readback_ = std::make_unique<EthCoreBufferReadback>(test_devices_, *fixture_);
+        }
+        return *eth_readback_;
+    }
 };
