@@ -432,7 +432,7 @@ class DeepseekGenerator:
         sampling: SamplingParams | None = None,
         teacher_forcing=None,
         early_print_first_user: bool = True,
-        num_runs: int = 1,
+        repeat_batches: int = 1,
         validate_against_ref: bool = False,
         reference_texts: dict[str, str] | None = None,
     ) -> List[List[int]]:
@@ -454,9 +454,9 @@ class DeepseekGenerator:
         tokens_batched, lengths = self._pad_batch(encoded)  # [USERS_PER_ROW, seq_len]
 
         logger.info(f"Lengths of (encoded) prompts: {lengths}")
-        # running for num_runs times
-        for run_idx in range(num_runs):
-            logger.info(f"Starting generation run {run_idx + 1}/{num_runs}...")
+        # running for repeat_batches times
+        for run_idx in range(repeat_batches):
+            logger.info(f"Starting generation run {run_idx + 1}/{repeat_batches}...")
 
             # Prefill
             self._prepare_run_configs("prefill")

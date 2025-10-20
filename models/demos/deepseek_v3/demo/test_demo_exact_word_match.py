@@ -39,10 +39,10 @@ def load_reference_map(path: Path) -> dict[str, str]:
     [200],
 )
 @pytest.mark.parametrize(
-    "num_runs",
+    "repeat_batches",
     [1],
 )
-def test_multi_prompt_generation_matches_reference(max_new_tokens, num_runs):
+def test_multi_prompt_generation_matches_reference(max_new_tokens, repeat_batches):
     """
     Loads a JSON dict {prompt: expected_text}, executes the demo ONCE with up to 32 prompts
     by calling run_demo(), and validates each returned generation['text'] against its reference.
@@ -67,7 +67,7 @@ def test_multi_prompt_generation_matches_reference(max_new_tokens, num_runs):
         random_weights=False,
         token_accuracy=False,
         early_print_first_user=False,
-        num_runs=num_runs,
+        repeat_batches=repeat_batches,
         validate_against_ref=True,
         reference_texts=ref_map,
     )
