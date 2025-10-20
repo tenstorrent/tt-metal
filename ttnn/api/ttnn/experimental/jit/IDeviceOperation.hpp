@@ -16,7 +16,7 @@ struct IDeviceOperation {
     virtual tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const = 0;
 
-    virtual Tensor invoke(std::vector<Tensor> input_tensors) = 0;
+    virtual std::vector<Tensor> invoke(std::vector<Tensor> input_tensors) = 0;
     virtual ~IDeviceOperation() = default;
 };
 

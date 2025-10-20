@@ -10,6 +10,7 @@
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/data_movement/split/device/split_op.hpp"
 #include "ttnn/experimental/jit/context.hpp"
+#include "ttnn/operations/operation_binder.hpp"
 #include "ttnn/types.hpp"
 
 #include "split.hpp"
@@ -36,32 +37,11 @@ void bind_experimental_split(pybind11::module& module) {
 
             // Create SplitDeviceOperation struct
             SplitDeviceOperation split_op{num_splits, dim, output_mem_config};
-
-            // Use Context to add a node with the args
-            auto& context = ttnn::experimental::jit::Context::instance();
-
             // Create inputs vector for the node
             std::vector<ttnn::Tensor> inputs = {input_tensor};
 
-            // Create shared_ptr to hold the args
-            auto args_ptr = std::make_shared<SplitDeviceOperation>(split_op);
-
-            // Add node to context
-            auto node_id = context.create_node(
-                inputs, "ttnn::split", std::static_pointer_cast<ttnn::experimental::jit::IDeviceOperation>(args_ptr));
-
-            auto output_specs = args_ptr->compute_output_specs(inputs);
-
-            // Create output tensors for each split
-            std::vector<ttnn::Tensor> output_tensors;
-            for (const auto& spec : output_specs) {
-                auto output_tensor = Tensor(input_tensor.storage(), spec, input_tensor.tensor_topology());
-                output_tensor = tt::tt_metal::set_tensor_id(output_tensor);
-                output_tensor.set_producer_node(node_id);
-                output_tensors.push_back(output_tensor);
-            }
-
-            return output_tensors;
+            return ttnn::operations::bind_operation(
+                inputs, "ttnn::split", std::make_shared<SplitDeviceOperation>(split_op));
         },
         py::arg("input_tensor"),
         py::arg("num_splits"),

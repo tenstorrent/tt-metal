@@ -36,7 +36,7 @@ struct SplitDeviceOperation : public ttnn::experimental::jit::IDeviceOperation {
         return tt::stl::hash::hash_objects_with_default_seed(num_splits, dim, output_mem_config);
     }
 
-    Tensor invoke(std::vector<Tensor> input_tensors) override;
+    std::vector<Tensor> invoke(std::vector<Tensor> input_tensors) override;
 
     void validate(const std::vector<Tensor>& input_tensors) const override;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const override;

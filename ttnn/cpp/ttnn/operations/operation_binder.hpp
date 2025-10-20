@@ -1,0 +1,55 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+#pragma once
+
+#include <ttnn/experimental/jit/IDeviceOperation.hpp>
+#include <ttnn/tensor/tensor.hpp>
+
+// This is not the most elegant file in the world, for now I am just encapsulating everything
+// I will deal with this later.
+
+namespace ttnn::operations {
+
+enum class JitOperationType {
+    LAZY_JIT,
+    EAGER_JIT,
+};
+
+static JitOperationType jit_operation_type = JitOperationType::LAZY_JIT;
+
+static std::vector<ttnn::Tensor> bind_operation(
+    std::vector<ttnn::Tensor> inputs,
+    const std::string&& operation_name,
+    std::shared_ptr<ttnn::experimental::jit::IDeviceOperation> operation) {
+    // Use Context to add a node with the args
+    auto& context = ttnn::experimental::jit::Context::instance();
+
+    // Create shared_ptr to hold the args
+    auto args_ptr = std::move(operation);
+
+    // Add node to context
+    auto node_id = context.create_node(
+        inputs,
+        std::move(operation_name),
+        std::static_pointer_cast<ttnn::experimental::jit::IDeviceOperation>(args_ptr));
+
+    auto output_specs = args_ptr->compute_output_specs(inputs);
+
+    // Create output tensors for each spec
+    std::vector<ttnn::Tensor> output_tensors;
+    for (const auto& spec : output_specs) {
+        // I am not entirely sure if this is true in any device...
+        auto output_tensor = tt::tt_metal::create_device_tensor(spec, inputs[0].device());
+        output_tensor = tt::tt_metal::set_tensor_id(output_tensor);
+        output_tensor.set_producer_node(node_id);
+        output_tensors.push_back(output_tensor);
+    }
+
+    if (jit_operation_type == JitOperationType::LAZY_JIT) {
+        return output_tensors;
+    }
+
+    return args_ptr->invoke(inputs);
+}
+}  // namespace ttnn::operations

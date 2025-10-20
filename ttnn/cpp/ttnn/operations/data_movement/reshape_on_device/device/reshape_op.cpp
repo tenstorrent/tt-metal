@@ -14,7 +14,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
-ttnn::Tensor ReshapeDeviceOperation::invoke(std::vector<Tensor> input_tensors) {
+std::vector<ttnn::Tensor> ReshapeDeviceOperation::invoke(std::vector<Tensor> input_tensors) {
     // // No-op (Will do a tensor copy)
     // if (((input_tensor.layout() == Layout::TILE or input_tensor.layout() == Layout::ROW_MAJOR) &&
     //      padded_output_shape[3] == input_tensor.padded_shape()[3])) {
@@ -41,7 +41,7 @@ ttnn::Tensor ReshapeDeviceOperation::invoke(std::vector<Tensor> input_tensors) {
     //         input_tensor.device(),
     //         output_mem_config);
     // }
-    return tt::tt_metal::operation::run(*this, input_tensors).at(0);
+    return tt::tt_metal::operation::run(*this, input_tensors);
 }
 
 void ReshapeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
