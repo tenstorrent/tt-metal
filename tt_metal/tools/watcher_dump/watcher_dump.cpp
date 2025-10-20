@@ -133,7 +133,7 @@ int main(int argc, char* argv[]) {
             }
         } else if ((s.rfind("-n=", 0) == 0) || (s.rfind("--num-hw-cqs==", 0) == 0)) {
             string value_str = s.substr(s.find("=") + 1);
-            num_hw_cqs = std::stoi(value_str.c_str());
+            num_hw_cqs = std::stoi(value_str);
         } else if (s == "-w" || s == "--dump-watcher") {
             dump_watcher = true;
         } else if (s == "-c" || s == "--dump-cqs") {

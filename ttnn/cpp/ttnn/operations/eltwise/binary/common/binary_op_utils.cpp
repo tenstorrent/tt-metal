@@ -161,8 +161,8 @@ std::map<std::string, std::string> get_defines(
         defines.insert({"SFPU_OP_TYPECAST_INCLUDE", "1"});
     }
 
-    defines["ELTWISE_OP"] = op_name.c_str();
-    defines["ELTWISE_OP_TYPE"] = op_binary_type.c_str();
+    defines["ELTWISE_OP"] = op_name;
+    defines["ELTWISE_OP_TYPE"] = op_binary_type;
     if (fused_activations.has_value()) {
         if (op_type == BinaryOpType::ADD and fused_activations->size() == 1 and
             fused_activations->at(0).type() == UnaryOpType::RELU and not input_tensor_a_activation.has_value()) {
