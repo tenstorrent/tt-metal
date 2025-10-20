@@ -756,32 +756,6 @@ bool PhysicalSystemDescriptor::is_cross_host_eth_link(AsicID asic_id, uint8_t ch
     return false;
 }
 
-bool PhysicalSystemDescriptor::is_external_eth_link_for_ubb(AsicID asic_id, uint8_t chan_id) const {
-    bool is_external_cable = false;
-
-    auto board_type = asic_descriptors_.at(asic_id).board_type;
-
-    if (board_type == BoardType::UBB) {
-        // Use UBB ID helper to determine ASIC position on UBB systems
-        auto ubb_asic_id = *asic_descriptors_.at(asic_id).asic_location;
-
-        if (ubb_asic_id == 1) {
-            // UBB 1 has external cables on channels 0-7
-            is_external_cable = (chan_id >= 0 and chan_id <= 7);
-        } else if (ubb_asic_id >= 2 and ubb_asic_id <= 4) {
-            // UBB 2 to 4 has external cables on channels 0-3
-            is_external_cable = (chan_id >= 0 and chan_id <= 3);
-        } else if (ubb_asic_id == 5) {
-            // UBB 5 has external cables on channels 4-7
-            is_external_cable = (chan_id >= 4 and chan_id <= 7);
-        }
-    } else {
-        TT_THROW("Currently not implemented for board type {}", board_type);
-    }
-
-    return is_external_cable;
-}
-
 std::vector<std::string> PhysicalSystemDescriptor::get_host_neighbors(const std::string& hostname) const {
     TT_FATAL(
         system_graph_.host_connectivity_graph.find(hostname) != system_graph_.host_connectivity_graph.end(),
