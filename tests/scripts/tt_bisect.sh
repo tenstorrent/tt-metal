@@ -52,9 +52,10 @@ if [ "$tracy_enabled" -eq 1 ]; then
 fi
 
 # Creating virtual environment where we can install ttnn
-./create_venv.sh
 export CC=clang-17
 export CXX=clang++-17
+./create_venv.sh
+
 
 pip install -r models/tt_transformers/requirements.txt
 
