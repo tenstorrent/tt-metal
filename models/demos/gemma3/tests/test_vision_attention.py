@@ -53,7 +53,7 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds):
         tt_ccl=TT_CCL(mesh_device),
         state_dict=state_dict,
         state_dict_prefix=first_layer_prefix,
-        weight_cache_path=None,
+        weight_cache_path=model_args.weight_cache_path(dtype),
         dtype=dtype,
         configuration=model_args,
     )
