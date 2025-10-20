@@ -95,6 +95,7 @@ jobs:
             mesh-device: TG,
             tt-llama-text-ver: llama3_70b_galaxy,
             override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
+            extra-args: "--data_parallel_size 4 --max_seqs_in_batch 8 --async_engine",
             multimodal: false,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
@@ -194,6 +195,12 @@ jobs:
             export OVERRIDE_TT_CONFIG=()
           fi
 
+          if [ -n "${{ matrix.test-group.extra-args }}" ]; then
+            export EXTRA_ARGS=("${{ matrix.test-group.extra-args }}")
+          else
+            export EXTRA_ARGS=()
+          fi
+
           echo "Override config: ${OVERRIDE_TT_CONFIG[@]}"
 
           export MESH_DEVICE=${{ matrix.test-group.mesh-device }}
@@ -207,10 +214,14 @@ jobs:
           # vLLM environment variables
           export VLLM_RPC_TIMEOUT=300000
 
+          export VLLM_USE_V1=1
+
           python3 vllm/examples/server_example_tt.py \
+            --num_scheduler_steps 1 \
             --model ${{ matrix.test-group.model }} \
             ${{ matrix.test-group.additional-args }} \
             "${OVERRIDE_TT_CONFIG[@]}" \
+            "${EXTRA_ARGS[@]}"
             > "${FILE_SERVER_LOG}" 2>&1 &
 
           # Store server's pid for cleanup
