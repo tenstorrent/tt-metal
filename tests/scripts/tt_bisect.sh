@@ -97,12 +97,40 @@ PY
 echo "Starting git bisect…"
 git bisect start "$bad_commit" "$good_commit"
 
+
+detect_galaxy() {
+    local smi_output=$(tt-smi -ls 2>/dev/null)
+
+    if echo "$smi_output" | grep -q "Wormhole"; then
+        local device_count=$(echo "$smi_output" | grep -c "tt-galaxy-wh")
+        if [[ "$device_count" -ge 32 ]]; then
+            echo "topology-6u"
+            return 0
+        fi
+    fi
+
+    # Default for non-galaxy systems
+    echo ""
+}
+
+is_galaxy=$(detect_galaxy)
+echo "Is Galaxy Detected: $is_galaxy"
+
 found=false
 while [[ "$found" == "false" ]]; do
   rev="$(git rev-parse --short=12 HEAD)"
   echo "::group::Building $rev"
 
   fresh_clean
+
+  echo "Resetting devices..."
+  if [ "$is_galaxy" == "topology-6u" ]; then
+    echo "Using galaxy reset mode"
+    tt-smi -glx_reset_auto 2>&1 || true  # use galaxy reset mode
+  else
+    tt-smi -r >/dev/null 2>&1 || true  # use regular reset mode
+  fi
+
 
   build_rc=0
   if [ "$tracy_enabled" -eq 1 ]; then
@@ -134,21 +162,6 @@ while [[ "$found" == "false" ]]; do
   echo "::endgroup::"
 
 
-  detect_galaxy() {
-      local smi_output=$(tt-smi -ls 2>/dev/null)
-
-      if echo "$smi_output" | grep -q "Wormhole"; then
-          local device_count=$(echo "$smi_output" | grep -c "tt-galaxy-wh")
-          if [[ "$device_count" -ge 32 ]]; then
-              echo "topology-6u"
-              return 0
-          fi
-      fi
-
-      # Default for non-galaxy systems
-      echo ""
-  }
-
   is_galaxy=$(detect_galaxy)
   echo "Is Galaxy Detected: $is_galaxy"
 
@@ -161,13 +174,6 @@ while [[ "$found" == "false" ]]; do
     run_idx=1
     while [ $run_idx -le $retries ]; do
       echo "Attempt $run_idx/$retries on $(git rev-parse HEAD)"
-      echo "Resetting devices..."
-      if [ "$is_galaxy" == "topology-6u" ]; then
-        echo "Using galaxy reset mode"
-        tt-smi -glx_reset_auto 2>&1 || true  # use galaxy reset mode
-      else
-        tt-smi -r >/dev/null 2>&1 || true  # use regular reset mode
-      fi
 
       echo "Run: $test"
       if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test" 2>&1 | tee "$output_file"; then
