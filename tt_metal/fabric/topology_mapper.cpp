@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <unordered_set>
 #include <limits>
-#include <queue>
 #include <functional>
 
 #include <tt-logger/tt-logger.hpp>
@@ -201,7 +200,7 @@ void TopologyMapper::build_mapping() {
         "MetalContext::set_custom_fabric_topology");
 
     // Build host-to-mesh mapping via distributed all-gather of local bindings.
-    auto mesh_id_host_names = build_cross_host_mesh_mappings();
+    auto mesh_id_host_names = build_host_mesh_mapping();
 
     // Only 1 host builds the mapping the rest will wait and use the mapping from the 1st host
     if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
@@ -223,12 +222,20 @@ void TopologyMapper::build_mapping() {
     rebuild_host_rank_structs_from_mapping();
 }
 
-std::unordered_map<MeshId, std::unordered_set<HostName>> TopologyMapper::build_cross_host_mesh_mappings() {
+std::unordered_map<MeshId, std::unordered_set<HostName>> TopologyMapper::build_host_mesh_mapping() {
     std::unordered_map<MeshId, std::unordered_set<HostName>> mesh_id_to_hosts;
 
-    // Gather (mesh_id, host_rank) for ALL meshes owned by each rank.
+    // Gather (mesh_id, host_rank) for ALL meshes owned by each rank, but only if multi-host.
     auto global_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const std::size_t world_size = *global_context->size();
+
+    // Single-host or uninitialized distributed context: compute mapping locally without any collectives
+    if (world_size <= 1) {
+        for (const auto& mesh_id : local_mesh_binding_.mesh_ids) {
+            mesh_id_to_hosts[mesh_id].insert(physical_system_descriptor_.my_host_name());
+        }
+        return mesh_id_to_hosts;
+    }
 
     // Build MPI rank -> host name map using PhysicalSystemDescriptor's rank mapping.
     std::vector<HostName> rank_to_host(world_size);
@@ -686,6 +693,11 @@ void TopologyMapper::broadcast_mapping_to_all_hosts() {
 void TopologyMapper::receive_mapping_from_host(int rank) {
     using namespace tt::tt_metal::distributed::multihost;
     auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+
+    // If not in distributed context, nothing to receive
+    if (*distributed_context.size() <= 1) {
+        return;
+    }
 
     auto my_rank = *distributed_context.rank();
     if (static_cast<int>(my_rank) == rank) {

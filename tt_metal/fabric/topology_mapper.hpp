@@ -192,7 +192,7 @@ private:
      * to the ASIC IDs of the physical descriptor. Uses MPI through distributed context
      * to gather the mappings from all ranks.
      */
-    HostMeshMapping build_cross_host_mesh_mappings();
+    HostMeshMapping build_host_mesh_mapping();
 
     /**
      * @brief Build logical adjacency maps from mesh graph connectivity
