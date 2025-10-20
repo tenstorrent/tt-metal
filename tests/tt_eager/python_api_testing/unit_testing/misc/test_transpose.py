@@ -1285,3 +1285,41 @@ def test_transpose_21803(device):
 
         if torch.any(torch.isinf(torch_output)) or (torch.any(torch.isnan(torch_output))):
             assert False, f"Found infinity values at iteration {i} in ttnn but not in pytorch"
+
+
+def test_transpose_29126(device):
+    # Test DRAM sharding, which uses the same code path as DRAM interleaved
+    h = 8192
+    w = 2048
+
+    dram_cores = 8
+    dram_weight_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(dram_cores - 1, 0),
+            )
+        }
+    )
+    shard_spec = ttnn.ShardSpec(
+        dram_weight_grid,
+        (ttnn.core.roundup(ttnn.core.divup(h, dram_cores), ttnn.TILE_SIZE), w),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+    torch_input = torch.randn(h, w)
+    torch_output = torch_input.transpose(-1, -2)
+
+    ttnn_input = ttnn.as_tensor(
+        torch_input,
+        dtype=ttnn.float32,
+        device=device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(-1, -2), mesh_shape=(1, 1)),
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=memory_config,
+    )
+    ttnn_output = ttnn.transpose(ttnn_input, -1, -2, memory_config=memory_config)
+    ttnn_output = ttnn.to_torch(ttnn_output.cpu())
+
+    assert_with_pcc(torch_output, ttnn_output, 0.9999)
