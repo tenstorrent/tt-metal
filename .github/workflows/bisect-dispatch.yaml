@@ -29,7 +29,6 @@ on:
           - config-t3000
           - config-tg
           - topology-6u
-          - config-t3000
         description: "Runner Type Label"
       commit-range:
         required: true
@@ -285,10 +284,6 @@ jobs:
           bisect_args+=(-b "$BAD_COMMIT")
           bisect_args+=(-g "$GOOD_COMMIT")
           bisect_args+=(-r "$RETRIES")
-
-          if [[ "${{ inputs.download-artifacts }}" == 'true' ]]; then
-            bisect_args+=(-a)
-          fi
 
           if [[ "${{ inputs.tracy }}" == 'true' ]]; then
             bisect_args+=(-p)
