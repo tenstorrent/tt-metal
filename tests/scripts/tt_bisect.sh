@@ -12,6 +12,7 @@ Usage:
   -p             : enable Tracy profiling
   -r RETRIES     : number of retries (default 3)
   -n             : enable non-deterministic detection mode (ND mode)
+  -a             : enable artifact download optimization (requires gh CLI)
 END
 
 timeout_duration_iteration="30m"
@@ -21,10 +22,11 @@ bad_commit=""
 tracy_enabled=0
 retries=3
 nd_mode=false
+artifact_mode=false
 run_idx=0
 timeout_rc=1
 
-while getopts ":f:g:b:t:pr:n" opt; do
+while getopts ":f:g:b:t:pr:na" opt; do
   case "$opt" in
     f) test="$OPTARG" ;;
     g) good_commit="$OPTARG" ;;
@@ -33,6 +35,7 @@ while getopts ":f:g:b:t:pr:n" opt; do
     p) tracy_enabled=1 ;;
     r) retries="$OPTARG" ;;
     n) nd_mode=true ;;
+    a) artifact_mode=true ;;
     \?) die "Invalid option: -$OPTARG" ;;
     :)  die "Option -$OPTARG requires an argument." ;;
   esac
@@ -42,7 +45,6 @@ done
 [ -n "$good_commit" ] || die "Please specify -g GOOD_SHA."
 [ -n "$bad_commit" ] || die "Please specify -b BAD_SHA."
 
-
 echo "TT_METAL_HOME: $TT_METAL_HOME"
 echo "PYTHONPATH: $PYTHONPATH"
 echo "ARCH_NAME: ${ARCH_NAME:-}"
@@ -51,9 +53,18 @@ if [ "$tracy_enabled" -eq 1 ]; then
   echo "Tracy profiling enabled for builds."
 fi
 
-# Creating virtual environment where we can install ttnn
-./create_venv.sh
-pip install -r models/tt_transformers/requirements.txt
+if [ "$artifact_mode" = true ]; then
+  echo "Artifact download optimization enabled."
+fi
+
+# Set up environment (skip if already in CI container with pre-configured venv)
+if [ ! -d "$PYTHON_ENV_DIR" ]; then
+  echo "Creating virtual environment and installing dependencies..."
+  CXX=clang++-17 CC=clang-17 ./create_venv.sh
+  pip install -r models/tt_transformers/requirements.txt
+else
+  echo "Using existing virtual environment: $PYTHON_ENV_DIR"
+fi
 
 git cat-file -e "$good_commit^{commit}" 2>/dev/null || die "Invalid good commit: $good_commit"
 git cat-file -e "$bad_commit^{commit}" 2>/dev/null  || die "Invalid bad commit: $bad_commit"
@@ -90,26 +101,67 @@ print("ttnn imported from:", ttnn.__file__)
 PY
 }
 
+# Try to download build artifacts from GitHub Actions using external script
+try_download_artifacts() {
+  local commit_sha="$1"
+  local download_script="./build_bisect/download_artifacts.sh"
+
+  if [ ! -f "$download_script" ]; then
+    echo "ERROR: Download artifacts script not found: $download_script"
+    return 1
+  fi
+
+  # Call the external script with appropriate flags
+  if [ "$tracy_enabled" -eq 1 ]; then
+    "$download_script" "$commit_sha" --tracy
+  else
+    "$download_script" "$commit_sha"
+  fi
+}
+
 echo "Starting git bisect…"
 git bisect start "$bad_commit" "$good_commit"
 
 found=false
 while [[ "$found" == "false" ]]; do
   rev="$(git rev-parse --short=12 HEAD)"
+  full_sha="$(git rev-parse HEAD)"
   echo "::group::Building $rev"
 
   fresh_clean
 
   build_rc=0
-  if [ "$tracy_enabled" -eq 1 ]; then
-    ./build_metal.sh \
-      --build-all \
-      --enable-ccache \
-      --enable-profiler || build_rc=$?
+
+  # Try to download artifacts first if artifact mode is enabled
+  if [ "$artifact_mode" = true ]; then
+    if try_download_artifacts "$full_sha"; then
+      echo "Using downloaded artifacts for $rev"
+      build_rc=0
+    else
+      echo "WARNING: Artifact download failed, falling back to local build"
+      if [ "$tracy_enabled" -eq 1 ]; then
+        ./build_metal.sh \
+          --build-all \
+          --enable-ccache \
+          --enable-profiler || build_rc=$?
+      else
+        ./build_metal.sh \
+          --build-all \
+          --enable-ccache || build_rc=$?
+      fi
+    fi
   else
-    ./build_metal.sh \
-      --build-all \
-      --enable-ccache || build_rc=$?
+    # Standard local build
+    if [ "$tracy_enabled" -eq 1 ]; then
+      ./build_metal.sh \
+        --build-all \
+        --enable-ccache \
+        --enable-profiler || build_rc=$?
+    else
+      ./build_metal.sh \
+        --build-all \
+        --enable-ccache || build_rc=$?
+    fi
   fi
 
   echo "::endgroup::"
