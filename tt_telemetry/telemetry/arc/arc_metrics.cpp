@@ -15,7 +15,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <telemetry/arc/arc_metrics.hpp>
-#include <telemetry/ethernet/ethernet_endpoint.hpp>
+#include <topology/topology.hpp>
 
 #include <chrono>
 
@@ -29,68 +29,69 @@ void create_arc_metrics(
     std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
     std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
     const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::unique_ptr<TopologyHelper>& topology_translation,
     const std::unique_ptr<tt::tt_metal::Hal>& hal) {
-    tt::umd::tt_ClusterDescriptor* cluster_descriptor = cluster->get_cluster_description();
-
-    // Get all chips using get_ethernet_endpoints_by_chip
-    auto ethernet_endpoints_by_chip = get_ethernet_endpoints_by_chip(cluster);
+    tt::umd::ClusterDescriptor* cluster_descriptor = cluster->get_cluster_description();
 
     // Iterate through all chips and create ARC metrics for MMIO-capable ones
-    for (const auto& [chip_identifier, endpoints] : ethernet_endpoints_by_chip) {
-        tt::umd::chip_id_t chip_id = chip_identifier.id;
-
+    for (tt::ChipId chip_id : cluster_descriptor->get_all_chips()) {
         // Check if this chip has MMIO capability (is a local chip)
         if (cluster_descriptor->is_chip_mmio_capable(chip_id)) {
             tt::umd::TTDevice* device = cluster->get_tt_device(chip_id);
             if (device) {
+                // Get ASICDescriptor
+                std::optional<tt::tt_metal::ASICDescriptor> asic_descriptor =
+                    topology_translation->get_asic_descriptor_for_local_chip(chip_id);
+                TT_FATAL(asic_descriptor.has_value(), "No ASIC descriptor for chip ID {}", chip_id);
+
                 // Get FirmwareInfoProvider from the device
                 auto firmware_provider = device->get_firmware_info_provider();
                 if (firmware_provider) {
                     // Create UInt metrics using FirmwareInfoProvider methods
                     uint_metrics.push_back(std::make_unique<ARCUintMetric>(
-                        chip_identifier,
+                        asic_descriptor.value(),
                         firmware_provider,
                         "AIClock",
                         [firmware_provider]() { return firmware_provider->get_aiclk(); },
                         MetricUnit::MEGAHERTZ));
 
                     uint_metrics.push_back(std::make_unique<ARCUintMetric>(
-                        chip_identifier,
+                        asic_descriptor.value(),
                         firmware_provider,
                         "AXIClock",
                         [firmware_provider]() { return firmware_provider->get_axiclk(); },
                         MetricUnit::MEGAHERTZ));
 
                     uint_metrics.push_back(std::make_unique<ARCUintMetric>(
-                        chip_identifier,
+                        asic_descriptor.value(),
                         firmware_provider,
                         "ARCClock",
                         [firmware_provider]() { return firmware_provider->get_arcclk(); },
                         MetricUnit::MEGAHERTZ));
 
                     uint_metrics.push_back(std::make_unique<ARCUintMetric>(
-                        chip_identifier,
+                        asic_descriptor.value(),
                         firmware_provider,
                         "FanSpeed",
                         [firmware_provider]() { return firmware_provider->get_fan_speed(); },
                         MetricUnit::REVOLUTIONS_PER_MINUTE));
 
                     uint_metrics.push_back(std::make_unique<ARCUintMetric>(
-                        chip_identifier,
+                        asic_descriptor.value(),
                         firmware_provider,
                         "TDP",
                         [firmware_provider]() { return firmware_provider->get_tdp(); },
                         MetricUnit::WATTS));
 
                     uint_metrics.push_back(std::make_unique<ARCUintMetric>(
-                        chip_identifier,
+                        asic_descriptor.value(),
                         firmware_provider,
                         "TDC",
                         [firmware_provider]() { return firmware_provider->get_tdc(); },
                         MetricUnit::AMPERES));
 
                     uint_metrics.push_back(std::make_unique<ARCUintMetric>(
-                        chip_identifier,
+                        asic_descriptor.value(),
                         firmware_provider,
                         "VCore",
                         [firmware_provider]() { return firmware_provider->get_vcore(); },
@@ -98,7 +99,7 @@ void create_arc_metrics(
 
                     // Create Double metrics using FirmwareInfoProvider methods
                     double_metrics.push_back(std::make_unique<ARCDoubleMetric>(
-                        chip_identifier,
+                        asic_descriptor.value(),
                         firmware_provider,
                         "ASICTemperature",
                         [firmware_provider]() {
@@ -107,7 +108,7 @@ void create_arc_metrics(
                         MetricUnit::CELSIUS));
 
                     double_metrics.push_back(std::make_unique<ARCDoubleMetric>(
-                        chip_identifier,
+                        asic_descriptor.value(),
                         firmware_provider,
                         "BoardTemperature",
                         [firmware_provider]() { return firmware_provider->get_board_temperature(); },
@@ -119,18 +120,24 @@ void create_arc_metrics(
     log_info(tt::LogAlways, "Created ARC metrics using FirmwareInfoProvider");
 }
 
+static std::vector<std::string> arc_telemetry_path(
+    tt::tt_metal::TrayID tray_id, tt::tt_metal::ASICLocation asic_location, const std::string& metric_name) {
+    // Create path in format: tray{n}/chip{m}/metric_name
+    return {"tray" + std::to_string(*tray_id), "chip" + std::to_string(*asic_location), metric_name};
+}
+
 /**************************************************************************************************
 | ARCUintMetric Class
 **************************************************************************************************/
 
 ARCUintMetric::ARCUintMetric(
-    ChipIdentifier chip_id,
+    tt::tt_metal::ASICDescriptor asic_descriptor,
     tt::umd::FirmwareInfoProvider* firmware_provider,
     const std::string& metric_name,
     std::function<std::optional<uint32_t>()> getter_func,
     MetricUnit units) :
     UIntMetric(units),
-    chip_id_(chip_id),
+    asic_descriptor_(asic_descriptor),
     firmware_provider_(firmware_provider),
     metric_name_(metric_name),
     getter_func_(getter_func) {
@@ -139,13 +146,7 @@ ARCUintMetric::ARCUintMetric(
 }
 
 const std::vector<std::string> ARCUintMetric::telemetry_path() const {
-    // Start with the chip identifier path
-    std::vector<std::string> path = chip_id_.telemetry_path();
-
-    // Add the metric name
-    path.push_back(metric_name_);
-
-    return path;
+    return arc_telemetry_path(asic_descriptor_.tray_id, asic_descriptor_.asic_location, metric_name_);
 }
 
 void ARCUintMetric::update(
@@ -168,13 +169,13 @@ void ARCUintMetric::update(
 **************************************************************************************************/
 
 ARCDoubleMetric::ARCDoubleMetric(
-    ChipIdentifier chip_id,
+    tt::tt_metal::ASICDescriptor asic_descriptor,
     tt::umd::FirmwareInfoProvider* firmware_provider,
     const std::string& metric_name,
     std::function<std::optional<double>()> getter_func,
     MetricUnit units) :
     DoubleMetric(units),
-    chip_id_(chip_id),
+    asic_descriptor_(asic_descriptor),
     firmware_provider_(firmware_provider),
     metric_name_(metric_name),
     getter_func_(getter_func) {
@@ -183,13 +184,7 @@ ARCDoubleMetric::ARCDoubleMetric(
 }
 
 const std::vector<std::string> ARCDoubleMetric::telemetry_path() const {
-    // Start with the chip identifier path
-    std::vector<std::string> path = chip_id_.telemetry_path();
-
-    // Add the metric name
-    path.push_back(metric_name_);
-
-    return path;
+    return arc_telemetry_path(asic_descriptor_.tray_id, asic_descriptor_.asic_location, metric_name_);
 }
 
 void ARCDoubleMetric::update(

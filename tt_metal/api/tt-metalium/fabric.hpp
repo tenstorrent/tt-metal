@@ -10,7 +10,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include <vector>
 #include <umd/device/types/core_coordinates.hpp>
 #include <optional>
@@ -85,7 +85,7 @@ void append_routing_plane_connection_manager_rt_args(
 std::vector<uint32_t> get_forwarding_link_indices(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
 
-FabricNodeId get_fabric_node_id_from_physical_chip_id(chip_id_t physical_chip_id);
+FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id);
 
 std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
     FabricNodeId fabric_node_id, RoutingDirection routing_direction);

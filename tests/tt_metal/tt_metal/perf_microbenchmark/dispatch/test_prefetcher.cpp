@@ -80,9 +80,9 @@ constexpr uint32_t PCIE_TRANSFER_SIZE_DEFAULT = 4096;
 
 constexpr uint32_t host_data_dirty_pattern = 0xbaadf00d;
 
-constexpr CoreType DISPATCH_CORE_TYPE =
-    CoreType::WORKER;  // If this changes, need to pass it into CreateDevice. TODO: Clean this up when when we clean up
-                       // single device creation.
+constexpr tt::CoreType DISPATCH_CORE_TYPE =
+    tt::CoreType::WORKER;  // If this changes, need to pass it into CreateDevice. TODO: Clean this up when when we clean
+                           // up single device creation.
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // Test dispatch program performance
@@ -1773,7 +1773,7 @@ void write_prefetcher_cmd(
     uint32_t prefetch_q_base,
     uint32_t prefetch_q_rd_ptr_addr,
     CoreCoord phys_prefetch_core,
-    tt::Writer& prefetch_q_writer) {
+    umd::Writer& prefetch_q_writer) {
     static vector<uint32_t> read_vec;  // static to avoid realloc
 
     // wait for space
@@ -1832,7 +1832,7 @@ void write_prefetcher_cmds(
     uint32_t prefetch_q_base,
     uint32_t prefetch_q_rd_ptr_addr,
     CoreCoord phys_prefetch_core,
-    tt::Writer& prefetch_q_writer,
+    umd::Writer& prefetch_q_writer,
     bool is_control_only) {
     static uint32_t* host_mem_ptr;
     static uint32_t prefetch_q_dev_ptr;
@@ -1918,7 +1918,7 @@ std::chrono::duration<double> run_test(
     uint32_t prefetch_q_base,
     uint32_t prefetch_q_rd_ptr_addr,
     CoreCoord phys_prefetch_core,
-    tt::Writer& prefetch_q_writer) {
+    umd::Writer& prefetch_q_writer) {
     auto start = std::chrono::system_clock::now();
 
     std::thread t1([&]() {
@@ -2009,7 +2009,7 @@ void configure_for_single_chip(
     TT_ASSERT(cmddat_q_size_g >= 2 * max_prefetch_command_size_g);
 
     // NOTE: this test hijacks hugepage
-    chip_id_t mmio_device_id =
+    ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
@@ -2439,7 +2439,7 @@ int main(int argc, char** argv) {
         }
         log_info(LogTest, "Iterations: {}", iterations_g);
 
-        tt::Writer prefetch_q_writer = tt::tt_metal::MetalContext::instance().get_cluster().get_static_tlb_writer(
+        umd::Writer prefetch_q_writer = tt::tt_metal::MetalContext::instance().get_cluster().get_static_tlb_writer(
             tt_cxy_pair(device->id(), phys_prefetch_core_g));
 
         vector<uint32_t> cmds, terminate_cmds;

@@ -466,7 +466,7 @@ MeshDevice::~MeshDevice() {
     close();
 }
 
-IDevice* MeshDevice::get_device(chip_id_t physical_device_id) const {
+IDevice* MeshDevice::get_device(ChipId physical_device_id) const {
     for (auto device : this->get_devices()) {
         if (device->id() == physical_device_id) {
             return device;
@@ -620,7 +620,7 @@ const MeshDeviceView& MeshDevice::get_view() const {
 
 int MeshDevice::id() const { return mesh_id_; }
 // For a mesh, build id is the same as the device id for the reference device
-chip_id_t MeshDevice::build_id() const { return reference_device()->id(); }
+ChipId MeshDevice::build_id() const { return reference_device()->id(); }
 
 bool MeshDevice::is_parent_mesh() const { return parent_mesh_ == nullptr; }
 
@@ -747,7 +747,7 @@ bool MeshDevice::is_inactive_ethernet_core(CoreCoord /*logical_core*/) const {
     TT_THROW("is_inactive_ethernet_core() is not supported on MeshDevice - use individual devices instead");
 }
 
-std::tuple<chip_id_t, CoreCoord> MeshDevice::get_connected_ethernet_core(CoreCoord /*eth_core*/) const {
+std::tuple<ChipId, CoreCoord> MeshDevice::get_connected_ethernet_core(CoreCoord /*eth_core*/) const {
     TT_THROW("get_connected_ethernet_core() is not supported on MeshDevice - use individual devices instead");
 }
 
@@ -755,7 +755,7 @@ bool MeshDevice::is_active_ethernet_core(CoreCoord /*logical_core*/, bool /*skip
     TT_THROW("is_active_ethernet_core() is not supported on MeshDevice - use individual devices instead");
 }
 
-std::vector<CoreCoord> MeshDevice::get_ethernet_sockets(chip_id_t /*connected_chip_id*/) const {
+std::vector<CoreCoord> MeshDevice::get_ethernet_sockets(ChipId /*connected_chip_id*/) const {
     TT_THROW("get_ethernet_sockets() is not supported on MeshDevice - use individual devices instead");
 }
 

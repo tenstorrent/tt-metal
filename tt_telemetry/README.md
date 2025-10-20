@@ -36,7 +36,7 @@ bool is_ethernet_endpoint_up(const tt::Cluster &cluster, const EthernetEndpoint 
         // The link status should be auto-updated periodically by code running on RISC0 but this
         // may not be guaranteed in some cases, so we retain the option to do it explicitly.
         tt::llrt::internal_::send_msg_to_eth_mailbox(
-            ep.chip.id,         // device ID (chip_id_t)
+            ep.chip.id,         // device ID (ChipId)
             virtual_eth_core,   // virtual core (CoreCoord == tt_cxy_pair)
             tt::tt_metal::FWMailboxMsg::ETH_MSG_LINK_STATUS_CHECK,
             {0xffffffff},       // args: arg0=copy_addr -- we don't want to copy this anywhere so as not to overwrite anything, just perform update of existing struct we will read LINK_UP from

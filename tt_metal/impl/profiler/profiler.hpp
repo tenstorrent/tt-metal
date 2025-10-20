@@ -73,7 +73,7 @@ private:
     tt::ARCH device_arch{tt::ARCH::Invalid};
 
     // Device ID
-    chip_id_t device_id{};
+    ChipId device_id{};
 
     // Device frequency
     int device_core_frequency{};
@@ -94,8 +94,7 @@ private:
     std::unordered_map<uint16_t, tracy::MarkerDetails> hash_to_zone_src_locations;
 
     // Device-Core tracy context
-    std::unordered_map<std::pair<chip_id_t, CoreCoord>, TracyTTCtx, pair_hash<chip_id_t, CoreCoord>>
-        device_tracy_contexts;
+    std::unordered_map<std::pair<ChipId, CoreCoord>, TracyTTCtx, pair_hash<ChipId, CoreCoord>> device_tracy_contexts;
 
     // (cpu time, device time, frequency) for sync propagated from root device
     SyncInfo device_sync_info;
@@ -164,7 +163,7 @@ private:
         std::set<tracy::TTDeviceMarker>& device_markers,
         uint32_t run_host_id,
         const std::string& op_name,
-        chip_id_t device_id,
+        ChipId device_id,
         const CoreCoord& physical_core,
         tracy::RiscType risc_type,
         uint64_t data,
@@ -188,7 +187,7 @@ private:
         const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec);
 
     // Update tracy context for the core
-    void updateTracyContext(const std::pair<chip_id_t, CoreCoord>& device_core);
+    void updateTracyContext(const std::pair<ChipId, CoreCoord>& device_core);
 
     // Iterate over all markers and update their data if needed
     void processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& device_markers);

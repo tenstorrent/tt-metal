@@ -273,9 +273,9 @@ inline void RunPersistent1dFabricLatencyTest(
         if (is_connected_in_direction) {
             const auto device_fabric_node_id =
                 tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->get_devices()[0]->id());
-            chip_id_t connected_chip_id = direction == tt::tt_fabric::EdmLineFabricOpInterface::FORWARD
-                                              ? forward_device->get_devices()[0]->id()
-                                              : backward_device->get_devices()[0]->id();
+            ChipId connected_chip_id = direction == tt::tt_fabric::EdmLineFabricOpInterface::FORWARD
+                                           ? forward_device->get_devices()[0]->id()
+                                           : backward_device->get_devices()[0]->id();
             const auto connected_device_fabric_node_id =
                 tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(connected_chip_id);
             tt::tt_fabric::append_fabric_connection_rt_args(
