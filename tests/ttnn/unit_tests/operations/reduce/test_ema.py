@@ -13,7 +13,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "T, B, C, cores_y, cores_x",
     [
-        (16384, 4, 8192, 8, 8),  # base case
+        (16384, 4, 8192, 0, 0),  # base case
     ],
 )
 def test_ema(device, T, B, C, cores_y, cores_x):

@@ -48,8 +48,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ema_multi_core(
 
     // We now have the number of cores to use, compute per core parameters
     auto all_cores = CoreRangeSet(grid_to_cores(num_cores, grid_size.x, grid_size.y, false));
-    log_warning(tt::LogOp, "Using {} cores out of {} available", num_cores, num_cores_available);
-    log_warning(tt::LogOp, "Provided grid size: {}x{}", grid_size.x, grid_size.y);
+    log_debug(tt::LogOp, "Provided grid size: y={}, x={}", grid_size.y, grid_size.x);
+    log_debug(tt::LogOp, "Using {} cores out of {} available", num_cores, num_cores_available);
 
     auto total_tiles_per_core = total_tiles / num_cores;
     auto total_batches_per_core = total_tiles_per_core / tiles_per_channel;
