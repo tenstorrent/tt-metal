@@ -34,6 +34,7 @@ int32_t get_static_tlb_size() {
 namespace blackhole {
 
 static constexpr uint32_t NUM_PORTS_PER_DRAM_CHANNEL = 3;
+static constexpr uint32_t NUM_DRAM_CHANNELS = 8;
 
 int32_t get_static_tlb_size() {
     return 2 * (1 << 20);
@@ -64,7 +65,7 @@ void configure_static_tlbs(
     }
 
     std::int32_t address = 0;
-    // Setup static TLBs for all worker cores
+    // Setup static TLBs for all worker cores.
     for (const tt::umd::CoreCoord& core : sdesc.get_cores(tt::CoreType::TENSIX, tt::CoordSystem::TRANSLATED)) {
         // TODO
         // Note: see issue #10107
@@ -77,6 +78,16 @@ void configure_static_tlbs(
     // Setup static TLBs for all eth cores
     for (const  tt::umd::CoreCoord& core : sdesc.get_cores(tt::CoreType::ETH, tt::CoordSystem::TRANSLATED)) {
         device_driver.configure_tlb(mmio_device_id, core, get_static_tlb_size(), address, tt::umd::tlb_data::Strict);
+    }
+
+    if (arch == tt::ARCH::BLACKHOLE) {
+        // Setup static 4GB tlbs for DRAM cores.
+        uint32_t dram_addr = 0;
+        for (std::uint32_t dram_channel = 0; dram_channel < blackhole::NUM_DRAM_CHANNELS; dram_channel++) {
+            tt::umd::CoreCoord dram_core =
+                tt::umd::CoreCoord(blackhole::ddr_to_noc0(dram_channel), CoreType::DRAM, CoordSystem::NOC0);
+            device_driver.configure_tlb(mmio_device_id, dram_core, 4ULL * (1ULL << 30), dram_addr, TLB_DATA::Posted);
+        }
     }
 }
 
