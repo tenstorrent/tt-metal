@@ -106,7 +106,8 @@ def test_max_pool2d_with_indices(device, in_c):
 
     # Compare outputs using allclose
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
-    ttnn_indices_torch = ttnn.to_torch(indices)
+    # convert indexes to int64 for compatability with torch
+    ttnn_indices_torch = ttnn.to_torch(indices, dtype=torch.int64)
 
     # Check that ttnn_output_base is exactly equal to ttnn_output
     # ttnn_output_base = ttnn.max_pool2d(
