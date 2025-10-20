@@ -18,15 +18,6 @@ enum class ExpPrecision : std::uint8_t {
     B = 1,
 };
 
-bool is_exp_b_format(DataFormat data_format);
-ExpPrecision get_exp_precision(DataFormat data_format);
-
-/*
- * Checks operand data formats for same exponent width format
- * Returns the last valid data-format between operand buffers.
- */
-DataFormat check_consistent_format_across_buffers(DataFormat data_format[NUM_CIRCULAR_BUFFERS]);
-
 DataFormat check_valid_formats_in_out_data_formats(DataFormat data_format[NUM_CIRCULAR_BUFFERS]);
 ExpPrecision get_data_exp_precision(DataFormat data_formats[NUM_CIRCULAR_BUFFERS]);
 
