@@ -245,15 +245,13 @@ def gather_single_test_perf(device, test_passed):
         return None
     elif opPerfData == []:
         logger.warning("No profiling data available. Using dummy data for testing purposes.")
-        # Return dummy device performance data for testing
-        import random
 
         dummy_data = {
-            "DEVICE FW DURATION [ns]": 0,  # 8-15ms
-            "DEVICE KERNEL DURATION [ns]": 0,  # 5-12ms
-            "OP TO OP LATENCY [ns]": 0,  # 0.1-0.5ms
-            "DEVICE BRISC FW DURATION [ns]": 0,  # 1-3ms
-            "DEVICE NCRISC FW DURATION [ns]": 0,  # 2-4ms
+            "DEVICE FW DURATION [ns]": 0,
+            "DEVICE KERNEL DURATION [ns]": 0,
+            "OP TO OP LATENCY [ns]": 0,
+            "DEVICE BRISC FW DURATION [ns]": 0,
+            "DEVICE NCRISC FW DURATION [ns]": 0,
         }
         return dummy_data
     elif len(opPerfData) > 1:
