@@ -808,9 +808,9 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
 
     log_debug(
         tt::LogOp,
-        "num_tiles_height_per_core: {}, num_tiles_per_channel: {}",
+        "num_tiles_height_per_core: {}, max_num_tiles_per_row: {}",
         num_tiles_height_per_core,
-        num_tiles_per_channel);
+        max_num_tiles_per_row);
 
     std::vector<uint32_t> compute_args = {
         cb_input_index,         // src0_cb_index

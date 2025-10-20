@@ -28,11 +28,10 @@ void kernel_main() {
     uint32_t src_stick_id = start_id;
     uint32_t tiles_read = 0;
     const uint32_t tile_size = get_tile_size(cb_id_in0);
-    constexpr auto src_args = TensorAccessorArgs<0>();
+    constexpr auto src_args = TensorAccessorArgs<1>();
     const auto s0 = TensorAccessor(src_args, src_addr, tile_size);
     const uint32_t extra_tiles_per_row = num_tiles_per_row - num_tiles_per_row_this_core;
 
-#define DEBUG
 #ifdef DEBUG
     DPRINT << "src_addr: " << src_addr << ", num_dims: " << num_dims << ", start_id: " << start_id
            << ", num_tiles_per_core: " << num_tiles_per_core << ", num_tiles_per_barrier: " << num_tiles_per_barrier
@@ -58,9 +57,6 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_tiles_per_barrier and tiles_read < num_tiles_per_core; ++i) {
             tiles_read++;
             if (id_per_dim[0] >= (num_unpadded_sticks[0] - extra_tiles_per_row)) {
-                DPRINT << "SKIP READ src_stick_id: " << src_stick_id << ", src_buffer_l1_addr: " << src_buffer_l1_addr
-                       << "id " << id_per_dim[0] << "," << id_per_dim[1] << "," << id_per_dim[2] << "," << id_per_dim[3]
-                       << ENDL();
                 src_buffer_l1_addr += tile_size;
                 src_stick_id++;
 
@@ -89,6 +85,5 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_id_in0, num_tiles_per_barrier);
         num_tiles_pushed += num_tiles_per_barrier;
-        DPRINT << "num_tiles_pushed: " << num_tiles_pushed << ENDL();
     }
 }

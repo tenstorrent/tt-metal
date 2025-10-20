@@ -17,7 +17,6 @@ uint32_t round_down(uint32_t value, uint32_t multiple) {
     }
     return value;
 }
-// #define DEBUG
 void kernel_main() {
     constexpr uint32_t cb_untilized_id = get_compile_time_arg_val(0);
     constexpr uint32_t cb_out_id = get_compile_time_arg_val(1);
