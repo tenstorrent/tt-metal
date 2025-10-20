@@ -7,14 +7,6 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/ccl/mesh_partition/mesh_partition.hpp"
 
-namespace {
-uint32_t normalize_dim_4d(const uint32_t dim, const uint32_t rank) {
-    constexpr int32_t RANK_4D = 4;
-    const auto dim_normalization = static_cast<int32_t>(rank) - RANK_4D;
-    return (dim < std::abs(dim_normalization)) ? dim : dim - dim_normalization;
-}
-}  // namespace
-
 namespace composite_common {
 
 bool is_fabric_2d() {
@@ -23,6 +15,14 @@ bool is_fabric_2d() {
     return (
         fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D ||
         fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+
+// Map a dimension of an ND tensor to 4D. If dim > than rank difference, subtract rank difference.
+std::tuple<uint32_t, int32_t> normalize_dim_4d(const uint32_t dim, const uint32_t rank) {
+    constexpr int32_t RANK_4D = 4;
+    const auto rank_diff = static_cast<int32_t>(rank) - RANK_4D;
+    const auto normalized_dim = (dim < std::abs(rank_diff)) ? dim : dim - rank_diff;
+
+    return std::make_tuple(normalized_dim, rank_diff);
 }
 
 bool use_composite_reduce_scatter(
@@ -34,7 +34,7 @@ bool use_composite_reduce_scatter(
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
-    const auto normalized_scatter_dim = normalize_dim_4d(scatter_dim, rank);
+    const auto normalized_scatter_dim = std::get<0>(normalize_dim_4d(scatter_dim, rank));
 
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
 

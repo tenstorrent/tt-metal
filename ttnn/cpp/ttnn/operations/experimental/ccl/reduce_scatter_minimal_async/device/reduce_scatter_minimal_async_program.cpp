@@ -1081,19 +1081,17 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         // implicitly reshape lower dims so it is treated as 4D
         uint32_t input_tensor_B =
             std::accumulate(input_tensor_shape.cbegin(), input_tensor_shape.cend() - 3, 1, std::multiplies<uint32_t>());
-        auto dim_normalization = static_cast<int32_t>(input_tensor_shape.rank()) - 4;
-        uint32_t normalized_dim = (dim < std::abs(dim_normalization)) ? dim : dim - dim_normalization;
-        // if the gather dim is 4D normalized to 0,2,3 we can proceed as if nothing has changed
-        // if not we have to roll up the lower dims from the gather dim up to 1 into C and gather on 1.
+
+        auto [normalized_dim, rank_diff] = composite_common::normalize_dim_4d(dim, input_tensor_shape.rank());
 
         uint32_t c_includes_dim;
-        if (dim_normalization >= 1 && dim <= dim_normalization) {
+        if (rank_diff >= 1 && dim <= rank_diff) {
             // gather dim to rank-3 accumulated into C
             c_includes_dim = dim;
             normalized_dim = 1;
         } else {
             // C will be 4D normalized dim 1
-            c_includes_dim = 1 + dim_normalization;
+            c_includes_dim = 1 + rank_diff;
         }
 
         uint32_t input_tensor_C = std::accumulate(
@@ -1101,12 +1099,6 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
             input_tensor_shape.view().rend() - c_includes_dim,
             1,
             std::multiplies<uint32_t>());
-
-        // uint32_t output_tensor_C = std::accumulate(
-        //             output_tensor_shape.view().rbegin() + 2,
-        //             output_tensor_shape.view().rend() - c_includes_dim,
-        //             1,
-        //             std::multiplies<uint32_t>());
 
         return std::make_tuple(normalized_dim, input_tensor_C, input_tensor_B);
     };
