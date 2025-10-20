@@ -151,6 +151,15 @@ found=false
 while [[ "$found" == "false" ]]; do
   rev="$(git rev-parse --short=12 HEAD)"
   full_sha="$(git rev-parse HEAD)"
+  commit_msg="$(git log -1 --pretty=%s HEAD)"
+
+  # Check if commit message contains [skip-ci] and skip if so
+  if [[ "$commit_msg" =~ \[skip-ci\] ]]; then
+    echo "Commit $rev contains [skip-ci], skipping: $commit_msg"
+    git bisect skip
+    continue
+  fi
+
   echo "::group::Building $rev"
 
   fresh_clean
