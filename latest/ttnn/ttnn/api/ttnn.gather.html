@@ -186,6 +186,55 @@ The index tensor must be of type uint16 or uint32.</p></li>
 </ul>
 </dd>
 </dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Supported dtypes and layout for input tensor values:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Dtypes</p></th>
+<th class="head"><p>Layouts</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, FLOAT32</p></td>
+<td><p>TILE</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>UINT16, UINT32</p></td>
+<td><p>TILE</p></td>
+</tr>
+<tr class="row-even">
+<td><p>INT32</p></td>
+<td><p>TILE</p></td>
+</tr>
+</tbody>
+</table>
+<p>Supported dtypes and layout for index tensor values:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Dtypes</p></th>
+<th class="head"><p>Layouts</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>UINT16, UINT32</p></td>
+<td><p>TILE</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<dl class="simple">
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Interleaved: DRAM and L1</p></li>
+</ul>
+</dd>
+</dl>
 <p>Example:</p>
 <div class="highlight-python notranslate">
 <div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
