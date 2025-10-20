@@ -1319,6 +1319,8 @@ void TestConfigBuilder::expand_patterns_into_test(
             expand_unidirectional_linear_unicast_or_multicast(test, defaults);
         } else if (pattern.type == "perimeter_linear") {
             expand_perimeter_linear_unicast_or_multicast(test, defaults);
+        } else if (pattern.type == "neighbor_exchange") {
+            expand_neighbor_exchange_unicast_or_multicast(test, defaults);
         } else if (pattern.type == "full_ring" || pattern.type == "half_ring") {
             HighLevelTrafficPattern pattern_type =
                 detail::high_level_traffic_pattern_mapper.from_string(pattern.type, "HighLevelTrafficPattern");
@@ -1552,6 +1554,28 @@ void TestConfigBuilder::expand_full_or_half_ring_unicast_or_multicast(
                 test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
             }
         }
+    }
+}
+
+// This test pattern sends packets between mesh 0, device 0 and mesh 0, device 1.
+void TestConfigBuilder::expand_neighbor_exchange_unicast_or_multicast(
+    ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
+    log_debug(LogTest, "Expanding neighbor_exchange pattern for test: {}", test.name);
+
+    std::vector<FabricNodeId> devices = device_info_provider_.get_local_node_ids();
+    FabricNodeId device_0 = FabricNodeId(MeshId{0}, 0);
+    bool device_0_present = (std::find(devices.begin(), devices.end(), device_0) != devices.end());
+    TT_FATAL(device_0_present, "Cannot expand neighbor_exchange because mesh 0, device 0 is not present.");
+
+    FabricNodeId device_1 = FabricNodeId(MeshId{0}, 1);
+    bool device_1_present = (std::find(devices.begin(), devices.end(), device_1) != devices.end());
+    TT_FATAL(device_1_present, "Cannot expand neighbor_exchange because mesh 0, device 1 is not present.");
+
+    for (const auto& src_node : {device_0, device_1}) {
+        ParsedTrafficPatternConfig specific_pattern;
+        specific_pattern.destination = ParsedDestinationConfig{.device = (src_node == device_0) ? device_1 : device_0};
+        auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
+        test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
     }
 }
 
