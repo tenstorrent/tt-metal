@@ -110,7 +110,6 @@ void MAIN {
 
         // Simultaneous calculation of E[x] and Var[x] using Welford's algorithm
         // Generate reciprocals
-        cb_wait_front(cb_integers, 1);
         kutil::compute::numeric::sfpu::generate_consecutive_reciprocal_tiles<W>(cb_integers, cb_reciprocals);
         auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<std::array<uint32_t, W>>(cb_reciprocals, 0);
 
