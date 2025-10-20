@@ -51,15 +51,15 @@ void kernel_main() {
     constexpr uint32_t weight_size_h = get_compile_time_arg_val(27);  // Input filter window height
 #ifdef SPLIT_READER_OVERLAPPED
     constexpr bool split_reader_overlapped = true;
-    const uint32_t act_split_reader_sync_first_semaphore_addr = get_semaphore(get_compile_time_arg_val(28));
-    const uint32_t act_split_reader_sync_second_semaphore_addr = get_semaphore(get_compile_time_arg_val(29));
+    const uint32_t act_split_reader_reserve_done_semaphore_addr = get_semaphore(get_compile_time_arg_val(28));
+    const uint32_t act_split_reader_write_done_semaphore_addr = get_semaphore(get_compile_time_arg_val(29));
     constexpr uint32_t act_write_offset = get_compile_time_arg_val(30);
     constexpr uint32_t act_write_offset_last = get_compile_time_arg_val(31);
 
-    volatile tt_l1_ptr uint32_t* act_split_reader_sync_first_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_sync_first_semaphore_addr);
-    volatile tt_l1_ptr uint32_t* act_split_reader_sync_second_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_sync_second_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* act_split_reader_reserve_done_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_reserve_done_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* act_split_reader_write_done_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_write_done_semaphore_addr);
 
     constexpr uint32_t ct_arg_idx = 32;
 #else
@@ -67,8 +67,8 @@ void kernel_main() {
     constexpr uint32_t act_write_offset = 0;
     constexpr uint32_t act_write_offset_last = 0;
 
-    volatile tt_l1_ptr uint32_t* act_split_reader_sync_first_semaphore_addr_ptr = nullptr;
-    volatile tt_l1_ptr uint32_t* act_split_reader_sync_second_semaphore_addr_ptr = nullptr;
+    volatile tt_l1_ptr uint32_t* act_split_reader_reserve_done_semaphore_addr_ptr = nullptr;
+    volatile tt_l1_ptr uint32_t* act_split_reader_write_done_semaphore_addr_ptr = nullptr;
     constexpr uint32_t ct_arg_idx = 28;
 #endif
 
@@ -187,8 +187,7 @@ void kernel_main() {
                 }
                 if (is_sender_core) {
                     if constexpr (split_reader_overlapped) {
-                        noc_semaphore_wait(act_split_reader_sync_first_semaphore_addr_ptr, VALID);
-                        noc_semaphore_set(act_split_reader_sync_first_semaphore_addr_ptr, INVALID);
+                        wait_reserve_done(act_split_reader_reserve_done_semaphore_addr_ptr);
                         prev_addr = l1_write_addr_act;
                     } else {
                         l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
@@ -213,7 +212,7 @@ void kernel_main() {
                         stride_h_bytes);
                     if constexpr (split_reader_overlapped) {
                         l1_write_addr_act = split_reader_cb_write_addr_sum - prev_addr;
-                        noc_semaphore_set(act_split_reader_sync_second_semaphore_addr_ptr, VALID);
+                        signal_write_done(act_split_reader_write_done_semaphore_addr_ptr);
                     }
                 }
                 if constexpr (!split_reader_overlapped) {

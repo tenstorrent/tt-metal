@@ -658,8 +658,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     uint32_t weights_mcast_receiver_semaphore_id{};
     uint32_t act_mcast_sender_semaphore_id = 0;
     uint32_t act_mcast_receiver_semaphore_id = 0;
-    uint32_t act_split_reader_sync_first_semaphore_id = 0;
-    uint32_t act_split_reader_sync_second_semaphore_id = 0;
+    uint32_t act_split_reader_reserve_done_semaphore_id = 0;
+    uint32_t act_split_reader_write_done_semaphore_id = 0;
 
     // Check if we should run BRISC kernels on cores that are not in the output grid ( when split reader is enabled and
     // the output grid is smaller than the input grid)
@@ -693,8 +693,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         if (split_reader_overlapped) {
             weights_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
             weights_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-            act_split_reader_sync_first_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-            act_split_reader_sync_second_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+            act_split_reader_reserve_done_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+            act_split_reader_write_done_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
         } else {
             weights_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_cores, INVALID);
             weights_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_cores, INVALID);
@@ -835,8 +835,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             reader_compile_time_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
     }
     if (split_reader_overlapped) {
-        reader_compile_time_args.push_back(act_split_reader_sync_first_semaphore_id);
-        reader_compile_time_args.push_back(act_split_reader_sync_second_semaphore_id);
+        reader_compile_time_args.push_back(act_split_reader_reserve_done_semaphore_id);
+        reader_compile_time_args.push_back(act_split_reader_write_done_semaphore_id);
     }
 
     if (skip_activation_mcast) {
@@ -948,8 +948,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
                 second_writer_two_addr
                     ? (act_block_num_tiles_split_last + 2 * act_block_num_tiles_split) * halo_output_tile_size
                     : act_write_offset;
-            split_reader_args.push_back(act_split_reader_sync_first_semaphore_id);
-            split_reader_args.push_back(act_split_reader_sync_second_semaphore_id);
+            split_reader_args.push_back(act_split_reader_reserve_done_semaphore_id);
+            split_reader_args.push_back(act_split_reader_write_done_semaphore_id);
             split_reader_args.push_back(act_write_offset);
             split_reader_args.push_back(act_write_offset_last);
         }
