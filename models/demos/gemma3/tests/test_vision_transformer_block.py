@@ -20,7 +20,7 @@ from models.tt_transformers.tt.ccl import TT_CCL
 )
 @pytest.mark.parametrize(
     "gated",
-    (False,),
+    (True, False),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -58,7 +58,7 @@ def test_block_inference(batch, num_chunks, mesh_device, reset_seeds, gated):
         tt_ccl=TT_CCL(mesh_device),
         state_dict=state_dict,
         state_dict_prefix=first_layer_prefix,
-        weight_cache_path=None,
+        weight_cache_path=model_args.weight_cache_path(dtype),
         dtype=dtype,
         configuration=model_args,
         gated=gated,
@@ -81,7 +81,6 @@ def test_block_inference(batch, num_chunks, mesh_device, reset_seeds, gated):
     )
 
     tt_out = tt_model(attention_input, mask=tt_mask)
-
     tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
 
     reference_output = reference_model(pt_attention_input, attention_mask=attention_mask)[0]
