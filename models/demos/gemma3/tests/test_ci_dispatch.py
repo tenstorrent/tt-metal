@@ -7,18 +7,20 @@ import os
 import pytest
 from loguru import logger
 
+from models.tt_transformers.tt.common import get_hf_tt_cache_path
+
 
 # This test will run all the nightly fast dispatch tests for all supported TTT models in CI [N150 / N300 only]
 @pytest.mark.parametrize(
     "model_weights",
-    ["/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it", "/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it"],
+    ["google/gemma-3-4b-it", "google/gemma-3-27b-it"],
     ids=["gemma-3-4b-it", "gemma-3-27b-it"],
 )
 def test_ci_dispatch(model_weights, is_ci_env):
     if not is_ci_env:
         pytest.skip("Skipping CI dispatch tests when running locally.")
     os.environ["HF_MODEL"] = model_weights
-    os.environ["TT_CACHE_PATH"] = model_weights
+    os.environ["TT_CACHE_PATH"] = get_hf_tt_cache_path(model_weights)
     logger.info(f"Running fast dispatch tests for {model_weights}")
 
     # Pass the exit code of pytest to proper keep track of failures during runtime
