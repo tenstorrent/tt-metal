@@ -800,6 +800,12 @@ jobs:
 
           echo "DEBUG generate-comment: Final TEAM_MEMBERS='$TEAM_MEMBERS'"
 
+          # Save TEAM_MEMBERS to GITHUB_ENV to avoid ARG_MAX limits
+          echo "TEAM_MEMBERS_DATA<<TEAM_EOF" >> $GITHUB_ENV
+          echo "$TEAM_MEMBERS" >> $GITHUB_ENV
+          echo "TEAM_EOF" >> $GITHUB_ENV
+          echo "Saved team members data to environment ($(echo "$TEAM_MEMBERS" | wc -c) bytes)"
+
           # Collect pending and approved groups separately
           PENDING_GROUPS=""
           APPROVED_GROUPS=""
@@ -1134,9 +1140,6 @@ jobs:
             {
               echo "pr-number<<EOF"
               echo "$PR_NUMBER"
-              echo "EOF"
-              echo "team-members<<EOF"
-              echo "$TEAM_MEMBERS"
               echo "EOF"
               echo "create-new<<EOF"
               echo "$CREATE_NEW"
@@ -1728,7 +1731,10 @@ jobs:
         if: needs.parse-comment.outputs.is-direct-ping != 'true'
         id: select-owners
         run: |
-          TEAM_MEMBERS="${{ steps.generate-comment.outputs.team-members }}"
+          # Read TEAM_MEMBERS from environment variable (set in generate-comment step)
+          TEAM_MEMBERS="$TEAM_MEMBERS_DATA"
+          echo "DEBUG: Loaded team members data ($(echo "$TEAM_MEMBERS" | wc -c) bytes)"
+
           # Handle cases where analyze-codeowners job might be skipped (direct ping)
           TEAMS="${{ needs.analyze-codeowners.outputs.codeowners-teams || '' }}"
           INDIVIDUALS="${{ needs.analyze-codeowners.outputs.codeowners-individuals || '' }}"
