@@ -291,6 +291,27 @@ Tests:
       - type: neighbor_exchange
         iterations: 3
 
+  # Torus tests
+  - name: "TorusAllToAllMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+        iterations: 3
+
   # Torus fused_atomic_inc tests are more inconsistent, so run them for extra iterations
   - name: "TorusAllToAllMulticast"
     benchmark_mode: true
