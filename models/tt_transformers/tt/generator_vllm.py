@@ -623,6 +623,10 @@ class GptOssForCausalLM(Generator):
     ):
         from models.demos.gpt_oss.tt.common import create_tt_model
 
+        optimizations = (
+            DecodersPrecision.from_string(optimizations) if optimizations is not None else DecodersPrecision.performance
+        )
+
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 
         model_args = []
@@ -635,9 +639,7 @@ class GptOssForCausalLM(Generator):
                 mesh_device=submesh,
                 instruct=True,
                 max_batch_size=max_batch_size // tt_data_parallel,
-                optimizations=lambda model_args: DecodersPrecision.from_string(optimizations)(
-                    model_args.n_layers, model_args.model_name
-                ),
+                optimizations=lambda model_args: optimizations(model_args.n_layers, model_args.model_name),
                 max_seq_len=max_seq_len,
                 paged_attention_config=None,
                 dtype=ttnn.bfloat8_b,
