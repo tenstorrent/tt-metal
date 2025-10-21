@@ -13,7 +13,6 @@ https://huggingface.co/docs/transformers/en/model_doc/vit
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-  - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
 - login to huggingface with your token: `huggingface-cli login` or by setting the token with the command `export HF_TOKEN=<token>`
   - To obtain a huggingface token visit: https://huggingface.co/docs/hub/security-tokens
 
@@ -32,7 +31,7 @@ pytest --disable-warnings models/demos/wormhole/vit/demo/test_demo_vit_ttnn_infe
 
 -  For inference device OPs analysis, use the following command to run the demo:
 ```sh
-# Need to enable the profiler by building with ./build_metal.sh -p
+# Build with ./build_metal.sh
 
 # To manually inspect ops
 ./tools/tracy/profile_this.py -n vit -c "pytest --disable-warnings models/demos/wormhole/vit/demo/test_vit_device_perf.py::test_vit_device_ops"
