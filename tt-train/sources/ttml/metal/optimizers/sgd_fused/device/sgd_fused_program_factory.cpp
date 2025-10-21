@@ -17,19 +17,20 @@ namespace {
 
 constexpr auto kReaderKernelPath =
     "tt-train/sources/ttml/metal/optimizers/sgd_fused/device/kernels/dataflow/"
-    "reader_sgd_fused_interleaved_start_id.cpp";
+    "reader_sgd_fused_vanilla.cpp";
 
 constexpr auto kWriterKernelPath =
     "tt-train/sources/ttml/metal/optimizers/sgd_fused/device/kernels/dataflow/"
     "writer_sgd_fused_interleaved_start_id.cpp";
 
 constexpr auto kComputeKernelPath =
-    "tt-train/sources/ttml/metal/optimizers/sgd_fused/device/kernels/compute/sgd_fused_kernel.cpp";
+    "tt-train/sources/ttml/metal/optimizers/sgd_fused/device/kernels/compute/sgd_fused_vanilla.cpp";
 
 // reader runtime args
 constexpr uint32_t kParamAddrIdx = 0;
 constexpr uint32_t kGradAddrIdx = 1U;
 constexpr uint32_t kMomentumBufferInAddrIdx = 2U;
+constexpr uint32_t kBcastLrIdx = 3U;
 // compute runtime args
 constexpr uint32_t kLrIdx = 0U;
 constexpr uint32_t kMomentumIdx = 1U;
@@ -47,6 +48,7 @@ constexpr auto kMomentumOutCbIndex = tt::CBIndex::c_4;
 constexpr auto kMomentumToDramCbIndex = tt::CBIndex::c_5;
 
 constexpr auto kUpdateCbIndex = tt::CBIndex::c_6;
+constexpr auto kBcastLrCbIndex = tt::CBIndex::c_7;
 
 constexpr auto kOutputCbIndex = tt::CBIndex::c_16;
 
@@ -99,7 +101,7 @@ void assign_per_core_runtime_args(
             TT_THROW("Core {} not in specified core ranges", core);
         }
 
-        // Reader kernel: (param_addr, grad_addr, momentum_buffer_addr, number_of_tiles, offset_in_tiles)
+        // Reader kernel: (param_addr, grad_addr, momentum_buffer_addr, lr, number_of_tiles, offset_in_tiles)
         SetRuntimeArgs(
             program,
             kernels.reader,
@@ -107,6 +109,7 @@ void assign_per_core_runtime_args(
             {param_buffer->address(),
              grad_buffer->address(),
              momentum_buffer != nullptr ? momentum_buffer->address() : 0,
+             std::bit_cast<uint32_t>(lr),
              num_tiles_per_core,
              num_tiles_written});
 
@@ -167,11 +170,15 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
 
     tt::tt_metal::Program program{};
 
-    tt::DataFormat param_data_format = datatype_to_dataformat_converter(param.dtype());
-    tt::DataFormat grad_data_format = datatype_to_dataformat_converter(grad.dtype());
+    tt::DataFormat input_data_format = datatype_to_dataformat_converter(param.dtype());
+    tt::DataFormat output_data_format = input_data_format;
+    // tt::DataFormat intermediate_data_format = tt::DataFormat::Float32;
+
+    TT_FATAL(input_data_format == tt::DataFormat::Float16_b, "Input data format must be Float16_b");
+    TT_FATAL(output_data_format == tt::DataFormat::Float16_b, "Output data format must be Float16_b");
 
     uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
-    uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
+    // uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
 
     auto padded_tensor_shape = param.padded_shape();
     auto padded_tensor_volume = param.physical_volume();
@@ -201,28 +208,41 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     const uint32_t num_output_tiles = twice_block_size;
 
     [[maybe_unused]] auto cb_param = create_circular_buffer(
-        program, all_cores, kParamCbIndex, param_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+        program, all_cores, kParamCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
     [[maybe_unused]] auto cb_grad = create_circular_buffer(
-        program, all_cores, kGradCbIndex, grad_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+        program, all_cores, kGradCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
     [[maybe_unused]] auto cb_mom_in = create_circular_buffer(
-        program, all_cores, kMomentumInCbIndex, grad_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+        program, all_cores, kMomentumInCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
     [[maybe_unused]] auto cb_grad_wd = create_circular_buffer(
-        program, all_cores, kGradWdCbIndex, grad_data_format, float32_single_tile_size_bytes, num_input_tiles);
+        program, all_cores, kGradWdCbIndex, output_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
     [[maybe_unused]] auto cb_mom_out = create_circular_buffer(
-        program, all_cores, kMomentumOutCbIndex, grad_data_format, float32_single_tile_size_bytes, num_input_tiles);
+        program, all_cores, kMomentumOutCbIndex, output_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
     [[maybe_unused]] auto cb_mom_to_dram = create_circular_buffer(
-        program, all_cores, kMomentumToDramCbIndex, grad_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+        program,
+        all_cores,
+        kMomentumToDramCbIndex,
+        output_data_format,
+        bfloat16_single_tile_size_bytes,
+        num_input_tiles);
 
     [[maybe_unused]] auto cb_update = create_circular_buffer(
-        program, all_cores, kUpdateCbIndex, grad_data_format, float32_single_tile_size_bytes, num_input_tiles);
+        program,
+        all_cores,
+        kUpdateCbIndex,
+        tt::DataFormat::Float16_b,
+        bfloat16_single_tile_size_bytes,
+        num_input_tiles);
+
+    [[maybe_unused]] auto cb_bcast_lr = create_circular_buffer(
+        program, all_cores, kBcastLrCbIndex, tt::DataFormat::Float16_b, bfloat16_single_tile_size_bytes, 1U);
 
     [[maybe_unused]] auto cb_output = create_circular_buffer(
-        program, all_cores, kOutputCbIndex, param_data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
+        program, all_cores, kOutputCbIndex, output_data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -259,12 +279,12 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
         block_size};                 // per_core_block_size
 
     kernels.compute_group_1 = create_compute_kernel(
-        program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+        program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/false);
 
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_group_2_args = {num_tiles_per_core_group_2, block_size};
         kernels.compute_group_2 = create_compute_kernel(
-            program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+            program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/false);
     }
 
     // -------------------------------------------------------------------------
@@ -351,6 +371,7 @@ void SGDFusedProgramFactory::override_runtime_arguments(
             runtime_args[kGradAddrIdx] = grad_buffer->address();
             runtime_args[kMomentumBufferInAddrIdx] =
                 momentum_buffer_unwrapped != nullptr ? momentum_buffer_unwrapped->address() : 0;
+            runtime_args[kBcastLrIdx] = std::bit_cast<uint32_t>(lr);
         }
         if (core_group_1.contains(core)) {
             auto& runtime_args = compute_group_1_runtime_args[core.x][core.y];
