@@ -90,6 +90,26 @@ def test_binary_atan2_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
+def test_lazy_atan2_ttnn(input_shapes, device):
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
+
+    output_tensor = ttnn.materialize(ttnn.lazy.atan2(input_tensor1, input_tensor2))
+    golden_function = ttnn.get_golden_function(ttnn.atan2)
+    golden_tensor = golden_function(in_data1, in_data2)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
 def test_binary_logical_xor_ttnn(input_shapes, device):
     num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
     in_data1 = torch.linspace(-100, 100, num_elements, dtype=torch.bfloat16)

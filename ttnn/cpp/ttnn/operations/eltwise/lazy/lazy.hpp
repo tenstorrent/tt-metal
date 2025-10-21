@@ -129,7 +129,7 @@ struct Atan2Fn : ttsl::overloaded<
     using OverloadsFor<Atan2Fn, Param, ExpressionView>::operator();
 };
 
-inline constexpr UnaryFn recip{.operation = Unary::RECIP};
+inline constexpr UnaryFn reciprocal{.operation = Unary::RECIP};
 inline constexpr UnaryFn neg{.operation = Unary::NEGATIVE};
 inline constexpr UnaryFn exp{.operation = Unary::EXP};
 
@@ -163,12 +163,6 @@ inline constexpr OverloadedBinaryFn sub{
     BinaryFn{.operation = Binary::SUB},
 };
 
-inline constexpr OverloadedRBinaryFn rsub{
-    UnaryWithParamFn{.operation = UnaryWithParam::RSUB},
-    RUnaryWithParamFn{.operation = UnaryWithParam::SUB},
-    RBinaryFn{.operation = Binary::SUB},
-};
-
 inline constexpr OverloadedBinaryFn mul{
     UnaryWithParamFn{.operation = UnaryWithParam::MUL},
     RUnaryWithParamFn{.operation = UnaryWithParam::MUL},
@@ -181,20 +175,9 @@ inline constexpr OverloadedBinaryFn pow{
     BinaryFn{.operation = Binary::POWER},
 };
 
-inline constexpr OverloadedRBinaryFn rpow{
-    UnaryWithParamFn{.operation = UnaryWithParam::RPOW},
-    RUnaryWithParamFn{.operation = UnaryWithParam::POWER},
-    RBinaryFn{.operation = Binary::POWER},
-};
-
 inline constexpr DivFn div{
     UnaryWithParamFn{.operation = UnaryWithParam::DIV},
     BinaryFn{.operation = Binary::DIV},
-};
-
-inline constexpr RDivFn rdiv{
-    RUnaryWithParamFn{.operation = UnaryWithParam::DIV},
-    RBinaryFn{.operation = Binary::DIV},
 };
 
 inline constexpr LogicalBinaryFn logical_and{.operation = lazy::mul};

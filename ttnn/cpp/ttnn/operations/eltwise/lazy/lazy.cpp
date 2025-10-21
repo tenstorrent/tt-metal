@@ -106,7 +106,7 @@ Function TernaryFn::operator()(ExpressionView first, ExpressionView second, Expr
     return lazy::defer(operation, first, second, third).value();
 }
 
-Function DivFn::operator()(Param first, ExpressionView second) const { return first * lazy::recip(second); }
+Function DivFn::operator()(Param first, ExpressionView second) const { return first * lazy::reciprocal(second); }
 
 Function RDivFn::operator()(ExpressionView first, Param second) const { return second / first; }
 
@@ -202,9 +202,9 @@ auto _atan2(First y, Second x) {
         lazy::_ltz(x) and lazy::_ltz(y),
         atan - pi,
         lazy::_gtz(y),
-        pi * 2,
+        pi / 2,
         lazy::_ltz(y),
-        -pi * 2,
+        -pi / 2,
         0);
 }
 

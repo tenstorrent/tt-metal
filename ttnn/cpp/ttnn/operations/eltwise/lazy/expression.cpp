@@ -579,9 +579,9 @@ std::string to_compute_kernel_string(FunctionView expression) {
             [&](FunctionView function) {
                 // prefix or separator
                 if (result.empty()) {
-                    std::format_to(
+                    fmt::format_to(
                         std::back_inserter(result), "using View=MakeComputeView<{}>;", expression.circular_buffers());
-                    std::format_to(
+                    fmt::format_to(
                         std::back_inserter(result),
                         "View::init_tiles(init_sfpu<c_0,{}>());",
                         enchantum::to_string(expression.cb_index()));
