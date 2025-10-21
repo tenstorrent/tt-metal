@@ -11,9 +11,12 @@
 #include <filesystem>
 #include <string_view>
 #include <condition_variable>
+#include <optional>
+#include <iomanip>
 #include <telemetry/telemetry_subscriber.hpp>
 #include <server/prom_writer.hpp>
 #include <unistd.h>
+#include <limits.h>
 
 class PromWriter : public TelemetrySubscriber {
 private:
@@ -43,12 +46,12 @@ private:
     static constexpr std::chrono::milliseconds snapshot_check_timeout_{1000};
 
     static std::string get_hostname() {
-        char hostname[256];
+        char hostname[HOST_NAME_MAX + 1];
         if (gethostname(hostname, sizeof(hostname)) != 0) {
             throw std::runtime_error("Failed to get hostname");
         }
-        std::string hostname_str(hostname);
-        return hostname_str;
+        hostname[HOST_NAME_MAX] = '\0';  // Ensure null termination
+        return std::string(hostname);
     }
 
     std::string sanitize_metric_name(std::string_view path) {
@@ -84,12 +87,12 @@ private:
     void update_state_from_snapshot(const TelemetrySnapshot& snapshot) {
         std::lock_guard<std::mutex> lock(state_mutex_);
 
-        // Helper lambda to process all metric types
-        auto process_metrics = [&](const auto& metrics,
-                                   const auto& timestamps,
-                                   const auto* units,  // nullable for bool metrics
-                                   const std::string& help_text,
-                                   auto value_converter) {
+        // Helper lambda to process metric types with units
+        auto process_metrics_with_units = [&](const auto& metrics,
+                                              const auto& timestamps,
+                                              const auto& units,
+                                              const std::string& help_text,
+                                              auto value_converter) {
             for (const auto& [path, value] : metrics) {
                 MetricState::MetricData data;
                 data.value = value_converter(value);
@@ -99,49 +102,60 @@ private:
                 auto ts_it = timestamps.find(path);
                 data.timestamp = (ts_it != timestamps.end()) ? ts_it->second : 0;
 
-                // Get unit label if units map is provided
-                if constexpr (!std::is_null_pointer_v<decltype(units)>) {
-                    if (units) {
-                        auto unit_it = units->find(path);
-                        if (unit_it != units->end()) {
-                            auto label_it = snapshot.metric_unit_display_label_by_code.find(unit_it->second);
-                            // Throw an error if no label is found
-                            if (label_it == snapshot.metric_unit_display_label_by_code.end()) {
-                                throw std::runtime_error(
-                                    "No display label found for unit code: " + std::to_string(unit_it->second) +
-                                    " for metric path: " + path);
-                            }
-                            data.unit_label = label_it->second;
-                        }
+                // Get unit label
+                auto unit_it = units.find(path);
+                if (unit_it != units.end()) {
+                    auto label_it = snapshot.metric_unit_display_label_by_code.find(unit_it->second);
+                    // Throw an error if no label is found
+                    if (label_it == snapshot.metric_unit_display_label_by_code.end()) {
+                        throw std::runtime_error(
+                            "No display label found for unit code: " + std::to_string(unit_it->second) +
+                            " for metric path: " + path);
                     }
+                    data.unit_label = label_it->second;
                 }
 
                 current_state_.metrics[sanitize_metric_name(path)] = data;
             }
         };
 
-        // Process bool metrics
-        process_metrics(
+        // Helper lambda to process metric types without units
+        auto process_metrics_no_units =
+            [&](const auto& metrics, const auto& timestamps, const std::string& help_text, auto value_converter) {
+                for (const auto& [path, value] : metrics) {
+                    MetricState::MetricData data;
+                    data.value = value_converter(value);
+                    data.help_text = help_text;
+
+                    // Get timestamp
+                    auto ts_it = timestamps.find(path);
+                    data.timestamp = (ts_it != timestamps.end()) ? ts_it->second : 0;
+
+                    current_state_.metrics[sanitize_metric_name(path)] = data;
+                }
+            };
+
+        // Process bool metrics (no units)
+        process_metrics_no_units(
             snapshot.bool_metrics,
             snapshot.bool_metric_timestamps,
-            static_cast<const std::map<std::string, int>*>(nullptr),  // no units for bool metrics
             "Boolean metric from Tenstorrent Metal",  // TODO(kkfernandez): something more descriptive, per metric
             [](bool v) { return std::to_string(v ? 1 : 0); });
 
-        // Process unsigned integer metrics
-        process_metrics(
+        // Process unsigned integer metrics (with units)
+        process_metrics_with_units(
             snapshot.uint_metrics,
             snapshot.uint_metric_timestamps,
-            &snapshot.uint_metric_units,
+            snapshot.uint_metric_units,
             "Unsigned integer metric from Tenstorrent Metal",  // TODO(kkfernandez): something more descriptive, per
                                                                // metric
             [](auto v) { return std::to_string(v); });
 
-        // Process floating-point metrics
-        process_metrics(
+        // Process floating-point metrics (with units)
+        process_metrics_with_units(
             snapshot.double_metrics,
             snapshot.double_metric_timestamps,
-            &snapshot.double_metric_units,
+            snapshot.double_metric_units,
             "Floating-point metric from Tenstorrent Metal",  // TODO(kkfernandez): something more descriptive, per
                                                              // metric
             [](auto v) { return std::to_string(v); });
@@ -154,12 +168,12 @@ private:
         // Write header
         auto now = std::chrono::system_clock::now();
         auto now_c = std::chrono::system_clock::to_time_t(now);
-        std::string time_str = std::ctime(&now_c);
-        time_str.pop_back(); // Remove trailing newline
+        std::tm tm_buf;
+        localtime_r(&now_c, &tm_buf);
 
         output << "# Tenstorrent Metal Telemetry Metrics\n";
         output << "# Host: " << hostname_ << "\n";
-        output << "# Generated at: " << time_str << "\n\n";
+        output << "# Generated at: " << std::put_time(&tm_buf, "%c") << "\n\n";
 
         // Write all metrics with their metadata
         for (const auto& [metric_name, data] : current_state_.metrics) {

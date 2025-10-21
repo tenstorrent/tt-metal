@@ -221,7 +221,7 @@ int main(int argc, char* argv[]) {
     if (result.count("prom-metrics-file")) {
         prom_metrics_file = result["prom-metrics-file"].as<std::string>();
     } else if (!metal_src_dir.empty()) {
-        prom_metrics_file = (std::filesystem::path(metal_src_dir) / relative_metrics_path.string()).string();
+        prom_metrics_file = (std::filesystem::path(metal_src_dir) / relative_metrics_path).string();
     } else {
         prom_metrics_file = relative_metrics_path.filename().string();
     }
