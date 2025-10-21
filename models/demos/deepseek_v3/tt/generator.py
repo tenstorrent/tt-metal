@@ -519,7 +519,7 @@ class DeepseekGenerator:
             self._cleanup_run_configs("decode")
 
             ### FAST VALIDATION AGAINST REFERENCE TEXTS ###
-            if validate_against_ref and self.tokenizer is not None:
+            if validate_against_ref:
                 for i, prompt in enumerate(prompts):
                     gen_text = self.tokenizer.decode(generations[i], skip_special_tokens=True)
                     ref_text = reference_texts.get(prompt)
