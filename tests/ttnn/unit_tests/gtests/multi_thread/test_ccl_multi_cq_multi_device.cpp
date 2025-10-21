@@ -27,7 +27,9 @@
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/unit_mesh/unit_mesh_utils.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
@@ -51,7 +53,7 @@ using tt::tt_metal::distributed::MeshShape;
 // Custom Fixture using 1D Fabric on a Multi-CQ MeshDevice
 class MultiCQFabricMeshDevice2x4Fixture : public MeshDeviceFixtureBase {
 protected:
-    MultiCQFabricMeshDevice2x4Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{2, 4}, .num_cqs = 2}) {
+    MultiCQFabricMeshDevice2x4Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 4}, .num_cqs = 2}) {
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
     }
     void TearDown() override {
@@ -60,6 +62,7 @@ protected:
     }
 };
 
+// TODO(#30692): Re-enable after migrating to aggregated tensor + semaphore-free all-gather APIs.
 TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
     constexpr size_t test_expected_num_devices = 4;
 
@@ -150,20 +153,19 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
 
         log_info(LogTest, "Enqueue AllGather");
 
-        // Enqueue the all_gather_command_processor_async operation on each device.
-        // It does not support command queue ID as a parameter and internally uses command queue 0.
-        std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {
-            multi_device_global_semaphore};
-        const std::vector<Tensor> gathered_tensors = ttnn::experimental::all_gather_command_processor_async(
-            device_tensors,
-            /* dim */ 0,
-            multi_dev_semaphore,
-            /* persistent_output_buffer */ std::nullopt,
-            /* num_links */ 1,
-            operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            ttnn::ccl::Topology::Linear,
-            /* cluster_axis */ std::nullopt,
-            SubDeviceId(0));
+        auto aggregated_tensor = ttnn::experimental::unit_mesh::aggregate(device_tensors);
+
+        // Quiesce parent mesh before all gather
+        mesh_device_->quiesce_submeshes();
+
+        auto all_gathered_tensor = ttnn::all_gather(
+            aggregated_tensor,
+            /* dim */ 0);
+
+        // Quiesce parent mesh after all gather
+        mesh_device_->quiesce_submeshes();
+
+        auto gathered_tensors = ttnn::experimental::unit_mesh::disaggregate(all_gathered_tensor);
 
         log_info(LogTest, "Enqueue dummy ops");
         for (int dev_idx = 0; dev_idx < devices.size(); dev_idx++) {
@@ -326,20 +328,19 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
 
         log_info(LogTest, "Enqueue AllGather");
 
-        // Enqueue the all_gather_command_processor_async operation on each device.
-        // It does not support command queue ID as a parameter and internally uses command queue 0.
-        std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {
-            multi_device_global_semaphore};
-        const std::vector<Tensor> gathered_tensors = ttnn::experimental::all_gather_command_processor_async(
-            device_tensors,
-            /* dim */ 0,
-            multi_dev_semaphore,
-            /* persistent_output_buffer */ std::nullopt,
-            /* num_links */ 1,
-            operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            ttnn::ccl::Topology::Linear,
-            /* cluster_axis */ std::nullopt,
-            SubDeviceId(0));
+        auto aggregated_tensor = ttnn::experimental::unit_mesh::aggregate(device_tensors);
+
+        // Quiesce parent mesh before all gather
+        mesh_device_->quiesce_submeshes();
+
+        auto all_gathered_tensor = ttnn::all_gather(
+            aggregated_tensor,
+            /* dim */ 0);
+
+        // Quiesce parent mesh after all gather
+        mesh_device_->quiesce_submeshes();
+
+        auto gathered_tensors = ttnn::experimental::unit_mesh::disaggregate(all_gathered_tensor);
 
         log_info(LogTest, "Enqueue dummy ops");
         for (size_t dev_idx = 0; dev_idx < devices.size(); dev_idx++) {
@@ -529,20 +530,19 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
 
         log_info(LogTest, "Enqueue AllGather");
 
-        // Enqueue the all_gather_command_processor_async operation on each device.
-        // It does not support command queue ID as a parameter and internally uses command queue 0.
-        std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {
-            multi_device_global_semaphore};
-        const std::vector<Tensor> gathered_tensors = ttnn::experimental::all_gather_command_processor_async(
-            device_tensors,
-            /* dim */ 0,
-            multi_dev_semaphore,
-            /* persistent_output_buffer */ std::nullopt,
-            /* num_links */ 1,
-            operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            ttnn::ccl::Topology::Linear,
-            /* cluster_axis */ std::nullopt,
-            SubDeviceId(0));
+        auto aggregated_tensor = ttnn::experimental::unit_mesh::aggregate(device_tensors);
+
+        // Quiesce parent mesh before all gather
+        mesh_device_->quiesce_submeshes();
+
+        auto all_gathered_tensor = ttnn::all_gather(
+            aggregated_tensor,
+            /* dim */ 0);
+
+        // Quiesce parent mesh after all gather
+        mesh_device_->quiesce_submeshes();
+
+        auto gathered_tensors = ttnn::experimental::unit_mesh::disaggregate(all_gathered_tensor);
 
         log_info(LogTest, "Enqueue dummy ops");
         for (size_t dev_idx = 0; dev_idx < devices.size(); dev_idx++) {
