@@ -264,6 +264,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal, SupportsV0On
     def initialize_vllm_model(
         cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations: str = None
     ):
+        assert optimizations is None, "Custom optimizations are not supported for this model"
         from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
 
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
@@ -372,7 +373,9 @@ class LlamaForCausalLM(Generator):
             max_seq_len=max_seq_len,
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
-            optimizations=DecodersPrecision.from_string(optimizations) if optimizations is not None else None,
+            optimizations=DecodersPrecision.from_string(optimizations)
+            if optimizations is not None
+            else DecodersPrecision.performance,
         )
         return cls(tt_model, model_args, mesh_device)
 
@@ -405,7 +408,6 @@ class QwenForCausalLM(Generator):
         tt_data_parallel=1,
         optimizations: str = "performance",
     ):
-        logger.info(f"DecodersPrecision: {optimizations}")
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
             tt_data_parallel,
@@ -414,7 +416,9 @@ class QwenForCausalLM(Generator):
             max_seq_len=max_seq_len,
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
-            optimizations=DecodersPrecision.from_string(optimizations) if optimizations is not None else None,
+            optimizations=DecodersPrecision.from_string(optimizations)
+            if optimizations is not None
+            else DecodersPrecision.performance,
         )
         return cls(tt_model, model_args, mesh_device)
 
@@ -455,7 +459,9 @@ class MistralForCausalLM(Generator):
             max_seq_len=max_seq_len,
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
-            optimizations=DecodersPrecision.from_string(optimizations) if optimizations is not None else None,
+            optimizations=DecodersPrecision.from_string(optimizations)
+            if optimizations is not None
+            else DecodersPrecision.performance,
         )
         return cls(tt_model, model_args, mesh_device)
 
@@ -554,8 +560,9 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         max_seq_len=131072,
         n_layers=None,
         tt_data_parallel=1,
-        optimizations=None,
+        optimizations: str = None,
     ):
+        assert optimizations is None, "Custom optimizations are not supported for this model"
         from models.demos.gemma3.demo.vision_demo import create_multimodal_model
 
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
