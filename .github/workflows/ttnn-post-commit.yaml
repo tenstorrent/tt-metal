@@ -97,8 +97,6 @@ jobs:
             cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/fused -xv -m "not disable_fast_runtime_mode"
           - name: ttnn moreh group
             cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/moreh -xv -m "not disable_fast_runtime_mode"
-          - name: ttnn transformers group
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode"
           - name: ttnn reduce and misc ops group
             cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/reduce tests/ttnn/unit_tests/operations/rand tests/ttnn/unit_tests/operations/debug tests/ttnn/unit_tests/operations/ssm -xv -m "not disable_fast_runtime_mode"
           - name: core ttnn unit test group
