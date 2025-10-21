@@ -131,13 +131,13 @@ struct ChannelPoolCollection
     // 1) number of pools: n_pools
     // 2) array of pool types: pool_types[n_pools]
     // 3) for_each(pool): get args
+    // 4) sender channel to pool mapping
+    // 5) receiver channel to pool mapping
     static constexpr size_t num_channel_pools = get_compile_time_arg_val(CT_ARG_IDX_BASE);
     static constexpr size_t channel_pool_types_base_idx = CT_ARG_IDX_BASE + 1;
     static constexpr size_t pools_data_base_idx =
         channel_pool_types_base_idx + // start of pool types
-        num_channel_pools;// +           // end of channel pool types
-        // NumSenderChannels +           // sender channel to pool mapping
-        // NumReceiverChannels;          // receiver channel to pool mapping
+        num_channel_pools;            // end of channel pool types
 
 
     // pool types list
@@ -170,12 +170,6 @@ struct ChannelPoolCollection
     static constexpr size_t GET_NUM_ARGS_CONSUMED() {
         return (sender_channel_to_pool_index_base_idx + NumSenderChannels + NumReceiverChannels) -
                CT_ARG_IDX_BASE;
-        // return PoolsBuilder<
-        //            pools_data_base_idx,
-        //            num_channel_pools,
-        //            channel_pool_types_base_idx,
-        //            make_index_sequence<num_channel_pools>>::final_ct_arg_idx -
-        //        CT_ARG_IDX_BASE;
     }
 };
 
