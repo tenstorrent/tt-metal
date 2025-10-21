@@ -5,6 +5,7 @@
 import os
 import subprocess
 from pathlib import Path
+from loguru import logger
 
 from models.common.utility_functions import skip_for_blackhole
 import nbformat
@@ -89,8 +90,8 @@ def setup_once(model_location_generator):
                 local_path_obj.unlink()  # Remove existing symlink/file
             local_path_obj.symlink_to(data_placement.parent)
         except Exception as e:
-            print(
-                f"Warning: Could not set up data for tutorial {tutorial_id}. Error: {e}. Data will be downloaded at runtime from original source."
+            logger.warning(
+                f"Could not set up data for tutorial {tutorial_id}. Error: {e}. Data will be downloaded at runtime from original source."
             )
 
 
