@@ -180,15 +180,12 @@ RUN set -eu && \
         tar -cvhf /artifacts/ttm_any.tar ${ARTIFACT_PATHS}; \
     fi
 
-COPY /dockerfile/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
-
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-
-
 FROM scratch AS artifacts
 COPY --from=build-artifacts /artifacts /artifacts
 COPY --from=build-artifacts /build /build
+
+FROM build-artifacts as evaluation
+CMD ["tail", "-f", "/dev/null"]
 
 #############################################################
 
@@ -276,10 +273,6 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 #############################################################
-
-FROM dev as evaluation
-COPY --from=build-artifacts /artifacts /artifacts
-COPY --from=build-artifacts /build /build
 
 FROM base AS release
 

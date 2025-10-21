@@ -180,7 +180,7 @@ jobs:
       - name: Build evaluation image
         run: |
           mkdir outputs
-          /home/runner/build.sh --target artifacts \
+          /home/runner/build.sh --target evaluation \
             --image harbor.ci.tenstorrent.net/event-scanner/tt-metal-ev:${{ github.sha }} \
             --dockerfile-dir dockerfile \
             --dockerfile Dockerfile \
