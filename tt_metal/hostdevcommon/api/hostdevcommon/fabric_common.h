@@ -12,6 +12,7 @@
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
 #include "tt-metalium/mesh_coord.hpp"
 #include "tt-metalium/mesh_graph.hpp"
+#include "tt-metalium/routing_table_generator.hpp"
 #endif
 
 namespace tt::tt_fabric {
@@ -171,8 +172,7 @@ struct __attribute__((packed)) intra_mesh_routing_path_t {
 
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
     // Routing calculation methods
-    void calculate_chip_to_all_routing_fields(
-        uint16_t src_chip_id, tt_metal::distributed::MeshShape& shape, FabricType torus_type = FabricType::MESH);
+    void calculate_chip_to_all_routing_fields(FabricNodeId src_fabric_node_id, tt_metal::distributed::MeshShape& shape);
 #else
     // Device-side methods (declared here, implemented in fabric_routing_path_interface.h):
     inline bool decode_route_to_buffer(uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) const;
