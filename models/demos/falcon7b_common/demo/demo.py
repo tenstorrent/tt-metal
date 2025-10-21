@@ -6,6 +6,7 @@ import json
 import os
 import time
 from functools import partial
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F
@@ -179,7 +180,7 @@ def run_falcon_demo_kv(
     profiler.end(f"tokenizing_inputs")
 
     model_config = get_model_config(model_config_strs_prefill_decode[0], nearest_32(num_input_tokens), batch_size)
-    tt_cache_path = get_hf_tt_cache_path(model_version)
+    tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
     # State dict is needed for embeddings
     logger.info("Loading huggingface weights...")
