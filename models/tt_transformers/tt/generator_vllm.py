@@ -403,8 +403,9 @@ class QwenForCausalLM(Generator):
         max_seq_len,
         n_layers=None,
         tt_data_parallel=1,
-        optimizations=DecodersPrecision.performance,
+        optimizations: str = "performance",
     ):
+        logger.info(f"DecodersPrecision: {optimizations}")
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
             tt_data_parallel,
@@ -444,7 +445,7 @@ class MistralForCausalLM(Generator):
         max_seq_len,
         n_layers=None,
         tt_data_parallel=1,
-        optimizations=DecodersPrecision.performance,
+        optimizations: str = "performance",
     ):
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,

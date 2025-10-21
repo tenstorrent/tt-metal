@@ -2924,7 +2924,9 @@ class DecodersPrecision:
         elif optimizations == "accuracy":
             return cls.accuracy
         else:
-            raise ValueError(f"Invalid optimizations: {optimizations}")
+            raise ValueError(
+                f"Invalid optimization configuration: {optimizations}. Allowed values are 'performance' or 'accuracy'"
+            )
 
     @classmethod
     def accuracy(cls, num_decoders, model_name):
