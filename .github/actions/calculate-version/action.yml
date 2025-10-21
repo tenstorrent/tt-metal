@@ -15,6 +15,9 @@ outputs:
   new_version:
     description: 'The calculated new version'
     value: ${{ steps.calculate-version.outputs.new_version }}
+  final_version:
+    description: 'The final version with tag type suffix (rc/dev) if applicable'
+    value: ${{ steps.format-final-version.outputs.final_version }}
 
 runs:
   using: 'composite'
@@ -116,3 +119,24 @@ runs:
         new_version="v$major.$minor.$patch"
         echo "New calculated version: $new_version"
         echo "new_version=$new_version" >> "$GITHUB_OUTPUT"
+
+    - name: Format final version with tag type
+      id: format-final-version
+      shell: bash
+      run: |
+        baseVersion="${{ steps.calculate-version.outputs.new_version }}"
+        tagType="${{ inputs.tag-type }}"
+
+        if [ "$tagType" = "rc" ]; then
+          currentNumberRCs=$(git tag | grep "$baseVersion"-rc | wc -l)
+          newNumber=$(($currentNumberRCs+1))
+          version="$baseVersion-rc$newNumber"
+        elif [ "$tagType" = "dev" ]; then
+          dateInt=$(date +%Y%m%d)
+          version="$baseVersion-dev$dateInt"
+        else
+          version="$baseVersion"
+        fi
+
+        echo "Final version: $version"
+        echo "final_version=$version" >> "$GITHUB_OUTPUT"
