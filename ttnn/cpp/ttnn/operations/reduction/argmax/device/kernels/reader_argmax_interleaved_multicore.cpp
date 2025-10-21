@@ -382,7 +382,7 @@ void kernel_main() {
             noc_semaphore_wait(start_sem_local_ptr, k + 1);
         }
 
-        if(k > start_outer_dim_units && !is_reader){
+        if(k > start_outer_dim_units && !is_reader) {
             noc_semaphore_wait(start_sem_local_ptr, k + 1 - (outer_dim_units  +  1) / 2); 
         }
 
