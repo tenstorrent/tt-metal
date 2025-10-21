@@ -95,7 +95,7 @@ void kernel_main() {
     }
 
     if constexpr (reduce_all) {
-        constexpr bool need_w2r_sync = (outer_dim_units + 1) / 2 < outer_dim_units;
+        constexpr bool need_w2r_sync = ((outer_dim_units + 1) / 2) < outer_dim_units;
         if constexpr (is_reader && need_w2r_sync) {
             cb_wait_front(w2r_cb_idx, 1);
             const uint32_t w2r_cb_addr = get_read_ptr(w2r_cb_idx);
