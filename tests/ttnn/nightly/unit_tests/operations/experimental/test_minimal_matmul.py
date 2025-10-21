@@ -497,7 +497,7 @@ def test_create_perf_table(fidelity, dtype, fp32_acc):
     for M, K, N in TABLE_CONFIGS:
         float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
         cols = ["ATTRIBUTES"]
-        command = f'pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_minimal_matmul.py::test_perf_table_sweep -k "{M}-{K}-{N} and {fp32_acc} and {fidelity} and {dtype}"'
+        command = f"pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_minimal_matmul.py::test_perf_table_sweep[{dtype}-{fidelity}-{fp32_acc}-M={M}-K={K}-N={N}]"
 
         run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
         r = post_process_ops_log(
