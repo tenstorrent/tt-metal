@@ -357,3 +357,26 @@ inline void _llk_unpack_tilizeA_B_(
         switch_config_context(unp_cfg_context);
     }
 }
+
+inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM)
+{
+    // Revert X dim value to default.
+    TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
+    TT_SETADCXX(p_setadc::UNP_B, face_r_dim * FACE_C_DIM - 1, 0x0);
+
+    // _llk_unpack_tilizeA_B uses y-stride and updates y counter
+    TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
+
+    unpack_config_u config = {0};
+
+    config.f.out_data_format = unpack_dst_format;
+    config.f.throttle_mode   = 2;
+    TT_SETDMAREG(0, LOWER_HALFWORD(config.val[0]), 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(config.val[0]), 0, HI_16(p_gpr_unpack::TMP0));
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    // Load unpack config[0]
+    TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG2_Out_data_format_ADDR32);
+    // GPR preloaded with  16 | (16 << 16)}
+    TTI_WRCFG(p_gpr_unpack::FACE_DIM_16x16, 0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
+    TTI_NOP;
+}
