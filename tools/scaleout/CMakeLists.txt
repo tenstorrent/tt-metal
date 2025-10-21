@@ -94,7 +94,7 @@ set_target_properties(
             ${CMAKE_BINARY_DIR}/tools/scaleout
 )
 
-target_include_directories(2d_big_mesh_cabling_gen SYSTEM PRIVATE ${CMAKE_BINARY_DIR}/tools/scaleout)
+target_include_directories(2d_big_mesh_cabling_gen SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 target_link_libraries(
     2d_big_mesh_cabling_gen
@@ -113,7 +113,7 @@ set_target_properties(
             ${CMAKE_BINARY_DIR}/tools/scaleout
 )
 
-target_include_directories(run_cabling_generator SYSTEM PRIVATE ${CMAKE_BINARY_DIR}/tools/scaleout)
+target_include_directories(run_cabling_generator SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 target_link_libraries(
     run_cabling_generator
