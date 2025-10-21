@@ -37,11 +37,12 @@ constexpr uint32_t kDbetaComponentsBufferIdx = 2U;
 
 // CBs with input data
 constexpr auto kScalerCbIndex = tt::CBIndex::c_0;        // 1/N scaler
-constexpr auto kGammaCbIndex = tt::CBIndex::c_1;         // gamma (scale parameter)
-constexpr auto kXHatCbIndex = tt::CBIndex::c_2;          // x_hat (normalized input) from forward pass
-constexpr auto kRstdCbIndex = tt::CBIndex::c_3;          // rstd from forward pass
-constexpr auto kDLoutCbIndex = tt::CBIndex::c_4;         // upstream gradient
-constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_5;  // reduction vector
+constexpr auto kMaskWCbIndex = tt::CBIndex::c_1;         // mask for width dimension
+constexpr auto kGammaCbIndex = tt::CBIndex::c_2;         // gamma (scale parameter)
+constexpr auto kXHatCbIndex = tt::CBIndex::c_3;          // x_hat (normalized input) from forward pass
+constexpr auto kRstdCbIndex = tt::CBIndex::c_4;          // rstd from forward pass
+constexpr auto kDLoutCbIndex = tt::CBIndex::c_5;         // upstream gradient
+constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_6;  // reduction vector
 
 // CBs with output data
 constexpr auto kDxCbIndex = tt::CBIndex::c_10;                // dx (input gradient)
@@ -61,6 +62,7 @@ constexpr auto kCbZeroIndex = tt::CBIndex::c_19;  // (1/N) * sum(dy * gamma * x_
 
 // CB sizes (some set to 2U for ping-pong)
 constexpr uint32_t kNumScalerTiles = 1U;
+constexpr uint32_t kNumMaskTiles = 1U;
 constexpr uint32_t kNumRstdTiles = 2U;
 constexpr uint32_t kNumMatMulReduceTiles = 1U;
 constexpr uint32_t kNumXNormalizedTiles = 2U;
@@ -69,6 +71,7 @@ constexpr uint32_t kNumDyGammaSumTiles = 1U;
 constexpr uint32_t kNumDyGammaXnormSumTiles = 1U;
 constexpr uint32_t kNumZeroTiles = 1U;
 
+const std::string kMaskWDefineKey = "DO_MASK_W";
 const std::string kEverythingFitsInL1DefineKey = "EVERYTHING_FITS_IN_L1";
 
 bool fits_in_l1_check(
@@ -83,6 +86,7 @@ bool fits_in_l1_check(
 
     // Memory for input data CBs
     const uint64_t scaler_memory = kNumScalerTiles * bfloat16_single_tile_size_bytes;
+    const uint64_t mask_memory = kNumMaskTiles * bfloat16_single_tile_size_bytes;
     const uint64_t gamma_memory = Wt * bfloat16_single_tile_size_bytes;
     const uint64_t x_hat_memory = Wt * bfloat16_single_tile_size_bytes;
     const uint64_t rstd_memory = kNumRstdTiles * bfloat16_single_tile_size_bytes;
@@ -101,8 +105,8 @@ bool fits_in_l1_check(
     const uint64_t dy_gamma_xnorm_sum_memory = kNumDyGammaXnormSumTiles * float32_single_tile_size_bytes;
 
     // Total L1 memory required
-    const uint64_t required_L1_in_bytes = scaler_memory + gamma_memory + x_hat_memory + rstd_memory + dL_dout_memory +
-                                          matmul_reduce_memory + dx_memory + dgamma_components_memory +
+    const uint64_t required_L1_in_bytes = scaler_memory + mask_memory + gamma_memory + x_hat_memory + rstd_memory +
+                                          dL_dout_memory + matmul_reduce_memory + dx_memory + dgamma_components_memory +
                                           dbeta_components_memory + x_normalized_memory + dy_gamma_memory +
                                           dy_gamma_sum_memory + dy_gamma_xnorm_sum_memory;
 
@@ -228,6 +232,10 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     // Get the number of inner dimension (assumes divisible by TILE_WIDTH)
     uint32_t num_inner = input.logical_shape()[-1];
 
+    // This parameter is used to determine if we need to mask tiles, i.e. if the operation applied over inner dimension
+    // might produce incorrect results due to some random data in the end of the last tile.
+    uint32_t mask_w = num_inner % tt::constants::TILE_WIDTH;
+
     // Get number of free cores
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -260,6 +268,8 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     // Input data CBs
     [[maybe_unused]] auto cb_scaler = create_circular_buffer(
         program, all_cores, kScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
+    [[maybe_unused]] auto cb_mask_w = create_circular_buffer(
+        program, all_cores, kMaskWCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
     [[maybe_unused]] auto cb_gamma = create_circular_buffer(
         program, all_cores, kGammaCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
     [[maybe_unused]] auto cb_x_hat = create_circular_buffer(
@@ -354,12 +364,15 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
         enchantum::to_string(dbeta_components_buffer->buffer_type()));
 
     std::map<std::string, std::string> defines;
+    if (mask_w != 0) {
+        defines[kMaskWDefineKey] = "1";
+    }
     if (everything_fits_in_l1) {
         defines[kEverythingFitsInL1DefineKey] = "1";
     }
 
     LayerNormBackwardKernels kernels;
-    std::vector<uint32_t> reader_compile_time_args{packed_scaler, block_size, Wt};
+    std::vector<uint32_t> reader_compile_time_args{packed_scaler, block_size, mask_w, Wt};
     tt::tt_metal::TensorAccessorArgs(gamma_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(x_hat_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(rstd_buffer).append_to(reader_compile_time_args);
@@ -380,6 +393,7 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     std::vector<uint32_t> compute_group_1_args = {
         num_rows_per_core_group_1,  // per_core_block_cnt
         block_size,                 // per_core_block_size
+        mask_w,                     // mask_w
         Wt                          // num_inner / TILE_W
     };
 
@@ -391,6 +405,7 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
         std::vector<uint32_t> compute_group_2_args = {
             num_rows_per_core_group_2,  // per_core_block_cnt
             block_size,                 // per_core_block_size
+            mask_w,                     // mask_w
             Wt                          // num_inner / TILE_W
         };
 

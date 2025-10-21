@@ -8,16 +8,24 @@
 
 // CBs with input data
 constexpr uint32_t cb_scaler_idx = tt::CBIndex::c_0;      // 1/N scaler
-constexpr uint32_t cb_gamma_idx = tt::CBIndex::c_1;       // gamma (scale parameter)
-constexpr uint32_t cb_x_hat_idx = tt::CBIndex::c_2;       // x_hat (normalized input) from forward pass
-constexpr uint32_t cb_rstd_idx = tt::CBIndex::c_3;        // rstd from forward pass
-constexpr uint32_t cb_dL_out_idx = tt::CBIndex::c_4;      // upstream gradient
-constexpr uint32_t cb_mat_mul_reduce = tt::CBIndex::c_5;  // reduction vector
+constexpr uint32_t cb_mask_w_idx = tt::CBIndex::c_1;      // mask for width dimension
+constexpr uint32_t cb_gamma_idx = tt::CBIndex::c_2;       // gamma (scale parameter)
+constexpr uint32_t cb_x_hat_idx = tt::CBIndex::c_3;       // x_hat (normalized input) from forward pass
+constexpr uint32_t cb_rstd_idx = tt::CBIndex::c_4;        // rstd from forward pass
+constexpr uint32_t cb_dL_out_idx = tt::CBIndex::c_5;      // upstream gradient
+constexpr uint32_t cb_mat_mul_reduce = tt::CBIndex::c_6;  // reduction vector
 constexpr uint32_t cb_zero = tt::CBIndex::c_19;           // reduction vector
 
 constexpr uint32_t packed_scaler = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
-constexpr uint32_t Wt = get_compile_time_arg_val(2);
+constexpr uint32_t mask_w = get_compile_time_arg_val(2);
+constexpr uint32_t Wt = get_compile_time_arg_val(3);
+
+#ifdef DO_MASK_W
+constexpr bool do_mask_w = true;
+#else
+constexpr bool do_mask_w = false;
+#endif
 
 template <typename AddrGen>
 inline void read_tiles(
@@ -44,6 +52,12 @@ void kernel_main() {
     uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
 
+    constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
+    constexpr uint16_t zero = 0x0;
+    // Generate mask tile.
+    if constexpr (do_mask_w) {
+        generate_mask_tile(cb_mask_w_idx, one, zero, mask_w);
+    }
     // Generate tile with scalar (1/N).
     generate_tile_with_packed_bfloat16_value(cb_scaler_idx, packed_scaler);
 
@@ -52,7 +66,7 @@ void kernel_main() {
     generate_matmul_row_reduce_tile(cb_mat_mul_reduce);
 
     const uint32_t tile_bytes = get_tile_size(cb_scaler_idx);
-    constexpr auto gamma_args = TensorAccessorArgs<3>();
+    constexpr auto gamma_args = TensorAccessorArgs<4>();
     constexpr auto x_hat_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     constexpr auto rstd_args = TensorAccessorArgs<x_hat_args.next_compile_time_args_offset()>();
     constexpr auto dL_out_args = TensorAccessorArgs<rstd_args.next_compile_time_args_offset()>();
