@@ -588,7 +588,6 @@ class TT_CCL:
                     "FF3": [(1, 1, seqlen, 3584)],
                     "FF2": [(1, 1, seqlen, 2048)],
                     "LAYERNORM": [(1, 1, seqlen, 128)],
-                    # "SAMPLING": [(1, 1, 32, 128 * 1024)]
                 }
                 if not self.is_qwen
                 else {
@@ -600,7 +599,6 @@ class TT_CCL:
                     "FF3": [(1, 1, seqlen, 3200)],
                     "FF2": [(1, 1, seqlen, 1280)],
                     "LAYERNORM": [(1, 1, seqlen, 128)],
-                    # "SAMPLING": [(1, 1, 32, 155648)],
                 }
             )
             for key, shape in buffers_dict.items():
@@ -625,7 +623,7 @@ class TT_CCL:
             if not self.is_qwen
             else {
                 "LM_HEAD": [(4, 1, 32, 19456)],
-                "SAMPLING": [(1, 1, 32, 155648)],
+                "SAMPLING": [(1, 1, 32, 19456 * 8)],
             }
         )
         for key, shape in buffers_fixed_length.items():
@@ -1236,26 +1234,13 @@ def tt_distributed_rmsnorm(
     mesh_device,
     compute_kernel_config,
     tt_ccl=None,
-    program_config=None,
-    memory_config=None,
 ):
-    # use_2d_grid = inp.shape[-2] == 128
-    use_2d_grid = False
+    use_2d_grid = inp.shape[-2] == 128 and not tt_ccl.is_qwen
 
     # Run distributed rmsnorm part 1
-    tt_stats = (
-        ttnn.rms_norm_pre_all_gather(
-            inp,
-            compute_kernel_config=compute_kernel_config,
-            program_config=program_config,
-            dtype=ttnn.bfloat16,
-        )
-        if program_config is not None
-        else ttnn.rms_norm_pre_all_gather(
-            inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16, use_2d_core_grid=use_2d_grid
-        )
+    tt_stats = ttnn.rms_norm_pre_all_gather(
+        inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16, use_2d_core_grid=use_2d_grid
     )
-    padded_shape = (1, 1, inp.shape[-2], 32)
 
     tt_stats_gathered = tt_ccl.line_all_gather(
         tt_stats, dim=3, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="LAYERNORM"
@@ -1263,24 +1248,13 @@ def tt_distributed_rmsnorm(
     tt_stats.deallocate(True)
 
     # Run distributed rmsnorm part 2
-    tt_out = (
-        ttnn.rms_norm_post_all_gather(
-            inp,
-            tt_stats_gathered,
-            epsilon=epsilon,
-            weight=gamma,
-            program_config=program_config,
-            compute_kernel_config=compute_kernel_config,
-            use_2d_core_grid=use_2d_grid,
-        )
-        if program_config is not None
-        else ttnn.rms_norm_post_all_gather(
-            inp,
-            tt_stats_gathered,
-            epsilon=epsilon,
-            weight=gamma,
-            compute_kernel_config=compute_kernel_config,
-        )
+    tt_out = ttnn.rms_norm_post_all_gather(
+        inp,
+        tt_stats_gathered,
+        epsilon=epsilon,
+        weight=gamma,
+        compute_kernel_config=compute_kernel_config,
+        use_2d_core_grid=use_2d_grid,
     )
     # tt_stats_gathered.deallocate(True)
     # inp.deallocate(True)

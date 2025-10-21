@@ -179,12 +179,12 @@ class Generator:
             and prefill_seq_lens[0] * batch < 128 * 1024
             and tt_out_logits_all_users is None
             and not return_logits
+            and not self.model.args.is_qwen
         ):
             use_batched_prefill = True
-        use_batched_prefill = False
 
         if return_logits:
-            tt_out_logits_all_users = torch.zeros(batch, 1, 155648)
+            tt_out_logits_all_users = torch.zeros(batch, 1, 155648 if self.model.args.is_qwen else 128256)
 
         all_users = [0] if use_batched_prefill else empty_slots
 
@@ -239,7 +239,7 @@ class Generator:
 
             # If PCC check enabled or return_logits is True (we save output logits)
             if tt_out_logits_all_users is not None or return_logits:
-                tt_out_logits_saved = torch.zeros(1, 155648)
+                tt_out_logits_saved = torch.zeros(1, 155648 if self.model.args.is_qwen else 128256)
                 prefill_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
 
             if enable_trace:

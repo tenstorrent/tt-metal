@@ -189,6 +189,8 @@ class TtQwenModelArgs(TtModelArgs):
         self.n_kv_heads = 8
 
         self.qk_norm = True
+        self.is_qwen = True
+        self.unfuse_res_add = True
 
         if self.num_devices == 32:
             self.use_prefetcher = True

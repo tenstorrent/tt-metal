@@ -204,7 +204,7 @@ class TtLlamaMLP(LightweightModule):
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
         seq_len = x.shape[-2]
-        use_w1_w3_interleaved = (seq_len >= 4096 or seq_len == 128) if not self.args.qk_norm else True
+        use_w1_w3_interleaved = (seq_len >= 4096 or seq_len == 128) if not self.args.is_qwen else True
         pc_1 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
         pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
         pc_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
