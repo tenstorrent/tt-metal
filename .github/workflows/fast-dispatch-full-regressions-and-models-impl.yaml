@@ -304,11 +304,11 @@ jobs:
       - name: Run frequent reg tests scripts
         timeout-minutes: ${{ matrix.test-config.timeout || 30 }}
         run: |
-          extra_options=""
           if [[ "${{ matrix.test-config.model }}" == *"gemma-3"* ]]; then
-            extra_options="-k ${{ matrix.test-config.model }}"
+            pytest tests/nightly/single_card/gemma3 -k ${{ matrix.test-config.model }}
+          else
+            pytest tests/nightly/single_card/${{ matrix.test-config.model }}
           fi
-          pytest tests/nightly/single_card/${{ matrix.test-config.model }} $extra_options
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
