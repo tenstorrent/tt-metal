@@ -10,7 +10,7 @@
 #include <enchantum/enchantum.hpp>
 #include <memory_reporter.hpp>
 #include <persistent_kernel_cache.hpp>
-#include <semaphore.hpp>
+#include "impl/buffers/semaphore.hpp"
 #include <tt_align.hpp>
 #include <algorithm>
 #include <array>
