@@ -61,6 +61,7 @@ target_sources(
         test_graph_query_op_constraints.cpp
         test_graph_query_op_runtime.cpp
         test_launch_operation.cpp # TODO: Fix data race (TSan) then shift-left
+        test_lazy_mode.cpp
         test_matmul_benchmark.cpp
         test_sub_int.cpp
 )

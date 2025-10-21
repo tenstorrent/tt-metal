@@ -564,7 +564,7 @@ auto default_create_mesh_workload(
 template <class OutputTensorsT = Tensors>
 class DeviceOperation final {
 public:
-    using storage_t = std::array<std::byte, 1240>;
+    using storage_t = std::array<std::byte, 1328>;
     using OutputTensors = OutputTensorsT;
     using ComputedSpecs = std::vector<ttnn::TensorSpec>;
 

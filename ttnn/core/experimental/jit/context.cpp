@@ -38,6 +38,9 @@ NodeId Context::create_node(
         }
     }
 
+    log_info(
+        tt::LogOp, "LAZY MODE: Created node {} for operation '{}' with {} input(s)", id, operation_name, inputs.size());
+
     return id;
 }
 
@@ -68,12 +71,16 @@ std::vector<Node>& Context::get_all_nodes() { return nodes_; }
 
 void Context::execute_node(NodeId id) {
     std::vector<NodeId> nodes = topological_sort({id});
+    log_info(tt::LogOp, "LAZY MODE: Executing {} node(s) in topological order", nodes.size());
     for (auto node_id : nodes) {
         auto node = get_node(node_id);
         if (node != nullptr) {
+            log_info(tt::LogOp, "LAZY MODE: Executing node {} - operation '{}'", node_id, node->operation_name());
             node->execute();
+            log_info(tt::LogOp, "LAZY MODE: Completed node {} - operation '{}'", node_id, node->operation_name());
         }
     }
+    log_info(tt::LogOp, "LAZY MODE: Finished executing all nodes");
 }
 
 // Build dependency graph from output tensors

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/experimental/jit/node.hpp"
+#include "ttnn/lazy_mode.hpp"
 
 namespace ttnn::experimental::jit {
 Node::Node(
@@ -10,7 +11,7 @@ Node::Node(
     const std::vector<Tensor>& inputs,
     const std::string&& operation_name,
     std::shared_ptr<IDeviceOperation>&& Args) :
-    id_(id), operation_name_(std::move(operation_name)), Args(std::move(Args)) {
+    id_(id), operation_name_(operation_name), Args(std::move(Args)) {
     inputs_.reserve(inputs.size());
     for (const auto& input : inputs) {
         inputs_.push_back(input);
@@ -29,7 +30,10 @@ void Node::add_output_node(NodeId node_id) { output_nodes_.push_back(node_id); }
 
 void Node::execute() {
     TT_FATAL(Args != nullptr, "Args is not set");
+    // Temporarily disable lazy mode during execution to prevent re-entry
+    ttnn::lazy_mode::ScopedDisable disable_lazy;
     Args->invoke(inputs_);
+    is_materialized_ = true;
 }
 
 }  // namespace ttnn::experimental::jit

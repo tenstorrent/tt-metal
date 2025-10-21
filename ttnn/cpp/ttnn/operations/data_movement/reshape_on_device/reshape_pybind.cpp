@@ -14,6 +14,7 @@
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::data_movement {
+namespace py = pybind11;
 
 void py_bind_reshape(pybind11::module& module) {
     auto reshape_submodule = module.def_submodule("reshape_on_device", "Experimental reshape operation");

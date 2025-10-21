@@ -269,7 +269,7 @@ public:
 private:
     void init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     void deallocate_impl(bool force);
-    ttnn::experimental::jit::NodeId producer_node_;
+    ttnn::experimental::jit::NodeId producer_node_ = ttnn::experimental::jit::NodeId(0);
 };
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
