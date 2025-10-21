@@ -497,15 +497,7 @@ struct HeterogeneousChannelTuple {
     template <typename PoolCollection>
     void init(size_t buffer_size_bytes, size_t header_size_bytes) {
         // Note: removed channel_base_id parameter - it was never used
-        
-        std::apply([&](auto&... chans) {
-            size_t ch_idx = 0;
-            ((init_single_channel<PoolCollection>(
-                chans, 
-                ch_idx++,
-                buffer_size_bytes,
-                header_size_bytes)), ...);
-        }, channel_buffers);
+        init_impl<PoolCollection>(buffer_size_bytes, header_size_bytes, std::make_index_sequence<std::tuple_size_v<ChannelTypes>>());
     }
 
     template <size_t I>
@@ -514,13 +506,20 @@ struct HeterogeneousChannelTuple {
     }
 
 private:
-    template <typename PoolCollection, typename Channel>
+    template <typename PoolCollection, size_t... ChannelIndices>
+    void init_impl(size_t buffer_size_bytes, size_t header_size_bytes, std::index_sequence<ChannelIndices...>) {
+        (init_single_channel<PoolCollection, ChannelIndices>(
+            std::get<ChannelIndices>(channel_buffers), 
+            buffer_size_bytes,
+            header_size_bytes), ...);
+    }
+
+    template <typename PoolCollection, size_t ChannelIdx, typename Channel>
     void init_single_channel(Channel& chan, 
-                             size_t channel_idx,
                              size_t buffer_size_bytes,
                              size_t header_size_bytes) {
         // Get pool index for this channel using provided mapping
-        constexpr size_t pool_idx = ChannelToPoolIndex[channel_idx];
+        constexpr size_t pool_idx = ChannelToPoolIndex[ChannelIdx];
         constexpr auto pool_type = static_cast<FabricChannelPoolType>(
             PoolCollection::channel_pool_types[pool_idx]);
         
@@ -530,7 +529,7 @@ private:
             constexpr size_t base_address = PoolType::base_address;
             
             // Calculate channel offset within pool (for multiple channels sharing a pool)
-            constexpr size_t channels_before = count_channels_in_pool_before<PoolCollection>(channel_idx, pool_idx);
+            constexpr size_t channels_before = count_channels_in_pool_before<PoolCollection, ChannelIdx>(pool_idx);
             size_t channel_address = base_address + (channels_before * buffer_size_bytes * PoolType::num_slots);
             
             chan.init(channel_address, buffer_size_bytes, header_size_bytes);
@@ -544,11 +543,11 @@ private:
     }
 
     // Helper to count how many channels are mapped to the same pool before this channel
-    template <typename PoolCollection>
-    static constexpr size_t count_channels_in_pool_before(size_t channel_idx, size_t pool_idx) {
+    template <typename PoolCollection, size_t channel_idx>
+    static constexpr size_t count_channels_in_pool_before(size_t pool_idx) {
         size_t count = 0;
         for (size_t i = 0; i < channel_idx; ++i) {
-            constexpr size_t idx_pool = ChannelToPoolIndex[i];
+            size_t idx_pool = ChannelToPoolIndex[i];
             if (idx_pool == pool_idx) {
                 count++;
             }

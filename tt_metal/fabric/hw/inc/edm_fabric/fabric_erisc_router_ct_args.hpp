@@ -188,18 +188,17 @@ constexpr std::array<FabricChannelPoolType, NUM_SENDER_CHANNELS> SENDER_TO_POOL_
     NUM_SENDER_CHANNELS>();
 static_assert(all_elements_satisfy(SENDER_TO_POOL_TYPE, [](FabricChannelPoolType pool_type) { return pool_type <= FabricChannelPoolType::ELASTIC; }));
 constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> RECEIVER_TO_POOL_IDX = channel_pools_args::receiver_channel_to_pool_index;
-static_assert(RECEIVER_TO_POOL_IDX[0]  < NUM_POOLS, "RECEIVER_TO_POOL_IDX[0] must be less than NUM_POOLS");
-static_assert(RECEIVER_TO_POOL_IDX[1]  < NUM_POOLS, "RECEIVER_TO_POOL_IDX[1] must be less than NUM_POOLS");
-static_assert(all_elements_satisfy(RECEIVER_TO_POOL_IDX, [](size_t pool_idx) { return pool_idx < NUM_POOLS; }), "RECEIVER_TO_POOL_IDX must be less than NUM_POOLS");
 static_assert(all_elements_satisfy(RECEIVER_TO_POOL_IDX, [](size_t pool_idx) { return pool_idx < NUM_POOLS; }), "RECEIVER_TO_POOL_IDX must be less than NUM_POOLS");
 constexpr std::array<FabricChannelPoolType, NUM_RECEIVER_CHANNELS> RECEIVER_TO_POOL_TYPE = fill_array_with_next_n_args<
     FabricChannelPoolType,
+
+    // We accidentally double emit the *_TO_POOL_TYPE arrays so we skip past some unused args
     CHANNEL_MAPPINGS_START_IDX + (2 * NUM_SENDER_CHANNELS) + NUM_RECEIVER_CHANNELS,
     NUM_RECEIVER_CHANNELS>();
 static_assert(all_elements_satisfy(RECEIVER_TO_POOL_TYPE, [](FabricChannelPoolType pool_type) { return pool_type <= FabricChannelPoolType::ELASTIC; }));
 
 
-constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX = CHANNEL_MAPPINGS_START_IDX + (2 * NUM_SENDER_CHANNELS) + (2 * NUM_RECEIVER_CHANNELS);
+constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX = CHANNEL_MAPPINGS_START_IDX + 2 * (NUM_SENDER_CHANNELS + NUM_RECEIVER_CHANNELS);
 static_assert(
     get_compile_time_arg_val(DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX) == 0xabaddad7,
     "DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX not found. This implies some arguments were misaligned between host and device. Double check the CT args.");

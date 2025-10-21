@@ -5,6 +5,7 @@
 #pragma once
 
 #include "compile_time_args.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
 
 enum class FabricChannelPoolType {
     STATIC = 0,
@@ -134,23 +135,14 @@ struct ChannelPoolCollection
     static constexpr size_t channel_pool_types_base_idx = CT_ARG_IDX_BASE + 1;
     static constexpr size_t pools_data_base_idx =
         channel_pool_types_base_idx + // start of pool types
-        num_channel_pools +           // end of channel pool types
-        NumSenderChannels +           // sender channel to pool mapping
-        NumReceiverChannels;          // receiver channel to pool mapping
+        num_channel_pools;// +           // end of channel pool types
+        // NumSenderChannels +           // sender channel to pool mapping
+        // NumReceiverChannels;          // receiver channel to pool mapping
 
 
     // pool types list
     static constexpr std::array<size_t, num_channel_pools> channel_pool_types =
         fill_array_with_next_n_args<size_t, channel_pool_types_base_idx, num_channel_pools>();
-
-    // sender channel to pool mapping
-    static constexpr std::array<size_t, NumSenderChannels> sender_channel_to_pool_index =
-        fill_array_with_next_n_args<size_t, channel_pool_types_base_idx + num_channel_pools, NumSenderChannels>();
-    static constexpr std::array<size_t, NumReceiverChannels> receiver_channel_to_pool_index =
-        fill_array_with_next_n_args<
-            size_t,
-            channel_pool_types_base_idx + num_channel_pools + NumSenderChannels,
-            NumReceiverChannels>();
 
     // pools tuple (args)
     // unpacks args according to the pool types list
@@ -160,13 +152,30 @@ struct ChannelPoolCollection
         channel_pool_types_base_idx,
         make_index_sequence<num_channel_pools>>::type;
 
-    static constexpr size_t GET_NUM_ARGS_CONSUMED() {
-        return PoolsBuilder<
+    // sender channel to pool mapping
+    static constexpr size_t sender_channel_to_pool_index_base_idx = PoolsBuilder<
                    pools_data_base_idx,
                    num_channel_pools,
                    channel_pool_types_base_idx,
-                   make_index_sequence<num_channel_pools>>::final_ct_arg_idx -
+                   make_index_sequence<num_channel_pools>>::final_ct_arg_idx;
+    static constexpr std::array<size_t, NumSenderChannels> sender_channel_to_pool_index =
+        fill_array_with_next_n_args<size_t, sender_channel_to_pool_index_base_idx, NumSenderChannels>();//channel_pool_types_base_idx + num_channel_pools, NumSenderChannels>();
+    static constexpr std::array<size_t, NumReceiverChannels> receiver_channel_to_pool_index =
+        fill_array_with_next_n_args<
+            size_t,
+            sender_channel_to_pool_index_base_idx + NumSenderChannels, //channel_pool_types_base_idx + num_channel_pools + NumSenderChannels,
+            NumReceiverChannels>();
+
+
+    static constexpr size_t GET_NUM_ARGS_CONSUMED() {
+        return (sender_channel_to_pool_index_base_idx + NumSenderChannels + NumReceiverChannels) -
                CT_ARG_IDX_BASE;
+        // return PoolsBuilder<
+        //            pools_data_base_idx,
+        //            num_channel_pools,
+        //            channel_pool_types_base_idx,
+        //            make_index_sequence<num_channel_pools>>::final_ct_arg_idx -
+        //        CT_ARG_IDX_BASE;
     }
 };
 
