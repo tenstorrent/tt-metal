@@ -306,7 +306,7 @@ ttnn::Tensor composite_all_gather(
     // and after re-tilizing
     ttnn::DataType input_dtype = input_tensor.dtype();
     bool is_tiled_and_not_tile_aligned = input_tensor.layout() == ttnn::Layout::TILE &&
-                                         (input_shape[2] % tile_height != 0 || input_shape[3] % tile_width != 0);
+                                         (input_shape[-2] % tile_height != 0 || input_shape[-1] % tile_width != 0);
     bool convert_to_bfloat16_for_composite = is_tiled_and_not_tile_aligned && input_dtype == ttnn::DataType::BFLOAT8_B;
 
     auto input_memory_config = input_tensor.memory_config();
@@ -327,13 +327,8 @@ ttnn::Tensor composite_all_gather(
         input_tensor = ttnn::to_memory_config(input_tensor, intermediate_memory_config);
     }
 
-    // Convert to row major
-    if (is_tiled_and_not_tile_aligned) {
-        // If input is tiled bfloat8_b, convert to bfloat16 to do the all_broadcast_async + concat
-        if (convert_to_bfloat16_for_composite) {
-            input_tensor = ttnn::typecast(input_tensor, ttnn::DataType::BFLOAT16);
-        }
-        input_tensor = ttnn::to_layout(input_tensor, ttnn::Layout::ROW_MAJOR);
+    if (convert_to_bfloat16_for_composite) {
+        input_tensor = ttnn::typecast(input_tensor, ttnn::DataType::BFLOAT16);
     }
 
     std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::experimental::ccl::all_broadcast_async(
@@ -342,14 +337,8 @@ ttnn::Tensor composite_all_gather(
     // Do the gather itself
     ttnn::Tensor all_gather_output_tensor = ttnn::concat(broadcasted_tensors, gather_dim);
 
-    // Convert back to tiled
-    if (is_tiled_and_not_tile_aligned) {
-        all_gather_output_tensor = ttnn::to_layout(all_gather_output_tensor, ttnn::Layout::TILE);
-        // If we had to convert the input dtype in order to execute the row-major composite op, convert back to the
-        // input dtype
-        if (convert_to_bfloat16_for_composite) {
-            all_gather_output_tensor = ttnn::typecast(all_gather_output_tensor, input_dtype);
-        }
+    if (convert_to_bfloat16_for_composite) {
+        all_gather_output_tensor = ttnn::typecast(all_gather_output_tensor, input_dtype);
     }
 
     if (output_memory_config.is_sharded()) {
