@@ -1,6 +1,6 @@
 # sfpi version information
 sfpi_repo=https://github.com/tenstorrent/sfpi
-sfpi_version=7.5.0-nops-14591
-sfpi_x86_64_linux_deb_md5=f532482430c96d9affb25563dcccb92d
-sfpi_x86_64_linux_rpm_md5=47d20c33d9d435028870b031a99ef2d8
-sfpi_x86_64_linux_txz_md5=111464f6acb0d7c52c618b1358e459f8
+sfpi_version=7.5.0-nops-muladd-14591
+sfpi_x86_64_linux_deb_md5=6dd844f458debd6ccef0643e79935f7c
+sfpi_x86_64_linux_rpm_md5=ed190086cdd6476e3c0dbaec35a78dcb
+sfpi_x86_64_linux_txz_md5=9586f45754d7f6596bfd54c853c2298b
