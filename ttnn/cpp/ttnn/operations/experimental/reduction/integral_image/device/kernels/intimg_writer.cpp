@@ -91,7 +91,7 @@ FORCE_INLINE void broadcast_last_row_to_all_rows_in_cube(
     // get the output after processing previous row (the block right above the currently processed block)
     // make the axis 3 propagation tile
     // push back to the compute
-    constexpr uint32_t LAST_ROW_ORD = 32 - 1;  // tile_height - 1
+    constexpr uint32_t LAST_ROW_ORD = 32 - 1;
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
         ReadCBGuard propagation_upper_read_guard{axis_3_propagation_read_cb, ONE_TILE};
         WriteCBGuard propagation_upper_write_guard{axis_3_propagation_write_cb, ONE_TILE};
@@ -101,7 +101,7 @@ FORCE_INLINE void broadcast_last_row_to_all_rows_in_cube(
             reinterpret_cast<volatile tt_l1_ptr output_number_t*>(propagation_read_addr);
         volatile tt_l1_ptr output_number_t* propagation_write_ptr =
             reinterpret_cast<volatile tt_l1_ptr output_number_t*>(propagation_write_addr);
-        for (uint32_t column_read_i = 0; column_read_i < 32; ++column_read_i) {
+        for (uint32_t column_read_i = 0; column_read_i < 32; ++column_read_i) {  // TODO(jbbieniekTT): no magic in code!
             output_number_t value_to_broadcast =
                 propagation_read_ptr[get_coord_from_tile_xy(column_read_i, LAST_ROW_ORD)];
             for (uint32_t row_write_i = 0; row_write_i < 32; ++row_write_i) {
@@ -145,6 +145,8 @@ void kernel_main() {
                             block_depth);
                         broadcast_last_row_to_all_rows_in_cube<output_number_type, decltype(output_addr_gtor)>(
                             output_addr_gtor, ctas.axis_3_buffer_0_cb, ctas.axis_3_buffer_1_cb, block_depth);
+                        DPRINT << "AFTER BROADCAST: channel/row/column/depth: " << channels_slice_i << "/"
+                               << row_chunk_i << "/" << column_block_i << "/" << block_depth << ENDL();
                     }
                     output_block(
                         output_addr_gtor,
@@ -156,6 +158,8 @@ void kernel_main() {
                         num_blocks_in_column,
                         num_slices_along_channels,
                         block_depth);
+                    DPRINT << "AFTER OUTPUTTING A BLOCK: channel/row/column/depth: " << channels_slice_i << "/"
+                           << row_chunk_i << "/" << column_block_i << "/" << block_depth << ENDL();
                 }
             }
         }
