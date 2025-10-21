@@ -83,9 +83,9 @@ def test_point_to_point(mesh_device, shape_coords, layout, dtype):
 
     sent_tensor = ttnn.point_to_point(
         input_tensor,
-        coord1,
         coord0,
-        ttnn.Topology.Linear,
+        coord1,
+        topology=ttnn.Topology.Linear,
     )
     sent_tensor_torch = ttnn.to_torch(sent_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
     assert_equal(input_tensor_torch[idx_start0:idx_end0, :, :, :], sent_tensor_torch[idx_start1:idx_end1, :, :, :])
@@ -99,10 +99,10 @@ def test_point_to_point(mesh_device, shape_coords, layout, dtype):
     )
     ttnn.point_to_point(
         sent_tensor,
-        coord0,
         coord1,
-        ttnn.Topology.Linear,
-        optional_output_tensor=return_tensor,
+        coord0,
+        topology=ttnn.Topology.Linear,
+        output_tensor=return_tensor,
     )
 
     torch_return_tensor = ttnn.to_torch(return_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
@@ -113,7 +113,7 @@ def test_point_to_point(mesh_device, shape_coords, layout, dtype):
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 500000}], indirect=True
 )
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["row_major", "tile"])
 @pytest.mark.parametrize("shape_coords", [((1, 1, 1, 16), ((0, 0), (0, 1)))])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 def test_point_to_point_with_device_delay(mesh_device, shape_coords, layout, dtype):
@@ -158,9 +158,9 @@ def test_point_to_point_with_device_delay(mesh_device, shape_coords, layout, dty
     # Compile programs
     sent_tensor = ttnn.point_to_point(
         input_tensor,
-        coord1,
         coord0,
-        ttnn.Topology.Linear,
+        coord1,
+        topology=ttnn.Topology.Linear,
     )
     ttnn.apply_device_delay(
         mesh_device, delays
@@ -170,18 +170,18 @@ def test_point_to_point_with_device_delay(mesh_device, shape_coords, layout, dty
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     sent_tensor = ttnn.point_to_point(
         input_tensor,
-        coord1,
         coord0,
-        ttnn.Topology.Linear,
+        coord1,
+        topology=ttnn.Topology.Linear,
     )
     ttnn.apply_device_delay(
         mesh_device, delays
     )  # tests for a potential race by having receive attempt to increment the semaphore before the send is done
     sent_tensor2 = ttnn.point_to_point(
         input_tensor2,
-        coord1,
         coord0,
-        ttnn.Topology.Linear,
+        coord1,
+        topology=ttnn.Topology.Linear,
     )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
@@ -232,13 +232,13 @@ def test_point_to_point_optional_intermediate(mesh_device):
     )
 
     spec = ttnn._ttnn.operations.point_to_point.p2p_compute_intermediate_tensor_spec(
-        input_tensor, coord1, coord0, ttnn.Topology.Linear
+        input_tensor, coord0, coord1, ttnn.Topology.Linear
     )
 
     torch_intermediate = torch.zeros(tuple(spec.shape), dtype=torch.bfloat16)
     tt_intermediate = ttnn.from_torch(torch_intermediate, spec=spec, device=mesh_device)
     sent_tensor = ttnn.point_to_point(
-        input_tensor, coord1, coord0, ttnn.Topology.Linear, optional_intermediate_tensor=tt_intermediate
+        input_tensor, coord0, coord1, topology=ttnn.Topology.Linear, intermediate_tensor=tt_intermediate
     )
     sent_tensor_torch = ttnn.to_torch(sent_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
     assert_equal(input_tensor_torch[idx_start0:idx_end0, :, :, :], sent_tensor_torch[idx_start1:idx_end1, :, :, :])

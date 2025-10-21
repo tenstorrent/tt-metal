@@ -14,7 +14,8 @@
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/device.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include <optional>
 #include <set>
 #include <vector>
@@ -42,8 +43,8 @@ bool is_TG_gateway_connection(
         return false;
     }
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    chip_id_t src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
-    chip_id_t dst_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
+    tt::ChipId src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
+    tt::ChipId dst_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
     const auto mmio_chip_id1 =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(src_chip_id);
     const auto mmio_chip_id2 =
@@ -73,7 +74,7 @@ size_t get_tt_fabric_max_payload_size_bytes() {
     return control_plane.get_fabric_context().get_fabric_max_payload_size_bytes();
 }
 
-FabricNodeId get_fabric_node_id_from_physical_chip_id(chip_id_t physical_chip_id) {
+FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     return control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
 }
@@ -184,19 +185,25 @@ void append_fabric_connection_rt_args(
         const auto router_direction = control_plane.routing_direction_to_eth_direction(forwarding_direction.value());
 
         // src_chip_id is still required to get the fabric_router_virtual_core from tt_cluster
-        chip_id_t src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
+        ChipId src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
 
         CoreCoord fabric_router_virtual_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
                 src_chip_id, fabric_router_channel);
 
         const auto& edm_config = fabric_context.get_fabric_router_config();
+        auto channel_allocator = edm_config.channel_allocator.get();
+        TT_FATAL(
+            dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator) != nullptr,
+            "Only FabricStaticSizedChannelsAllocator is supported currently.");
+        const auto static_channel_allocator =
+            dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
         const auto sender_channel = is_2d_fabric ? router_direction : 0;
         tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
             .edm_noc_x = fabric_router_virtual_core.x,
             .edm_noc_y = fabric_router_virtual_core.y,
-            .edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel],
-            .num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel],
+            .edm_buffer_base_addr = static_channel_allocator->get_sender_channel_base_address(sender_channel),
+            .num_buffers_per_channel = static_channel_allocator->get_sender_channel_number_of_slots(sender_channel),
             .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel],
             .edm_connection_handshake_addr = edm_config.sender_channels_connection_semaphore_address[sender_channel],
             .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[sender_channel],
@@ -379,7 +386,7 @@ size_t get_number_of_available_routing_planes(
     size_t row_idx = cluster_axis == 0 ? 0 : row_or_col;
     size_t col_idx = cluster_axis == 0 ? row_or_col : 0;
     auto* first_chip = mesh_device.get_device(row_idx, col_idx);
-    chip_id_t first_chip_id = first_chip->id();
+    ChipId first_chip_id = first_chip->id();
     auto fabric_node_in_row_or_col = control_plane.get_fabric_node_id_from_physical_chip_id(first_chip_id);
 
     // Map cluster axis to routing directions

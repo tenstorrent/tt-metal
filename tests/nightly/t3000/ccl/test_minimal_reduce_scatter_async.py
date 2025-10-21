@@ -317,10 +317,9 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "ones_tensor",
     [
-        True,
         False,
     ],
-    ids=["ones", "random"],
+    ids=["random"],
 )
 @pytest.mark.parametrize(
     "use_barrier, use_persistent_buffers",
@@ -435,10 +434,9 @@ def test_reduce_scatter_async(
 @pytest.mark.parametrize(
     "ones_tensor",
     [
-        True,
         False,
     ],
-    ids=["ones", "random"],
+    ids=["random"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",

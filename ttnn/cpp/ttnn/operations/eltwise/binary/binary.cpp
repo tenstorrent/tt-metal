@@ -234,78 +234,6 @@ inline auto any_subtile_broadcasted_block_format(const Tensor& a, const auto& b)
     return false;
 }
 
-inline auto any_sharded_scalar(const Tensor& a, const auto& b) {
-    if constexpr (requires {
-                      b.logical_shape();
-                      b.is_sharded();
-                  }) {
-        const auto& a_shape = a.logical_shape();
-        const auto& b_shape = b.logical_shape();
-        return (a.is_sharded() or b.is_sharded()) and
-               ((a_shape[-2] == 1 and a_shape[-1] == 1) or (b_shape[-2] == 1 and b_shape[-1] == 1));
-    }
-
-    return false;
-}
-
-inline auto is_w_bcast(const Tensor& a, const auto& b) {
-    if constexpr (requires { b.padded_shape(); }) {
-        const auto& shape_a = a.padded_shape();
-        const auto& shape_b = b.padded_shape();
-        return (shape_a[-1] == 1 and shape_b[-1] > 1) or (shape_b[-1] == 1 and shape_a[-1] > 1);
-    }
-    return false;
-}
-
-inline auto any_non_height_sharded_w_bcast(const Tensor& a, const auto& b, const MemoryConfig& c) {
-    // NOTE: currently with sharded tensor, broadcast is on w dimension only,
-    // so only check for w dimension, not all dimensions
-    if (a.is_sharded()) {
-        return a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED and is_w_bcast(a, b);
-    }
-
-    if constexpr (requires { b.is_sharded(); }) {
-        if (b.is_sharded()) {
-            return b.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED and is_w_bcast(a, b);
-        }
-    }
-
-    if (c.is_sharded()) {
-        return c.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED and is_w_bcast(a, b);
-    }
-
-    return false;
-}
-
-inline auto is_uneven(const Tensor& t) {
-    if (not t.is_sharded()) {
-        return false;
-    }
-
-    const auto& shape = t.padded_shape();
-    const auto& shard = t.shard_spec()->shape;
-
-    return (shape[-4] * shape[-3] * shape[-2] % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
-}
-
-inline auto any_uneven(const Tensor& a, const auto& b, const std::optional<Tensor>& c) {
-    if (is_uneven(a)) {
-        return true;
-    }
-
-    if constexpr (requires { is_uneven(b); }) {
-        if (is_uneven(b)) {
-            return true;
-        }
-    }
-
-    if (c.has_value() and is_uneven(*c)) {
-        return true;
-    }
-
-    return false;
-}
-
 inline auto is_binary_ng_only(const Tensor& a, const auto& b, BinaryOpType binary_op_type) {
     if constexpr (requires {
                       b.dtype();
@@ -357,7 +285,7 @@ bool is_legacy_only(
     const auto& output_mem_cfg = memory_config.value_or(output ? output->memory_config() : MemoryConfig{});
 
     if (detail::any_non_llk_row_broadcasted(lhs, rhs) or detail::any_sharded_block_format(lhs, rhs) or
-        detail::any_subtile_broadcasted_block_format(lhs, rhs) or detail::any_uneven(lhs, rhs, output)) {
+        detail::any_subtile_broadcasted_block_format(lhs, rhs)) {
         TT_FATAL(
             lhs_activations.size() <= 1,
             "lhs_activations support maximum of 1 for legacy-only configuration; Override with use_legacy=False "
@@ -718,6 +646,25 @@ Tensor BinaryOperationSubalpha<binary_op_type>::invoke(
         lhs, rhs, std::nullopt, memory_config, output, {}, {}, rhs_activations, false);
 }
 
+template <BinaryOpType binary_op_type>
+Tensor BinaryOperationHypot<binary_op_type>::invoke(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::invoke_binary_ng(
+        input_tensor_a,
+        input_tensor_b,
+        binary_op_type,
+        std::nullopt,
+        memory_config,
+        optional_output_tensor,
+        {},      // no post_activations
+        {},      // no lhs_activations
+        {},      // no rhs_activations
+        false);  // legacy_flag
+}
+
 template struct BinaryOperation<BinaryOpType::ADD>;
 template struct InplaceBinaryOperation<BinaryOpType::ADD>;
 template struct BinaryOperation<BinaryOpType::SUB>;
@@ -781,5 +728,6 @@ template struct BinaryOperationSfpu<BinaryOpType::LCM>;
 
 template struct BinaryOperationAddalpha<BinaryOpType::ADDALPHA>;
 template struct BinaryOperationSubalpha<BinaryOpType::SUBALPHA>;
+template struct BinaryOperationHypot<BinaryOpType::HYPOT>;
 
 }  // namespace ttnn::operations::binary

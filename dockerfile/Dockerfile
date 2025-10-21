@@ -14,7 +14,8 @@ ENV PATH="$CARGO_HOME/bin:$PATH"
 
 # Install runtime deps
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
-COPY /tt_metal/sfpi-version.sh /opt/tt_metal_infra/scripts/docker/sfpi-version.sh
+COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
+COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
 RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker
 
 #############################################################
@@ -57,6 +58,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sudo \
     uuid-runtime \
     wget \
+    zstd \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
