@@ -90,6 +90,7 @@ COPY tools /tt-metal/tools
 COPY tt_telemetry /tt-metal/tt_telemetry
 COPY cmake /tt-metal/cmake
 COPY tt-train /tt-metal/tt-train
+COPY tt_stl /tt-metal/tt_stl
 COPY build_metal.sh /tt-metal/build_metal.sh
 COPY CMakeLists.txt /tt-metal/CMakeLists.txt
 COPY CMakePresets.json /tt-metal/CMakePresets.json
