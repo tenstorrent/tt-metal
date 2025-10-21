@@ -177,8 +177,8 @@ def run_demo(
             token_acc = TokenAccuracy(str(reference_file), prompt_len=tf_prompt_len)
 
         gen = DeepseekGenerator(
-            mesh_device,
-            Path(model_path),
+            mesh_device=mesh_device,
+            model_path=Path(model_path),
             cache_dir=Path(cache_dir),
             tokenizer=tokenizer,
             random_weights=bool(random_weights),
