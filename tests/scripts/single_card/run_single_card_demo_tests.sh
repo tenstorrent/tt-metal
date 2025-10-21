@@ -214,11 +214,6 @@ run_efficientnet_b0_func(){
   pytest models/experimental/efficientnetb0/demo/demo.py
 
 }
-run_roberta_func() {
-
-  pytest models/demos/roberta/demo/demo.py
-
-}
 
 run_stable_diffusion_func() {
 
