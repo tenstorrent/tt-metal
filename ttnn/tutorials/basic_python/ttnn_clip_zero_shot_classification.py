@@ -568,7 +568,9 @@ def main():
     # Load pre-trained CLIP model and convert weights to TT-NN format
     logger.info("Loading pre-trained CLIP model...")
 
-    model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+    model = CLIPModel.from_pretrained(
+        "openai/clip-vit-base-patch32", cache_dir="ttnn_clip_zero_shot_image_classification/"
+    )
 
     tokenizer = CLIPTokenizer.from_pretrained(
         "openai/clip-vit-base-patch32", cache_dir="ttnn_clip_zero_shot_image_classification/"
