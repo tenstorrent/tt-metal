@@ -24,11 +24,11 @@ inline void write_cb_block_to_dram(
     uint32_t current_block_size,
     uint32_t tile_size_bytes) {
     cb_wait_front(cb_idx, block_size);
-    uint32_t l1_write_addr = get_read_ptr(cb_idx);
+    uint32_t l1_read_addr = get_read_ptr(cb_idx);
 
     for (uint32_t k = 0; k < current_block_size; ++k) {
-        noc_async_write_tile(start_idx + k, addr_gen, l1_write_addr);
-        l1_write_addr += tile_size_bytes;
+        noc_async_write_tile(start_idx + k, addr_gen, l1_read_addr);
+        l1_read_addr += tile_size_bytes;
     }
 }
 
