@@ -9,10 +9,6 @@ import ttnn
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range_dtype
 
 
-def torch_to_device(pt_tensor: torch.Tensor, ttnn_dtype: ttnn.types, device: ttnn.Device) -> ttnn.Tensor:
-    return ttnn.Tensor(pt_tensor, ttnn_dtype).to(ttnn.TILE_LAYOUT).to(device)
-
-
 def reference_softmax_backward_output(y: torch.Tensor, grad: torch.Tensor, axis: int) -> torch.Tensor:
     dot = (y * grad).sum(dim=axis, keepdim=True)
     return y * (grad - dot)
@@ -56,7 +52,7 @@ def test_bw_softmax(input_shapes, dtype, range, dim, device):
 
     torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
     pt_softmax_tensor = torch.softmax(in_data, dim=dim, dtype=torch_dtype)
-    tt_softmax_tensor = torch_to_device(pt_softmax_tensor, dtype, device)
+    tt_softmax_tensor = ttnn.from_torch(pt_softmax_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     # Test the fused kernel implementation
     tt_output_tensor_fused = ttnn.softmax_backward(tt_softmax_tensor, grad_tensor, dim=dim)

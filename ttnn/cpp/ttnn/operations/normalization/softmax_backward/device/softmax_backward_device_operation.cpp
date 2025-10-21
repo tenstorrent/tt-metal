@@ -45,7 +45,7 @@ void SoftmaxBackwardDeviceOperation::validate_on_program_cache_miss(
 
     // Validate dimension
     const auto rank = softmax_output.logical_shape().rank();
-    TT_ASSERT(
+    TT_FATAL(
         attributes.dim == rank - 1 || attributes.dim == static_cast<uint32_t>(-1),
         "Currently only supporting softmax_backward on last dimension");
 }

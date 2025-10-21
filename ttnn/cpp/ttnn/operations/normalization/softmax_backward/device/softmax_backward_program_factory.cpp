@@ -17,6 +17,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "hostdevcommon/kernel_structs.h"
+#include "tt-metalium/runtime_args_data.hpp"
 #include "tt_stl/assert.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
@@ -209,17 +210,19 @@ void SoftmaxBackwardProgramFactory::override_runtime_arguments(
     const auto& softmax_output = tensor_args.softmax_output;
     const auto& upstream_grad = tensor_args.upstream_grad;
 
+    auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
+    auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
     for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
-        CoreCoord core = {core_idx / num_cores_y, core_idx % num_cores_y};
+        const CoreCoord core = {core_idx / num_cores_y, core_idx % num_cores_y};
 
         // Update reader runtime args
-        auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-        reader_runtime_args[0] = softmax_output.buffer()->address();
-        reader_runtime_args[1] = upstream_grad.buffer()->address();
+        RuntimeArgsData& reader_runtime_args_per_core = reader_runtime_args[core.x][core.y];
+        reader_runtime_args_per_core[0] = softmax_output.buffer()->address();
+        reader_runtime_args_per_core[1] = upstream_grad.buffer()->address();
 
         // Update writer runtime args
-        auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-        writer_runtime_args[0] = tensor_return_value.buffer()->address();
+        RuntimeArgsData& writer_runtime_args_per_core = writer_runtime_args[core.x][core.y];
+        writer_runtime_args_per_core[0] = tensor_return_value.buffer()->address();
     }
 }
 

@@ -114,13 +114,13 @@ ALWI void fused_sub_mul(
 namespace NAMESPACE {
 void MAIN {
     // Compile time args
-    constexpr uint32_t src0_cb_id = get_compile_time_arg_val(0);        // softmax_output (y)
-    constexpr uint32_t src1_cb_id = get_compile_time_arg_val(1);        // upstream_grad (grad)
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(2);         // output
-    constexpr uint32_t mul_cb_id = get_compile_time_arg_val(3);         // y * grad
-    constexpr uint32_t sum_reduce_cb_id = get_compile_time_arg_val(4);  // sum(y * grad)
-    constexpr uint32_t intermed2_cb_id = get_compile_time_arg_val(5);   // grad - sum(y * grad)
-    constexpr uint32_t scaler_cb_id = get_compile_time_arg_val(6);      // scaler for reduction (1.0)
+    constexpr uint32_t y_cb_id = get_compile_time_arg_val(0);               // softmax_output (y)
+    constexpr uint32_t grad_cb_id = get_compile_time_arg_val(1);            // upstream_grad (grad)
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(2);             // output
+    constexpr uint32_t mul_cb_id = get_compile_time_arg_val(3);             // y * grad
+    constexpr uint32_t sum_reduce_cb_id = get_compile_time_arg_val(4);      // sum(y * grad)
+    constexpr uint32_t grad_minus_sum_cb_id = get_compile_time_arg_val(5);  // grad - sum(y * grad)
+    constexpr uint32_t scaler_cb_id = get_compile_time_arg_val(6);          // scaler for reduction (1.0)
     constexpr uint32_t num_tiles_per_row = get_compile_time_arg_val(7);
 
     // Runtime args
@@ -128,19 +128,19 @@ void MAIN {
     const uint32_t width_in_tiles = get_arg_val<uint32_t>(1);  // Tiles per row
 
     // Initialize compute operations
-    binary_op_init_common(src0_cb_id, src1_cb_id, out_cb_id);
+    binary_op_init_common(y_cb_id, grad_cb_id, out_cb_id);
 
     // Process each row
     for (uint32_t row = 0; row < num_rows; ++row) {
         // Step 1: Compute y * grad for all tiles in the row (element-wise multiplication)
         // Wait for reader to provide all input tiles
-        cb_wait_front(src0_cb_id, width_in_tiles);
-        cb_wait_front(src1_cb_id, width_in_tiles);
+        cb_wait_front(y_cb_id, width_in_tiles);
+        cb_wait_front(grad_cb_id, width_in_tiles);
 
         // Step 1: multiply y * grad
-        mul_tiles_init(src0_cb_id, src1_cb_id);
+        mul_tiles_init(y_cb_id, grad_cb_id);
         for (uint32_t w = 0; w < width_in_tiles; ++w) {
-            elementwise_multiply(src0_cb_id, src1_cb_id, mul_cb_id, w, w);
+            elementwise_multiply(y_cb_id, grad_cb_id, mul_cb_id, w, w);
         }
 
         // Step 2: Reduce sum(y * grad) across the row using scaler CB
@@ -149,25 +149,25 @@ void MAIN {
 
         // Step 3: For each tile in the row, compute final result: y * (grad - sum(y * grad))
         // Wait for all input tiles to be available before processing
-        cb_wait_front(src0_cb_id, width_in_tiles);
-        cb_wait_front(src1_cb_id, width_in_tiles);
+        cb_wait_front(y_cb_id, width_in_tiles);
+        cb_wait_front(grad_cb_id, width_in_tiles);
         cb_wait_front(sum_reduce_cb_id, 1);
 
         // Step 3: subtract grad - sum, then multiply y * (grad - sum)
         for (uint32_t w = 0; w < width_in_tiles; ++w) {
             fused_sub_mul(
-                src0_cb_id,        // y
-                src1_cb_id,        // grad
-                sum_reduce_cb_id,  // sum(y * grad)
-                intermed2_cb_id,   // intermediate: grad - sum
-                out_cb_id,         // output
-                w,                 // y tile index
-                w);                // grad tile index
+                y_cb_id,               // y
+                grad_cb_id,            // grad
+                sum_reduce_cb_id,      // sum(y * grad)
+                grad_minus_sum_cb_id,  // intermediate: grad - sum
+                out_cb_id,             // output
+                w,                     // y tile index
+                w);                    // grad tile index
         }
 
         // Pop consumed data for this row
-        cb_pop_front(src0_cb_id, width_in_tiles);
-        cb_pop_front(src1_cb_id, width_in_tiles);
+        cb_pop_front(y_cb_id, width_in_tiles);
+        cb_pop_front(grad_cb_id, width_in_tiles);
         cb_pop_front(sum_reduce_cb_id, 1);
     }
 }

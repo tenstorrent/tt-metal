@@ -64,10 +64,7 @@ void kernel_main() {
 
         for (uint32_t w = 0; w < num_tiles_per_row; ++w) {
             const uint32_t curr_tile = row_start_tile + w;
-            noc_async_read(
-                softmax_output_accessor.get_noc_addr(curr_tile),
-                l1_write_addr_src0 + w * src0_tile_size,
-                src0_tile_size);
+            noc_async_read_page(curr_tile, softmax_output_accessor, l1_write_addr_src0 + w * src0_tile_size);
         }
 
         // Batch read all tiles for this row from upstream_grad
@@ -76,10 +73,7 @@ void kernel_main() {
 
         for (uint32_t w = 0; w < num_tiles_per_row; ++w) {
             const uint32_t curr_tile = row_start_tile + w;
-            noc_async_read(
-                upstream_grad_accessor.get_noc_addr(curr_tile),
-                l1_write_addr_src1 + w * src1_tile_size,
-                src1_tile_size);
+            noc_async_read_page(curr_tile, upstream_grad_accessor, l1_write_addr_src1 + w * src1_tile_size);
         }
 
         // Single barrier for all reads in this batch
