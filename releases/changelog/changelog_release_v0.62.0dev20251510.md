@@ -48,7 +48,7 @@
    - PR: #28833
 - Fix GCC Debug build
    - PR: #29794
-- [skip ci] Updating pipeline tracker 
+- [skip ci] Updating pipeline tracker
    - PR: #30031
 - Add back ttnn.reduce_scatter without global semaphores, persistent buffers and automatic decision making for hyperparameters, topology and links
    - PR: #29985
