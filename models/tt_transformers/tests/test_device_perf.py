@@ -39,14 +39,28 @@ from tools.tracy.process_model_log import get_latest_ops_log_filename
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "num_layers, num_head_ops, num_tail_ops, tail_start_index, batch_size, data_parallel, max_seq_len, mode",
-    [(3, 3, 14, None, 1, 1, 1024, "prefill"), (3, 3, 14, None, 1, 2, 1024, "prefill")],
-    ids=["llama3.1-8b-TP2", "llama3.1-8b-DP2"],
+    "num_layers, num_head_ops, num_tail_ops, tail_start_index, batch_size, data_parallel, max_seq_len, max_generated_tokens, mode",
+    [
+        (3, 3, 14, None, 1, 1, 1024, 0, "prefill"),
+        (3, 3, 14, None, 1, 2, 1024, 0, "prefill"),
+        (3, 3, 14, None, 1, 1, 1024, 2, "decode"),
+        (3, 3, 14, None, 1, 2, 1024, 2, "decode"),
+    ],
+    ids=["llama3.1-8b-TP2-prefill", "llama3.1-8b-DP2-prefill", "llama3.1-8b-TP2-decode", "llama3.1-8b-DP2-decode"],
 )
 def test_device_perf_one_iter(
-    mesh_device, num_layers, num_head_ops, num_tail_ops, tail_start_index, batch_size, data_parallel, max_seq_len, mode
+    mesh_device,
+    num_layers,
+    num_head_ops,
+    num_tail_ops,
+    tail_start_index,
+    batch_size,
+    data_parallel,
+    max_seq_len,
+    max_generated_tokens,
+    mode,
 ):
-    cmd = f"pytest models/tt_transformers/demo/simple_text_demo.py -k device-perf --num_layers {num_layers} --data_parallel {data_parallel} --max_seq_len {max_seq_len} --max_generated_tokens 1 --paged_attention 1  --batch_size {batch_size}"
+    cmd = f"pytest models/tt_transformers/demo/simple_text_demo.py -k device-perf --num_layers {num_layers} --data_parallel {data_parallel} --max_seq_len {max_seq_len} --max_generated_tokens {max_generated_tokens} --paged_attention 1  --batch_size {batch_size}"
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     device_analysis_types = ["device_kernel_duration", "device_kernel_first_to_last_start"]
