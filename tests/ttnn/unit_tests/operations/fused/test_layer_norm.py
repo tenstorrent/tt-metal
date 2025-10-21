@@ -339,3 +339,23 @@ def test_l1_interleaved(device, use_welford, dtype):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
+
+
+@pytest.mark.parametrize("dim_a", [2048, 3072, 4096])
+@pytest.mark.parametrize("dim_b", [2048, 3072, 4096])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+def test_layer_norm_across_dtypes(*, device: ttnn.Device, dim_a: int, dim_b: int, dtype: ttnn.DataType) -> None:
+    torch.manual_seed(0)
+
+    epsilon = 1e-5
+    input_shape = [1, 1, dim_a, dim_b]
+
+    torch_input = torch.randn(input_shape)
+    torch_output = torch.nn.functional.layer_norm(torch_input, (input_shape[-1],), eps=epsilon)
+
+    tt_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    tt_output = ttnn.layer_norm(tt_input, epsilon=epsilon)
+
+    tt_output_torch = ttnn.to_torch(tt_output)
+
+    assert_with_pcc(torch_output, tt_output_torch, pcc=0.988)
