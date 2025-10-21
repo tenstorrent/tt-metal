@@ -211,13 +211,11 @@ void py_module(py::module& module) {
     def_all_rbinary("__radd__", lazy::add);
 
     def_all_binary("__sub__", lazy::sub);
-    def_all_rbinary("__rsub__", lazy::rsub);
 
     def_all_binary("__mul__", lazy::mul);
     def_all_rbinary("__rmul__", lazy::mul);
 
     def_all_binary("__truediv__", lazy::div);
-    def_all_rbinary("__rtruediv__", lazy::rdiv);
 
     def_all_binary("__lt__", lazy::lt);
     def_all_binary("__gt__", lazy::gt);
@@ -232,7 +230,7 @@ void py_module(py::module& module) {
     def_all_binary("__or__", lazy::logical_or);
     def_all_rbinary("__ror__", lazy::logical_or);
 
-    def_functor(module, "recip", lazy::recip);
+    def_functor(module, "reciprocal", lazy::reciprocal);
     def_functor(module, "neg", lazy::neg);
     def_functor(module, "exp", lazy::exp);
     def_functor(module, "eqz", lazy::eqz);
@@ -251,12 +249,9 @@ void py_module(py::module& module) {
     def_functor(module, "ne", lazy::ne);
     def_functor(module, "add", lazy::add);
     def_functor(module, "sub", lazy::sub);
-    def_functor(module, "rsub", lazy::rsub);
     def_functor(module, "mul", lazy::mul);
     def_functor(module, "pow", lazy::pow);
-    def_functor(module, "rpow", lazy::rpow);
     def_functor(module, "div", lazy::div);
-    def_functor(module, "rdiv", lazy::rdiv);
     def_functor(module, "logical_and", lazy::logical_and);
     def_functor(module, "logical_or", lazy::logical_or);
     def_functor(module, "logical_xor", lazy::logical_xor);
