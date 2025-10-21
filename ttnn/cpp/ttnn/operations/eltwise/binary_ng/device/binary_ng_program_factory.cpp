@@ -60,40 +60,6 @@ std::tuple<uint32_t, uint32_t> calculate_compute_kernel_args(
     }
 }
 
-struct AllShardSpecs {
-    ShardSpec a_shard_spec;
-    ShardSpec b_shard_spec;
-    ShardSpec c_shard_spec;
-};
-
-ShardSpec adjust_to_shape(const ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
-    auto ret = shard_spec;
-
-    // Calculate volume of all dimensions EXCEPT the last (width)
-    // This is the "collapsed height" for sharding purposes
-    uint32_t from_volume_except_width = 1;
-    uint32_t to_volume_except_width = 1;
-
-    const int rank = std::max(from_shape.rank(), to_shape.rank());
-
-    // Accumulate all dimensions except the last
-    for (int i = 0; i < rank - 1; ++i) {
-        uint32_t from_dim = (i < from_shape.rank()) ? from_shape[i] : 1;
-        uint32_t to_dim = (i < to_shape.rank()) ? to_shape[i] : 1;
-        from_volume_except_width *= from_dim;
-        to_volume_except_width *= to_dim;
-    }
-
-    // Get width dimensions
-    uint32_t from_width = from_shape[-1];
-    uint32_t to_width = to_shape[-1];
-
-    // Adjust shard shape based on full volume ratios
-    ret.shape[0] = std::max((ret.shape[0] * to_volume_except_width) / from_volume_except_width, 32u);
-    ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, 32u);
-    return ret;
-}
-
 TensorMemoryLayout get_memory_layout(const Tensor& a, const std::optional<Tensor>& b, const Tensor& c) {
     if (!b.has_value()) {
         return TensorMemoryLayout::INTERLEAVED;
@@ -188,11 +154,6 @@ std::optional<AllShardSpecs> get_shard_specs(const Tensor& a, const std::optiona
     ShardSpec c_shard_spec = c_sharded   ? *c.shard_spec()
                              : a_sharded ? adjust_to_shape(*a.shard_spec(), a_shape, c_shape)
                                          : adjust_to_shape(*b->shard_spec(), b_shape, c_shape);
-    if (!c_sharded && !a_sharded && b_sharded) {
-        // TODO: later when fully support row_col_mixed broadcast
-        // TT_FATAL(c_shape == b_shape, "If input B is sharded and input A is not, output shape must match input B
-        // shape");
-    }
     return AllShardSpecs{
         a_sharded ? *a.shard_spec() : adjust_to_shape(c_shard_spec, c_shape, a_shape),
         b_sharded ? *b->shard_spec() : adjust_to_shape(c_shard_spec, c_shape, b_shape),
