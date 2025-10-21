@@ -31,6 +31,8 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
 #include "hostdevcommon/fabric_common.h"
 
+#include "debug/dprint.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -1545,6 +1547,14 @@ void run_sender_channel_step_impl(
     uint32_t sender_channel_free_slots_stream_id,
     SenderChannelFromReceiverCredits& sender_channel_from_receiver_credits,
     PerfTelemetryRecorder& perf_telemetry_recorder) {
+    // === compact, low-noise tracing ===
+    static uint32_t send_ctr = 0;                  // increments per actual send (this template instantiation)
+    static uint32_t prev_free_slots = 0xFFFFFFFF;  // detect changes only
+    static uint32_t prev_packed = 0xFFFFFFFF;      // detect changes only
+    // One-time per channel: identify which sender channel this instance is
+    if (prev_free_slots == 0xFFFFFFFF) {
+        WATCHER_RING_BUFFER_PUSH(0xFA000000u | (uint32_t)sender_channel_index);
+    }
     // If the receiver has space, and we have one or more packets unsent from producer, then send one
     // TODO: convert to loop to send multiple packets back to back (or support sending multiple packets in one shot)
     //       when moving to stream regs to manage rd/wr ptrs
@@ -1556,6 +1566,17 @@ void run_sender_channel_step_impl(
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
         can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
     }
+
+    // Pack state to keep pushes minimal:
+    // [31:28]=0xB tag, [19:12]=free_slots(8b), [2]=can_send, [1]=has_unsent, [0]=rx_has_space
+    uint32_t packed = 0xB0000000u | ((free_slots & 0xFFu) << 12) | ((uint32_t)can_send << 2) |
+                      ((uint32_t)has_unsent_packet << 1) | ((uint32_t)receiver_has_space_for_packet << 0);
+    if (packed != prev_packed || free_slots != prev_free_slots) {
+        WATCHER_RING_BUFFER_PUSH(packed);
+        prev_packed = packed;
+        prev_free_slots = free_slots;
+    }
+
     if constexpr (enable_first_level_ack) {
         bool sender_backpressured_from_sender_side = free_slots == 0;
         can_send = can_send && !sender_backpressured_from_sender_side;
@@ -1574,6 +1595,7 @@ void run_sender_channel_step_impl(
         if constexpr (!UPDATE_PKT_HDR_ON_RX_CH) {
             update_packet_header_before_eth_send<sender_channel_index>(pkt_header);
         }
+        WATCHER_RING_BUFFER_PUSH(0xC0000000u | (send_ctr & 0x00FFFFFFu));
         send_next_data<sender_channel_index, to_receiver_pkts_sent_id, SKIP_CONNECTION_LIVENESS_CHECK>(
             local_sender_channel,
             local_sender_channel_worker_interface,
@@ -1581,6 +1603,11 @@ void run_sender_channel_step_impl(
             remote_receiver_channel,
             perf_telemetry_recorder);
         increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
+        send_ctr++;
+        // AFTER send: observe post-send free_slots once (tag 0xD, low 8b = free_slots)
+        uint32_t fs2 = get_ptr_val(sender_channel_free_slots_stream_id);
+        // WATCHER_RING_BUFFER_PUSH(0xD0000000u | (fs2 & 0xFFu));
+        prev_free_slots = fs2;
     }
 
     // Process COMPLETIONs from receiver

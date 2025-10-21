@@ -178,23 +178,10 @@ void kernel_main() {
                 DPRINT << "writer:N route&send page " << i << ENDL();
             }
             fabric_set_mcast_route(mh_N_ll, 0, 0, e_hops, w_hops, n_hops, 0);
-            const uint32_t* __p = reinterpret_cast<const uint32_t*>(const_cast<PACKET_HEADER_TYPE*>(mh_N));
-            WATCHER_RING_BUFFER_PUSH(TAG_HDR | BR_N);
-            // Push first 8 words of header
-            WATCHER_RING_BUFFER_PUSH(__p[0]);
-            WATCHER_RING_BUFFER_PUSH(__p[1]);
-            WATCHER_RING_BUFFER_PUSH(__p[2]);
-            WATCHER_RING_BUFFER_PUSH(__p[3]);
-            WATCHER_RING_BUFFER_PUSH(__p[4]);
-            WATCHER_RING_BUFFER_PUSH(__p[5]);
-            WATCHER_RING_BUFFER_PUSH(__p[6]);
-            WATCHER_RING_BUFFER_PUSH(__p[7]);
+            volatile tt_l1_ptr uint32_t* __p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mh_N);
             hdr_N->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
             conn_N.send_payload_without_header_non_blocking_from_address(page_l1_addr, PAGE_SIZE);
             conn_N.send_payload_flush_non_blocking_from_address((uint32_t)hdr_N, sizeof(PACKET_HEADER_TYPE));
-
-            WATCHER_RING_BUFFER_PUSH(TAG_PAYLOAD | BR_N);
-            WATCHER_RING_BUFFER_PUSH(i);
         }
         // SOUTH trunk
         if (use_S) {
@@ -203,17 +190,8 @@ void kernel_main() {
                 DPRINT << "writer:S route&send page " << i << ENDL();
             }
             fabric_set_mcast_route(mh_S_ll, 0, 0, e_hops, w_hops, 0, s_hops);
-            const uint32_t* __p = reinterpret_cast<const uint32_t*>(const_cast<PACKET_HEADER_TYPE*>(mh_S));
-            WATCHER_RING_BUFFER_PUSH(TAG_HDR | BR_S);
+            volatile tt_l1_ptr uint32_t* __p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mh_S);
             // Push first 8 words of header
-            WATCHER_RING_BUFFER_PUSH(__p[0]);
-            WATCHER_RING_BUFFER_PUSH(__p[1]);
-            WATCHER_RING_BUFFER_PUSH(__p[2]);
-            WATCHER_RING_BUFFER_PUSH(__p[3]);
-            WATCHER_RING_BUFFER_PUSH(__p[4]);
-            WATCHER_RING_BUFFER_PUSH(__p[5]);
-            WATCHER_RING_BUFFER_PUSH(__p[6]);
-            WATCHER_RING_BUFFER_PUSH(__p[7]);
             hdr_S->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
             DPRINT << "writer:S route&send page " << i << ENDL();
             DPRINT << "S: header prepared" << ENDL();
@@ -221,9 +199,6 @@ void kernel_main() {
             DPRINT << "S: payload queued" << ENDL();
             conn_S.send_payload_flush_non_blocking_from_address((uint32_t)hdr_S, sizeof(PACKET_HEADER_TYPE));
             DPRINT << "S: header sent" << ENDL();
-
-            WATCHER_RING_BUFFER_PUSH(TAG_PAYLOAD | BR_S);
-            WATCHER_RING_BUFFER_PUSH(i);
         }
         // WEST branch on source row
         if (use_W) {
@@ -232,23 +207,10 @@ void kernel_main() {
             hdr_W->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
             if (should_log(i)) {
                 DPRINT << "writer:W route&send page " << i << ENDL();
-                const uint32_t* __p = reinterpret_cast<const uint32_t*>(const_cast<PACKET_HEADER_TYPE*>(mh_W));
-                WATCHER_RING_BUFFER_PUSH(TAG_HDR | BR_W);
-                // Push first 8 words of header
-                WATCHER_RING_BUFFER_PUSH(__p[0]);
-                WATCHER_RING_BUFFER_PUSH(__p[1]);
-                WATCHER_RING_BUFFER_PUSH(__p[2]);
-                WATCHER_RING_BUFFER_PUSH(__p[3]);
-                WATCHER_RING_BUFFER_PUSH(__p[4]);
-                WATCHER_RING_BUFFER_PUSH(__p[5]);
-                WATCHER_RING_BUFFER_PUSH(__p[6]);
-                WATCHER_RING_BUFFER_PUSH(__p[7]);
+                volatile tt_l1_ptr uint32_t* __p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mh_W);
             }
             conn_W.send_payload_without_header_non_blocking_from_address(page_l1_addr, PAGE_SIZE);
             conn_W.send_payload_flush_non_blocking_from_address((uint32_t)hdr_W, sizeof(PACKET_HEADER_TYPE));
-
-            WATCHER_RING_BUFFER_PUSH(TAG_PAYLOAD | BR_W);
-            WATCHER_RING_BUFFER_PUSH(i);
         }
         // EAST branch on source row
         if (use_E) {
@@ -266,9 +228,6 @@ void kernel_main() {
             DPRINT << "writer:E after send_payload_without_header_non_blocking_from_address" << i << ENDL();
             conn_E.send_payload_flush_non_blocking_from_address((uint32_t)hdr_E, sizeof(PACKET_HEADER_TYPE));
             DPRINT << "writer:E after send_payload_blocking_from_address" << i << ENDL();
-
-            WATCHER_RING_BUFFER_PUSH(TAG_PAYLOAD | BR_E);
-            WATCHER_RING_BUFFER_PUSH(i);
         }
         // --- Loopback on this chip: write to receiver DRAM via NOC-1 (not worker L1) ---
         // Reuse the accessor so we target DRAM banking correctly on NOC1.
@@ -299,16 +258,12 @@ void kernel_main() {
         fabric_set_mcast_route(mh_N_ll, 0, 0, e_hops, w_hops, n_hops, 0);
         hdr_N->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
         conn_N.send_payload_flush_non_blocking_from_address((uint32_t)hdr_N, sizeof(PACKET_HEADER_TYPE));
-        WATCHER_RING_BUFFER_PUSH(TAG_SEM | BR_N);
-        WATCHER_RING_BUFFER_PUSH(sem_l1_addr);
     } else if (use_S) {
         conn_S.wait_for_empty_write_slot();
         DPRINT << "writer:S atomic_inc" << ENDL();
         fabric_set_mcast_route(mh_S_ll, 0, 0, e_hops, w_hops, 0, s_hops);
         hdr_S->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
         conn_S.send_payload_flush_non_blocking_from_address((uint32_t)hdr_S, sizeof(PACKET_HEADER_TYPE));
-        WATCHER_RING_BUFFER_PUSH(TAG_SEM | BR_S);
-        WATCHER_RING_BUFFER_PUSH(sem_l1_addr);
     } else {
         // Single-row: bump both directions so every chip on the row gets exactly one bump
         if (use_W) {
@@ -317,20 +272,9 @@ void kernel_main() {
             fabric_set_mcast_route(mh_W_ll, 0, 0, 0, w_hops, 0, 0);
             hdr_W->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
             {
-                const uint32_t* __p = reinterpret_cast<const uint32_t*>(const_cast<PACKET_HEADER_TYPE*>(mh_W));
-                WATCHER_RING_BUFFER_PUSH(TAG_HDR | BR_W);
-                WATCHER_RING_BUFFER_PUSH(__p[0]);
-                WATCHER_RING_BUFFER_PUSH(__p[1]);
-                WATCHER_RING_BUFFER_PUSH(__p[2]);
-                WATCHER_RING_BUFFER_PUSH(__p[3]);
-                WATCHER_RING_BUFFER_PUSH(__p[4]);
-                WATCHER_RING_BUFFER_PUSH(__p[5]);
-                WATCHER_RING_BUFFER_PUSH(__p[6]);
-                WATCHER_RING_BUFFER_PUSH(__p[7]);
+                volatile tt_l1_ptr uint32_t* __p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mh_W);
             }
             conn_W.send_payload_blocking_from_address((uint32_t)hdr_W, sizeof(PACKET_HEADER_TYPE));
-            WATCHER_RING_BUFFER_PUSH(TAG_SEM | BR_W);
-            WATCHER_RING_BUFFER_PUSH(sem_l1_addr);
         }
         if (use_E) {
             conn_E.wait_for_empty_write_slot();
@@ -339,8 +283,6 @@ void kernel_main() {
             hdr_E->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
             // Use flush on the last send so fabric pushes promptly
             conn_E.send_payload_flush_non_blocking_from_address((uint32_t)hdr_E, sizeof(PACKET_HEADER_TYPE));
-            WATCHER_RING_BUFFER_PUSH(TAG_SEM | BR_E);
-            WATCHER_RING_BUFFER_PUSH(sem_l1_addr);
         }
     }
 
