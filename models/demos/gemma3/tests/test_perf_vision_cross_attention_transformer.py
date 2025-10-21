@@ -131,21 +131,6 @@ def run_model(mesh_device, batch_size, profiler, nr_forward_iterations):
     )[0, :, :, :]
     profiler.end("postprocessing_and_transfer")
 
-    # print profiling information
-    #     self.t_vision_encoder = 0
-    # self.t_mmp = 0
-    # self.n = 0
-    print("high level model - mmp vs vision encoder:")
-    print(f"{model.t_vision_encoder/(model.n-1)}")
-    print(f"{model.t_mmp/(model.n-1)}")
-    print()
-    print()
-    print("vision encoder - embedding (should be very small)")
-    print(f"{model.vision_encoder.embedding_time/(model.vision_encoder.n-1)}")
-    print()
-    print()
-    print("visionen encoder -> transformer -> total blocks time")
-    print(f"{model.vision_encoder.encoder.block_time/(model.vision_encoder.encoder.n-1)}")
     return tt_output_torch
 
 
