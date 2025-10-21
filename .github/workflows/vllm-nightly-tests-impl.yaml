@@ -59,7 +59,7 @@ jobs:
             mesh-device: P150x2,
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"data_parallel\": 2}",
-            extra-args: "--data_parallel_size 2",
+            additional-args: "--data_parallel_size 2",
             multimodal: false,
             owner_id: U08GELBB1AP, # Ambrose Ling
           },
@@ -72,7 +72,7 @@ jobs:
             mesh-device: P150x4,
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"data_parallel\": 4}",
-            extra-args: "--data_parallel_size 4",
+            additional-args: "--data_parallel_size 4",
             multimodal: false,
             owner_id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
@@ -85,7 +85,7 @@ jobs:
             mesh-device: P150x8,
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"data_parallel\": 8}",
-            extra-args: "--data_parallel_size 8",
+            additional-args: "--data_parallel_size 8",
             multimodal: false,
             owner_id: U08GELBB1AP, # Ambrose Ling
           },
@@ -98,7 +98,7 @@ jobs:
             mesh-device: TG,
             tt-llama-text-ver: llama3_70b_galaxy,
             override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
-            extra-args: "--data_parallel_size 4 --max_seqs_in_batch 8 --async_engine",
+            additional-args: "--data_parallel_size 4 --max_seqs_in_batch 8",
             multimodal: false,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
@@ -111,7 +111,7 @@ jobs:
             runner-label: topology-6u,
             mesh-device: TG,
             override-tt-config: "{\"data_parallel\": 16, \"fabric_config\": \"FABRIC_1D_RING\"}",
-            extra-args: "--data_parallel_size 16",
+            additional-args: "--data_parallel_size 16",
             tt-llama-text-ver: tt_transformers,
             multimodal: false,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
@@ -199,12 +199,6 @@ jobs:
             export OVERRIDE_TT_CONFIG=()
           fi
 
-          if [ -n "${{ matrix.test-group.extra-args }}" ]; then
-            export EXTRA_ARGS=("${{ matrix.test-group.extra-args }}")
-          else
-            export EXTRA_ARGS=()
-          fi
-
           echo "Override config: ${OVERRIDE_TT_CONFIG[@]}"
 
           export MESH_DEVICE=${{ matrix.test-group.mesh-device }}
@@ -225,7 +219,6 @@ jobs:
             --model ${{ matrix.test-group.model }} \
             ${{ matrix.test-group.additional-args }} \
             "${OVERRIDE_TT_CONFIG[@]}" \
-            "${EXTRA_ARGS[@]}" \
             > "${FILE_SERVER_LOG}" 2>&1 &
 
           # Store server's pid for cleanup
