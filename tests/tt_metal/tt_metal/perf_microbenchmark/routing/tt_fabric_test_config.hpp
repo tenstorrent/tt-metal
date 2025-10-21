@@ -299,6 +299,19 @@ public:
     uint32_t get_hung_threshold();
 
 private:
+    // Helpers for check_filter
+    bool check_filter_name(const ParsedTestConfig& test_config) const;
+    bool check_filter_topology(const ParsedTestConfig& test_config) const;
+    bool check_filter_routing_type(const ParsedTestConfig& test_config) const;
+    bool check_filter_benchmark_mode(const ParsedTestConfig& test_config) const;
+    bool check_filter_sync(const ParsedTestConfig& test_config) const;
+    bool check_filter_num_links(const ParsedTestConfig& test_config, bool fine_grained) const;
+    bool check_filter_ntype(ParsedTestConfig& test_config, bool fine_grained);
+    bool check_filter_ftype(ParsedTestConfig& test_config, bool fine_grained);
+    bool check_filter_num_packets(ParsedTestConfig& test_config, bool fine_grained);
+    bool check_filter_size(ParsedTestConfig& test_config, bool fine_grained);
+    bool check_filter_pattern(const ParsedTestConfig& test_config) const;
+
     const std::vector<std::string>& input_args_;
     std::optional<std::string> filter_type;
     std::optional<std::string> filter_value;
