@@ -255,6 +255,23 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-nn
 
+  galaxy-fast-tests:
+    needs: build
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: in-service, topology: topology-6u },
+        ]
+    uses: ./.github/workflows/galaxy-apc-fast-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      topology: ${{ matrix.test-group.topology }}
+
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
   workflow-status:
