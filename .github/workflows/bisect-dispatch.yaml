@@ -209,6 +209,67 @@ jobs:
           chmod +x /work/bisect_gist_script.sh
           echo "Gist script downloaded and made executable"
 
+      - name: Validate Inputs
+        id: validate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Parse commit range from combined input
+          COMMIT_RANGE='${{ inputs.commit-range }}'
+          IFS=',' read -r GOOD_COMMIT BAD_COMMIT <<< "$COMMIT_RANGE"
+
+          # Validate parsed values
+          if [ -z "$GOOD_COMMIT" ] || [ -z "$BAD_COMMIT" ]; then
+            echo "ERROR: Invalid commit-range format. Expected 'good,bad' (e.g., 'abc1234,def5678')"
+            exit 1
+          fi
+
+          echo "✓ Parsed good commit: $GOOD_COMMIT"
+          echo "✓ Parsed bad commit: $BAD_COMMIT"
+
+          # Parse timeout and retries from combined input
+          TIMEOUT_RETRIES='${{ inputs.timeout-retries }}'
+          IFS=',' read -r TIMEOUT RETRIES <<< "$TIMEOUT_RETRIES"
+
+          # Validate parsed values
+          if [ -z "$TIMEOUT" ] || [ -z "$RETRIES" ]; then
+            echo "ERROR: Invalid timeout-retries format. Expected 'timeout,retries' (e.g., '30m,3')"
+            exit 1
+          fi
+
+          echo "✓ Parsed timeout: $TIMEOUT"
+          echo "✓ Parsed retries: $RETRIES"
+
+          # Validate command/gist-url exclusivity
+          GIST_URL='${{ inputs.gist-url }}'
+          COMMAND='${{ inputs.command }}'
+
+          if [ -z "$GIST_URL" ] && [ -z "$COMMAND" ]; then
+            echo "ERROR: Either gist-url or command must be provided"
+            exit 1
+          fi
+
+          if [ -n "$GIST_URL" ] && [ -n "$COMMAND" ]; then
+            echo "ERROR: Cannot specify both gist-url and command"
+            exit 1
+          fi
+
+          if [ -n "$GIST_URL" ]; then
+            echo "✓ Using gist URL: $GIST_URL"
+          else
+            echo "✓ Using inline command"
+          fi
+
+          echo ""
+          echo "All inputs validated successfully"
+
+          # Export parsed values as outputs for next step
+          echo "good-commit=$GOOD_COMMIT" >> $GITHUB_OUTPUT
+          echo "bad-commit=$BAD_COMMIT" >> $GITHUB_OUTPUT
+          echo "timeout=$TIMEOUT" >> $GITHUB_OUTPUT
+          echo "retries=$RETRIES" >> $GITHUB_OUTPUT
+
       - name: Run Git Bisect
         shell: bash
         env:
@@ -224,46 +285,16 @@ jobs:
           chmod +x ./build_bisect/tt_bisect.sh
           chmod +x ./build_bisect/download_artifacts.sh
 
-          # Parse commit range from combined input
-          COMMIT_RANGE='${{ inputs.commit-range }}'
-          IFS=',' read -r GOOD_COMMIT BAD_COMMIT <<< "$COMMIT_RANGE"
-
-          # Validate parsed values
-          if [ -z "$GOOD_COMMIT" ] || [ -z "$BAD_COMMIT" ]; then
-            echo "ERROR: Invalid commit-range format. Expected 'good,bad' (e.g., 'abc1234,def5678')"
-            exit 1
-          fi
-
-          echo "Parsed good commit: $GOOD_COMMIT, bad commit: $BAD_COMMIT"
-
-          # Parse timeout and retries from combined input
-          TIMEOUT_RETRIES='${{ inputs.timeout-retries }}'
-          IFS=',' read -r TIMEOUT RETRIES <<< "$TIMEOUT_RETRIES"
-
-          # Validate parsed values
-          if [ -z "$TIMEOUT" ] || [ -z "$RETRIES" ]; then
-            echo "ERROR: Invalid timeout-retries format. Expected 'timeout,retries' (e.g., '30m,3')"
-            exit 1
-          fi
-
-          echo "Parsed timeout: $TIMEOUT, retries: $RETRIES"
+          # Use parsed values from validation step
+          GOOD_COMMIT='${{ steps.validate.outputs.good-commit }}'
+          BAD_COMMIT='${{ steps.validate.outputs.bad-commit }}'
+          TIMEOUT='${{ steps.validate.outputs.timeout }}'
+          RETRIES='${{ steps.validate.outputs.retries }}'
 
           # Determine which script to run
           SCRIPT_PATH=""
-
-          # Check gist-url first
           GIST_URL='${{ inputs.gist-url }}'
-          COMMAND='${{ inputs.command }}'
 
-          if [ -z "$GIST_URL" ] && [ -z "$COMMAND" ]; then
-            echo "ERROR: Either gist-url or command must be provided"
-            exit 1
-          fi
-
-          if [ -n "$GIST_URL" ] && [ -n "$COMMAND" ]; then
-            echo "ERROR: Cannot specify both gist-url and command"
-            exit 1
-          fi
           if [ -n "$GIST_URL" ]; then
             SCRIPT_PATH="/work/bisect_gist_script.sh"
           else
