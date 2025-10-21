@@ -7,8 +7,11 @@ with changes incorporating the GemmaImageAttention and GemmaImageFeedForward
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
 from tqdm import tqdm
 
+import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.gemma3.tt.gemma_image_block import TtGemmaImageTransformerBlock
 
@@ -46,6 +49,8 @@ class TtGemmaImageTransformer(LightweightModule):
             )
             for i in tqdm(range(layers), desc=f"Loading vision transformer layers")
         ]
+        self.n = 0
+        self.block_time = 0
 
     def forward(self, x, return_intermediate=None, mask=None):
         """
@@ -53,8 +58,12 @@ class TtGemmaImageTransformer(LightweightModule):
         a list of intermediate tensors rather than a stack of intermediates.
         Outer code will have to be aware and handle this correctly.
         """
+        self.n += 1
         seq_len = x.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
+
+        ttnn.synchronize_device(self.mesh_device)
+        t0 = time.perf_counter()
 
         out = []
         for idx, r in enumerate(self.resblocks):
@@ -64,4 +73,9 @@ class TtGemmaImageTransformer(LightweightModule):
         if return_intermediate is not None:
             assert False  # mstojko temp
             return x, out
+
+        ttnn.synchronize_device(self.mesh_device)
+        if self.n != 1:
+            self.block_time += time.perf_counter() - t0
+
         return x

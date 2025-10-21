@@ -6,6 +6,8 @@ This is the Vision Tower Model for Gemma-3-4b-it.
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
 import torch
 
 import ttnn
@@ -80,6 +82,9 @@ class TtSiglipGemmaVisionModel(LightweightModule):
             eps=configuration.norm_eps,
         )
 
+        self.embedding_time = 0.0
+        self.n = 0
+
     def forward(self, images):
         assert isinstance(
             images, torch.Tensor
@@ -87,8 +92,15 @@ class TtSiglipGemmaVisionModel(LightweightModule):
 
         bsz, in_channel, h, w = images.shape
 
+        self.n += 1
+
+        ttnn.synchronize_device(self.mesh_device)
+        t0 = time.perf_counter()
         x = self.embeddings(images)
         attention_mask = torch.zeros(bsz, 1, x.shape[1], x.shape[1])
+        ttnn.synchronize_device(self.mesh_device)
+        if self.n != 1:
+            self.embedding_time += time.perf_counter() - t0
 
         tt_mask = ttnn.from_torch(
             attention_mask,
