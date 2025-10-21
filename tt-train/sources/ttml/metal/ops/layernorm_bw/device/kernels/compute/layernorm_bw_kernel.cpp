@@ -26,10 +26,12 @@ constexpr uint32_t Wt = get_compile_time_arg_val(3);
 constexpr uint32_t cb_scaler_idx = tt::CBIndex::c_0;      // 1/N scaler
 constexpr uint32_t cb_mask_w_idx = tt::CBIndex::c_1;      // mask for width dimension
 constexpr uint32_t cb_gamma_idx = tt::CBIndex::c_2;       // gamma (scale parameter)
-constexpr uint32_t cb_x_hat_idx = tt::CBIndex::c_3;       // x_hat (normalized input) from forward pass
+constexpr uint32_t cb_x_hat_idx = tt::CBIndex::c_3;       // x_hat (computed as (input - mean) * rstd)
 constexpr uint32_t cb_rstd_idx = tt::CBIndex::c_4;        // rstd from forward pass
 constexpr uint32_t cb_dL_out_idx = tt::CBIndex::c_5;      // upstream gradient
 constexpr uint32_t cb_mat_mul_reduce = tt::CBIndex::c_6;  // reduction vector
+constexpr uint32_t cb_input_idx = tt::CBIndex::c_7;       // input tensor
+constexpr uint32_t cb_mean_idx = tt::CBIndex::c_8;        // mean from forward pass
 
 // CBs with output data
 constexpr uint32_t cb_dx_idx = tt::CBIndex::c_10;                // dx (input gradient)
@@ -64,6 +66,44 @@ inline void zero_dst() {
 inline void zero_dst_reg(uint32_t i) {
     copy_tile_init(cb_zero);
     copy_tile(cb_zero, 0, i);
+}
+
+// Compute x_hat = (input - mean) * rstd
+// input is in cb_input_idx, mean is in cb_mean_idx (broadcasted), rstd is in cb_rstd_idx (broadcasted)
+// result is stored in cb_x_hat_idx
+inline void compute_x_hat_preprocessing(uint32_t num_tiles) {
+    // mean and rstd are already broadcasted across the row
+    for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
+        tile_regs_acquire();
+        uint32_t x_hat_reg = 0;
+        uint32_t mean_reg = 1;
+        uint32_t rstd_reg = 2;
+
+        // Load input tile
+        copy_tile_init(cb_input_idx);
+        copy_tile(cb_input_idx, tile_idx, x_hat_reg);
+
+        // Load broadcasted mean
+        copy_tile_init(cb_mean_idx);
+        copy_tile(cb_mean_idx, 0, mean_reg);
+
+        // Subtract mean: (input - mean)
+        sub_binary_tile_init();
+        sub_binary_tile(x_hat_reg, mean_reg, x_hat_reg);
+
+        // Load broadcasted rstd
+        copy_tile_init(cb_rstd_idx);
+        copy_tile(cb_rstd_idx, 0, rstd_reg);
+
+        // Multiply by rstd: (input - mean) * rstd
+        mul_binary_tile_init();
+        mul_binary_tile(x_hat_reg, rstd_reg, x_hat_reg);
+
+        // Store result in cb_x_hat
+        cb_reserve_back(cb_x_hat_idx, 1);
+        tile_regs_commit();
+        pack_and_push(x_hat_reg, cb_x_hat_idx);
+    }
 }
 
 #ifdef EVERYTHING_FITS_IN_L1
@@ -368,6 +408,11 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
     tile_regs_acquire();
 
     for (uint32_t col = 0; col < Wt; col += block_size) {
+        // Compute x_hat from input for this block
+        cb_wait_front(cb_input_idx, block_size);
+        compute_x_hat_preprocessing(block_size);
+        tile_regs_acquire();
+
         cb_wait_front(cb_x_hat_idx, block_size);
         cb_wait_front(cb_dL_out_idx, block_size);
         cb_wait_front(cb_gamma_idx, block_size);
@@ -413,6 +458,7 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
         cb_pop_front(cb_x_hat_idx, block_size);
         cb_pop_front(cb_dL_out_idx, block_size);
         cb_pop_front(cb_gamma_idx, block_size);
+        cb_pop_front(cb_input_idx, block_size);
     }
 
     tile_regs_commit();
@@ -553,9 +599,8 @@ inline void MAIN {
     binary_op_init_common(cb_x_hat_idx, cb_gamma_idx, cb_dx_idx);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
-        // Wait for rstd (per row)
-        // [[rstd_{1, 1}, rstd_{1, 2}, ...], [rstd_{1, 1}, rstd_{1, 2}, ...], ...]
-        // broadcasted across rows
+        // Wait for rstd and mean (per row)
+        // Both are broadcasted across rows: [[value, value, ...], [value, value, ...], ...]
         tile_regs_acquire();
         cb_wait_front(cb_rstd_idx, onetile);
         unary_bcast_init<BroadcastType::COL>(cb_rstd_idx, cb_rstd_idx);
@@ -564,9 +609,21 @@ inline void MAIN {
         pack_and_push(0, cb_rstd_idx);
         cb_wait_front(cb_rstd_idx, onetile);
 
+        tile_regs_acquire();
+        cb_wait_front(cb_mean_idx, onetile);
+        unary_bcast_init<BroadcastType::COL>(cb_mean_idx, cb_mean_idx);
+        unary_bcast<BroadcastType::COL>(cb_mean_idx, /* tile idx */ 0, /* reg tile idx */ 0);
+        tile_regs_commit();
+        pack_and_push(0, cb_mean_idx);
+        cb_wait_front(cb_mean_idx, onetile);
+
 #ifdef EVERYTHING_FITS_IN_L1
-        // Wait for x_hat for entire row when everything fits in L1
+        // Wait for input for entire row when everything fits in L1
+        cb_wait_front(cb_input_idx, Wt);
+        // Compute x_hat = (input - mean) * rstd for the entire row
+        compute_x_hat_preprocessing(Wt);
         cb_wait_front(cb_x_hat_idx, Wt);
+
         cb_wait_front(cb_dL_out_idx, Wt);
         // If everything fits in L1, wait for gamma only once as its shared across all rows
         if (row == 0) {
@@ -588,7 +645,11 @@ inline void MAIN {
             // Compute dx
             {
 #ifndef EVERYTHING_FITS_IN_L1
+                // Compute x_hat for this block
+                cb_wait_front(cb_input_idx, block_size);
+                compute_x_hat_preprocessing(block_size);
                 cb_wait_front(cb_x_hat_idx, block_size);
+
                 cb_wait_front(cb_dL_out_idx, block_size);
                 cb_wait_front(cb_gamma_idx, block_size);
 #endif
@@ -610,13 +671,18 @@ inline void MAIN {
                 cb_pop_front(cb_x_hat_idx, block_size);
                 cb_pop_front(cb_dL_out_idx, block_size);
                 cb_pop_front(cb_gamma_idx, block_size);
+                cb_pop_front(cb_input_idx, block_size);
 #endif
             }
 
             // Compute dgamma_components
             {
 #ifndef EVERYTHING_FITS_IN_L1
+                // Compute x_hat for this block
+                cb_wait_front(cb_input_idx, block_size);
+                compute_x_hat_preprocessing(block_size);
                 cb_wait_front(cb_x_hat_idx, block_size);
+
                 cb_wait_front(cb_dL_out_idx, block_size);
 #endif
                 uint32_t dgamma_register;
@@ -636,6 +702,7 @@ inline void MAIN {
 #ifndef EVERYTHING_FITS_IN_L1
                 cb_pop_front(cb_x_hat_idx, block_size);
                 cb_pop_front(cb_dL_out_idx, block_size);
+                cb_pop_front(cb_input_idx, block_size);
 #endif
             }
 
@@ -668,6 +735,7 @@ inline void MAIN {
         // Pop per-row data
         cb_pop_front(cb_dL_out_idx, Wt);
         cb_pop_front(cb_x_hat_idx, Wt);
+        cb_pop_front(cb_input_idx, Wt);
 
         // Pop gamma only on the last row (since it's shared across all rows)
         if (row == num_rows_per_core - 1) {
@@ -677,6 +745,7 @@ inline void MAIN {
 
         // Pop the row-level tensors
         cb_pop_front(cb_rstd_idx, 2 * onetile);
+        cb_pop_front(cb_mean_idx, 2 * onetile);
         cb_pop_front(cb_scaled_dy_gamma_sum_idx, onetile);
         cb_pop_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
     }

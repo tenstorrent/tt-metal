@@ -63,7 +63,7 @@ void LayerNormBackwardDeviceOperation::validate_on_program_cache_miss(
 
     const auto& input_tensor = tensor_args.input;
     const auto& gamma_tensor = tensor_args.gamma;
-    const auto& x_hat_tensor = tensor_args.x_hat;
+    const auto& mean_tensor = tensor_args.mean;
     const auto& rstd_tensor = tensor_args.rstd;
     const auto& dL_dout_tensor = tensor_args.dL_dout;
     const auto& preallocated_dx_tensor = tensor_args.preallocated_dx;
@@ -72,7 +72,7 @@ void LayerNormBackwardDeviceOperation::validate_on_program_cache_miss(
 
     check_tensor(input_tensor, "Input");
     check_tensor(gamma_tensor, "Gamma");
-    check_tensor(x_hat_tensor, "X_hat");
+    check_tensor(mean_tensor, "Mean");
     check_tensor(rstd_tensor, "Rstd");
     check_tensor(dL_dout_tensor, "dL_dout");
     if (preallocated_dx_tensor.has_value()) {
@@ -170,7 +170,7 @@ std::tuple<LayerNormBackwardDeviceOperation::operation_attributes_t, LayerNormBa
 LayerNormBackwardDeviceOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& gamma_tensor,
-    const ttnn::Tensor& x_hat_tensor,
+    const ttnn::Tensor& mean_tensor,
     const ttnn::Tensor& rstd_tensor,
     const ttnn::Tensor& dL_dout_tensor,
     float epsilon,
@@ -184,7 +184,7 @@ LayerNormBackwardDeviceOperation::invoke(
         tensor_args_t{
             .input = input_tensor,
             .gamma = gamma_tensor,
-            .x_hat = x_hat_tensor,
+            .mean = mean_tensor,
             .rstd = rstd_tensor,
             .dL_dout = dL_dout_tensor,
             .preallocated_dx = preallocated_dx,
