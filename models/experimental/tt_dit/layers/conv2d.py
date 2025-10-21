@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import re
+
 import torch
 import ttnn
 
@@ -203,23 +205,35 @@ class Conv2d(Module):
             slice_type=ttnn.Conv2dDRAMSliceWidth,
         )
 
-        output_tensor, [_out_height, _out_width] = ttnn.conv2d(
-            input_tensor=x,
-            weight_tensor=self.weight.data,
-            bias_tensor=self.bias.data if self.bias is not None else None,
-            in_channels=c,
-            out_channels=self.weight.data.shape[0],
-            device=self.mesh_device,
-            kernel_size=self.kernel_size,
-            stride=self.stride,
-            padding=self.padding,
-            batch_size=b,
-            input_height=h,
-            input_width=w,
-            conv_config=None,
-            compute_config=self.compute_config,
-            slice_config=slice_config,
-            return_output_dim=True,
-        )
-        output_tensor = ttnn.reshape(output_tensor, (b, _out_height, _out_width, -1))
-        return output_tensor
+        try:
+            output_tensor, [_out_height, _out_width] = ttnn.conv2d(
+                input_tensor=x,
+                weight_tensor=self.weight.data,
+                bias_tensor=self.bias.data if self.bias is not None else None,
+                in_channels=c,
+                out_channels=self.weight.data.shape[0],
+                device=self.mesh_device,
+                kernel_size=self.kernel_size,
+                stride=self.stride,
+                padding=self.padding,
+                batch_size=b,
+                input_height=h,
+                input_width=w,
+                conv_config=None,
+                compute_config=self.compute_config,
+                slice_config=slice_config,
+                return_output_dim=True,
+            )
+        except RuntimeError as e:
+            m = re.search(r"Out of Memory: (.*)", str(e))
+            if m is None:
+                raise
+
+            msg = (
+                f"conv2d out of memory with (height, width, in_channels, out_channels) = "
+                f"{(h, w, self.in_channels, self.out_channels)} and mesh_shape = "
+                f"{tuple(self.mesh_device.shape)}: {m.group(1)}"
+            )
+            raise RuntimeError(msg) from e
+
+        return ttnn.reshape(output_tensor, (b, _out_height, _out_width, -1))
