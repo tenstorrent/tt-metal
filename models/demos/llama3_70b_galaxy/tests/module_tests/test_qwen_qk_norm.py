@@ -6,7 +6,7 @@ from loguru import logger
 from models.demos.llama3_70b_galaxy.tt.model_config import (
     get_core_ranges,
 )
-from models.utility_functions import torch_random
+from models.common.utility import torch_random
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.common.rmsnorm import RMSNorm
 

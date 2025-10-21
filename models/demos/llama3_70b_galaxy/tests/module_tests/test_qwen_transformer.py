@@ -11,15 +11,13 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
-from models.utility_functions import skip_for_grayskull
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "device_params",
     [
