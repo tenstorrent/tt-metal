@@ -180,6 +180,8 @@ RUN set -eu && \
         tar -cvhf /artifacts/ttm_any.tar ${ARTIFACT_PATHS}; \
     fi
 
+
+
 FROM scratch AS artifacts
 COPY --from=build-artifacts /artifacts /artifacts
 COPY --from=build-artifacts /build /build
@@ -271,6 +273,10 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 #############################################################
+
+FROM dev as evaluation
+COPY --from=build-artifacts /artifacts /artifacts
+COPY --from=build-artifacts /build /build
 
 FROM base AS release
 

@@ -157,11 +157,31 @@ jobs:
           # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
           ccache -z
 
-      - name: Build artifacts
+#      - name: Build artifacts
+#        run: |
+#          mkdir outputs
+#          /home/runner/build.sh --target artifacts \
+#            --local outputs \
+#            --dockerfile-dir dockerfile \
+#            --dockerfile Dockerfile \
+#            --build-arg BUILD_TYPE=${{ inputs.build-type }} \
+#            --build-arg DISTRIBUTED=${{ inputs.distributed }} \
+#            --build-arg TRACY=${{ inputs.tracy }} \
+#            --build-arg BUILD_UMD_TESTS=${{ inputs.build-umd-tests }} \
+#            --build-arg TOOLCHAIN_FILE=${{ inputs.toolchain }} \
+#            --build-arg PROFILE=${{ inputs.profile }} \
+#            --build-arg SKIP_TT_TRAIN=${{ inputs.skip-tt-train }}
+#          ls outputs
+
+      - name: Authenticate to harbor
+        run: |
+          docker login harbor.ci.tenstorrent.net -u $reg_user -p $reg_token
+
+      - name: Build evaluation image
         run: |
           mkdir outputs
           /home/runner/build.sh --target artifacts \
-            --local outputs \
+            --image harbor.ci.tenstorrent.net/event-scanner/tt-metal-ev:${{ github.sha }} \
             --dockerfile-dir dockerfile \
             --dockerfile Dockerfile \
             --build-arg BUILD_TYPE=${{ inputs.build-type }} \
@@ -171,7 +191,6 @@ jobs:
             --build-arg TOOLCHAIN_FILE=${{ inputs.toolchain }} \
             --build-arg PROFILE=${{ inputs.profile }} \
             --build-arg SKIP_TT_TRAIN=${{ inputs.skip-tt-train }}
-          ls outputs
 
       - name: List all stuff
         run: |
