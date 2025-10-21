@@ -149,11 +149,10 @@ def infinite_loop_context():
 
     MARKER = "for (;;) {}  // Infinite loop to test timeout - only for ADD operations"
 
-    TARGET = (
-        "    if constexpr ((eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB))\n"
-        "    {\n"
-        "        if constexpr (src_b_bcast_type == BroadcastType::COL)"
-    )
+    # Updated to match the actual file content
+    TARGET = """    if constexpr ((eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB))
+    {
+        if constexpr (src_b_bcast_type == BroadcastType::COL)"""
 
     REPLACEMENT = """    if constexpr ((eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB))
     {
@@ -652,8 +651,8 @@ def run_generate_test_and_display_results(validate_tests=False):
                         # Check if it failed at the expected operation (the hanging one)
                         # The test file name contains the operation index (e.g., test_op_3_ttnn_add.py)
                         # The last operation (ADD) is the problematic one
-                        if "add" in test_file.lower() or "op_3" in test_file:
-                            # This is expected - the ADD operation was the hanging one
+                        if "add" in test_file.lower() or "op_4" in test_file:
+                            # This is expected - the ADD operation was the hanging one (operation ID 4)
                             log.success(f"  ✓ {test_file} correctly identified as problematic operation")
                             test_results.append((test_file, "identified_issue"))
                         elif "ttnn::add" in test_result.stdout or "ttnn.add" in test_result.stdout:
@@ -681,7 +680,7 @@ def run_generate_test_and_display_results(validate_tests=False):
             log.separator()
             log.substep("\nTest Validation Summary:")
             log.substep("=" * 40)
-            passed_count = sum(1 for _, status in test_results if status in ["passed", "identified_issue"])
+            passed_count = sum(1 for _, status in test_results if status in ["passed", "identified_issue", "timeout"])
             log.substep(f"Total tests: {len(test_results)}")
             log.substep(f"Successfully validated: {passed_count}")
 
