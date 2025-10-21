@@ -265,7 +265,6 @@ models/**/bert*/ @TT-BrianLiu @uaydonat @tenstorrent/metalium-codeowners-large-c
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu @tenstorrent/metalium-codeowners-large-changes
 models/**/distilbert/ @tt-aho @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/*/mnist/ @esmalTT @uaydonat @tenstorrent/metalium-codeowners-large-changes
-models/*/roberta/ @sraizada-tt @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/*/squeezebert/ @cfjchu @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/demos/ttnn_falcon7b @cfjchu @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/*/vgg/ @bbradelTT @uaydonat @mbahnasTT @tenstorrent/metalium-codeowners-large-changes
