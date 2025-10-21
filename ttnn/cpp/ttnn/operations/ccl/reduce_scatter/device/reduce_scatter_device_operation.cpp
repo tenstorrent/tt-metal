@@ -108,22 +108,13 @@ ReduceScatterDeviceOperation::invoke(
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     uint32_t num_links,
     tt::tt_fabric::Topology topology) {
-
-    uint32_t target_ring_size =
-        ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
-    ttnn::ccl::Topology ccl_topology = topology;
-    if (target_ring_size == 2 && topology == ttnn::ccl::Topology::Ring) {
-        log_warning(tt::LogOp, "Using Linear topology for ReduceScatter with 2 devices instead of Ring.");
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    }
-
     return {
         operation_attributes_t{
             .memory_config = memory_config,
             .dim = dim,
             .cluster_axis = cluster_axis,
             .subdevice_id = subdevice_id,
-            .topology = ccl_topology,
+            .topology = topology,
             .num_links = num_links},
         tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = optional_output_tensor}};
 }

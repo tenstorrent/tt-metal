@@ -262,20 +262,13 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     /* ReduceScatter setup */
     constexpr uint32_t DEFAULT_WORKERS_PER_LINK = 1;
 
-    uint32_t num_devices = devices.size();
-    ttnn::ccl::Topology ccl_topology = topology;
-    if (num_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
-        log_warning(tt::LogOp, "Using Linear topology for ReduceScatter with 2 devices instead of Ring.");
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    }
-
     ttnn::ReduceScatterMinimalAsync reduce_scatter_minimal_async_struct = ttnn::ReduceScatterMinimalAsync(
         dim,
         num_links,
-        num_devices,
+        devices.size(),
         memory_config_rs.value_or(input_tensor.memory_config()),
         intermediate_memory_config_rs.value_or(input_tensor.memory_config()),
-        ccl_topology,
+        topology,
         multi_device_global_semaphore,
         barrier_semaphore,
         using_persistent_buffers,

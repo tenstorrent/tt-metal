@@ -33,11 +33,7 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
     const auto& mesh_view = mesh_device.get_view();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
-    ttnn::ccl::Topology ccl_topology = topology;
-    if (num_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
-        log_warning(tt::LogOp, "Using Linear topology for AllGather with 2 devices instead of Ring.");
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    }
+    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
 
     std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_tensor};
     const std::vector<std::optional<const Tensor>> optional_input_tensors = {residual_input_tensor, weight, stats};
@@ -49,7 +45,7 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
                    program_config,
                    kernel_config_val,
                    dtype,
-                   ccl_topology,
+                   topology_,
                    num_preferred_links.value_or(1),
                    num_devices,
                    semaphore,

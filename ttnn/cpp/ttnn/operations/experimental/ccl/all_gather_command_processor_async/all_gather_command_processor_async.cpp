@@ -20,6 +20,7 @@ ttnn::Tensor ExecuteAllGatherCommandProcessorAsync::invoke(
     ttnn::ccl::Topology topology,
     std::optional<uint32_t> cluster_axis,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
+    topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     return ttnn::operations::experimental::ccl::all_gather_command_processor_async(
         input_tensor,
         dim,
@@ -42,6 +43,7 @@ std::vector<ttnn::Tensor> ExecuteAllGatherCommandProcessorAsync::invoke(
     ttnn::ccl::Topology topology,
     std::optional<uint32_t> cluster_axis,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
+    topology = ::ttnn::ccl::get_usable_topology(input_tensors.at(0), topology, cluster_axis);
     return ttnn::operations::experimental::ccl::all_gather_command_processor_async(
         input_tensors,
         dim,

@@ -238,12 +238,6 @@ Tensor all_gather_command_processor_async_impl(
         num_devices = devices.size();
     }
 
-    ttnn::ccl::Topology ccl_topology = topology;
-    if (num_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
-        log_warning(tt::LogOp, "Using Linear topology for AllGather with 2 devices instead of Ring.");
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    }
-
     std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_buffer};
     return tt::tt_metal::operation::run(
                ttnn::AllGatherCommandProcessorAsync(
@@ -253,7 +247,7 @@ Tensor all_gather_command_processor_async_impl(
                    multi_device_global_semaphore,
                    num_links,
                    memory_config.value_or(input_tensor.memory_config()),
-                   ccl_topology,
+                   topology,
                    cluster_axis,
                    sub_device_id),
                {input_tensor},

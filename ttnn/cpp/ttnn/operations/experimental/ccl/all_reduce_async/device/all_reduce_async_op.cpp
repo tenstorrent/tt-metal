@@ -187,19 +187,13 @@ Tensor all_reduce_async_impl(
         mesh_view.is_mesh_2d(), "all-reduce invoked with cluster_axis API on >2D mesh, which is currently unsupported");
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
-    ttnn::ccl::Topology ccl_topology = topology;
-    if (num_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
-        log_warning(tt::LogOp, "Using Linear topology for AllReduce with 2 devices instead of Ring.");
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    }
-
     return tt::tt_metal::operation::run(
                ttnn::AllReduceAsync{
                    num_preferred_links.has_value() ? num_preferred_links.value() : 1,
                    num_devices,
                    dtype.value_or(input_tensor.dtype()),
                    memory_config.value_or(input_tensor.memory_config()),
-                   ccl_topology,
+                   topology,
                    multi_device_global_semaphore,
                    subdevice_id,
                    use_noc1_only,

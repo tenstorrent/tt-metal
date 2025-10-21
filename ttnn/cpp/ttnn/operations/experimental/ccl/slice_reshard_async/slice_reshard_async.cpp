@@ -37,11 +37,7 @@ ttnn::Tensor ExecuteSliceReshardAsync::invoke(
 
     TT_FATAL(num_devices > 1, "slice_reshard_async op will only work for num_devices > 1, but has {}", num_devices);
 
-    ttnn::ccl::Topology ccl_topology = topology.value_or(ttnn::ccl::Topology::Linear);
-    if (num_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
-        log_warning(tt::LogOp, "Using Linear topology for SliceReshard with 2 devices instead of Ring.");
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    }
+    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
 
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
@@ -57,7 +53,7 @@ ttnn::Tensor ExecuteSliceReshardAsync::invoke(
                    barrier_semaphore,
                    num_preferred_links.value_or(1),
                    memory_config.value_or(input_tensor.memory_config()),
-                   ccl_topology,
+                   topology_,
                    num_devices),
                {input_tensor},
                {},

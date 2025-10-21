@@ -258,20 +258,13 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
 
     std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_buffer};
 
-    uint32_t num_devices = devices.size();
-    ttnn::ccl::Topology ccl_topology = topology;
-    if (num_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
-        log_warning(tt::LogOp, "Using Linear topology for AllGather with 2 devices instead of Ring.");
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    }
-
     /* AllGather setup */
     ttnn::AllGatherAsync all_gather_async_struct = ttnn::AllGatherAsync(
         dim,
         num_links,
-        num_devices,
+        devices.size(),
         memory_config_ag.value_or(input_tensor.memory_config()),
-        ccl_topology,
+        topology,
         multi_device_global_semaphore,
         sub_device_id,
         /*cluster_axis=*/std::nullopt,

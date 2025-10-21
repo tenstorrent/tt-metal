@@ -184,19 +184,13 @@ Tensor all_gather_concat(
         rank - 1,
         dim);
 
-    ttnn::ccl::Topology ccl_topology = topology;
-    if (num_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
-        log_warning(tt::LogOp, "Using Linear topology for AllGather with 2 devices instead of Ring.");
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    }
-
     return tt::tt_metal::operation::run(
                ttnn::AllGatherConcat{
                    gather_dim,
                    num_links.value_or(1),
                    num_devices,
                    memory_config,
-                   ccl_topology,
+                   topology,
                    global_semaphore,
                    sub_device_id,
                    num_heads,

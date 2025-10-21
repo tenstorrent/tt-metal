@@ -30,11 +30,7 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
 
     TT_FATAL(ring_devices > 1, "reduce_scatter async op will only work for ring_devices > 1, but has {}", ring_devices);
 
-    ttnn::ccl::Topology ccl_topology = topology;
-    if (ring_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
-        log_warning(tt::LogOp, "Using Linear topology for ReduceScatter with 2 devices instead of Ring.");
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    }
+    topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
 
     return ttnn::prim::llama_reduce_scatter(
         input_tensor,
@@ -46,7 +42,7 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
         ring_devices,
         num_links,
         memory_config,
-        ccl_topology,
+        topology,
         use_noc1_only);
 }
 

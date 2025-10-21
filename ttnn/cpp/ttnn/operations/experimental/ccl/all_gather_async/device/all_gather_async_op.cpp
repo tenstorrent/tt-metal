@@ -290,12 +290,6 @@ Tensor all_gather_async_impl(
 
     TT_FATAL(num_devices > 1, "all_gather_async op will only work for num_devices > 1, but has {}", num_devices);
 
-    ttnn::ccl::Topology ccl_topology = topology;
-    if (num_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
-        log_warning(tt::LogOp, "Using Linear topology for AllGather with 2 devices instead of Ring.");
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    }
-
     bool using_persistent_buffers = false;
 
     return tt::tt_metal::operation::run(
@@ -304,7 +298,7 @@ Tensor all_gather_async_impl(
                    num_links,
                    num_devices,
                    memory_config.value_or(input_tensor.memory_config()),
-                   ccl_topology,
+                   topology,
                    multi_device_global_semaphore,
                    sub_device_id,
                    /*cluster_axis=*/std::nullopt,
@@ -347,12 +341,6 @@ Tensor all_gather_async_impl(
 
     TT_FATAL(num_devices > 1, "all_gather_async op will only work for num_devices > 1, but has {}", num_devices);
 
-    ttnn::ccl::Topology ccl_topology = topology;
-    if (num_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
-        log_warning(tt::LogOp, "Using Linear topology for AllGather with 2 devices instead of Ring.");
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    }
-
     log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", num_devices, num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
@@ -366,7 +354,7 @@ Tensor all_gather_async_impl(
                    num_links,
                    num_devices,
                    memory_config.value_or(input_tensor.memory_config()),
-                   ccl_topology,
+                   topology,
                    multi_device_global_semaphore,
                    sub_device_id,
                    cluster_axis,
@@ -419,19 +407,13 @@ Tensor all_gather_async_impl(
 
     std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_tensor};
 
-    ttnn::ccl::Topology ccl_topology = topology;
-    if (num_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
-        log_warning(tt::LogOp, "Using Linear topology for AllGather with 2 devices instead of Ring.");
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    }
-
     return tt::tt_metal::operation::run(
                ttnn::AllGatherAsync{
                    gather_dim,
                    num_preferred_links.has_value() ? num_preferred_links.value() : 1,
                    num_devices,
                    memory_config.value_or(input_tensor.memory_config()),
-                   ccl_topology,
+                   topology,
                    multi_device_global_semaphore,
                    sub_device_id,
                    cluster_axis,

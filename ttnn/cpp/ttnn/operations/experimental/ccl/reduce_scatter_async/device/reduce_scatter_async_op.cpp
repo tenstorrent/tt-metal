@@ -282,13 +282,8 @@ Tensor reduce_scatter_impl(
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "reduce_scatter op is only supported for Fast Dispatch");
 
-    ttnn::ccl::Topology ccl_topology = topology;
     uint32_t num_devices = devices.size();
     TT_FATAL(num_devices > 1, "reduce_scatter op will only work for num_devices > 1, but has {}", num_devices);
-    if (num_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
-        log_warning(tt::LogOp, "Using Linear topology for ReduceScatter with 2 devices instead of Ring.");
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    }
 
     int16_t rank = input_tensor.logical_shape().rank();
     int16_t scatter_dim = (dim < 0) ? rank + dim : dim;
@@ -307,7 +302,7 @@ Tensor reduce_scatter_impl(
                    scatter_dim,
                    num_devices,
                    output_mem_config,
-                   ccl_topology,
+                   topology,
                    num_links_preferred,
                    from_remote_multi_device_global_semaphore,
                    to_remote_multi_device_global_semaphore,

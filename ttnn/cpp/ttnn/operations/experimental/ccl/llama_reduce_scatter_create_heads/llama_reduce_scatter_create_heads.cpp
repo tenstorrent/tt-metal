@@ -33,11 +33,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteLlamaReduceScatterCr
     uint32_t ring_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     TT_FATAL(ring_devices > 1, "reduce_scatter async op will only work for ring_devices > 1, but has {}", ring_devices);
 
-    ttnn::ccl::Topology ccl_topology = topology;
-    if (ring_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
-        log_warning(tt::LogOp, "Using Linear topology for ReduceScatter with 2 devices instead of Ring.");
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    }
+    topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
 
     uint32_t head_dim = input_tensor.padded_shape()[-1] / (num_heads + 2 * num_kv_heads);
     uint32_t slice_size = input_tensor.padded_shape()[-2] / ring_devices;
@@ -49,7 +45,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteLlamaReduceScatterCr
         subdevice_id,
         cluster_axis,
         ring_devices,
-        ccl_topology,
+        topology,
         num_links,
         num_heads,
         num_kv_heads,

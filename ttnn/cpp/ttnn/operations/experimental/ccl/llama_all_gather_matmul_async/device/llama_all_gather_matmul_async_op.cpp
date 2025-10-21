@@ -258,12 +258,6 @@ Tensor llama_all_gather_matmul_async_impl(
         rank - 1,
         dim);
 
-    ttnn::ccl::Topology ccl_topology = topology;
-    if (num_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
-        log_warning(tt::LogOp, "Using Linear topology for AllGather with 2 devices instead of Ring.");
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    }
-
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     optional_input_tensors.push_back(std::nullopt);
     std::vector<std::optional<Tensor>> optional_output_tensors = {};
@@ -275,7 +269,7 @@ Tensor llama_all_gather_matmul_async_impl(
         num_preferred_links.has_value() ? num_preferred_links.value() : 1,
         num_devices,
         ag_memory_config.value_or(input_tensor.memory_config()),
-        ccl_topology,
+        topology,
         multi_device_global_semaphore,
         sub_device_id,
         cluster_axis};

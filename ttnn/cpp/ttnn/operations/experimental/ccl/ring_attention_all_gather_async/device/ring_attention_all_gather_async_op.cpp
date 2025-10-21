@@ -229,12 +229,6 @@ std::vector<Tensor> ring_attention_all_gather_async_impl(
         rank - 1,
         dim);
 
-    ttnn::ccl::Topology ccl_topology = topology;
-    if (num_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
-        log_warning(tt::LogOp, "Using Linear topology for AllGather with 2 devices instead of Ring.");
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    }
-
     std::vector<std::optional<Tensor>> optional_output_tensors;
     optional_output_tensors.reserve(persistent_output_buffer.size());
     for (size_t i = 0; i < persistent_output_buffer.size(); ++i) {
@@ -248,7 +242,7 @@ std::vector<Tensor> ring_attention_all_gather_async_impl(
             num_links,
             num_devices,
             memory_config.value_or(input_tensors[0].memory_config()),
-            ccl_topology,
+            topology,
             multi_device_global_semaphore,
             sub_device_id,
             cluster_axis},
