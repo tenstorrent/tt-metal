@@ -23,8 +23,8 @@ def natural_key_from_path(s):
 Runs tests/ttnn/unit_tests/gtests/accessor/test_accessor_benchmarks.cpp test and parses output.
 See the C++ test for more details on what is benchmarked and generated.
 
-Make sure that tt-metal is built with profiler enabled, e.g.:
-./build_metal.sh --release --enable-ccache --build-tests -e -p
+Make sure that tt-metal is built with tests, e.g.:
+./build_metal.sh --release --enable-ccache --build-tests -e
 """
 
 # Bits Encoding: [Bank coordinates][Tensor shape][Shard shape][Number of banks][Rank]01
