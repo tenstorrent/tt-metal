@@ -41,13 +41,29 @@ void kernel_main() {
     constexpr uint32_t cb_id_act_row_major_bfloat16 = get_compile_time_arg_val(25);
     constexpr uint32_t cb_l1_array = get_compile_time_arg_val(26);
 
+    // Split multicasting related compile-time args (always present when split reader is enabled)
+    constexpr bool split_mcast_enabled = get_compile_time_arg_val(30) == 1;
+    const uint32_t act_first_reader_tilize_done_semaphore_addr =
+        split_mcast_enabled ? get_semaphore(get_compile_time_arg_val(31)) : 0;
+    const uint32_t act_second_reader_mcast_done_semaphore_addr =
+        split_mcast_enabled ? get_semaphore(get_compile_time_arg_val(32)) : 0;
+
+    volatile tt_l1_ptr uint32_t* act_first_reader_tilize_done_semaphore_addr_ptr =
+        split_mcast_enabled
+            ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_first_reader_tilize_done_semaphore_addr)
+            : nullptr;
+    volatile tt_l1_ptr uint32_t* act_second_reader_mcast_done_semaphore_addr_ptr =
+        split_mcast_enabled
+            ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_second_reader_mcast_done_semaphore_addr)
+            : nullptr;
+
 #ifdef SPLIT_READER_CB_SHARED
     // When the split reader CB is shared, both readers write to the same circular buffer.
     // Synchronization is required: the main reader signals when CB space is reserved,
     // and the second reader signals when it has finished writing its portion.
     constexpr bool split_reader_cb_shared = true;
-    const uint32_t act_split_reader_reserve_done_semaphore_addr = get_semaphore(get_compile_time_arg_val(30));
-    const uint32_t act_split_reader_write_done_semaphore_addr = get_semaphore(get_compile_time_arg_val(31));
+    const uint32_t act_split_reader_reserve_done_semaphore_addr = get_semaphore(get_compile_time_arg_val(33));
+    const uint32_t act_split_reader_write_done_semaphore_addr = get_semaphore(get_compile_time_arg_val(34));
 
     volatile tt_l1_ptr uint32_t* act_split_reader_reserve_done_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_reserve_done_semaphore_addr);
@@ -176,6 +192,11 @@ void kernel_main() {
                     // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
                     cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
 
+                    // Signal to second reader that tilized data is ready (if split mcast is enabled)
+                    if (split_mcast_enabled) {
+                        noc_semaphore_set(act_first_reader_tilize_done_semaphore_addr_ptr, VALID);
+                    }
+
                     // Now we have the block in the CB address, we can mcast to dests!
                     uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
 
@@ -231,6 +252,12 @@ void kernel_main() {
                             act_mcast_sender_semaphore_valid_addr,
                             act_mcast_receiver_semaphore_noc_addr,
                             act_mcast_num_cores + 1);
+                    }
+
+                    // Wait for second reader to complete its multicast (if split mcast is enabled)
+                    if (split_mcast_enabled) {
+                        noc_semaphore_wait(act_second_reader_mcast_done_semaphore_addr_ptr, VALID);
+                        noc_semaphore_set(act_second_reader_mcast_done_semaphore_addr_ptr, INVALID);
                     }
                 } else if (is_receiver_core) {
                     // MCAST RECEIVER: receive entire tilized input from sender core
