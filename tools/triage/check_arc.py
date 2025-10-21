@@ -20,8 +20,6 @@ from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.hardware.noc_block import NocBlock
-from ttexalens.hw.tensix.blackhole.blackhole import BlackholeDevice
-from ttexalens.hw.tensix.wormhole.wormhole import WormholeDevice
 from ttexalens.tt_exalens_lib import read_arc_telemetry_entry
 import utils
 from utils import RED, BLUE, GREEN, ORANGE, RST
