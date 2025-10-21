@@ -60,8 +60,6 @@ void kernel_main() {
     uint32_t l1_read_addr_in1 = 0;
     constexpr DataFormat in1_data_format = get_dataformat(cb_id_in1);
 
-    // uint32_t in1_base_addr =
-    //     noc_async_read_tile_dram_sharded_set_state<true>(in1_tensor_addr, in1_page_size, dram_bank_id, vc);
     uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, in1_tensor_addr);
     noc_async_read_one_packet_set_state<true>(in1_base_addr, in1_page_size, vc);
 
@@ -72,7 +70,6 @@ void kernel_main() {
         l1_write_addr_in1 = get_write_ptr(cb_id_in1);
 
         for (uint32_t h = 0; h < in1_num_pages; ++h) {
-            // noc_async_read_tile_dram_sharded_with_state(in1_base_addr, l1_read_addr_in1, l1_write_addr_in1);
             noc_async_read_one_packet_with_state<true, true>(in1_base_addr + l1_read_addr_in1, l1_write_addr_in1, vc);
             l1_read_addr_in1 += in1_page_size;
             l1_write_addr_in1 += in1_page_size;
@@ -96,8 +93,6 @@ void kernel_main() {
         noc_async_read_tile_dram_sharded_set_trid(curr_block_trid);
 
         for (uint32_t h = 0; h < in1_num_pages; ++h) {
-            // noc_async_read_tile_dram_sharded_with_state_with_trid(
-            //     in1_base_addr, l1_read_addr_in1, l1_write_addr_in1, curr_block_trid);
             noc_async_read_tile_dram_sharded_with_state_with_trid(
                 in1_base_addr, l1_read_addr_in1, l1_write_addr_in1, curr_block_trid);
             l1_read_addr_in1 += in1_page_size;
@@ -135,13 +130,10 @@ void kernel_main() {
     uint32_t l1_write_addr_in3 = get_write_ptr(cb_id_in3);
     uint32_t l1_read_addr_in3 = 0;
 
-    // uint32_t in3_base_addr =
-    //     noc_async_read_tile_dram_sharded_set_state<true>(in3_tensor_addr, in3_page_size, dram_bank_id, vc);
     uint64_t in3_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, in3_tensor_addr);
     noc_async_read_one_packet_set_state<true>(in3_base_addr, in3_page_size, vc);
 
     for (uint32_t h = 0; h < in3_num_pages; ++h) {
-        // noc_async_read_tile_dram_sharded_with_state(in3_base_addr, l1_read_addr_in3, l1_write_addr_in3);
         noc_async_read_one_packet_with_state<true, true>(in3_base_addr + l1_read_addr_in3, l1_write_addr_in3, vc);
         l1_read_addr_in3 += in3_page_size;
         l1_write_addr_in3 += in3_page_size;
