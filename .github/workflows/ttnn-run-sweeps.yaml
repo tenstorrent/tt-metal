@@ -564,7 +564,7 @@ on:
         type: boolean
         default: true
       measure_device_perf:
-        description: "Measure device performance using device profiler (--device-perf flag). REQUIRES PROFILER BUILD!"
+        description: "Measure device performance using device profiler (--device-perf flag)."
         type: boolean
         default: false
   schedule:
