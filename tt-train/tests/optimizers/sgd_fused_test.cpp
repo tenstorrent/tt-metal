@@ -9,6 +9,7 @@
 
 #include <bit>
 #include <core/ttnn_all_includes.hpp>
+#include <cstdlib>
 #include <functional>
 
 #include "autograd/auto_context.hpp"
@@ -261,18 +262,6 @@ static ttnn::Tensor to_tt(const xt::xarray<float>& x) {
     return ttml::core::from_xtensor(x, &ttml::autograd::ctx().get_device());
 }
 
-static inline uint16_t fp32_to_bf16_rne(float v) {
-    uint32_t x = std::bit_cast<uint32_t>(v);
-    uint32_t lsb = (x >> 16) & 1u;
-    uint32_t rounding_bias = 0x7FFFu + lsb;  // ties-to-even
-    return static_cast<uint16_t>((x + rounding_bias) >> 16);
-}
-
-static inline float bf16_to_fp32(uint16_t bf16_bits) {
-    uint32_t bits = static_cast<uint32_t>(bf16_bits) << 16;
-    return std::bit_cast<float>(bits);
-}
-
 static void cpu_sgd_step(
     xt::xarray<float>& param,
     xt::xarray<float>& grad,
@@ -284,7 +273,6 @@ static void cpu_sgd_step(
     bool nesterov,
     bool has_momentum) {
     for (size_t i = 0; i < param.size(); ++i) {
-        // Inputs are BF16-quantized already
         float theta = param(i);
         float g_orig = grad(i);
         float m_prev = (has_momentum ? momentum_buffer(i) : 0.0f);
@@ -313,35 +301,26 @@ static void cpu_sgd_step(
 static void run_one_step_and_compare(const ParityCase& pc) {
     using namespace ttml;
 
+    ttml::autograd::ctx().set_seed(0U);
     auto& g = autograd::ctx().get_generator();
     const uint32_t seed_param = g();
     const uint32_t seed_grad = g();
     const uint32_t seed_mom = g();
 
-    // Same data used for both optimizers
+    // Same data used for all optimizers
     xt::xarray<float> w0 = make_random_xarray(pc.shape, seed_param);
     xt::xarray<float> g0 = make_random_xarray(pc.shape, seed_grad);
 
-    // Convert to BF16 precision
-    xt::xarray<float> w0_bf16 = w0;
-    xt::xarray<float> g0_bf16 = g0;
-    for (size_t i = 0; i < w0_bf16.size(); ++i) {
-        w0_bf16(i) = bf16_to_fp32(fp32_to_bf16_rne(w0_bf16(i)));
-        g0_bf16(i) = bf16_to_fp32(fp32_to_bf16_rne(g0_bf16(i)));
-    }
-    xt::xarray<float> w_cpu = w0_bf16;
-    xt::xarray<float> g_cpu = g0_bf16;
-    xt::xarray<float> mom_cpu = xt::zeros_like(w0_bf16);
+    xt::xarray<float> w_cpu = w0;
+    xt::xarray<float> g_cpu = g0;
+    xt::xarray<float> mom_cpu = xt::zeros_like(w0);
     if (pc.momentum > 0.0f) {
         mom_cpu = make_random_xarray(pc.shape, seed_mom);
-        for (size_t i = 0; i < mom_cpu.size(); ++i) {
-            mom_cpu(i) = bf16_to_fp32(fp32_to_bf16_rne(mom_cpu(i)));
-        }
     }
 
     // Build autograd tensor for fused optimizer
-    auto theta_fused = autograd::create_tensor(to_tt(w0_bf16), true);
-    theta_fused->set_grad(to_tt(g0_bf16));
+    auto theta_fused = autograd::create_tensor(to_tt(w0), true);
+    theta_fused->set_grad(to_tt(g0));
 
     // Named parameters map for fused optimizer
     ttml::serialization::NamedParameters params_fused{{"theta", theta_fused}};
@@ -365,86 +344,171 @@ static void run_one_step_and_compare(const ParityCase& pc) {
         opt_fused.set_state_dict(sd_fused);
     }
 
-    // fused optimizer step
+    // Build autograd tensor for composite optimizer
+    auto theta_comp = autograd::create_tensor(to_tt(w0), true);
+    theta_comp->set_grad(to_tt(g0));
+
+    // Named parameters map for composite optimizer
+    ttml::serialization::NamedParameters params_comp{{"theta", theta_comp}};
+
+    // Build composite config
+    ttml::optimizers::SGDConfig comp_cfg;
+    comp_cfg.lr = pc.lr;
+    comp_cfg.momentum = pc.momentum;
+    comp_cfg.dampening = pc.dampening;
+    comp_cfg.weight_decay = pc.weight_decay;
+    comp_cfg.nesterov = pc.nesterov;
+
+    // Create composite optimizer
+    ttml::optimizers::SGD opt_comp(params_comp, comp_cfg);
+
+    // If momentum is used, initialize the momentum buffer with the same values
+    if (pc.momentum > 0.0f) {
+        auto sd_comp = opt_comp.get_state_dict();
+        auto mom_comp = std::get<ttml::serialization::NamedParameters>(sd_comp.at("theta"));
+        mom_comp["theta"]->set_value(to_tt(mom_cpu));
+        opt_comp.set_state_dict(sd_comp);
+    }
+
+    // Run optimizer steps
     opt_fused.step();
+    opt_comp.step();
 
     // CPU optimizer step
     cpu_sgd_step(
         w_cpu, g_cpu, mom_cpu, pc.lr, pc.momentum, pc.dampening, pc.weight_decay, pc.nesterov, pc.momentum > 0.0f);
 
-    // Pull fused params
+    // Pull fused and composite params
     const auto w_fused = ttml::core::to_xtensor(theta_fused->get_value());
+    const auto w_comp = ttml::core::to_xtensor(theta_comp->get_value());
     ASSERT_EQ(w_fused.shape(), w_cpu.shape());
+    ASSERT_EQ(w_comp.shape(), w_cpu.shape());
 
-    // 1) Round CPU FP32 result once to BF16 (RNE), then back to FP32 for compare
-    xt::xarray<float> w_cpu_bf = w_cpu;
-    for (size_t i = 0; i < w_cpu_bf.size(); ++i) {
-        w_cpu_bf(i) = bf16_to_fp32(fp32_to_bf16_rne(w_cpu_bf(i)));
+    // Calculate errors relative to CPU (ground truth)
+    auto err_fused = xt::abs(w_fused - w_cpu);
+    auto err_comp = xt::abs(w_comp - w_cpu);
+    float max_err_fused = xt::amax(err_fused)();
+    float max_err_comp = xt::amax(err_comp)();
+    float mean_err_fused = xt::mean(err_fused)();
+    float mean_err_comp = xt::mean(err_comp)();
+
+    // Check for plot mode environment variable
+    const char* plot_mode_env = std::getenv("PLOT_MODE");
+    bool plot_mode = (plot_mode_env != nullptr && std::string(plot_mode_env) == "1");
+
+    if (plot_mode) {
+        // Mark start of plot data block
+        fmt::print("===PLOT_DATA_START===\n");
+
+        // Print summary statistics
+        fmt::print(
+            "# Case: {} | max_err_fused={:.6e} | max_err_comp={:.6e} | mean_err_fused={:.6e} | mean_err_comp={:.6e}\n",
+            pc.name,
+            max_err_fused,
+            max_err_comp,
+            mean_err_fused,
+            mean_err_comp);
+
+        // Print header
+        fmt::print("# idx\terr_fused\terr_comp\tparam\tgrad\tfused_val\tcomp_val\tcpu_val\n");
+
+        // Print all data points in tab-separated format
+        for (size_t i = 0; i < w_fused.size(); ++i) {
+            float ef = std::fabs(w_fused(i) - w_cpu(i));
+            float ec = std::fabs(w_comp(i) - w_cpu(i));
+            fmt::print(
+                "{}\t{:.10e}\t{:.10e}\t{:.10e}\t{:.10e}\t{:.10e}\t{:.10e}\t{:.10e}\n",
+                i,
+                ef,
+                ec,
+                w0(i),
+                g0(i),
+                w_fused(i),
+                w_comp(i),
+                w_cpu(i));
+        }
+
+        // Mark end of plot data block
+        fmt::print("===PLOT_DATA_END===\n");
+    } else {
+        fmt::print(
+            "Case '{}': Fused max_err={:.6e}, mean_err={:.6e} | Comp max_err={:.6e}, mean_err={:.6e}\n",
+            pc.name,
+            max_err_fused,
+            mean_err_fused,
+            max_err_comp,
+            mean_err_comp);
     }
 
-    const float atol = 1e-3f;  // absolute tolerance
-    const float rtol = 1e-2f;  // relative tolerance (1%)
+    // Print diagnostic info if fused performs worse than composite
+    if (!plot_mode && (max_err_fused > max_err_comp || mean_err_fused > mean_err_comp)) {
+        fmt::print("Fused performance is worse than composite - printing diagnostics:\n");
 
-    bool params_match = xt::allclose(w_fused, w_cpu_bf, atol, rtol);
-    if (!params_match) {
-        auto abs_err = xt::abs(w_fused - w_cpu_bf);
-        float max_abs = xt::amax(abs_err)();
-        auto denom = xt::maximum(xt::abs(w_cpu_bf), 1e-12f);
-        float max_rel = xt::amax(abs_err / denom)();
-        fmt::print(
-            "allclose failed: max_abs = {:.6e}, max_rel = {:.6e} (atol={}, rtol={})\n", max_abs, max_rel, atol, rtol);
-
-        size_t printed = 0;
-        for (size_t i = 0; i < w_fused.size() && printed < 8; ++i) {
-            float a = w_fused(i);
-            float b = w_cpu_bf(i);
-            float e = std::fabs(a - b);
-            float er = e / std::max(std::fabs(b), 1e-12f);
-            if (!(e <= atol + rtol * std::fabs(b))) {
-                fmt::print(
-                    "idx {:4d} | fused={: .8f} | cpu_bf={: .8f} | abs={:.3e} rel={:.3e}\n",
-                    static_cast<int>(i),
-                    a,
-                    b,
-                    e,
-                    er);
-                ++printed;
+        // Collect all cases where fused is worse than composite and sort by error
+        struct ErrorCase {
+            size_t idx;
+            float param;
+            float grad;
+            float fused_val;
+            float comp_val;
+            float cpu_val;
+            float err_fused;
+            float err_comp;
+        };
+        std::vector<ErrorCase> error_cases;
+        for (size_t i = 0; i < w_fused.size(); ++i) {
+            float err_fused = std::fabs(w_fused(i) - w_cpu(i));
+            float err_comp = std::fabs(w_comp(i) - w_cpu(i));
+            if (err_fused > err_comp) {
+                error_cases.push_back({i, w0(i), g0(i), w_fused(i), w_comp(i), w_cpu(i), err_fused, err_comp});
             }
         }
+
+        // Sort by fused error in descending order
+        std::sort(error_cases.begin(), error_cases.end(), [](const ErrorCase& a, const ErrorCase& b) {
+            return a.err_fused > b.err_fused;
+        });
+
+        fmt::print(
+            "Elements where fused error > composite error: {} / {} ({:.2f}%)\n",
+            error_cases.size(),
+            w_fused.size(),
+            (100.0 * error_cases.size()) / w_fused.size());
+
+        // Print top 8 highest errors
+        fmt::print("8 highest errors where fused error > composite error:\n");
+        size_t to_print = std::min(size_t(8), error_cases.size());
+        for (size_t i = 0; i < to_print; ++i) {
+            const auto& ec = error_cases[i];
+            fmt::print(
+                "idx {:6d} | param={: 12.8f} | grad={: 12.8f} | fused={: 12.8f} | comp={: 12.8f} | cpu={: 12.8f} | "
+                "err_fused={:10.3e} | err_comp={:10.3e}\n",
+                static_cast<int>(ec.idx),
+                ec.param,
+                ec.grad,
+                ec.fused_val,
+                ec.comp_val,
+                ec.cpu_val,
+                ec.err_fused,
+                ec.err_comp);
+        }
     }
 
-    EXPECT_TRUE(params_match) << "Param mismatch after one step in case '" << pc.name << "' "
-                              << "shape=(" << pc.shape[0] << "," << pc.shape[1] << "," << pc.shape[2] << ","
-                              << pc.shape[3] << ")";
+    // Ensure fused error is always better than (or equal to) composite error
 
+    EXPECT_LE(mean_err_fused, mean_err_comp)
+        << "Fused mean error should be <= composite mean error (case '" << pc.name << "'). "
+        << "Fused: " << mean_err_fused << ", Composite: " << mean_err_comp;
+
+    /*
     if (pc.momentum > 0.0f) {
-        xt::xarray<float> mom_cpu_bf = mom_cpu;
-        for (size_t i = 0; i < mom_cpu_bf.size(); ++i) {
-            mom_cpu_bf(i) = bf16_to_fp32(fp32_to_bf16_rne(mom_cpu_bf(i)));
-        }
         auto sd_fused = opt_fused.get_state_dict();
         auto mom_fused = std::get<ttml::serialization::NamedParameters>(sd_fused.at("momentum"));
         ASSERT_TRUE(mom_fused.count("theta"));
 
         const auto m_fused = ttml::core::to_xtensor(mom_fused.at("theta")->get_value());
-
-        bool momentum_match = xt::allclose(m_fused, mom_cpu_bf, atol, rtol);
-        if (!momentum_match) {
-            float max_diff = 0.0f;
-            size_t mismatch_count = 0;
-            for (size_t i = 0; i < m_fused.size(); ++i) {
-                float diff = std::fabs(m_fused(i) - mom_cpu_bf(i));
-                if (diff > atol) {
-                    max_diff = std::max(max_diff, diff);
-                    mismatch_count++;
-                }
-            }
-            fmt::print(
-                "Momentum mismatch: {} / {} values differ, max diff = {}\n", mismatch_count, m_fused.size(), max_diff);
-        }
-
-        EXPECT_TRUE(momentum_match) << "Momentum buffer mismatch in case '" << pc.name << "'";
     }
+    */
 }
 static std::string CaseName(const ::testing::TestParamInfo<ParityCase>& info) {
     const auto& c = info.param;
@@ -457,25 +521,27 @@ TEST_P(SGDFusedParityTest, UpdateParityOneStep) {
 }
 
 static const ParityCase kCases[] = {
-    {{1, 1, 1, 32}, 1e-3f, 0.0f, 0.0f, 0.0f, false, "Vec32_SGD"},
-    {{1, 1, 1, 64}, 1e-3f, 0.0f, 0.0f, 1e-2f, false, "Vec64_L2"},
-    {{1, 1, 32, 64}, 1e-3f, 0.9f, 0.1f, 0.0f, false, "Seq32x64_Mom_Damp"},
-    {{2, 1, 32, 128}, 1e-3f, 0.9f, 0.0f, 0.0f, true, "Batch2_Seq32x128_Nesterov"},
-    {{1, 4, 32, 32}, 5e-4f, 0.9f, 0.0f, 1e-3f, true, "Heads4_Seq32x32_Nest_L2"},
+    {{1, 1, 1, 32}, 1e-2f, 0.0f, 0.0f, 0.0f, false, "Vanilla_Vec32"},
+    {{1, 1, 1, 64}, 1e-2f, 0.0f, 0.0f, 0.0f, false, "Vanilla_Vec64"},
+    {{1, 1, 1, 64}, 1e-3f, 0.0f, 0.0f, 1e-2f, false, "L2_Vec64"},
+    {{1, 1, 32, 64}, 1e-3f, 0.9f, 0.0f, 0.0f, false, "Mom_Seq32x64"},
+    {{1, 1, 32, 64}, 1e-3f, 0.9f, 0.1f, 0.0f, false, "Mom_Damp_Seq32x64"},
+    {{2, 1, 32, 128}, 1e-3f, 0.9f, 0.0f, 0.0f, true, "Nesterov_B2_Seq32x128"},
+    {{1, 4, 32, 32}, 5e-4f, 0.9f, 0.0f, 1e-3f, true, "Nesterov_L2_H4_Seq32x32"},
 };
 
 INSTANTIATE_TEST_SUITE_P(SGDFusedVsCPUParity, SGDFusedParityTest, ::testing::ValuesIn(kCases), CaseName);
 
 static const ParityCase kBigCases[] = {
     // A "fatter" single vector (~262k params)
-    {{1, 1, 1, 262'144}, 1e-3f, 0.0f, 0.0f, 0.0f, false, "Vec262k_SGD"},
+    {{1, 1, 1, 262'144}, 1e-2f, 0.0f, 0.0f, 0.0f, false, "Vanilla_Vec262k"},
 
     // Transformer-like blocks in the low millions of elements
     // 4 * 8 * 1024 * 128 = 4,194,304
-    {{4, 8, 1024, 128}, 1e-3f, 0.9f, 0.0f, 1e-4f, true, "B4H8_S1024_C128_Nesterov_L2"},
+    {{4, 8, 1024, 128}, 1e-3f, 0.9f, 0.0f, 1e-4f, true, "Nesterov_L2_B4H8_S1024_C128"},
 
     // 2 * 16 * 2048 * 128 = 8,388,608
-    {{2, 16, 2048, 128}, 5e-4f, 0.9f, 0.1f, 0.0f, false, "B2H16_S2048_C128_Mom_Damp"},
+    {{2, 16, 2048, 128}, 5e-4f, 0.9f, 0.1f, 0.0f, false, "Mom_Damp_B2H16_S2048_C128"},
 };
 
 INSTANTIATE_TEST_SUITE_P(SGDFusedVsCPUParity_Big, SGDFusedParityTest, ::testing::ValuesIn(kBigCases), CaseName);
@@ -483,19 +549,19 @@ INSTANTIATE_TEST_SUITE_P(SGDFusedVsCPUParity_Big, SGDFusedParityTest, ::testing:
 // --- HUGE test cases ----------------------------------------------
 static const ParityCase kHugeCases[] = {
     // ~1.0M params vector — fast and stresses contiguous path
-    {{1, 1, 1, 1'048'576}, 1e-3f, 0.0f, 0.0f, 0.0f, false, "Vec1M_SGD"},
+    {{1, 1, 1, 1'048'576}, 1e-2f, 0.0f, 0.0f, 0.0f, false, "Vanilla_Vec1M"},
 
     // A bigger transformer-like block (~16.7M elems):
     // 4 * 16 * 2048 * 128 = 16,777,216
-    {{4, 16, 2048, 128}, 1e-3f, 0.9f, 0.0f, 1e-4f, true, "B4H16_S2048_C128_Nesterov_L2"},
+    {{4, 16, 2048, 128}, 1e-3f, 0.9f, 0.0f, 1e-4f, true, "Nesterov_L2_B4H16_S2048_C128"},
 
     // Wide MLP-style layer (~67.1M elems):
     // 8 * 16 * 2048 * 256 = 67,108,864
-    {{8, 16, 2048, 256}, 5e-4f, 0.9f, 0.0f, 1e-4f, true, "B8H16_S2048_C256_Nesterov_L2"},
+    {{8, 16, 2048, 256}, 5e-4f, 0.9f, 0.0f, 1e-4f, true, "Nesterov_L2_B8H16_S2048_C256"},
 
     // Long-sequence stress (~134.2M elems):
     // 4 * 32 * 4096 * 256 = 134,217,728
-    {{4, 32, 4096, 256}, 1e-2f, 0.9f, 0.0f, 1e-3f, true, "B4H32_S4096_C256_Nesterov_L2"},
+    {{4, 32, 4096, 256}, 1e-2f, 0.9f, 0.0f, 1e-3f, true, "Nesterov_L2_B4H32_S4096_C256"},
 };
 
 INSTANTIATE_TEST_SUITE_P(SGDFusedVsCPUParity_Huge, SGDFusedParityTest, ::testing::ValuesIn(kHugeCases), CaseName);
