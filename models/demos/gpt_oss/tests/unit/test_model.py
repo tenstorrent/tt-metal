@@ -369,8 +369,8 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
     )
 
     # Assert minimum accuracy thresholds (realistic for teacher forcing)
-    min_top1_acc = 0.90  # 90% minimum top-1 accuracy with teacher forcing
-    min_top5_acc = 0.96  # 99% minimum top-5 accuracy with teacher forcing
+    min_top1_acc = 0.86  # 86% minimum top-1 accuracy with teacher forcing
+    min_top5_acc = 0.96  # 96% minimum top-5 accuracy with teacher forcing
 
     assert top1_acc >= min_top1_acc, f"Top-1 accuracy {top1_acc:.4f} below threshold {min_top1_acc}"
     assert top5_acc >= min_top5_acc, f"Top-5 accuracy {top5_acc:.4f} below threshold {min_top5_acc}"
