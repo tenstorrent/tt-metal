@@ -11,7 +11,6 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/lazy_mode.hpp"
-#include "ttnn/lazy_execution.hpp"
 #include "ttnn/experimental/jit/context.hpp"
 #include "ttnn_test_fixtures.hpp"
 
@@ -70,7 +69,7 @@ TEST_F(LazyModeFixture, SimpleUnaryOperationsLazy) {
 
     // Now execute the lazy graph
     log_info(tt::LogTest, "Executing lazy graph...");
-    ttnn::execute_lazy_graph(sqrt_output);
+    context.execute_node(sqrt_output.producer_node());
 
     // Get lazy result to host for comparison
     const auto lazy_result = ttnn::from_device(sqrt_output);
@@ -125,7 +124,7 @@ TEST_F(LazyModeFixture, BinaryOperationsLazy) {
 
     // Now execute the lazy graph
     log_info(tt::LogTest, "Executing lazy graph...");
-    ttnn::execute_lazy_graph(mul_output);
+    context.execute_node(mul_output.producer_node());
 
     // Get lazy result to host for comparison
     const auto lazy_result = ttnn::from_device(mul_output);
@@ -189,7 +188,7 @@ TEST_F(LazyModeFixture, MixedOperationsLazy) {
 
     // Now execute the lazy graph
     log_info(tt::LogTest, "Executing lazy graph with {} operations...", context.size());
-    ttnn::execute_lazy_graph(sub_result);
+    context.execute_node(sub_result.producer_node());
 
     // Get lazy result to host for comparison
     const auto lazy_result = ttnn::from_device(sub_result);
@@ -249,7 +248,7 @@ TEST_F(LazyModeFixture, ExecutionOrderCorrect) {
 
     // Now execute the lazy graph - should execute in topological order
     log_info(tt::LogTest, "Executing lazy graph (watch for execution order in logs)...");
-    ttnn::execute_lazy_graph(final_result);
+    context.execute_node(final_result.producer_node());
 
     // Get lazy result to host for comparison
     const auto lazy_result = ttnn::from_device(final_result);

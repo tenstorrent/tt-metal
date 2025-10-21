@@ -67,14 +67,6 @@ concept HasInvoke = requires {
 
 namespace detail {
 
-// Concept to check if an operation can be reconstructed from input tensors
-// This checks the patterns that LazyDeviceOperation::build_tensor_args_with_reflection supports
-template <typename operation_t>
-concept CanReconstructTensorArgs =
-    requires { typename operation_t::tensor_args_t; } &&
-    (std::is_constructible_v<typename operation_t::tensor_args_t, const Tensor&, std::optional<Tensor>> ||
-     std::is_constructible_v<typename operation_t::tensor_args_t, const Tensor&>);
-
 // Concept to check if compute_output_specs is available
 template <typename operation_t>
 concept HasComputeOutputSpecs = requires(
@@ -87,28 +79,11 @@ template <typename operation_t>
 concept HasSupportedLazyReturnType = std::same_as<typename operation_t::tensor_return_value_t, Tensor> ||
                                      std::same_as<typename operation_t::tensor_return_value_t, std::vector<Tensor>>;
 
-// Helper to check if a program factory has the standard create() method
-template <typename factory_t, typename operation_t>
-concept HasStandardCreateMethod = requires(
-    const typename operation_t::operation_attributes_t& attrs,
-    const typename operation_t::tensor_args_t& tensor_args,
-    typename operation_t::tensor_return_value_t& tensor_return_value) {
-    { factory_t::create(attrs, tensor_args, tensor_return_value) };
-};
-
-// Concept to check if program factories support standard create() method
-// This excludes mesh workload factories that use create_at() or create_mesh_workload()
-template <typename operation_t>
-concept HasStandardProgramFactories =
-    requires { typename operation_t::program_factory_t; } && []<typename... Ts>(std::variant<Ts...>*) {
-        return (HasStandardCreateMethod<Ts, operation_t> && ...);
-    }(static_cast<typename operation_t::program_factory_t*>(nullptr));
-
 // Main concept: can this operation be made lazy?
+// Since we store tensor_args directly (Tensor is shallow-copyable), we don't need reconstruction checks
+// We also don't need to check for specific program factories since we use the eager execution path
 template <typename operation_t>
-concept CanBeMadeLazy = PrimitiveOperationConcept<operation_t> && CanReconstructTensorArgs<operation_t> &&
-                        HasComputeOutputSpecs<operation_t> && HasSupportedLazyReturnType<operation_t> &&
-                        HasStandardProgramFactories<operation_t>;
+concept CanBeMadeLazy = PrimitiveOperationConcept<operation_t> && HasSupportedLazyReturnType<operation_t>;
 
 }  // namespace detail
 
@@ -156,7 +131,7 @@ private:
         ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data), cpp_fully_qualified_name.size());
         auto [operation_attributes, tensors_args] = operation_t::invoke(std::forward<decltype(args)>(args)...);
 
-        // Check if lazy mode is enabled
+        // TODO: we need to add option to mix lazy and non-lazy execution in the future.
         if (ttnn::lazy_mode::is_lazy_enabled()) {
             return invoke_lazy(operation_attributes, tensors_args);
         }
@@ -172,18 +147,6 @@ private:
             // Extract input tensors from tensor_args
             std::vector<Tensor> input_tensors =
                 ttnn::experimental::jit::object_to_vector<tensor_args_t, Tensor>(tensor_args);
-
-            // TODO: Do I need that?
-            // Filter out output tensors if present
-            // For most operations, output_tensor is std::optional and should be excluded
-            if constexpr (requires { tensor_args.output_tensor; }) {
-                if (tensor_args.output_tensor.has_value()) {
-                    // Remove the output tensor from inputs (it's typically at the end)
-                    if (!input_tensors.empty()) {
-                        input_tensors.pop_back();
-                    }
-                }
-            }
 
             // Create lazy operation wrapper
             auto lazy_op =
@@ -203,7 +166,8 @@ private:
             auto first_input_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
             auto device = first_input_tensor.device();
 
-            // TODO: Move this if constexprs to a separate function
+            // TODO: Move this if constexprs to a separate function.
+            // TODO: Add support for all kinds of returns
             if constexpr (std::same_as<tensor_return_value_t, Tensor>) {
                 // Single tensor output
                 TT_FATAL(!output_specs.empty(), "Expected at least one output spec");
