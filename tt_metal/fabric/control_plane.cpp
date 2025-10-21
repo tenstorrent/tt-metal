@@ -2339,7 +2339,6 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
     std::vector<PortDescriptor> ports_to_neighbor;
 
     std::unordered_map<uint64_t, RoutingDirection> curr_exit_node_direction;
-
     for (const auto& exit_node : exit_nodes) {
         FabricNodeId exit_node_fabric_node_id = this->get_fabric_node_id_from_asic_id(*exit_node.src_exit_node);
 

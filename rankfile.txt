@@ -2,3 +2,4 @@ rank 0=wh-glx-a03u02 slots=1
 rank 1=wh-glx-a03u08 slots=1
 rank 2=wh-glx-a03u14 slots=1
 rank 3=wh-glx-a04u08 slots=1
+rank 4=wh-glx-a04u14 slots=1
