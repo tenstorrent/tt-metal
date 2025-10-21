@@ -39,7 +39,6 @@ constexpr uint32_t cb_dgamma_components = tt::CBIndex::c_11;     // dgamma compo
 constexpr uint32_t cb_dbeta_components = tt::CBIndex::c_12;      // dbeta components
 
 // CBs with intermediate computations
-constexpr uint32_t cb_x_normalized_idx = tt::CBIndex::c_13;         // x_normalized (loaded from x_hat)
 constexpr uint32_t cb_dy_gamma_idx = tt::CBIndex::c_14;             // dy * gamma
 constexpr uint32_t cb_dy_gamma_sum_idx = tt::CBIndex::c_15;         // sum(dy * gamma)
 constexpr uint32_t cb_dy_gamma_xnorm_sum_idx = tt::CBIndex::c_16;   // sum(dy * gamma * x_normalized)
