@@ -97,7 +97,7 @@ Node build_node(
     HostId host_id,
     const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
     std::unordered_map<std::string, Node>& node_templates,
-    std::unordered_map<tt::umd::BoardType, Board>& board_templates) {
+    std::unordered_map<BoardType, Board>& board_templates) {
     const std::string& node_type = node_descriptor_name;
     auto it = node_templates.find(node_type);
     if (it != node_templates.end()) {
@@ -207,7 +207,7 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
     const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
     const std::string& instance_name,
     std::unordered_map<std::string, Node>& node_templates,
-    std::unordered_map<tt::umd::BoardType, Board>& board_templates) {
+    std::unordered_map<BoardType, Board>& board_templates) {
     auto resolved = std::make_unique<ResolvedGraphInstance>();
     resolved->template_name = graph_instance.template_name();
     resolved->instance_name = instance_name;
@@ -444,7 +444,11 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         {CableLength::UNKNOWN, "UNKNOWN"}};
 
     const std::unordered_map<tt::ARCH, std::string> speed_str = {
-        {tt::ARCH::WORMHOLE_B0, "400G"}, {tt::ARCH::BLACKHOLE, "800G"}, {tt::ARCH::Invalid, "UNKNOWN"}};
+        // TODO: BLACKHOLE cable speed 200G in early stages/validation, but should be able to support 800G in the
+        // future.
+        {tt::ARCH::WORMHOLE_B0, "400G"},
+        {tt::ARCH::BLACKHOLE, "400G"},
+        {tt::ARCH::Invalid, "UNKNOWN"}};
 
     // Unknown for lengths unable to be calculated (longer than avaiable cables, cross-aisle/hall, etc.)
 
@@ -454,8 +458,10 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
     CablingGenerator::get_all_connections_of_type(root_instance_, {PortType::QSFP_DD}, conn_list);
     output_file.fill('0');
     if (loc_info) {
-        output_file << "Source,,,,,,,,Destination,,,,,,,,Cable Length,Cable Type" << std::endl;
-        output_file << "Hall,Aisle,Rack,Shelf U,Tray,Port,Label,Node Type,Hall,Aisle,Rack,Shelf U,Tray,Port,Label,Node Type,," << std::endl;
+        output_file << "Source,,,,,,,,,Destination,,,,,,,,,Cable Length,Cable Type" << std::endl;
+        output_file << "Hostname,Hall,Aisle,Rack,Shelf U,Tray,Port,Label,Node Type,Hostname,Hall,Aisle,Rack,Shelf "
+                       "U,Tray,Port,Label,Node Type,,"
+                    << std::endl;
     } else {
         output_file << "Source,,,,Destination,,," << std::endl;
         output_file << "Hostname,Tray,Port,Node Type,Hostname,Tray,Port,Node Type" << std::endl;
@@ -472,30 +478,45 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         const auto& host1 = deployment_hosts_[host_id1];
         const auto& host2 = deployment_hosts_[host_id2];
 
+        // Create node_type strings with "_DEFAULT" suffix removed if present
+        const std::string suffix = "_DEFAULT";
+        std::string host1_node_type = host1.node_type;
+        if (host1_node_type.size() >= suffix.size() &&
+            host1_node_type.compare(host1_node_type.size() - suffix.size(), suffix.size(), suffix) == 0) {
+            host1_node_type = host1_node_type.substr(0, host1_node_type.size() - suffix.size());
+        }
+        std::string host2_node_type = host2.node_type;
+        if (host2_node_type.size() >= suffix.size() &&
+            host2_node_type.compare(host2_node_type.size() - suffix.size(), suffix.size(), suffix) == 0) {
+            host2_node_type = host2_node_type.substr(0, host2_node_type.size() - suffix.size());
+        }
+
         // Get arch from node
         // Assume arch for start and end are the same
         // This is validated in create_port_connection
         auto arch = host_id_to_node_.at(std::get<0>(start))->boards.at(std::get<1>(start)).get_arch();
 
-        CableLength cable_l = calc_cable_length(host1, host2);
+        CableLength cable_l = calc_cable_length(host1, tray_id1, host2, tray_id2, host1_node_type);
         if (loc_info) {
+            output_file << host1.hostname << ",";
             output_file << host1.hall << "," << host1.aisle << "," << std::setw(2) << host1.rack << ",U" << std::setw(2)
                         << host1.shelf_u << "," << tray_id1 << "," << port_id1 << ",";
 
             output_file << host1.hall << host1.aisle << std::setw(2) << host1.rack << "U" << std::setw(2)
-                        << host1.shelf_u << "-" << tray_id1 << "-" << port_id1 << "," << host1.node_type << ",";
+                        << host1.shelf_u << "-" << tray_id1 << "-" << port_id1 << "," << host1_node_type << ",";
 
+            output_file << host2.hostname << ",";
             output_file << host2.hall << "," << host2.aisle << "," << std::setw(2) << host2.rack << ",U" << std::setw(2)
                         << host2.shelf_u << "," << tray_id2 << "," << port_id2 << ",";
             output_file << host2.hall << host2.aisle << std::setw(2) << host2.rack << "U" << std::setw(2)
-                        << host2.shelf_u << "-" << tray_id2 << "-" << port_id2 << "," << host2.node_type << ",";
+                        << host2.shelf_u << "-" << tray_id2 << "-" << port_id2 << "," << host2_node_type << ",";
 
             output_file << cable_length_str.at(cable_l) << ",";
             output_file << speed_str.at(arch) << "_" << ((cable_l == CableLength::UNKNOWN) ? "Optical" : "AEC")
                         << std::endl;
         } else {
-            output_file << host1.hostname << "," << tray_id1 << "," << port_id1 << "," << host1.node_type << ",";
-            output_file << host2.hostname << "," << tray_id2 << "," << port_id2 << "," << host2.node_type << std::endl;
+            output_file << host1.hostname << "," << tray_id1 << "," << port_id1 << "," << host1_node_type << ",";
+            output_file << host2.hostname << "," << tray_id2 << "," << port_id2 << "," << host2_node_type << std::endl;
         }
     }
 
@@ -681,23 +702,32 @@ void CablingGenerator::get_all_connections_of_type(
     }
 }
 
-CableLength calc_cable_length(const Host& host1, const Host& host2) {
+CableLength calc_cable_length(
+    const Host& host1, int tray_id1, const Host& host2, int tray_id2, const std::string& node_type) {
     if (host1.hall != host2.hall) {
         return CableLength::UNKNOWN;
     } else if (host1.aisle != host2.aisle) {
         return CableLength::UNKNOWN;
     }
 
+    int tray_id_0 = tray_id1;
+    int tray_id_1 = tray_id2;
     int rack_0 = host1.rack;
-    int shelf_u_0 = host1.shelf_u;
     int rack_1 = host2.rack;
-    int shelf_u_1 = host2.shelf_u;
+
+    double tray_u_est_0 = host1.shelf_u;
+    double tray_u_est_1 = host2.shelf_u;
+    if (node_type.find("GALAXY") != std::string::npos) {
+        // 1.25 U per tray, 1 U at bottom of 6U shelf, BH_GALAXY has 8U shelves
+        tray_u_est_0 += (((4 - tray_id_0) * 1.25) + 1);
+        tray_u_est_1 += (((4 - tray_id_1) * 1.25) + 1);
+    }
 
     double standard_rack_w = 600.0;    // mm
     double standard_rack_u_h = 44.45;  // mm
 
     double rack_distance = std::abs(rack_0 - rack_1) * standard_rack_w;
-    double u_distance = std::abs(shelf_u_0 - shelf_u_1) * standard_rack_u_h;
+    double u_distance = std::abs(tray_u_est_0 - tray_u_est_1) * standard_rack_u_h;
 
     double cable_length = std::sqrt((rack_distance * rack_distance) + (u_distance * u_distance)) + 150;  // 150mm slack
 

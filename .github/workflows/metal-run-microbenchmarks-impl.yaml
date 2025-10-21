@@ -96,7 +96,7 @@ jobs:
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -105,9 +105,16 @@ jobs:
         timeout-minutes: 45
         run: ${{ matrix.test-group.cmd }}
       - name: Upload microbenchmark report csvs
-        uses: actions/upload-artifact@v4
+        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
+        if: ${{ !cancelled() }}
         with:
-          name: microbenchmark-report-csv-${{ join(matrix.test-group.name) }}
+          prefix: microbenchmark-report-csv-${{ join(matrix.test-group.name) }}
           path: /work/generated/profiler/.logs
+      - name: Upload generated test reports
+        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main

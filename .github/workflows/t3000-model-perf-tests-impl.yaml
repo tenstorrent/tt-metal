@@ -9,12 +9,6 @@ on:
       wheel-artifact-name:
         required: true
         type: string
-      build-artifact-profiler-name:
-        required: true
-        type: string
-      wheel-artifact-profiler-name:
-        required: true
-        type: string
       docker-image:
         required: true
         type: string
@@ -40,6 +34,7 @@ jobs:
       ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+      HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
     runs-on:
       - arch-wormhole_b0
       - config-t3000
@@ -57,7 +52,7 @@ jobs:
         with:
           name: ${{ inputs.build-artifact-name }}
       - name: Extract files
-        run: tar -xvf ttm_any.tar
+        run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
@@ -78,6 +73,7 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e HF_HOME=/mnt/MLPerf/huggingface
             -v /mnt/MLPerf:/mnt/MLPerf:ro
           install_wheel: true
           run_args: |
@@ -131,6 +127,7 @@ jobs:
       ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+      HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
     runs-on:
       - arch-wormhole_b0
       - config-t3000
@@ -146,14 +143,14 @@ jobs:
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
-          name: ${{ inputs.build-artifact-profiler-name }}
+          name: ${{ inputs.build-artifact-name }}
       - name: Extract files
-        run: tar -xvf ttm_any.tar
+        run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
-          name: ${{ inputs.wheel-artifact-profiler-name }}
+          name: ${{ inputs.wheel-artifact-name }}
       - name: Enable Performance mode
         run: |
           sudo cpupower frequency-set -g performance
@@ -169,6 +166,7 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
             -v /mnt/MLPerf:/mnt/MLPerf:ro
           install_wheel: true
           run_args: |

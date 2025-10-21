@@ -93,6 +93,10 @@ def test_model_inference(
         if num_layers != 1 and seq_len != 4096:
             pytest.skip("CI only runs full model for 4k seq len to reduce CI pipeline load")
 
+        hf_model_env = os.getenv("HF_MODEL", "")
+        if ("Llama" in hf_model_env) and ("Vision" in hf_model_env) and (num_layers is None):
+            pytest.skip("Skipping Llama Vision full model test: no CrossAttention functionality in this test.")
+
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     dtype = ttnn.bfloat8_b
     batch_size = 1  # For prefill we only support batch_size = 1
