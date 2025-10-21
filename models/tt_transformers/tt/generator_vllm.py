@@ -6,6 +6,7 @@ import os
 from typing import List, Mapping, Optional, Sequence, Union
 
 import torch
+import vllm.envs as envs
 from llama_models.llama3.api.chat_format import create_vision_mask
 from loguru import logger
 from PIL.Image import Image
@@ -518,7 +519,7 @@ class MultiModalProcessor(BaseMultiModalProcessor):
 
 
 @MULTIMODAL_REGISTRY.register_processor(
-    Gemma3MultiModalProcessor if os.environ.get("VLLM_USE_V1", "0") == "1" else MultiModalProcessor,
+    Gemma3MultiModalProcessor if envs.VLLM_USE_V1 else MultiModalProcessor,
     info=Gemma3ProcessingInfo,
     dummy_inputs=Gemma3DummyInputsBuilder,
 )
@@ -556,7 +557,7 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         return self.model_args[0].model_cache_path
 
     def prefill_forward(self, *args, **kwargs):
-        if os.environ.get("VLLM_USE_V1", "0") != "1":
+        if envs.VLLM_USE_V1:
             data = kwargs.get("images", None)
             kwargs["pixel_values"] = (
                 [im.pixel_values if hasattr(im, "pixel_values") else None for im in data] if data else None
