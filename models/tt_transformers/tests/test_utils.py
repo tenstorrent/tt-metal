@@ -65,10 +65,11 @@ def get_ref_model_dype(ref_model, model_name):
     return default_dype
 
 
-###### UTIL FUNCTIONS FOR DEVICE PERF
+### UTIL FUNCTIONS FOR DEVICE PERF
 
 
 def build_duration_dict(raw_dict, column_name):
+    """Build a dictionary of op codes to list of durations."""
     op_code_dict = {}
     for entry in raw_dict:
         if column_name not in entry:
@@ -82,6 +83,7 @@ def build_duration_dict(raw_dict, column_name):
 
 
 def build_duration_per_instance_dict(input_dict, num_layers):
+    """Build a dictionary of op codes to list of durations per instance."""
     per_instance_dict = {}
     for op_code in input_dict:
         num_ops_with_op_code = len(input_dict[op_code])
@@ -217,3 +219,115 @@ def aggregate_per_instance_dict(input_dict, agg_fn, default=0):
         clean_values = [v if v is not None else 0 for v in values]
         result[key] = agg_fn(clean_values) if clean_values else default
     return result
+
+
+def split_compile_and_trace(
+    df: pd.DataFrame,
+    num_head_ops: int = 0,
+    num_tail_ops: int = 0,
+    mode: str = "prefill",
+    num_runs: int = 1,
+    num_layers: int = None,
+    tail_start_index: int = None,
+):
+    """
+    Split a concatenated ops DataFrame into compile and runtime-trace segments,
+    and further partition those into first layer, mid layers, and model tail DataFrames.
+
+    The ops CSV typically contains three consecutive phases: compile, capture/trace,
+    and runtime trace. When an extra sampling compile pass is present (to enable
+    random sampling), it contributes a fixed number of rows that should not be used
+    to determine the thirds split.
+
+    Parameters:
+        df:                the input DataFrame (all ops)
+        num_tail_ops:      fixed rows from a sampling-only compile run (excluded from thirds logic)
+        num_runs:          number of runs in the CSV (typically 3: compile, capture, trace)
+        num_layers:        number of core layers to partition (required for further splits)
+        op_start_index:    slice index for start of core layers region (inclusive)
+        op_end_index:      slice index for end of core layers region (exclusive)
+        tail_start_index:  slice index for start of model tail ops (e.g. lmhead+sampling)
+
+    Returns:
+        (
+            df_model_compilation, df_model_trace,
+            df_first_layer_compilation, df_first_layer_trace,
+            df_mid_layers_compilation, df_mid_layers_trace,
+            df_model_tail_compilation, df_model_tail_trace
+        )
+        Any of the additional outputs may be None if slicing arguments are not provided.
+    """
+    adjusted_len = len(df)
+    first_run_end = int(adjusted_len / num_runs)
+    last_run_start = int((num_runs - 1) * (adjusted_len / num_runs))
+
+    df_model_compilation = df[:first_run_end]
+    df_model_trace = df[last_run_start:]
+
+    # Excluding model embeddings and tail ops
+    # [op_start_index:op_end_index] = all core layers region
+    op_start_index = num_head_ops
+    op_end_index = len(df_model_compilation) - num_tail_ops
+    df_layers_compilation = df_model_compilation[op_start_index:op_end_index]
+    df_layers_trace = df_model_trace[op_start_index:op_end_index]
+
+    # First layer: always first 'len/num_layers'
+    split_point = int(len(df_layers_compilation) / num_layers)
+    df_first_layer_compilation = df_layers_compilation[:split_point]
+    df_first_layer_trace = df_layers_trace[:split_point]
+
+    # Mid layers: remainder of layers region
+    if num_layers > 1:
+        df_mid_layers_compilation = df_layers_compilation[split_point:]
+        df_mid_layers_trace = df_layers_trace[split_point:]
+    else:
+        df_mid_layers_compilation = None
+        df_mid_layers_trace = None
+
+    # Model tail ops (e.g. lmhead/sampling): [tail_start_index:]
+    if tail_start_index is not None:
+        df_model_tail_compilation = df_model_compilation[tail_start_index:]
+        df_model_tail_trace = df_model_trace[tail_start_index:]
+    else:
+        df_model_tail_compilation = None
+        df_model_tail_trace = None
+
+    return (
+        df_model_compilation,
+        df_model_trace,
+        df_first_layer_compilation,
+        df_first_layer_trace,
+        df_mid_layers_compilation,
+        df_mid_layers_trace,
+        df_model_tail_compilation,
+        df_model_tail_trace,
+    )
+
+
+def verify_value_within_margin(value, target, margin, op_code_with_id, perf_type):
+    upper_limit = target + margin * target
+    lower_limit = target - margin * target
+
+    passing = True
+
+    if value > upper_limit:
+        passing = False
+        logger.warning(
+            f"{op_code_with_id} {perf_type}: {value} ns is larger than target "
+            f"({target}) ns, difference: "
+            f"{abs(value - upper_limit)} ns, margin: "
+            f"{margin}, "
+            f"relative margin to pass would be: "
+            f"{(abs(target - value) / target) if target != 0 else -1}"
+        )
+    elif value < lower_limit:
+        passing = False
+        logger.warning(
+            f"{op_code_with_id} {perf_type}: {value} ns is smaller than target "
+            f"({target}) ns, difference: "
+            f"{abs(value - lower_limit)} ns, margin: "
+            f"{margin}, "
+            f"relative margin to pass would be: "
+            f"{(abs(target - value) / target) if target != 0 else -1}"
+        )
+    return passing

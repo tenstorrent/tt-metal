@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
+import json as _json
+from argparse import ArgumentTypeError
 
 import pytest
 
@@ -14,6 +16,36 @@ def ensure_gc():
 
 
 def pytest_addoption(parser):
+    def parse_json_dict(value):
+        try:
+            obj = _json.loads(value)
+        except Exception as e:
+            raise ArgumentTypeError(f"Invalid JSON for dict option: {value}") from e
+        if not isinstance(obj, dict):
+            raise ArgumentTypeError("Option value must be a JSON object (e.g., '{\"k\": 1}')")
+        return obj
+
+    parser.addoption("--input_prompts", action="store", help="input prompts json file")
+    parser.addoption("--instruct", action="store", type=int, help="Use instruct weights")
+    parser.addoption("--repeat_batches", action="store", type=int, help="Number of consecutive batches of users to run")
+    parser.addoption("--max_seq_len", action="store", type=int, help="Maximum context length supported by the model")
+    parser.addoption("--batch_size", action="store", type=int, help="Number of users in a batch ")
+    parser.addoption(
+        "--max_generated_tokens", action="store", type=int, help="Maximum number of tokens to generate for each user"
+    )
+    parser.addoption("--data_parallel", action="store", type=int, help="Number of data parallel workers")
+    parser.addoption(
+        "--paged_attention", action="store", type=bool, help="Whether to use paged attention or default attention"
+    )
+    parser.addoption(
+        "--page_params", action="store", type=parse_json_dict, help="Page parameters for paged attention (JSON object)"
+    )
+    parser.addoption(
+        "--sampling_params", action="store", type=parse_json_dict, help="Sampling parameters for decoding (JSON object)"
+    )
+    parser.addoption(
+        "--stop_at_eos", action="store", type=int, help="Whether to stop decoding when the model generates an EoS token"
+    )
     parser.addoption(
         "--optimizations",
         action="store",
@@ -21,11 +53,38 @@ def pytest_addoption(parser):
         type=parse_optimizations,
         help="Precision and fidelity configuration diffs over default (i.e., accuracy)",
     )
-
     parser.addoption(
         "--decoder_config_file",
         action="store",
         default=None,
         type=str,
         help="Provide a JSON file defining per-decoder precision and fidelity settings",
+    )
+    parser.addoption(
+        "--token_accuracy",
+        action="store",
+        default=False,
+        type=bool,
+        help="Whether to compute top1 and top5 exact token matching accuracy",
+    )
+    parser.addoption(
+        "--stress_test",
+        action="store",
+        default=False,
+        type=bool,
+        help="Run stress test (same decode iteration over a large number of iterations",
+    )
+    parser.addoption(
+        "--enable_trace",
+        action="store",
+        default=None,
+        type=bool,
+        help="Whether to enable tracing",
+    )
+    parser.addoption(
+        "--num_layers",
+        action="store",
+        default=None,
+        type=int,
+        help="Number of layers to use",
     )
