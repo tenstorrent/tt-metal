@@ -144,57 +144,19 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
         return physical_system_descriptor;
     } else {
         log_output_rank0("Running Physical Discovery");
+        constexpr bool run_discovery = true;
         auto& context = tt::tt_metal::MetalContext::instance();
-        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& driver = context.get_cluster().get_driver();
         auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
-            cluster.get_driver(),
+            driver,
             context.get_distributed_context_ptr(),
             &context.hal(),
             context.rtoptions().get_mock_enabled(),
-            true);
+            run_discovery);
         log_output_rank0("Physical Discovery Complete");
         log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
         return physical_system_descriptor;
     }
-}
-
-AsicTopology generate_missing_asic_topology(
-    std::set<PhysicalChannelConnection> missing_physical_connections,
-    PhysicalSystemDescriptor& physical_system_descriptor) {
-    AsicTopology asic_topology;
-    std::unordered_map<tt_metal::AsicID, std::set<tt_metal::AsicID>> visited;
-    std::unordered_map<tt_metal::AsicID, std::unordered_map<tt_metal::AsicID, uint32_t>> visited_idx;
-    for (const auto& connection : missing_physical_connections) {
-        auto src = connection.first;
-        auto dst = connection.second;
-        auto src_asic_id = physical_system_descriptor.get_asic_id(
-            src.hostname, tt_metal::TrayID(*src.tray_id), tt_metal::ASICLocation(src.asic_channel.asic_location));
-        auto dst_asic_id = physical_system_descriptor.get_asic_id(
-            dst.hostname, tt_metal::TrayID(*dst.tray_id), tt_metal::ASICLocation(dst.asic_channel.asic_location));
-        if (visited[src_asic_id].find(dst_asic_id) == visited[src_asic_id].end()) {
-            asic_topology[src_asic_id].push_back(
-                {dst_asic_id,
-                 {EthConnection(
-                     *src.asic_channel.channel_id, *dst.asic_channel.channel_id, src.hostname == dst.hostname)}});
-            visited[src_asic_id].insert(dst_asic_id);
-            visited_idx[src_asic_id][dst_asic_id] = asic_topology[src_asic_id].size() - 1;
-        } else {
-            asic_topology[src_asic_id][visited_idx[src_asic_id][dst_asic_id]].second.push_back(EthConnection(
-                *src.asic_channel.channel_id, *dst.asic_channel.channel_id, src.hostname == dst.hostname));
-        }
-        if (visited[dst_asic_id].find(src_asic_id) == visited[dst_asic_id].end()) {
-            asic_topology[dst_asic_id].push_back(
-                {src_asic_id,
-                 {EthConnection(
-                     *dst.asic_channel.channel_id, *src.asic_channel.channel_id, src.hostname == dst.hostname)}});
-            visited[dst_asic_id].insert(src_asic_id);
-            visited_idx[dst_asic_id][src_asic_id] = asic_topology[dst_asic_id].size() - 1;
-        } else {
-            asic_topology[dst_asic_id][visited_idx[dst_asic_id][src_asic_id]].second.push_back(EthConnection(
-                *dst.asic_channel.channel_id, *src.asic_channel.channel_id, src.hostname == dst.hostname));
-        }
-    }
-    return asic_topology;
 }
 
 AsicTopology validate_connectivity(const InputArgs& input_args, PhysicalSystemDescriptor& physical_system_descriptor) {
@@ -211,7 +173,7 @@ AsicTopology validate_connectivity(const InputArgs& input_args, PhysicalSystemDe
     auto missing_physical_connections = tt::scaleout_tools::validate_fsd_against_gsd(
         get_factory_system_descriptor_path(input_args), gsd_yaml_path, true, input_args.fail_on_warning, log_output);
     log_output_rank0("Factory System Descriptor (Golden Representation) Validation Complete");
-    return generate_missing_asic_topology(missing_physical_connections, physical_system_descriptor);
+    return generate_asic_topology_from_connections(missing_physical_connections, physical_system_descriptor);
 }
 
 void print_usage_info() {
@@ -267,16 +229,11 @@ int main(int argc, char* argv[]) {
     // Create physical system descriptor and discover the system
     auto physical_system_descriptor = generate_physical_system_descriptor(input_args);
 
-    AsicTopology missing_asic_topology = {};
-    bool first_iter = true;
-    while (missing_asic_topology.size() or first_iter) {
-        missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
-        std::cout << "Resetting Ethernet Links" << std::endl;
+    AsicTopology missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
+    while (missing_asic_topology.size()) {
         reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
-        std::cout << "Running Physical Discovery" << std::endl;
         physical_system_descriptor.run_discovery(true);
-        std::cout << "Physical Discovery Complete" << std::endl;
-        first_iter = false;
+        missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
     }
 
     eth_connections_healthy = generate_link_metrics(

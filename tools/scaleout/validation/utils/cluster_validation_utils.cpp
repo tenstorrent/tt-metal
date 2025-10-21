@@ -12,7 +12,6 @@
 #include <random>
 #include <thread>
 
-#include <factory_system_descriptor/utils.hpp>
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include "tools/scaleout/validation/utils/ethernet_link_metrics_serialization.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
@@ -970,66 +969,6 @@ void log_link_metrics(
     }
 }
 
-void reset_unhealthy_links(
-    const PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::vector<EthernetLinkMetrics>& unhealthy_links) {
-    if (unhealthy_links.empty()) {
-        return;
-    }
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    std::unordered_map<uint64_t, chip_id_t> asic_id_to_chip_id;
-
-    for (const auto& [chip_id, asic_id] : cluster.get_unique_chip_ids()) {
-        asic_id_to_chip_id[asic_id] = chip_id;
-    }
-    std::vector<uint32_t> set = {1};
-    std::unordered_map<uint64_t, std::set<uint8_t>> reset_cores;
-
-    for (const auto& link : unhealthy_links) {
-        auto src_asic = link.channel_identifier.asic_id;
-        auto src_chan = link.channel_identifier.channel;
-        auto src_chip = asic_id_to_chip_id[*src_asic];
-        auto [dst_asic, dst_chan] = physical_system_descriptor.get_connected_asic_and_channel(src_asic, src_chan);
-        auto dst_chip = asic_id_to_chip_id[*dst_asic];
-
-        if (reset_cores[*dst_asic].find(dst_chan) != reset_cores[*dst_asic].end()) {
-            TT_FATAL(
-                reset_cores[*src_asic].find(src_chan) != reset_cores[*src_asic].end(),
-                "Expected to channel {} on ASIC {} to be reset, but it is not",
-                +src_chan,
-                *src_asic);
-            continue;
-        }
-        reset_cores[*src_asic].insert(src_chan);
-        reset_cores[*dst_asic].insert(dst_chan);
-        const auto& src_soc_desc = cluster.get_soc_desc(src_chip);
-        const auto& dst_soc_desc = cluster.get_soc_desc(dst_chip);
-
-        auto src_logical_coord = src_soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
-        auto dst_logical_coord = dst_soc_desc.get_eth_core_for_channel(dst_chan, CoordSystem::LOGICAL);
-        auto src_virtual_coord =
-            cluster.get_virtual_coordinate_from_logical_coordinates(src_chip, src_logical_coord, CoreType::ETH);
-        auto dst_virtual_coord =
-            cluster.get_virtual_coordinate_from_logical_coordinates(dst_chip, dst_logical_coord, CoreType::ETH);
-
-        // Issue reset on both channels
-        std::cout << "Resetting unhealthy links: " << +src_chan << " on " << *src_asic << " " << +dst_chan << " on "
-                  << *dst_asic << std::endl;
-        cluster.write_core(src_chip, src_virtual_coord, set, 0x1EFC);
-        cluster.write_core(dst_chip, dst_virtual_coord, set, 0x1EFC);
-
-        // Stall until reset has been acknowledged by both channels
-        bool reset = false;
-        while (!reset) {
-            std::vector<uint32_t> reset_0 = {0};
-            std::vector<uint32_t> reset_1 = {0};
-            cluster.read_core(reset_0, sizeof(uint32_t), tt_cxy_pair(src_chip, src_virtual_coord), 0x1EFC);
-            cluster.read_core(reset_1, sizeof(uint32_t), tt_cxy_pair(dst_chip, dst_virtual_coord), 0x1EFC);
-            reset = !(reset_0[0] || reset_1[0]);
-        }
-    }
-}
-
 void point_to_point_barrier(const ResetPair& reset_pair) {
     auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     TT_FATAL(
@@ -1201,8 +1140,15 @@ void reset_ethernet_links(
                 }
                 reset_cores[*asic_id].insert(src_chan);
                 reset_cores[*dst_asic_id].insert(dst_chan);
-                std::cout << "Resetting: " << +src_chan << " on " << *asic_id << " " << +dst_chan << " on "
-                          << *dst_asic_id << std::endl;
+                const auto& asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(asic_id);
+                const auto& dst_asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(dst_asic_id);
+                log_output_rank0(
+                    "Host: " + asic_descriptor.host_name + " Resetting Link " + std::to_string(src_chan) + " on " +
+                    " Tray: " + std::to_string(*asic_descriptor.tray_id) + " Location: " +
+                    std::to_string(*asic_descriptor.asic_location) + " and Link: " + std::to_string(dst_chan) + " on " +
+                    " Tray: " + std::to_string(*dst_asic_descriptor.tray_id) +
+                    " Location: " + std::to_string(*dst_asic_descriptor.asic_location));
+
                 reset_local_link(src_chip_id, dst_chip_id, src_chan, dst_chan);
             }
         }
@@ -1214,6 +1160,7 @@ void reset_ethernet_links(
     std::vector<ResetPair> cross_node_reset_pairs;
     std::unordered_map<uint32_t, std::vector<EthChannelIdentifier>> ordered_exit_nodes;
     std::unordered_map<uint32_t, std::vector<ResetPair>> ordered_reset_pairs;
+    std::unordered_map<uint64_t, std::unordered_set<uint64_t>> paired_asic_ids;
 
     for (const auto& host : physical_system_descriptor.get_all_hostnames()) {
         ordered_exit_nodes[physical_system_descriptor.get_rank_for_hostname(host)] =
@@ -1226,6 +1173,11 @@ void reset_ethernet_links(
             auto src_host_rank = physical_system_descriptor.get_rank_for_hostname(
                 physical_system_descriptor.get_host_name_for_asic(asic_id));
             for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
+                if (paired_asic_ids.find(*dst_asic_id) != paired_asic_ids.end() and
+                    paired_asic_ids[*dst_asic_id].find(*asic_id) != paired_asic_ids[*dst_asic_id].end()) {
+                    continue;
+                }
+                paired_asic_ids[*asic_id].insert(*dst_asic_id);
                 auto dst_host_rank = physical_system_descriptor.get_rank_for_hostname(
                     physical_system_descriptor.get_host_name_for_asic(dst_asic_id));
                 if (src_host_rank == dst_host_rank) {
@@ -1261,7 +1213,11 @@ void reset_ethernet_links(
         const auto& src_soc_desc = cluster.get_soc_desc(src_chip_id);
         auto src_coord = cluster.get_virtual_coordinate_from_logical_coordinates(
             src_chip_id, src_soc_desc.get_eth_core_for_channel(link.channel, CoordSystem::LOGICAL), CoreType::ETH);
-        std::cout << "Resetting: " << +link.channel << " on " << *link.asic_id << std::endl;
+        const auto& asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(link.asic_id);
+        log_output_rank0(
+            "Resetting Cross-Node Link " + std::to_string(link.channel) + " on " + std::to_string(*link.asic_id) +
+            " Host: " + asic_descriptor.host_name + " Tray: " + std::to_string(*asic_descriptor.tray_id) +
+            " Location: " + std::to_string(*asic_descriptor.asic_location));
         point_to_point_barrier(reset_pair);
         cluster.write_core(src_chip_id, src_coord, set, 0x1EFC);
         std::vector<uint32_t> reset = {1};
@@ -1315,6 +1271,44 @@ bool generate_link_metrics(
     }
     log_link_metrics(result.unhealthy_links, output_path, false);
     return result.unhealthy_links.empty();
+}
+
+AsicTopology generate_asic_topology_from_connections(
+    std::set<PhysicalChannelConnection> physical_connections, PhysicalSystemDescriptor& physical_system_descriptor) {
+    AsicTopology asic_topology;
+    std::unordered_map<tt_metal::AsicID, std::set<tt_metal::AsicID>> visited;
+    std::unordered_map<tt_metal::AsicID, std::unordered_map<tt_metal::AsicID, uint32_t>> visited_idx;
+    for (const auto& connection : physical_connections) {
+        auto src = connection.first;
+        auto dst = connection.second;
+        auto src_asic_id = physical_system_descriptor.get_asic_id(
+            src.hostname, tt_metal::TrayID(*src.tray_id), tt_metal::ASICLocation(src.asic_channel.asic_location));
+        auto dst_asic_id = physical_system_descriptor.get_asic_id(
+            dst.hostname, tt_metal::TrayID(*dst.tray_id), tt_metal::ASICLocation(dst.asic_channel.asic_location));
+        if (visited[src_asic_id].find(dst_asic_id) == visited[src_asic_id].end()) {
+            asic_topology[src_asic_id].push_back(
+                {dst_asic_id,
+                 {EthConnection(
+                     *src.asic_channel.channel_id, *dst.asic_channel.channel_id, src.hostname == dst.hostname)}});
+            visited[src_asic_id].insert(dst_asic_id);
+            visited_idx[src_asic_id][dst_asic_id] = asic_topology[src_asic_id].size() - 1;
+        } else {
+            asic_topology[src_asic_id][visited_idx[src_asic_id][dst_asic_id]].second.push_back(EthConnection(
+                *src.asic_channel.channel_id, *dst.asic_channel.channel_id, src.hostname == dst.hostname));
+        }
+        if (visited[dst_asic_id].find(src_asic_id) == visited[dst_asic_id].end()) {
+            asic_topology[dst_asic_id].push_back(
+                {src_asic_id,
+                 {EthConnection(
+                     *dst.asic_channel.channel_id, *src.asic_channel.channel_id, src.hostname == dst.hostname)}});
+            visited[dst_asic_id].insert(src_asic_id);
+            visited_idx[dst_asic_id][src_asic_id] = asic_topology[dst_asic_id].size() - 1;
+        } else {
+            asic_topology[dst_asic_id][visited_idx[dst_asic_id][src_asic_id]].second.push_back(EthConnection(
+                *dst.asic_channel.channel_id, *src.asic_channel.channel_id, src.hostname == dst.hostname));
+        }
+    }
+    return asic_topology;
 }
 
 }  // namespace tt::scaleout_tools
