@@ -10,7 +10,6 @@
 constexpr uint32_t cb_dx_idx = tt::CBIndex::c_10;                // dx (input gradient)
 constexpr uint32_t cb_dgamma_components = tt::CBIndex::c_11;     // dgamma components
 constexpr uint32_t cb_dbeta_components = tt::CBIndex::c_12;      // dbeta components
-constexpr uint32_t cb_debug_scaled_sum_idx = tt::CBIndex::c_21;  // DEBUG: scaled dy*gamma sum
 
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 constexpr uint32_t Wt = get_compile_time_arg_val(1);
@@ -53,19 +52,8 @@ void kernel_main() {
         // NOTE: The final dL_dgamma and dL_dbeta (gradients w.r.t. gamma and beta) require
         // reduction across batches, which is performed on the host. Here, we output the
         // per-tile components for host-side reduction.
-        // if (r == end_row-1) {
-        //     DPRINT << "WRITER: Processing row printing cb_debug_scaled_sum_idx " << r << ENDL();
-        //     cb_wait_front(cb_debug_scaled_sum_idx, 1);
-        //     print_tile(cb_debug_scaled_sum_idx, 0, false);
-        // }
         for (uint32_t c = 0; c < Wt; c += block_size) {
-            // DEBUG: Print row number
             uint32_t start_idx = (r * Wt) + c;
-            // if (c == 0) {
-            //     DPRINT << "WRITER: Processing row printing cb_debug_scaled_sum_idx " << r << ENDL();
-            //     cb_wait_front(cb_debug_scaled_sum_idx, 1);
-            //     print_tile(cb_debug_scaled_sum_idx, 0, false);
-            // }
 
             // Write dx block
             write_cb_block_to_dram(cb_dx_idx, dx_output_addr_generator, start_idx, block_size, tile_bytes);
