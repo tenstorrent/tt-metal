@@ -354,6 +354,7 @@ def run_llama3_demo(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    #ttnn.ReadDeviceProfiler(mesh_device)
 
     # Compile
     logger.info(f"Compiling model trace...")
@@ -363,9 +364,13 @@ def run_llama3_demo(
         num_compile_iters = 2
     else:
         num_compile_iters = 1
+    
+    num_compile_iters = 1
+    print("-------------------------", num_compile_iters)
     for i in range(num_compile_iters):
         tt_decode_input = tt_embd(tt_out_tok)
         logger.info(f"tt_decode_input done")
+        #ttnn.ReadDeviceProfiler(mesh_device)
 
         tt_out = tt_model(
             tt_decode_input,
@@ -374,10 +379,12 @@ def run_llama3_demo(
             mode="decode",
             page_table=page_table_tt,
         )
+        #ttnn.ReadDeviceProfiler(mesh_device)
 
         # Sampling
         _ = tt_sampling(tt_out[0], seed, tt_out_tok=tt_out_tok)  # Compile once with setting the seed
         logger.info(f"Sampling done")
+        #ttnn.ReadDeviceProfiler(mesh_device)
 
     if not stress_test:
         ttnn.plus_one(
@@ -394,6 +401,7 @@ def run_llama3_demo(
     )  # Compile again without seed to obtain random sampling; at this position to simplify test_decoder_device_perf.py
 
     # Capture Trace
+    #ttnn.ReadDeviceProfiler(mesh_device)
     logger.info(f"Capturing model trace...")
     profiler.start(f"capture_trace")
 
@@ -467,6 +475,7 @@ def run_llama3_demo(
 
     logger.info(f"Starting decode loop in trace mode...")
     profiler.start(f"inference_decode", iteration=iteration)
+    #ttnn.ReadDeviceProfiler(mesh_device)
 
     # Determine TSU threshold based on layer count
     tsu_thresholds = TSU_THRESHOLDS[galaxy_type].get(
@@ -586,6 +595,7 @@ def run_llama3_demo(
     # Finish profiling at the end of all batches inference
     profiler.end(profiler_step_name)
     profiler.end("run")
+    ttnn.ReadDeviceProfiler(mesh_device)
 
     if is_ci_env and tokens_per_second_per_user_token127 is not None:
         benchmark_data.add_measurement(profiler, 0, profiler_step_name, "tsu_e2e", tokens_per_second_per_user_token127)

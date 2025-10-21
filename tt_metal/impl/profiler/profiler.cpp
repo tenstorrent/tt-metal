@@ -21,7 +21,9 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 
 #include <tt_stl/assert.hpp>
@@ -385,12 +387,11 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
     using EMD = KernelProfilerNocEventMetadata;
     std::unordered_map<RuntimeID, std::vector<tracy::TTDeviceMarker>> markers_by_opname;
     // Pass 1: separate out start/end zones and noc events from markers and group by runtime id
+    // TODO: need to separate TS_DATA markers from zones since they can interfere with coalescing; for now dsiabling zones
     for (const tracy::TTDeviceMarker& marker : device_markers) {
         if (isMarkerAZoneEndpoint(marker)) {
-            if (marker.marker_name != "SYNC-ZONE-SENDER" && marker.marker_name != "SYNC-ZONE-RECEIVER" &&
-                !marker.marker_name.ends_with("-FW") &&
-                (!marker.marker_name.ends_with("-KERNEL") || marker.risc == tracy::RiscType::BRISC ||
-                 marker.risc == tracy::RiscType::NCRISC)) {
+            if ((marker.risc == tracy::RiscType::BRISC || marker.risc == tracy::RiscType::NCRISC) &&
+                (marker.marker_name.starts_with("TRUE-KERNEL-END") || marker.marker_name.ends_with("-KERNEL"))) {
                 markers_by_opname[marker.runtime_host_id].push_back(marker);
             }
         } else if (isMarkerATimestampedDatapoint(marker)) {
@@ -423,7 +424,7 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
 
         for (size_t i = 0; i < markers.size(); /* manual increment */) {
             // If it is a zone, simply copy existing event as-is
-            if (isMarkerAZoneEndpoint(markers[i])) {
+            if (!isMarkerATimestampedDatapoint(markers[i])) {
                 coalesced_events_by_opname[runtime_id].push_back(markers[i]);
                 i += 1;
                 continue;
@@ -471,9 +472,58 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
                         "[profiler noc tracing] Failed to coalesce fabric noc trace events in op '{}': "
                         "missing routing fields event and/or local write. {}, {}",
                         markers[i].op_name,
-                        EMD(markers[i + 1].data).data.raw_event.noc_xfer_type,
-                        EMD(markers[i + 2].data).data.raw_event.noc_xfer_type);
+                        i + 1,
+                        i + 2);
                     i += 1;
+
+                    // Dump markers to JSON file
+                    nlohmann::json marker_json_array = nlohmann::json::array();
+                    for (size_t idx = 0; idx < markers.size(); ++idx) {
+                        const auto& marker = markers[idx];
+                        using EMD = KernelProfilerNocEventMetadata;
+                        EMD emd_data(marker.data);
+                        
+                        // Copy bit-field values to avoid binding issues
+                        uint64_t remaining_data = emd_data.data.raw_event.remaining_data;
+                        auto noc_xfer_type_enum = static_cast<EMD::NocEventType>(emd_data.data.raw_event.noc_xfer_type);
+                        
+                        nlohmann::json marker_json = {
+                            {"index", idx},
+                            {"chip_id", marker.chip_id},
+                            {"marker_id", marker.marker_id},
+                            {"timestamp", marker.timestamp},
+                            {"marker_type", enchantum::to_string(marker.marker_type)},
+                            {"data_emd", {
+                                {"noc_xfer_type", static_cast<int>(noc_xfer_type_enum)},
+                                {"noc_xfer_type_name", enchantum::to_string(noc_xfer_type_enum)},
+                                {"remaining_data", remaining_data}
+                            }},
+                            {"op_name", marker.op_name},
+                            {"core_x", marker.core_x},
+                            {"core_y", marker.core_y},
+                            {"risc", enchantum::to_string(marker.risc)},
+                            {"runtime_host_id", marker.runtime_host_id}
+                        };
+
+                        marker_json_array.push_back(marker_json);
+                    }
+                    
+                    // Generate filename with timestamp
+                    auto now = std::chrono::system_clock::now();
+                    auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+                    std::string filename = "marker_" + std::to_string(timestamp) + ".csv";
+                    
+                    // Write to marker file (despite the .csv extension, it's JSON format)
+                    std::ofstream marker_file(filename);
+                    if (marker_file.is_open()) {
+                        marker_file << marker_json_array.dump(2);
+                        marker_file.close();
+                        std::cout << "Marker data dumped to " << filename << std::endl;
+                    } else {
+                        std::cerr << "Failed to open " << filename << " for writing" << std::endl;
+                    }
+
+                    return {};
                     continue;
                 }
 
@@ -1774,6 +1824,28 @@ void DeviceProfiler::processResults(
     for (const auto& virtual_core : virtual_cores) {
         readRiscProfilerResults(device, virtual_core, data_source, metadata);
     }
+
+    /*
+    if (rtoptions.get_profiler_noc_events_enabled() &&
+        (state == ProfilerReadState::NORMAL || state == ProfilerReadState::LAST_FD_READ)) {
+
+        std::unordered_set<tracy::TTDeviceMarker> new_device_markers;
+        for (const auto& [core, risc_map] : device_markers_per_core_risc_map) {
+            for (const auto& [risc, device_markers] : risc_map) {
+                for (const tracy::TTDeviceMarker& marker : device_markers) {
+                    if (noc_trace_markers_processed.find(marker) == noc_trace_markers_processed.end()) {
+                        new_device_markers.insert(marker);
+                        noc_trace_markers_processed.insert(marker);
+                    }
+                }
+            }
+        }
+
+        std::unordered_map<RuntimeID, nlohmann::json::array_t> processed_markers_by_op_name =
+            convertNocTracePacketsToJson(new_device_markers, device_id, *routing_lookup, freq_scale, shift);
+        noc_trace_data.push_back(std::move(processed_markers_by_op_name));
+    }
+    */
 #endif
 }
 
