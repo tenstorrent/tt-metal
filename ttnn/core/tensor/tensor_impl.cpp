@@ -533,8 +533,6 @@ std::string to_string<bfloat4_b>(const Tensor& tensor) {
 // ======================================================================================
 
 HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
-    ZoneScopedN("AllocateBuffer");
-
     const size_t size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
 
     auto create_host_buffer = [size_bytes]<typename Type>() {
@@ -715,7 +713,6 @@ Tensor to_device(
 
 template <typename T>
 void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blocking, std::optional<ttnn::QueueId> cq_id) {
-    ZoneScoped;
     TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "Source tensor is not on device.");
     TT_FATAL(host_tensor.storage_type() == StorageType::HOST, "Destination tensor is not on host.");
     TT_FATAL(device_tensor.is_allocated(), "Buffer must be allocated on device.");
@@ -772,7 +769,6 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
 
 template <typename T>
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<ttnn::QueueId> cq_id) {
-    ZoneScoped;
     TT_FATAL(host_tensor.storage_type() == StorageType::HOST, "Source tensor is not on host.");
     TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "Destination tensor is not on device.");
     TT_FATAL(device_tensor.is_allocated(), "Buffer must be allocated on device.");

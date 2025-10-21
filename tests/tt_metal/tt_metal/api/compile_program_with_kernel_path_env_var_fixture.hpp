@@ -21,7 +21,7 @@ protected:
             GTEST_SKIP();
         }
 
-        const chip_id_t device_id = 0;
+        const tt::ChipId device_id = 0;
         this->device_ = tt::tt_metal::CreateDevice(device_id);
         this->program_ = tt::tt_metal::CreateProgram();
     }
@@ -68,6 +68,10 @@ private:
 
     bool are_env_vars_set() {
         bool are_set = true;
+        if (!tt::tt_metal::MetalContext::instance().rtoptions().is_root_dir_specified()) {
+            log_info(tt::LogTest, "Skipping test: TT_METAL_HOME must be set");
+            are_set = false;
+        }
         if (!tt::tt_metal::MetalContext::instance().rtoptions().is_kernel_dir_specified()) {
             log_info(tt::LogTest, "Skipping test: TT_METAL_KERNEL_PATH must be set");
             are_set = false;
