@@ -7,6 +7,7 @@
 #include <concepts>
 #include <optional>
 #include <random>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/indestructible.hpp>
 #include "ttnn/tensor/tensor.hpp"
@@ -197,10 +198,7 @@ void enqueue_mesh_workload(
     if (mesh_device_operation_utils::track_workload(workload, mesh_device)) {
         return;
     }
-    {
-        ZoneScopedN("EnqueueMeshWorkload");
-        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-    }
+    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     TracyOpMeshWorkload(
         mesh_device, workload, mesh_device_operation_t{}, operation_attributes, tensor_args, tensor_return_value);
@@ -231,7 +229,6 @@ void handle_mesh_adapter_cache_hit(
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     tt::stl::hash::hash_t program_hash) {
-    ZoneScopedN("Handle Mesh Adapter Cache Hit");
     mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
 
     auto& cached_program_factory = program_cache.get(program_hash);
@@ -261,7 +258,6 @@ void create_and_cache_mesh_workload(
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     tt::stl::hash::hash_t program_hash) {
-    ZoneScopedN("Handle Mesh Adapter Cache Miss");
     mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
 
     auto program_factory = mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args);
@@ -310,8 +306,6 @@ void launch_operation_with_adapter(
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     ttnn::MeshDevice* mesh_device) {
-    ZoneScopedN("Launch With MeshDeviceAdapter");
-
     // Skip if operation should be skipped
     if constexpr (HasSkipLaunch<mesh_device_operation_t>) {
         if (mesh_device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)) {
@@ -374,6 +368,9 @@ get_output_placements_and_shape(
         max_distribution_rank, tt::tt_metal::distributed::MeshMapperConfig::Replicate{});
     std::unordered_set<int> shard_dims;
     bool dim_mismatch = false;
+
+    // TODO: #25340 - Add back logging / validation. Currently, this results in a lot of log spam.
+    constexpr bool kEnableLogging = false;
     tt::stl::reflection::visit_object_of_type<Tensor>(
         [&](const Tensor& tensor) {
             // Augment output tensor distribution shape with the max strides of all input tensors with the max
@@ -402,7 +399,7 @@ get_output_placements_and_shape(
 
                                 // If a different tensor dim is sharded across this distribution dim, keep the
                                 // earliest-seen shard dimension.
-                                if (new_shard_placement.dim != existing_shard_placement.dim) {
+                                if (new_shard_placement.dim != existing_shard_placement.dim && kEnableLogging) {
                                     log_warning(
                                         tt::LogOp,
                                         "Output tensor cannot shard different tensor dimensions across the same "
@@ -415,7 +412,7 @@ get_output_placements_and_shape(
                                 continue;
                             }
                             output_placement = new_shard_placement;
-                        } else {
+                        } else if (kEnableLogging) {
                             log_warning(
                                 tt::LogOp,
                                 "Duplicate tensor shard dimension {} across distribution dim {} replaced with "
@@ -431,7 +428,7 @@ get_output_placements_and_shape(
             }
         },
         tensor_args);
-    if (dim_mismatch) {
+    if (dim_mismatch && kEnableLogging) {
         log_warning(
             tt::LogOp,
             "Input tensors have different distribution ranks, only imputing output tensor topology with tensors that "
@@ -444,8 +441,6 @@ template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t launch_on_device(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
-    ZoneScopedN("Launch Device Operation");
-
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
     if (!mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
         mesh_device_operation_utils::filter_tensor_shards(
@@ -474,8 +469,6 @@ template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t invoke(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
-    ZoneScopedN("Run Device Operation");
-
     // TODO: Add GraphTracker::instance().track_device_operation to track device operations specifically?
     tt::tt_metal::GraphTracker::instance().track_function_start(
         get_operation_name<device_operation_t>(operation_attributes), operation_attributes, tensor_args);
