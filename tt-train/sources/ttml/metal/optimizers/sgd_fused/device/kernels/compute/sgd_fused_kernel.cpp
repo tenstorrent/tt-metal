@@ -66,6 +66,7 @@ void MAIN {
     uint32_t weight_decay = get_arg_val<uint32_t>(runtime_args_counter++);
 
     init_sfpu(cb_grad_idx, cb_grad_idx);
+    binary_op_init_common(cb_param_in_idx, cb_update_idx, cb_output_idx);
 
     for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_core; tile_idx += block_size) {
         cb_wait_front(cb_grad_idx, block_size);
