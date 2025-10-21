@@ -208,6 +208,37 @@ static Tensor create_scalar_config_tensor(
     return Tensor(std::move(buffer), config_shape, DataType::UINT16, Layout::ROW_MAJOR);
 }
 
+std::vector<uint16_t> generate_core_starting_indices(
+    const std::vector<uint32_t>& op_trace_metadata,
+    const std::vector<sliding_window::ShardBoundary>& shard_boundaries,
+    const tt::tt_metal::TensorMemoryLayout shard_scheme,
+    const uint32_t num_cores_x,
+    const uint32_t ncores) {
+    std::vector<uint16_t> starting_indices;
+    uint32_t repeat_factor = 0;
+    switch (shard_scheme) {
+        case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED: repeat_factor = 1; break;
+        case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED: repeat_factor = ncores; break;
+        case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED: repeat_factor = num_cores_x; break;
+        default: TT_FATAL(false, "Unsupported shard scheme");
+    };
+    for (const auto& item : shard_boundaries) {
+        const auto& [output_shard_start, output_shard_end] = item.output_range;
+        const auto& [input_shard_start, input_shard_end] = item.input_range;
+        if (output_shard_start >= op_trace_metadata.size()) {
+            // this core has no output
+            starting_indices.push_back(0);
+            continue;
+        }
+        TT_ASSERT(input_shard_start == op_trace_metadata[output_shard_start]);
+        for (uint32_t r = 0; r < repeat_factor; r++) {
+            starting_indices.push_back(op_trace_metadata[output_shard_start]);
+        }
+    }
+
+    return starting_indices;
+}
+
 Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_new(
     Program& program,
     const Tensor& input,
@@ -386,41 +417,40 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_1, in_cb_pagesize, in_cb_npages);
     }
 
-    uint32_t idx_tmp_cb_id = 32;
-    uint32_t tile_tmp_cb_id = 32;
-    uint32_t tile_idx_tmp_cb_id = 32;
-    uint32_t right_inc_tmp_cb_id = 32;
-    uint32_t down_left_wrap_inc_tmp_cb_id = 32;
-    uint32_t up_left_wrap_inc_tmp_cb_id = 32;
+    uint32_t in_idx_cb_id = 32;
+    uint32_t pack_tmp_cb_id = 32;
+    uint32_t pack_idx_tmp_cb_id = 32;
+    uint32_t right_inc_cb_id = 32;
+    uint32_t down_left_wrap_inc_cb_id = 32;
+    uint32_t up_left_wrap_inc_cb_id = 32;
     uint16_t right_inc = 0;
     uint16_t down_left_wrap_inc = 0;
     uint16_t up_left_wrap_inc = 0;
     if (return_indices) {
         uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
-        idx_tmp_cb_id = next_cb_index++;
-        tt::tt_metal::create_cb(idx_tmp_cb_id, program, all_cores, params.nbytes * tile_elems, 1, params.index_format);
-        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", idx_tmp_cb_id, params.nbytes * tile_elems, 1);
-        tile_tmp_cb_id = next_cb_index++;
-        tt::tt_metal::create_cb(tile_tmp_cb_id, program, all_cores, params.nbytes * tile_elems, 1, params.data_format);
-        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", tile_tmp_cb_id, params.nbytes * tile_elems, 1);
-        tile_idx_tmp_cb_id = next_cb_index++;
+        in_idx_cb_id = next_cb_index++;
+        tt::tt_metal::create_cb(in_idx_cb_id, program, all_cores, params.nbytes * tile_elems, 1, params.index_format);
+        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_idx_cb_id, params.nbytes * tile_elems, 1);
+        pack_tmp_cb_id = next_cb_index++;
+        tt::tt_metal::create_cb(pack_tmp_cb_id, program, all_cores, params.nbytes * tile_elems, 1, params.data_format);
+        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", pack_tmp_cb_id, params.nbytes * tile_elems, 1);
+        pack_idx_tmp_cb_id = next_cb_index++;
         tt::tt_metal::create_cb(
-            tile_idx_tmp_cb_id, program, all_cores, params.index_nbytes * tile_elems, 1, params.index_format);
-        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", tile_idx_tmp_cb_id, params.index_nbytes * tile_elems, 1);
-        right_inc_tmp_cb_id = next_cb_index++;
+            pack_idx_tmp_cb_id, program, all_cores, params.index_nbytes * tile_elems, 1, params.index_format);
+        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", pack_idx_tmp_cb_id, params.index_nbytes * tile_elems, 1);
+        right_inc_cb_id = next_cb_index++;
         tt::tt_metal::create_cb(
-            right_inc_tmp_cb_id, program, all_cores, params.index_nbytes * tile_elems, 1, params.index_format);
-        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", right_inc_tmp_cb_id, params.index_nbytes * tile_elems, 1);
-        down_left_wrap_inc_tmp_cb_id = next_cb_index++;
+            right_inc_cb_id, program, all_cores, params.index_nbytes * tile_elems, 1, params.index_format);
+        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", right_inc_cb_id, params.index_nbytes * tile_elems, 1);
+        down_left_wrap_inc_cb_id = next_cb_index++;
         tt::tt_metal::create_cb(
-            down_left_wrap_inc_tmp_cb_id, program, all_cores, params.index_nbytes * tile_elems, 1, params.index_format);
+            down_left_wrap_inc_cb_id, program, all_cores, params.index_nbytes * tile_elems, 1, params.index_format);
         log_debug(
-            tt::LogOp, "CB {} :: PS = {}, NP = {}", down_left_wrap_inc_tmp_cb_id, params.index_nbytes * tile_elems, 1);
-        up_left_wrap_inc_tmp_cb_id = next_cb_index++;
+            tt::LogOp, "CB {} :: PS = {}, NP = {}", down_left_wrap_inc_cb_id, params.index_nbytes * tile_elems, 1);
+        up_left_wrap_inc_cb_id = next_cb_index++;
         tt::tt_metal::create_cb(
-            up_left_wrap_inc_tmp_cb_id, program, all_cores, params.index_nbytes * tile_elems, 1, params.index_format);
-        log_debug(
-            tt::LogOp, "CB {} :: PS = {}, NP = {}", up_left_wrap_inc_tmp_cb_id, params.index_nbytes * tile_elems, 1);
+            up_left_wrap_inc_cb_id, program, all_cores, params.index_nbytes * tile_elems, 1, params.index_format);
+        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", up_left_wrap_inc_cb_id, params.index_nbytes * tile_elems, 1);
 
         // compute increments for index tile population
         right_inc = stride_w;
@@ -568,12 +598,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_reader_indices_cb_id,        // 18
         in_scalar_cb_id_0,              // 19
         in_scalar_cb_id_1,              // 20
-        idx_tmp_cb_id,                  // 21
-        tile_tmp_cb_id,                 // 22
-        tile_idx_tmp_cb_id,             // 23
-        right_inc_tmp_cb_id,            // 24
-        down_left_wrap_inc_tmp_cb_id,   // 25
-        up_left_wrap_inc_tmp_cb_id,     // 26
+        in_idx_cb_id,                   // 21
+        pack_tmp_cb_id,                 // 22
+        pack_idx_tmp_cb_id,             // 23
+        right_inc_cb_id,                // 24
+        down_left_wrap_inc_cb_id,       // 25
+        up_left_wrap_inc_cb_id,         // 26
         clear_value_cb_id,              // 27
         (uint32_t)pool_type,            // 28
         one_scalar_per_core,            // 29
@@ -630,12 +660,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_cb_id_1,                     // 8
         in_scalar_cb_id_0,              // 9
         in_scalar_cb_id_1,              // 10
-        idx_tmp_cb_id,                  // 11
-        tile_tmp_cb_id,                 // 12
-        tile_idx_tmp_cb_id,             // 13
-        right_inc_tmp_cb_id,            // 14
-        down_left_wrap_inc_tmp_cb_id,   // 15
-        up_left_wrap_inc_tmp_cb_id,     // 16
+        in_idx_cb_id,                   // 11
+        pack_tmp_cb_id,                 // 12
+        pack_idx_tmp_cb_id,             // 13
+        right_inc_cb_id,                // 14
+        down_left_wrap_inc_cb_id,       // 15
+        up_left_wrap_inc_cb_id,         // 16
         out_cb_id,                      // 17
         out_idx_cb_id,                  // 18
         one_scalar_per_core,            // 19
@@ -843,8 +873,8 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         const uint32_t num_cores_x = input.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
         const uint32_t ncores = input.shard_spec().value().grid.num_cores();
         const TensorMemoryLayout shard_scheme = input.memory_config().memory_layout();
-        core_starting_indices = sliding_window::generate_core_starting_indices(
-            op_trace_metadata, shard_boundaries, shard_scheme, num_cores_x, ncores);
+        core_starting_indices =
+            generate_core_starting_indices(op_trace_metadata, shard_boundaries, shard_scheme, num_cores_x, ncores);
     }
 
     Tensor reader_indices = sliding_window::construct_on_host_config_tensor(top_left_indices, parallel_config);

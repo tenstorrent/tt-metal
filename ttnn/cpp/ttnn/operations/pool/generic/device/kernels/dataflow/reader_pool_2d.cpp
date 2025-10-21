@@ -106,8 +106,8 @@ template <
     uint32_t out_cb_id,
     uint32_t out_idx_cb_id,
     uint32_t reader_id,
-    uint32_t tile_tmp_cb_id,
-    uint32_t tile_idx_tmp_cb_id>
+    uint32_t pack_tmp_cb_id,
+    uint32_t pack_idx_tmp_cb_id>
 ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
     // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
@@ -213,19 +213,19 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 uint32_t output_faces =
                     c_i == in_nblocks_c - 1 ? num_faces_in_last_output_tile : num_faces_in_output_tile;
 
-                cb_wait_front(tile_tmp_cb_id, 1);
+                cb_wait_front(pack_tmp_cb_id, 1);
                 noc_async_read_one_packet(
-                    get_noc_addr(get_read_ptr(tile_tmp_cb_id)),
+                    get_noc_addr(get_read_ptr(pack_tmp_cb_id)),
                     get_write_ptr(out_cb_id),
                     output_faces * FACE_WIDTH * BYTES_PER_ELEM);
-                cb_wait_front(tile_idx_tmp_cb_id, 1);
+                cb_wait_front(pack_idx_tmp_cb_id, 1);
                 noc_async_read_one_packet(
-                    get_noc_addr(get_read_ptr(tile_idx_tmp_cb_id)),
+                    get_noc_addr(get_read_ptr(pack_idx_tmp_cb_id)),
                     get_write_ptr(out_idx_cb_id),
                     output_faces * FACE_WIDTH * BYTES_PER_ELEM);
                 noc_async_read_barrier();
-                cb_pop_front(tile_tmp_cb_id, 1);
-                cb_pop_front(tile_idx_tmp_cb_id, 1);
+                cb_pop_front(pack_tmp_cb_id, 1);
+                cb_pop_front(pack_idx_tmp_cb_id, 1);
 
                 cb_push_back(out_cb_id, output_faces);
                 if constexpr (return_indices) {
@@ -302,12 +302,12 @@ void kernel_main() {
     constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(18);
     constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(19);
     constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(20);
-    constexpr uint32_t idx_tmp_cb_id = get_compile_time_arg_val(21);
-    constexpr uint32_t tile_tmp_cb_id = get_compile_time_arg_val(22);
-    constexpr uint32_t tile_idx_tmp_cb_id = get_compile_time_arg_val(23);
-    constexpr uint32_t right_inc_tmp_cb_id = get_compile_time_arg_val(24);
-    constexpr uint32_t down_left_wrap_inc_tmp_cb_id = get_compile_time_arg_val(25);
-    constexpr uint32_t up_left_wrap_inc_tmp_cb_id = get_compile_time_arg_val(26);
+    constexpr uint32_t in_idx_cb_id = get_compile_time_arg_val(21);
+    constexpr uint32_t pack_tmp_cb_id = get_compile_time_arg_val(22);
+    constexpr uint32_t pack_idx_tmp_cb_id = get_compile_time_arg_val(23);
+    constexpr uint32_t right_inc_cb_id = get_compile_time_arg_val(24);
+    constexpr uint32_t down_left_wrap_inc_cb_id = get_compile_time_arg_val(25);
+    constexpr uint32_t up_left_wrap_inc_cb_id = get_compile_time_arg_val(26);
     constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(27);
     constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(28);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(29);
@@ -371,7 +371,7 @@ void kernel_main() {
             clear_out_tiles<in_cb_id, clear_value_cb_id>();
             // TODO we don't need to init the idx CBs, but eases debugging for now
             if constexpr (return_indices) {
-                clear_out_tiles<idx_tmp_cb_id, clear_value_cb_id>();
+                clear_out_tiles<in_idx_cb_id, clear_value_cb_id>();
             }
         }
     }
@@ -408,7 +408,7 @@ void kernel_main() {
 
         // initialize the index CB
         volatile tt_l1_ptr uint16_t* idx_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(idx_tmp_cb_id));
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(in_idx_cb_id));
         uint16_t kernel_idx = 0;
         for (uint32_t h = 0; h < kernel_h; ++h) {
             for (uint32_t w = 0; w < kernel_w; ++w) {
@@ -424,31 +424,31 @@ void kernel_main() {
         }
 
         // initialize the right inc tile
-        cb_reserve_back(right_inc_tmp_cb_id, 1);
+        cb_reserve_back(right_inc_cb_id, 1);
         volatile tt_l1_ptr uint16_t* right_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(right_inc_tmp_cb_id));
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(right_inc_cb_id));
         for (uint32_t i = 0; i < TILE_HEIGHT * TILE_WIDTH; ++i) {
             right_ptr[i] = right_inc;
         }
-        cb_push_back(right_inc_tmp_cb_id, 1);
+        cb_push_back(right_inc_cb_id, 1);
 
         // initialize the down left wrap inc tile
-        cb_reserve_back(down_left_wrap_inc_tmp_cb_id, 1);
+        cb_reserve_back(down_left_wrap_inc_cb_id, 1);
         volatile tt_l1_ptr uint16_t* down_left_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(down_left_wrap_inc_tmp_cb_id));
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(down_left_wrap_inc_cb_id));
         for (uint32_t i = 0; i < TILE_HEIGHT * TILE_WIDTH; ++i) {
             down_left_ptr[i] = down_left_wrap_inc;
         }
-        cb_push_back(down_left_wrap_inc_tmp_cb_id, 1);
+        cb_push_back(down_left_wrap_inc_cb_id, 1);
 
         // initialize the up left wrap inc tile
-        cb_reserve_back(up_left_wrap_inc_tmp_cb_id, 1);
+        cb_reserve_back(up_left_wrap_inc_cb_id, 1);
         volatile tt_l1_ptr uint16_t* up_left_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(up_left_wrap_inc_tmp_cb_id));
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(up_left_wrap_inc_cb_id));
         for (uint32_t i = 0; i < TILE_HEIGHT * TILE_WIDTH; ++i) {
             up_left_ptr[i] = up_left_wrap_inc;
         }
-        cb_push_back(up_left_wrap_inc_tmp_cb_id, 1);
+        cb_push_back(up_left_wrap_inc_cb_id, 1);
     }
 
     // initialize the scalar CB
@@ -535,8 +535,8 @@ void kernel_main() {
                 out_cb_id,
                 out_idx_cb_id,
                 reader_id,
-                tile_tmp_cb_id,
-                tile_idx_tmp_cb_id>(ind, in_l1_read_base_addr);
+                pack_tmp_cb_id,
+                pack_idx_tmp_cb_id>(ind, in_l1_read_base_addr);
             if (use_split_reader && ind == end) {
                 first_row_value = false;
             }
@@ -573,7 +573,7 @@ void kernel_main() {
             out_cb_id,
             out_idx_cb_id,
             reader_id,
-            tile_tmp_cb_id,
-            tile_idx_tmp_cb_id>(0, in_l1_read_base_addr);
+            pack_tmp_cb_id,
+            pack_idx_tmp_cb_id>(0, in_l1_read_base_addr);
     }
 }  // kernel_main()

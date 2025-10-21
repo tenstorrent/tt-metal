@@ -46,12 +46,12 @@ void MAIN {
     constexpr uint32_t in_cb_id_1 = get_compile_time_arg_val(8);  // for split reader
     constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(9);
     constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(10);
-    constexpr uint32_t idx_tmp_cb_id = get_compile_time_arg_val(11);
-    constexpr uint32_t tile_tmp_cb_id = get_compile_time_arg_val(12);
-    constexpr uint32_t tile_idx_tmp_cb_id = get_compile_time_arg_val(13);
-    constexpr uint32_t right_inc_tmp_cb_id = get_compile_time_arg_val(14);
-    constexpr uint32_t down_left_wrap_inc_tmp_cb_id = get_compile_time_arg_val(15);
-    constexpr uint32_t up_left_wrap_inc_tmp_cb_id = get_compile_time_arg_val(16);
+    constexpr uint32_t in_idx_cb_id = get_compile_time_arg_val(11);
+    constexpr uint32_t pack_tmp_cb_id = get_compile_time_arg_val(12);
+    constexpr uint32_t pack_idx_tmp_cb_id = get_compile_time_arg_val(13);
+    constexpr uint32_t right_inc_cb_id = get_compile_time_arg_val(14);
+    constexpr uint32_t down_left_wrap_inc_cb_id = get_compile_time_arg_val(15);
+    constexpr uint32_t up_left_wrap_inc_cb_id = get_compile_time_arg_val(16);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(17);
     constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(18);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(19);
@@ -69,8 +69,8 @@ void MAIN {
 
     constexpr bool use_split_reader = split_reader && !return_indices;
 
-    constexpr uint32_t topk_output_tiles = 1;
-    constexpr uint32_t topk_cb_tile_idx = 0;
+    constexpr uint32_t mpwi_output_tiles = 1;
+    constexpr uint32_t mpwi_cb_tile_idx = 0;
     constexpr uint32_t data_dst_idx = 0;
     constexpr uint32_t index_dst_idx = 2;
     constexpr uint32_t inc_dst_idx = 4;
@@ -114,11 +114,6 @@ void MAIN {
     } else {
         unary_op_init_common(in_cb_id_0, in_cb_id_0);
         copy_tile_to_dst_init_short(in_cb_id_0);
-        // tilize_init(in_cb_id_0, topk_output_tiles, in_cb_id_0);
-
-        // this can be done here because we do not use the SFPU for anything else so it does not get reprogrammed
-        // if you use the sfpu for other operations, you need to call this to reprogram the sfpu
-        max_reduce_with_indices_init();
     }
 
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
@@ -137,13 +132,13 @@ void MAIN {
         current_idx_col = start_col;
         current_idx_row = start_row;
 
-        cb_wait_front(right_inc_tmp_cb_id, 1);
-        cb_wait_front(down_left_wrap_inc_tmp_cb_id, 1);
-        cb_wait_front(up_left_wrap_inc_tmp_cb_id, 1);
-        // idx_tmp_cb_id is populated by the reader, but this happens after the inc CBs are populated
+        cb_wait_front(right_inc_cb_id, 1);
+        cb_wait_front(down_left_wrap_inc_cb_id, 1);
+        cb_wait_front(up_left_wrap_inc_cb_id, 1);
+        // in_idx_cb_id is populated by the reader, but this happens after the inc CBs are populated
         // so idx_tmp is protected here, and we intend to have PACK act as the sole producer, hence
         // why the reader cannot push_back here
-        cb_push_back(idx_tmp_cb_id, 1);
+        cb_push_back(in_idx_cb_id, 1);
     }
 
     uint32_t tilize_stick_counter = 0;
@@ -181,16 +176,16 @@ void MAIN {
                 cb_wait_front(curr_in_cb_id, 1);
                 if constexpr (return_indices) {
                     reconfig_data_format_srca(curr_in_cb_id);
-                    copy_tile(curr_in_cb_id, topk_cb_tile_idx, data_dst_idx);
+                    copy_tile(curr_in_cb_id, mpwi_cb_tile_idx, data_dst_idx);
 
                     if (first_c_block) {
-                        cb_wait_front(idx_tmp_cb_id, 1);
+                        cb_wait_front(in_idx_cb_id, 1);
                     }
-                    reconfig_data_format_srca(idx_tmp_cb_id);
-                    copy_tile(idx_tmp_cb_id, topk_cb_tile_idx, index_dst_idx);
-                    copy_tile(idx_tmp_cb_id, topk_cb_tile_idx, index_scratch_in_dst_idx);
+                    reconfig_data_format_srca(in_idx_cb_id);
+                    copy_tile(in_idx_cb_id, mpwi_cb_tile_idx, index_dst_idx);
+                    copy_tile(in_idx_cb_id, mpwi_cb_tile_idx, index_scratch_in_dst_idx);
                     if (last_c_block) {
-                        cb_pop_front(idx_tmp_cb_id, 1);
+                        cb_pop_front(in_idx_cb_id, 1);
                     }
 
                     if (first_c_block) {
@@ -212,15 +207,15 @@ void MAIN {
                             if (current_idx_row + stride_h + eff_kernel_h > in_h_padded) {
                                 // we reached the bottom right corner, wrap to the top and to the left
                                 current_idx_row = 0;
-                                copy_tile(up_left_wrap_inc_tmp_cb_id, topk_cb_tile_idx, inc_dst_idx);
+                                copy_tile(up_left_wrap_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
                             } else {
                                 current_idx_row += stride_h;
-                                copy_tile(down_left_wrap_inc_tmp_cb_id, topk_cb_tile_idx, inc_dst_idx);
+                                copy_tile(down_left_wrap_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
                             }
                         } else {
                             // we are still in the same row, move to the right
                             current_idx_col += stride_w;
-                            copy_tile(right_inc_tmp_cb_id, topk_cb_tile_idx, inc_dst_idx);
+                            copy_tile(right_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
                         }
 
                         // we allow overflow here for negative values as this only occurs in padding regions
@@ -307,20 +302,20 @@ void MAIN {
                     tile_regs_release();
                 }
             } else {
-                cb_reserve_back(tile_tmp_cb_id, 1);
-                pack_reconfig_data_format(tile_tmp_cb_id);
-                pack_tile<true>(data_dst_idx, tile_tmp_cb_id, topk_cb_tile_idx);
-                cb_push_back(tile_tmp_cb_id, 1);
+                cb_reserve_back(pack_tmp_cb_id, 1);
+                pack_reconfig_data_format(pack_tmp_cb_id);
+                pack_tile<true>(data_dst_idx, pack_tmp_cb_id, mpwi_cb_tile_idx);
+                cb_push_back(pack_tmp_cb_id, 1);
 
-                cb_reserve_back(tile_idx_tmp_cb_id, 1);
-                pack_reconfig_data_format(tile_idx_tmp_cb_id);
-                pack_tile<true>(index_dst_idx, tile_idx_tmp_cb_id, topk_cb_tile_idx);
-                cb_push_back(tile_idx_tmp_cb_id, 1);
+                cb_reserve_back(pack_idx_tmp_cb_id, 1);
+                pack_reconfig_data_format(pack_idx_tmp_cb_id);
+                pack_tile<true>(index_dst_idx, pack_idx_tmp_cb_id, mpwi_cb_tile_idx);
+                cb_push_back(pack_idx_tmp_cb_id, 1);
 
                 if (last_c_block) {
-                    cb_reserve_back(idx_tmp_cb_id, 1);
-                    pack_tile<true>(index_scratch_out_dst_idx, idx_tmp_cb_id, topk_cb_tile_idx);
-                    cb_push_back(idx_tmp_cb_id, 1);
+                    cb_reserve_back(in_idx_cb_id, 1);
+                    pack_tile<true>(index_scratch_out_dst_idx, in_idx_cb_id, mpwi_cb_tile_idx);
+                    cb_push_back(in_idx_cb_id, 1);
                 }
                 tile_regs_release();
             }
