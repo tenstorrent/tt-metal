@@ -43,7 +43,7 @@ def test_qwen_mlp_rs(mesh_device):
         [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
     )
 
-    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, use_qwen_mlp=True)
+    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, is_qwen=True)
 
     pc_1_3 = model_config["FF1_3_TG_RING_PROGCFG"]
     pc_2 = model_config["FF2_TG_RING_PROGCFG"]

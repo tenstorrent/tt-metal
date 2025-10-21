@@ -82,7 +82,7 @@ def test_qwen_mlp_ttt_inference(seq_len, batch_size, mesh_device, reset_seeds):
         [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
     )
 
-    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, use_qwen_mlp=True)
+    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, is_qwen=True)
 
     tt_model = TtLlamaMLP(
         mesh_device=mesh_device,

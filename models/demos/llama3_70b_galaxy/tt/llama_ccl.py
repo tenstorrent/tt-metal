@@ -29,7 +29,7 @@ class TT_CCL:
         worker_sub_device_id,
         mode="decode",
         allocate_prefill_buffers=True,
-        use_qwen_mlp=False,
+        is_qwen=False,
     ):
         self.mode = mode
         all_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
@@ -51,7 +51,7 @@ class TT_CCL:
         self.max_top_k = model_args.max_top_k
         self.max_batch_size = model_args.max_batch_size
         self.cluster_shape = model_args.cluster_shape
-        self.use_qwen_mlp = use_qwen_mlp
+        self.is_qwen = is_qwen
 
         # Double buffered on each axis
         self.gather_semaphore_handles = [[], []]
@@ -255,7 +255,7 @@ class TT_CCL:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-            if not self.use_qwen_mlp
+            if not self.is_qwen
             else ttnn.from_torch(
                 torch.zeros((1, 1, 32, 155648)),
                 device=self.mesh_device,
@@ -277,7 +277,7 @@ class TT_CCL:
                 memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-            if not self.use_qwen_mlp
+            if not self.is_qwen
             else ttnn.from_torch(
                 torch.zeros((1, 1, self.max_batch_size, 3200)),
                 device=self.mesh_device,
@@ -308,9 +308,7 @@ class TT_CCL:
         # Create persistent buffers for cluster axis 0
         cluster_axis = 0
         N_per_shard = (
-            2048 // 16 * cluster_shape[cluster_axis]
-            if not self.use_qwen_mlp
-            else 1280 // 10 * cluster_shape[cluster_axis]
+            2048 // 16 * cluster_shape[cluster_axis] if not self.is_qwen else 1280 // 10 * cluster_shape[cluster_axis]
         )  # FF2/DO
         buffer_mem_cfg = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -358,7 +356,7 @@ class TT_CCL:
         num_cores_after_lm_head = 32  # Use 32 cores instead of 16 to reduce L1 memory usage per core
         N_per_shard = (
             (16 * 1024) // num_cores_after_lm_head * cluster_shape[cluster_axis]
-            if not self.use_qwen_mlp
+            if not self.is_qwen
             else (155648 // 8) // num_cores_after_lm_head * cluster_shape[cluster_axis]
         )  # LM Head
         self.lm_head_buffer_mem_cfg = ttnn.MemoryConfig(
@@ -469,7 +467,7 @@ class TT_CCL:
                     "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
                     "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
                 }
-                if not self.use_qwen_mlp
+                if not self.is_qwen
                 else {
                     "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
                     "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
@@ -536,7 +534,7 @@ class TT_CCL:
                     "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
                     "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
                 }
-                if not self.use_qwen_mlp
+                if not self.is_qwen
                 else {
                     "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
                     "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
@@ -592,7 +590,7 @@ class TT_CCL:
                     "LAYERNORM": [(1, 1, seqlen, 128)],
                     # "SAMPLING": [(1, 1, 32, 128 * 1024)]
                 }
-                if not self.use_qwen_mlp
+                if not self.is_qwen
                 else {
                     "QKV": [(1, 1, seqlen, 1280)],
                     "SDPA": [(1, 1, seqlen // 2, 1024)],
@@ -624,7 +622,7 @@ class TT_CCL:
                 "LM_HEAD": [(4, 1, 32, 16384)],
                 "SAMPLING": [(1, 1, 32, 128 * 1024)],
             }
-            if not self.use_qwen_mlp
+            if not self.is_qwen
             else {
                 "LM_HEAD": [(4, 1, 32, 19456)],
                 "SAMPLING": [(1, 1, 32, 155648)],

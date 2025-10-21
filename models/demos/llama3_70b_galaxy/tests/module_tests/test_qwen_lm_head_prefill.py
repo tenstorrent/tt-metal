@@ -59,7 +59,7 @@ def test_qwen_lm_head_inference_prefill(seq_len, batch_size, mesh_device, reset_
 
     prefetcher_setup = TtLlamaPrefetcherSetup(mesh_device, n_tensors=0, n_layers=1, mode="prefill")
     mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
-    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, mode="prefill", use_qwen_mlp=True)
+    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, mode="prefill", is_qwen=True)
 
     tt_model = LMHead(
         args=model_args,

@@ -46,7 +46,7 @@ def test_qwen_tensor_cache(mesh_device):
         [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
     )
 
-    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, use_qwen_mlp=True)
+    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, is_qwen=True)
     prefetcher_setup.create_global_cb()
 
     x = torch.randn(1, 1, 32, model_args.dim)

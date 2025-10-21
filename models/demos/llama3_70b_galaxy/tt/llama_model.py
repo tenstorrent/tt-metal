@@ -156,7 +156,7 @@ class TtTransformer(LightweightModule):
                 self.prefetcher_setup.worker_sub_device_id,
                 mode="prefill",
                 allocate_prefill_buffers=self.allocate_prefill_buffers,
-                use_qwen_mlp=True,
+                is_qwen=True,
             )
         else:
             self.tt_ccl = self.tt_ccl_prefill
@@ -178,7 +178,7 @@ class TtTransformer(LightweightModule):
                 self.mesh_device,
                 self.args,
                 self.prefetcher_setup.worker_sub_device_id,
-                use_qwen_mlp=True,
+                is_qwen=True,
             )
             self.tt_sampling = TTSampling(
                 args=self.args,
