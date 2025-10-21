@@ -69,7 +69,7 @@ jobs:
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
-      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:dec9417e1b2b355d286ee299d80f97f587aa27ec
+      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest
       env:
         GH_TOKEN: ${{ github.token }}
         ARCH_NAME: ${{ inputs.arch }}
