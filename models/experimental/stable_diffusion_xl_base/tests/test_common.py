@@ -535,10 +535,8 @@ def prepare_image_latents(
 
     return ttnn.to_torch(
         latents,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(
-            tt_pipeline.ttnn_device, dims=(-1, 0), mesh_shape=tuple(tt_pipeline.ttnn_device.shape)
-        ),
-    )
+        mesh_composer=ttnn.ConcatMeshToTensor(tt_pipeline.ttnn_device, dim=0),
+    )[:batch_size, ...]
 
 
 # adapted from sdxl inpaint pipeline: diffusers/pipelines/stable_diffusion_xl/pipeline_stable_diffusion_xl_inpaint.py

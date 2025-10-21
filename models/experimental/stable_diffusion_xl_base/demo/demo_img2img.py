@@ -267,7 +267,7 @@ def prepare_device(mesh_device, use_cfg_parallel):
 )
 def test_demo(
     validate_fabric_compatibility,
-    device,
+    mesh_device,
     is_ci_env,
     prompt,
     negative_prompt,
@@ -281,7 +281,6 @@ def test_demo(
     fixed_seed_for_batch,
     strength,
 ):
-    mesh_device = device
     from PIL import Image
 
     image_path = "output/output1.png"

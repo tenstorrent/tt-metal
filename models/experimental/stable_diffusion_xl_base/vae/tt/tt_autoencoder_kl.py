@@ -61,6 +61,8 @@ class TtAutoencoderKL(LightweightModule):
         ), "encode only supports torch tensors as input, conversion to ttnn done within"
 
         B, C, H, W = hidden_states.shape
+
+        initial_batch_size = hidden_states.shape[0]
         hidden_states = torch.permute(hidden_states, (0, 2, 3, 1))  # NHWC to NCHW
         hidden_states = torch.reshape(hidden_states, (B, 1, H * W, C))
         hidden_states = ttnn.from_torch(
@@ -80,7 +82,9 @@ class TtAutoencoderKL(LightweightModule):
             bias=self.tt_quant_conv_bias,
         )
 
-        h = ttnn.to_torch(hidden_states, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0)).float()
+        h = ttnn.to_torch(hidden_states, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0)).float()[
+            :initial_batch_size, ...
+        ]
         B = h.shape[0]
         h = h.reshape(B, H, W, C)
         h = torch.permute(h, (0, 3, 1, 2))
