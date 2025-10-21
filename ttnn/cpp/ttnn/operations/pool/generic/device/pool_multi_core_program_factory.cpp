@@ -268,8 +268,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         pool_type,
         return_indices,
         output_layout);
-    uint32_t eff_kernel_h = (kernel_h - 1) * dilation_h + 1;
-    uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
+    uint32_t eff_kernel_h = ((kernel_h - 1) * dilation_h) + 1;
+    uint32_t eff_kernel_w = ((kernel_w - 1) * dilation_w) + 1;
     uint32_t pad_h = pad_t + pad_b;
     uint32_t pad_w = pad_l + pad_r;
     const uint32_t in_h_padded = in_h + pad_h + ceil_pad_h;
