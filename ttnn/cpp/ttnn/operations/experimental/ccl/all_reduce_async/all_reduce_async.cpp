@@ -343,7 +343,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             out_memory_config,
             std::nullopt,
             num_preferred_links,
-            std::optional<tt::tt_fabric::Topology>(topology_));
+            topology_);
     }
     interleaved_tensor.deallocate();
     ttnn::Tensor gathered;
@@ -373,7 +373,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             out_memory_config,
             std::nullopt,
             num_preferred_links,
-            std::optional<tt::tt_fabric::Topology>(topology_));
+            topology_);
     }
     scattered_tensor.deallocate();
     if (change_mem_config) {
