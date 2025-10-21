@@ -43,17 +43,7 @@ jobs:
         version: ${{ inputs.version || 22.04 }}
         distro: ${{ inputs.distro || 'ubuntu' }}
         build-wheel: true
-        fetch-depth: 0
-        skip-tt-train: false
-  build-artifact-profiler:
-      uses: ./.github/workflows/build-artifact.yaml
-      permissions:
-        packages: write
-      secrets: inherit
-      with:
-        version: ${{ inputs.version || 22.04 }}
         tracy: true
-        build-wheel: true
         fetch-depth: 0
         skip-tt-train: false
 
@@ -76,7 +66,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   t3000-model-perf:
-    needs: [build-artifact, build-artifact-profiler]
+    needs: build-artifact
     if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
     uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
     secrets: inherit
@@ -84,8 +74,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      build-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
   galaxy-demos:
     needs: build-artifact
     if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
