@@ -89,6 +89,7 @@ WORKDIR /tt-metal
 # Override version to not rely at all on git
 RUN sed -i 's/set(fallbackVersion "\$Format:%(describe)\$")/set(fallbackVersion "0.0.0")/; s/set(fallbackHash "\$Format:%h\$")/set(fallbackHash "000")/' cmake/version.cmake
 
+
 ARG SKIP_TT_TRAIN="true"
 ARG BUILD_TYPE="Release"
 ARG TOOLCHAIN="cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
@@ -125,8 +126,6 @@ RUN set -eu && \
     # Execute the build command
     echo "Build command: ${BUILD_COMMAND}" && \
     ${BUILD_COMMAND}
-
-RUN sed 
 
 RUN cmake --build build --target install
 
