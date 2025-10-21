@@ -505,8 +505,8 @@ void ControlPlane::validate_mesh_connections(MeshId mesh_id) const {
 
     // Validate connections only for the local portion of the mesh
     for (const auto& mesh_coord : mesh_coord_range) {
-        MeshCoordinate mesh_coord_next{mesh_coord[0], mesh_coord[1] + 1};
-        MeshCoordinate mesh_coord_next_row{mesh_coord[0] + 1, mesh_coord[1]};
+        MeshCoordinate mesh_coord_next{mesh_coord[0], (mesh_coord[1] + 1) % mesh_shape[1]};
+        MeshCoordinate mesh_coord_next_row{(mesh_coord[0] + 1) % mesh_shape[0], mesh_coord[1]};
 
         // Only validate connections to neighbors that are also in the local mesh portion
         if (mesh_coord_range.contains(mesh_coord_next)) {

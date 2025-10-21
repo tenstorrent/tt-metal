@@ -122,6 +122,12 @@ public:
     // Constructs an inclusive range that iterates between `start` and `end`.
     MeshCoordinateRange(const MeshCoordinate& start, const MeshCoordinate& end);
 
+    // Constructs an inclusive range that iterates between `start` and `end`,
+    // interpreting ranges with wraparound semantics based on the provided shape.
+    // When wraparound is enabled, a dimension where start > end is treated as
+    // wrapping from start..(shape[dim]-1) and then 0..end.
+    MeshCoordinateRange(const MeshCoordinate& start, const MeshCoordinate& end, const MeshShape& wraparound_shape);
+
     // Constructs a range that iterates over all coordinates in the mesh.
     explicit MeshCoordinateRange(const MeshShape& shape);
 
@@ -173,6 +179,12 @@ public:
         // MeshCoordinate to wrap around the range end.
         MeshCoordinate current_coord_;
         size_t linear_index_ = 0;
+
+        // Local iteration state for wraparound ranges: per-dimension lengths and positions.
+        // When wraparound is active and start > end in a dimension, we iterate over a circular span
+        // of length: (shape[dim] - start) + (end + 1), mapping local positions to actual coords via modulo.
+        std::vector<uint32_t> lengths_;
+        std::vector<uint32_t> local_pos_;
     };
 
     Iterator begin() const;
@@ -181,6 +193,8 @@ public:
 private:
     MeshCoordinate start_;
     MeshCoordinate end_;
+    // If present, enables wraparound semantics with these per-dimension sizes.
+    std::optional<MeshShape> wraparound_shape_;
 };
 
 bool operator==(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs);

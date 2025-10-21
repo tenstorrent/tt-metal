@@ -816,6 +816,47 @@ TEST(MeshContainerIteratorTraitsTest, STLAlgorithmsCompatibility) {
     EXPECT_TRUE(none_greater_than_10);
 }
 
+TEST(MeshCoordinateRangeTest, Wraparound2D_BasicIterationAndShape) {
+    // 4x4 mesh; wraparound range from (3,3) to (0,0) should cover a 2x2 area with wrap.
+    MeshShape shape(4, 4);
+    MeshCoordinateRange range(MeshCoordinate(3, 3), MeshCoordinate(0, 0), shape);
+
+    // Iteration order is row-major starting from start coord, wrapping in each dimension.
+    std::vector<MeshCoordinate> coords;
+    for (const auto& c : range) {
+        coords.push_back(c);
+    }
+    EXPECT_THAT(
+        coords,
+        ElementsAre(
+            MeshCoordinate(3, 3),  // start
+            MeshCoordinate(3, 0),  // wrap column
+            MeshCoordinate(0, 3),  // wrap row
+            MeshCoordinate(0, 0)));
+
+    // Shape should reflect the minimal circular span per dimension.
+    EXPECT_EQ(range.shape(), MeshShape(2, 2));
+
+    // Contains the four points and excludes an outside point.
+    EXPECT_TRUE(range.contains(MeshCoordinate(3, 3)));
+    EXPECT_TRUE(range.contains(MeshCoordinate(3, 0)));
+    EXPECT_TRUE(range.contains(MeshCoordinate(0, 3)));
+    EXPECT_TRUE(range.contains(MeshCoordinate(0, 0)));
+    EXPECT_FALSE(range.contains(MeshCoordinate(2, 2)));
+}
+
+TEST(MeshCoordinateRangeTest, Wraparound2D_IntersectionWithNonWrapped) {
+    MeshShape shape(4, 4);
+    MeshCoordinateRange wrapped(MeshCoordinate(3, 3), MeshCoordinate(0, 0), shape);
+    MeshCoordinateRange single(MeshCoordinate(0, 0), MeshCoordinate(0, 0));
+
+    ASSERT_TRUE(wrapped.intersects(single));
+    auto inter = wrapped.intersection(single);
+    ASSERT_TRUE(inter.has_value());
+    EXPECT_TRUE(inter->contains(MeshCoordinate(0, 0)));
+    EXPECT_EQ(inter->shape().mesh_size(), 1u);
+}
+
 TEST(GetNeighborTest, Basic1D) {
     MeshShape shape(5);
     MeshCoordinate coord(2);

@@ -833,6 +833,8 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping() {
     // Derive per-mesh host sets and per-host coord ranges from current mapping
     std::unordered_map<MeshId, std::unordered_set<HostName>> mesh_to_hosts;
     std::unordered_map<MeshId, std::unordered_map<HostName, MeshCoordinateRange>> mesh_host_to_range;
+    // For wraparound-aware construction, accumulate coordinates per host then compute minimal circular ranges.
+    std::unordered_map<MeshId, std::unordered_map<HostName, std::vector<MeshCoordinate>>> mesh_host_to_coords;
 
     // Precompute coordinate per chip from MeshGraph
     std::unordered_map<MeshId, std::unordered_map<chip_id_t, MeshCoordinate>> per_mesh_chip_to_coord;
@@ -844,21 +846,71 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping() {
         }
     }
 
-    // Accumulate ranges
+    // Accumulate coordinates per host
     for (const auto& [fabric_node_id, asic_id] : fabric_node_id_to_asic_id_) {
         const auto host = physical_system_descriptor_.get_host_name_for_asic(asic_id);
         mesh_to_hosts[fabric_node_id.mesh_id].insert(host);
         const auto coord = per_mesh_chip_to_coord[fabric_node_id.mesh_id].at(fabric_node_id.chip_id);
-        auto& range_map = mesh_host_to_range[fabric_node_id.mesh_id];
-        auto it = range_map.find(host);
-        if (it == range_map.end()) {
-            range_map.emplace(host, MeshCoordinateRange(coord, coord));
-        } else {
-            auto start = it->second.start_coord();
-            auto end = it->second.end_coord();
-            MeshCoordinate new_start(std::min(start[0], coord[0]), std::min(start[1], coord[1]));
-            MeshCoordinate new_end(std::max(end[0], coord[0]), std::max(end[1], coord[1]));
-            it->second = MeshCoordinateRange(new_start, new_end);
+        mesh_host_to_coords[fabric_node_id.mesh_id][host].push_back(coord);
+    }
+
+    // Build minimal wraparound-aware ranges per host
+    for (const auto& [mesh_id, host_coords_map] : mesh_host_to_coords) {
+        const auto shape = mesh_graph_.get_mesh_shape(mesh_id);
+        auto& range_map = mesh_host_to_range[mesh_id];
+        for (const auto& [host, coords] : host_coords_map) {
+            // Compute unique values per dimension
+            std::vector<uint32_t> unique_r;
+            std::vector<uint32_t> unique_c;
+            unique_r.reserve(coords.size());
+            unique_c.reserve(coords.size());
+            for (const auto& c : coords) {
+                unique_r.push_back(c[0]);
+                unique_c.push_back(c[1]);
+            }
+            auto uniq = [](std::vector<uint32_t>& v) {
+                std::sort(v.begin(), v.end());
+                v.erase(std::unique(v.begin(), v.end()), v.end());
+            };
+            uniq(unique_r);
+            uniq(unique_c);
+
+            auto minimal_circular_span = [](const std::vector<uint32_t>& values, uint32_t dim_size) {
+                // Returns pair(start, end) in circular sense; start may be > end to indicate wrap.
+                if (values.empty()) {
+                    return std::pair<uint32_t, uint32_t>(0, 0);
+                }
+                if (values.size() == 1) {
+                    return std::pair<uint32_t, uint32_t>(values[0], values[0]);
+                }
+                if (values.size() >= dim_size) {
+                    return std::pair<uint32_t, uint32_t>(0u, dim_size - 1);
+                }
+                // values must be sorted unique
+                std::vector<uint32_t> v = values;
+                // compute maximum gap between consecutive values on circle
+                uint32_t max_gap = 0;
+                size_t max_gap_idx = 0;  // gap between v[i] and v[i+1] (wrapping at end)
+                for (size_t i = 0; i < v.size(); ++i) {
+                    uint32_t a = v[i];
+                    uint32_t b = (i + 1 < v.size()) ? v[i + 1] : v[0];
+                    uint32_t gap = (i + 1 < v.size()) ? (b - a) : ((dim_size - a) + b);
+                    if (gap > max_gap) {
+                        max_gap = gap;
+                        max_gap_idx = i;
+                    }
+                }
+                // minimal arc excludes the largest gap; start is next value, end is current value
+                uint32_t start = (max_gap_idx + 1 < v.size()) ? v[max_gap_idx + 1] : v[0];
+                uint32_t end = v[max_gap_idx];
+                return std::make_pair(start, end);
+            };
+
+            auto [row_start, row_end] = minimal_circular_span(unique_r, shape[0]);
+            auto [col_start, col_end] = minimal_circular_span(unique_c, shape[1]);
+            MeshCoordinate start(row_start, col_start);
+            MeshCoordinate end(row_end, col_end);
+            range_map.emplace(host, MeshCoordinateRange(start, end, shape));
         }
     }
 

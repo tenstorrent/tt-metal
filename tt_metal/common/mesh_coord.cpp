@@ -229,6 +229,22 @@ MeshCoordinateRange::MeshCoordinateRange(const MeshCoordinate& start, const Mesh
     }
 }
 
+MeshCoordinateRange::MeshCoordinateRange(
+    const MeshCoordinate& start, const MeshCoordinate& end, const MeshShape& wraparound_shape) :
+    start_(start), end_(end), wraparound_shape_(wraparound_shape) {
+    TT_FATAL(
+        start.dims() == end.dims(),
+        "Start and end dimensions of a coordinate range do not match: {} != {}",
+        start.dims(),
+        end.dims());
+    TT_FATAL(
+        wraparound_shape_.value().dims() == start.dims(),
+        "Wraparound shape dims must match range dims: {} != {}",
+        wraparound_shape_.value().dims(),
+        start.dims());
+    // No invariant on start <= end when wraparound is provided; iterator will handle wrapping.
+}
+
 MeshCoordinateRange::MeshCoordinateRange(const MeshShape& shape) :
     MeshCoordinateRange(MeshCoordinate::zero_coordinate(shape.dims()), shape_back(shape)) {}
 
@@ -240,17 +256,50 @@ const MeshCoordinate& MeshCoordinateRange::end_coord() const { return end_; }
 
 MeshShape MeshCoordinateRange::shape() const {
     tt::stl::SmallVector<uint32_t> shape_dims;
+    if (!wraparound_shape_.has_value()) {
+        for (size_t i = 0; i < dims(); ++i) {
+            shape_dims.push_back(end_[i] - start_[i] + 1);
+        }
+        return MeshShape(shape_dims);
+    }
+    // Wraparound: each dimension length is circular span size between start and end inclusive.
     for (size_t i = 0; i < dims(); ++i) {
-        shape_dims.push_back(end_[i] - start_[i] + 1);
+        const uint32_t S = wraparound_shape_.value()[i];
+        const uint32_t s = start_[i];
+        const uint32_t e = end_[i];
+        if (s <= e) {
+            shape_dims.push_back(e - s + 1);
+        } else {
+            // wraps: [s..S-1] U [0..e]
+            shape_dims.push_back((S - s) + (e + 1));
+        }
     }
     return MeshShape(shape_dims);
 }
 
 bool MeshCoordinateRange::contains(const MeshCoordinate& coord) const {
     TT_FATAL(coord.dims() == dims(), "Coordinate dimensions do not match: {} != {}", coord.dims(), dims());
+    if (!wraparound_shape_.has_value()) {
+        for (int i = 0; i < coord.dims(); ++i) {
+            if (coord[i] < start_[i] || coord[i] > end_[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
     for (int i = 0; i < coord.dims(); ++i) {
-        if (coord[i] < start_[i] || coord[i] > end_[i]) {
-            return false;
+        const uint32_t s = start_[i];
+        const uint32_t e = end_[i];
+        const uint32_t c = coord[i];
+        if (s <= e) {
+            if (c < s || c > e) {
+                return false;
+            }
+        } else {
+            // wraps: c in [s..S-1] or [0..e]
+            if (!(c >= s || c <= e)) {
+                return false;
+            }
         }
     }
     return true;
@@ -262,31 +311,75 @@ bool MeshCoordinateRange::contains(const MeshCoordinateRange& range) const {
 
 bool MeshCoordinateRange::intersects(const MeshCoordinateRange& range) const {
     TT_FATAL(range.dims() == dims(), "Coordinate dimensions do not match: {} != {}", range.dims(), dims());
-    for (int i = 0; i < range.dims(); ++i) {
-        if (range.end_coord()[i] < start_[i] || range.start_coord()[i] > end_[i]) {
-            return false;
+    // Fallback: iterate over the smaller range and test containment to cover wrap semantics.
+    const MeshCoordinateRange& smaller = (range.shape().mesh_size() <= this->shape().mesh_size()) ? range : *this;
+    const MeshCoordinateRange& larger = (&smaller == this) ? range : *this;
+    for (const auto& c : smaller) {
+        if (larger.contains(c)) {
+            return true;
         }
     }
-    return true;
+    return false;
 }
 
 std::optional<MeshCoordinateRange> MeshCoordinateRange::intersection(const MeshCoordinateRange& range) const {
     if (!intersects(range)) {
         return std::nullopt;
     }
-
-    tt::stl::SmallVector<uint32_t> intersection_start(dims(), 0);
-    tt::stl::SmallVector<uint32_t> intersection_end(dims(), 0);
-    for (size_t i = 0; i < dims(); ++i) {
-        intersection_start[i] = std::max(start_coord()[i], range.start_coord()[i]);
-        intersection_end[i] = std::min(end_coord()[i], range.end_coord()[i]);
+    // Conservative implementation: gather all coords from smaller range that are contained in the larger, then
+    // build a minimal bounding range w.r.t the larger's wraparound settings if present.
+    const MeshCoordinateRange& smaller = (range.shape().mesh_size() <= this->shape().mesh_size()) ? range : *this;
+    const MeshCoordinateRange& larger = (&smaller == this) ? range : *this;
+    bool first = true;
+    std::optional<MeshCoordinate> minc;
+    std::optional<MeshCoordinate> maxc;
+    for (const auto& c : smaller) {
+        if (larger.contains(c)) {
+            if (first) {
+                minc = c;
+                maxc = c;
+                first = false;
+            } else {
+                tt::stl::SmallVector<uint32_t> mins;
+                tt::stl::SmallVector<uint32_t> maxs;
+                mins.reserve(c.dims());
+                maxs.reserve(c.dims());
+                for (size_t i = 0; i < c.dims(); ++i) {
+                    mins.push_back(std::min((*minc)[i], c[i]));
+                    maxs.push_back(std::max((*maxc)[i], c[i]));
+                }
+                minc = MeshCoordinate(mins);
+                maxc = MeshCoordinate(maxs);
+            }
+        }
     }
-    return MeshCoordinateRange(MeshCoordinate(intersection_start), MeshCoordinate(intersection_end));
+    if (first) {
+        return std::nullopt;
+    }
+    if (larger.wraparound_shape_.has_value()) {
+        return MeshCoordinateRange(*minc, *maxc, larger.wraparound_shape_.value());
+    }
+    return MeshCoordinateRange(*minc, *maxc);
 }
 
 MeshCoordinateRange::Iterator::Iterator(
     const MeshCoordinateRange* range, const MeshCoordinate& current, size_t linear_index) :
-    range_(range), current_coord_(current), linear_index_(linear_index) {}
+    range_(range), current_coord_(current), linear_index_(linear_index) {
+    if (range_ && range_->wraparound_shape_.has_value()) {
+        const auto dims = current_coord_.dims();
+        lengths_.resize(dims);
+        local_pos_.resize(dims);
+        for (size_t i = 0; i < dims; ++i) {
+            const uint32_t S = range_->wraparound_shape_.value()[i];
+            const uint32_t s = range_->start_coord()[i];
+            const uint32_t e = range_->end_coord()[i];
+            lengths_[i] = (s <= e) ? (e - s + 1) : ((S - s) + (e + 1));
+            local_pos_[i] = 0;
+        }
+        // Ensure current_coord_ corresponds to start_ for iteration start
+        current_coord_ = range_->start_coord();
+    }
+}
 
 MeshCoordinateRange::Iterator MeshCoordinateRange::Iterator::operator++(int) {
     Iterator tmp = *this;
@@ -296,12 +389,30 @@ MeshCoordinateRange::Iterator MeshCoordinateRange::Iterator::operator++(int) {
 
 MeshCoordinateRange::Iterator& MeshCoordinateRange::Iterator::operator++() {
     ++linear_index_;
-    for (int i = current_coord_.dims() - 1; i >= 0; --i) {
-        if (++current_coord_[i] > range_->end_coord()[i]) {
-            current_coord_[i] = range_->start_coord()[i];
+    if (!range_->wraparound_shape_.has_value()) {
+        for (int i = current_coord_.dims() - 1; i >= 0; --i) {
+            if (++current_coord_[i] > range_->end_coord()[i]) {
+                current_coord_[i] = range_->start_coord()[i];
+            } else {
+                break;
+            }
+        }
+        return *this;
+    }
+    // Wrapped iteration: advance local positions row-major over lengths_, then map to coords via start and shape.
+    const size_t dims = current_coord_.dims();
+    for (int i = dims - 1; i >= 0; --i) {
+        local_pos_[i]++;
+        if (local_pos_[i] >= lengths_[i]) {
+            local_pos_[i] = 0;
         } else {
             break;
         }
+    }
+    for (size_t i = 0; i < dims; ++i) {
+        const uint32_t S = range_->wraparound_shape_.value()[i];
+        const uint32_t s = range_->start_coord()[i];
+        current_coord_[i] = (s + local_pos_[i]) % S;
     }
     return *this;
 }
@@ -314,8 +425,19 @@ bool MeshCoordinateRange::Iterator::operator!=(const Iterator& other) const { re
 MeshCoordinateRange::Iterator MeshCoordinateRange::begin() const { return Iterator(this, start_, /*linear_index=*/0); }
 MeshCoordinateRange::Iterator MeshCoordinateRange::end() const {
     size_t range_size = 1;
-    for (size_t i = 0; i < start_.dims(); ++i) {
-        range_size *= end_[i] - start_[i] + 1;
+    if (!wraparound_shape_.has_value()) {
+        for (size_t i = 0; i < start_.dims(); ++i) {
+            range_size *= end_[i] - start_[i] + 1;
+        }
+    } else {
+        // For wraparound, size is product of circular span lengths per dimension.
+        for (size_t i = 0; i < start_.dims(); ++i) {
+            const uint32_t S = wraparound_shape_.value()[i];
+            const uint32_t s = start_[i];
+            const uint32_t e = end_[i];
+            const uint32_t len = (s <= e) ? (e - s + 1) : ((S - s) + (e + 1));
+            range_size *= len;
+        }
     }
     // Set `start_` coordinate but `range_size` linear index as the wrap around condition.
     return Iterator(this, start_, range_size);

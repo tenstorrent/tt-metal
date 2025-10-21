@@ -11,7 +11,6 @@
 #include <tt_stl/span.hpp>
 #include <cstring>
 
-#include "fabric_fixture.hpp"
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/metal_context.hpp"
@@ -438,6 +437,100 @@ TEST(MultiHost, TestQuadGalaxyFabric1DSanity) {
             control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id, RoutingDirection::E);
         EXPECT_TRUE(!eth_chans_by_direction.empty());
     }
+}
+
+TEST(MultiHost, TestBHQB4x4ControlPlaneInit) {
+    // This test is intended for Blackhole 4x4 mesh spanning 2x2 hosts (BHQB)
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::P150_X4) {
+        log_info(tt::LogTest, "This test is only for Blackhole Galaxy (BHQB)");
+        GTEST_SKIP();
+    }
+
+    const std::filesystem::path bhqb_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/bh_qb_4x4_mesh_graph_descriptor.textproto";
+    auto control_plane = std::make_unique<ControlPlane>(bhqb_mesh_graph_desc_path.string());
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+}
+
+TEST(MultiHost, TestBHQB4x4Fabric2DSanity) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::P150_X4) {
+        log_info(tt::LogTest, "This test is only for Blackhole Galaxy (BHQB)");
+        GTEST_SKIP();
+    }
+
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // 4x4 torus has 32 unique undirected adjacencies: (horizontal 16 + vertical 16)
+    // With bidirectional and 2 ethernet channels per direction -> 32 * 2 * 2 = 128
+    const auto& intramesh_connections = get_all_intramesh_connections(control_plane);
+    EXPECT_EQ(intramesh_connections.size(), 128);
+
+    for (const auto& [src_node_id, dst_node_id] : intramesh_connections) {
+        const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
+        EXPECT_TRUE(direction.has_value());
+
+        const auto& eth_chans_by_direction =
+            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, *direction);
+        EXPECT_TRUE(!eth_chans_by_direction.empty());
+
+        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
+        EXPECT_TRUE(!eth_chans.empty());
+    }
+}
+
+TEST(MultiHost, TestBHQB4x4Fabric1DSanity) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::P150_X4) {
+        log_info(tt::LogTest, "This test is only for Blackhole Galaxy (BHQB)");
+        GTEST_SKIP();
+    }
+
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_1D_RING,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // Intra-mesh adjacency count is determined by the MGD, independent of fabric config
+    const auto& intramesh_connections = get_all_intramesh_connections(control_plane);
+    EXPECT_EQ(intramesh_connections.size(), 128);
+
+    for (const auto& [src_node_id, dst_node_id] : intramesh_connections) {
+        const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
+        EXPECT_TRUE(direction.has_value());
+
+        const auto& eth_chans_by_direction =
+            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, *direction);
+        EXPECT_TRUE(!eth_chans_by_direction.empty());
+
+        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
+        EXPECT_TRUE(!eth_chans.empty());
+    }
+}
+
+TEST(MultiHost, TestClosetBoxTTSwitchControlPlaneInit) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
+        log_info(tt::LogTest, "This test is only for N300 2x2");
+        GTEST_SKIP();
+    }
+
+    auto& instance = tt::tt_metal::MetalContext::instance();
+
+    // Get the host name
+    auto host_rank = *instance.get_distributed_context_ptr()->rank();
+
+    // Savve the cluster descriptors
+    auto cluster_descriptor = instance.get_cluster().get_cluster_desc()->serialize_to_file(
+        "closet_box_cluster_desc_rank_" + std::to_string(host_rank) + ".yaml");
 }
 
 }  // namespace multi_host_tests
