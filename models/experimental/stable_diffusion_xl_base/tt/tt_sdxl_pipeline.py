@@ -200,7 +200,7 @@ class TtSDXLPipeline(LightweightModule):
             y <= 2048 and x <= 2048
         ), f"`crop_coords_top_left` = ({y}, {x}) is unreasonably large. Coordinates should typically be within [0, 1024] for SDXL."
 
-    def __validate_timesteps_sigmas(self, timesteps=None, sigmas=None):
+    def _validate_timesteps_sigmas(self, timesteps=None, sigmas=None):
         """
         Validates timesteps and sigmas parameters.
         """
@@ -465,7 +465,7 @@ class TtSDXLPipeline(LightweightModule):
 
         # Validate timesteps/sigmas at the beginning if custom values are provided
         if timesteps is not None or sigmas is not None:
-            self.__validate_timesteps_sigmas(timesteps, sigmas)
+            self._validate_timesteps_sigmas(timesteps, sigmas)
 
         logger.info("Generating input tensors...")
         profiler.start("prepare_latents")

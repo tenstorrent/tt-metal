@@ -53,14 +53,19 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
         torch_mask,
         start_latent_seed=None,  # need this to generate noise tensors, and in the future if we want to support strength_max == 1.0
         fixed_seed_for_batch=False,
+        timesteps=None,
+        sigmas=None,
     ):
         # Generate user input tensors for the TT model.
+        # Validate timesteps/sigmas at the beginning if custom values are provided
+        if timesteps is not None or sigmas is not None:
+            self._validate_timesteps_sigmas(timesteps, sigmas)
 
         logger.info("Generating input tensors...")
         profiler.start("prepare_latents")
 
         # This cuts number of inference steps relative by strength parameter
-        self._prepare_timesteps()
+        self._prepare_timesteps(timesteps, sigmas)
 
         num_channels_image_latents = self.torch_pipeline.vae.config.latent_channels
         height = width = 1024
