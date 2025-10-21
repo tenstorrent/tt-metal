@@ -41,7 +41,11 @@ if "data_collection_paused" not in st.session_state:
 
 
 def parse_output_file(file_path="output.txt"):
-    """Parse the output.txt file to extract training metrics."""
+    """Parse the output.txt file to extract training metrics.
+    
+    Returns:
+        dict with 'current' (latest data point) and 'all' (list of all data points)
+    """
     if not os.path.exists(file_path):
         return None
 
@@ -49,36 +53,41 @@ def parse_output_file(file_path="output.txt"):
         with open(file_path, "r") as f:
             lines = f.readlines()
 
-        # Get the last non-empty line with data
         if not lines:
-            return None
-
-        # Find the last non-empty line
-        last_line = None
-        for line in reversed(lines):
-            if line.strip():
-                last_line = line.strip()
-                break
-
-        if not last_line:
             return None
 
         # Parse the format: "LR: 3e-3, training_loss: 0.97, val_loss: 1.01, step: 120, epoch: 1"
         pattern = (
             r"LR:\s*([\d.e+-]+),\s*training_loss:\s*([\d.]+),\s*val_loss:\s*([\d.]+),\s*step:\s*(\d+),\s*epoch:\s*(\d+)"
         )
-        match = re.search(pattern, last_line)
-
-        if match:
-            lr, train_loss, val_loss, step, epoch = match.groups()
-            return {
-                "lr": float(lr),
-                "training_loss": float(train_loss),
-                "val_loss": float(val_loss),
-                "step": int(step),
-                "epoch": int(epoch),
-                "timestamp": datetime.now(),
-            }
+        
+        all_data = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+                
+            match = re.search(pattern, line)
+            if match:
+                lr, train_loss, val_loss, step, epoch = match.groups()
+                data_point = {
+                    "lr": float(lr),
+                    "training_loss": float(train_loss),
+                    "val_loss": float(val_loss),
+                    "step": int(step),
+                    "epoch": int(epoch),
+                    "timestamp": datetime.now(),
+                }
+                all_data.append(data_point)
+        
+        if not all_data:
+            return None
+            
+        return {
+            "current": all_data[-1],  # Most recent data point
+            "all": all_data  # All data points
+        }
+        
     except Exception as e:
         st.error(f"Error parsing output.txt: {e}")
 
@@ -201,6 +210,11 @@ def create_training_yaml(config_dict, output_path="/home/ubuntu/tt-metal/tt-trai
         "max_lr": config_dict["max_lr"],
     }
 
+    device_config = {
+        "enable_ddp": True,
+        "mesh_shape": [1, 32]
+    }
+
     # Write YAML with blank lines between top-level sections
     with open(output_path, "w") as f:
         f.write("training_config:\n")
@@ -215,6 +229,14 @@ def create_training_yaml(config_dict, output_path="/home/ubuntu/tt-metal/tt-trai
         scheduler_yaml = yaml.dump(scheduler_config, default_flow_style=False, sort_keys=False)
         # Indent each line
         for line in scheduler_yaml.strip().split("\n"):
+            f.write(f"  {line}\n")
+
+        f.write("\n")  # Blank line between sections
+
+        f.write("device_config:\n")
+        device_yaml = yaml.dump(device_config, default_flow_style=False, sort_keys=False)
+        # Indent each line
+        for line in device_yaml.strip().split("\n"):
             f.write(f"  {line}\n")
 
     return output_path
@@ -331,6 +353,15 @@ def main():
         ]
         selected_model = st.selectbox("Base Model", model_options, index=0)
 
+        # Device selection
+        st.subheader("Device Settings")
+        devices_options = [
+            "N300",
+            "LoudBox",
+            "Galaxy",
+            "3-tier"
+        ]
+        selected_devices = st.selectbox("Devices", devices_options, index=2)
         # Dataset selection
         st.subheader("Dataset Settings")
         dataset_options = ["gsm8k", "math_qa", "aqua_rat", "svamp", "mawps"]
@@ -361,9 +392,9 @@ def main():
 
         col1, col2 = st.columns(2)
         with col1:
-            batch_size = st.number_input("Batch Size", min_value=1, max_value=64, value=1, step=1)
+            batch_size = st.number_input("Batch Size", min_value=1, max_value=64, value=64, step=1)
 
-            max_steps = st.number_input("Max Steps", min_value=10, max_value=100000, value=160, step=100)
+            max_steps = st.number_input("Max Steps", min_value=10, max_value=100000, value=60, step=100)
 
         with col2:
             warmup_steps = st.number_input("Warmup Steps", min_value=0, max_value=1000, value=20, step=10)
@@ -373,7 +404,7 @@ def main():
         eval_every = st.number_input("Eval Every", min_value=10, max_value=1000, value=20, step=10)
 
         gradient_accumulation = st.number_input(
-            "Gradient Accumulation Steps", min_value=1, max_value=128, value=64, step=1
+            "Gradient Accumulation Steps", min_value=1, max_value=128, value=8, step=1
         )
 
         max_seq_length = st.number_input("Max Sequence Length", min_value=128, max_value=4096, value=512, step=128)
@@ -386,7 +417,7 @@ def main():
         # YAML output directory configuration
         yaml_output_dir = st.text_input(
             "Override YAML Directory",
-            value="/home/ubuntu/tt-metal/tt-train/configs",
+            value="/home/training-team/git/tt-metal/tt-train/sources/examples/gsm8k_finetune",
             help="Directory where training_overrides.yaml will be saved",
         )
 
@@ -539,7 +570,11 @@ def main():
             test_data = parse_output_file(output_file)
             if test_data:
                 st.success("File parsed successfully!")
-                st.json(test_data)
+                st.json({
+                    "current_step": test_data["current"]["step"],
+                    "total_data_points": len(test_data["all"]),
+                    "current_data": test_data["current"]
+                })
             else:
                 st.error("Failed to parse file")
                 if os.path.exists(output_file):
@@ -561,15 +596,22 @@ def main():
         # Parse current training data and update history (only if not paused)
         current_data = None
         if not st.session_state.data_collection_paused:
-            current_data = parse_output_file(output_file)
+            parsed_data = parse_output_file(output_file)
 
-            if current_data:
-                # Update history if this is a new step OR if we haven't recorded anything yet
-                if current_data["step"] >= st.session_state.last_step:
-                    # Only append if it's actually a new step or first entry
-                    if current_data["step"] > st.session_state.last_step or len(st.session_state.training_history) == 0:
-                        st.session_state.training_history.append(current_data)
+            if parsed_data:
+                current_data = parsed_data["current"]
+                all_data = parsed_data["all"]
+                
+                # If we have no history yet, load all data from file
+                if len(st.session_state.training_history) == 0:
+                    st.session_state.training_history = all_data
                     st.session_state.last_step = current_data["step"]
+                else:
+                    # Only append new steps that we don't have yet
+                    for data_point in all_data:
+                        if data_point["step"] > st.session_state.last_step:
+                            st.session_state.training_history.append(data_point)
+                            st.session_state.last_step = data_point["step"]
 
         # Current status metrics
         col1, col2, col3, col4 = st.columns(4)

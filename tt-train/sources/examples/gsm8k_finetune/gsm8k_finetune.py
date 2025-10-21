@@ -6,6 +6,7 @@ Fine-tunes a Llama model on the GSM8K math word problems dataset using TT-Metal.
 
 import os
 import sys
+from time import time
 import datasets
 from dataclasses import dataclass
 import numpy as np
@@ -15,9 +16,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from huggingface_hub import hf_hub_download
 from matplotlib import pyplot as plt
 from tqdm import tqdm
-import debugpy
 from typing import List, Tuple, Dict, Optional
-import time
 
 # Add TT-Metal path
 sys.path.append(f"{os.environ['TT_METAL_HOME']}/tt-train/sources/ttml")
@@ -103,29 +102,21 @@ def build_logits_mask(vocab_size: int, padded_vocab_size: int) -> ttml.autograd.
 
 
 class CollateFn:
-    def __init__(self, tokenizer, max_sequence_length, padded_vocab_size):
-        self.tokenizer = tokenizer
+    def __init__(self, eos_token_id, max_sequence_length, padded_vocab_size):
+        self.eos_token_id = eos_token_id
         self.max_sequence_length = max_sequence_length
         self.padded_vocab_size = padded_vocab_size
 
     def collate_fn(self, batch):
-        # X = [sample['question'] for sample in batch]
-        # Y = [sample['answer'] for sample in batch]
         X = [sample[0] for sample in batch]
         Y = [sample[1] for sample in batch]
 
         batch_size = len(X)
 
-        # Batch tokenize questions and answers
-        # x_tokens_batch = self.tokenizer(X, return_tensors="np", add_special_tokens=False)["input_ids"]
-        # y_tokens_batch = self.tokenizer(Y, return_tensors="np", add_special_tokens=False)["input_ids"]
-
-        data_np = np.full((batch_size, self.max_sequence_length), self.tokenizer.eos_token_id, dtype=np.uint32)
+        data_np = np.full((batch_size, self.max_sequence_length), self.eos_token_id, dtype=np.uint32)
         mask_lens = []
 
         for i in range(batch_size):
-            # x_tokens = x_tokens_batch[i]
-            # y_tokens = y_tokens_batch[i]
             x_tokens = X[i]
             y_tokens = Y[i]
 
@@ -157,36 +148,20 @@ class CollateFn:
         X_np = np.expand_dims(data_np, axis=(1, 2))
 
         y_np = np.full(
-            (batch_size, self.max_sequence_length), self.tokenizer.eos_token_id, dtype=np.uint32
+            (batch_size, self.max_sequence_length), self.eos_token_id, dtype=np.uint32
         )  # Shape: [batch, seq_len]
         y_np[:, 0:-1] = X_np[:, 0, 0, 1:]  # Shift left by 1
 
-        logits_mask_np = np.ones((batch_size, 1, self.max_sequence_length, self.padded_vocab_size), dtype=np.float32)
 
+        loss_scaler_np = np.full((batch_size, 1, self.max_sequence_length, 1), 1.0, dtype=np.float32)
         for i, mask_len in enumerate(mask_lens):
-            # Mask out the question tokens (first mask_len tokens)
-            logits_mask_np[i, :, : mask_len - 1, :] = 0.0
-            # Also mask padding tokens
-            pad_positions = X_np[i, 0, 0, :] == self.tokenizer.eos_token_id
-            logits_mask_np[i, :, pad_positions, :] = 0.0
+            loss_scaler_np[i, :, :mask_len, :] = 0.0
+            pad_positions = X_np[i, 0, 0, :] == self.eos_token_id
+            loss_scaler_np[i, :, pad_positions, :] = 0.0
+        loss_scaler_ratio = self.max_sequence_length * batch_size / np.sum(loss_scaler_np)
+        loss_scaler_np = loss_scaler_np * loss_scaler_ratio
 
-        scaler_np = logits_mask_np[..., 0].sum(axis=-1, keepdims=True)  # Shape: [batch_size, 1, 1]
-        scaler_np = self.max_sequence_length / scaler_np
-
-        scaler_np = np.expand_dims(scaler_np, axis=-1)
-        scaler_np = np.repeat(scaler_np, self.max_sequence_length, axis=2)
-
-        logits_add_mask_np = np.zeros_like(logits_mask_np, dtype=np.float32)
-
-        # Find positions where mask is 0 (question tokens)
-        mask_positions = logits_mask_np[:, 0, :, 0] == 0.0  # Shape: [batch_size, max_sequence_length]
-
-        # Use advanced indexing to set the corresponding target token positions to 1e3
-        batch_indices, seq_indices = np.where(mask_positions)
-        target_tokens = y_np[batch_indices, seq_indices]
-        logits_add_mask_np[batch_indices, 0, seq_indices, target_tokens] = 1e3
-
-        return X_np, y_np, logits_mask_np, logits_add_mask_np, scaler_np
+        return X_np, y_np, loss_scaler_np
 
     def __call__(self, batch):
         return self.collate_fn(batch)
@@ -200,42 +175,13 @@ def get_batch_generator(dataloader, batch_size, max_sequence_length, padded_voca
     
     while True:
         for batch in dataloader:
-            X_np, y_np, logits_mask_np, logits_add_mask_np, scaler_np = batch
-
-            # X_np_size = X_np.shape[0] * X_np.shape[1] * X_np.shape[2] * X_np.shape[3] * X_np.itemsize
-            # y_np_size = y_np.shape[0] * y_np.shape[1] * y_np.itemsize
-            # logits_mask_np_size = logits_mask_np.shape[0] * logits_mask_np.shape[1] * logits_mask_np.shape[2] * logits_mask_np.shape[3] * logits_mask_np.itemsize
-            # logits_add_mask_np_size = logits_add_mask_np.shape[0] * logits_add_mask_np.shape[1] * logits_add_mask_np.shape[2] * logits_add_mask_np.shape[3] * logits_add_mask_np.itemsize
-            # scaler_np_size = scaler_np.shape[0] * scaler_np.shape[1] * scaler_np.shape[2] * scaler_np.itemsize
-            # print(f"X_np_size: {X_np_size}, y_np_size: {y_np_size}, logits_mask_np_size: {logits_mask_np_size}, logits_add_mask_np_size: {logits_add_mask_np_size}, scaler_np_size: {scaler_np_size}")
-            # exit(0)
-
-            logits_add_mask = ttml.autograd.Tensor.from_numpy(
-                logits_add_mask_np, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16, mapper
-            )
-
-            logits_mask = ttml.autograd.Tensor.from_numpy(
-                logits_mask_np, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16, mapper
-            )
-
-            scaler = ttml.autograd.Tensor.from_numpy(scaler_np, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16, mapper)
-
-
-            # logits_add_mask = ttml.autograd.Tensor.from_numpy(
-            #     logits_add_mask_np, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16, mapper
-            # )
-
-            # logits_mask = ttml.autograd.Tensor.from_numpy(
-            #     logits_mask_np, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16, mapper
-            # )
-
-            # scaler = ttml.autograd.Tensor.from_numpy(scaler_np, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16, mapper)
+            X_np, y_np, loss_scaler_np = batch
 
             X = ttml.autograd.Tensor.from_numpy(X_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32, mapper)
             y = ttml.autograd.Tensor.from_numpy(y_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32, mapper)
+            loss_scaler = ttml.autograd.Tensor.from_numpy(loss_scaler_np, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16, mapper)
 
-            # yield (X, y, logits_mask, logits_add_mask, scaler)
-            yield (X, y, logits_mask, logits_add_mask, scaler)
+            yield (X, y, loss_scaler)
 
 
 def generate_text_tt(
@@ -267,9 +213,11 @@ def generate_text_tt(
 
     generated_tokens = []
 
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
+
     # Preallocate once
     padded_prompt_tokens = np.full((1, 1, 1, max_sequence_length), pad_token_id, dtype=np.uint32)
-
     for _ in range(max_gen_tokens):
         # Sliding window for long prompts
         if len(prompt_tokens) > max_sequence_length:
@@ -297,7 +245,7 @@ def generate_text_tt(
 
         # Take the token at the last active position in the current window
         next_token_idx = max_sequence_length - 1 if len(prompt_tokens) > max_sequence_length else len(window) - 1
-        next_token = int(next_token_tensor.to_numpy().reshape(-1, 1)[next_token_idx][0])
+        next_token = int(next_token_tensor.to_numpy(composer=composer).reshape(-1, 1)[next_token_idx][0])
 
         generated_tokens.append(next_token)
         prompt_tokens.append(next_token)
@@ -306,15 +254,10 @@ def generate_text_tt(
             break
 
     # Decode once at the end
-    gen_text = tokenizer.decode(generated_tokens)
+    out = tokenizer.decode(generated_tokens)
     if return_with_prompt:
-        full_text = tokenizer.decode(prompt_tokens)  # includes original question + generated
-        print(full_text, end="")
-        out = full_text
-    else:
-        print(gen_text, end="")
-        out = gen_text
-
+        out = tokenizer.decode(prompt_tokens)
+    
     ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.ENABLED)
     return out
 
@@ -336,42 +279,43 @@ def validate(
     eval_batch_count = 4
     cur_val_losses = []
     for _ in range(eval_batch_count):
-        val_X, val_y, val_logits_mask, val_logits_add_mask, val_loss_scaler = next(val_batch_generator)
+        val_X, val_y, val_loss_scaler = next(val_batch_generator)
         val_logits = tt_model(val_X, causal_mask)
 
-        # Apply mask to validation logits
-        val_masked_logits = adjust_logits(val_logits, val_logits_mask, val_logits_add_mask)
-
         # Compute validation loss
-        val_loss = loss_fn(val_masked_logits, val_y, reduce)
+        val_loss = loss_fn(val_logits, val_y, reduce)
         val_loss = val_loss * val_loss_scaler
         val_loss = ttml.ops.unary.mean(val_loss)
         cur_val_losses.append(get_loss_over_devices(val_loss))
 
     checks_count = 4
 
-    # with open("validation.txt", "a+") as val_file:
-    #     val_file.write(f"Validation at step {current_step}\n")
-    #     for check in range(checks_count):
-    #         val_file.write(f"Validation check: {check}\n")
-    #         val_file.write("====================================\n")
-    #         val_file.write(f"Question: {testing_data[check]['question']}\n")
-    #         val_file.write("====================================\n")
+    with open("validation.txt", "a+") as val_file:
+        val_file.write(f"Validation at step {current_step}\n")
+        for check in range(checks_count):
+            val_file.write(f"Validation check: {check}\n")
+            val_file.write("====================================\n")
 
-    #         gen_text = generate_text_tt(
-    #             tt_model,
-    #             tokenizer,
-    #             testing_data[check]["question"],
-    #             max_sequence_length,
-    #             causal_mask,
-    #             0.0,
-    #             logits_mask_tensor,
-    #         )
+            tokenized_question, tokenized_answer = testing_data[check]
+            question = tokenizer.decode(tokenized_question, skip_special_tokens=True)
 
-    #         val_file.write(f"Generated Answer: {gen_text}\n")
-    #         val_file.write("\n====================================\n")
+            val_file.write(f"Question: {question}\n")
+            val_file.write("====================================\n")
 
-    #     val_file.write("Last validation loss: {:.4f}\n\n\n".format(np.mean(cur_val_losses)))
+            gen_text = generate_text_tt(
+                tt_model,
+                tokenizer,
+                question,
+                max_sequence_length,
+                causal_mask,
+                0.0,
+                logits_mask_tensor,
+            )
+
+            val_file.write(f"Generated Answer: {gen_text}\n")
+            val_file.write("\n====================================\n")
+
+        val_file.write("Last validation loss: {:.4f}\n\n\n".format(np.mean(cur_val_losses)))
 
     ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.ENABLED)
     tt_model.train()
@@ -483,13 +427,6 @@ def train():
     training_config = TrainingConfig(yaml_config)
     scheduler_config = ttml.common.config.SchedulerConfig(yaml_config)
 
-    # over complication 
-    # if os.path.isfile("training_overrides.yaml"):
-    #     print("Applying training overrides...")
-    #     override_config = get_config("training_overrides.yaml")
-    #     training_config.update_config(override_config)
-    #     scheduler_config.update_config(override_config)
-
     batch_size = training_config.batch_size
 
     # initialize device
@@ -538,7 +475,7 @@ def train():
         shuffle=True,  # Shuffle the dataset for each epoch
         drop_last=True,
         num_workers=0,
-        collate_fn=CollateFn(tokenizer, max_sequence_length, padded_vocab_size),
+        collate_fn=CollateFn(tokenizer.eos_token_id, max_sequence_length, padded_vocab_size),
         # persistent_workers=True,
     )
 
@@ -552,7 +489,7 @@ def train():
         shuffle=False,  # Disable shuffling for validation
         drop_last=True,
         num_workers=0,
-        collate_fn=CollateFn(tokenizer, max_sequence_length, padded_vocab_size),
+        collate_fn=CollateFn(tokenizer.eos_token_id, max_sequence_length, padded_vocab_size),
         # persistent_workers=True,
     )
 
@@ -575,20 +512,13 @@ def train():
     train_losses = []
     val_losses = []
 
+    # remove output.txt if it exists
+    if os.path.exists("output.txt"):
+        os.remove("output.txt")
+
     train_batch_generator = get_batch_generator(
         training_dataloader, batch_size, max_sequence_length, padded_vocab_size, tokenizer, device_config
     )
-
-    from time import time
-
-    iter_dl = iter(train_batch_generator)
-    for _ in range(1000):
-        before = time()
-        X, y, logits_mask, logits_add_mask, loss_scaler = next(iter_dl)
-        after = time()
-        print(f"Time taken: {after - before} seconds")
-
-    exit(0)
 
     val_batch_generator = get_batch_generator(testing_dataloader, VALIDATION_BATCH_SIZE_PER_DEVICE * num_devices, max_sequence_length, padded_vocab_size, tokenizer, device_config)
 
@@ -635,21 +565,14 @@ def train():
         micro_losses = []
 
         for micro in range(accum_steps):
-            start_data = time()
-            X, y, logits_mask, logits_add_mask, loss_scaler = next(train_batch_generator)
-            end_data = time()
-            print('Data time: ', (end_data - start_data))
-
+            X, y, loss_scaler = next(train_batch_generator)
 
             # Forward
             logits = tt_model(X, causal_mask)  # [B,1,T,V]
 
-            # Mask logits
-            masked_logits = adjust_logits(logits, logits_mask, logits_add_mask)
-
             # CE on masked logits
-            unscaled_loss = loss_fn(masked_logits, y, reduce)  # [B,1,T,1] shape reduced later
-            loss = unscaled_loss * loss_scaler
+            loss = loss_fn(logits, y, reduce)  # [B,1,T,1] shape reduced later
+            loss = loss * loss_scaler
             loss = ttml.ops.unary.mean(loss)  # scalar
 
             # Track true loss for reporting
@@ -679,19 +602,20 @@ def train():
         bar.set_postfix(postfix, refresh=False)
 
         # Validation every eval_every steps
-        # if total_steps % training_config.eval_every == 0:
-        #     last_val_loss = validate(
-        #         tt_model,
-        #         tokenizer,
-        #         val_batch_generator,
-        #         testing_data,
-        #         loss_fn,
-        #         causal_mask,
-        #         logits_mask_tensor,
-        #         max_sequence_length,
-        #         total_steps,
-        #     )
-        #     val_losses.append(last_val_loss)
+        if total_steps % training_config.eval_every == 0 or \
+            total_steps + 1 == training_config.steps:
+            last_val_loss = validate(
+                tt_model,
+                tokenizer,
+                val_batch_generator,
+                testing_data,
+                loss_fn,
+                causal_mask,
+                logits_mask_tensor,
+                max_sequence_length,
+                total_steps,
+            )
+            val_losses.append(last_val_loss)
         """
         if training_config.save_every > 0 and (total_steps % training_config.save_every == 0):
             ckpt_path = tt_serialization._save_model_npz(
@@ -699,13 +623,13 @@ def train():
             )
             print(f"[Checkpoint] Saved model to {ckpt_path}")
         """
-        f = open("output.txt", "w")
-        f.write(
-            f"LR: {lr_now:.6f}, training_loss: {step_loss:.4f}, val_loss: {last_val_loss:.4f}, step: {total_steps}, epoch: 1\n"
-        )
-        f.close()
 
+        with open("output.txt", "a") as f:
+            f.write(
+                f"LR: {lr_now:.6f}, training_loss: {step_loss:.4f}, val_loss: {last_val_loss:.4f}, step: {total_steps}, epoch: 1\n"
+            )
         total_steps += 1
+
     print("Training completed!")
 
     # Plot training curves
