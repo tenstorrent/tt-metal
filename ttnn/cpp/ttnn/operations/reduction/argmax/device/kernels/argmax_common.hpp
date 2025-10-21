@@ -93,6 +93,24 @@ auto get_default_value() {
     }
 }
 
+/**
+ * @brief Extracts a value from a raw memory pointer based on the specified data format.
+ *
+ * This template function interprets the data pointed to by the void pointer according to
+ * the specified data format and returns the appropriately typed value. It supports multiple
+ * data formats including floating-point and integer types.
+ *
+ * @tparam data_format The DataFormat enum value that determines how to interpret the data
+ * @param ptr A void pointer to the raw memory containing the data to be interpreted
+ *
+ * @return The interpreted value of the appropriate type based on data_format:
+ *         - uint16_t for Float16_b and UInt16 formats
+ *         - uint32_t for Float32 and UInt32 formats
+ *         - int32_t for Int32 format
+ *
+ * @note This function uses compile-time template specialization for type safety and performance
+ * @throws Compile-time error for unsupported data formats via static_assert
+ */
 template <DataFormat data_format>
 auto get_value(void* ptr) {
     // Check for supported datatypes
