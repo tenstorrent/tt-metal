@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "debug/dprint.h"
-#include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
 
 // CBs with output data
 constexpr uint32_t cb_dx_idx = tt::CBIndex::c_10;                // dx (input gradient)
@@ -14,7 +12,7 @@ constexpr uint32_t cb_dbeta_components = tt::CBIndex::c_12;      // dbeta compon
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
-// constexpr uint32_t onetile = 1;
+constexpr uint32_t onetile = 1;
 
 template <typename AddrGen>
 inline void write_cb_block_to_dram(

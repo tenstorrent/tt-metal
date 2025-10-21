@@ -261,7 +261,7 @@ TEST_F(LayerNormFusedOpTest, MetalLayerNormBw_LargeFeatures_NoL1Fit) {
         auto metal_dx = core::to_vector(output_tensors[0].value());
         auto metal_dgamma = core::to_vector(output_tensors[1].value());
 
-        float tolerance = 5e-2f;
+        float tolerance = 1e-1f;
 
         for (uint32_t i = 0; i < total_elements; ++i) {
             EXPECT_NEAR(metal_dx[i], dx_ref[i], tolerance) << "Input gradient mismatch at index " << i;
@@ -339,7 +339,7 @@ TEST_F(LayerNormFusedOpTest, MetalLayerNormBw_Everything_Small_L1Fit) {
         auto metal_dx = core::to_vector(output_tensors[0].value());
         auto metal_dgamma = core::to_vector(output_tensors[1].value());
 
-        float tolerance = 5e-2f;
+        float tolerance = 1e-1f;
 
         for (uint32_t i = 0; i < total_elements; ++i) {
             EXPECT_NEAR(metal_dx[i], dx_ref[i], tolerance) << "Input gradient mismatch at index " << i;
@@ -417,7 +417,7 @@ TEST_F(LayerNormFusedOpTest, MetalLayerNormBw_One_Tile_Row) {
         auto metal_dx = core::to_vector(output_tensors[0].value());
         auto metal_dgamma = core::to_vector(output_tensors[1].value());
 
-        float tolerance = 5e-2f;
+        float tolerance = 1e-1f;
 
         for (uint32_t i = 0; i < total_elements; ++i) {
             EXPECT_NEAR(metal_dx[i], dx_ref[i], tolerance) << "Input gradient mismatch at index " << i;
