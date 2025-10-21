@@ -9,7 +9,7 @@ Usage:
   -s SCRIPT      : path to script to run instead of test command (optional)
   -g GOOD_SHA    : known good commit
   -b BAD_SHA     : known bad commit
-  -t TIMEOUT     : per-iteration timeout (default 30m)
+  -t TIMEOUT     : per-iteration timeout in minutes (default 30)
   -p             : enable Tracy profiling
   -r RETRIES     : number of retries (default 3)
   -n             : enable non-deterministic detection mode (ND mode)
@@ -17,7 +17,7 @@ Usage:
 Note: Either -f or -s must be specified, but not both.
 END
 
-timeout_duration_iteration="30m"
+timeout_duration_iteration="30"
 test=""
 script_path=""
 good_commit=""
@@ -259,7 +259,7 @@ while [[ "$found" == "false" ]]; do
         run_cmd="$test"
       fi
 
-      if timeout -k 10s "$timeout_duration_iteration" bash -lc "$run_cmd" 2>&1 | tee "$output_file"; then
+      if timeout -k 10s "${timeout_duration_iteration}m" bash -lc "$run_cmd" 2>&1 | tee "$output_file"; then
         if grep -qiE "(^|[^a-zA-Z])(SKIP|SKIPPED)([^a-zA-Z]|$)" "$output_file"; then
           echo "Attempt $run_idx: detected skip (exit 0 with 'SKIP' in output)"
           skip_count=$((skip_count+1))
@@ -347,7 +347,7 @@ while [[ "$found" == "false" ]]; do
         run_cmd="$test"
       fi
 
-      if timeout -k 10s "$timeout_duration_iteration" bash -lc "$run_cmd" 2>&1 | tee "$output_file"; then
+      if timeout -k 10s "${timeout_duration_iteration}m" bash -lc "$run_cmd" 2>&1 | tee "$output_file"; then
         timeout_rc=0
         echo "--- Logs (attempt $run_idx) ---"
         sed -n '1,200p' "$output_file" || true
