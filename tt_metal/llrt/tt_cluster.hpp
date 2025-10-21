@@ -35,6 +35,8 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/cluster_types.hpp>
 
+// REVERT ME, NEED TO FORCE CLANG TIDY TO RUN
+
 namespace tt {
 namespace llrt {
 class RunTimeOptions;
