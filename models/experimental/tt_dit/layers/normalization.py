@@ -356,7 +356,7 @@ class GroupNorm(Module):
         self.mesh_axis = (
             self.filter_mesh_axis(mesh_device, mesh_axis, num_channels, torch_ref) if filter_mesh_axis else mesh_axis
         )
-        self.num_devices = tuple(mesh_device.shape)[mesh_axis] if self.mesh_axis is not None else 1
+        self.num_devices = tuple(mesh_device.shape)[self.mesh_axis] if self.mesh_axis is not None else 1
         self.num_channels = (num_channels or torch_ref.num_channels) // self.num_devices
         self.num_groups = (num_groups or torch_ref.num_groups) // self.num_devices
         self.core_grid = core_grid or ttnn.CoreGrid(x=8, y=8)  # self.mesh_device.core_grid # Issue on 6U 8x9 grid
@@ -384,13 +384,13 @@ class GroupNorm(Module):
         self.weight = Parameter(
             total_shape=weight_shape,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_axes=[mesh_axis, None, None, None],
+            mesh_axes=[self.mesh_axis, None, None, None],
             device=self.mesh_device,
         )
         self.bias = Parameter(
             total_shape=weight_shape,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_axes=[mesh_axis, None, None, None],
+            mesh_axes=[self.mesh_axis, None, None, None],
             device=self.mesh_device,
         )
         self.mask = Parameter(total_shape=mask_shape, device=self.mesh_device)
