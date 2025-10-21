@@ -150,6 +150,7 @@ def test_model_inference(
             "Llama-3.2-11B": 0.955 if mode_accuracy else 0.944,
             "Llama-3.2-90B": 0.9732,
             "Mistral-7B": 0.95 if mode_accuracy else 0.95,
+            "Qwen3-32B": 0.98 if mode_accuracy else 0.95,
         }[model_name]
 
         final_k_cache_pcc = {
@@ -166,6 +167,7 @@ def test_model_inference(
             "Llama-3.2-11B": 0.9995,
             "Llama-3.2-90B": 0.9995,
             "Mistral-7B": 0.68,
+            "Qwen3-32B": 0.999,
         }[model_name]
         final_v_cache_pcc = {
             "llama32_1b": 0.9996,
@@ -181,6 +183,7 @@ def test_model_inference(
             "Llama-3.2-11B": 0.9996,
             "Llama-3.2-90B": 0.9996,
             "Mistral-7B": 0.68,
+            "Qwen3-32B": 0.999,
         }[model_name]
 
         quick_iterations = {
@@ -197,6 +200,7 @@ def test_model_inference(
             "Llama-3.2-11B": 6,
             "Llama-3.2-90B": 6,
             "Mistral-7B": 2,
+            "Qwen3-32B": 4,
         }[model_name]
 
         iterations = quick_iterations

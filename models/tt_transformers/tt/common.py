@@ -683,6 +683,7 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
+    # num_layers = 1
     if num_layers is not None:
         tt_model_args.n_layers = num_layers
 
