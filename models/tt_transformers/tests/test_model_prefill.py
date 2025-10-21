@@ -9,14 +9,13 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc, skip_for_grayskull
+from models.common.utility_functions import comp_pcc
 from models.tt_transformers.tt.common import PagedAttentionConfig, create_tt_model
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import CheckpointType, DecodersPrecision
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.timeout(900)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
@@ -94,6 +93,10 @@ def test_model_inference(
         if num_layers != 1 and seq_len != 4096:
             pytest.skip("CI only runs full model for 4k seq len to reduce CI pipeline load")
 
+        hf_model_env = os.getenv("HF_MODEL", "")
+        if ("Llama" in hf_model_env) and ("Vision" in hf_model_env) and (num_layers is None):
+            pytest.skip("Skipping Llama Vision full model test: no CrossAttention functionality in this test.")
+
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     dtype = ttnn.bfloat8_b
     batch_size = 1  # For prefill we only support batch_size = 1
@@ -127,6 +130,7 @@ def test_model_inference(
         model_args.base_model_name.startswith("Mistral-")
         or model_args.base_model_name.startswith("Qwen3-")
         or model_args.base_model_name.startswith("Phi-3-mini-")
+        or model_args.base_model_name.startswith("phi-4")
     ):
         # TODO: Per layer KV cache fetching is not implemented for all models
         # See issue https://github.com/tenstorrent/tt-metal/issues/19806"

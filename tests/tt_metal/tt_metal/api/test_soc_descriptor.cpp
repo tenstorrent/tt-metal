@@ -20,14 +20,13 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/coordinates/coordinate_manager.hpp>
 #include <umd/device/types/arch.hpp>
-#include <tt-metalium/utils.hpp>
 
 using namespace tt;
 using namespace tt::test_utils;
 
 namespace unit_tests::basic::soc_desc {
-std::unordered_set<int> get_harvested_rows(chip_id_t device_id) {
-    uint32_t harvested_rows_mask = CoordinateManager::shuffle_tensix_harvesting_mask_to_noc0_coords(
+std::unordered_set<int> get_harvested_rows(ChipId device_id) {
+    uint32_t harvested_rows_mask = tt::umd::CoordinateManager::shuffle_tensix_harvesting_mask_to_noc0_coords(
         tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).arch,
         tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id));
     std::unordered_set<int> harvested_rows;

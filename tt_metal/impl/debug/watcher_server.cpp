@@ -19,7 +19,7 @@
 #include <thread>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "debug/ring_buffer.h"
 #include "debug_helpers.hpp"
@@ -46,7 +46,7 @@ public:
     void detach_devices();
     void __attribute__((noinline)) dump(FILE* f);  // noinline so that this fn exists to be called from gdb
     void dump() { dump(logfile_); }
-    void isolated_dump(std::vector<chip_id_t>& device_ids);
+    void isolated_dump(std::vector<ChipId>& device_ids);
     void clear_log() {
         const std::lock_guard<std::mutex> lock(watch_mutex_);
         create_log_file();
@@ -67,7 +67,7 @@ private:
     void create_log_file();
     void create_kernel_file();
     void create_kernel_elf_file();
-    void init_device(chip_id_t device_id);
+    void init_device(ChipId device_id);
     void poll_watcher_data();
 
     std::atomic<bool> stop_server_ = false;
@@ -76,7 +76,7 @@ private:
     std::atomic<bool> server_killed_due_to_error_ = false;
     std::atomic<int> dump_count_ = 0;
 
-    std::map<chip_id_t, WatcherDeviceReader> device_id_to_reader_;
+    std::map<ChipId, WatcherDeviceReader> device_id_to_reader_;
     std::vector<std::string> kernel_names_;
     inline static std::chrono::time_point start_time = std::chrono::system_clock::now();
     std::mutex watch_mutex_;  // Guards server internal state + logfile + device watcher mailbox
@@ -98,7 +98,7 @@ private:
 
 void WatcherServer::Impl::init_devices() {
     auto all_devices = MetalContext::instance().get_cluster().all_chip_ids();
-    for (chip_id_t device_id : all_devices) {
+    for (ChipId device_id : all_devices) {
         init_device(device_id);
     }
 }
@@ -114,7 +114,7 @@ void WatcherServer::Impl::attach_devices() {
         create_log_file();
         create_kernel_file();
         auto all_devices = MetalContext::instance().get_cluster().all_chip_ids();
-        for (chip_id_t device_id : all_devices) {
+        for (ChipId device_id : all_devices) {
             device_id_to_reader_.try_emplace(device_id, logfile_, device_id, kernel_names_);
             log_info(LogLLRuntime, "Watcher attached device {}", device_id);
             fprintf(logfile_, "At %.3lfs attach device %d\n", get_elapsed_secs(), device_id);
@@ -169,7 +169,7 @@ void WatcherServer::Impl::detach_devices() {
     {
         const std::lock_guard<std::mutex> lock(watch_mutex_);
         auto all_devices = MetalContext::instance().get_cluster().all_chip_ids();
-        for (chip_id_t device_id : all_devices) {
+        for (ChipId device_id : all_devices) {
             TT_ASSERT(device_id_to_reader_.count(device_id) > 0);
             device_id_to_reader_.erase(device_id);
             log_info(LogLLRuntime, "Watcher detached device {}", device_id);
@@ -190,11 +190,11 @@ void WatcherServer::Impl::dump(FILE* f) {
     }
 }
 
-void WatcherServer::Impl::isolated_dump(std::vector<chip_id_t>& device_ids) {
+void WatcherServer::Impl::isolated_dump(std::vector<ChipId>& device_ids) {
     // No init, so we don't clear mailboxes
     clear_log();
     read_kernel_ids_from_file();
-    for (chip_id_t device_id : device_ids) {
+    for (ChipId device_id : device_ids) {
         device_id_to_reader_.try_emplace(device_id, logfile_, device_id, kernel_names_);
         log_info(LogLLRuntime, "Watcher attached device {}", device_id);
         fprintf(logfile_, "At %.3lfs attach device %d\n", get_elapsed_secs(), device_id);
@@ -338,7 +338,7 @@ void WatcherServer::Impl::create_kernel_elf_file() {
     fflush(f);
 }
 
-void WatcherServer::Impl::init_device(chip_id_t device_id) {
+void WatcherServer::Impl::init_device(ChipId device_id) {
     const std::lock_guard<std::mutex> lock(watch_mutex_);
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -389,7 +389,7 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
         tt::llrt::RunTimeDebugFeatureWriteDebugDelay,
         tt::llrt::RunTimeDebugFeatureAtomicDebugDelay};
     for (auto delay_feature : debug_delay_features) {
-        const std::vector<chip_id_t>& chip_ids = rtoptions.get_feature_chip_ids(delay_feature);
+        const std::vector<ChipId>& chip_ids = rtoptions.get_feature_chip_ids(delay_feature);
         bool this_chip_enabled =
             rtoptions.get_feature_all_chips(delay_feature) || std::ranges::find(chip_ids, device_id) != chip_ids.end();
         if (this_chip_enabled) {
@@ -572,5 +572,5 @@ std::string WatcherServer::exception_message() { return impl_->exception_message
 void WatcherServer::set_exception_message(const std::string& msg) { impl_->set_exception_message(msg); }
 int WatcherServer::dump_count() { return impl_->dump_count(); }
 std::unique_lock<std::mutex> WatcherServer::get_lock() { return impl_->get_lock(); }
-void WatcherServer::isolated_dump(std::vector<chip_id_t>& device_ids) { impl_->isolated_dump(device_ids); }
+void WatcherServer::isolated_dump(std::vector<ChipId>& device_ids) { impl_->isolated_dump(device_ids); }
 }  // namespace tt::tt_metal

@@ -14,7 +14,7 @@
 
 #include <hostdevcommon/common_values.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/cluster.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -35,9 +35,9 @@ namespace detail {
 
 bool DispatchStateCheck(bool isFastDispatch);
 
-std::map<chip_id_t, IDevice*> CreateDevices(
+std::map<ChipId, IDevice*> CreateDevices(
     // TODO: delete this in favour of DevicePool
-    const std::vector<chip_id_t>& device_ids,
+    const std::vector<ChipId>& device_ids,
     uint8_t num_hw_cqs = 1,
     size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
     size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
@@ -48,7 +48,7 @@ std::map<chip_id_t, IDevice*> CreateDevices(
     bool use_max_eth_core_count_on_all_devices = false,
     bool initialize_fabric_and_dispatch_fw = true);
 
-void CloseDevices(const std::map<chip_id_t, IDevice*>& devices);
+void CloseDevices(const std::map<ChipId, IDevice*>& devices);
 
 /**
  * Copies data from a host buffer into the specified buffer

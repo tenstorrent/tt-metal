@@ -6,7 +6,7 @@
 #include <fmt/base.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/event.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <future>
@@ -50,7 +50,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
         auto start = std::chrono::system_clock::now();
 
         uint32_t completion_queue_base = device->sysmem_manager().get_completion_queue_read_ptr(0);
-        chip_id_t mmio_device_id =
+        ChipId mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
         uint16_t channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
@@ -76,7 +76,8 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
         uint32_t event;
         if (data_movement_mode == DataMovementMode::WRITE) {
             for (size_t i = 0; i < num_buffers; i++) {
-                uint32_t host_addr = last_read_address + i * completion_queue_page_size + completion_queue_event_offset;
+                uint32_t host_addr =
+                    last_read_address + (i * completion_queue_page_size) + completion_queue_event_offset;
                 tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
                     &event, 4, host_addr, mmio_device_id, channel);
                 EXPECT_EQ(event, ++expected_event_id);  // Event ids start at 1
@@ -85,7 +86,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
             for (size_t i = 0; i < num_buffers; i++) {
                 // Extra entry in the completion queue is from the buffer read data.
                 uint32_t host_addr =
-                    completion_queue_base + (2 * i + 1) * completion_queue_page_size + completion_queue_event_offset;
+                    completion_queue_base + ((2 * i + 1) * completion_queue_page_size) + completion_queue_event_offset;
                 tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
                     &event, 4, host_addr, mmio_device_id, channel);
                 EXPECT_EQ(event, ++expected_event_id);  // Event ids start at 1
@@ -105,7 +106,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
     auto start = std::chrono::system_clock::now();
 
     for (size_t i = 0; i < num_events; i++) {
-        auto event = distributed::EnqueueRecordEventToHost(cq);
+        auto event = cq.enqueue_record_event_to_host();
         EXPECT_EQ(event.id(), cmds_issued_per_cq + 1);  // Event ids start at 1
         EXPECT_EQ(event.mesh_cq_id(), cq.id());
         cmds_issued_per_cq++;
@@ -129,8 +130,8 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventAndSynchronize) {
 
     // A bunch of events recorded, occasionally will sync from host.
     for (size_t i = 0; i < num_events; i++) {
-        auto event = sync_events.emplace_back(
-            std::make_shared<distributed::MeshEvent>(distributed::EnqueueRecordEventToHost(cq)));
+        auto event =
+            sync_events.emplace_back(std::make_shared<distributed::MeshEvent>(cq.enqueue_record_event_to_host()));
         // Host synchronize every N number of events.
         if (i > 0 && ((i % num_events_between_sync) == 0)) {
             distributed::EventSynchronize(*event);
@@ -159,20 +160,20 @@ TEST_F(UnitMeshCQEventFixture, TestEventsQueueWaitForEventBasic) {
 
     // A bunch of events recorded, occasionally will sync from device.
     for (size_t i = 0; i < num_events; i++) {
-        auto event = sync_events.emplace_back(
-            std::make_shared<distributed::MeshEvent>(distributed::EnqueueRecordEventToHost(cq)));
+        auto event =
+            sync_events.emplace_back(std::make_shared<distributed::MeshEvent>(cq.enqueue_record_event_to_host()));
 
         // Device synchronize every N number of events.
         if (i > 0 && ((i % num_events_between_sync) == 0)) {
             log_debug(tt::LogTest, "Going to WaitForEvent for i: {}", i);
-            distributed::EnqueueWaitForEvent(cq, *event);
+            cq.enqueue_wait_for_event(*event);
         }
     }
 
     // A bunch of bonus syncs where event_id is mod on earlier ID's.
-    distributed::EnqueueWaitForEvent(cq, *sync_events.at(0));
-    distributed::EnqueueWaitForEvent(cq, *sync_events.at(sync_events.size() - 5));
-    distributed::EnqueueWaitForEvent(cq, *sync_events.at(4));
+    cq.enqueue_wait_for_event(*sync_events.at(0));
+    cq.enqueue_wait_for_event(*sync_events.at(sync_events.size() - 5));
+    cq.enqueue_wait_for_event(*sync_events.at(4));
     distributed::Finish(cq);
 
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
@@ -192,8 +193,8 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEventsQueryBasic) {
 
     // Record many events, occasionally query from host, but cannot guarantee completion status.
     for (size_t i = 0; i < num_events; i++) {
-        auto event = sync_events.emplace_back(
-            std::make_shared<distributed::MeshEvent>(distributed::EnqueueRecordEventToHost(cq)));
+        auto event =
+            sync_events.emplace_back(std::make_shared<distributed::MeshEvent>(cq.enqueue_record_event_to_host()));
 
         if (i > 0 && ((i % num_events_between_query) == 0)) {
             [[maybe_unused]] auto status = distributed::EventQuery(*event);
@@ -218,7 +219,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEventsQueryBasic) {
         mesh_device.get(),
         cq.id(),
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0)));
-    distributed::EnqueueRecordEvent(cq);
+    cq.enqueue_record_event();
     event_status = distributed::EventQuery(*future_event);
     EXPECT_EQ(event_status, false);
 
@@ -242,13 +243,13 @@ TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) 
     auto start = std::chrono::system_clock::now();
 
     uint32_t completion_queue_base = device->sysmem_manager().get_completion_queue_read_ptr(0);
-    chip_id_t mmio_device_id =
+    ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
     for (size_t i = 0; i < num_buffers; i++) {
         log_debug(tt::LogTest, "i: {} - Going to record event, write, wait, synchronize.", i);
-        auto event = std::make_shared<distributed::MeshEvent>(distributed::EnqueueRecordEventToHost(cq));
+        auto event = std::make_shared<distributed::MeshEvent>(cq.enqueue_record_event_to_host());
         EXPECT_EQ(event->mesh_cq_id(), cq.id());
         EXPECT_EQ(event->id(), events_issued_per_cq + 1);  // Event ids start at 1
 
@@ -257,7 +258,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) 
         std::shared_ptr<distributed::MeshBuffer> buf =
             distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
         distributed::WriteShard(cq, buf, page, distributed::MeshCoordinate(0, 0), true);
-        distributed::EnqueueWaitForEvent(cq, *event);
+        cq.enqueue_wait_for_event(*event);
 
         if (i % 10 == 0) {
             distributed::EventSynchronize(*event);
@@ -269,7 +270,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) 
     // Read completion queue and ensure we see expected event IDs
     uint32_t event_id;
     for (size_t i = 0; i < num_buffers * num_events_per_cq; i++) {
-        uint32_t host_addr = completion_queue_base + i * completion_queue_page_size + completion_queue_event_offset;
+        uint32_t host_addr = completion_queue_base + (i * completion_queue_page_size) + completion_queue_event_offset;
         tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
             &event_id, 4, host_addr, mmio_device_id, channel);
         EXPECT_EQ(event_id, ++expected_event_id);

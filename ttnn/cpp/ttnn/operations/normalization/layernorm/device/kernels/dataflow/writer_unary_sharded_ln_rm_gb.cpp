@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,8 @@ void kernel_main() {
     constexpr bool fuse_gamma = get_compile_time_arg_val(1) == 1;
     constexpr bool fuse_beta = get_compile_time_arg_val(2) == 1;
     constexpr uint32_t block_w = get_compile_time_arg_val(3);
-    constexpr auto gamma_args = TensorAccessorArgs<4>();
+    constexpr bool use_welford = get_compile_time_arg_val(4) == 1;
+    constexpr auto gamma_args = TensorAccessorArgs<5>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     constexpr uint32_t stick_size = get_compile_time_arg_val(beta_args.next_compile_time_args_offset());
     constexpr bool FLOAT32_DTYPE_GAMMA = get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 1) == 1;
@@ -50,7 +51,7 @@ void kernel_main() {
         const uint32_t scalar_w = get_arg_val<uint32_t>(1);
         generate_reduce_scaler(cb_in_2, scalar_w);
     }
-    if constexpr (is_all_to_all_worker) {
+    if constexpr (is_all_to_all_worker && !use_welford) {
         constexpr uint32_t cb_in_4 = tt::CBIndex::c_4;
         const uint32_t scalar_c = get_arg_val<uint32_t>(0);
         generate_reduce_scaler(cb_in_4, scalar_c);

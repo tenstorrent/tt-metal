@@ -9,17 +9,16 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32, skip_for_grayskull
+from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import get_single_rot_mat
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.model_config import CheckpointType, ModelArgs
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text import (
     TtLlamaCrossAttentionTransformerText,
 )
 from models.tt_transformers.tt.rope import get_rot_mats
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "text_seq_len",
     (2048,),
@@ -78,6 +77,10 @@ def test_cross_attention_transformer_text_inference(
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
+    if model_args.checkpoint_type == CheckpointType.HuggingFace:
+        if "learnable_embedding.weight" not in partial_state_dict:
+            partial_state_dict["learnable_embedding.weight"] = partial_state_dict["tok_embeddings.weight"][-8:]
+            partial_state_dict["tok_embeddings.weight"] = partial_state_dict["tok_embeddings.weight"][:-8]
     if model_args.is_90b and is_ci_env:
         # removing extra cross attention layers from the state dict as the Ref model decrees
         x_atten_prefix = "cross_attention_layers."
@@ -140,16 +143,9 @@ def test_cross_attention_transformer_text_inference(
     prev_pos = 0
     # tokens = torch.randint(100, 1000, (batch, text_seq_len+n_iter), dtype=torch.long)#, device="cuda"
     tokens = torch.randint(0, model_args.vocab_size, (batch, text_seq_len + n_iter), dtype=torch.long)
-    if model_args.is_90b and is_ci_env:
-        ref_file_path = model_args.CKPT_DIR + "/refpt/llama3_cross_attention_transformer_text_reference_output.pt"
-        logger.info(f"Loading reference model results from file: {ref_file_path}")
-        results_to_save = torch.load(ref_file_path, map_location="cpu")
-        get_ref_model_logits = lambda iter_idx, *args, **kwargs: results_to_save[iter_idx]["logits"]
-        get_ref_model_xattn_cache = lambda iter_idx: results_to_save[iter_idx]["xattn_cache"]
-    else:
-        logger.info(f"Running reference model for validation")
-        get_ref_model_logits = lambda _, *args, **kwargs: reference_model.forward(*args, **kwargs)
-        get_ref_model_xattn_cache = lambda _: pt_xattn_cache_chunks
+    logger.info(f"Running reference model for validation")
+    get_ref_model_logits = lambda _, *args, **kwargs: reference_model.forward(*args, **kwargs)
+    get_ref_model_xattn_cache = lambda _: pt_xattn_cache_chunks
 
     for i in range(n_iter):
         # Test prefill and decode

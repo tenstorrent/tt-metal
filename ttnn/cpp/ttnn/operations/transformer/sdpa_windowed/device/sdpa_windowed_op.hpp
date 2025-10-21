@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,9 +14,10 @@
 
 namespace ttnn::operations::transformer {
 
-constexpr uint32_t cu_window_seqlens_nelements = 1024;
-// [INFO] 1024 is large enough for 300DPI images but can be increased if needed
-static_assert(cu_window_seqlens_nelements == 1024, "cu_window_seqlens_nelements must be 1024");
+constexpr uint32_t cu_window_seqlens_nelements = 4096;
+// [INFO] 1024 is large enough for 300DPI images and it was increased to 4096 to support larger images.
+//        Even larger number of elements can be supported if needed.
+static_assert(cu_window_seqlens_nelements == 4096, "cu_window_seqlens_nelements must be 4096");
 
 struct WindowedScaledDotProductAttention {
     const std::optional<float> scale;

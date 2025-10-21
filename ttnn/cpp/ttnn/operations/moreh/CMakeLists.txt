@@ -6,8 +6,8 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_moreh)
 set_target_properties(
     ttnn_op_moreh
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
@@ -16,6 +16,8 @@ file(
     moreh_dot/device/kernels/*
     moreh_getitem/device/moreh_getitem_kernels/*
     moreh_getitem/device/moreh_getitem_tilized_kernels/*
+    moreh_group_norm_backward/device/gamma_beta_grad/kernels/*
+    moreh_group_norm_backward/device/input_grad/kernels/*
     moreh_group_norm/device/kernels/*
     moreh_matmul/device/kernels/*
 )
@@ -25,7 +27,24 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES moreh_group_norm/moreh_group_norm.hpp moreh_matmul/moreh_matmul.hpp
+        FILES
+            moreh_adamw/moreh_adamw.hpp
+            moreh_clip_grad_norm/moreh_clip_grad_norm.hpp
+            moreh_group_norm/moreh_group_norm.hpp
+            moreh_layer_norm/moreh_layer_norm.hpp
+            moreh_layer_norm_backward/moreh_layer_norm_backward.hpp
+            moreh_linear_backward/device/moreh_linear_backward_device_operation.hpp
+            moreh_linear_backward/moreh_linear_backward.hpp
+            moreh_matmul/moreh_matmul.hpp
+            moreh_mean/moreh_mean.hpp
+            moreh_mean_backward/moreh_mean_backward.hpp
+            moreh_nll_loss/moreh_nll_loss.hpp
+            moreh_nll_loss_backward/moreh_nll_loss_backward.hpp
+            moreh_softmax/device/moreh_softmax_device_operation.hpp
+            moreh_softmax/moreh_softmax.hpp
+            moreh_softmax_backward/device/moreh_softmax_backward_device_operation.hpp
+            moreh_softmax_backward/moreh_softmax_backward.hpp
+            moreh_sum/moreh_sum.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -164,12 +183,7 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_moreh PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_moreh
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_moreh PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS

@@ -22,7 +22,6 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -195,7 +194,7 @@ int main(int argc, char** argv) {
         for (int i = 0; i < num_cores_r; i++) {
             for (int j = 0; j < num_cores_c; j++) {
                 CoreCoord core = {(std::size_t)j, (std::size_t)i};
-                uint32_t core_index = i * num_cores_c + j;
+                uint32_t core_index = (i * num_cores_c) + j;
                 uint32_t l1_buffer_addr = l1_mesh_buffer->address();
 
                 const std::array noc_runtime_args = {core_index, l1_buffer_addr, num_tiles, num_cores_r * num_cores_c};
@@ -207,9 +206,8 @@ int main(int argc, char** argv) {
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
         log_info(LogTest, "Num tests {}", num_tests);
-        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
-        tt_metal::distributed::AddProgramToMeshWorkload(
-            mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
+        auto mesh_workload = tt_metal::distributed::MeshWorkload();
+        mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}}, std::move(program));
 
         for (uint32_t i = 0; i < num_tests; ++i) {
             auto t_begin = std::chrono::steady_clock::now();

@@ -15,7 +15,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -32,7 +32,6 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <tt-metalium/utils.hpp>
 #include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
 
@@ -98,7 +97,7 @@ void read_translation_table(
 TEST(NOC, TensixSingleDeviceHarvestingPrints) {
     auto arch = tt::get_arch_from_string(get_umd_arch_name());
     std::shared_ptr<distributed::MeshDevice> mesh_device;
-    chip_id_t id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
+    ChipId id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
     const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
     mesh_device = distributed::MeshDevice::create_unit_mesh(
         id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
@@ -168,11 +167,11 @@ TEST(NOC, TensixVerifyNocNodeIDs) {
 }
 TEST(NOC, TensixVerifyNocIdentityTranslationTable) {
     auto arch = tt::get_arch_from_string(get_umd_arch_name());
-    if (arch == tt::ARCH::BLACKHOLE) {
+    if (arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::QUASAR) {
         GTEST_SKIP();
     }
     std::shared_ptr<distributed::MeshDevice> mesh_device;
-    chip_id_t id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
+    ChipId id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
     const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
     mesh_device = distributed::MeshDevice::create_unit_mesh(
         id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
@@ -216,7 +215,7 @@ TEST_F(MeshDeviceFixture, TensixDirectedStreamRegWriteRead) {
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
         tt_metal::Program program = tt_metal::CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
         auto device = mesh_device->get_devices()[0];
 
@@ -282,7 +281,7 @@ TEST_F(MeshDeviceFixture, TensixIncrementStreamRegWrite) {
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
         tt_metal::Program program = tt_metal::CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
         CoreCoord logical_grid_size = mesh_device->compute_with_storage_grid_size();
@@ -347,7 +346,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWrite4BAlignment) {
         CoreCoord virtual_receiver_core = mesh_device->worker_core_from_logical_core(receiver_core);
 
         tt_metal::Program program = tt_metal::CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
         tt_metal::KernelHandle kernel0 = tt_metal::CreateKernel(
@@ -391,7 +390,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDedicatedNoc) {
         CoreCoord virtual_receiver_core = mesh_device->worker_core_from_logical_core(receiver_core);
 
         tt_metal::Program program = tt_metal::CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
         tt_metal::KernelHandle kernel0 = tt_metal::CreateKernel(
@@ -447,7 +446,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDedicatedNocMisaligned) {
         CoreCoord virtual_receiver_core = mesh_device->worker_core_from_logical_core(receiver_core);
 
         tt_metal::Program program = tt_metal::CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
         tt_metal::KernelHandle kernel0 = tt_metal::CreateKernel(
@@ -503,7 +502,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDynamicNoc) {
         CoreCoord virtual_receiver_core = mesh_device->worker_core_from_logical_core(receiver_core);
 
         tt_metal::Program program = tt_metal::CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
         tt_metal::KernelHandle kernel0 = tt_metal::CreateKernel(
@@ -575,7 +574,7 @@ void run_local_noc_stream_reg_inc(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     // Create the kernel

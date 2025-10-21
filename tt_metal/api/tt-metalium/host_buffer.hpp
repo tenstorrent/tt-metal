@@ -7,7 +7,7 @@
 #include <tt_stl/span.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/memory_pin.hpp>
 
 #include <functional>

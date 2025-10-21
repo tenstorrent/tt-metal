@@ -6,15 +6,19 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_normalization)
 set_target_properties(
     ttnn_op_normalization
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
+    batch_norm/device/kernels/*
+    groupnorm/device/kernels/*
     layernorm/device/kernels/*
+    layernorm_distributed/device/kernels/*
     softmax/device/kernels/*
+    kernel_util/compute/*
 )
 target_sources(
     ttnn_op_normalization
@@ -60,12 +64,7 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_normalization PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_normalization
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_normalization PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS

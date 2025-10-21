@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -157,13 +157,23 @@ void py_module_types(py::module& module) {
             &tt::tt_metal::ComputeConfigDescriptor::math_approx_mode,
             "Approximation mode for mathematical operations");
 
-    export_enum<tt::tt_metal::KernelDescriptor::SourceType>(module, "SourceType");
-    py::class_<tt::tt_metal::KernelDescriptor>(module, "KernelDescriptor", R"pbdoc(
+    py::class_<tt::tt_metal::KernelDescriptor> kernel_descriptor_class(module, "KernelDescriptor", R"pbdoc(
         Descriptor for a computational kernel.
 
         Contains all the information needed to compile and execute a kernel,
         including source code, compilation options, runtime arguments, and configuration.
+    )pbdoc");
+
+    // Bind SourceType as a nested enum within KernelDescriptor
+    py::enum_<tt::tt_metal::KernelDescriptor::SourceType>(kernel_descriptor_class, "SourceType", R"pbdoc(
+        Source type for kernel source code.
+
+        Defines whether the kernel source is provided as a file path or inline source code.
     )pbdoc")
+        .value("FILE_PATH", tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH, "Kernel source is a file path")
+        .value("SOURCE_CODE", tt::tt_metal::KernelDescriptor::SourceType::SOURCE_CODE, "Kernel source is inline code");
+
+    kernel_descriptor_class
         .def(py::init<>(), R"pbdoc(
             Default constructor for KernelDescriptor.
         )pbdoc")
@@ -230,8 +240,8 @@ void py_module_types(py::module& module) {
         Default constructor for SemaphoreDescriptor.
     )pbdoc")
         .def(
-            py::init<CoreType, CoreRangeSet, uint32_t>(),
-            py::arg("core_type") = CoreType::WORKER,
+            py::init<tt::CoreType, CoreRangeSet, uint32_t>(),
+            py::arg("core_type") = tt::CoreType::WORKER,
             py::arg("core_ranges"),
             py::arg("initial_value"),
             R"pbdoc(

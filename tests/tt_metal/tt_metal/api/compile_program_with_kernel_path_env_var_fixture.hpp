@@ -8,7 +8,7 @@
 #include <string>
 
 #include <gtest/gtest.h>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 
@@ -21,7 +21,7 @@ protected:
             GTEST_SKIP();
         }
 
-        const chip_id_t device_id = 0;
+        const tt::ChipId device_id = 0;
         this->device_ = tt::tt_metal::CreateDevice(device_id);
         this->program_ = tt::tt_metal::CreateProgram();
     }

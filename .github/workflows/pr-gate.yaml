@@ -23,7 +23,7 @@ on:
     inputs:
       build-type:
         required: false
-        default: ASan
+        default: ASanCoverage
         type: choice
         options:
           - Release
@@ -31,6 +31,7 @@ on:
           - RelWithDebInfo
           - ASan
           - TSan
+          - ASanCoverage
   pull_request:
     types:
       - opened
@@ -76,7 +77,7 @@ jobs:
     with:
       version: "22.04"
       toolchain: cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
-      build-type: ${{ inputs.build-type || 'ASan' }}
+      build-type: ${{ inputs.build-type || 'ASanCoverage' }}
       publish-artifact: false
       skip-tt-train: true
       ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
@@ -109,11 +110,13 @@ jobs:
           "N150-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
+    secrets: inherit
     with:
       docker-image: ${{ needs.asan-build.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-metalium
+      upload-coverage: true
 
   ttnn-smoke-tests:
     needs: [ asan-build, find-changed-files ]
@@ -131,11 +134,13 @@ jobs:
           "N150-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
+    secrets: inherit
     with:
       docker-image: ${{ needs.asan-build.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-nn
+      upload-coverage: true
 
   build:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
@@ -155,6 +160,62 @@ jobs:
       skip-tt-train: true
       distributed: false
       ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
+
+  build-tt-train:
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    needs: [ build, find-changed-files ]
+    runs-on: tt-ubuntu-2204-large-stable
+    container:
+      image: harbor.ci.tenstorrent.net/${{ needs.build.outputs.ci-build-docker-image || 'docker-image-unresolved!' }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build.outputs.packages-artifact-name || 'packages artifact unresolved!' }}
+          path: /work/pkgs/
+      - name: Install packages
+        run: |
+          set -euo pipefail
+
+          apt update
+          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-nn_*.deb ./pkgs/tt-nn-dev_*.deb
+
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v5
+        with:
+          # submodules: recursive
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
+          fetch-depth: 500
+          fetch-tags: true # Need tags for `git describe`
+          path: docker-job
+          sparse-checkout: |
+            tt-train
+
+      - name: Submodules
+        run: |
+          set -euo pipefail
+          git submodule update --init --recursive tt-train
+
+      - name: Configure tt-train
+        run: |
+          set -euo pipefail
+
+          cd /work/tt-train
+          mkdir -p .build && cd .build
+          cmake -DCMAKE_BUILD_TYPE=Release -G Ninja ..
+
+      - name: Build tt-train
+        run: |
+          set -euo pipefail
+
+          cd /work/tt-train/.build
+          cmake --build .
 
   metalium-examples:
     needs: [ build, find-changed-files ]
@@ -177,15 +238,7 @@ jobs:
       product: tt-metalium
 
   ttsim-integration-tests:
-    needs: [ build, find-changed-files ]
-    if: ${{
-        (github.ref_name == 'main' ||
-        needs.find-changed-files.outputs.cmake-changed == 'true' ||
-        needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
-        needs.find-changed-files.outputs.tt-nn-changed == 'true' ||
-        needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true') &&
-        github.event.pull_request.head.repo.fork == false
-      }}
+    needs: [ build ]
     strategy:
       fail-fast: false
     uses: ./.github/workflows/ttsim.yaml
@@ -255,6 +308,13 @@ jobs:
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y clang-tidy-20 python3.11 python3.11-venv python3.11-dev
         sudo ln -s $(which clang-tidy-20) /usr/local/bin/clang-tidy
         pip install pyyaml # Needed for clang-tidy-diff-20.py
+    - name: Prepare .clang-tidy with extra checks
+      run: |
+        if [ -f .clang-tidy-light ]; then
+          grep -v -F -f .clang-tidy-light .clang-tidy > .clang-tidy-new
+          mv .clang-tidy-new .clang-tidy
+        fi
+        cat .clang-tidy
     - name: Prepare compile_commands.json
       run: |
         cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DTT_METAL_BUILD_TESTS=ON -DTTNN_BUILD_TESTS=ON -DTT_UNITY_BUILDS=OFF -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
@@ -265,7 +325,7 @@ jobs:
       run: |
         mkdir clang-tidy-result
     - name: Analyze
-      timeout-minutes: 60 # Big PRs will have a LOT to scan, but most should be well under this.
+      timeout-minutes: 90 # Big PRs will have a LOT to scan, but this should be enough for everyone.
       shell: bash
       run: |
         set -euo pipefail

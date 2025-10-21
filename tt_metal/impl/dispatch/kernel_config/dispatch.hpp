@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include <optional>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "fd_kernel.hpp"
@@ -90,8 +90,8 @@ class DispatchKernel : public FDKernel {
 public:
     DispatchKernel(
         int node_id,
-        chip_id_t device_id,
-        chip_id_t servicing_device_id,
+        ChipId device_id,
+        ChipId servicing_device_id,
         uint8_t cq_id,
         noc_selection_t noc_selection,
         bool h_variant,

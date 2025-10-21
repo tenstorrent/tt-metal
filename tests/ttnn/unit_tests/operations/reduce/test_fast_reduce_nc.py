@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose_and_pcc, comp_pcc, skip_for_grayskull
+from models.common.utility_functions import comp_allclose_and_pcc, comp_pcc
 from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
@@ -56,7 +56,6 @@ def get_tensors(input_shape, output_shape, device, *, with_padding=True, use_ran
         "dim01_reduce",
     ],
 )
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "dims",
     ([0], [1], [0, 1]),
@@ -101,7 +100,6 @@ def test_fast_reduce_nc(input_shape, dims, compute_kernel_options, dataformat, d
     ([0], [1], [0, 1]),
     ids=["0", "1", "0_1"],
 )
-@skip_for_grayskull()
 def test_fast_reduce_nc_with_prgm_caching(dims, device):
     torch.manual_seed(2023)
 

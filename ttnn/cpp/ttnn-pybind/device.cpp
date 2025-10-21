@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -232,7 +232,7 @@ void device_module(py::module& m_device) {
     )doc");
     m_device.def(
         "CloseDevices",
-        [](const std::map<chip_id_t, MeshDevice*>& devices) {
+        [](const std::map<tt::ChipId, MeshDevice*>& devices) {
             for (const auto& device_entry : devices) {
                 device_entry.second->close();
             }
@@ -257,6 +257,14 @@ void device_module(py::module& m_device) {
 
     m_device.def("GetPCIeDeviceID", &tt::tt_metal::GetPCIeDeviceID, R"doc(
         Returns associated mmio device of give device id.
+    )doc");
+
+    m_device.def("SetRootDir", &tt::tt_metal::SetRootDir, py::arg("root_dir"), R"doc(
+        Sets the root directory for TT Metal operations.
+        Args:
+            root_dir (str): Path to the root directory to set.
+        Example:
+            >>> ttnn.device.SetRootDir("/path/to/tt_metal_home")
     )doc");
 
     m_device.def(
@@ -483,15 +491,6 @@ void device_module(py::module& m_device) {
                     >>> # Assume some operations are queued on the device
                     >>> ttnn.synchronize_device(device)
             )doc";
-    m_device.def(
-        "synchronize_device",
-        [](IDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
-            Synchronize(device, raw_optional(cq_id), sub_device_ids);
-        },
-        synchronize_device_doc.data(),
-        py::arg("device"),
-        py::arg("cq_id") = std::nullopt,
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>());
     m_device.def(
         "synchronize_device",
         [](MeshDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {

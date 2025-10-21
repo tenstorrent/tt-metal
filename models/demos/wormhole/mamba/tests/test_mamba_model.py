@@ -11,7 +11,6 @@ from loguru import logger
 from transformers import AutoTokenizer
 
 import ttnn
-from models.common.utility_functions import skip_for_grayskull
 from models.demos.wormhole.mamba.reference.args import ModelMode
 from models.demos.wormhole.mamba.reference.decode_model import MambaPretrainedModelName
 from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba
@@ -104,7 +103,6 @@ buildings, agriculture and land use are among the main sectors causing greenhous
 
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-@skip_for_grayskull("Not supported on Grayskull")
 @pytest.mark.parametrize(
     "model_version, mode, batch, seq_len, num_layers, iterations, pcc",
     (
@@ -170,7 +168,6 @@ def test_inference(
     )
 
 
-@skip_for_grayskull("Not supported on Grayskull")
 @pytest.mark.parametrize(
     "iterations",
     (1, 2),

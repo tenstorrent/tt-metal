@@ -60,8 +60,8 @@ void add_sequential_port_pairs(
     }
     uint32_t num_pairs = total_ports / 2;
     for (uint32_t i = 0; i < num_pairs; ++i) {
-        uint32_t port_a = i * 2 + 1;
-        uint32_t port_b = i * 2 + 2;
+        uint32_t port_a = (i * 2) + 1;
+        uint32_t port_b = (i * 2) + 2;
         internal_connections[port_type].push_back({PortId(port_a), PortId(port_b)});
     }
 }
@@ -75,34 +75,21 @@ std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>> create_inte
     return internal_connections;
 }
 
-// Helper function to create both ports and internal connections efficiently
-std::pair<
-    std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>>,
-    std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>>>
-create_ports_and_connections(
-    const std::function<std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>>()>&
-        ports_func,
-    PortType connection_port_type) {
-    auto ports = ports_func();
-    auto internal_connections = create_internal_connections_from_ports(ports, connection_port_type);
-    return {ports, internal_connections};
-}
-
 }  // anonymous namespace
 
 Board::Board(
     const std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>>& ports,
     const std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>>& internal_connections,
-    const tt::umd::BoardType& board_type) :
+    const BoardType& board_type) :
     ports_(ports), internal_connections_(internal_connections), board_type_(board_type), asic_locations_() {
     switch (board_type_) {
-        case tt::umd::BoardType::N150:
-        case tt::umd::BoardType::N300:
-        case tt::umd::BoardType::UBB_WORMHOLE: arch_ = tt::ARCH::WORMHOLE_B0; break;
-        case tt::umd::BoardType::P100:
-        case tt::umd::BoardType::P150:
-        case tt::umd::BoardType::P300:
-        case tt::umd::BoardType::UBB_BLACKHOLE: arch_ = tt::ARCH::BLACKHOLE; break;
+        case BoardType::N150:
+        case BoardType::N300:
+        case BoardType::UBB_WORMHOLE: arch_ = tt::ARCH::WORMHOLE_B0; break;
+        case BoardType::P100:
+        case BoardType::P150:
+        case BoardType::P300:
+        case BoardType::UBB_BLACKHOLE: arch_ = tt::ARCH::BLACKHOLE; break;
         default: throw std::runtime_error("Invalid board type");
     }
     // Initialize available_ports from ports
@@ -127,10 +114,10 @@ Board::Board(
     // Currently UBB has a different definition of board in this representation compared to UMD.
     // TODO: This exception shouldn't live here.
     uint32_t expected_asic_indices = 0;
-    if (board_type_ == tt::umd::BoardType::UBB_WORMHOLE || board_type_ == tt::umd::BoardType::UBB_BLACKHOLE) {
+    if (board_type_ == BoardType::UBB_WORMHOLE || board_type_ == BoardType::UBB_BLACKHOLE) {
         expected_asic_indices = 8;
     } else {
-        expected_asic_indices = tt::umd::get_number_of_chips_from_board_type(board_type_);
+        expected_asic_indices = get_number_of_chips_from_board_type(board_type_);
     }
     if (asic_locations_.size() != expected_asic_indices) {
         throw std::runtime_error("Number of ASICs in board configuration does not match number of chips in board type");
@@ -141,12 +128,12 @@ Board::Board(
     const std::pair<
         std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>>,
         std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>>>& ports_and_connections,
-    const tt::umd::BoardType& board_type) :
+    const BoardType& board_type) :
     Board(ports_and_connections.first, ports_and_connections.second, board_type) {}
 
 tt::ARCH Board::get_arch() const { return arch_; }
 
-tt::umd::BoardType Board::get_board_type() const { return board_type_; }
+BoardType Board::get_board_type() const { return board_type_; }
 
 const std::vector<PortId>& Board::get_available_port_ids(PortType port_type) const {
     auto it = available_port_ids_.find(port_type);
@@ -194,7 +181,7 @@ const std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>>& Boar
 // N150 board class
 class N150 : public Board {
 public:
-    N150() : Board(create_n150_ports(), create_n150_internal_connections(), tt::umd::BoardType::N150) {}
+    N150() : Board(create_n150_ports(), create_n150_internal_connections(), BoardType::N150) {}
 
 private:
     static std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>> create_n150_ports() {
@@ -219,7 +206,7 @@ private:
 // N300 board class
 class N300 : public Board {
 public:
-    N300() : Board(create_n300_ports_and_connections(), tt::umd::BoardType::N300) {}
+    N300() : Board(create_n300_ports_and_connections(), BoardType::N300) {}
 
 private:
     static std::pair<
@@ -252,7 +239,7 @@ private:
 // UBB_WORMHOLE board class
 class UBB_WORMHOLE : public Board {
 public:
-    UBB_WORMHOLE() : Board(create_ubb_wormhole_ports_and_connections(), tt::umd::BoardType::UBB_WORMHOLE) {}
+    UBB_WORMHOLE() : Board(create_ubb_wormhole_ports_and_connections(), BoardType::UBB_WORMHOLE) {}
 
 private:
     static std::pair<
@@ -316,7 +303,7 @@ private:
 // P150 board class
 class P150 : public Board {
 public:
-    P150() : Board(create_p150_ports(), create_p150_internal_connections(), tt::umd::BoardType::P150) {}
+    P150() : Board(create_p150_ports(), create_p150_internal_connections(), BoardType::P150) {}
 
 private:
     static std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>> create_p150_ports() {
@@ -340,7 +327,7 @@ private:
 // P300 board class
 class P300 : public Board {
 public:
-    P300() : Board(create_p300_ports_and_connections(), tt::umd::BoardType::P300) {}
+    P300() : Board(create_p300_ports_and_connections(), BoardType::P300) {}
 
 private:
     static std::pair<
@@ -383,7 +370,7 @@ private:
 // UBB_BLACKHOLE board class
 class UBB_BLACKHOLE : public Board {
 public:
-    UBB_BLACKHOLE() : Board(create_ubb_blackhole_ports_and_connections(), tt::umd::BoardType::UBB_BLACKHOLE) {}
+    UBB_BLACKHOLE() : Board(create_ubb_blackhole_ports_and_connections(), BoardType::UBB_BLACKHOLE) {}
 
 private:
     static std::pair<
@@ -456,7 +443,7 @@ private:
 };
 
 // Factory function to create boards by type (for backward compatibility)
-Board create_board(tt::umd::BoardType board_type) {
+Board create_board(BoardType board_type) {
     switch (board_type) {
         case BoardType::N150: return N150();
         case BoardType::N300: return N300();
@@ -468,8 +455,8 @@ Board create_board(tt::umd::BoardType board_type) {
     }
 }
 
-tt::umd::BoardType get_board_type_from_string(const std::string& board_name) {
-    auto board_type = enchantum::cast<tt::umd::BoardType>(board_name, ttsl::ascii_caseless_comp);
+BoardType get_board_type_from_string(const std::string& board_name) {
+    auto board_type = enchantum::cast<BoardType>(board_name, ttsl::ascii_caseless_comp);
     if (!board_type.has_value()) {
         throw std::runtime_error("Invalid board type: " + std::string(board_name));
     }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -48,8 +48,8 @@ void kernel_main() {
 
     // PACKET HEADER SETUP
 
-    payload_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops_upstream));
-    sem_inc_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops_upstream));
+    fabric_set_unicast_route<false>(payload_packet_header, num_hops_upstream);
+    fabric_set_unicast_route<false>(sem_inc_packet_header, num_hops_upstream);
 
     auto dest_semaphore_noc_addr =
         safe_get_noc_addr(static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), semaphore_address, 0);

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -259,23 +259,22 @@ inline void RunPersistent1dFabricLatencyTest(
     std::vector<size_t> per_device_global_sem_addr_rt_arg;
     size_t program_device_index = 0;
 
-    auto build_connection_args = [is_ring](
-                                     const std::shared_ptr<MeshDevice>& device,
-                                     const std::shared_ptr<MeshDevice>& forward_device,
-                                     const std::shared_ptr<MeshDevice>& backward_device,
-                                     Program& program,
-                                     CoreCoord worker_core_logical,
-                                     bool is_connected_in_direction,
-                                     tt::tt_fabric::EdmLineFabricOpInterface::Direction direction,
-                                     std::vector<uint32_t>& rt_args_out) {
+    auto build_connection_args = [](const std::shared_ptr<MeshDevice>& device,
+                                    const std::shared_ptr<MeshDevice>& forward_device,
+                                    const std::shared_ptr<MeshDevice>& backward_device,
+                                    Program& program,
+                                    CoreCoord worker_core_logical,
+                                    bool is_connected_in_direction,
+                                    tt::tt_fabric::EdmLineFabricOpInterface::Direction direction,
+                                    std::vector<uint32_t>& rt_args_out) {
         rt_args_out.push_back(is_connected_in_direction);
 
         if (is_connected_in_direction) {
             const auto device_fabric_node_id =
                 tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->get_devices()[0]->id());
-            chip_id_t connected_chip_id = direction == tt::tt_fabric::EdmLineFabricOpInterface::FORWARD
-                                              ? forward_device->get_devices()[0]->id()
-                                              : backward_device->get_devices()[0]->id();
+            ChipId connected_chip_id = direction == tt::tt_fabric::EdmLineFabricOpInterface::FORWARD
+                                           ? forward_device->get_devices()[0]->id()
+                                           : backward_device->get_devices()[0]->id();
             const auto connected_device_fabric_node_id =
                 tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(connected_chip_id);
             tt::tt_fabric::append_fabric_connection_rt_args(

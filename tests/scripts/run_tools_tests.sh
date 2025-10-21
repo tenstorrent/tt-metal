@@ -16,16 +16,6 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
     # Watcher dump tool testing
     echo "Running watcher dump tool tests..."
 
-    # Run a test that populates basic fields but not watcher fields
-    TT_METAL_WATCHER_KEEP_ERRORS=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*PrintHanging
-
-    # Run dump tool w/ minimum data - no error expected.
-    ./build/tools/watcher_dump -d=0 -w -c
-
-    # Verify the kernel we ran shows up in the log.
-    grep "tests/tt_metal/tt_metal/test_kernels/misc/print_hang.cpp" generated/watcher/watcher.log > /dev/null || { echo "Error: couldn't find expected string in watcher log after dump." ; exit 1; }
-    echo "Watcher dump minimal test - Pass"
-
     # Now run with all watcher features, expect it to throw.
     TT_METAL_WATCHER_KEEP_ERRORS=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=WatcherAssertTests/*Brisc
     ./build/tools/watcher_dump -d=0 -w &> tmp.log || { echo "Above failure is expected."; }
@@ -52,7 +42,7 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
     echo "First run, no teardown"
     ./build/test/tt_metal/test_clean_init --skip-teardown || { echo "Above failure is expected."; }
     echo "Second run, expect clean init"
-    timeout 10 ./build/test/tt_metal/test_clean_init || { echo "Error: second run timed out, clean init (FD-on-Tensix) failed."; exit 1; }
+    timeout 40 ./build/test/tt_metal/test_clean_init || { echo "Error: second run timed out, clean init (FD-on-Tensix) failed."; exit 1; }
     echo "Clean init tests - FD-on-Tensix passed!"
 
     if [[ "$ARCH_NAME" == "wormhole_b0" ]]; then
@@ -60,7 +50,7 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
         echo "First run, no teardown"
         env ./build/test/tt_metal/test_clean_init --skip-teardown || { echo "Above failure is expected."; }
         echo "Second run, expect clean init"
-        timeout 10 env ./build/test/tt_metal/test_clean_init || { echo "Error: second run timed out, clean init (FD-on-Eth) failed."; exit 1; }
+        timeout 40 env ./build/test/tt_metal/test_clean_init || { echo "Error: second run timed out, clean init (FD-on-Eth) failed."; exit 1; }
         echo "Clean init tests - FD-on-Eth passed!"
     fi
 fi

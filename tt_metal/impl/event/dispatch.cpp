@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
@@ -39,7 +39,7 @@ uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
 
 void issue_record_event_commands(
     IDevice* device,
-    chip_id_t device_id,
+    ChipId device_id,
     uint32_t event_id,
     uint8_t cq_id,
     uint32_t num_command_queues,
@@ -170,8 +170,8 @@ void issue_wait_for_event_commands(
 
 void read_events_from_completion_queue(
     ReadEventDescriptor& event_descriptor,
-    chip_id_t mmio_device_id,
-    chip_id_t device_id,
+    ChipId mmio_device_id,
+    ChipId device_id,
     uint16_t channel,
     uint8_t cq_id,
     SystemMemoryManager& sysmem_manager) {

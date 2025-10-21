@@ -34,9 +34,9 @@ class SamplingParams:
     The same data class exists in vLLM at vllm/worker/tt_model_runner.py.
     """
 
-    temperature: float
-    top_k: int
-    top_p: float
+    temperature: float | list[float]
+    top_k: int | list[int]
+    top_p: float | list[float]
 
 
 class Generator:
@@ -296,33 +296,33 @@ class Generator:
 
         tt_tokens = []
         tt_current_pos = []
-        tt_rot_mat_idxs_global = []
-        tt_rot_mat_idxs_local = []
+        tt_rot_mat_idxs = []
         tt_page_table = []
-
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
             model_i = self.model[i]
             (
                 tt_tokens_i,
                 tt_current_pos_i,
-                tt_rot_mat_idxs_global_i,
-                tt_rot_mat_idxs_local_i,
+                tt_rot_mat_idxs_i,
                 tt_page_table_i,
             ) = model_i.prepare_inputs_decode(tokens[i], current_pos[i], user_page_table)
             tt_tokens.append(tt_tokens_i)
             tt_current_pos.append(tt_current_pos_i)
-            tt_rot_mat_idxs_global.append(tt_rot_mat_idxs_global_i)
-            tt_rot_mat_idxs_local.append(tt_rot_mat_idxs_local_i)
+            tt_rot_mat_idxs.append(tt_rot_mat_idxs_i)
             tt_page_table.append(tt_page_table_i)
+            if (
+                hasattr(self.model[i], "device_decode_sliding_mask")
+                and self.model[i].device_decode_sliding_mask is not None
+            ):
+                self.model[i].update_attention_masks(current_pos[i])
 
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             tt_logits_i = self.model[i].ttnn_decode_forward(
                 tt_tokens[i],
                 tt_current_pos[i],
-                rot_mat_idxs_global=tt_rot_mat_idxs_global[i],
-                rot_mat_idxs_local=tt_rot_mat_idxs_local[i],
+                rot_mat_idxs=tt_rot_mat_idxs[i],
                 page_table=tt_page_table[i],
                 kv_cache=user_kv_cache,
                 argmax_on_device=argmax_on_device,
@@ -355,11 +355,17 @@ class Generator:
         trace_ids = {}
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
+
             host_inputs = self.model[i].prepare_decode_inputs_host(
                 tokens[i], current_pos[i], page_table=user_page_table
             )
 
             device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
+            if (
+                hasattr(self.model[i], "device_decode_sliding_mask")
+                and self.model[i].device_decode_sliding_mask is not None
+            ):
+                self.model[i].update_attention_masks(current_pos[i])
             device_inputs.append(device_inputs_i)
 
         for i in range(self.data_parallel):
@@ -410,6 +416,13 @@ class Generator:
                     host_tensors=host_inputs_i,
                     device_tensors=self.trace_inputs_text[i],
                 )
+
+        for i in range(self.data_parallel):
+            if (
+                hasattr(self.model[i], "device_decode_sliding_mask")
+                and self.model[i].device_decode_sliding_mask is not None
+            ):
+                self.model[i].update_attention_masks(current_pos[i])
 
         for i, trace_id in self.trace_ids_text.items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
@@ -528,7 +541,9 @@ class Generator:
         empty_slots=None,
         **kwargs,
     ):
-        if self.model_args[0].checkpoint_type == CheckpointType.HuggingFace:
+        if (self.model_args[0].checkpoint_type == CheckpointType.HuggingFace) and (
+            not self.model_args[0].is_llama_vision()
+        ):
             logits = self.prefill_forward_text(
                 tokens,
                 page_table=page_table,
@@ -745,7 +760,9 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
     ):
-        if self.model_args[0].checkpoint_type == CheckpointType.HuggingFace:
+        if (self.model_args[0].checkpoint_type == CheckpointType.HuggingFace) and (
+            not self.model_args[0].is_llama_vision()
+        ):
             return self.decode_forward_text(
                 tokens,
                 start_pos,

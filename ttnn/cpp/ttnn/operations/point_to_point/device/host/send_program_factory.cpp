@@ -10,9 +10,6 @@
 #include <tt-metalium/work_split.hpp>
 #include "point_to_point_device_op.hpp"
 
-using tt::tt_fabric::FabricNodeId;
-using tt::tt_fabric::get_fabric_node_id_from_physical_chip_id;
-
 namespace ttnn::operations::point_to_point {
 
 ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t> send_program_factory(
@@ -83,8 +80,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
-    auto this_device = mesh_device->get_device(send_coord);
-    const auto this_fabric_id = get_fabric_node_id_from_physical_chip_id(this_device->id());
+    const auto this_fabric_id = mesh_device->get_fabric_node_id(send_coord);
 
     const auto [num_hops, dst_is_forward, next_fabric_id] =
         detail::fabric_1d_routing(mesh_device, send_coord, receive_coord, topology);
@@ -115,14 +111,11 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         page_idx_end += increment;
 
         const std::vector<uint32_t> reader_runtime_args = {
-            input_tensor.mesh_buffer()->get_device_buffer(send_coord)->address(),
-            increment,
-            page_idx_start,
-            input_page_size_bytes};
+            input_tensor.buffer()->address(), increment, page_idx_start, input_page_size_bytes};
         tt::tt_metal::SetRuntimeArgs(program, send_unary_reader_kernel_id, c, reader_runtime_args);
 
         std::vector<uint32_t> writer_runtime_args = {
-            output_tensors.at(0).mesh_buffer()->get_device_buffer(receive_coord)->address(),
+            output_tensors.at(0).buffer()->address(),
             page_idx_start,
             page_idx_end,
             num_hops,

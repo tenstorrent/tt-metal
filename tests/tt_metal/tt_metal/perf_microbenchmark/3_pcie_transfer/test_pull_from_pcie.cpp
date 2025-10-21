@@ -26,7 +26,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include "impl/dispatch/command_queue_common.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -246,7 +246,7 @@ int main(int argc, char** argv) {
         CoreCoord logical_core(0, 0);
         CoreCoord physical_core = device->worker_core_from_logical_core(logical_core);
 
-        chip_id_t mmio_device_id =
+        ChipId mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
         TT_ASSERT(device_id == mmio_device_id, "This test can only be run on MMIO device!");
         uint16_t channel =
@@ -286,7 +286,7 @@ int main(int argc, char** argv) {
         // First add is for aligning to next aligned addr
         // Second add is for making sure the specified alignment is the max alignment
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
-            total_transfer_size + 2 * addr_align, 1000, std::chrono::system_clock::now().time_since_epoch().count());
+            total_transfer_size + (2 * addr_align), 1000, std::chrono::system_clock::now().time_since_epoch().count());
 
         uint32_t* start_ptr = (uint32_t*)align(src_vec.data(), addr_align);
         std::vector<uint32_t> result_vec;
@@ -312,9 +312,8 @@ int main(int argc, char** argv) {
         log_info(LogTest, "Num tests {}", num_tests);
 
         // Create MeshWorkload for kernel execution
-        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
-        tt_metal::distributed::AddProgramToMeshWorkload(
-            mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
+        auto mesh_workload = tt_metal::distributed::MeshWorkload();
+        mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}}, std::move(program));
 
         for (uint32_t i = 0; i < num_tests; ++i) {
             // Execute application

@@ -18,11 +18,11 @@ on:
       ttsim-ref:
         required: false
         type: string
-        default: "919f293d7fc404c0c81456b3552e918ed6edf07a"
+        default: "af305dc11a2ca665261c95b8ee70f5cf3f53e5e8"
 
 jobs:
   ttsim-integration:
-    runs-on: ubuntu-latest
+    runs-on: tt-ubuntu-2204-small-stable
     name: "TTSim Integration - ${{ matrix.arch }}"
     strategy:
       fail-fast: false
@@ -37,7 +37,7 @@ jobs:
     permissions:
       contents: read
     container:
-      image: ${{ inputs.basic-docker-image || 'docker-image-unresolved!'}}
+      image: harbor.ci.tenstorrent.net/${{ inputs.basic-docker-image || 'docker-image-unresolved!'}}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
     defaults:
@@ -54,7 +54,7 @@ jobs:
     steps:
 
       - name: Download packages artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
@@ -91,14 +91,17 @@ jobs:
           cp $TT_METAL_HOME/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: Build and Run Metal Examples
-        timeout-minutes: 15
+        timeout-minutes: 3
         run: |
           working_examples=(
             "add_2_integers_in_compute"
             "add_2_integers_in_riscv"
             "eltwise_binary"
+            "eltwise_sfpu"
             "hello_world_compute_kernel"
             "hello_world_datamovement_kernel"
+            "matmul_multi_core"
+            "matmul_multicore_reuse"
           )
           for example_name in "${working_examples[@]}"; do
             example_path="/usr/share/tt-metalium/examples/${example_name}"
@@ -122,7 +125,7 @@ jobs:
             fi
           done
   ttnn-pytests:
-    runs-on: tt-ubuntu-2204-small-stable
+    runs-on: ubuntu-latest
     name: "TTNN Pytests - ${{ matrix.arch }}"
     strategy:
       fail-fast: false
@@ -135,7 +138,7 @@ jobs:
             build_suffix: release_bh
             soc_desc: blackhole_140_arch.yaml
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
+      image: ${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
       env:
@@ -152,7 +155,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
@@ -177,5 +180,121 @@ jobs:
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: Run TTNN Pytests
+        timeout-minutes: 5
         run: |
-          pytest tests/ttnn/unit_tests/operations/eltwise/test_sub.py
+          pytest \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/all_post_commit/test_all_gather_apc.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/all_post_commit/test_reduce_scatter_apc.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_all_gather_nightly.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_all_to_all_combine_bh.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_all_to_all_dispatch_bh.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_all_to_all.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_ccl_perf.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_minimal_reduce_scatter_async_bh.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_new_all_broadcast.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_reduce_scatter_nightly.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_qb.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_lb.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_p300.py \
+            tests/ttnn/unit_tests/operations/ccl/perf/test_ccl_async_perf.py \
+            tests/ttnn/unit_tests/operations/ccl/perf/test_ccl_perf.py \
+            tests/ttnn/unit_tests/operations/ccl/test_ag_rs_llama_prefill_TG.py \
+            tests/ttnn/unit_tests/operations/ccl/test_all_gather.py \
+            tests/ttnn/unit_tests/operations/ccl/test_all_gather_N300_post_commit.py \
+            tests/ttnn/unit_tests/operations/ccl/test_all_gather_TG_nightly.py \
+            tests/ttnn/unit_tests/operations/ccl/test_all_gather_TG_post_commit.py \
+            tests/ttnn/unit_tests/operations/ccl/test_all_gather_async_TG_nightly.py \
+            tests/ttnn/unit_tests/operations/ccl/test_all_gather_llama_perf_sweep.py \
+            tests/ttnn/unit_tests/operations/ccl/test_all_gather_matmul.py \
+            tests/ttnn/unit_tests/operations/ccl/test_all_gather_nightly.py \
+            tests/ttnn/unit_tests/operations/ccl/test_all_reduce_async.py \
+            tests/ttnn/unit_tests/operations/ccl/test_all_reduce_t3000_frequent.py \
+            tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_6U.py \
+            tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_t3000.py \
+            tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_6U.py \
+            tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_t3000.py \
+            tests/ttnn/unit_tests/operations/ccl/test_barrier_t3000_frequent.py \
+            tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py \
+            tests/ttnn/unit_tests/operations/ccl/test_fabric_ccl.py \
+            tests/ttnn/unit_tests/operations/ccl/test_llama_prefill_ccl_ops.py \
+            tests/ttnn/unit_tests/operations/ccl/test_llama_prefill_ccl_ops_perf_nightly_TG.py \
+            tests/ttnn/unit_tests/operations/ccl/test_llama_reduce_scatter_async_6U.py \
+            tests/ttnn/unit_tests/operations/ccl/test_llama_reduce_scatter_async_TG.py \
+            tests/ttnn/unit_tests/operations/ccl/test_llama_reduce_scatter_create_heads_async_TG.py \
+            tests/ttnn/unit_tests/operations/ccl/test_mesh_partition_6U.py \
+            tests/ttnn/unit_tests/operations/ccl/test_mesh_partition_t3000.py \
+            tests/ttnn/unit_tests/operations/ccl/test_minimals.py \
+            tests/ttnn/unit_tests/operations/ccl/test_moe_ccl_end_to_end.py \
+            tests/ttnn/unit_tests/operations/ccl/test_new_all_broadcast.py \
+            tests/ttnn/unit_tests/operations/ccl/test_new_all_gather.py \
+            tests/ttnn/unit_tests/operations/ccl/test_new_all_reduce.py \
+            tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py \
+            tests/ttnn/unit_tests/operations/ccl/test_qkv_all_reduce_minimal.py \
+            tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_N300_post_commit.py \
+            tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_TG_nightly.py \
+            tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_async.py \
+            tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_async_TG_nightly.py \
+            tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_llama_perf_sweep.py \
+            tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_nightly.py \
+            tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_post_commit.py \
+            tests/ttnn/unit_tests/operations/ccl/test_send_recv_async.py \
+            tests/ttnn/unit_tests/operations/data_movement/test_moe_expert_token_remap_t3k.py \
+            tests/ttnn/unit_tests/operations/debug/test_apply_device_delay_t3000.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/complex_ops/test_backward_complex_add.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/complex_ops/test_backward_complex_mul.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/complex_ops/test_backward_conj.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/complex_ops/test_backward_imag.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/complex_ops/test_backward_real.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_abs.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_addalpha.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_addcmul.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_assign.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_ceil.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_clamp.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_clip.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_concat.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_deg2rad.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_fill.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_fill_zero.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_floor.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_frac.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_i0.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_lerp.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_max.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_min.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_neg.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_rad2deg.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_relu.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_repeat.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_round.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_rsub.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_sign.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_square.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_squared_difference.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_subalpha.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_trunc.py \
+            tests/ttnn/unit_tests/operations/eltwise/test_complex_tensor.py \
+            tests/ttnn/unit_tests/operations/eltwise/test_eltwise_logical_and_.py \
+            tests/ttnn/unit_tests/operations/eltwise/test_eltwise_softplus_inf.py \
+            tests/ttnn/unit_tests/operations/eltwise/test_inplace.py \
+            tests/ttnn/unit_tests/operations/eltwise/test_mul_bcast.py \
+            tests/ttnn/unit_tests/operations/eltwise/test_signbit.py \
+            tests/ttnn/unit_tests/operations/eltwise/test_sub.py \
+            tests/ttnn/unit_tests/operations/eltwise/test_unary_uint16.py \
+            tests/ttnn/unit_tests/operations/point_to_point/test_moe_p2p.py \
+            tests/ttnn/unit_tests/operations/point_to_point/test_point_to_point.py \
+            tests/ttnn/unit_tests/operations/transformers/test_concatenate_heads.py \
+            tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py \
+            tests/ttnn/unit_tests/operations/debug/test_examples.py \
+            tests/ttnn/unit_tests/operations/data_movement/test_full.py \
+            tests/ttnn/unit_tests/operations/data_movement/test_full_like.py \
+            tests/ttnn/unit_tests/operations/debug/test_generic_op.py \
+            tests/ttnn/unit_tests/operations/eltwise/test_hardtanh.py \
+            tests/ttnn/unit_tests/operations/data_movement/test_index_fill.py \
+            tests/ttnn/unit_tests/operations/moreh/test_moreh_full.py \
+            tests/ttnn/unit_tests/operations/data_movement/test_non_zero_indices.py \
+            tests/ttnn/unit_tests/operations/transformers/test_paged_cache_mask.py \
+            tests/ttnn/unit_tests/operations/eltwise/test_polyval.py \
+            tests/ttnn/unit_tests/operations/transformers/test_prefetcher_TG.py \
+            tests/ttnn/unit_tests/operations/data_movement/test_reallocate.py \
+            tests/ttnn/unit_tests/operations/data_movement/test_tosa_gather.py

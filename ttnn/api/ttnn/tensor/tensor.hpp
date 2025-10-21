@@ -196,6 +196,8 @@ public:
     // ======================================================================================
     [[nodiscard]] Tensor reshape(const ttnn::Shape& new_shape) const;
     [[nodiscard]] Tensor reshape(const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape) const;
+
+    Tensor with_tensor_topology(TensorTopology tensor_topology) const;
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
@@ -278,28 +280,18 @@ Tensor create_device_tensor(
 
 // The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors
 void memcpy(
-    CommandQueue& queue,
-    void* dst,
-    const Tensor& src,
-    const std::optional<BufferRegion>& region = std::nullopt,
-    bool blocking = true);
-void memcpy(
     distributed::MeshCommandQueue& queue,
     void* dst,
     const Tensor& src,
     const std::optional<BufferRegion>& region = std::nullopt,
     bool blocking = true);
 
-void memcpy(
-    CommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
 void memcpy(
     distributed::MeshCommandQueue& queue,
     Tensor& dst,
     const void* src,
     const std::optional<BufferRegion>& region = std::nullopt);
 
-void memcpy(
-    CommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 void memcpy(
     distributed::MeshCommandQueue& queue,
     Tensor& dst,

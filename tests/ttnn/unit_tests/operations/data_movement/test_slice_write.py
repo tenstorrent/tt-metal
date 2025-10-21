@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -94,7 +94,6 @@ def offset_increment_tensor(shape, offset=0, dtype=torch.int32, step=1):
     ).reshape(shape)
 
 
-@skip_for_blackhole("Fails on Blackhole. Issue #28021")
 @pytest.mark.parametrize("rank", range(1, 9))  # 1D … 8D
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_slice_write_nd(rank, layout, device):

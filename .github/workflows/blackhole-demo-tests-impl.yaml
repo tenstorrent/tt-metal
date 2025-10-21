@@ -16,6 +16,10 @@ on:
         required: false
         type: string
         default: "BH"
+      regenerate-ttnn-cache:
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   single-card-demo-tests:
@@ -44,60 +48,68 @@ jobs:
           }
         ]
     name: ${{ matrix.test-group.name }}
-    runs-on: ["in-service", "${{ inputs.runner-label }}", "pipeline-perf"]
+    runs-on:
+      - "in-service"
+      - "${{ inputs.runner-label }}"
+      - "pipeline-perf"
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved' }}
+      env:
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        LD_LIBRARY_PATH: /work/build/lib
+        PYTHONPATH: /work
+        TT_METAL_HOME: /work
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - "/localdev/blackhole_demos/huggingface_data:/localdev/blackhole_demos/huggingface_data${{ inputs.regenerate-ttnn-cache == true && ':rw' || ':ro' }}"
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: ⬇️ Download Build
-        uses: actions/download-artifact@v4
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
-          name: ${{ inputs.build-artifact-name }}
-      - name: Extract files
-        run: tar -xvf ttm_any.tar
-      - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: ${{ inputs.wheel-artifact-name }}
-      - name: Enable Performance mode
-        if: ${{ contains(matrix.test-group.name, 'performance') }}
-        run: |
-          sudo cpupower frequency-set -g performance
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Run demo regression tests
-        uses: ./.github/actions/docker-run
         timeout-minutes: 70
+        run: |
+          if [[ "${{ matrix.test-group.name }}" == *"llama"* ]]; then
+            pip install -r /work/models/tt_transformers/requirements.txt
+          fi
+          ${{ matrix.test-group.cmd }}
+      - name: Save environment data
+        if: ${{ contains(matrix.test-group.name, 'llama') && !cancelled() }}
+        timeout-minutes: 15
         env:
-          LOGURU_LEVEL: INFO
+          ARCH_NAME: ${{ matrix.test-group.arch }}
+        run: python3 /work/.github/scripts/data_analysis/create_benchmark_with_environment_json.py
+
+      - name: Upload benchmark data
+        if: ${{ contains(matrix.test-group.name, 'llama') && !cancelled() }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
-          docker_image: ${{ inputs.docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=${{ matrix.test-group.arch }}
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e HF_TOKEN=${{ secrets.HUGGINGFACE_TOKEN }}
-            -v /localdev/blackhole_demos:/localdev/blackhole_demos:ro
-          install_wheel: true
-          run_args: |
-            if [[ "${{ matrix.test-group.name }}" == *"llama"* ]]; then
-              pip install -r ${{ github.workspace }}/models/tt_transformers/requirements.txt
-            fi
-            ${{ matrix.test-group.cmd }}
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
+
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: generated/test_reports/
           prefix: "test_reports_"
-      - name: Disable Performance mode
-        if: ${{ contains(matrix.test-group.name, 'performance') }}
-        run: |
-          sudo cpupower frequency-set -g ondemand
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

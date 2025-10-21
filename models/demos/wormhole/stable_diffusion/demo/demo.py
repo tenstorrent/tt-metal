@@ -9,20 +9,24 @@ import numpy as np
 import pytest
 import torch
 from datasets import load_dataset
-from diffusers import AutoencoderKL, UNet2DConditionModel
 from loguru import logger
 from PIL import Image
 from torchmetrics.image.fid import FrechetInceptionDistance
 from torchmetrics.multimodal.clip_score import CLIPScore
 from torchvision.transforms import ToTensor
-from transformers import CLIPTextModel, CLIPTokenizer
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import enable_persistent_kernel_cache, is_wormhole_b0, profiler
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE, SD_TRACE_REGION_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.demos.wormhole.stable_diffusion.sd_helper_funcs import compile_trace_sd
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import (
+    compile_trace_sd,
+    get_reference_clip_text_encoder,
+    get_reference_clip_tokenizer,
+    get_reference_unet,
+    get_reference_vae,
+)
 from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
@@ -63,7 +67,17 @@ def preprocess_images(image_paths):
     return torch.stack(images)
 
 
-def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size=(256, 256)):
+def run_demo_inference(
+    device,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+    reset_seeds,
+    input_path,
+    num_prompts,
+    num_inference_steps,
+    image_size=(256, 256),
+):
     enable_persistent_kernel_cache()
     profiler.clear()
 
@@ -78,16 +92,15 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
 
     torch_device = "cpu"
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
-    vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
-    vae.to(torch_device)
+    vae = get_reference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
     vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
     tt_vae = Vae(torch_vae=vae, device=device)
     # 2. Load the tokenizer and text encoder to tokenize and encode the text.
-    tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
-    text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14")
+    tokenizer = get_reference_clip_tokenizer(is_ci_env, is_ci_v2_env, model_location_generator)
+    text_encoder = get_reference_clip_text_encoder(is_ci_env, is_ci_v2_env, model_location_generator)
 
     # 3. The UNet model for generating the latents.
-    unet = UNet2DConditionModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="unet")
+    unet = get_reference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
 
     # 4. load the K-LMS scheduler with some fitting parameters.
     ttnn_scheduler = TtPNDMScheduler(
@@ -99,9 +112,6 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
         steps_offset=1,
         device=device,
     )
-
-    text_encoder.to(torch_device)
-    unet.to(torch_device)
 
     config = unet.config
     parameters = preprocess_model_parameters(
@@ -223,7 +233,9 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
     return output_images
 
 
-def run_interactive_demo_inference(device, num_inference_steps, image_size=(256, 256)):
+def run_interactive_demo_inference(
+    device, is_ci_env, is_ci_v2_env, model_location_generator, num_inference_steps, image_size=(256, 256)
+):
     enable_persistent_kernel_cache()
 
     # Until di/dt issues are resolved
@@ -237,17 +249,16 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
 
     torch_device = "cpu"
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
-    vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
-    vae.to(torch_device)
+    vae = get_reference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
     vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
     tt_vae = Vae(torch_vae=vae, device=device)
 
     # 2. Load the tokenizer and text encoder to tokenize and encode the text.
-    tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
-    text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14")
+    tokenizer = get_reference_clip_tokenizer(is_ci_env, is_ci_v2_env, model_location_generator)
+    text_encoder = get_reference_clip_text_encoder(is_ci_env, is_ci_v2_env, model_location_generator)
 
     # 3. The UNet model for generating the latents.
-    unet = UNet2DConditionModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="unet")
+    unet = get_reference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
 
     # 4. load the K-LMS scheduler with some fitting parameters.
     ttnn_scheduler = TtPNDMScheduler(
@@ -259,9 +270,6 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
         steps_offset=1,
         device=device,
     )
-
-    text_encoder.to(torch_device)
-    unet.to(torch_device)
 
     config = unet.config
     parameters = preprocess_model_parameters(
@@ -363,7 +371,15 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
 
 
 def run_demo_inference_diffusiondb(
-    device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size=(256, 256)
+    device,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+    reset_seeds,
+    input_path,
+    num_prompts,
+    num_inference_steps,
+    image_size=(256, 256),
 ):
     enable_persistent_kernel_cache()
 
@@ -382,17 +398,16 @@ def run_demo_inference_diffusiondb(
 
     torch_device = "cpu"
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
-    vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
-    vae.to(torch_device)
+    vae = get_reference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
     vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
     tt_vae = Vae(torch_vae=vae, device=device)
 
     # 2. Load the tokenizer and text encoder to tokenize and encode the text.
-    tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
-    text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14")
+    tokenizer = get_reference_clip_tokenizer(is_ci_env, is_ci_v2_env, model_location_generator)
+    text_encoder = get_reference_clip_text_encoder(is_ci_env, is_ci_v2_env, model_location_generator)
 
     # 3. The UNet model for generating the latents.
-    unet = UNet2DConditionModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="unet")
+    unet = get_reference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
 
     # 4. load the K-LMS scheduler with some fitting parameters.
     ttnn_scheduler = TtPNDMScheduler(
@@ -404,9 +419,6 @@ def run_demo_inference_diffusiondb(
         steps_offset=1,
         device=device,
     )
-
-    text_encoder.to(torch_device)
-    unet.to(torch_device)
 
     config = unet.config
     parameters = preprocess_model_parameters(
@@ -545,5 +557,25 @@ def run_demo_inference_diffusiondb(
     "image_size",
     ((512, 512),),
 )
-def test_demo(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size):
-    run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size)
+def test_demo(
+    device,
+    reset_seeds,
+    input_path,
+    num_prompts,
+    num_inference_steps,
+    image_size,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+):
+    run_demo_inference(
+        device,
+        is_ci_env,
+        is_ci_v2_env,
+        model_location_generator,
+        reset_seeds,
+        input_path,
+        num_prompts,
+        num_inference_steps,
+        image_size,
+    )

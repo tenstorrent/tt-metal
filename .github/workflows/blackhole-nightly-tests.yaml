@@ -4,6 +4,32 @@ name: "(Blackhole) Blackhole nightly tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      run_bh_single_card_nightly_demos:
+        description: 'Run Blackhole single card nightly demo tests'
+        required: false
+        type: boolean
+        default: false
+      run_bh_multi_card_nightly_demo_tests:
+        description: 'Run Blackhole multi card nightly demo tests'
+        required: false
+        type: boolean
+        default: false
+      run_bh_nightly_20_cores:
+        description: 'Run Blackhole nightly 20 cores tests'
+        required: false
+        type: boolean
+        default: false
+      run_bh_multi_card_nightly_unit_tests:
+        description: 'Run Blackhole multi card nightly unit tests'
+        required: false
+        type: boolean
+        default: false
+      run_bh_multi_card_nightly_ttnn_stress_tests:
+        description: 'Run Blackhole multi card nightly ttnn stress tests'
+        required: false
+        type: boolean
+        default: false
   workflow_call:
   schedule:
     - cron: "0 */8 * * *"  # Every 8 hours at 0:00, 8:00, and 16:00 UTC
@@ -27,6 +53,7 @@ jobs:
       tracy: true
       version: 22.04
   bh-nightly:
+    if: ${{ github.event_name == 'schedule' || inputs.run_bh_single_card_nightly_demos }}
     needs: build-artifact
     uses: ./.github/workflows/blackhole-nightly-tests-impl.yaml
     strategy:
@@ -39,7 +66,22 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  bh-nightly-20-cores:
+    if: ${{ github.event_name == 'schedule' || inputs.run_bh_nightly_20_cores }}
+    needs: build-artifact
+    uses: ./.github/workflows/blackhole-nightly-tests-20-cores-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        card_type: ["p150b"]  # use CIv2 runner
+    secrets: inherit
+    with:
+      runner-label: ${{ matrix.card_type }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   blackhole-multi-card-demo-tests:
+    if: ${{ github.event_name == 'schedule' || inputs.run_bh_multi_card_nightly_demo_tests }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
@@ -55,10 +97,14 @@ jobs:
             runner-label: BH-DeskBox
             extra-tag: pipeline-perf
             num_devices: 2
-          # - name: RackBox Demo tests
-          #   runner-label: BH-RackBox
-          #   extra-tag: pipeline-functional
-          #   num_devices: 8
+          - name: LoudBox Demo tests
+            runner-label: BH-LoudBox
+            extra-tag: pipeline-perf
+            num_devices: 8
+          - name: P300 Demo tests
+            runner-label: P300-viommu
+            extra-tag: pipeline-yyz2-lfc
+            num_devices: 2
     with:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -67,26 +113,17 @@ jobs:
       extra-tag: ${{ matrix.test-group.extra-tag }}
       num_devices: ${{ matrix.test-group.num_devices }}
   blackhole-multi-card-unit-tests:
+    if: ${{ github.event_name == 'schedule' || inputs.run_bh_multi_card_nightly_unit_tests }}
     needs: build-artifact-profiler
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group:
-          - name: LLMBox unit tests
-            runner-label: BH-LLMBox
-          - name: DeskBox unit tests
-            runner-label: BH-DeskBox
-          # - name: RackBox unit tests
-          #   runner-label: BH-RackBox
     with:
       arch: blackhole
-      runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
   blackhole-multi-card-ttnn-stress-tests:
+    if: ${{ github.event_name == 'schedule' || inputs.run_bh_multi_card_nightly_ttnn_stress_tests }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/ttnn-stress-tests-impl.yaml
@@ -98,8 +135,8 @@ jobs:
             runner-label: BH-LLMBox
           - name: DeskBox ttnn stress tests
             runner-label: BH-DeskBox
-          # - name: RackBox unit tests
-          #   runner-label: BH-RackBox
+          - name: LoudBox ttnn stress tests
+            runner-label: BH-LoudBox
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group.runner-label }}

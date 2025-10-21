@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,7 @@
 #include <tt-metalium/allocator.hpp>
 
 namespace distribution_spec_tests {
-using tt::tt_metal::BufferDistributionSpec;
+using tt::tt_metal::BufferDistributionSpec;  // NOLINT(misc-unused-using-decls)
 constexpr uint32_t PADDING = tt::tt_metal::UncompressedBufferPageMapping::PADDING;
 
 struct BufferDistributionSpecInputs {
@@ -209,7 +209,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
     const auto& [cq_write, cq_read, params] = GetParam();
 
     // Create a replicated mesh buffer across generic mesh device; tests will only use first device
-    const auto mesh_buffer = create_replicated_mesh_buffer_from_inputs(params.inputs, mesh_device_.get());
+    auto mesh_buffer = create_replicated_mesh_buffer_from_inputs(params.inputs, mesh_device_.get());
 
     // Extract local single-device buffer (ie. shard_view) concepts for testing
     const tt::tt_metal::distributed::MeshCoordinate mesh_coordinate{0, 0};
@@ -228,9 +228,9 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
      * Here, buffer refers to local device buffer or shard view
      * - Initialize buffer and command queue state to 0
      * - Initialize src vector
-     * - Write to buffer (with either EnqueueWriteBuffer or WriteToBuffer)
+     * - Write to buffer (with either EnqueueWriteMeshBuffer or WriteToBuffer)
      * - Validate written results are correct per core (using explicitly hard-coded core mapping)
-     * - Read from buffer (with either EnqueueReadBuffer or ReadFromBuffer)
+     * - Read from buffer (with either ReadShard or ReadFromBuffer)
      */
 
     // Initialize local device buffer to 0
@@ -246,7 +246,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
     {
         uint16_t channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(local_device->id());
-        chip_id_t mmio_device_id =
+        ChipId mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(local_device->id());
         uint32_t cq_size = local_device->sysmem_manager().get_cq_size();
         uint32_t cq_start = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
@@ -267,12 +267,8 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
         tt::test_utils::generate_uniform_random_vector<uint8_t>(0, UINT8_MAX, host_size_in_bytes / sizeof(uint8_t));
 
     if (cq_write) {
-        log_info(tt::LogTest, "Writing with: FDMeshCommandQueue enqueue_write_shards");
-        std::vector<tt::tt_metal::distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
-            .shard_coord = tt::tt_metal::distributed::MeshCoordinate{0, 0},
-            .host_data = const_cast<void*>(reinterpret_cast<const void*>(src.data())),
-        }};
-        mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, shard_data_transfer, /*blocking=*/false);
+        log_info(tt::LogTest, "Writing with: FDMeshCommandQueue EnqueueWriteMeshBuffer");
+        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, src, /*blocking=*/false);
         Finish(mesh_device_->mesh_command_queue());
     } else {
         log_info(tt::LogTest, "Writing with: WriteToBuffer (equivalent to SDMeshCommandQueue enqueue_write_shards)");
@@ -333,12 +329,13 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
     std::vector<uint8_t> dst(host_size_in_bytes / sizeof(uint8_t), 0);
 
     if (cq_read) {
-        log_info(tt::LogTest, "Reading with: FDMeshCommandQueue enqueue_read_shards");
-        std::vector<tt::tt_metal::distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
-            .shard_coord = tt::tt_metal::distributed::MeshCoordinate{0, 0},
-            .host_data = const_cast<void*>(reinterpret_cast<const void*>(dst.data())),
-        }};
-        mesh_device_->mesh_command_queue().enqueue_read_shards(shard_data_transfer, mesh_buffer, /*blocking=*/false);
+        log_info(tt::LogTest, "Reading with: FDMeshCommandQueue ReadShard");
+        ReadShard(
+            mesh_device_->mesh_command_queue(),
+            dst,
+            mesh_buffer,
+            tt::tt_metal::distributed::MeshCoordinate{0, 0},
+            /*blocking=*/false);
         Finish(mesh_device_->mesh_command_queue());
     } else {
         log_info(tt::LogTest, "Reading with: ReadFromBuffer (equivalent to SDMeshCommandQueue enqueue_read_shards)");

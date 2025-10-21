@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <circular_buffer_constants.h>  // For NUM_CIRCULAR_BUFFERS
 #include <core_coord.hpp>
 #include <fmt/base.h>
@@ -97,31 +97,32 @@ const char* get_riscv_name(HalProgrammableCoreType core_type, uint32_t processor
 }
 
 // Helper function to determine core type from virtual coord. TODO: Remove this once we fix code types.
-CoreType core_type_from_virtual_core(chip_id_t device_id, const CoreCoord& virtual_coord) {
+tt::CoreType core_type_from_virtual_core(tt::ChipId device_id, const CoreCoord& virtual_coord) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(virtual_coord, device_id)) {
-        return CoreType::WORKER;
+        return tt::CoreType::WORKER;
     } else if (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_coord, device_id)) {
-        return CoreType::ETH;
+        return tt::CoreType::ETH;
     }
 
     const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
 
     const std::vector<tt::umd::CoreCoord>& translated_dram_cores =
-        soc_desc.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED);
+        soc_desc.get_cores(tt::CoreType::DRAM, tt::CoordSystem::TRANSLATED);
     if (std::find(translated_dram_cores.begin(), translated_dram_cores.end(), virtual_coord) !=
         translated_dram_cores.end()) {
-        return CoreType::DRAM;
+        return tt::CoreType::DRAM;
     }
 
-    CoreType core_type = soc_desc.translate_coord_to(virtual_coord, CoordSystem::NOC0, CoordSystem::NOC0).core_type;
-    if (core_type == CoreType::TENSIX) {
-        core_type = CoreType::WORKER;
+    tt::CoreType core_type =
+        soc_desc.translate_coord_to(virtual_coord, tt::CoordSystem::NOC0, tt::CoordSystem::NOC0).core_type;
+    if (core_type == tt::CoreType::TENSIX) {
+        core_type = tt::CoreType::WORKER;
     }
     return core_type;
 }
 
 // Helper function to convert noc coord -> virtual coord. TODO: Remove this once we fix code types.
-CoreCoord virtual_noc_coordinate(chip_id_t device_id, uint8_t noc_index, CoreCoord coord) {
+CoreCoord virtual_noc_coordinate(tt::ChipId device_id, uint8_t noc_index, CoreCoord coord) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE) {
         return coord;
     }
@@ -143,15 +144,15 @@ CoreCoord virtual_noc_coordinate(chip_id_t device_id, uint8_t noc_index, CoreCoo
 
 // Helper function to get string rep of noc target.
 string get_noc_target_str(
-    chip_id_t device_id,
+    tt::ChipId device_id,
     CoreCoord virtual_coord,
     HalProgrammableCoreType programmable_core_type,
     int noc,
     dev_msgs::debug_sanitize_noc_addr_msg_t::ConstView san) {
-    auto get_core_and_mem_type = [](chip_id_t device_id, CoreCoord& noc_coord, int noc) -> std::pair<string, string> {
+    auto get_core_and_mem_type = [](tt::ChipId device_id, CoreCoord& noc_coord, int noc) -> std::pair<string, string> {
         // Get the virtual coord from the noc coord
         CoreCoord virtual_core = virtual_noc_coordinate(device_id, noc, noc_coord);
-        CoreType core_type;
+        tt::CoreType core_type;
         try {
             core_type = core_type_from_virtual_core(device_id, virtual_core);
         } catch (std::runtime_error& e) {
@@ -159,10 +160,10 @@ string get_noc_target_str(
             return {"Unknown", ""};
         }
         switch (core_type) {
-            case CoreType::DRAM: return {"DRAM", "DRAM"};
-            case CoreType::ETH: return {"Ethernet", "L1"};
-            case CoreType::PCIE: return {"PCIe", "PCIE"};
-            case CoreType::WORKER: return {"Tensix", "L1"};
+            case tt::CoreType::DRAM: return {"DRAM", "DRAM"};
+            case tt::CoreType::ETH: return {"Ethernet", "L1"};
+            case tt::CoreType::PCIE: return {"PCIe", "PCIE"};
+            case tt::CoreType::WORKER: return {"Tensix", "L1"};
             default: return {"Unknown", ""};
         }
     };
@@ -289,7 +290,7 @@ public:
     void Dump() const;
 };
 
-WatcherDeviceReader::WatcherDeviceReader(FILE* f, chip_id_t device_id, const std::vector<string>& kernel_names) :
+WatcherDeviceReader::WatcherDeviceReader(FILE* f, ChipId device_id, const std::vector<string>& kernel_names) :
     f(f), device_id(device_id), kernel_names(kernel_names) {
     // On init, read out eth link retraining register so that we can see if retraining has occurred. WH only for now.
     if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::WORMHOLE_B0 &&
@@ -982,9 +983,12 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
     if (programmable_core_type_ == HalProgrammableCoreType::TENSIX) {
         fprintf(reader_.f, "smsg:");
         DumpRunState(subordinate_sync.dm1());
-        DumpRunState(subordinate_sync.trisc0());
-        DumpRunState(subordinate_sync.trisc1());
-        DumpRunState(subordinate_sync.trisc2());
+        if (tt::tt_metal::MetalContext::instance().get_cluster().arch() !=
+            ARCH::QUASAR) {  // TODO enable when we have triscs running
+            DumpRunState(subordinate_sync.trisc0());
+            DumpRunState(subordinate_sync.trisc1());
+            DumpRunState(subordinate_sync.trisc2());
+        }
         fprintf(reader_.f, " ");
     } else if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
         fprintf(reader_.f, "smsg:");
@@ -1028,14 +1032,14 @@ void WatcherDeviceReader::Core::DumpSyncRegs() const {
     for (uint32_t operand = 0; operand < NUM_CIRCULAR_BUFFERS; operand++) {
         // XXXX TODO(PGK) get this from device
         const uint32_t OPERAND_START_STREAM = 8;
-        uint32_t base = NOC_OVERLAY_START_ADDR + (OPERAND_START_STREAM + operand) * NOC_STREAM_REG_SPACE_SIZE;
+        uint32_t base = NOC_OVERLAY_START_ADDR + ((OPERAND_START_STREAM + operand) * NOC_STREAM_REG_SPACE_SIZE);
 
-        uint32_t rcvd_addr = base + STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX * sizeof(uint32_t);
+        uint32_t rcvd_addr = base + (STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX * sizeof(uint32_t));
         data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             reader_.device_id, virtual_coord_, rcvd_addr, sizeof(uint32_t));
         uint32_t rcvd = data[0];
 
-        uint32_t ackd_addr = base + STREAM_REMOTE_DEST_BUF_START_REG_INDEX * sizeof(uint32_t);
+        uint32_t ackd_addr = base + (STREAM_REMOTE_DEST_BUF_START_REG_INDEX * sizeof(uint32_t));
         data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             reader_.device_id, virtual_coord_, ackd_addr, sizeof(uint32_t));
         uint32_t ackd = data[0];

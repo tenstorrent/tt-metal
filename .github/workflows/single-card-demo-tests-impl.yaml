@@ -42,7 +42,6 @@ jobs:
             { name: "bert", runner-label: "N150", performance: false, cmd: run_bert_func, owner_id: U024A4EFV6U}, # Brian Liu
             { name: "resnet", runner-label: "N150", performance: false, cmd: run_resnet_func, owner_id: U0837MYG788}, # Marko Radosavljevic
             { name: "distilbert", runner-label: "N150", performance: false, cmd: run_distilbert_func, owner_id: U013121KDH9}, # Austin Ho
-            { name: "covnet_mnist", runner-label: "N150", performance: false, cmd: run_covnet_mnist_func, owner_id: U06LRK6JDGB}, # Saad Jameel
             { name: "mnist", runner-label: "N150", performance: false, cmd: run_mnist_func, owner_id: U06ECNVR0EN}, # Evan Smal
             { name: "squeezebert", runner-label: "N150", performance: false, cmd: run_squeezebert_func, owner_id: UBHPP2NDP}, # Joseph Chu
             { name: "roberta", runner-label: "N150", performance: false, cmd: run_roberta_func, owner_id: U06F3ER8X9A}, # Stuti Raizada
@@ -79,7 +78,6 @@ jobs:
             { name: "bert", runner-label: "N300", performance: false, cmd: run_bert_func, owner_id: U024A4EFV6U}, # Brian Liu
             { name: "resnet", runner-label: "N300", performance: false, cmd: run_resnet_func, owner_id: U0837MYG788}, # Marko Radosavljevic
             { name: "distilbert", runner-label: "N300", performance: false, cmd: run_distilbert_func, owner_id: U013121KDH9}, # Austin Ho
-            { name: "covnet_mnist", runner-label: "N300", performance: false, cmd: run_covnet_mnist_func, owner_id: U06LRK6JDGB}, # Saad Jameel
             { name: "mnist", runner-label: "N300", performance: false, cmd: run_mnist_func, owner_id: U06ECNVR0EN}, # Evan Smal
             { name: "squeezebert", runner-label: "N300", performance: false, cmd: run_squeezebert_func, owner_id: UBHPP2NDP}, #Joseph Chu
             { name: "roberta", runner-label: "N300", performance: false, cmd: run_roberta_func, owner_id: U06F3ER8X9A}, # Stuti Raizada
@@ -110,11 +108,13 @@ jobs:
             { name: "vovnet", runner-label: "N300", performance: false, cmd: run_vovnet_demo, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
             { name: "swin_v2", runner-label: "N300", performance: false, cmd: run_swin_v2_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
             { name: "yolov5x", runner-label: "N300", performance: false, cmd: "pytest models/demos/yolov5x/demo/demo.py", owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
-  #          # Moved to t3k tests until OOM on single card runners resolved
+            # Moved to t3k tests until OOM on single card runners resolved
             # { name: "qwen7b", runner-label: "N300", performance: false, cmd: run_qwen7b_func, owner_id: U03PUAKE719}, # Mark O'Connor
             { name: "qwen25_vl", runner-label: "N300", performance: true, cmd: run_qwen25_vl_func, owner_id: U07RY6B5FLJ},  #Gongyu Wang
-            { name: "gemma3", runner-label: "N150", performance: true, cmd: run_gemma3_perf, owner_id: U08TJ70UFRT},  # Harry Andrews
+            { name: "ds_r1_qwen", runner-label: "N300", performance: false, cmd: run_ds_r1_qwen_func, owner_id: U07RY6B5FLJ, civ2-compatible: true},  #Gongyu Wang
+            # { name: "gemma3", runner-label: "N150", performance: true, cmd: run_gemma3_perf, owner_id: U08TJ70UFRT},  # Harry Andrews TODO: Gemma3 N150 tests pulled due to OOM; will be addressed in future PR
             { name: "gemma3", runner-label: "N300", performance: true, cmd: run_gemma3_perf, owner_id: U08TJ70UFRT},  # Harry Andrews
+            { name: "phi4", runner-label: "N300", performance: false, cmd: run_phi4_func, owner_id: U094PKWHNJ0, civ2-compatible: true},  # Petar Milojevic
           ]]
     steps:
       - name: Compute tests
@@ -185,14 +185,14 @@ jobs:
         with:
           submodules: recursive
       - name: ⬇️ Download Build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ inputs.build-artifact-name }}
       - name: Extract files
-        run: tar -xvf ttm_any.tar
+        run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ inputs.wheel-artifact-name }}

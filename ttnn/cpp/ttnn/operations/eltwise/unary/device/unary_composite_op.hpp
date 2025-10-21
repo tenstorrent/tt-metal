@@ -13,7 +13,6 @@
 namespace ttnn::operations::unary {
 
 enum class UnaryCompositeOpType {
-    CBRT,
     DIGAMMA,
     LGAMMA,
     MULTIGAMMALN,
@@ -31,11 +30,9 @@ enum class UnaryCompositeOpType {
     POLYGAMMA,
     LOGIT,
     LOGICAL_NOT_,
-    RPOW,
     NORMALIZE_GLOBAL,
     FRAC,
 };
-Tensor _cbrt(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _digamma(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _lgamma(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _multigammaln(const Tensor&, const std::optional<MemoryConfig>&);
@@ -56,18 +53,12 @@ Tensor _triu(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>&
 Tensor _polygamma(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
 Tensor _logit(const Tensor& a, float eps = 0.0f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _logical_not_(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _rpow(const Tensor& a, float param, const std::optional<MemoryConfig>&);
 Tensor _normalize_global(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _frac(const Tensor&, const std::optional<MemoryConfig>&);
 
 // OpHandler struct template
 template <UnaryCompositeOpType OpType>
 struct OpHandler;
-
-template <>
-struct OpHandler<UnaryCompositeOpType::CBRT> {
-    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _cbrt(t1, mem_cfg); }
-};
 
 template <>
 struct OpHandler<UnaryCompositeOpType::NORMALIZE_GLOBAL> {
@@ -180,13 +171,6 @@ template <>
 struct OpHandler<UnaryCompositeOpType::LOGICAL_NOT_> {
     static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) {
         return _logical_not_(t1, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::RPOW> {
-    static Tensor handle(const Tensor& t1, float param, const std::optional<MemoryConfig>& mem_cfg) {
-        return _rpow(t1, param, mem_cfg);
     }
 };
 

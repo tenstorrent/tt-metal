@@ -16,13 +16,13 @@ It is important to note that this example builds on top of the previous single c
 
 The full source code for this example is available under the ``tt_metal/programming_examples/matmul/matmul_multi_core/`` directory.
 
-Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``matmul_multi_core`` executable in the ``build/programming_examples`` directory. For example:
+Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``metal_example_matmul_multi_core`` executable in the ``build/programming_examples`` directory. For example:
 
 .. code-block:: bash
 
     export TT_METAL_HOME=</path/to/tt-metal>
     ./build_metal.sh --build-programming-examples
-    ./build/programming_examples/matmul_multi_core
+    ./build/programming_examples/metal_example_matmul_multi_core
 
 .. note::
     Efficiently parallelizing matrix multiplication across multiple cores—using SPMD (Single Program, Multiple Data) or other parallelization strategies - is a broad and advanced topic, often covered in depth in advanced computer science courses. While this tutorial demonstrates how to use our API to distribute work across cores, it does not attempt to teach the fundamentals of parallel programming or SPMD concepts themselves.
@@ -448,7 +448,7 @@ See :ref:`Kernel execution and result verification in the single core matrix mul
     distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
 
     // Add program to mesh workload and execute
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     // Download results from DRAM buffer to host

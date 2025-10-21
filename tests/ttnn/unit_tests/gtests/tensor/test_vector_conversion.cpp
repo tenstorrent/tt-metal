@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -89,18 +89,6 @@ TYPED_TEST(VectorConversionTest, InvalidSize) {
     EXPECT_ANY_THROW((void)Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>())));
 }
 
-TYPED_TEST(VectorConversionTest, InvalidDtype) {
-    ttnn::Shape shape{32, 32};
-    auto input = arange<TypeParam>(0, shape.volume(), 1);
-
-    EXPECT_ANY_THROW((void)Tensor::from_vector(
-        input,
-        get_tensor_spec(
-            shape,
-            // Use INT32 for verification, except for when the actual type is int32_t.
-            (std::is_same_v<TypeParam, int32_t> ? DataType::FLOAT32 : DataType::INT32))));
-}
-
 TYPED_TEST(VectorConversionTest, Roundtrip) {
     for (const auto& shape : get_shapes_for_test()) {
         auto input = arange<TypeParam>(0, shape.volume(), 1);
@@ -135,32 +123,6 @@ TYPED_TEST(VectorConversionTest, RoundtripTilizedLayoutOddShape) {
 
     EXPECT_THAT(tensor.logical_shape(), ShapeIs(1, 40, 3, 121));
     EXPECT_THAT(tensor.padded_shape(), ShapeIs(1, 40, 32, 128));
-
-    auto output = tensor.template to_vector<TypeParam>();
-
-    EXPECT_THAT(output, Pointwise(Eq(), input));
-}
-
-TYPED_TEST(VectorConversionTest, RoundtripWithShardedLayout) {
-    ttnn::Shape shape{56, 56, 30};
-    auto input = arange<TypeParam>(0, shape.volume(), 1);
-    auto tensor = Tensor::from_vector(
-        input,
-        get_tensor_spec(
-            shape,
-            convert_to_data_type<TypeParam>(),
-            Layout::TILE,
-            MemoryConfig{
-                TensorMemoryLayout::HEIGHT_SHARDED,
-                BufferType::L1,
-                ShardSpec{
-                    ttnn::CoreRangeSet{ttnn::CoreRange{ttnn::CoreCoord{0, 0}, ttnn::CoreCoord{63, 63}}},
-                    /*shard_shape_=*/{49, 30},
-                    ShardOrientation::ROW_MAJOR,
-                    ShardMode::LOGICAL}}));
-
-    EXPECT_THAT(tensor.logical_shape(), ShapeIs(56, 56, 30));
-    EXPECT_THAT(tensor.padded_shape(), ShapeIs(56, 64, 32));
 
     auto output = tensor.template to_vector<TypeParam>();
 

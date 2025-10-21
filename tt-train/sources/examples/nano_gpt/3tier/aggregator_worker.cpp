@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,13 +6,12 @@
 
 #include <CLI/CLI.hpp>
 
-#include "autograd/module_base.hpp"
 #include "common.hpp"
 #include "core/distributed/distributed.hpp"
+#include "core/distributed/socket_manager.hpp"
 #include "datasets/utils.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/gpt2.hpp"
-#include "socket_manager.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
@@ -21,6 +20,7 @@
 using SortedParameters = std::map<std::string, ttml::autograd::TensorPtr>;
 using Rank = ttml::core::distributed::Rank;
 using Tag = ttml::core::distributed::Tag;
+using SocketManager = ttml::core::distributed::SocketManager;
 
 void send_aggregated_gradients_from_workers_to_optimizer(
     SocketManager &socket_manager,
@@ -37,10 +37,11 @@ void send_aggregated_gradients_from_workers_to_optimizer(
 
         // TODO: allow usage of tensor from model parameters (avoids redundant storage of a model)
         auto tensor = ttnn::empty_like(tensor_ptr->get_value());
-        socket_manager.recv(tensor, workers_and_aggregator_ctx, ttml::core::distributed::Rank{0});
+        tensor = socket_manager.recv(tensor, workers_and_aggregator_ctx, ttml::core::distributed::Rank{0});
         for (int worker_id = 1; worker_id < workers; ++worker_id) {
             auto tensor_to_add = ttnn::empty_like(tensor_ptr->get_value());
-            socket_manager.recv(tensor_to_add, workers_and_aggregator_ctx, ttml::core::distributed::Rank{worker_id});
+            tensor_to_add = socket_manager.recv(
+                tensor_to_add, workers_and_aggregator_ctx, ttml::core::distributed::Rank{worker_id});
             tensor = ttnn::add(tensor, tensor_to_add);
         }
         tensor = ttnn::multiply(tensor, 1.0F / static_cast<float>(workers));
@@ -60,7 +61,8 @@ void send_weights_from_optimizer_to_workers(
     Rank optimizer_rank{aggregator_and_optimizer_ctx->rank().get() + 1};
     for (auto &[name, tensor_ptr] : sorted_model_parameters) {
         auto tensor = tensor_ptr->get_value();
-        socket_manager.recv(tensor, aggregator_and_optimizer_ctx, ttml::core::distributed::Rank{optimizer_rank});
+        tensor =
+            socket_manager.recv(tensor, aggregator_and_optimizer_ctx, ttml::core::distributed::Rank{optimizer_rank});
 
         for (int worker_id = 0; worker_id < workers; ++worker_id) {
             socket_manager.send(tensor, workers_and_aggregator_ctx, ttml::core::distributed::Rank{worker_id});
@@ -91,8 +93,8 @@ int main(int argc, char **argv) {
         ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
     }
     three_tier_arch::initialize_device(device_config.mesh_shape, device_config.device_ids);
-
-    auto socket_manager = SocketManager(config.socket_type);
+    ttml::autograd::ctx().initialize_socket_manager(config.socket_type);
+    auto &socket_manager = ttml::autograd::ctx().get_socket_manager();
 
     auto [steps_per_dataset, vocab_size] = three_tier_arch::get_steps_per_dataset_and_vocab_size(config);
     auto *device = &ttml::autograd::ctx().get_device();
@@ -112,7 +114,7 @@ int main(int argc, char **argv) {
         config.transformer_config);
 
     auto model = std::visit(
-        [&device_config](auto &&arg) -> std::shared_ptr<ttml::autograd::ModuleBase> {
+        [&device_config](auto &&arg) -> std::shared_ptr<ttml::modules::ModuleBase> {
             if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
                 if (device_config.enable_tp) {
                     return ttml::models::distributed::llama::create(arg);

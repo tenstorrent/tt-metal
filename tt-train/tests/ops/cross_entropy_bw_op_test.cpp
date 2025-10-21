@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,6 +18,8 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "ops/losses.hpp"
+#include "ops/unary_ops.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 class CrossEntropyBackwardTest : public ::testing::Test {
@@ -260,7 +262,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Backward) {
 
 TEST_F(CrossEntropyBackwardTest, NIGHTLY_CrossEntropyBackward_Huge_Backward) {
     auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
-    if (board == BoardType::P100 || board == BoardType::P150) {
+    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
         GTEST_SKIP() << "Skipping on P100/P150 boards";
     }
     using namespace ttml;
@@ -314,4 +316,52 @@ TEST_F(CrossEntropyBackwardTest, NIGHTLY_CrossEntropyBackward_Huge_Backward) {
     auto result_xtensor = core::to_xtensor(result);
     assert((result_xtensor.shape() == expected_result.shape()));
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
+}
+
+TEST_F(CrossEntropyBackwardTest, CrossEntropyForwardBackward_ReduceMeanVsNone) {
+    using namespace ttml;
+
+    const uint32_t N = 5U, C = 1U, H = 91U, W = 187U;
+    const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
+
+    std::random_device rd;
+    std::mt19937 gen(42);
+    xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
+    auto& rng = ttml::autograd::ctx().get_generator();
+    uint32_t seed = rng();
+    ttml::core::parallel_generate(
+        std::span{input_tensor.data(), input_tensor.size()},
+        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
+        seed);
+    xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
+
+    std::uniform_int_distribution<uint32_t> class_dist(0, W - 1);
+    for (uint32_t n = 0; n < N; ++n) {
+        for (uint32_t h = 0; h < H; ++h) {
+            uint32_t true_class = class_dist(gen);
+            target_tensor(n, h) = true_class;
+        }
+    }
+
+    auto input = ttml::autograd::create_tensor(core::from_xtensor(input_tensor, &autograd::ctx().get_device()));
+    auto target = ttml::autograd::create_tensor(core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+        target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR));
+
+    auto result_none = ttml::ops::cross_entropy_loss(input, target, ttml::ops::ReduceType::NONE);
+    auto result_none_with_mean_after = ttml::ops::mean(result_none);
+    auto result_mean = ttml::ops::cross_entropy_loss(input, target, ttml::ops::ReduceType::MEAN);
+
+    result_mean->backward();
+    result_none_with_mean_after->backward();
+
+    auto result_mean_grad = core::to_xtensor(result_mean->get_grad());
+    auto result_none_with_mean_after_grad = core::to_xtensor(result_none_with_mean_after->get_grad());
+
+    auto result_none_after_mean_xtensor = core::to_xtensor(result_none_with_mean_after->get_value());
+    auto result_mean_xtensor = core::to_xtensor(result_mean->get_value());
+
+    assert((result_none_after_mean_xtensor.shape() == result_mean_xtensor.shape()));
+    EXPECT_TRUE(xt::allclose(result_none_after_mean_xtensor, result_mean_xtensor, 3e-2F, 1e-2F));
+    assert((result_none_with_mean_after_grad.shape() == result_mean_grad.shape()));
+    EXPECT_TRUE(xt::allclose(result_none_with_mean_after_grad, result_mean_grad, 3e-2F, 1e-2F));
 }

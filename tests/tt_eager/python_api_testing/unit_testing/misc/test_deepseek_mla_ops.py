@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -24,7 +24,7 @@ import pytest
 from models.common.utility_functions import skip_for_blackhole
 
 from models.demos.deepseek_v3.tt.rope import RotarySetup
-from models.demos.deepseek_v3.tt.mla import MLA
+from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import RMSNorm as ReferenceRMSNorm
 from models.demos.deepseek_v3.reference.deepseek.rope_helpers import (
@@ -537,14 +537,22 @@ def run_rope_impl(
     #################
     rope_setup = RotarySetup(
         device=device,
-        batch_size=bsz,
+        batch_size_per_row=bsz,
         hf_config=decode_cfg.args,
     )
 
     if mode == "prefill":
-        tt_cos, tt_sin, tt_trans_mat = rope_setup.get_rot_mats_table(seq_len)
+        match rope_setup.get_rot_mats_table(seq_len):
+            case {"cos_matrix": tt_cos, "sin_matrix": tt_sin, "trans_matrix": tt_trans_mat}:
+                pass
+            case _:
+                raise ValueError("Unexpected return from get_rot_mats_table")
     else:
-        tt_cos, tt_sin, tt_trans_mat = rope_setup.get_rot_mats(position_ids)
+        match rope_setup.get_rot_mats(position_ids):
+            case {"cos_matrix": tt_cos, "sin_matrix": tt_sin, "trans_matrix": tt_trans_mat}:
+                pass
+            case _:
+                raise ValueError("Unexpected return from get_rot_mats")
 
     tt_input = ttnn.from_torch(
         input_torch,
@@ -598,7 +606,7 @@ def run_update_cache_impl(
     input_torch = torch.randn(shape).float()
     current_pos = torch.randint(0, max_seq_len, (bsz,))
 
-    paged_config = MLA.get_valid_paged_config(decode_cfg.args.max_seq_len, bsz, dp_factor=1)
+    paged_config = MLA1D.get_valid_paged_config(decode_cfg.args.max_seq_len, bsz, dp_factor=1)
     page_table = page_table_setup(bsz, paged_config)
 
     #################
@@ -698,7 +706,7 @@ def run_fill_cache_impl(
     batch_idx = torch.randint(0, prefill_cfg.max_batch_size_per_device, (1,)).item()  # Randomly select a batch index
     logger.debug(f"Selected batch index: {batch_idx}")
 
-    paged_config = MLA.get_valid_paged_config(
+    paged_config = MLA1D.get_valid_paged_config(
         prefill_cfg.args.max_seq_len, prefill_cfg.max_batch_size_per_device, dp_factor=1
     )
     page_table = page_table_setup(prefill_cfg.max_batch_size_per_device, paged_config)

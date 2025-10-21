@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,7 +24,7 @@
 #include <cstring>
 #include <iostream>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -37,6 +37,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 #include <array>
 #include <bit>
@@ -69,7 +70,7 @@ public:
 
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() >= 2 and
             tt::tt_metal::GetNumPCIeDevices() >= 1) {
-            std::vector<chip_id_t> ids(num_devices_, 0);
+            std::vector<ChipId> ids(num_devices_, 0);
             std::iota(ids.begin(), ids.end(), 0);
             devices_ = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(ids);
         } else {
@@ -93,7 +94,7 @@ public:
         devices_.clear();
     }
 
-    std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
+    std::map<ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -469,16 +470,12 @@ void run_test(
 
     log_info(tt::LogAlways, "Launching programs");
 
-    tt_metal::distributed::MeshWorkload local_workload = tt_metal::distributed::CreateMeshWorkload();
-    tt_metal::distributed::MeshWorkload remote_workload = tt_metal::distributed::CreateMeshWorkload();
-    tt_metal::distributed::AddProgramToMeshWorkload(
-        local_workload,
-        std::move(test_resources.local_device.program),
-        tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}));
-    tt_metal::distributed::AddProgramToMeshWorkload(
-        remote_workload,
-        std::move(test_resources.remote_device.program),
-        tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}));
+    tt_metal::distributed::MeshWorkload local_workload;
+    tt_metal::distributed::MeshWorkload remote_workload;
+    local_workload.add_program(
+        tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}), std::move(test_resources.local_device.program));
+    remote_workload.add_program(
+        tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}), std::move(test_resources.remote_device.program));
 
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         std::thread th2 = std::thread([&] {

@@ -6,8 +6,8 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_binary)
 set_target_properties(
     ttnn_op_eltwise_binary
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
@@ -44,12 +44,7 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_eltwise_binary PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_eltwise_binary
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_eltwise_binary PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS

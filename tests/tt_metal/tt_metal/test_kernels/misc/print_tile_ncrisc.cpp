@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,7 +27,6 @@ void kernel_main() {
     if (is_tilized) {
         cb_wait_front(cb_intermed, 1);
     }
-    DPRINT << WAIT{4};
     DPRINT << "Print tile from Data1:" << ENDL();
     // Use NCRISC to test printing untilized
     DPRINT

@@ -34,7 +34,6 @@ def test_sigmoid_accurate_arange(device):
 
     golden_function = ttnn.get_golden_function(ttnn.sigmoid_accurate)
     golden = golden_function(input_tensor, device=device)
-
-    tt_result = ttnn.sigmoid_accurate(tt_in)
+    tt_result = ttnn.sigmoid_accurate(tt_in, fast_and_approximate_mode=False)
     result = ttnn.to_torch(tt_result)
     assert_with_ulp(golden, result, 3, allow_nonfinite=True)

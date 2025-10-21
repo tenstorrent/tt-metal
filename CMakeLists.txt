@@ -154,7 +154,6 @@ target_link_libraries(
     INTERFACE
         dl
         pthread
-        atomic
         hwloc
         numa
 )
@@ -171,12 +170,10 @@ add_compile_options(
     # Vars that are used only in Asserts will appear as dead stores in builds
     # where the preprocessor has stripped away the assert.
     -Wno-unused-but-set-variable
-    -Wno-unused-function
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-volatile>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-logical-op-parentheses>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-reorder-ctor>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-lambda-capture>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-private-field>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unknown-pragmas>"
     "$<$<CXX_COMPILER_ID:Clang>:SHELL:-Xclang -fno-pch-timestamp>" # ccache-friendly PCH flag
@@ -304,14 +301,16 @@ install(
         COMPONENT tar
 )
 
-# FIXME(17578): figure out what bits we actually need to ship and omit the rest
-install(
-    DIRECTORY
-        runtime/sfpi
-    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/runtime
-    USE_SOURCE_PERMISSIONS
-    COMPONENT jit-build
-)
+if(NOT TT_USE_SYSTEM_SFPI)
+    # FIXME(17578): figure out what bits we actually need to ship and omit the rest
+    install(
+        DIRECTORY
+            runtime/sfpi
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/runtime
+        USE_SOURCE_PERMISSIONS
+        COMPONENT jit-build
+    )
+endif()
 
 # Custom clean target for `built` folder for when new kernel changes are pulled
 add_custom_target(

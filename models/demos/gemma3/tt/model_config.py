@@ -461,7 +461,7 @@ class ModelArgs:
             os.makedirs(self.CACHE_PATH, exist_ok=True)
 
         logger.info(f"Checkpoint directory: {self.CKPT_DIR}")
-        logger.info(f"Tokenizer file: {self.TOKENIZER_PATH + '/tokenizer.model'}")
+        logger.info(f"Tokenizer file: {os.path.join(self.TOKENIZER_PATH, 'tokenizer.model')}")
         logger.info(f"Cache directory: {self.CACHE_PATH}")
         logger.info(f"Model name: {self.model_name}")
 
@@ -470,8 +470,8 @@ class ModelArgs:
         self.model_cache_path = Path(self.CACHE_PATH)
 
         # Load weights and tokenizer
-        self.consolidated_weights_path = self.CKPT_DIR + "/consolidated.00.pth"
-        self.tokenizer_path = self.TOKENIZER_PATH + "/tokenizer.model"
+        self.consolidated_weights_path = os.path.join(self.CKPT_DIR, "consolidated.00.pth")
+        self.tokenizer_path = os.path.join(self.TOKENIZER_PATH, "tokenizer.model")
 
         self.instruct = instruct
         # If the weights file contain the keyword `instruct` also set self.instruct to true
@@ -1209,7 +1209,7 @@ class ModelArgs:
 
             self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = _get_xattn_kv_prefill_mem_cfg
 
-            if self.is_vision():
+            if self.is_llama_vision():
                 self.VISION_MAX_MM_SEQ = self.vision_chunk_ntok if self.is_gemma else nearest_32(self.vision_chunk_ntok)
 
             # RMS NORM
@@ -1356,7 +1356,7 @@ class ModelArgs:
         return xs_1BSH
 
     def _get_text_prefix(self):
-        if self.is_vision():
+        if self.is_llama_vision():
             return "text_model."
         else:
             return ""
@@ -1484,6 +1484,9 @@ class ModelArgs:
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
 
+        # Sliding window attention
+        self.sliding_window = text_config.get("sliding_window", None)
+
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
@@ -1507,7 +1510,7 @@ class ModelArgs:
         # self.vision_in_channels = 3
 
         self.state_dict_text_prefix = self._get_text_prefix()
-        self.is_multimodal = "vision_config" in config or self.is_vision()
+        self.is_multimodal = "vision_config" in config or self.is_llama_vision()
 
         self._set_model_specific_params()
 
@@ -1701,8 +1704,8 @@ class ModelArgs:
     vision_num_cross_attention_layers={self.vision_num_cross_attention_layers}
 )"""
 
-    def is_vision(self):
-        return self.vision_chunk_size > 0
+    def is_llama_vision(self):
+        return ("llama" in self.CKPT_DIR.lower()) and ("vision" in self.CKPT_DIR.lower())
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
         if self.is_gemma:
@@ -2165,7 +2168,9 @@ class ModelArgs:
 
             try:
                 # Try to load tokenizer from the original model path
-                tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
+                tokenizer = AutoTokenizer.from_pretrained(
+                    self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true"
+                )
                 logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
             except Exception as e:
                 logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
@@ -2204,7 +2209,9 @@ class ModelArgs:
                 if fallback_tokenizer_path:
                     logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
                     try:
-                        tokenizer = AutoTokenizer.from_pretrained(fallback_tokenizer_path)
+                        tokenizer = AutoTokenizer.from_pretrained(
+                            fallback_tokenizer_path, local_files_only=os.getenv("CI") == "true"
+                        )
                         logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
                     except Exception as fallback_e:
                         logger.error(f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}")
@@ -2463,7 +2470,7 @@ class ModelArgs:
 
             return wrapper
 
-    def reference_attention(self):
+    def reference_attention(self, rope_embeddings="global"):
         if self.checkpoint_type == CheckpointType.Meta:
             from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
 
@@ -2476,9 +2483,14 @@ class ModelArgs:
                 "MistralAttention",
                 "Gemma3Attention",
             )
-            wrapper = HfAttentionWrapper(
-                layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
-            )
+            if "gemma-3" in self.model_name:
+                if rope_embeddings == "local":
+                    rotary_emb = model.model.rotary_emb_local
+                else:
+                    rotary_emb = model.model.rotary_emb
+            else:
+                rotary_emb = model.model.rotary_emb
+            wrapper = HfAttentionWrapper(layer, self.head_dim, rotary_emb if use_position_embeddings else None)
             return wrapper
 
     def set_tg_attention_config(self):
@@ -2569,6 +2581,7 @@ class HfAttentionWrapper:
         super().__init__()
         self.attention = attention
         self.past_key_value = DynamicCache()
+        # self.past_key_value = StaticCache(config=attention.config, max_batch_size=1, max_cache_len=256)
         self.head_dim = head_dim
         self.rotary_emb = rotary_emb
 

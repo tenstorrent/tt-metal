@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -43,13 +43,13 @@ void MeshCommandQueueBase::write_sharded_buffer(const MeshBuffer& buffer, const 
     const auto& [height_replicated, width_replicated] = buffer.replicated_dims();
     for (std::size_t shard_y = 0; shard_y < num_shards_y; shard_y++) {
         for (std::size_t shard_x = 0; shard_x < num_shards_x; shard_x++) {
-            auto read_offset = shard_x * single_read_size + shard_y * stride_size_bytes * shard_shape.height();
+            auto read_offset = (shard_x * single_read_size) + (shard_y * stride_size_bytes * shard_shape.height());
             uint32_t size_to_read = total_read_size_per_shard;
             uint32_t local_offset = 0;
             while (size_to_read) {
                 std::memcpy(
-                    shard_data.data() + local_offset * (single_read_size / sizeof(uint32_t)),
-                    (uint8_t*)(src) + read_offset + local_offset * stride_size_bytes,
+                    shard_data.data() + (local_offset * (single_read_size / sizeof(uint32_t))),
+                    (uint8_t*)(src) + read_offset + (local_offset * stride_size_bytes),
                     single_read_size);
                 size_to_read -= single_read_size;
                 local_offset++;
@@ -135,13 +135,14 @@ void MeshCommandQueueBase::read_sharded_buffer(MeshBuffer& buffer, void* dst) {
                 /*region=*/std::nullopt,
                 num_txns_per_device);
             this->submit_memcpy_request(num_txns_per_device, true);
-            uint64_t write_offset = shard_x * single_write_size + shard_y * stride_size_bytes * shard_shape.height();
+            uint64_t write_offset =
+                (shard_x * single_write_size) + (shard_y * stride_size_bytes * shard_shape.height());
             uint64_t size_to_write = total_write_size_per_shard;
             uint32_t local_offset = 0;
             while (size_to_write) {
                 std::memcpy(
-                    (uint8_t*)(dst) + write_offset + local_offset * stride_size_bytes,
-                    shard_data.data() + local_offset * (single_write_size / sizeof(uint32_t)),
+                    (uint8_t*)(dst) + write_offset + (local_offset * stride_size_bytes),
+                    shard_data.data() + (local_offset * (single_write_size / sizeof(uint32_t))),
                     single_write_size);
                 local_offset++;
                 size_to_write -= single_write_size;

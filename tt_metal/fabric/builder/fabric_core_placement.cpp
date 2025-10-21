@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,12 +10,12 @@
 
 namespace tt::tt_fabric::core_placement {
 
-static void run_default_galaxy_optimizer(
+namespace {
+void run_default_galaxy_optimizer(
     const CorePlacementContext& ctx,
     tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder1,
     tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder2,
     size_t l) {
-
     if (!ctx.is_galaxy) return;
 
     constexpr uint32_t ring_noc_selection_link_threshold = 3;
@@ -41,28 +41,28 @@ static void run_default_galaxy_optimizer(
 
     if (enable_noc_selection_opt) {
         if (edm_builder1.my_noc_x < edm_builder2.my_noc_x) {
-            for (uint32_t i = 0; i < edm_builder1.config.num_receiver_channels; i++) {
+            for (uint32_t i = 0; i < builder_config::num_receiver_channels; i++) {
                 edm_builder1.config.receiver_channel_forwarding_noc_ids[i] = 0;
                 edm_builder2.config.receiver_channel_forwarding_noc_ids[i] = 1;
             }
-            for (uint32_t i = 0; i < edm_builder1.config.num_receiver_channels; i++) {
+            for (uint32_t i = 0; i < builder_config::num_receiver_channels; i++) {
                 edm_builder1.config.receiver_channel_local_write_noc_ids[i] = 1;
                 edm_builder2.config.receiver_channel_local_write_noc_ids[i] = 1;
             }
-            for (uint32_t i = 0; i < edm_builder1.config.num_sender_channels; i++) {
+            for (uint32_t i = 0; i < builder_config::num_sender_channels; i++) {
                 edm_builder1.config.sender_channel_ack_noc_ids[i] = 1;
                 edm_builder2.config.sender_channel_ack_noc_ids[i] = 0;
             }
         } else if (edm_builder1.my_noc_x > edm_builder2.my_noc_x) {
-            for (uint32_t i = 0; i < edm_builder1.config.num_receiver_channels; i++) {
+            for (uint32_t i = 0; i < builder_config::num_receiver_channels; i++) {
                 edm_builder1.config.receiver_channel_forwarding_noc_ids[i] = 1;
                 edm_builder2.config.receiver_channel_forwarding_noc_ids[i] = 0;
             }
-            for (uint32_t i = 0; i < edm_builder1.config.num_receiver_channels; i++) {
+            for (uint32_t i = 0; i < builder_config::num_receiver_channels; i++) {
                 edm_builder1.config.receiver_channel_local_write_noc_ids[i] = 1;
                 edm_builder2.config.receiver_channel_local_write_noc_ids[i] = 1;
             }
-            for (uint32_t i = 0; i < edm_builder1.config.num_sender_channels; i++) {
+            for (uint32_t i = 0; i < builder_config::num_sender_channels; i++) {
                 edm_builder1.config.sender_channel_ack_noc_ids[i] = 0;
                 edm_builder2.config.sender_channel_ack_noc_ids[i] = 1;
             }
@@ -70,6 +70,7 @@ static void run_default_galaxy_optimizer(
     }
 }
 
+}  // namespace
 
 void apply_core_placement_optimizations(
     const CorePlacementContext& ctx,

@@ -33,18 +33,21 @@ jobs:
             mesh-device: T3K,
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"fabric_config\": \"FABRIC_1D\"}",
+            multimodal: false,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
           {
             name: "[WH-T3K] Qwen2.5-VL-72B-Instruct",
             model: "Qwen/Qwen2.5-VL-72B-Instruct",
-            server-timeout: 30,
-            benchmark-timeout: 15,
+            server-timeout: 10,
+            benchmark-timeout: 5,
             runner-label: config-t3000,
             mesh-device: T3K,
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
+            multimodal: true,
+            additional-args: "--max_model_len 2048",
             co-owner-1-id: U07RY6B5FLJ, # Gongyu Wang
           },
           {
@@ -56,6 +59,7 @@ jobs:
             mesh-device: P150x2,
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"data_parallel\": 2}",
+            multimodal: false,
             owner_id: U08GELBB1AP, # Ambrose Ling
           },
           {
@@ -67,20 +71,21 @@ jobs:
             mesh-device: P150x4,
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"data_parallel\": 4}",
+            multimodal: false,
             owner_id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
-          # {
-          #   Removing this until #26734 is resolved
-          #   name: "[BH-RB] Llama-3.1-8B-Instruct",
-          #   model: "meta-llama/Llama-3.1-8B-Instruct",
-          #   server-timeout: 35,
-          #   benchmark-timeout: 10,
-          #   runner-label: bh-rackbox,
-          #   mesh-device: P150x8,
-          #   tt-llama-text-ver: tt_transformers,
-          #   override-tt-config: "{\"data_parallel\": 8}",
-          #   owner_id: U08GELBB1AP, # Ambrose Ling
-          # },
+          {
+            name: "[BH-LB] Llama-3.1-8B-Instruct",
+            model: "meta-llama/Llama-3.1-8B-Instruct",
+            server-timeout: 35,
+            benchmark-timeout: 10,
+            runner-label: bh-rackbox,
+            mesh-device: P150x8,
+            tt-llama-text-ver: tt_transformers,
+            override-tt-config: "{\"data_parallel\": 8}",
+            multimodal: false,
+            owner_id: U08GELBB1AP, # Ambrose Ling
+          },
           {
             name: "[WH-GLX] Llama-3.3-70B-Instruct",
             model: "meta-llama/Llama-3.3-70B-Instruct",
@@ -89,7 +94,8 @@ jobs:
             runner-label: topology-6u,
             mesh-device: TG,
             tt-llama-text-ver: llama3_70b_galaxy,
-            override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 95693824}",
+            override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
+            multimodal: false,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
@@ -102,6 +108,7 @@ jobs:
             mesh-device: TG,
             override-tt-config: "{\"data_parallel\": 16, \"fabric_config\": \"FABRIC_1D_RING\"}",
             tt-llama-text-ver: tt_transformers,
+            multimodal: false,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08BH66EXAL, # Radoica Draskic
           },
@@ -114,6 +121,7 @@ jobs:
             mesh-device: T3K,
             override-tt-config: "{\"fabric_config\": \"FABRIC_1D\", \"l1_small_size\": 768}",
             tt-llama-text-ver: tt_transformers,
+            multimodal: false, # Disabled until the error seen in https://github.com/tenstorrent/tt-metal/actions/runs/18021096729/job/51279632451 is fixed
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08BH66EXAL, # Radoica Draskic
           },
@@ -132,10 +140,12 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
         HF_HUB_OFFLINE: 1
-        HF_HOME: /mnt/MLPerf/huggingface
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
         FILE_SERVER_PID: "./server.pid"
         FILE_SERVER_LOG: "./output/vllm_server.log"
         FILE_BENCHMARK_LOG: "./output/vllm_benchmark.log"
+        FILE_MULTIMODAL_BENCHMARK_LOG: "./output/vllm_multimodal_benchmark.log"
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -147,7 +157,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️ Setup Metal
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -192,13 +202,14 @@ jobs:
           # Keep TT cache separate from HF hub
           export HF_MODEL="${{ matrix.test-group.model }}"
           MODEL_NAME="${HF_MODEL/\//--}"
-          export TT_CACHE_PATH="$HF_HOME/tt_cache/$MODEL_NAME"
+          export TT_CACHE_PATH="$TT_CACHE_HOME/$MODEL_NAME"
 
           # vLLM environment variables
           export VLLM_RPC_TIMEOUT=300000
 
           python3 vllm/examples/server_example_tt.py \
             --model ${{ matrix.test-group.model }} \
+            ${{ matrix.test-group.additional-args }} \
             "${OVERRIDE_TT_CONFIG[@]}" \
             > "${FILE_SERVER_LOG}" 2>&1 &
 
@@ -251,6 +262,37 @@ jobs:
             exit 1
           fi
 
+      - name: 🖼️ Run multimodal benchmark
+        if: ${{ matrix.test-group.multimodal }}
+        timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
+        run: |
+          echo "Using: $(pip list | grep datasets)"
+          unset HF_HUB_OFFLINE # Disable offline mode to allow downloading the dataset
+
+          python3 vllm/benchmarks/benchmark_serving.py \
+            --backend openai-chat \
+            --endpoint /v1/chat/completions \
+            --model ${{ matrix.test-group.model }} \
+            --dataset-name hf \
+            --dataset-path lmarena-ai/vision-arena-bench-v0.1 \
+            --no-stream \
+            --num-prompts 32 \
+            --random-input-len 100 \
+            --random-output-len 100 \
+            --ignore-eos \
+            --percentile-metrics ttft,tpot,itl,e2el \
+            --save-result \
+            --result-filename output/vllm_result.json \
+            2>&1 | tee ${FILE_MULTIMODAL_BENCHMARK_LOG}
+
+          # If the backend fails, the benchmark will still complete successfully but with all-zero results.
+          # It will contain a warning message, though
+          warning_message="All requests failed"
+          if grep -q "$warning_message" "${FILE_MULTIMODAL_BENCHMARK_LOG}"; then
+            echo "❌ All requests failed"
+            echo "Check out the server log in a step below."
+            exit 1
+          fi
       - name: 🧹 Cleanup server process
         if: always()
         run: |

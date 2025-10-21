@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,12 +14,6 @@
 
 namespace tt::tt_metal::distributed {
 
-MeshWorkload CreateMeshWorkload() { return MeshWorkload(); }
-
-void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program&& program, const MeshCoordinateRange& device_range) {
-    mesh_workload.add_program(device_range, std::move(program));
-}
-
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         mesh_workload.impl().compile(mesh_cq.device());
@@ -28,22 +22,6 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     }
     mesh_cq.enqueue_mesh_workload(mesh_workload, blocking);
 }
-
-MeshEvent EnqueueRecordEvent(
-    MeshCommandQueue& mesh_cq,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
-    const std::optional<MeshCoordinateRange>& device_range) {
-    return mesh_cq.enqueue_record_event(sub_device_ids, device_range);
-}
-
-MeshEvent EnqueueRecordEventToHost(
-    MeshCommandQueue& mesh_cq,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
-    const std::optional<MeshCoordinateRange>& device_range) {
-    return mesh_cq.enqueue_record_event_to_host(sub_device_ids, device_range);
-}
-
-void EnqueueWaitForEvent(MeshCommandQueue& mesh_cq, const MeshEvent& event) { mesh_cq.enqueue_wait_for_event(event); }
 
 void EventSynchronize(const MeshEvent& event) {
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
@@ -72,16 +50,6 @@ MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id) {
     device->begin_mesh_trace(cq_id, trace_id);
     return trace_id;
 }
-
-void EndTraceCapture(MeshDevice* device, uint8_t cq_id, const MeshTraceId& trace_id) {
-    device->end_mesh_trace(cq_id, trace_id);
-}
-
-void ReplayTrace(MeshDevice* device, uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) {
-    device->replay_mesh_trace(cq_id, trace_id, blocking);
-}
-
-void ReleaseTrace(MeshDevice* device, const MeshTraceId& trace_id) { device->release_mesh_trace(trace_id); }
 
 void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     if (!device->is_initialized()) {

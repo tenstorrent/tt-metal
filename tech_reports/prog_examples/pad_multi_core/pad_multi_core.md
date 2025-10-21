@@ -26,9 +26,10 @@ export TT_METAL_HOME=$(pwd)
 
 ``` cpp
 int device_id = 0;
-Device *device = CreateDevice(device_id);
-CommandQueue& cq = device->command_queue();
-Program program = CreateProgram();
+std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+distributed::MeshWorkload workload;
+distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 ```
 
 In order to access the hardware capabilities of the accelerator, we retrieve the `Device` object, referencing the Tenstorrent device with a `device_id` of 0. We also instantiate the `CommandQueue` and `Program` objects in order to later dispatch the program to the device for execution.
@@ -94,13 +95,10 @@ This example will send data to 4 cores for the padding operation. We specify the
 
 ``` cpp
 uint32_t src_buffer_size = packed_data_size * src_num_values_packed;
-tt_metal::InterleavedBufferConfig input_dram_config {
-    .device = device,
-    .size = src_buffer_size,
-    .page_size = packed_data_size,
-    .buffer_type = tt_metal::BufferType::DRAM
-};
-std::shared_ptr<tt::tt_metal::Buffer> src_buffer = CreateBuffer(input_dram_config);
+distributed::DeviceLocalBufferConfig dram_config{
+    .page_size = packed_data_size, .buffer_type = tt_metal::BufferType::DRAM};
+distributed::ReplicatedBufferConfig input_buffer_config{.size = src_buffer_size};
+auto src_buffer = distributed::MeshBuffer::create(input_buffer_config, dram_config, mesh_device.get());
 uint32_t src_addr = src_buffer->address();
 ```
 
@@ -108,13 +106,8 @@ We configure the DRAM buffer for the source data (input tensor). The page size w
 
 ``` cpp
 uint32_t pad_buffer_size = packed_data_size * pad_vec.size();
-tt_metal::InterleavedBufferConfig pad_dram_config {
-    .device = device,
-    .size = pad_buffer_size,
-    .page_size = packed_data_size,
-    .buffer_type = tt_metal::BufferType::DRAM
-};
-std::shared_ptr<tt::tt_metal::Buffer> pad_buffer = CreateBuffer(pad_dram_config);
+distributed::ReplicatedBufferConfig pad_buffer_config{.size = pad_buffer_size};
+auto pad_buffer = distributed::MeshBuffer::create(pad_buffer_config, dram_config, mesh_device.get());
 uint32_t pad_addr = pad_buffer->address();
 ```
 
@@ -122,13 +115,8 @@ We create another DRAM buffer for the pad value. This buffer will only contain a
 
 ``` cpp
 uint32_t dst_buffer_size = packed_data_size * dst_num_values_packed;
-tt_metal::InterleavedBufferConfig output_dram_config {
-    .device = device,
-    .size = dst_buffer_size,
-    .page_size = packed_data_size,
-    .buffer_type = tt_metal::BufferType::DRAM
-};
-std::shared_ptr<tt::tt_metal::Buffer> dst_buffer = CreateBuffer(output_dram_config);
+distributed::ReplicatedBufferConfig output_buffer_config{.size = dst_buffer_size};
+auto dst_buffer = distributed::MeshBuffer::create(output_buffer_config, dram_config, mesh_device.get());
 uint32_t dst_addr = dst_buffer->address();
 ```
 
@@ -336,17 +324,18 @@ Once the reader kernel is finished padding the tensor and storing the new data i
 # Dispatch program to device for execution
 
 ``` cpp
-EnqueueWriteBuffer(cq, src_buffer, src_vec.data(), false);
-EnqueueWriteBuffer(cq, pad_buffer, pad_vec.data(), false);
-EnqueueProgram(cq, program, false);
-EnqueueReadBuffer(cq, dst_buffer, dst_vec.data(), false);
-Finish(cq);
+distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec.data(), false);
+distributed::EnqueueWriteMeshBuffer(cq, pad_buffer, pad_vec.data(), false);
+workload.add_program(device_range, std::move(program));
+distributed::EnqueueMeshWorkload(cq, workload, false);
+distributed::EnqueueReadMeshBuffer(cq, dst_buffer, dst_vec.data(), false);
+distributed::Finish(cq);
 /* ... */
-CloseDevice(device);
+mesh_device->close();
 ```
 
-In order to send the program to the device for execution, we call `EnqueueWriteBuffer` to move the input tensor data into its corresponding DRAM buffer, and also move the pad value into its corresponding DRAM buffer.
-We then call `EnqueueReadBuffer` to move the output tensor data from its corresponding DRAM buffer to the destination vector.
+In order to send the program to the device for execution, we call `EnqueueWriteMeshBuffer` to move the input tensor data into its corresponding DRAM buffer, and also move the pad value into its corresponding DRAM buffer.
+We then call `EnqueueReadMeshBuffer` to move the output tensor data from its corresponding DRAM buffer to the destination vector.
 
 # Summary
 

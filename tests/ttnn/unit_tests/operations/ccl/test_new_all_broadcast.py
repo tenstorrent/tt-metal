@@ -7,7 +7,6 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.common.utility_functions import skip_for_grayskull
 
 
 def run_with_trace(
@@ -72,7 +71,12 @@ def run_all_broadcast_impl(
     output_shard_grid=None,
     tensor_mem_layout=None,
     cluster_axis=None,
+    mesh_mapper_config=None,
 ):
+    if mesh_mapper_config is None:
+        mesh_mapper_config = ttnn.MeshMapperConfig(
+            [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)], ttnn.MeshShape(1, num_devices)
+        )
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
 
@@ -169,9 +173,7 @@ def run_all_broadcast_impl(
             memory_config=input_mem_config,
             mesh_mapper=ttnn.create_mesh_mapper(
                 mesh_device,
-                ttnn.MeshMapperConfig(
-                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)], ttnn.MeshShape(1, num_devices)
-                ),
+                mesh_mapper_config,
             ),
         )
 
@@ -211,7 +213,7 @@ def run_all_broadcast_impl(
         for k in range(num_devices):
             output_tensor = output_tensors[k]
             for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensors[k])):
-                tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+                tt_output_tensor = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
                 logger.info(f"Checking for device {t.device().id()}")
                 if input_dtype == ttnn.bfloat16:
                     eq, output = comp_equal(tt_output_tensor, output_tensor)
@@ -231,7 +233,6 @@ def run_all_broadcast_impl(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, output_shape, layout, input_dtype",
     [
@@ -242,6 +243,8 @@ def run_all_broadcast_impl(
         (8, 1, [256, 3328], ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
         (4, 1, [1, 69, 4000], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
         (8, 1, [10, 8320], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        (2, 1, [11, 10, 32784], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        (4, 1, [1, 2, 16300], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
     ],
 )
 @pytest.mark.parametrize(
@@ -390,6 +393,15 @@ def test_all_broadcast_trace(
             None,
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ),
+        (
+            4,
+            [1, 1, 32, 32768],
+            (32, 1024),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))}),
+            None,
+            None,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
     ],
 )
 @pytest.mark.parametrize("num_links", [1])
@@ -423,6 +435,70 @@ def test_all_broadcast_sharded(
 
     run_all_broadcast_impl(
         t3k_mesh_device,
+        num_devices,
+        output_shape,
+        num_links,
+        input_dtype,
+        layout,
+        function_level_defaults,
+        all_broadcast_topology=ttnn.Topology.Linear,
+        num_iters=num_iters,
+        rand_tensor=True,
+        input_shard_shape=input_shard_shape,
+        input_shard_grid=input_shard_grid,
+        output_shard_shape=output_shard_shape,
+        output_shard_grid=output_shard_grid,
+        tensor_mem_layout=tensor_mem_layout,
+    )
+
+
+@pytest.mark.parametrize(
+    "num_devices, output_shape, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
+    [
+        (
+            4,
+            [2, 4, 32, 256],
+            (64, 64),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))}),
+            None,
+            None,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize("num_iters", [1])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+def test_all_broadcast_sharded_2x4(
+    mesh_device,
+    num_devices,
+    output_shape,
+    num_links,
+    input_dtype,
+    layout,
+    num_iters,
+    function_level_defaults,
+    input_shard_shape,
+    input_shard_grid,
+    output_shard_shape,
+    output_shard_grid,
+    tensor_mem_layout,
+):
+    if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
+        pytest.skip("bfloat8_b not supported for row-major")
+
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
+    run_all_broadcast_impl(
+        submesh_device,
         num_devices,
         output_shape,
         num_links,

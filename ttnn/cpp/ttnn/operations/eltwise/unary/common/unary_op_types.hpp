@@ -102,6 +102,7 @@ enum class UnaryOpType {
     ZERO_POINT,
     ALT_COMPLEX_ROTATE90,
     MISH,
+    HARDMISH,
     MAXIMUM,
     MINIMUM,
     TANHSHRINK,
@@ -116,6 +117,8 @@ enum class UnaryOpType {
     CELU,
     CLAMP_TSS,
     SELU,
+    RPOW,
+    CBRT,
 };
 
 enum class VecMode {
@@ -196,7 +199,7 @@ struct BasicUnaryWithParam {
 template <typename T>
 struct BasicUnaryWithParam<T> {
     UnaryOpType op_type;
-    std::vector<T> params;
+    std::vector<T> params{};
 
     BasicUnaryWithParam(UnaryOpType op_type, const std::vector<T>& params) : op_type{op_type}, params{params} {}
     BasicUnaryWithParam(UnaryOpType op_type, std::initializer_list<T> params) : op_type{op_type}, params{params} {}

@@ -65,13 +65,14 @@ def create_multimodal_model(
     checkpoint=None,
     optimizations=None,
     num_layers=None,
+    paged_attention_config=None,
 ):
     from models.demos.gemma3.tt.gemma_e2e_model import TtGemmaModel
     from models.demos.gemma3.tt.model_config import ModelArgs
     from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
 
     tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size, optimizations=optimizations)
-    assert tt_model_args.is_vision(), "This model is multimodal"
+    assert tt_model_args.is_multimodal, "This model is multimodal"
 
     # limit length or we'll run out of space
     tt_model_args.max_seq_len = max_seq_len
@@ -95,6 +96,7 @@ def create_multimodal_model(
             dtype=ttnn.bfloat8_b,
             args=tt_model_args,
             use_paged_kv_cache=use_paged_kv_cache,
+            paged_attention_config=paged_attention_config,
         )
     else:
         model = CrossAttentionTransformer(
@@ -255,7 +257,9 @@ def test_multimodal_demo_text(
     else:
         from transformers import AutoProcessor
 
-        processor = AutoProcessor.from_pretrained(model_args[0].CKPT_DIR, use_fast=True, do_convert_rgb=True)
+        processor = AutoProcessor.from_pretrained(
+            model_args[0].CKPT_DIR, local_files_only=os.getenv("CI") == "true", use_fast=True, do_convert_rgb=True
+        )
 
     generator = Generator(model, model_args, mesh_device)
 

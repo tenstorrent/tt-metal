@@ -26,7 +26,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -88,7 +88,7 @@ public:
 
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() >= 2 and
             tt::tt_metal::GetNumPCIeDevices() >= 1) {
-            std::vector<chip_id_t> ids(num_devices_, 0);
+            std::vector<ChipId> ids(num_devices_, 0);
             std::iota(ids.begin(), ids.end(), 0);
             devices_ = distributed::MeshDevice::create_unit_meshes(ids);
 
@@ -110,7 +110,7 @@ public:
         }
     }
 
-    std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
+    std::map<ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -146,7 +146,7 @@ void generate_receiver_worker_kernels(
     uint32_t num_pages_per_edm_buffer,
     uint32_t worker_semaphore_address,
     uint32_t dram_output_buffer_base_addr,  // remote_output_buffers.at(i)->address();
-    bool dest_is_dram,
+    distributed::MeshBuffer* dst_buffer,
     ttnn::ccl::EriscDataMoverTerminationMode edm_termination_mode) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -167,7 +167,7 @@ void generate_receiver_worker_kernels(
         num_pages,  //
         page_size,
         num_pages_per_edm_buffer};
-    tt::tt_metal::TensorAccessorArgs().append_to(receiver_worker_writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(receiver_worker_writer_compile_args);
     std::vector<uint32_t> receiver_worker_writer_runtime_args{dram_output_buffer_base_addr};
     log_info(tt::LogTest, "\tReceiverWriter CT Args");
     for (auto const& arg : receiver_worker_writer_compile_args) {
@@ -233,7 +233,7 @@ void generate_sender_worker_kernels(
     uint32_t num_pages_per_edm_buffer,
     uint32_t worker_semaphore_address,
     uint32_t dram_output_buffer_base_addr,  // remote_output_buffers.at(i)->address();
-    bool src_is_dram,
+    distributed::MeshBuffer* src_buffer,
     ttnn::ccl::EriscDataMoverTerminationMode edm_termination_mode) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -244,7 +244,7 @@ void generate_sender_worker_kernels(
         num_pages_total,  //
         page_size,
         num_pages_per_edm_buffer};
-    tt::tt_metal::TensorAccessorArgs().append_to(sender_worker_reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(sender_worker_reader_compile_args);
     std::vector<uint32_t> sender_worker_reader_runtime_args{dram_output_buffer_base_addr};
 
     log_info(tt::LogTest, "\tSenderReader CT Args");
@@ -331,12 +331,12 @@ bool RunWriteBWTest(
 
     distributed::MeshWorkload sender_workload;
     tt_metal::Program sender_program_{};
-    distributed::AddProgramToMeshWorkload(sender_workload, std::move(sender_program_), device_range);
+    sender_workload.add_program(device_range, std::move(sender_program_));
     auto& sender_program = sender_workload.get_programs().at(device_range);
 
     distributed::MeshWorkload receiver_workload;
     tt_metal::Program receiver_program_{};
-    distributed::AddProgramToMeshWorkload(receiver_workload, std::move(receiver_program_), device_range);
+    receiver_workload.add_program(device_range, std::move(receiver_program_));
     auto& receiver_program = receiver_workload.get_programs().at(device_range);
 
     auto& sender_cq = sender_mesh_device->mesh_command_queue();
@@ -534,7 +534,7 @@ bool RunWriteBWTest(
             pages_per_send,
             local_worker_semaphore_addresses.at(i),
             local_input_buffer_addresses.at(i),
-            src_is_dram,
+            local_input_buffer.get(),
             edm_termination_mode);
         generate_receiver_worker_kernels(
             receiver_workload,
@@ -548,7 +548,7 @@ bool RunWriteBWTest(
             pages_per_send,
             remote_worker_semaphore_addresses.at(i),
             remote_output_buffers.at(i)->address(),
-            dest_is_dram,
+            remote_output_buffers.at(i).get(),
             edm_termination_mode);
     }
     log_info(tt::LogTest, "Generating remote_sender -> local_receiver workers");
@@ -567,7 +567,7 @@ bool RunWriteBWTest(
             pages_per_send,
             remote_worker_semaphore_addresses.at(i + num_local_sender_channels),
             remote_input_buffer_addresses.at(i),
-            src_is_dram,
+            local_input_buffer.get(),
             edm_termination_mode);
 
         generate_receiver_worker_kernels(
@@ -582,7 +582,7 @@ bool RunWriteBWTest(
             pages_per_send,
             local_worker_semaphore_addresses.at(i + num_local_sender_channels),
             local_output_buffers.at(i)->address(),
-            dest_is_dram,
+            local_output_buffers.at(i).get(),
             edm_termination_mode);
     }
 
@@ -716,7 +716,7 @@ int TestEntrypoint(
     auto const& active_eth_cores = device_0->get_active_ethernet_cores(true);
     auto eth_sender_core_iter = active_eth_cores.begin();
     auto eth_sender_core_iter_end = active_eth_cores.end();
-    chip_id_t device_id = std::numeric_limits<chip_id_t>::max();
+    ChipId device_id = std::numeric_limits<ChipId>::max();
     tt_xy_pair eth_receiver_core;
     tt_xy_pair eth_sender_core;
     do {

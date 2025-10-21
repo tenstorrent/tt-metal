@@ -16,7 +16,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
 
     bool pass = true;
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-    vector<chip_id_t> ids;
+    vector<tt::ChipId> ids;
     ids.reserve(num_devices);
     for (unsigned int id = 0; id < num_devices; id++) {
         ids.push_back(id);
@@ -138,8 +138,7 @@ int main(int argc, char** argv) {
                 core,
                 runtime_args
             );
-            distributed::AddProgramToMeshWorkload(
-                mesh_workload, std::move(program), distributed::MeshCoordinateRange(device->shape()));
+            mesh_workload.add_program(distributed::MeshCoordinateRange(device->shape()), std::move(program));
             distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
             log_info(tt::LogTest, "Started program");
             distributed::Finish(cq);

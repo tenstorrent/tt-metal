@@ -1,4 +1,4 @@
-name: Galaxy Multi-user Isolation Tests
+name: (Galaxy) Multi-user Isolation Tests
 on:
   workflow_dispatch:
     inputs:
@@ -7,6 +7,10 @@ on:
         required: false
         default: true
         type: boolean
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
   schedule:
     - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
 
@@ -22,24 +26,23 @@ jobs:
   galaxy-multi-user-isolation-tests:
     needs: build-artifact
     runs-on:
-      # A physical, multi-host WH 6U that's in service
       - topology-6u
       - arch-wormhole_b0
-      - bare-metal
+      - ${{ inputs.extra-tag || 'in-service' }}
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
       - name: ⬇️ Download Build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       - name: Extract files
-        run: tar -xvf ttm_any.tar
+        run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

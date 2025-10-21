@@ -7,14 +7,17 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_ccl)
 set_target_properties(
     ttnn_op_ccl
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
+    common/kernels/*
     kernel_common/*
     kernels/*
+    all_to_all_combine/device/kernels/*
+    all_to_all_dispatch/device/kernels/*
 )
 target_sources(
     ttnn_op_ccl
@@ -22,12 +25,22 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES ccl_op_fusion.hpp
+        FILES
+            ccl_common.hpp
+            ccl_host_datastructures.hpp
+            ccl_host_types.hpp
+            ccl_op_fusion.hpp
+            common/host/ccl_command_stream_builders.hpp
+            common/types/ccl_types.hpp
+            common/uops/ccl_command.hpp
+            mesh_partition/mesh_partition.hpp
+            shared_with_host/hetergeneous_data_structs.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES
             ${kernels}
+            ccl_host_types.hpp
             shared_with_host/hetergeneous_data_structs.hpp
             shared_with_host/sharded_tensor_addr_gen.hpp
             common/types/ccl_types.hpp
@@ -55,12 +68,19 @@ target_sources(
         common/host/ccl_command_stream_builders.cpp
         common/host/moe_utils.cpp
         # Ops
+        all_gather/all_gather.cpp
+        all_gather/device/all_gather_device_operation.cpp
+        all_gather/device/all_gather_program_factory.cpp
+        all_reduce/all_reduce.cpp
         all_to_all_combine/all_to_all_combine.cpp
         all_to_all_combine/device/all_to_all_combine_device_operation.cpp
         all_to_all_combine/device/all_to_all_combine_program_factory.cpp
         all_to_all_dispatch/all_to_all_dispatch.cpp
         all_to_all_dispatch/device/all_to_all_dispatch_device_operation.cpp
         all_to_all_dispatch/device/all_to_all_dispatch_program_factory.cpp
+        reduce_scatter/reduce_scatter.cpp
+        reduce_scatter/device/reduce_scatter_device_operation.cpp
+        reduce_scatter/device/reduce_scatter_program_factory.cpp
         mesh_partition/mesh_partition.cpp
         mesh_partition/device/mesh_partition_device_operation.cpp
         mesh_partition/device/mesh_partition_program_factory.cpp
@@ -70,12 +90,7 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_ccl PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_ccl
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_ccl PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS

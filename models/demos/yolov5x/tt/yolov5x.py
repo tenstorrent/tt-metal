@@ -59,7 +59,7 @@ class Yolov5x:
             conv_pt.model[7].conv,
             deallocate_activation=False,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
-            use_1d_systolic_array=False,
+            use_1d_systolic_array=True,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
         self.c3_4 = TtnnC3(
@@ -110,7 +110,7 @@ class Yolov5x:
             conv_pt.model[21].conv,
             deallocate_activation=False,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
-            use_1d_systolic_array=False,
+            use_1d_systolic_array=True,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
 
@@ -189,7 +189,7 @@ class Yolov5x:
         x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = concat(-1, True, x, x10)
         ttnn.deallocate(x10)
-
+        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = self.c3_8(x)
         x23 = x
         x = self.detect(x17, x20, x23)

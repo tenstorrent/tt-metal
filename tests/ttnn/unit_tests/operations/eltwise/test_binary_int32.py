@@ -574,6 +574,8 @@ def test_binary_mul_int32_edge_cases(use_legacy, device):
     [
         ttnn.lt,
         ttnn.gt,
+        ttnn.ge,
+        ttnn.le,
     ],
 )
 def test_comp_ops_implicit_broadcast(device, shapes, ttnn_op):
@@ -583,9 +585,6 @@ def test_comp_ops_implicit_broadcast(device, shapes, ttnn_op):
     max_int = torch.iinfo(torch.int32).max
     torch_input_tensor_a = torch.randint(low=min_int, high=max_int, size=shapes[0], dtype=torch.int32)
     torch_input_tensor_b = torch.randint(low=min_int, high=max_int, size=shapes[1], dtype=torch.int32)
-
-    golden_function = ttnn.get_golden_function(ttnn_op)
-    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -602,6 +601,9 @@ def test_comp_ops_implicit_broadcast(device, shapes, ttnn_op):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+
     output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -613,6 +615,8 @@ def test_comp_ops_implicit_broadcast(device, shapes, ttnn_op):
     [
         ttnn.lt,
         ttnn.gt,
+        ttnn.ge,
+        ttnn.le,
     ],
 )
 def test_comp_ops_edge_cases(ttnn_op, device):

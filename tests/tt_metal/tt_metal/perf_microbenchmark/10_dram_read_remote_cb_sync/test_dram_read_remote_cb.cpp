@@ -14,7 +14,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
-#include <tt-metalium/util.hpp>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -34,7 +33,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -60,7 +59,6 @@
 
 using std::vector;
 using namespace tt;
-using std::chrono::duration_cast;
 using std::chrono::microseconds;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -336,9 +334,9 @@ create_mesh_workloads(
 
     std::vector<tt_metal::distributed::MeshWorkload> mesh_workloads;
     for (auto& program : programs) {
-        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
-        tt_metal::distributed::AddProgramToMeshWorkload(
-            mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
+        auto mesh_workload = tt_metal::distributed::MeshWorkload();
+        mesh_workload.add_program(
+            tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}}, std::move(program));
         mesh_workloads.push_back(std::move(mesh_workload));
     }
 
@@ -514,7 +512,7 @@ bool validation_mixed_df(
         uint32_t num_blocks_till_fifo_limit = (cb_size_block_aligned - fifo_wr_ptr) / block_size;
         // start pointer addr of current layer
         fifo_wr_ptr =
-            fifo_wr_ptr_exceed_fifo_limit ? 0 : cb_size_block_aligned - num_blocks_till_fifo_limit * block_size;
+            fifo_wr_ptr_exceed_fifo_limit ? 0 : cb_size_block_aligned - (num_blocks_till_fifo_limit * block_size);
         // start index to read, fifo_wr_ptr / 2 because fp16 format
         start_index = fifo_wr_ptr == cb_size_block_aligned ? 0 : fifo_wr_ptr / 2;
         // end pointer addr of current layer
@@ -528,7 +526,7 @@ bool validation_mixed_df(
     for (int k = 0; k < kt; ++k) {
         for (int n = 0; n < num_receivers; ++n) {
             for (int i = 0; i < nt * 32 * 32 / num_receivers; ++i) {
-                values_fp16_split[n][i + k * nt * 32 * 32 / num_receivers] = to_float(values_fp16[index]);
+                values_fp16_split[n][i + (k * nt * 32 * 32 / num_receivers)] = to_float(values_fp16[index]);
                 index++;
             }
         }
@@ -553,7 +551,7 @@ bool validation_mixed_df(
     for (int k = 0; k < kt / num_blocks * cb_num_blocks; ++k) {
         for (int n = 0; n < num_receivers; ++n) {
             for (int i = 0; i < nt * 32 * 32 / num_receivers; ++i) {
-                golden_vec[index] = golden_vec_split[n][i + k * nt * 32 * 32 / num_receivers];
+                golden_vec[index] = golden_vec_split[n][i + (k * nt * 32 * 32 / num_receivers)];
                 index++;
             }
         }
@@ -736,7 +734,7 @@ int main(int argc, char** argv) {
         uint32_t kt = k / 32;
         uint32_t nt = n / 32;
 
-        uint32_t single_tile_size = tt_metal::detail::TileSize(tile_format);
+        uint32_t single_tile_size = tt::tile_size(tile_format);
 
         TT_FATAL(input_size % single_tile_size == 0, "input size is not aligned to tile size");
         ////////////////////////////////////////////////////////////////////////////
@@ -920,7 +918,7 @@ int main(int argc, char** argv) {
             }
             tt_metal::distributed::Finish(device->mesh_command_queue());
             for ([[maybe_unused]] auto& mesh_workload : mesh_workloads) {
-                tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
+                tt_metal::ReadMeshDeviceProfilerResults(*device);
             }
         }
 

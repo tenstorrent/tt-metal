@@ -4,7 +4,7 @@
 #include "pool_utils.hpp"
 #include <limits>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 
 #include "tt-metalium/constants.hpp"
 
@@ -205,7 +205,15 @@ uint32_t calculate_L1_usage(
     }
 
     FactoryParameters params = get_factory_parameters(
-        num_shards_c, input.dtype(), output_dtype, kernel_h, kernel_w, in_channels, pool_type, return_indices, output_layout);
+        num_shards_c,
+        input.dtype(),
+        output_dtype,
+        kernel_h,
+        kernel_w,
+        in_channels,
+        pool_type,
+        return_indices,
+        output_layout);
 
     bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
@@ -484,8 +492,8 @@ void validate_input_params(
         kernel_size[1]);
 
     // ensure effective kernel size (with dilation) doesn't exceed padded input
-    uint32_t effective_kernel_h = dilation_h * (kernel_size[0] - 1) + 1;
-    uint32_t effective_kernel_w = dilation_w * (kernel_size[1] - 1) + 1;
+    uint32_t effective_kernel_h = (dilation_h * (kernel_size[0] - 1)) + 1;
+    uint32_t effective_kernel_w = (dilation_w * (kernel_size[1] - 1)) + 1;
     uint32_t padded_input_h = input_h + pad_top + pad_bottom;
     uint32_t padded_input_w = input_w + pad_left + pad_right;
     TT_FATAL(

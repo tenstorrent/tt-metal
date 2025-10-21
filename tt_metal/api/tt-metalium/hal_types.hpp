@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -42,11 +42,16 @@ enum class HalL1MemAddrType : uint8_t {
     UNCORR_CW,  // Link status - Uncorrected Codewords count
     LINK_UP,    // Link status - Link up status
     FABRIC_ROUTER_CONFIG,
+    FABRIC_ROUTING_TABLE,
+    FABRIC_EXIT_NODE_TABLE,
+    FABRIC_ROUTING_PATH_1D,
+    FABRIC_ROUTING_PATH_2D,
     ETH_FW_MAILBOX,
     TENSIX_ROUTING_TABLE,
     TENSIX_FABRIC_CONNECTIONS,
     TENSIX_ROUTING_PATH_1D,
     TENSIX_ROUTING_PATH_2D,
+    TENSIX_EXIT_NODE_TABLE,
     COUNT  // Keep this last so it always indicates number of enum options
 };
 

@@ -5,10 +5,8 @@
 #include <random>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -256,11 +254,11 @@ void matmul_multi_core(
     // 1. Upload input data to DRAM buffers
     // 2. Execute the program (all kernels run in parallel across cores)
     // 3. Read back the result from DRAM to host memory
-    // The 'true' parameter in EnqueueReadBuffer ensures we wait for completion (so when the function
+    // The 'true' parameter in EnqueueReadMeshBuffer ensures we wait for completion (so when the function
     // returns, the output vector is fully populated).
     distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
     distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     // Blocking read waits for completion before returning and resizes 'output' as needed
     distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);

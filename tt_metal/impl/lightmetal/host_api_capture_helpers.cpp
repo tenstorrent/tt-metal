@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/overloaded.hpp>
 #include <circular_buffer_config.hpp>
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
 #include "dispatch/system_memory_manager.hpp"
@@ -27,7 +27,7 @@ namespace tt::tt_metal {
 
 namespace {
 // This can be useful for debug. Not all data types are currently supported, can use this during developmenmt.
-void PrintHostDataType(const HostDataType& data) {
+[[maybe_unused]] void PrintHostDataType(const HostDataType& data) {
     std::visit(
         tt::stl::overloaded{
             [](const std::shared_ptr<std::vector<uint8_t>>& /*value*/) {

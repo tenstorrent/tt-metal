@@ -63,11 +63,11 @@ uint32_t estimate_interm_tile_size(
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const tt::tt_metal::DataType output_dtype) {
     if (get_fp32_dest_acc_en(compute_kernel_config)) {
-        return tt_metal::detail::TileSize(tt::DataFormat::Float32);
+        return tt::tile_size(tt::DataFormat::Float32);
     }
-    uint32_t result = tt_metal::detail::TileSize(tt::DataFormat::Float16_b);  // packer l1 acc
+    uint32_t result = tt::tile_size(tt::DataFormat::Float16_b);  // packer l1 acc
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output_dtype);
-    uint32_t output_tile_size = tt_metal::detail::TileSize(output_data_format);
+    uint32_t output_tile_size = tt::tile_size(output_data_format);
     if (output_tile_size > result) {
         result = output_tile_size;
     }
@@ -186,8 +186,8 @@ inline uint32_t get_estimated_size_of_cbs(
     // program config.
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_a.dtype());
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_b.dtype());
-    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);  // use as estimate for output as well
-    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
+    uint32_t in0_single_tile_size = tt::tile_size(in0_data_format);  // use as estimate for output as well
+    uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
     uint32_t output_single_tile_size = in0_single_tile_size;
     auto in0_buffer = input_tensor_a.buffer();
     auto in0_tile = input_tensor_a.tensor_spec().tile();
@@ -1498,7 +1498,7 @@ std::vector<Tensor> matmul_batched_weights(
 }
 
 ttnn::Shape compute_sparse_matmul_output_shape(
-    const Tensor& input_tensor_a, const Tensor& input_tensor_b, bool is_input_a_sparse) {
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, bool is_input_a_sparse, bool is_input_b_sparse) {
     const auto& input_shape_a = input_tensor_a.logical_shape();
     const auto& input_shape_b = input_tensor_b.logical_shape();
 
@@ -1508,8 +1508,8 @@ ttnn::Shape compute_sparse_matmul_output_shape(
     // Decide the rank of the output shape based on batch dimensions in input tensors
     // Find batched dimensions in both. Add batched dimensions from both to output rank and then add 2
     // Batched dimensions are all dimensions except the last two
-    uint32_t a_batched_dims = (is_input_a_sparse || (a_rank <= 2)) ? 0 : (a_rank - 2);
-    uint32_t b_batched_dims = (b_rank > 2) ? (b_rank - 2) : 0;
+    uint32_t a_batched_dims = ((is_input_a_sparse && is_input_b_sparse) || (a_rank <= 2)) ? 0 : (a_rank - 2);
+    uint32_t b_batched_dims = ((is_input_a_sparse && !is_input_b_sparse) || (b_rank <= 2)) ? 0 : (b_rank - 2);
     uint32_t output_rank = a_batched_dims + b_batched_dims + 2;
 
     // Initialize output shape with zeros based on the output rank
@@ -1559,6 +1559,7 @@ SparseMatmul create_sparse_matmul_struct(
     return SparseMatmul{
         parameters.nnz,
         parameters.is_input_a_sparse,
+        parameters.is_input_b_sparse,
         matmul_struct.program_config,
         matmul_struct.output_mem_config,
         matmul_struct.output_dtype,
@@ -1708,7 +1709,7 @@ void Matmul::validate(
     uint32_t bias_single_tile_size = 0;
     if (optional_bias.has_value()) {
         auto bias_data_format = tt_metal::datatype_to_dataformat_converter(optional_bias.value().dtype());
-        bias_single_tile_size = tt_metal::detail::TileSize(bias_data_format);
+        bias_single_tile_size = tt::tile_size(bias_data_format);
     }
     MatmulProgramConfig chosen_program_config =
         get_program_config(input_tensor_a, input_tensor_b, bias_single_tile_size, this);
@@ -2424,7 +2425,7 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
         uint32_t bias_single_tile_size = 0;
         if (optional_bias.has_value()) {
             auto bias_data_format = tt_metal::datatype_to_dataformat_converter(optional_bias.value().dtype());
-            bias_single_tile_size = tt_metal::detail::TileSize(bias_data_format);
+            bias_single_tile_size = tt::tile_size(bias_data_format);
         }
         MatmulProgramConfig chosen_program_config =
             get_program_config(input_tensor_a, input_tensor_b, bias_single_tile_size, this);
@@ -2445,8 +2446,8 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                         "per_core_N must be divisible by override output tile width");
                     auto mem_config = this->output_mem_config;
                     if (!program_config.gather_in0) {
-                        uint32_t num_blocks_y = (M - 1) / per_core_M + 1;
-                        uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
+                        uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
+                        uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
                         uint32_t num_cores = num_blocks_x * num_blocks_y;
                         CoreRangeSet all_cores =
                             num_cores_to_corerangeset(num_cores, program_config.compute_with_storage_grid_size, true);
@@ -2488,8 +2489,8 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                         per_core_N % tile_width_ratio == 0,
                         "per_core_N must be divisible by override output tile width");
 
-                    uint32_t num_blocks_y = (M - 1) / per_core_M + 1;
-                    uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
+                    uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
+                    uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
                     uint32_t num_cores = num_blocks_x * num_blocks_y;
                     auto grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
                     CoreRangeSet all_cores = num_cores_to_corerangeset(num_cores, grid_size, true);
@@ -2512,8 +2513,8 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                         per_core_N % tile_width_ratio == 0,
                         "per_core_N must be divisible by override output tile width");
 
-                    uint32_t num_blocks_y = (M - 1) / per_core_M + 1;
-                    uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
+                    uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
+                    uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
                     CoreRangeSet all_cores;
                     ShardOrientation shard_orientation;
                     if (program_config.transpose_mcast) {
@@ -2540,8 +2541,8 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                         per_core_N % tile_width_ratio == 0,
                         "per_core_N must be divisible by override output tile width");
 
-                    uint32_t num_blocks_y = (M - 1) / per_core_M + 1;
-                    uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
+                    uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
+                    uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
                     uint32_t num_cores = num_blocks_x * num_blocks_y;
                     ShardOrientation shard_orientation = ShardOrientation::COL_MAJOR;
                     if (input_tensor_a.is_sharded()) {
@@ -2601,11 +2602,11 @@ MeshCoordinateRange get_range_from_mesh_coords(const ttnn::MeshCoordinateRangeSe
 
 operation::CacheableMeshWorkload<std::vector<Tensor>> create_homogenous_mesh_workload(
     tt::tt_metal::operation::ProgramWithCallbacks& matmul_program, const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-    tt::tt_metal::distributed::MeshWorkload matmul_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+    tt::tt_metal::distributed::MeshWorkload matmul_workload;
     std::unordered_map<MeshCoordinateRange, MatmulCallback> callbacks = {};
 
     auto workload_device_range = get_range_from_mesh_coords(tensor_coords);
-    AddProgramToMeshWorkload(matmul_workload, std::move(matmul_program.program), workload_device_range);
+    matmul_workload.add_program(workload_device_range, std::move(matmul_program.program));
     callbacks[workload_device_range] = std::move(matmul_program.override_runtime_arguments_callback.value());
     return {.workload = std::move(matmul_workload), .per_program_callbacks = std::move(callbacks)};
 }
@@ -2632,7 +2633,7 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
     uint32_t bias_single_tile_size = 0;
     if (bias.has_value()) {
         auto bias_data_format = tt_metal::datatype_to_dataformat_converter(bias.value().dtype());
-        bias_single_tile_size = tt_metal::detail::TileSize(bias_data_format);
+        bias_single_tile_size = tt::tile_size(bias_data_format);
     }
 
     MatmulProgramConfig chosen_program_config =
@@ -2740,10 +2741,8 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
                         false,
                         false,
                         false);
-                    AddProgramToMeshWorkload(
-                        dram_sharded_mm_workload,
-                        std::move(dram_sharded_mm_program.program),
-                        MeshCoordinateRange(coord, coord));
+                    dram_sharded_mm_workload.add_program(
+                        MeshCoordinateRange(coord, coord), std::move(dram_sharded_mm_program.program));
                     callbacks[MeshCoordinateRange(coord, coord)] =
                         std::move(dram_sharded_mm_program.override_runtime_arguments_callback.value());
                 }
@@ -2822,16 +2821,27 @@ void SparseMatmul::validate(
     TT_FATAL(this->nnz.value_or(1) > 0, "nnz ({}) must be greater than 0", this->nnz.value());
 
     // Check that nnz is less than or equal to the length of all batch dimensions
-    uint32_t batch_length = 1;
-    if ((!this->is_input_a_sparse) && ashape.rank() > 2) {
+    uint32_t batch_length_A = 1;
+    if (ashape.rank() > 2) {
         for (int i = 0; i < ashape.rank() - 2; ++i) {
-            batch_length *= ashape[i];
+            batch_length_A *= ashape[i];
         }
     }
+
+    uint32_t batch_length_B = 1;
     if (bshape.rank() > 2) {
         for (int i = 0; i < bshape.rank() - 2; ++i) {
-            batch_length *= bshape[i];
+            batch_length_B *= bshape[i];
         }
+    }
+
+    uint32_t batch_length = 0;
+    if (this->is_input_a_sparse && this->is_input_b_sparse) {
+        batch_length = batch_length_B;
+    } else if (this->is_input_a_sparse) {
+        batch_length = batch_length_A;
+    } else {
+        batch_length = batch_length_A * batch_length_B;
     }
 
     // Check that sparsity has enough entries
@@ -2864,8 +2874,8 @@ std::vector<ttnn::TensorSpec> SparseMatmul::compute_output_specs(
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
 
-    const auto output_shape =
-        compute_sparse_matmul_output_shape(input_tensor_a, input_tensor_b, this->is_input_a_sparse);
+    const auto output_shape = compute_sparse_matmul_output_shape(
+        input_tensor_a, input_tensor_b, this->is_input_a_sparse, this->is_input_b_sparse);
 
     const auto output_dtype = this->output_dtype.has_value() ? this->output_dtype.value() : input_tensor_a.dtype();
 
@@ -2922,6 +2932,7 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> SparseMatmul::create_mesh_
                     sparsity,
                     this->nnz,
                     this->is_input_a_sparse,
+                    this->is_input_b_sparse,
                     output_tensor,
                     program_config.compute_with_storage_grid_size,
                     this->compute_kernel_config.value(),
