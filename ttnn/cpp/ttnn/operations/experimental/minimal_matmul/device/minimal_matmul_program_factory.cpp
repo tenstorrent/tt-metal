@@ -137,6 +137,16 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     auto intermediate_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     auto intermediate_tile_size = tt::tile_size(intermediate_data_format);
 
+    uint32_t in0_addr = input_tensor.buffer()->address();
+    uint32_t in1_addr = weight_tensor.buffer()->address();
+    uint32_t in2_addr = use_bias ? bias_tensor.value().buffer()->address() : 0;
+    uint32_t out_addr = output_tensor.buffer()->address();
+
+    std::map<std::string, std::string> defines;
+    if (use_bias) {
+        defines["FUSE_BIAS"] = "1";
+    }
+
     /**
      * in0: M_tiles x K_tiles
      * in0 is divided into blocks, which are M_block_tiles x K_block_tiles
@@ -173,6 +183,524 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     uint32_t M_block_tiles = config.has_value() ? config.value().M_block_size : default_M_block_tiles;
     uint32_t K_block_tiles = config.has_value() ? config.value().K_block_size : default_K_block_tiles;
     uint32_t N_block_tiles = config.has_value() ? config.value().N_block_size : default_N_block_tiles;
+
+    // Aspect-ratio based partitioning for highly non-square outputs
+    // We partition along the longer output axis into multiple independent sub-grids.
+    const uint32_t min_tiles = std::max(1u, std::min(M_tiles, N_tiles));
+    const uint32_t max_tiles = std::max(M_tiles, N_tiles);
+    const double aspect_ratio = static_cast<double>(max_tiles) / static_cast<double>(min_tiles);
+    const bool output_is_wide = (N_tiles >= M_tiles);
+    const bool should_partition = aspect_ratio > 2.0;
+
+    if (should_partition) {
+        // Decide number of partitions along the grid dimension that parallels the shorter output axis:
+        // - If output is wide (M < N), we partition along Y (cores.y)
+        // - If output is tall (N < M), we partition along X (cores.x)
+        const uint32_t grid_dim_partition = output_is_wide ? grid_size.y : grid_size.x;
+        const uint32_t ar_floor = static_cast<uint32_t>(aspect_ratio);
+        const uint32_t upper_bound = std::min(grid_dim_partition, ar_floor);
+        uint32_t partitions = 1;
+        for (uint32_t candidate = upper_bound; candidate >= 1; --candidate) {
+            if ((grid_dim_partition % candidate) == 0u) {
+                partitions = candidate;
+                break;
+            }
+        }
+
+        log_info(
+            tt::LogOp,
+            "Partitioning enabled: aspect_ratio: {} partitions: {} split_dim: {}",
+            aspect_ratio,
+            partitions,
+            output_is_wide ? "Y" : "X");
+
+        // Create per-partition kernels and state
+        std::vector<tt::tt_metal::KernelHandle> in0_sender_kernels_ids;
+        std::vector<tt::tt_metal::KernelHandle> in0_receiver_kernels_ids;
+        std::vector<tt::tt_metal::KernelHandle> in1_sender_kernels_ids;
+        std::vector<tt::tt_metal::KernelHandle> in1_receiver_kernels_ids;
+        std::vector<tt::tt_metal::KernelHandle> compute_kernels_ids;
+        std::vector<std::vector<CoreCoord>> partition_cores;
+        std::vector<CoreCoord> partition_starts;
+        std::vector<uint32_t> partition_local_grid_size_x;
+        std::vector<uint32_t> partition_local_grid_size_y;
+        std::vector<bool> in0_receiver_exists;
+        std::vector<bool> in1_receiver_exists;
+
+        in0_sender_kernels_ids.reserve(partitions);
+        in0_receiver_kernels_ids.reserve(partitions);
+        in1_sender_kernels_ids.reserve(partitions);
+        in1_receiver_kernels_ids.reserve(partitions);
+        compute_kernels_ids.reserve(partitions);
+        partition_cores.reserve(partitions);
+
+        // Split the longer axis tiles across partitions (ceil)
+        const uint32_t longer_tiles = output_is_wide ? N_tiles : M_tiles;
+        const uint32_t tiles_per_partition = tt::div_up(longer_tiles, partitions);
+
+        for (uint32_t p = 0; p < partitions; ++p) {
+            // Local core grid for this partition:
+            // - Wide (M < N): slice Y into equal stripes -> grid_x = grid_size.x, grid_y = grid_size.y / partitions
+            // - Tall (N < M): slice X into equal stripes -> grid_x = grid_size.x / partitions, grid_y = grid_size.y
+            const uint32_t local_grid_size_y = output_is_wide ? (grid_size.y / partitions) : grid_size.y;
+            const uint32_t local_grid_size_x = output_is_wide ? grid_size.x : (grid_size.x / partitions);
+            const uint32_t y0 = output_is_wide ? (p * local_grid_size_y) : 0u;
+            const uint32_t x0 = output_is_wide ? 0u : (p * local_grid_size_x);
+            CoreCoord start = CoreCoord{x0, y0};
+            CoreCoord end = CoreCoord{x0 + local_grid_size_x - 1, y0 + local_grid_size_y - 1};
+            auto partition_core_grid = CoreRange(start, end);
+            auto local_num_cores = partition_core_grid.size();
+
+            // Transpose decision follows global rule: transpose when M > N (tall)
+            const bool local_transpose_core_grid = (M > N);
+
+            // Local parallel axis core counts (following original mapping rules on the local grid)
+            const uint32_t local_in0_parallel_axis_cores =
+                local_transpose_core_grid ? local_grid_size_x : local_grid_size_y;
+            const uint32_t local_in1_parallel_axis_cores =
+                local_transpose_core_grid ? local_grid_size_y : local_grid_size_x;
+
+            // Partition slice on the longer axis
+            const uint32_t part_start_tile = std::min(p * tiles_per_partition, longer_tiles);
+            const uint32_t part_end_tile = std::min((p + 1) * tiles_per_partition, longer_tiles);
+            const uint32_t part_len_tiles = (part_end_tile > part_start_tile) ? (part_end_tile - part_start_tile) : 0u;
+
+            // Local logical M/N in tiles for this partition
+            const uint32_t local_M_tiles = output_is_wide ? M_tiles : part_len_tiles;
+            const uint32_t local_N_tiles = output_is_wide ? part_len_tiles : N_tiles;
+
+            // Local paddings and per-core ranges
+            const uint32_t local_padded_M_tiles = tt::round_up(local_M_tiles, local_in0_parallel_axis_cores);
+            const uint32_t local_padded_N_tiles = tt::round_up(local_N_tiles, local_in1_parallel_axis_cores);
+            const uint32_t local_M_tiles_per_core = local_padded_M_tiles / local_in0_parallel_axis_cores;
+            const uint32_t local_N_tiles_per_core = local_padded_N_tiles / local_in1_parallel_axis_cores;
+
+            const uint32_t padded_K_tiles = tt::round_up(K_tiles, K_block_tiles);
+            const uint32_t K_blocks = padded_K_tiles / K_block_tiles;
+            const uint32_t M_blocks_per_core = tt::div_up(local_M_tiles_per_core, M_block_tiles);
+            const uint32_t N_blocks_per_core = tt::div_up(local_N_tiles_per_core, N_block_tiles);
+
+            // Assign NOCs/RISCs per local transpose
+            auto small_input_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+            auto small_input_risc = tt::tt_metal::DataMovementProcessor::RISCV_1;
+            auto large_input_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+            auto large_input_risc = tt::tt_metal::DataMovementProcessor::RISCV_0;
+
+            auto in0_noc = local_transpose_core_grid ? large_input_noc : small_input_noc;
+            auto in0_risc = local_transpose_core_grid ? large_input_risc : small_input_risc;
+            auto in1_noc = local_transpose_core_grid ? small_input_noc : large_input_noc;
+            auto in1_risc = local_transpose_core_grid ? small_input_risc : large_input_risc;
+
+            // CB sizes (same formulae as original but local per-core counts)
+            uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
+            uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
+            uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
+            uint32_t in2_block_num_tiles = N_block_tiles;
+
+            const uint32_t double_buffer_factor = 2;
+            uint32_t in0_cb_num_tiles = in0_block_num_tiles * double_buffer_factor;
+            uint32_t in1_cb_num_tiles = in1_block_num_tiles * double_buffer_factor;
+            uint32_t out_cb_num_tiles = out_block_num_tiles * double_buffer_factor;
+            uint32_t interm_cb_num_tiles = out_block_num_tiles;
+            uint32_t in2_cb_num_tiles = in2_block_num_tiles;
+
+            // Semaphores per partition
+            auto in0_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, partition_core_grid, INVALID);
+            auto in0_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, partition_core_grid, INVALID);
+            auto in0_valid_semaphore_id = tt::tt_metal::CreateSemaphore(program, partition_core_grid, VALID);
+            auto in1_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, partition_core_grid, INVALID);
+            auto in1_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, partition_core_grid, INVALID);
+            auto in1_valid_semaphore_id = tt::tt_metal::CreateSemaphore(program, partition_core_grid, VALID);
+
+            // CBs per partition
+            uint32_t in0_cb_id = tt::CBIndex::c_0;
+            tt::tt_metal::create_cb(
+                in0_cb_id, program, partition_core_grid, in0_tile_size, in0_cb_num_tiles, in0_data_format);
+            uint32_t in1_cb_id = tt::CBIndex::c_1;
+            tt::tt_metal::create_cb(
+                in1_cb_id, program, partition_core_grid, in1_tile_size, in1_cb_num_tiles, in1_data_format);
+            uint32_t out_cb_id = tt::CBIndex::c_2;
+            tt::tt_metal::create_cb(
+                out_cb_id, program, partition_core_grid, out_tile_size, out_cb_num_tiles, output_data_format);
+            uint32_t intermediate_cb_id = tt::CBIndex::c_3;
+            tt::tt_metal::create_cb(
+                intermediate_cb_id,
+                program,
+                partition_core_grid,
+                intermediate_tile_size,
+                interm_cb_num_tiles,
+                intermediate_data_format);
+            if (use_bias) {
+                uint32_t in2_cb_id = tt::CBIndex::c_4;
+                tt::tt_metal::create_cb(
+                    in2_cb_id, program, partition_core_grid, in2_tile_size, in2_cb_num_tiles, in2_data_format);
+            }
+
+            // Compile-time args for DM kernels (local sizes and counts)
+            bool in0_is_output_writer = !local_transpose_core_grid;
+            bool in1_is_output_writer = local_transpose_core_grid;
+            log_info(tt::LogOp, "in0_is_output_writer: {}", in0_is_output_writer);
+            log_info(tt::LogOp, "in1_is_output_writer: {}", in1_is_output_writer);
+
+            std::vector<uint32_t> in0_sender_compile_time_args = {
+                local_M_tiles,
+                local_padded_M_tiles,
+                K_tiles,
+                padded_K_tiles,
+                local_N_tiles,
+                local_padded_N_tiles,
+                M_block_tiles,
+                K_block_tiles,
+                N_block_tiles,
+                M_blocks_per_core,
+                N_blocks_per_core,
+                in0_tile_size,
+                out_tile_size,
+                in2_tile_size,
+                in0_sender_semaphore_id,
+                in0_receiver_semaphore_id,
+                in0_valid_semaphore_id,
+                in0_is_output_writer,
+                true};
+            append_accessors(in0_sender_compile_time_args, input_tensor, output_tensor, bias_tensor);
+
+            // Build local sender/receiver core ranges within this partition
+            CoreCoord local_core_0_0 = start;
+            CoreCoord local_core_endx_0 = CoreCoord{start.x + local_grid_size_x - 1, start.y};
+            CoreCoord local_core_0_endy = CoreCoord{start.x, start.y + local_grid_size_y - 1};
+            CoreCoord local_core_1_0 = CoreCoord{start.x + (local_grid_size_x > 1 ? 1 : 0), start.y};
+            CoreCoord local_core_0_1 = CoreCoord{start.x, start.y + (local_grid_size_y > 1 ? 1 : 0)};
+            CoreCoord local_core_endx_endy = end;
+
+            auto in0_sender_cores =
+                CoreRange(local_core_0_0, local_transpose_core_grid ? local_core_endx_0 : local_core_0_endy);
+            auto in0_receiver_cores =
+                CoreRange(local_transpose_core_grid ? local_core_0_1 : local_core_1_0, local_core_endx_endy);
+
+            log_info(tt::LogOp, "Creating in0 sender kernel with cores: {}", in0_sender_cores);
+            auto in0_sender_kernels_id = CreateKernel(
+                program,
+                "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
+                in0_sender_cores,
+                tt::tt_metal::DataMovementConfig{
+                    .processor = in0_risc,
+                    .noc = in0_noc,
+                    .compile_args = in0_sender_compile_time_args,
+                    .defines = defines});
+
+            std::vector<uint32_t> in0_receiver_compile_time_args = in0_sender_compile_time_args;
+            in0_receiver_compile_time_args.back() = false;  // is_injector_core = false
+            // Conditionally create in0 receiver kernel only if needed
+            // in0 forwards along X when transposed, else along Y
+            bool create_in0_receiver = local_transpose_core_grid ? (local_grid_size_y > 1) : (local_grid_size_x > 1);
+            tt::tt_metal::KernelHandle in0_receiver_kernels_id = 0;
+            if (create_in0_receiver) {
+                log_info(tt::LogOp, "Creating in0 receiver kernel with cores: {}", in0_receiver_cores);
+                in0_receiver_kernels_id = CreateKernel(
+                    program,
+                    "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
+                    in0_receiver_cores,
+                    tt::tt_metal::DataMovementConfig{
+                        .processor = in0_risc,
+                        .noc = in0_noc,
+                        .compile_args = in0_receiver_compile_time_args,
+                        .defines = defines});
+            }
+
+            std::vector<uint32_t> in1_sender_compile_time_args = {
+                local_M_tiles,
+                local_padded_M_tiles,
+                K_tiles,
+                padded_K_tiles,
+                local_N_tiles,
+                local_padded_N_tiles,
+                M_block_tiles,
+                K_block_tiles,
+                N_block_tiles,
+                M_blocks_per_core,
+                N_blocks_per_core,
+                in1_tile_size,
+                out_tile_size,
+                in2_tile_size,
+                in1_sender_semaphore_id,
+                in1_receiver_semaphore_id,
+                in1_valid_semaphore_id,
+                in1_is_output_writer,
+                true};
+            append_accessors(in1_sender_compile_time_args, weight_tensor, output_tensor, bias_tensor);
+            log_info(
+                tt::LogOp,
+                "Creating in1 sender kernel with cores: {}",
+                CoreRange(local_core_0_0, local_transpose_core_grid ? local_core_0_endy : local_core_endx_0));
+            auto in1_sender_kernels_id = CreateKernel(
+                program,
+                "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
+                CoreRange(local_core_0_0, local_transpose_core_grid ? local_core_0_endy : local_core_endx_0),
+                tt::tt_metal::DataMovementConfig{
+                    .processor = in1_risc,
+                    .noc = in1_noc,
+                    .compile_args = in1_sender_compile_time_args,
+                    .defines = defines});
+
+            std::vector<uint32_t> in1_receiver_compile_time_args = in1_sender_compile_time_args;
+            in1_receiver_compile_time_args.back() = false;  // is_injector_core = false
+            // Conditionally create in1 receiver kernel only if needed
+            // in1 forwards along Y when transposed, else along X
+            bool create_in1_receiver = local_transpose_core_grid ? (local_grid_size_x > 1) : (local_grid_size_y > 1);
+            tt::tt_metal::KernelHandle in1_receiver_kernels_id = 0;
+            if (create_in1_receiver) {
+                log_info(
+                    tt::LogOp,
+                    "Creating in1 receiver kernel with cores: {}",
+                    CoreRange(local_transpose_core_grid ? local_core_1_0 : local_core_0_1, local_core_endx_endy));
+                in1_receiver_kernels_id = CreateKernel(
+                    program,
+                    "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
+                    CoreRange(local_transpose_core_grid ? local_core_1_0 : local_core_0_1, local_core_endx_endy),
+                    tt::tt_metal::DataMovementConfig{
+                        .processor = in1_risc,
+                        .noc = in1_noc,
+                        .compile_args = in1_receiver_compile_time_args,
+                        .defines = defines});
+            }
+
+            // Compute kernel per partition
+            std::vector<uint32_t> compute_compile_time_args = {
+                K_blocks,
+                M_block_tiles,
+                K_block_tiles,
+                N_block_tiles,
+                M_blocks_per_core,
+                N_blocks_per_core,
+                subblock_h,
+                subblock_w};
+
+            auto compute_defines = defines;
+            std::map<std::string, std::string> compute_activation_defines;
+            if (fused_activation.has_value()) {
+                compute_activation_defines = ttnn::operations::unary::utils::get_defines(
+                    fused_activation.value().op_type,
+                    fused_activation.value().params,
+                    "ACTIVATION",
+                    "fused_act_dst_id",
+                    output_tensor.dtype());
+            }
+            compute_defines.merge(compute_activation_defines);
+            auto compute_kernels_id = CreateKernel(
+                program,
+                "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/compute.cpp",
+                partition_core_grid,
+                tt::tt_metal::ComputeConfig{
+                    .math_fidelity = math_fidelity,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .math_approx_mode = math_approx_mode,
+                    .compile_args = compute_compile_time_args,
+                    .defines = compute_defines});
+
+            // Save kernel ids
+            in0_sender_kernels_ids.push_back(in0_sender_kernels_id);
+            in0_receiver_kernels_ids.push_back(in0_receiver_kernels_id);
+            in1_sender_kernels_ids.push_back(in1_sender_kernels_id);
+            in1_receiver_kernels_ids.push_back(in1_receiver_kernels_id);
+            compute_kernels_ids.push_back(compute_kernels_id);
+            in0_receiver_exists.push_back(create_in0_receiver);
+            in1_receiver_exists.push_back(create_in1_receiver);
+
+            // Build per-partition runtime args
+            auto cores = corerange_to_cores(partition_core_grid, local_num_cores, true);
+            partition_cores.push_back(cores);
+            partition_starts.push_back(start);
+            partition_local_grid_size_x.push_back(local_grid_size_x);
+            partition_local_grid_size_y.push_back(local_grid_size_y);
+
+            // K-block write deferral based on local parallel axis
+            uint32_t k_blocks_per_core = tt::div_up(
+                K_blocks, (local_transpose_core_grid ? local_in1_parallel_axis_cores : local_in0_parallel_axis_cores));
+
+            // Endpoints for order building relative to local grid
+            // No-op placeholders preserved intentionally for symmetry with non-partitioned path
+
+            for (uint32_t core_id = 0; core_id < local_num_cores; ++core_id) {
+                CoreCoord core = cores.at(core_id);
+                uint32_t in0_idx = local_transpose_core_grid ? core.x : core.y;
+                uint32_t in1_idx = local_transpose_core_grid ? core.y : core.x;
+
+                CoreCoord left_core = {start.x, core.y};
+                CoreCoord top_core = {core.x, start.y};
+
+                auto [in0_core_order, in0_core_order_index] = build_core_order_for_axis(
+                    core,
+                    local_transpose_core_grid,
+                    local_in1_parallel_axis_cores,
+                    in0_noc,
+                    /*axis_is_x_when_not_transposed=*/true,
+                    /*initial_endpoint=*/(local_transpose_core_grid ? top_core : left_core));
+
+                auto [in1_core_order, in1_core_order_index] = build_core_order_for_axis(
+                    core,
+                    local_transpose_core_grid,
+                    local_in0_parallel_axis_cores,
+                    in1_noc,
+                    /*axis_is_x_when_not_transposed=*/false,
+                    /*initial_endpoint=*/(local_transpose_core_grid ? left_core : top_core));
+
+                auto in0_prev_core = clamped_prev(in0_core_order, in0_core_order_index);
+                auto in0_next_core = clamped_next(in0_core_order, in0_core_order_index);
+                auto in1_prev_core = clamped_prev(in1_core_order, in1_core_order_index);
+                auto in1_next_core = clamped_next(in1_core_order, in1_core_order_index);
+
+                auto in0_prev_core_physical = device->worker_core_from_logical_core(in0_prev_core);
+                auto in0_next_core_physical = device->worker_core_from_logical_core(in0_next_core);
+                auto in1_prev_core_physical = device->worker_core_from_logical_core(in1_prev_core);
+                auto in1_next_core_physical = device->worker_core_from_logical_core(in1_next_core);
+
+                // Per-core M/N ranges with global partition offsets applied on the longer axis
+                uint32_t M_start_tile = local_M_tiles_per_core * in0_idx + (output_is_wide ? 0u : part_start_tile);
+                uint32_t M_end_tile = local_M_tiles_per_core * (in0_idx + 1) + (output_is_wide ? 0u : part_start_tile);
+                uint32_t N_start_tile = local_N_tiles_per_core * in1_idx + (output_is_wide ? part_start_tile : 0u);
+                uint32_t N_end_tile = local_N_tiles_per_core * (in1_idx + 1) + (output_is_wide ? part_start_tile : 0u);
+
+                uint32_t defer_write_k_block = (local_transpose_core_grid ? core.x : core.y) * k_blocks_per_core;
+                defer_write_k_block = std::min(defer_write_k_block, K_blocks - 1);
+
+                bool is_in0_sink = core == in0_core_order.back();
+                bool is_in1_sink = core == in1_core_order.back();
+                // log_info(tt::LogOp, "in0_core_order: {}", in0_core_order);
+                // log_info(tt::LogOp, "in1_core_order: {}", in1_core_order);
+
+                std::vector<uint32_t> in0_args = {
+                    in0_addr,
+                    out_addr,
+                    in2_addr,
+                    is_in0_sink,
+                    (std::uint32_t)in0_next_core_physical.x,
+                    (std::uint32_t)in0_next_core_physical.y,
+                    (std::uint32_t)in0_prev_core_physical.x,
+                    (std::uint32_t)in0_prev_core_physical.y,
+                    M_start_tile,
+                    M_end_tile,
+                    N_start_tile,
+                    N_end_tile,
+                    defer_write_k_block,
+                };
+                const bool is_in0_sender =
+                    local_transpose_core_grid ? core.y == local_core_0_0.y : core.x == local_core_0_0.x;
+                if (is_in0_sender) {
+                    SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_args);
+                } else {
+                    SetRuntimeArgs(program, in0_receiver_kernels_id, core, in0_args);
+                }
+
+                std::vector<uint32_t> in1_args = {
+                    in1_addr,
+                    out_addr,
+                    in2_addr,
+                    is_in1_sink,
+                    (std::uint32_t)in1_next_core_physical.x,
+                    (std::uint32_t)in1_next_core_physical.y,
+                    (std::uint32_t)in1_prev_core_physical.x,
+                    (std::uint32_t)in1_prev_core_physical.y,
+                    M_start_tile,
+                    M_end_tile,
+                    N_start_tile,
+                    N_end_tile,
+                    defer_write_k_block,
+                };
+                const bool is_in1_sender =
+                    local_transpose_core_grid ? core.x == local_core_0_0.x : core.y == local_core_0_0.y;
+                if (is_in1_sender) {
+                    SetRuntimeArgs(program, in1_sender_kernels_id, core, in1_args);
+                } else {
+                    SetRuntimeArgs(program, in1_receiver_kernels_id, core, in1_args);
+                }
+
+                log_info(
+                    tt::LogOp,
+                    "Setting runtime args for core: {} in0_sender: {} in1_sender: {} in0_sink: {} in1_sink: {}",
+                    core,
+                    is_in0_sender,
+                    is_in1_sender,
+                    is_in0_sink,
+                    is_in1_sink);
+
+                std::vector<uint32_t> compute_runtime_args = {
+                    M_start_tile,
+                    M_end_tile,
+                    N_start_tile,
+                    N_end_tile,
+                };
+                SetRuntimeArgs(program, compute_kernels_id, core, compute_runtime_args);
+            }
+        }
+
+        const bool partitions_transpose = (M > N);
+        auto override_runtime_arguments_callback =
+            [partitions,
+             partition_cores,
+             partition_starts,
+             partition_local_grid_size_x,
+             partition_local_grid_size_y,
+             in0_sender_kernels_ids,
+             in0_receiver_kernels_ids,
+             in1_sender_kernels_ids,
+             in1_receiver_kernels_ids,
+             in0_receiver_exists,
+             in1_receiver_exists,
+             partitions_transpose](
+                const void* operation,
+                tt::tt_metal::Program& program,
+                const std::vector<Tensor>& input_tensors,
+                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                const std::vector<Tensor>& output_tensors) {
+                auto in0_addr = input_tensors.at(0).buffer()->address();
+                auto in1_addr = input_tensors.at(1).buffer()->address();
+                auto output_addr = output_tensors.at(0).buffer()->address();
+                auto in2_addr = optional_input_tensors.at(0).has_value()
+                                    ? optional_input_tensors.at(0).value().buffer()->address()
+                                    : 0;
+
+                for (uint32_t p = 0; p < partitions; ++p) {
+                    auto& in0_sender_runtime_args = GetRuntimeArgs(program, in0_sender_kernels_ids[p]);
+                    auto& in1_sender_runtime_args = GetRuntimeArgs(program, in1_sender_kernels_ids[p]);
+
+                    const auto& cores = partition_cores[p];
+                    const CoreCoord start = partition_starts[p];
+                    for (const auto& core : cores) {
+                        // Compute local indices within the partition to decide sender vs receiver
+                        uint32_t local_x = core.x - start.x;
+                        uint32_t local_y = core.y - start.y;
+                        uint32_t in0_idx = partitions_transpose ? local_x : local_y;
+                        uint32_t in1_idx = partitions_transpose ? local_y : local_x;
+
+                        if (in1_idx == 0) {
+                            auto& args = in0_sender_runtime_args[core.x][core.y];
+                            args[0] = in0_addr;
+                            args[1] = output_addr;
+                            args[2] = in2_addr;
+                        } else if (in0_receiver_exists[p]) {
+                            auto& in0_receiver_runtime_args = GetRuntimeArgs(program, in0_receiver_kernels_ids[p]);
+                            auto& args = in0_receiver_runtime_args[core.x][core.y];
+                            args[1] = output_addr;
+                            args[2] = in2_addr;
+                        }
+
+                        if (in0_idx == 0) {
+                            auto& args = in1_sender_runtime_args[core.x][core.y];
+                            args[0] = in1_addr;
+                            args[1] = output_addr;
+                            args[2] = in2_addr;
+                        } else if (in1_receiver_exists[p]) {
+                            auto& in1_receiver_runtime_args = GetRuntimeArgs(program, in1_receiver_kernels_ids[p]);
+                            auto& args = in1_receiver_runtime_args[core.x][core.y];
+                            args[1] = output_addr;
+                            args[2] = in2_addr;
+                        }
+                    }
+                }
+            };
+        return {
+            .program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    }
 
     /**
      * We originally saw that for non-square outputs, N > M was significantly faster than M > N.
@@ -307,16 +835,6 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     log_debug(tt::LogOp, "in1_cb_num_tiles: {}", in1_cb_num_tiles);
     log_debug(tt::LogOp, "out_cb_num_tiles: {}", out_cb_num_tiles);
     log_debug(tt::LogOp, "interm_cb_num_tiles: {}", interm_cb_num_tiles);
-
-    std::map<std::string, std::string> defines;
-    if (use_bias) {
-        defines["FUSE_BIAS"] = "1";
-    }
-
-    uint32_t in0_addr = input_tensor.buffer()->address();
-    uint32_t in1_addr = weight_tensor.buffer()->address();
-    uint32_t in2_addr = use_bias ? bias_tensor.value().buffer()->address() : 0;
-    uint32_t out_addr = output_tensor.buffer()->address();
 
     /**
      * Create kernels

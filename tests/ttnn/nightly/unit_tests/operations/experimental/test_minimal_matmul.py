@@ -105,11 +105,13 @@ def run_test_linear(
 
 @pytest.mark.parametrize(
     "M, K, N",
-    [(4096, 4096, 4096)],
+    # [(4096, 4096, 4096)],
+    [(32, 2432, 7296)],
 )
 @pytest.mark.parametrize(
     "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
-    [(8, 8, 8, 2, 2)],
+    # [(8, 8, 8, 2, 2)],
+    [(2, 4, 8, 2, 2)],
 )
 def test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w):
     check_result = run_test_linear(
