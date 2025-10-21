@@ -12,6 +12,7 @@
 #include <iostream>
 #include <optional>
 #include <sstream>
+#include <filesystem>
 
 #include <boost/functional/hash.hpp>
 #include <cxxopts.hpp>
@@ -157,6 +158,8 @@ int main(int argc, char* argv[]) {
     // Parse command line arguments
     cxxopts::Options options("tt_telemetry_server", "TT-Metal Telemetry Server");
 
+    std::filesystem::path relative_metrics_path = std::filesystem::path("tt_telemetry") / "output" / "metrics.prom";
+
     options.add_options()(
         "mock-telemetry",
         "Use mock telemetry data instead of real hardware",
@@ -177,7 +180,7 @@ int main(int argc, char* argv[]) {
         "Enable Prometheus metrics writer to periodically write metrics to a file",
         cxxopts::value<bool>()->default_value("false"))(
         "prom-metrics-file",
-        "Path to the Prometheus metrics file (default: <metal-src-dir>/tt_telemetry/telemetry/metrics.prom)",
+        "Path to the Prometheus metrics file (default: <metal-src-dir>/" + relative_metrics_path.string() + ")",
         cxxopts::value<std::string>())(
         "metal-src-dir",
         "Metal source directory (optional, defaults to TT_METAL_HOME env var)",
@@ -218,9 +221,9 @@ int main(int argc, char* argv[]) {
     if (result.count("prom-metrics-file")) {
         prom_metrics_file = result["prom-metrics-file"].as<std::string>();
     } else if (!metal_src_dir.empty()) {
-        prom_metrics_file = metal_src_dir + "/tt_telemetry/telemetry/metrics.prom"; // TODO(kkfernandez): portable paths
+        prom_metrics_file = (std::filesystem::path(metal_src_dir) / relative_metrics_path.string()).string();
     } else {
-        prom_metrics_file = "metrics.prom";
+        prom_metrics_file = relative_metrics_path.filename().string();
     }
 
     bool use_prom_writer = result["use-prom-writer"].as<bool>();
