@@ -8,6 +8,9 @@ import math
 import pytest
 
 
+debug_output = False
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize("in_c", [1, 16, 24, 32, 40, 48, 56, 64])
 def test_max_pool2d_with_indices(device, in_c):
@@ -46,8 +49,6 @@ def test_max_pool2d_with_indices(device, in_c):
     else:
         out_h = math.floor((in_h + pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h) + 1
         out_w = math.floor((in_w + pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w) + 1
-
-    print("computed output shape:", (in_n, out_h, out_w, in_c))
 
     # Create tensor filled with height and width coordinates
     torch.manual_seed(0)
@@ -109,26 +110,27 @@ def test_max_pool2d_with_indices(device, in_c):
     # convert indexes to int64 for compatability with torch
     ttnn_indices_torch = ttnn.to_torch(indices, dtype=torch.int64)
 
-    # Check that ttnn_output_base is exactly equal to ttnn_output
-    # ttnn_output_base = ttnn.max_pool2d(
-    #     input_tensor=ttnn_input,
-    #     batch_size=in_n,
-    #     input_h=in_h,
-    #     input_w=in_w,
-    #     channels=in_c,
-    #     kernel_size=kernel_size,
-    #     stride=stride,
-    #     padding=padding,
-    #     dilation=dilation,
-    #     # applied_shard_scheme=shard_scheme,
-    #     ceil_mode=ceil_mode,
-    #     in_place_halo=True,  # test the base with IPH for a little more IPH coverage
-    #     deallocate_input=False,
-    #     reallocate_halo_output=True,
-    #     return_indices=False,
-    # )
-    # ttnn_outputs_exactly_equal = torch.equal(ttnn.to_torch(ttnn_output_base), ttnn.to_torch(ttnn_output))
-    print(f"ttnn_output_base exactly equals ttnn_output: {ttnn_outputs_exactly_equal}")
+    if debug_output:
+        # Check that ttnn_output_base is exactly equal to ttnn_output
+        ttnn_output_base = ttnn.max_pool2d(
+            input_tensor=ttnn_input,
+            batch_size=in_n,
+            input_h=in_h,
+            input_w=in_w,
+            channels=in_c,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
+            # applied_shard_scheme=shard_scheme,
+            ceil_mode=ceil_mode,
+            in_place_halo=True,  # test the base with IPH for a little more IPH coverage
+            deallocate_input=False,
+            reallocate_halo_output=True,
+            return_indices=False,
+        )
+        ttnn_outputs_exactly_equal = torch.equal(ttnn.to_torch(ttnn_output_base), ttnn.to_torch(ttnn_output))
+        print(f"ttnn_output_base exactly equals ttnn_output: {ttnn_outputs_exactly_equal}")
 
     # Run PyTorch max pool for reference
     torch_output, torch_indices = torch.nn.functional.max_pool2d(
@@ -145,32 +147,11 @@ def test_max_pool2d_with_indices(device, in_c):
     torch_output_reshaped = torch_output.permute(0, 2, 3, 1)  # N, H, W, C
     torch_indices_reshaped = torch_indices.permute(0, 2, 3, 1)  # N, H, W, C
 
-    print("PyTorch output shapes:")
-    print("Output shape:", torch_output_reshaped.shape)
-    # print("Output:\n", torch_output_reshaped)
-    print("Indices shape:", torch_indices_reshaped.shape)
-    # print("Indices:\n", torch_indices_reshaped)
-
     # Reshape TTNN outputs to match PyTorch shape for comparison
     # TTNN output is in shape (1, 1, out_h*out_w, channels)
     # Calculate output dimensions using the pooling formula
     ttnn_output_reshaped = ttnn_output_torch.reshape(in_n, out_h, out_w, in_c)
     ttnn_indices_reshaped = ttnn_indices_torch.reshape(in_n, out_h, out_w, in_c)
-
-    print("\nTTNN output shapes:")
-    print("Output shape:", ttnn_output_reshaped.shape)
-    # print("Output:\n", ttnn.to_torch(ttnn_output))
-    print("Indices shape:", ttnn_indices_reshaped.shape)
-    # print("Indices:\n", ttnn.to_torch(indices))
-
-    print("Torch data result:")
-    print(torch_output_reshaped.flatten())
-    print("TTNN data result:")
-    print(ttnn_output_reshaped.flatten())
-    print("Torch index result:")
-    print(torch_indices_reshaped.flatten())
-    print("TTNN index result:")
-    print(ttnn_indices_reshaped.flatten())
 
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     if ttnn_dtype == ttnn.bfloat8_b:
@@ -178,21 +159,38 @@ def test_max_pool2d_with_indices(device, in_c):
     output_match = torch.allclose(torch_output_reshaped, ttnn_output_reshaped, atol=atol, rtol=rtol)
     indices_match = torch.equal(torch_indices_reshaped, ttnn_indices_reshaped)
 
-    print(f"Output values match (allclose): {output_match}")
-    print(f"Indices values match (allclose): {indices_match}")
+    if debug_output:
+        print("PyTorch output shapes:")
+        print("Output shape:", torch_output_reshaped.shape)
+        print("Indices shape:", torch_indices_reshaped.shape)
+        print("\nTTNN output shapes:")
+        print("Output shape:", ttnn_output_reshaped.shape)
+        print("Indices shape:", ttnn_indices_reshaped.shape)
+        print("Torch data result:")
+        print(torch_output_reshaped.flatten())
+        print("TTNN data result:")
+        print(ttnn_output_reshaped.flatten())
+        print("Torch index result:")
+        print(torch_indices_reshaped.flatten())
+        print("TTNN index result:")
+        print(ttnn_indices_reshaped.flatten())
+        print(f"Output values match (allclose): {output_match}")
+        print(f"Indices values match (allclose): {indices_match}")
+        total_output_elements = torch_output_reshaped.numel()
+        print(f"\nTotal output elements: {total_output_elements}")
 
     # Print detailed mismatch information if outputs don't match
     if not output_match:
-        print("\n=== OUTPUT MISMATCHES ===")
         diff = torch.abs(torch_output_reshaped - ttnn_output_reshaped)
         max_diff = torch.max(diff)
-        print(f"Maximum absolute difference: {max_diff}")
 
         # Find positions where values don't match (with a small tolerance)
         mismatch_mask = diff > 1e-5
         mismatch_positions = torch.nonzero(mismatch_mask, as_tuple=False)
 
-        if len(mismatch_positions) > 0:
+        if len(mismatch_positions) > 0 and debug_output:
+            print("\n=== OUTPUT MISMATCHES ===")
+            print(f"Maximum absolute difference: {max_diff}")
             print(f"Number of mismatched elements: {len(mismatch_positions)}")
             print("All mismatches (n, h, w, c): torch_val vs ttnn_val (diff):")
             for i, pos in enumerate(mismatch_positions):
@@ -202,30 +200,27 @@ def test_max_pool2d_with_indices(device, in_c):
                 diff_val = diff[n, h, w, c]
                 print(f"  [{n}, {h}, {w}, {c}]: {torch_val:.6f} vs {ttnn_val:.6f} (diff: {diff_val:.6f})")
 
-    # Count total output elements
-    total_output_elements = torch_output_reshaped.numel()
-    print(f"\nTotal output elements: {total_output_elements}")
-
     # Analyze indices mismatches
     tie_breaking_differences = 0
     value_differences = 0
     has_actual_errors = False
 
     if not indices_match:
-        print("\n=== INDICES MISMATCHES ===")
         torch_indices_float = torch_indices_reshaped.float()
         ttnn_indices_float = ttnn_indices_reshaped.float()
         diff = torch.abs(torch_indices_float - ttnn_indices_float)
         max_diff = torch.max(diff)
-        print(f"Maximum absolute difference: {max_diff}")
 
         # Find positions where indices don't match
         mismatch_mask = diff > 1e-5
         mismatch_positions = torch.nonzero(mismatch_mask, as_tuple=False)
 
         if len(mismatch_positions) > 0:
-            print(f"Number of mismatched elements: {len(mismatch_positions)}")
-            print("All mismatches (n, h, w, c): torch_idx vs ttnn_idx (diff):")
+            if debug_output:
+                print("\n=== INDICES MISMATCHES ===")
+                print(f"Maximum absolute difference: {max_diff}")
+                print(f"Number of mismatched elements: {len(mismatch_positions)}")
+                print("All mismatches (n, h, w, c): torch_idx vs ttnn_idx (diff):")
             for i, pos in enumerate(mismatch_positions):
                 n, h, w, c = pos
                 torch_idx = torch_indices_float[n, h, w, c]
@@ -250,12 +245,6 @@ def test_max_pool2d_with_indices(device, in_c):
                 )
                 ttnn_input_val = torch_input[n, c, ttnn_h, ttnn_w] if ttnn_h < in_h and ttnn_w < in_w else float("nan")
 
-                print(
-                    f"  output [{n}, {h}, {w}, {c}]: torch_idx={torch_idx:.0f} vs ttnn_idx={ttnn_idx:.0f} (diff: {diff_val:.0f})"
-                )
-                print(f"    Torch chose input[{n},{c},{torch_h},{torch_w}] = {torch_input_val:.6f}")
-                print(f"    TTNN chose input[{n},{c},{ttnn_h},{ttnn_w}] = {ttnn_input_val:.6f}")
-
                 # Check if this is a valid tie-breaking difference
                 # Two conditions must be satisfied:
                 # 1. The values must be the same
@@ -276,8 +265,7 @@ def test_max_pool2d_with_indices(device, in_c):
                 def is_in_dilated_kernel_window(
                     input_h, input_w, kernel_top_left_h, kernel_top_left_w, kernel_h, kernel_w, dilation_h, dilation_w
                 ):
-                    """Check if a position (input_h, input_w) is within the dilated kernel window"""
-                    # Check if the position aligns with the dilated kernel pattern
+                    # Check if a position (input_h, input_w) is within the dilated kernel window
                     for kh in range(kernel_h):
                         for kw in range(kernel_w):
                             kernel_pos_h = kernel_top_left_h + kh * dilation_h
@@ -295,44 +283,55 @@ def test_max_pool2d_with_indices(device, in_c):
 
                 same_kernel_window = torch_in_window and ttnn_in_window
 
-                print(
-                    f"    Dilated kernel window: top_left=({kernel_top_left_h},{kernel_top_left_w}), kernel_size=({kernel_h},{kernel_w}), dilation=({dilation_h},{dilation_w})"
-                )
-                print(f"    Torch index in window: {torch_in_window}, TTNN index in window: {ttnn_in_window}")
-
                 if values_same and same_kernel_window:
-                    print(f"    -> Same input values AND same kernel window! This is a valid tie-breaking difference.")
                     tie_breaking_differences += 1
                 elif values_same and not same_kernel_window:
-                    print(f"    -> Same input values but DIFFERENT kernel windows! This is an error.")
                     value_differences += 1
                     has_actual_errors = True
                 else:
-                    print(
-                        f"    -> Different input values! Value difference: {abs(torch_input_val - ttnn_input_val):.6f}"
-                    )
                     value_differences += 1
                     has_actual_errors = True
-                print()
 
-    print(f"\n=== SUMMARY ===")
-    print(f"Total output elements: {total_output_elements}")
-    print(f"Tie-breaking differences: {tie_breaking_differences}")
-    print(f"Value or window differences(actual errors): {value_differences}")
+                if debug_output:
+                    print(
+                        f"  output [{n}, {h}, {w}, {c}]: torch_idx={torch_idx:.0f} vs ttnn_idx={ttnn_idx:.0f} (diff: {diff_val:.0f})"
+                    )
+                    print(f"    Torch chose input[{n},{c},{torch_h},{torch_w}] = {torch_input_val:.6f}")
+                    print(f"    TTNN chose input[{n},{c},{ttnn_h},{ttnn_w}] = {ttnn_input_val:.6f}")
+                    print(
+                        f"    Dilated kernel window: top_left=({kernel_top_left_h},{kernel_top_left_w}), kernel_size=({kernel_h},{kernel_w}), dilation=({dilation_h},{dilation_w})"
+                    )
+                    print(f"    Torch index in window: {torch_in_window}, TTNN index in window: {ttnn_in_window}")
+                    if values_same and same_kernel_window:
+                        print(
+                            f"    -> Same input values AND same kernel window! This is a valid tie-breaking difference."
+                        )
+                    elif values_same and not same_kernel_window:
+                        print(f"    -> Same input values but DIFFERENT kernel windows! This is an error.")
+                    else:
+                        print(
+                            f"    -> Different input values! Value difference: {abs(torch_input_val - ttnn_input_val):.6f}"
+                        )
+                    print()
 
     # Updated test result logic - only fail if there are actual value differences or output mismatches
     test_passed = output_match and (not has_actual_errors) and ttnn_outputs_exactly_equal
 
-    if test_passed:
-        print("\n✓ Test PASSED: TTNN and PyTorch outputs match!")
-        if tie_breaking_differences > 0:
-            print(f"  Note: {tie_breaking_differences} tie-breaking differences in indices are acceptable.")
-    else:
-        print("\n✗ Test FAILED:")
-        if not output_match:
-            print("  - Output values do not match")
-        if has_actual_errors:
-            print(f"  - {value_differences} actual value differences found in indices")
+    if debug_output:
+        print(f"\n=== SUMMARY ===")
+        print(f"Total output elements: {total_output_elements}")
+        print(f"Tie-breaking differences: {tie_breaking_differences}")
+        print(f"Value or window differences(actual errors): {value_differences}")
+        if test_passed:
+            print("\n✓ Test PASSED: TTNN and PyTorch outputs match!")
+            if tie_breaking_differences > 0:
+                print(f"  Note: {tie_breaking_differences} tie-breaking differences in indices are acceptable.")
+        else:
+            print("\n✗ Test FAILED:")
+            if not output_match:
+                print("  - Output values do not match")
+            if has_actual_errors:
+                print(f"  - {value_differences} actual value differences found in indices")
 
     # Ensure the test actually passes/fails based on the results
-    assert test_passed, "Test failed - see output above for details"
+    assert test_passed, "Test failed - see debug output for details"

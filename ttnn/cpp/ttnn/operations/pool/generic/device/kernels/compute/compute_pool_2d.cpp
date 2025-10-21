@@ -18,7 +18,6 @@
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
 #include "debug/dprint_tensix.h"
-#include "tools/profiler/kernel_profiler.hpp"
 #endif
 
 #define ALWI inline __attribute__((always_inline))
