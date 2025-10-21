@@ -263,15 +263,51 @@ jobs:
         run: |
           # Get the latest release candidate (pre-release with -rc suffix)
           # Sort by published_at in descending order to ensure we get the most recent
-          latestReleaseVersion=$(curl -s https://api.github.com/repos/tenstorrent/tt-metal/releases | jq -r 'sort_by(.published_at) | reverse | .[] | select(.prerelease == true and (.tag_name | contains("-rc"))) | .tag_name' | head -1)
+          latestRCVersion=$(curl -s https://api.github.com/repos/tenstorrent/tt-metal/releases | jq -r 'sort_by(.published_at) | reverse | .[] | select(.prerelease == true and (.tag_name | contains("-rc"))) | .tag_name' | head -1)
 
-          # Fallback to latest release if no RC found
-          if [ -z "$latestReleaseVersion" ] || [ "$latestReleaseVersion" = "null" ]; then
-            echo "No release candidate found, falling back to latest release"
-            latestReleaseVersion=$(curl -s https://api.github.com/repos/tenstorrent/tt-metal/releases/latest | jq -r .tag_name)
+          # Get the latest production release
+          latestProdVersion=$(curl -s https://api.github.com/repos/tenstorrent/tt-metal/releases/latest | jq -r .tag_name)
+
+          echo "Latest RC version: $latestRCVersion"
+          echo "Latest production version: $latestProdVersion"
+
+          # Function to compare semantic versions
+          # Returns: 0 if v1 > v2, 1 if v1 < v2, 2 if v1 == v2
+          compare_versions() {
+            # Remove 'v' prefix and any suffix (like -rc1) for comparison
+            v1=$(echo "$1" | sed 's/^v//' | sed 's/-.*$//')
+            v2=$(echo "$2" | sed 's/^v//' | sed 's/-.*$//')
+
+            # Use sort -V to compare semantic versions
+            [ "$v1" = "$v2" ] && return 2
+            printf '%s\n%s\n' "$v1" "$v2" | sort -V -C 2>/dev/null && return 1 || return 0
+          }
+
+          # Determine which version to use based on release workflow logic
+          if [ -z "$latestRCVersion" ] || [ "$latestRCVersion" = "null" ]; then
+            echo "No release candidate found, using latest production release"
+            latestReleaseVersion="$latestProdVersion"
+          else
+            compare_versions "$latestRCVersion" "$latestProdVersion"
+            comparison_result=$?
+
+            case $comparison_result in
+              2) # Equal versions
+                echo "RC and production versions are equal ($latestRCVersion ≈ $latestProdVersion), using production release"
+                latestReleaseVersion="$latestProdVersion"
+                ;;
+              0) # RC > Production
+                echo "RC version ($latestRCVersion) is newer than production ($latestProdVersion), using RC"
+                latestReleaseVersion="$latestRCVersion"
+                ;;
+              1) # RC < Production
+                echo "Production version ($latestProdVersion) is newer than RC ($latestRCVersion), using production"
+                latestReleaseVersion="$latestProdVersion"
+                ;;
+            esac
           fi
 
-          echo "Latest release candidate version: $latestReleaseVersion"
+          echo "Selected version for comparison: $latestReleaseVersion"
           echo "latest-release-version=$latestReleaseVersion" >> "$GITHUB_OUTPUT"
       - name: Check for new commits since latest release
         id: check-new-commits
