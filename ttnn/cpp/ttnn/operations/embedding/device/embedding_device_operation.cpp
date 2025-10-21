@@ -62,7 +62,6 @@ std::vector<TensorSpec> Embeddings::compute_output_specs(const std::vector<Tenso
 
     ttnn::Shape output_shape({batch_num, 1, num_output_embeddings, num_embedding_dims});
     auto output_layout = (tilized && input_tensors.at(0).layout() != Layout::TILE)? Layout::TILE : Layout::ROW_MAJOR;
-    // return {TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(output_layout), output_mem_config))};
     return {TensorSpec(output_shape, TensorLayout(weight_tensor.dtype(), PageConfig(output_layout), output_mem_config))};
 }
 
