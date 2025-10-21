@@ -7,7 +7,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
@@ -19,7 +18,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 def test_ema(device, T, B, C, cores_y, cores_x):
     torch.manual_seed(0)
 
-    grid_size = ttnn.CoreGrid(y=cores_y, x=cores_x)
+    grid_size = ttnn.CoreGrid(y=cores_y, x=cores_x) if cores_y > 0 and cores_x > 0 else None
 
     # torch input tensor
     torch_input_tensor = torch.ones(T * B * C, dtype=torch.bfloat16).reshape(1, B, C, T)
