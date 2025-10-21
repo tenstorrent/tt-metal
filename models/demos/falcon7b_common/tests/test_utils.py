@@ -38,7 +38,7 @@ def initialize_kv_cache(configuration, num_layers, batch_size, max_seq_len, mesh
 
 def load_hf_model(model_name):
     hugging_face_reference_model = FalconForCausalLM.from_pretrained(
-        model_name, torch_dtype="auto", local_files_only=os.getenv("CI") == "true"
+        model_name, local_files_only=os.getenv("CI") == "true"
     )
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
