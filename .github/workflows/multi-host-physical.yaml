@@ -56,7 +56,7 @@ jobs:
           ./create_venv.sh
       - name: Install Dependencies
         run: |
-          ./install_dependencies.sh || true
+          sudo ./install_dependencies.sh || true
       - name: Capture runner's home directory
         id: capture-home
         run: echo "home=${HOME}" >> $GITHUB_OUTPUT
@@ -123,7 +123,7 @@ jobs:
           ./create_venv.sh
       - name: Install Dependencies
         run: |
-          ./install_dependencies.sh || true
+          sudo ./install_dependencies.sh || true
       - name: Capture runner's home directory
         id: capture-home
         run: echo "home=${HOME}" >> $GITHUB_OUTPUT
