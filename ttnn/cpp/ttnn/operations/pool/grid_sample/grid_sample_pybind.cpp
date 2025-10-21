@@ -137,9 +137,10 @@ void bind_prepare_grid_sample_grid(py::module& module) {
         py::kw_only(),
         py::arg("mode") = "bilinear",
         py::arg("padding_mode") = "zeros",
+        py::arg("align_corners") = false,
         py::arg("output_dtype") = std::nullopt,
         R"doc(
-        prepare_grid_sample_grid(grid: ttnn.Tensor, input_shape: List[int], *, mode: str = "bilinear", padding_mode: str = "zeros", output_dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
+        prepare_grid_sample_grid(grid: ttnn.Tensor, input_shape: List[int], *, mode: str = "bilinear", padding_mode: str = "zeros", align_corners: bool = False, output_dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
 
         Precomputes grid sample data for optimized kernel execution.
 
@@ -156,6 +157,7 @@ void bind_prepare_grid_sample_grid(py::module& module) {
         Keyword Args:
             mode (str): Interpolation mode. "bilinear" and "nearest" are supported. Default: "bilinear"
             padding_mode (str): How to handle out-of-bounds coordinates. Currently only "zeros" is supported.
+            align_corners (bool): If True, align grid corners to input corners. Only supported for mode="nearest". Default: False
             output_dtype (ttnn.DataType, optional): Data type for the output tensor. Default: bfloat16
 
         Returns:

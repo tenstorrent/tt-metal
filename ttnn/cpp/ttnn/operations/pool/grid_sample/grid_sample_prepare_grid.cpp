@@ -29,6 +29,7 @@ tt::tt_metal::HostBuffer create_host_buffer_for_nearest_preprocessing(
     const Tensor& input_tensor,
     const ttnn::Shape& output_shape,
     const std::vector<uint32_t>& tensor_input_shape,
+    bool align_corners,
     DataType output_dtype) {
     auto input_buffer = tt::tt_metal::host_buffer::get_as<InputType>(input_tensor);
     std::vector<OutputType> output_buffer(output_shape.volume());
@@ -43,11 +44,21 @@ tt::tt_metal::HostBuffer create_host_buffer_for_nearest_preprocessing(
     uint32_t grid_h = grid_shape[1];
     uint32_t grid_w = grid_shape[2];
 
-    // Scale factors for coordinate transformation (align_corners=False)
-    float height_scale = static_cast<float>(input_h) * 0.5f;
-    float height_offset = height_scale - 0.5f;
-    float width_scale = static_cast<float>(input_w) * 0.5f;
-    float width_offset = width_scale - 0.5f;
+    // Scale factors for coordinate transformation
+    float height_scale, height_offset, width_scale, width_offset;
+    if (align_corners) {
+        // align_corners=True: map [-1,1] to [0, size-1] with corner alignment
+        height_scale = (input_h > 1) ? static_cast<float>(input_h - 1) * 0.5f : 0.0f;
+        height_offset = height_scale;
+        width_scale = (input_w > 1) ? static_cast<float>(input_w - 1) * 0.5f : 0.0f;
+        width_offset = width_scale;
+    } else {
+        // align_corners=False: map [-1,1] to [0, size-1] with pixel center alignment
+        height_scale = static_cast<float>(input_h) * 0.5f;
+        height_offset = height_scale - 0.5f;
+        width_scale = static_cast<float>(input_w) * 0.5f;
+        width_offset = width_scale - 0.5f;
+    }
 
     // Process each grid point
     for (uint32_t n = 0; n < grid_n; n++) {
@@ -187,11 +198,12 @@ Tensor convert_grid_tensor(
     const ttnn::Shape& output_shape,
     const std::vector<uint32_t>& tensor_input_shape,
     const std::string& mode,
+    bool align_corners,
     DataType output_dtype) {
     auto compute = [&](const tt::tt_metal::HostBuffer& input_host_buffer) {
         if (mode == "nearest") {
             return create_host_buffer_for_nearest_preprocessing<InputType, OutputType>(
-                input_tensor, output_shape, tensor_input_shape, output_dtype);
+                input_tensor, output_shape, tensor_input_shape, align_corners, output_dtype);
         } else {  // bilinear mode
             return create_host_buffer_for_grid_preprocessing<InputType, OutputType>(
                 input_tensor, output_shape, tensor_input_shape, output_dtype);
@@ -214,6 +226,7 @@ ttnn::Tensor prepare_grid_sample_grid(
     const std::vector<uint32_t>& input_shape,
     const std::string& mode,
     const std::string& padding_mode,
+    bool align_corners,
     const std::optional<DataType>& output_dtype) {
     // Validate inputs
     TT_FATAL(is_cpu_tensor(grid), "Grid tensor must be on host");
@@ -222,6 +235,7 @@ ttnn::Tensor prepare_grid_sample_grid(
     TT_FATAL(grid.logical_shape()[-1] == 2, "Grid tensor last dimension must be 2 (x, y coordinates)");
     TT_FATAL(mode == "bilinear" || mode == "nearest", "Mode must be either 'bilinear' or 'nearest'");
     TT_FATAL(padding_mode == "zeros", "Currently only 'zeros' padding mode is supported");
+    TT_FATAL(!align_corners || mode == "nearest", "align_corners=True is only supported for mode='nearest'");
     TT_FATAL(input_shape.size() == 4, "Input shape must have 4 dimensions [N, H, W, C]");
     TT_FATAL(
         output_dtype == DataType::BFLOAT16 || !output_dtype.has_value(),
@@ -241,7 +255,8 @@ ttnn::Tensor prepare_grid_sample_grid(
     // Dispatch based on output data type
     switch (out_dtype) {
         case DataType::BFLOAT16:
-            return convert_grid_tensor<float, bfloat16>(grid, output_shape, input_shape, mode, out_dtype);
+            return convert_grid_tensor<float, bfloat16>(
+                grid, output_shape, input_shape, mode, align_corners, out_dtype);
         default: TT_THROW("Unsupported output data type for prepare_grid_sample_grid: {}", out_dtype);
     }
 }
