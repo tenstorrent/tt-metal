@@ -8,6 +8,9 @@
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+#include "autograd/auto_context.hpp"
+#include "autograd/tensor.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "metal/ops/common/program_utils.hpp"
 
 namespace {
@@ -44,7 +47,7 @@ constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_5;  // reduction vector
 constexpr auto kDxCbIndex = tt::CBIndex::c_10;                // dx (input gradient)
 constexpr auto kDgammaComponentsCbIndex = tt::CBIndex::c_11;  // dgamma components
 constexpr auto kDbetaComponentsCbIndex = tt::CBIndex::c_12;   // dbeta components
-constexpr auto kDebugScaledSumCbIndex = tt::CBIndex::c_19;    // DEBUG: scaled dy*gamma sum
+constexpr auto kDebugScaledSumCbIndex = tt::CBIndex::c_21;    // DEBUG: scaled dy*gamma sum
 
 // CBs with intermediate computations
 constexpr auto kXNormalizedCbIndex = tt::CBIndex::c_13;       // x_normalized = (x - mean) * rstd
@@ -54,6 +57,7 @@ constexpr auto kDyGammaXnormSumCbIndex = tt::CBIndex::c_16;   // sum(dy * gamma 
 constexpr auto kScaledDyGammaSumCbIndex = tt::CBIndex::c_17;  // (1/N) * sum(dy * gamma) - pre-scaled
 constexpr auto kScaledDyGammaXnormSumCbIndex =
     tt::CBIndex::c_18;  // (1/N) * sum(dy * gamma * x_normalized) - pre-scaled
+constexpr auto kCbZeroIndex = tt::CBIndex::c_19;  // (1/N) * sum(dy * gamma * x_normalized) - pre-scaled
 
 // CB sizes (some set to 2U for ping-pong)
 constexpr uint32_t kNumScalerTiles = 1U;
@@ -63,6 +67,7 @@ constexpr uint32_t kNumXNormalizedTiles = 2U;
 constexpr uint32_t kNumDyGammaTiles = 2U;
 constexpr uint32_t kNumDyGammaSumTiles = 1U;
 constexpr uint32_t kNumDyGammaXnormSumTiles = 1U;
+constexpr uint32_t kNumZeroTiles = 1U;
 
 const std::string kEverythingFitsInL1DefineKey = "EVERYTHING_FITS_IN_L1";
 
@@ -187,6 +192,7 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
 
     // Check gamma shape is [1, 1, 1, C]
     const auto& gamma_shape = gamma.logical_shape();
+    std::cout << "Gamma shape dfkjslkfjsldk: " << gamma_shape << std::endl;
     TT_FATAL(gamma_shape.rank() == 4, "Gamma tensor must be 4D [1, 1, 1, C], got shape {}", gamma_shape);
 
     // Check x_hat shape is [B, 1, S, C] - same as input
@@ -242,12 +248,14 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     const bool everything_fits_in_l1 =
         fits_in_l1_check(Wt, block_size, bfloat16_single_tile_size_bytes, float32_single_tile_size_bytes, device);
 
+    std::cout << "Everything fits in L1: " << everything_fits_in_l1 << std::endl;
+
     const uint32_t num_input_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
 
     const uint32_t num_x_hat_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
 
     auto data_format = input_data_format;
-    auto precise_data_format = tt::DataFormat::Float32;
+    // auto precise_data_format = tt::DataFormat::Float32;
 
     // Input data CBs
     [[maybe_unused]] auto cb_scaler = create_circular_buffer(
@@ -281,34 +289,25 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     [[maybe_unused]] auto cb_dy_gamma = create_circular_buffer(
         program, all_cores, kDyGammaCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumDyGammaTiles);
     [[maybe_unused]] auto cb_dy_gamma_sum = create_circular_buffer(
-        program,
-        all_cores,
-        kDyGammaSumCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        kNumDyGammaSumTiles);
+        program, all_cores, kDyGammaSumCbIndex, data_format, float32_single_tile_size_bytes, kNumDyGammaSumTiles);
     [[maybe_unused]] auto cb_dy_gamma_xnorm_sum = create_circular_buffer(
         program,
         all_cores,
         kDyGammaXnormSumCbIndex,
-        precise_data_format,
+        data_format,
         float32_single_tile_size_bytes,
         kNumDyGammaXnormSumTiles);
     [[maybe_unused]] auto cb_scaled_dy_gamma_sum = create_circular_buffer(
-        program,
-        all_cores,
-        kScaledDyGammaSumCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        kNumDyGammaSumTiles);
+        program, all_cores, kScaledDyGammaSumCbIndex, data_format, float32_single_tile_size_bytes, kNumDyGammaSumTiles);
     [[maybe_unused]] auto cb_scaled_dy_gamma_xnorm_sum = create_circular_buffer(
         program,
         all_cores,
         kScaledDyGammaXnormSumCbIndex,
-        precise_data_format,
+        data_format,
         float32_single_tile_size_bytes,
         kNumDyGammaXnormSumTiles);
-
+    [[maybe_unused]] auto cb_zero = create_circular_buffer(
+        program, all_cores, kCbZeroIndex, data_format, bfloat16_single_tile_size_bytes, kNumZeroTiles);
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------

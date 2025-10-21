@@ -35,7 +35,7 @@ std::tuple<std::vector<float>, LayerNormCache> layernorm_forward_reference(
     const std::vector<float>& beta,
     uint32_t batch_size,
     uint32_t features,
-    float eps = 1e-6f) {
+    float eps = 1e-5f) {
     std::vector<float> y(x.size());
     std::vector<float> x_hat(x.size());
     std::vector<float> mu(batch_size);
@@ -84,6 +84,8 @@ std::tuple<std::vector<float>, std::vector<float>, std::vector<float>> layernorm
     for (uint32_t b = 0; b < cache.batch_size; ++b) {
         for (uint32_t d = 0; d < cache.features; ++d) {
             dgamma[d] += dy[b * cache.features + d] * cache.x_hat[b * cache.features + d];
+            // std::cout << "dgamma[d]: " << dy[b * cache.features + d] << " "<< cache.x_hat[b * cache.features + d] <<
+            // " " << dy[b * cache.features + d] * cache.x_hat[b * cache.features + d] << std::endl;
             dbeta[d] += dy[b * cache.features + d];
         }
     }
@@ -109,7 +111,6 @@ std::tuple<std::vector<float>, std::vector<float>, std::vector<float>> layernorm
             mean_dxhat_xhat += dxhat[d] * cache.x_hat[b * cache.features + d];
         }
         mean_dxhat_xhat /= cache.features;
-
         // Compute final dx
         for (uint32_t d = 0; d < cache.features; ++d) {
             dx[b * cache.features + d] =
@@ -134,84 +135,101 @@ protected:
 TEST_F(LayerNormFusedOpTest, MetalLayerNormBw_VariedInputs) {
     using namespace ttml;
 
-    uint32_t batch_size = 1;  // Increased to provide sufficient work
-    uint32_t seq_len = 32;    // Must be divisible by 32 (tile size)
+    uint32_t batch_size = 4;  // Increased to provide sufficient work
+    uint32_t seq_len = 64;    // Must be divisible by 32 (tile size)
     uint32_t heads = 1;
-    uint32_t features = 32;  // Must be divisible by 32 (tile size)
+    uint32_t features = 8192;  // Must be divisible by 32 (tile size)
 
-    std::vector<float> test_data;
     std::mt19937 gen(1213);
     std::normal_distribution<float> dist(0.0f, 2.0f);  // Larger variance
 
     uint32_t total_elements = batch_size * seq_len * heads * features;
-    for (uint32_t i = 0; i < total_elements; ++i) {
-        test_data.push_back(dist(gen));
+    for (int i = 0; i < 3; i++) {
+        std::vector<float> test_data;
+        for (uint32_t i = 0; i < total_elements; ++i) {
+            test_data.push_back(dist(gen));
+        }
+
+        std::vector<float> gamma_data;
+        std::vector<float> beta_data;
+        std::normal_distribution<float> param_dist(1.0f, 0.2f);
+        for (uint32_t i = 0; i < features; ++i) {
+            gamma_data.push_back(param_dist(gen));
+            beta_data.push_back(dist(gen) * 0.1f);
+        }
+
+        std::vector<float> dy_data;
+        std::normal_distribution<float> grad_dist(0.0f, 0.2f);
+        for (uint32_t i = 0; i < total_elements; ++i) {
+            dy_data.push_back(grad_dist(gen));
+        }
+
+        uint32_t combined_batch = batch_size * seq_len * heads;
+        auto [y_ref, cache] =
+            layernorm_forward_reference(test_data, gamma_data, beta_data, combined_batch, features, 1e-5f);
+        auto [dx_ref, dgamma_ref, dbeta_ref] = layernorm_backward_reference(dy_data, cache);
+
+        // // Print dx_ref for inspection
+        // std::cout << "dx_ref values:" << std::endl;
+        // for (size_t i = 0; i < dx_ref.size(); ++i) {
+        //     std::cout << dx_ref[i] << " ";
+        // }
+        // std::cout << std::endl;
+        auto input_tensor = core::from_vector(
+            test_data, ttnn::Shape({batch_size, heads, seq_len, features}), &autograd::ctx().get_device());
+        auto gamma_tensor =
+            core::from_vector(gamma_data, ttnn::Shape({1, 1, 1, features}), &autograd::ctx().get_device());
+        auto x_hat_tensor = core::from_vector(
+            cache.x_hat, ttnn::Shape({batch_size, heads, seq_len, features}), &autograd::ctx().get_device());
+
+        // std::cout << "Gamma tensor values:" << std::endl;
+        // auto gamma_host_data = core::to_vector(gamma_tensor);
+        // for (size_t i = 0; i < gamma_host_data.size(); ++i) {
+        //     std::cout << gamma_host_data[i] << " ";
+        // }
+
+        std::vector<float> rstd_data;
+        for (uint32_t b = 0; b < combined_batch; ++b) {
+            rstd_data.push_back(1.0f / cache.s[b]);
+        }
+        auto rstd_tensor =
+            core::from_vector(rstd_data, ttnn::Shape({batch_size, heads, seq_len, 1}), &autograd::ctx().get_device());
+        auto dy_tensor = core::from_vector(
+            dy_data, ttnn::Shape({batch_size, heads, seq_len, features}), &autograd::ctx().get_device());
+
+        // std::cout << "dy tensor values:" << std::endl;
+        // auto dy_host_data = core::to_vector(dy_tensor);
+        // for (size_t i = 0; i < dy_host_data.size(); ++i) {
+        //     std::cout << dy_host_data[i] << " ";
+        // }
+        // auto rstd_host_data = core::to_vector(rstd_tensor);
+        // for (size_t i = 0; i < rstd_host_data.size(); ++i) {
+        //     std::cout << rstd_host_data[i] << " ";
+        // }
+        // std::cout << std::endl;
+
+        auto output_tensors = metal::ops::layernorm_bw::LayerNormBackwardOperation::invoke(
+            input_tensor, gamma_tensor, x_hat_tensor, rstd_tensor, dy_tensor);
+        // std::cout << "Metal dx values:" << std::endl;
+        // auto metal_dx_host_data = core::to_vector(output_tensors[0].value());
+        // for (size_t i = 0; i < metal_dx_host_data.size(); ++i) {
+        //     std::cout << metal_dx_host_data[i] << " ";
+        // }
+        // std::cout << std::endl;
+
+        auto metal_dx = core::to_vector(output_tensors[0].value());
+        auto metal_dgamma = core::to_vector(output_tensors[1].value());
+
+        float tolerance = 3e-2f;
+
+        for (uint32_t i = 0; i < total_elements; ++i) {
+            EXPECT_NEAR(metal_dx[i], dx_ref[i], tolerance) << "Input gradient mismatch at index " << i;
+        }
+
+        for (uint32_t i = 0; i < features; ++i) {
+            EXPECT_NEAR(metal_dgamma[i], dgamma_ref[i], tolerance) << "Gamma gradient mismatch at index " << i;
+        }
     }
-
-    std::vector<float> gamma_data;
-    std::vector<float> beta_data;
-    std::normal_distribution<float> param_dist(1.0f, 0.2f);
-    for (uint32_t i = 0; i < features; ++i) {
-        gamma_data.push_back(param_dist(gen));
-        beta_data.push_back(dist(gen) * 0.1f);
-    }
-
-    std::vector<float> dy_data;
-    std::normal_distribution<float> grad_dist(0.0f, 0.2f);
-    for (uint32_t i = 0; i < total_elements; ++i) {
-        dy_data.push_back(grad_dist(gen));
-    }
-
-    uint32_t combined_batch = batch_size * seq_len * heads;
-    auto [y_ref, cache] =
-        layernorm_forward_reference(test_data, gamma_data, beta_data, combined_batch, features, 1e-6f);
-    auto [dx_ref, dgamma_ref, dbeta_ref] = layernorm_backward_reference(dy_data, cache);
-
-    auto input_tensor = core::from_vector(
-        test_data, ttnn::Shape({batch_size, heads, seq_len, features}), &autograd::ctx().get_device());
-    auto gamma_tensor = core::from_vector(gamma_data, ttnn::Shape({1, 1, 1, features}), &autograd::ctx().get_device());
-    auto x_hat_tensor = core::from_vector(
-        cache.x_hat, ttnn::Shape({batch_size, heads, seq_len, features}), &autograd::ctx().get_device());
-
-    std::cout << "Gamma tensor values:" << std::endl;
-    auto gamma_host_data = core::to_vector(gamma_tensor);
-    for (size_t i = 0; i < gamma_host_data.size(); ++i) {
-        std::cout << gamma_host_data[i] << " ";
-    }
-
-    std::vector<float> rstd_data;
-    for (uint32_t b = 0; b < combined_batch; ++b) {
-        rstd_data.push_back(1.0f / cache.s[b]);
-    }
-    auto rstd_tensor =
-        core::from_vector(rstd_data, ttnn::Shape({batch_size, heads, seq_len, 1}), &autograd::ctx().get_device());
-    auto dy_tensor =
-        core::from_vector(dy_data, ttnn::Shape({batch_size, heads, seq_len, features}), &autograd::ctx().get_device());
-
-    std::cout << "dy tensor values:" << std::endl;
-    auto dy_host_data = core::to_vector(dy_tensor);
-    for (size_t i = 0; i < dy_host_data.size(); ++i) {
-        std::cout << dy_host_data[i] << " ";
-    }
-    std::cout << std::endl;
-
-    auto output_tensors = metal::ops::layernorm_bw::LayerNormBackwardOperation::invoke(
-        input_tensor, gamma_tensor, x_hat_tensor, rstd_tensor, dy_tensor);
-
-    auto metal_dx = core::to_vector(output_tensors[0].value());
-    auto metal_dgamma = core::to_vector(output_tensors[1].value());
-
-    // float tolerance = 3e-2f;
-
-    // for (uint32_t i = 0; i < total_elements; ++i) {
-    //     EXPECT_NEAR(metal_dx[i], dx_ref[i], tolerance)
-    //         << "Input gradient mismatch at index " << i;
-    // }
-
-    // for (uint32_t i = 0; i < features; ++i) {
-    //     EXPECT_NEAR(metal_dgamma[i], dgamma_ref[i], tolerance)
-    //         << "Gamma gradient mismatch at index " << i;
-    // }
 }
 
 // // ============================================================================
@@ -846,7 +864,7 @@ TEST_F(LayerNormFusedOpTest, MetalLayerNormBw_VariedInputs) {
 //     using namespace ttml;
 
 //     // Maximal practical workload test
-//     uint32_t batch_size = 16;
+//     uint32_t batch_size = 1;
 //     uint32_t seq_len = 512;
 //     uint32_t heads = 16;
 //     uint32_t features = 1024;
@@ -877,12 +895,15 @@ TEST_F(LayerNormFusedOpTest, MetalLayerNormBw_VariedInputs) {
 //     // Run reference
 //     uint32_t combined_batch = batch_size * seq_len * heads;
 //     auto [y_ref, cache] = layernorm_forward_reference(test_data, gamma_data, beta_data, combined_batch, features,
-//     1e-6f); auto [dx_ref, dgamma_ref, dbeta_ref] = layernorm_backward_reference(dy_data, cache);
+//     1e-6f);
+//     auto [dx_ref, dgamma_ref, dbeta_ref] = layernorm_backward_reference(dy_data, cache);
 
 //     // Prepare metal tensors
 //     auto input_tensor = core::from_vector(test_data, ttnn::Shape({batch_size, heads, seq_len, features}),
-//     &autograd::ctx().get_device()); auto gamma_tensor = core::from_vector(gamma_data, ttnn::Shape({1, 1, 1,
-//     features}), &autograd::ctx().get_device()); auto x_hat_tensor = core::from_vector(cache.x_hat,
+//     &autograd::ctx().get_device());
+//     auto gamma_tensor = core::from_vector(gamma_data, ttnn::Shape({1, 1, 1,
+//     features}), &autograd::ctx().get_device());
+//     auto x_hat_tensor = core::from_vector(cache.x_hat,
 //     ttnn::Shape({batch_size, heads, seq_len, features}), &autograd::ctx().get_device());
 
 //     std::vector<float> rstd_data;
@@ -909,10 +930,10 @@ TEST_F(LayerNormFusedOpTest, MetalLayerNormBw_VariedInputs) {
 //             << "Input gradient mismatch at index " << idx;
 //     }
 
-//     for (uint32_t i = 0; i < features; ++i) {
-//         EXPECT_NEAR(metal_dgamma[i], dgamma_ref[i], tolerance)
-//             << "Gamma gradient mismatch at index " << i;
-//     }
+// for (uint32_t i = 0; i < features; ++i) {
+//     EXPECT_NEAR(metal_dgamma[i], dgamma_ref[i], tolerance)
+//         << "Gamma gradient mismatch at index " << i;
+// }
 // }
 
 // TEST_F(LayerNormFusedOpTest, MetalLayerNormBw_NonPowerOfTwo_Dimensions) {

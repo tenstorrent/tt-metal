@@ -4,6 +4,9 @@
 
 #include "layernorm_bw.hpp"
 
+#include <core/ttnn_all_includes.hpp>
+#include <iostream>
+
 #include "core/compute_kernel_config.hpp"
 #include "device/layernorm_bw_device_operation.hpp"
 
@@ -23,6 +26,7 @@ std::vector<std::optional<ttnn::Tensor>> LayerNormBackwardOperation::invoke(
 
     // dL_dgamma and dL_dbeta require sum over batches so we cannot perform this sum in the kernel.
     // Instead we return the components and reduce them here.
+
     return {
         result[0],  // dx - already complete
         ttnn::sum(

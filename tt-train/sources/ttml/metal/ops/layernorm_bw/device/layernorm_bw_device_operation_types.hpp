@@ -10,7 +10,7 @@ namespace ttml::metal::ops::layernorm_bw::device {
 
 // Attributes for the backward operation (add more if needed)
 struct operation_attributes_t {
-    float epsilon = 1e-6F;
+    float epsilon = 1e-5F;
 };
 
 // Tensors required for backward
