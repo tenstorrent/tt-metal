@@ -198,10 +198,10 @@ void physical_system_descriptor_to_proto(
 std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
     const tt::fabric::proto::PhysicalSystemDescriptor& proto_desc) {
     auto descriptor = std::make_unique<PhysicalSystemDescriptor>(
+        PhysicalSystemDescriptor::null_cluster,
         nullptr,
         nullptr,
         proto_desc.mock_cluster(),
-        nullptr,
         false);  // Don't run discovery
 
     // Convert system graph

@@ -29,7 +29,10 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     constexpr bool using_mock_cluster_descriptor = false;
 
     auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
-        distributed_context, &tt::tt_metal::MetalContext::instance().hal(), using_mock_cluster_descriptor);
+        cluster.get_driver(),
+        distributed_context,
+        &tt::tt_metal::MetalContext::instance().hal(),
+        using_mock_cluster_descriptor);
     // Run discovery again to ensure that state is cleared before re-discovery
     physical_system_desc.run_discovery();
     auto hostnames = physical_system_desc.get_all_hostnames();

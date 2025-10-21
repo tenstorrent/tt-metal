@@ -16,7 +16,7 @@
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
-#include "tt_metal/impl/context/metal_context.hpp"
+
 namespace tt::tt_metal {
 
 const std::unique_ptr<tt::umd::Cluster> PhysicalSystemDescriptor::null_cluster = nullptr;
@@ -139,22 +139,22 @@ struct EthEndpoint {
 **************************************************************************************************/
 
 PhysicalSystemDescriptor::PhysicalSystemDescriptor(
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     const Hal* hal,
     const llrt::RunTimeOptions& rtoptions,
-    const std::unique_ptr<tt::umd::Cluster>& cluster,
     bool run_discovery) :
-    PhysicalSystemDescriptor(distributed_context, hal, rtoptions.get_mock_enabled(), cluster, run_discovery) {}
+    PhysicalSystemDescriptor(cluster, distributed_context, hal, rtoptions.get_mock_enabled(), run_discovery) {}
 
 PhysicalSystemDescriptor::PhysicalSystemDescriptor(
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     const Hal* hal,
     bool using_mock_cluster_descriptor,
-    const std::unique_ptr<tt::umd::Cluster>& cluster,
     bool run_discovery) :
-    cluster_(cluster),
     distributed_context_(distributed_context),
     hal_(hal),
+    cluster_(cluster),
     using_mock_cluster_desc_(using_mock_cluster_descriptor) {
     if (run_discovery) {
         this->run_discovery();
@@ -246,19 +246,14 @@ void PhysicalSystemDescriptor::clear() {
     exit_node_connection_table_.clear();
 }
 
-const std::unique_ptr<tt::umd::Cluster>& PhysicalSystemDescriptor::get_cluster() const {
-    return owned_cluster_ ? owned_cluster_ : cluster_;
-}
-
 void PhysicalSystemDescriptor::run_local_discovery() {
     this->clear();
-    // If cluster_ is null, create our own cluster
-    if (!cluster_) {
-        owned_cluster_ = std::make_unique<tt::umd::Cluster>();
+    auto target_devices = cluster_->get_target_mmio_device_ids();
+    if (using_mock_cluster_desc_) {
+        cluster_desc_ = std::make_unique<tt::umd::ClusterDescriptor>(*cluster_->get_cluster_description());
+    } else {
+        cluster_desc_ = tt::umd::Cluster::create_cluster_descriptor("", {}, umd::IODeviceType::PCIe);
     }
-    const auto& cluster_to_use = get_cluster();
-    auto target_devices = cluster_to_use->get_target_mmio_device_ids();
-    cluster_desc_ = tt::umd::Cluster::create_cluster_descriptor("", {}, umd::IODeviceType::PCIe);
     const auto& chip_unique_ids = cluster_desc_->get_chip_unique_ids();
     const auto& eth_connections = cluster_desc_->get_ethernet_connections();
     auto cross_host_eth_connections = cluster_desc_->get_ethernet_connections_to_remote_devices();
@@ -273,11 +268,10 @@ void PhysicalSystemDescriptor::run_local_discovery() {
 
     auto add_local_asic_descriptor = [&](AsicID src_unique_id, chip_id_t src_chip_id) {
         auto [tray_id, asic_location] =
-            get_asic_position(get_cluster(), get_arch(cluster_desc_), src_chip_id, using_mock_cluster_desc_);
+            get_asic_position(cluster_, get_arch(cluster_desc_), src_chip_id, using_mock_cluster_desc_);
         asic_descriptors_[src_unique_id] = ASICDescriptor{
             TrayID{tray_id}, asic_location, cluster_desc_->get_board_type(src_chip_id), src_unique_id, hostname};
     };
-
 
     for (const auto& [chip_id, unique_id] : chip_unique_ids) {
         add_local_asic_descriptor(AsicID{unique_id}, chip_id);
@@ -825,22 +819,20 @@ LocalEthernetMetrics PhysicalSystemDescriptor::query_local_ethernet_metrics() co
 
                 auto src_eth_chan = eth_connection.src_chan;
                 auto src_chip_id = get_chip_id_for_asic(asic);
-                const auto& cluster_to_use = get_cluster();
-                const auto& soc_desc = cluster_to_use->get_soc_descriptor(src_chip_id);
+                const auto& soc_desc = cluster_->get_soc_descriptor(src_chip_id);
                 const auto& translated_eth_core =
                     soc_desc.get_eth_core_for_channel(src_eth_chan, CoordSystem::TRANSLATED);
 
-                cluster_to_use->read_from_device(
+                cluster_->read_from_device(
                     &retrain_count_val, src_chip_id, translated_eth_core, retrain_count_addr, sizeof(uint32_t));
-                cluster_to_use->read_from_device(
+                cluster_->read_from_device(
                     &crc_error_val, src_chip_id, translated_eth_core, crc_addr, sizeof(uint32_t));
-                cluster_to_use->read_from_device(
-                    &corr_val_hi, src_chip_id, translated_eth_core, corr_addr, sizeof(uint32_t));
-                cluster_to_use->read_from_device(
+                cluster_->read_from_device(&corr_val_hi, src_chip_id, translated_eth_core, corr_addr, sizeof(uint32_t));
+                cluster_->read_from_device(
                     &corr_val_lo, src_chip_id, translated_eth_core, corr_addr + 4, sizeof(uint32_t));
-                cluster_to_use->read_from_device(
+                cluster_->read_from_device(
                     &uncorr_val_hi, src_chip_id, translated_eth_core, uncorr_addr, sizeof(uint32_t));
-                cluster_to_use->read_from_device(
+                cluster_->read_from_device(
                     &uncorr_val_lo, src_chip_id, translated_eth_core, uncorr_addr + 4, sizeof(uint32_t));
 
                 local_ethernet_metrics[asic][src_eth_chan] = {

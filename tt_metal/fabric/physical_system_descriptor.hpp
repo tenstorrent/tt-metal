@@ -144,16 +144,16 @@ struct PhysicalConnectivityGraph {
 class PhysicalSystemDescriptor {
 public:
     PhysicalSystemDescriptor(
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
         const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
         const Hal* hal,
         const tt::llrt::RunTimeOptions& rtoptions,
-        const std::unique_ptr<tt::umd::Cluster>& cluster = nullptr,
         bool run_discovery = true);
     PhysicalSystemDescriptor(
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
         const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
         const Hal* hal,
         bool using_mock_cluster_descriptor,
-        const std::unique_ptr<tt::umd::Cluster>& cluster = nullptr,
         bool run_discovery = true);
     // Constructor generating a PhysicalSystemDescriptor based on a protobuf
     // descriptor (can be used entirely offline).
@@ -226,9 +226,6 @@ private:
     void remove_unresolved_nodes();
     void resolve_hostname_uniqueness();
     void validate_graphs();
-
-    // Helper to get the cluster to use (either the reference or our owned one)
-    const std::unique_ptr<tt::umd::Cluster>& get_cluster() const;
 
     const std::unique_ptr<tt::umd::Cluster>& cluster_;
     std::unique_ptr<tt::umd::Cluster> owned_cluster_ = nullptr;  // Used when cluster_ is null

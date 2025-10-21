@@ -115,12 +115,14 @@ InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
 std::string get_factory_system_descriptor_path(const InputArgs& input_args) {
     std::string fsd_path;
     if (input_args.cabling_descriptor_path.has_value()) {
+        const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
         log_output_rank0("Creating Factory System Descriptor (Golden Representation)");
         tt::scaleout_tools::CablingGenerator cabling_generator(
             input_args.cabling_descriptor_path.value(), input_args.deployment_descriptor_path.value());
-        fsd_path = input_args.output_path / "generated_factory_system_descriptor.textproto";
+        std::string filename =
+            "generated_factory_system_descriptor_" + std::to_string(*distributed_context.rank()) + ".textproto";
+        fsd_path = input_args.output_path / filename;
         cabling_generator.emit_factory_system_descriptor(fsd_path);
-
     } else {
         fsd_path = input_args.fsd_path.value();
     }
@@ -145,7 +147,11 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
         auto& context = tt::tt_metal::MetalContext::instance();
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
-            context.get_distributed_context_ptr(), &context.hal(), context.rtoptions().get_mock_enabled(), cluster.get_driver(), true);
+            cluster.get_driver(),
+            context.get_distributed_context_ptr(),
+            &context.hal(),
+            context.rtoptions().get_mock_enabled(),
+            true);
         log_output_rank0("Physical Discovery Complete");
         log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
         return physical_system_descriptor;
