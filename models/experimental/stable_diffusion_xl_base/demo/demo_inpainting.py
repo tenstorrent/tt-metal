@@ -98,8 +98,8 @@ def run_demo_inference(
     mask_url = "https://raw.githubusercontent.com/CompVis/latent-diffusion/main/data/inpainting_examples/overture-creations-5sI6fQgYIuo_mask.png"
 
     height = width = 1024
-    image = [load_image(img_url).resize((height, width))]
-    mask_image = [load_image(mask_url).resize((height, width))]
+    image = [load_image(img_url).resize((height, width))] * batch_size
+    mask_image = [load_image(mask_url).resize((height, width))] * batch_size
 
     init_image = [
         tt_sdxl.torch_pipeline.image_processor.preprocess(
@@ -272,7 +272,7 @@ def prepare_device(mesh_device, use_cfg_parallel):
 )
 @pytest.mark.parametrize(
     "prompt",
-    (("a tiger sitting on a park bench"),),
+    [["a tiger sitting on a park bench"]],
 )
 @pytest.mark.parametrize(
     "negative_prompt",

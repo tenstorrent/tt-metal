@@ -92,6 +92,7 @@ def run_demo_inference(
     if encoders_on_device:
         tt_sdxl.compile_text_encoding()
 
+    images = images + [images[0]] * needed_padding
     images = [
         tt_sdxl.torch_pipeline.image_processor.preprocess(
             image, height=1024, width=1024, crops_coords=None, resize_mode="default"
