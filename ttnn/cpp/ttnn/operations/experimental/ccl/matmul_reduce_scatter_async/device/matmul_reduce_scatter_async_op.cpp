@@ -261,7 +261,6 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
 
     /* ReduceScatter setup */
     constexpr uint32_t DEFAULT_WORKERS_PER_LINK = 1;
-
     ttnn::ReduceScatterMinimalAsync reduce_scatter_minimal_async_struct = ttnn::ReduceScatterMinimalAsync(
         dim,
         num_links,

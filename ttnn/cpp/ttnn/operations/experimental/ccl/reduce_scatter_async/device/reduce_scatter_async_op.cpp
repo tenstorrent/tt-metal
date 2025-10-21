@@ -337,12 +337,6 @@ Tensor reduce_scatter_impl(
         "reduce-scatter invoked with cluster_axis API on >2D mesh, which is currently unsupported");
     const uint32_t num_devices = cluster_axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
 
-    ttnn::ccl::Topology ccl_topology = topology;
-    if (num_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
-        log_warning(tt::LogOp, "Using Linear topology for ReduceScatter with 2 devices instead of Ring.");
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    }
-
     std::vector<std::optional<Tensor>> optional_output_tensors =
         persistent_output_tensors
             ? std::vector<std::optional<Tensor>>(persistent_output_tensors->begin(), persistent_output_tensors->end())
@@ -355,7 +349,7 @@ Tensor reduce_scatter_impl(
                    scatter_dim,
                    num_devices,
                    output_mem_config,
-                   ccl_topology,
+                   topology,
                    num_links_preferred,
                    from_remote_multi_device_global_semaphore,
                    to_remote_multi_device_global_semaphore,
