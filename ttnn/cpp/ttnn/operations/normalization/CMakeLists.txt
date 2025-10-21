@@ -15,6 +15,7 @@ file(
     GLOB_RECURSE kernels
     layernorm/device/kernels/*
     softmax/device/kernels/*
+    kernel_util/compute/*
 )
 target_sources(
     ttnn_op_normalization

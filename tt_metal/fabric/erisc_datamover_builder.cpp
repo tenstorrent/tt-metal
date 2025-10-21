@@ -10,6 +10,7 @@
 #include <tt-metalium/device.hpp>
 #include "erisc_datamover_builder.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
@@ -217,14 +218,25 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         next_l1_addr += 32;
     }
 
+    // Allocate code profiling buffer (conditionally enabled)
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
+        // Buffer size: max timer types * 16 bytes per result
+        constexpr size_t code_profiling_buffer_size = get_max_code_profiling_timer_types() * sizeof(CodeProfilingTimerResult);
+        this->code_profiling_buffer_address = next_l1_addr;
+        next_l1_addr += code_profiling_buffer_size;
+    } else {
+        this->code_profiling_buffer_address = 0; // Not allocated
+    }
+
     this->handshake_addr = next_l1_addr;
     next_l1_addr += eth_channel_sync_size;
 
     // issue: https://github.com/tenstorrent/tt-metal/issues/29073. TODO: Re-enable after hang is resolved.
     // Ethernet txq IDs on WH are 0,1 and on BH are 0,1,2.
-    // if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
-    //     this->receiver_txq_id = 1;
-    // }
+    if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE && tt::tt_metal::MetalContext::instance().rtoptions().get_is_fabric_2_erisc_mode_enabled()) {
+        this->receiver_txq_id = 1;
+    }
     this->num_riscv_cores = get_num_riscv_cores();
     for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
         this->risc_configs.emplace_back(risc_id);
@@ -695,6 +707,20 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(std::vector<ui
 
     // Add telemetry buffer address (16B aligned)
     ct_args.push_back(static_cast<uint32_t>(config.perf_telemetry_buffer_address));
+
+    // Add code profiling arguments (conditionally enabled)
+    if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
+        // Enable RECEIVER_CHANNEL_FORWARD timer (bit 0)
+        uint32_t code_profiling_enabled_timers = static_cast<uint32_t>(CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD);
+        ct_args.push_back(code_profiling_enabled_timers);
+
+        // Add code profiling buffer address (16B aligned)
+        ct_args.push_back(static_cast<uint32_t>(config.code_profiling_buffer_address));
+    } else {
+        // Code profiling disabled - add zeros
+        ct_args.push_back(0); // No timers enabled
+        ct_args.push_back(0); // No buffer address
+    }
 }
 
 std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_t risc_id) const {
@@ -1262,7 +1288,7 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm_impl(
             std::visit(
                 [this, ds_index, vc1_send_chan](auto&& vc1_builder_ref) {
                     auto& vc1_builder = vc1_builder_ref.get();
-                    setup_downstream_vc_connection(vc1_builder, ds_index, vc1_send_chan, true);
+                    this->setup_downstream_vc_connection(vc1_builder, ds_index, vc1_send_chan, true);
                 },
                 vc1_edm_builder);
         },
