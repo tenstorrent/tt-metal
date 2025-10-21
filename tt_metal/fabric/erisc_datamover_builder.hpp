@@ -257,6 +257,9 @@ struct FabricEriscDatamoverConfig {
     // Performance telemetry buffer address (16B aligned)
     std::size_t perf_telemetry_buffer_address = 0;
 
+    // Code profiling buffer address (16B aligned)
+    std::size_t code_profiling_buffer_address = 0;
+
     // Debug and Counters
     static constexpr std::size_t receiver_channel_counters_size_bytes =
         (((tt::tt_fabric::receiver_channel_counters_l1_size - 1) / field_size) + 1) * field_size;
@@ -408,7 +411,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
 // TODO: will be deprecated
 void append_worker_to_fabric_edm_sender_rt_args(
     const SenderWorkerAdapterSpec& connection,
-    chip_id_t chip_id,
+    ChipId chip_id,
     const CoreRangeSet& worker_cores,
     size_t sender_worker_teardown_semaphore_id,
     size_t sender_worker_buffer_index_semaphore_id,
@@ -464,8 +467,8 @@ public:
         tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
         const CoreCoord& ethernet_core,
-        chip_id_t local_physical_chip_id,
-        chip_id_t peer_physical_chip_id,
+        ChipId local_physical_chip_id,
+        ChipId peer_physical_chip_id,
         const FabricEriscDatamoverConfig& config,
         bool build_in_worker_connection_mode = false,
         FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default,

@@ -50,7 +50,7 @@ public:
 
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() >= 2 and
             tt::tt_metal::GetNumPCIeDevices() >= 1) {
-            std::vector<chip_id_t> ids(num_devices_, 0);
+            std::vector<ChipId> ids(num_devices_, 0);
             std::iota(ids.begin(), ids.end(), 0);
             auto reserved_devices = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
                 ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1);
@@ -75,7 +75,7 @@ public:
         }
     }
 
-    std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
+    std::map<ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -241,7 +241,7 @@ int main(int argc, char** argv) {
     const auto& active_eth_cores = device_0->get_devices()[0]->get_active_ethernet_cores(true);
     auto eth_sender_core_iter = active_eth_cores.begin();
     auto eth_sender_core_iter_end = active_eth_cores.end();
-    chip_id_t device_id = std::numeric_limits<chip_id_t>::max();
+    ChipId device_id = std::numeric_limits<ChipId>::max();
     tt_xy_pair eth_receiver_core;
     tt_xy_pair eth_sender_core;
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -253,9 +253,9 @@ int main(int argc, char** argv) {
             eth_sender_core = *eth_sender_core_iter;
         }
         eth_sender_core_iter++;
-    } while (device_id == std::numeric_limits<chip_id_t>::max() ||
+    } while (device_id == std::numeric_limits<ChipId>::max() ||
              !test_fixture.devices_.at(device_id)->get_devices()[0]->is_mmio_capable());
-    TT_FATAL(device_id != std::numeric_limits<chip_id_t>::max(), "No valid receiver device found to connect to");
+    TT_FATAL(device_id != std::numeric_limits<ChipId>::max(), "No valid receiver device found to connect to");
     auto* receiver_device = test_fixture.devices_.at(device_id)->get_devices()[0];
     TT_FATAL(receiver_device->is_mmio_capable(), "Receiver device is not mmio capable");
     const auto& device_1 = test_fixture.devices_.at(device_id);

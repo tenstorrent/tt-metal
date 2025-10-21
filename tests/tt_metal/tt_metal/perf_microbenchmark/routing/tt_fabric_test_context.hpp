@@ -25,6 +25,8 @@
 #include "tt_fabric_test_memory_map.hpp"
 #include "tt_fabric_telemetry.hpp"
 #include "tt_fabric_test_progress_monitor.hpp"
+#include "tt_fabric_test_results.hpp"
+#include "tt_fabric_test_eth_readback.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -72,6 +74,12 @@ using FabricConfig = tt::tt_fabric::FabricConfig;
 using RoutingType = tt::tt_fabric::fabric_tests::RoutingType;
 using FabricTensixConfig = tt::tt_fabric::FabricTensixConfig;
 
+using BandwidthResult = tt::tt_fabric::fabric_tests::BandwidthResult;
+using BandwidthResultSummary = tt::tt_fabric::fabric_tests::BandwidthResultSummary;
+using GoldenCsvEntry = tt::tt_fabric::fabric_tests::GoldenCsvEntry;
+using ComparisonResult = tt::tt_fabric::fabric_tests::ComparisonResult;
+using PostComparisonAnalyzer = tt::tt_fabric::fabric_tests::PostComparisonAnalyzer;
+
 // Helper functions for parsing traffic pattern parameters
 using tt::tt_fabric::fabric_tests::fetch_first_traffic_pattern;
 using tt::tt_fabric::fabric_tests::fetch_pattern_ftype;
@@ -101,70 +109,6 @@ const std::unordered_map<BandwidthStatistics, std::string> BandwidthStatisticsHe
 
 // Access to internal API: ProgramImpl::num_kernel
 #include "impl/program/program_impl.hpp"
-
-// Bandwidth measurement result structures
-struct BandwidthResult {
-    uint32_t num_devices;
-    uint32_t device_id;
-    RoutingDirection direction;
-    uint32_t total_traffic_count;
-    uint32_t num_packets;
-    uint32_t packet_size;
-    uint64_t cycles;
-    double bandwidth_GB_s;
-    double packets_per_second;
-    std::optional<double> telemetry_bw_GB_s_min;
-    std::optional<double> telemetry_bw_GB_s_avg;
-    std::optional<double> telemetry_bw_GB_s_max;
-};
-
-struct BandwidthResultSummary {
-    std::string test_name;
-    uint32_t num_iterations;
-    std::string ftype;
-    std::string ntype;
-    std::string topology;
-    uint32_t num_links;
-    uint32_t num_packets;
-    std::vector<uint32_t> num_devices;
-    uint32_t packet_size;
-    std::vector<double> cycles_vector;
-    std::vector<double> bandwidth_vector_GB_s;
-    std::vector<double> packets_per_second_vector;
-    std::vector<double> statistics_vector;  // Stores the calculated statistics for each test
-};
-
-// Golden CSV comparison structures
-struct GoldenCsvEntry {
-    std::string test_name;
-    std::string ftype;
-    std::string ntype;
-    std::string topology;
-    std::string num_devices;
-    uint32_t num_links{};
-    uint32_t packet_size{};
-    uint32_t num_iterations{};
-    double cycles{};
-    double bandwidth_GB_s{};
-    double packets_per_second{};
-    double tolerance_percent{};  // Per-test tolerance percentage
-};
-
-struct ComparisonResult {
-    std::string test_name;
-    std::string ftype;
-    std::string ntype;
-    std::string topology;
-    std::string num_devices;
-    uint32_t num_links{};
-    uint32_t packet_size{};
-    uint32_t num_iterations{};
-    double current_bandwidth_GB_s{};
-    double golden_bandwidth_GB_s{};
-    double difference_percent{};
-    bool within_tolerance{};
-    std::string status;
-};
 
 class TestContext {
 public:
@@ -455,6 +399,15 @@ public:
 
         // Compare summary results with golden CSV
         compare_summary_results_with_golden();
+
+        // Generate statistics based on golden comparison
+        PostComparisonAnalyzer post_comparison_analyzer(comparison_results_);
+        post_comparison_analyzer.generate_comparison_statistics();
+
+        // Generate comparison statistics CSV file
+        set_comparison_statistics_csv_file_path();
+        post_comparison_analyzer.generate_comparison_statistics_csv(comparison_statistics_csv_file_path_);
+
         validate_against_golden();
     }
 
@@ -504,6 +457,11 @@ public:
     bool get_benchmark_mode() { return benchmark_mode_; }
 
     bool get_telemetry_enabled() { return telemetry_enabled_; }
+
+    // Code profiling getters/setters
+    bool get_code_profiling_enabled() const { return code_profiling_enabled_; }
+    void set_code_profiling_enabled(bool enabled) { code_profiling_enabled_ = enabled; }
+    const std::vector<CodeProfilingEntry>& get_code_profiling_entries() const { return code_profiling_entries_; }
 
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
 
@@ -567,7 +525,7 @@ public:
 
         // Copy CSV files to CI artifacts directory
         for (const std::filesystem::path& csv_filepath :
-             {csv_file_path_, csv_summary_file_path_, diff_csv_file_path_}) {
+             {csv_file_path_, csv_summary_file_path_, diff_csv_file_path_, comparison_statistics_csv_file_path_}) {
             try {
                 std::filesystem::copy_file(
                     csv_filepath,
@@ -591,6 +549,13 @@ public:
     void process_telemetry_for_golden();
 
     void dump_raw_telemetry_csv(const TestConfig& config);
+
+    // Code profiling methods
+    void read_code_profiling_results();
+
+    void clear_code_profiling_buffers();
+
+    void report_code_profiling_results();
 
 private:
     // Credit configuration helper
@@ -616,6 +581,7 @@ private:
         device_direction_cycles_.clear();
         device_core_cycles_.clear();
         bandwidth_results_.clear();
+        code_profiling_entries_.clear();
         // Note: has_test_failures_ is NOT reset here to preserve failures across tests
         // Note: golden_csv_entries_ is kept loaded for reuse across tests
     }
@@ -1426,13 +1392,9 @@ private:
         double test_tolerance = 1.0;  // Default tolerance for no golden case
         if (golden_it != golden_csv_entries_.end()) {
             comp_result.golden_bandwidth_GB_s = golden_it->bandwidth_GB_s;
-            comp_result.difference_percent = ((comp_result.current_bandwidth_GB_s - comp_result.golden_bandwidth_GB_s) /
-                                              comp_result.golden_bandwidth_GB_s) *
-                                             100.0;
-
             // Use per-test tolerance from golden CSV instead of global tolerance
             test_tolerance = golden_it->tolerance_percent;
-            comp_result.within_tolerance = std::abs(comp_result.difference_percent) <= test_tolerance;
+            comp_result.within_tolerance = std::abs(comp_result.difference_percent()) <= test_tolerance;
 
             if (comp_result.within_tolerance) {
                 comp_result.status = "PASS";
@@ -1442,14 +1404,14 @@ private:
         } else {
             log_warning(tt::LogTest, "Golden CSV entry not found for test {}", comp_result.test_name);
             comp_result.golden_bandwidth_GB_s = 0.0;
-            comp_result.difference_percent = 0.0;
+            // Set within_tolerance explicitly to prevent an edge case, where golden is not found and test result is
+            // 0.0, which would cause subsequent within_tolerance checks to be true
             comp_result.within_tolerance = false;
             comp_result.status = "NO_GOLDEN";
         }
     }
 
-    ComparisonResult create_comparison_result(
-        const BandwidthResultSummary& test_result, double test_result_avg_bandwidth);
+    ComparisonResult create_comparison_result(const BandwidthResultSummary& test_result);
 
     std::string convert_num_devices_to_string(const std::vector<uint32_t>& num_devices);
 
@@ -1489,7 +1451,7 @@ private:
             auto golden_it = fetch_corresponding_golden_entry(test_result);
 
             // Compare the test result with the golden entry
-            ComparisonResult comp_result = create_comparison_result(test_result, test_result_avg_bandwidth);
+            ComparisonResult comp_result = create_comparison_result(test_result);
             populate_comparison_result_bandwidth(test_result_avg_bandwidth, comp_result, golden_it);
             comparison_results_.push_back(comp_result);
 
@@ -1499,7 +1461,7 @@ private:
                     acceptable_tolerance = golden_it->tolerance_percent;
                 }
                 std::string csv_format_string = generate_failed_test_format_string(
-                    test_result, test_result_avg_bandwidth, comp_result.difference_percent, acceptable_tolerance);
+                    test_result, test_result_avg_bandwidth, comp_result.difference_percent(), acceptable_tolerance);
                 all_failed_tests_.push_back(csv_format_string);
             }
         }
@@ -1528,7 +1490,7 @@ private:
                             << ",\"" << result.num_devices << "\"," << result.num_links << "," << result.packet_size
                             << "," << result.num_iterations << "," << std::fixed << std::setprecision(6)
                             << result.current_bandwidth_GB_s << "," << result.golden_bandwidth_GB_s << ","
-                            << std::setprecision(2) << result.difference_percent << "," << result.status << "\n";
+                            << std::setprecision(2) << result.difference_percent() << "," << result.status << "\n";
         }
         diff_csv_stream.close();
         log_info(tt::LogTest, "Comparison diff CSV results appended to: {}", diff_csv_file_path_.string());
@@ -1550,6 +1512,8 @@ private:
             log_info(tt::LogTest, "All tests passed golden comparison using per-test tolerance values");
         }
     }
+
+    void set_comparison_statistics_csv_file_path();
 
     // Track sync cores for each device
     std::unordered_map<FabricNodeId, CoreCoord> device_global_sync_cores_;
@@ -1576,6 +1540,8 @@ private:
     std::vector<BandwidthResult> bandwidth_results_;
     std::vector<BandwidthResultSummary> bandwidth_results_summary_;
     std::vector<TelemetryEntry> telemetry_entries_;  // Per-test raw data
+    std::vector<CodeProfilingEntry> code_profiling_entries_;  // Per-test code profiling data
+    bool code_profiling_enabled_ = false;
 
     // Device frequency cache to avoid repeated calculations
     std::unordered_map<FabricNodeId, uint32_t> device_freq_mhz_map_;
@@ -1596,4 +1562,18 @@ private:
     std::vector<std::string> all_failed_tests_;  // Accumulates all failed tests across test run
     std::filesystem::path diff_csv_file_path_;
     bool has_test_failures_ = false;  // Track if any tests failed validation
+
+    // Golden CSV comparison statistics
+    std::filesystem::path comparison_statistics_csv_file_path_;
+
+    // Ethernet core buffer readback helper
+    std::unique_ptr<EthCoreBufferReadback> eth_readback_;
+
+    // Getter for lazy initialization of eth_readback_
+    EthCoreBufferReadback& get_eth_readback() {
+        if (!eth_readback_) {
+            eth_readback_ = std::make_unique<EthCoreBufferReadback>(test_devices_, *fixture_);
+        }
+        return *eth_readback_;
+    }
 };

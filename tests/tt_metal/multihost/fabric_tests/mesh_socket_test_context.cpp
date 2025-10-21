@@ -109,7 +109,7 @@ void MeshSocketTestContext::initialize_and_validate_custom_physical_config(
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
     // ethernet coordinate chip mapping, which should be migrated away from
-    std::map<FabricNodeId, chip_id_t> chip_to_eth_coord_mapping;
+    std::map<FabricNodeId, ChipId> chip_to_eth_coord_mapping;
     for (std::uint32_t mesh_id = 0; mesh_id < eth_coord_mapping.size(); mesh_id++) {
         if (mesh_id == *local_mesh_id_) {
             for (std::uint32_t chip_id = 0; chip_id < eth_coord_mapping[mesh_id].size(); chip_id++) {

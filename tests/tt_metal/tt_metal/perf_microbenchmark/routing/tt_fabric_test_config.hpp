@@ -174,9 +174,9 @@ inline FabricNodeId resolve_device_identifier(const DeviceIdentifier& device_id,
             using T = std::decay_t<decltype(id)>;
             if constexpr (std::is_same_v<T, FabricNodeId>) {
                 return id;  // Already resolved
-            } else if constexpr (std::is_same_v<T, chip_id_t>) {
+            } else if constexpr (std::is_same_v<T, ChipId>) {
                 return provider.get_fabric_node_id(id);
-            } else if constexpr (std::is_same_v<T, std::pair<MeshId, chip_id_t>>) {
+            } else if constexpr (std::is_same_v<T, std::pair<MeshId, ChipId>>) {
                 return FabricNodeId{id.first, id.second};
             } else if constexpr (std::is_same_v<T, std::pair<MeshId, MeshCoordinate>>) {
                 return provider.get_fabric_node_id(id.first, id.second);
@@ -356,9 +356,9 @@ inline std::vector<std::vector<T>> YamlConfigParser::parse_2d_array(const YAML::
         row_vector.reserve(row.size());
         for (const auto& entry : row) {
             // only deals with ethernet core case
-            if constexpr (std::is_same_v<T, eth_coord_t>) {
+            if constexpr (std::is_same_v<T, EthCoord>) {
                 TT_FATAL(entry.size() == 5, "Expected ethernet core coordinates to be a sequence of 5 elements");
-                row_vector.push_back(eth_coord_t{
+                row_vector.push_back(EthCoord{
                     parse_scalar<uint32_t>(entry[0]),
                     parse_scalar<uint32_t>(entry[1]),
                     parse_scalar<uint32_t>(entry[2]),
@@ -1598,7 +1598,7 @@ private:
         out << YAML::EndMap;
     }
 
-    static void to_yaml(YAML::Emitter& out, const std::vector<std::vector<eth_coord_t>>& mapping) {
+    static void to_yaml(YAML::Emitter& out, const std::vector<std::vector<EthCoord>>& mapping) {
         out << YAML::BeginSeq;
         for (const auto& row : mapping) {
             out << YAML::BeginSeq;
