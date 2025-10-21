@@ -232,7 +232,9 @@ class DispatcherData:
         host_assigned_id = None
         try:
             # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
-            kernel_config_base = mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_config_base[programmable_core_type].value()
+            kernel_config_base = (
+                mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_config_base[programmable_core_type].value()
+            )
         except:
             pass
         try:
@@ -246,7 +248,9 @@ class DispatcherData:
         except:
             pass
         try:
-            watcher_previous_kernel_id = mailboxes.launch[previous_launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[proc_type].value()
+            watcher_previous_kernel_id = (
+                mailboxes.launch[previous_launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[proc_type].value()
+            )
         except:
             pass
         try:
