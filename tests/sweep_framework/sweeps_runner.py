@@ -381,7 +381,7 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
                     )
                     logger.info(f"Program cache cleared and re-enabled (entries after: {num_entries_after})")
 
-                    # TODO:Clear kernel cache when made available in ttnn. e2e perf is not available without ability to clear the kernel cache.
+                    # TODO: tt-metal #80925:Clear kernel cache when made available in ttnn. e2e perf is not available without ability to clear the kernel cache.
 
                     # First run (without cache) - measure uncached performance
                     results_uncached = test_module.run(**test_vector, device=device)
@@ -1036,8 +1036,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--result-dest",
         required=True,
-        choices=["elastic", "postgres", "results_export", "superset"],
-        help="Specify test result destination. Available presets are ['elastic', 'postgres', 'results_export', 'superset']",
+        choices=["elastic", "results_export", "superset"],
+        help="Specify test result destination. Available presets are ['elastic', 'results_export', 'superset']",
     )
 
     parser.add_argument(
