@@ -173,13 +173,6 @@ auto get_ctime_args_single_core(
             });
     } else {
         const uint32_t logical_rank = input.logical_shape().size();
-        TT_FATAL(reduce_all == false, "reduce_all not supported with TILE_LAYOUT");
-
-        // With TILE layout, padded shape has always at least 2 dims (i.e., also for 1D input tensors).
-        TT_FATAL(rank > 1, "Invalid rank for tiled tensor");
-        TT_FATAL(input_shape[rank - 1] % TILE_WIDTH == 0, "Invalid input tensor shape");
-        TT_FATAL(input_shape[rank - 2] % TILE_HEIGHT == 0, "Invalid input tensor shape");
-
         const uint32_t w_tiles = input_shape[rank - 1] / TILE_WIDTH;
         const uint32_t h_tiles = input_shape[rank - 2] / TILE_HEIGHT;
 

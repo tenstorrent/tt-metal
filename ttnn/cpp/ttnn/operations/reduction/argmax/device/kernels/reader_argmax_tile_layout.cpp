@@ -79,9 +79,9 @@ void kernel_main() {
 
     // Number of data elements in one output page (ROW_MAJOR layout)
     constexpr uint32_t output_page_elements = keepdim ? 1 : logical_height;
-    // Number of data elements to accumulate before writing data to the output tensor.
-    constexpr uint32_t stage_size = keepdim ? tile_height : logical_height;
-    uint32_t accumulated_arg_max[stage_size] = {0};
+
+    // Array for accumulating final argmax values. Used only when keepdim==true.
+    uint32_t accumulated_arg_max[tile_height] = {0};
 
     constexpr uint32_t tile_height_rem = logical_height % tile_height;
     constexpr uint32_t tile_width_rem = logical_width % tile_width;
@@ -102,7 +102,7 @@ void kernel_main() {
         src_data_format,
         src_cb_addr);
 
-    OutputContext output_ctx((uint32_t*)accumulated_arg_max, stage_size, dst_cb_addr, output_page_elements, keepdim);
+    OutputContext output_ctx((uint32_t*)accumulated_arg_max, tile_height, dst_cb_addr, output_page_elements, keepdim);
 
     // Iterate over the initial dimensions combined together
     for (uint32_t outer_index = 0; outer_index < outer_dim_size; outer_index++) {
@@ -117,13 +117,9 @@ void kernel_main() {
                 arg_max[row] = 0;
             }
 
-            // Count output units to be generated in this iteration.
-            uint32_t units_generated = 0;
-            if (tile_height_rem == 0 || i < input_height - 1) {
-                units_generated = tile_height;
-            } else {
-                units_generated = tile_height_rem;
-            }
+            // Number of output units to be generated in this iteration
+            const uint32_t units_generated =
+                (tile_height_rem == 0 || i < input_height - 1) ? tile_height : tile_height_rem;
 
             for (uint32_t j = 0; j < input_width; j++) {
                 // Number of input tiles in the last two dimensions.
@@ -135,8 +131,10 @@ void kernel_main() {
                 noc_async_read(src_noc_addr, src_cb_addr, src_page_size);
                 noc_async_read_barrier();
 
+                uint32_t tile_rows_processed = 0;
                 process_input_tile<src_element_type, src_data_format>(
-                    input_ctx, j, i, max_values, arg_max, tile_height);
+                    input_ctx, j, i, max_values, arg_max, tile_height, tile_rows_processed);
+                ASSERT(tile_rows_processed == units_generated);
             }
 
             // The rate at which argmax values are generated in the loop above

@@ -41,19 +41,15 @@ void bind_reduction_argmax_operation(py::module& module) {
                     * - dtype
                       - layout
                     * - FLOAT32
-                      - ROW_MAJOR
+                      - ROW_MAJOR, TILE
                     * - BFLOAT16
-                      - ROW_MAJOR
+                      - ROW_MAJOR, TILE
                     * - UINT32
                       - ROW_MAJOR
                     * - INT32
                       - ROW_MAJOR
                     * - UINT16
                       - ROW_MAJOR
-                    * - FLOAT32
-                      - TILE
-                    * - BFLOAT16
-                      - TILE
 
                 The output tensor will be of the following data type and layout:
 
@@ -73,6 +69,7 @@ void bind_reduction_argmax_operation(py::module& module) {
                 - Currently this op only supports dimension-specific reduction on the last dimension (i.e. :attr:`dim` = -1).
                 - Sharding is not supported for this operation
                 - Reduction over all elements (when dim=None) is not supported with the TILE input tensor layout
+                - The (optional) preallocated output tensor must have ROW_MAJOR layout
 
             Example:
               .. code-block:: python

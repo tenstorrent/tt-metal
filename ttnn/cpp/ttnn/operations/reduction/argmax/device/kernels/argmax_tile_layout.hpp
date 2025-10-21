@@ -4,12 +4,14 @@
 #pragma once
 
 #include "argmax_common.hpp"
+#include "tt-metalium/constants.hpp"
+
 #include "debug/assert.h"
 #include "debug/waypoint.h"
 
-constexpr uint32_t face_width = 16;
-constexpr uint32_t face_height = 16;
-constexpr uint32_t face_size = face_width * face_height;
+constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
+constexpr uint32_t face_height = tt::constants::FACE_HEIGHT;
+constexpr uint32_t face_size = tt::constants::FACE_HW;
 
 /**
  * @brief Struct container that gathers parameters (e.g., shape, data format)
@@ -74,24 +76,6 @@ struct InputContext {
 
 /**
  * @brief Struct container that gathers parameters related to the output tensor
- *
- * Since the output tensor parameters
- * This template function converts a raw memory address to a typed volatile pointer
- * that corresponds to the underlying data type of the specified DataFormat enum.
- * The returned pointer is marked as volatile and uses the tt_l1_ptr qualifier,
- * indicating it points to L1 cache memory that may be modified by hardware.
- *
- * @tparam data_format The DataFormat enum value that determines the return type
- * @param addr The raw memory address to be cast to the appropriate pointer type
- *
- * @return A volatile tt_l1_ptr pointer of the appropriate type:
- *         - uint16_t* for Float16_b and UInt16 formats
- *         - uint32_t* for Float32 and UInt32 formats
- *         - int32_t* for Int32 format
- *
- * @note This function uses compile-time template specialization to ensure
- *       type safety and optimal performance. Unsupported data formats will
- *       trigger a compile-time assertion error.
  */
 struct OutputContext {
     uint32_t collected_count;
@@ -148,10 +132,15 @@ void get_face_data_range(
  * @param max_values Array with the maximal values for a range of input tensor rows
  * @param arg_max Array with indices (tensor related) of the maximal values
  * @param[in] max_size The size of max_values and arg_max arrays
+ * @param[out] rows_processed Number of tile rows with real (non-padding) data, which
+ *             contributed to the output argmax values
  *
  * @note This function is invoked for subsequent tiles in a horizontal pass over the input tensor.
  *       Each call in this pass updates the max_values, arg_max arrays according to the values
  *       found in the tile.
+ *       The rows_processed output parameter allows the caller to validate the the number of processed
+ *       argmax values for each input tensor, as well as the number of final argmax values obtained
+ *       after each horizontal pass.
  */
 template <typename DTYPE, DataFormat format>
 void process_input_tile(
@@ -160,10 +149,13 @@ void process_input_tile(
     uint32_t tile_y,
     DTYPE max_values[],
     uint32_t arg_max[],
-    uint32_t max_size) {
+    uint32_t max_size,
+    uint32_t& rows_processed) {
     const bool has_padding = ctx.has_padding;
     const DataFormat src_data_format = ctx.data_format;
     auto src_ptr = get_tt_l1_ptr_based_on_data_format<format>(ctx.cb_addr);
+
+    rows_processed = 0;
 
     // Iterate over faces of the tile
     for (uint32_t face_id = 0; face_id < 4; face_id++) {
@@ -173,7 +165,6 @@ void process_input_tile(
         // Update for when face intersects the boundary with padding
         if (has_padding) {
             get_face_data_range(rows_to_process, cols_to_process, tile_x, tile_y, face_id, ctx);
-            WAYPOINT("AST5");
             ASSERT(rows_to_process <= face_height);
             ASSERT(cols_to_process <= face_width);
         }
@@ -181,6 +172,12 @@ void process_input_tile(
         if (rows_to_process == 0 && cols_to_process == 0) {
             // Face with padding data only
             continue;
+        }
+
+        // Account for each tile row only once
+        const bool left_side_face = (face_id == 0 || face_id == 2);
+        if (left_side_face) {
+            rows_processed += rows_to_process;
         }
 
         // Offset to the face within the tile
@@ -192,11 +189,7 @@ void process_input_tile(
             // Row index in the tile.
             const uint32_t row_index = (face_id < 2) ? row : row + face_height;
 
-            if (!(row_index < max_size)) {
-                WAYPOINT("AST1");
-                ASSERT(false);
-                continue;
-            }
+            ASSERT(row_index < max_size);
 
             DTYPE curr_max = max_values[row_index];
             uint32_t curr_arg_max = arg_max[row_index];
@@ -244,17 +237,9 @@ void collect_row_major_output(uint32_t new_values[], uint32_t count, OutputConte
     const uint32_t curr_collected = ctx.collected_count;
 
     if constexpr (keepdim) {
-        if (curr_collected + count > ctx.stack_buffer_size) {
-            WAYPOINT("AST2");
-            ASSERT(false);
-            return;
-        }
+        ASSERT(curr_collected + count <= ctx.stack_buffer_size);
     } else {
-        if (curr_collected + count > ctx.write_out_count) {
-            WAYPOINT("AST3");
-            ASSERT(false);
-            return;
-        }
+        ASSERT(curr_collected + count <= ctx.write_out_count);
     }
 
     auto stack_ptr = ctx.stack_ptr;

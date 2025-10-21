@@ -49,16 +49,30 @@ ttnn::SmallVector<uint32_t> ArgMax::get_output_shape(const Tensor& input_tensor)
 void ArgMax::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
+    const auto input_layout = input_tensor_a.layout();
 
     TT_FATAL(
         input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Only INTERLEAVED memory layout is supported for inputs!");
 
-    TT_FATAL(
-        input_tensor_a.dtype() == DataType::BFLOAT16 || input_tensor_a.dtype() == DataType::FLOAT32 ||
-            input_tensor_a.dtype() == DataType::INT32 || input_tensor_a.dtype() == DataType::UINT32 ||
-            input_tensor_a.dtype() == DataType::UINT16,
-        "Only BFLOAT16, FLOAT32, INT32, UINT32, and UINT16 are supported for inputs!");
+    if (input_layout == Layout::ROW_MAJOR) {
+        TT_FATAL(
+            input_tensor_a.dtype() == DataType::BFLOAT16 || input_tensor_a.dtype() == DataType::FLOAT32 ||
+                input_tensor_a.dtype() == DataType::INT32 || input_tensor_a.dtype() == DataType::UINT32 ||
+                input_tensor_a.dtype() == DataType::UINT16,
+            "Only BFLOAT16, FLOAT32, INT32, UINT32, and UINT16 are supported for inputs with ROW_MAJOR layout!");
+    } else {
+        TT_FATAL(
+            input_tensor_a.dtype() == DataType::BFLOAT16 || input_tensor_a.dtype() == DataType::FLOAT32,
+            "Only BFLOAT16, FLOAT32 are supported for inputs with TILE layout!");
+
+        const auto& input_shape = input_tensor_a.padded_shape();
+        auto rank = input_shape.size();
+        // With TILE layout, padded shape has always at least 2 dims (i.e., also for 1D input tensors).
+        TT_FATAL(rank > 1, "Invalid rank for input tensor with TILE layout");
+        TT_FATAL(input_shape[rank - 1] % detail::TILE_WIDTH == 0, "Invalid input tensor shape");
+        TT_FATAL(input_shape[rank - 2] % detail::TILE_HEIGHT == 0, "Invalid input tensor shape");
+    }
 
     TT_FATAL(this->output_dtype == DataType::UINT32, "Only UINT32 is supported for outputs!");
 
@@ -74,8 +88,7 @@ void ArgMax::validate_with_output_tensors(
             optional_output_tensor.value().memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Only INTERLEAVED memory layout is supported for outputs!");
         TT_FATAL(
-            optional_output_tensor.value().layout() == input_tensor_a.layout(),
-            "Input and output tensor layouts must be the same!");
+            optional_output_tensor.value().layout() == Layout::ROW_MAJOR, "Output tensor must have ROW_MAJOR layout!");
     }
 
     if (this->dim.has_value()) {
@@ -84,6 +97,8 @@ void ArgMax::validate_with_output_tensors(
 
         // TODO: Add support for normalized_dim = 0, 1, 2
         TT_FATAL(normalized_dim == (input_rank - 1), "Only argmax on last dim is supported!");
+    } else {
+        TT_FATAL(input_layout != Layout::TILE, "For inputs with TILE layout, dim parameter must be specified!");
     }
 
     if (this->use_multicore) {
