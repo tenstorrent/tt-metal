@@ -35,7 +35,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/semaphore.hpp>
+#include "impl/buffers/semaphore.hpp"
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
