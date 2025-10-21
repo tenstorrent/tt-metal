@@ -557,7 +557,7 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         return self.model_args[0].model_cache_path
 
     def prefill_forward(self, *args, **kwargs):
-        if envs.VLLM_USE_V1:
+        if not envs.VLLM_USE_V1:
             data = kwargs.get("images", None)
             kwargs["pixel_values"] = (
                 [im.pixel_values if hasattr(im, "pixel_values") else None for im in data] if data else None
