@@ -263,7 +263,7 @@ jobs:
         run: |
           # Get the latest release candidate (pre-release with -rc suffix)
           # Sort by published_at in descending order to ensure we get the most recent
-          latestReleaseVersion=$(curl -s https://api.github.com/repos/tenstorrent/tt-metal/releases | jq -r 'sort_by(.  ) | reverse | .[] | select(.prerelease == true and (.tag_name | contains("-rc"))) | .tag_name' | head -1)
+          latestReleaseVersion=$(curl -s https://api.github.com/repos/tenstorrent/tt-metal/releases | jq -r 'sort_by(.published_at) | reverse | .[] | select(.prerelease == true and (.tag_name | contains("-rc"))) | .tag_name' | head -1)
 
           # Fallback to latest release if no RC found
           if [ -z "$latestReleaseVersion" ] || [ "$latestReleaseVersion" = "null" ]; then
