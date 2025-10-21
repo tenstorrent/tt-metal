@@ -86,7 +86,7 @@ jobs:
           SPLITS=$TEST_SPLITS
           cd tests/python_tests/
           pytest -m "${{ inputs.pytest_markers }}" \
-                ${{ inputs.random_order && '--random-order' || '' }} \
+                ${{ inputs.random_order && '--random-order-bucket=global' || '' }} \
                 --splits $SPLITS --group ${{ matrix.test_group }} \
                 --override-ini="addopts=-v" --timeout=60 \
                 --junitxml=pytest-report-${CHIP_ARCH}-${{ matrix.test_group }}.xml .
