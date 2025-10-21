@@ -157,13 +157,13 @@ echo "Fetching the repository ..." >&1 >&2
 if ! [[ -d .git ]]; then
     (set -x; \
      git clone -b $sfpi_version --depth 1 $sfpi_repo .; \
-     git submodules update --depth 1 --init --recursive; \
+     git submodule update --depth 1 --init --recursive; \
      )
 else
     (set -x; \
      git fetch --depth 1 $sfpi_repo $sfpi_version; \
      git checkout $sfpi_version; \
-     git submodules update --depth 1 --init --recursive; \
+     git submodule update --depth 1 --init --recursive; \
      )
 fi
 
