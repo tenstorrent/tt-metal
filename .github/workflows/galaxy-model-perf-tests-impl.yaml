@@ -86,7 +86,7 @@ jobs:
             arch: wormhole_b0,
             save-perf-data: true,
             timeout: 60,
-            cmd: 'TT_MM_THROTTLE_PERF=5 pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k "4x8sp1tp0"',
+            cmd: 'export TT_DIT_CACHE_DIR="/mnt/MLPerf/tt_dnn-models/mochi/genmo-mochi-1-preview" && pytest models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model_caching -k "4x8sp1tp0" && TT_MM_THROTTLE_PERF=5 pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k "4x8sp1tp0"',
             owner_id: U09ELB03XRU # Stephen Osborne
           }
         ]

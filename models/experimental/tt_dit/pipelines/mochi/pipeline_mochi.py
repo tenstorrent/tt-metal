@@ -655,7 +655,7 @@ class MochiPipeline(DiffusionPipeline):
                 cache_dict = load_cache_dict(cache_path)
                 self.transformer.from_cached_state_dict(cache_dict)
             else:
-                ReleaseAssertNotImplemented()
+                raise NotImplementedError("use_cache must be True if the DiT model is reloaded during inference")
             logger.info("Recreated MochiTransformer3DModel")
 
         # 4. Prepare latent variables
