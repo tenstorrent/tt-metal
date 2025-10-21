@@ -10,6 +10,7 @@
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
+#include "ops/distributed/comm_ops.hpp"
 #include "ops/dropout_op.hpp"
 #include "ops/embedding_op.hpp"
 #include "ops/layernorm_op.hpp"
@@ -29,6 +30,7 @@ void py_module_types(nb::module_& m) {
     ttml::nanobind::util::export_enum<ReduceType>(m);
 
     m.def_submodule("binary");
+    m.def_submodule("distributed");
     m.def_submodule("dropout");
     m.def_submodule("embedding");
     m.def_submodule("layernorm");
@@ -86,6 +88,15 @@ void py_module(nb::module_& m) {
                 &ttml::ops::operator/),
             nb::arg("a"),
             nb::arg("b"));
+    }
+
+    {
+        auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));
+        py_distributed.def("all_reduce", &ttml::ops::distributed::all_reduce, nb::arg("tensor"));
+        py_distributed.def(
+            "reduce_scatter", &ttml::ops::distributed::reduce_scatter, nb::arg("tensor"), nb::arg("dim"));
+        py_distributed.def("all_gather", &ttml::ops::distributed::all_gather, nb::arg("tensor"), nb::arg("dim"));
+        py_distributed.def("broadcast", &ttml::ops::distributed::broadcast, nb::arg("tensor"));
     }
 
     {

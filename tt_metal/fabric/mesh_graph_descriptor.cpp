@@ -589,44 +589,12 @@ void MeshGraphDescriptor::validate_legacy_requirements(const proto::MeshGraphDes
         }
     }
 
-    // Connections have to be specific down to the device level
-    for (const auto& graph : proto.graph_descriptors()) {
-        for (const auto& connection : graph.connections()) {
-            for (const auto& node : connection.nodes()) {
-                if (!node.mesh().has_device_id()) {
-                    error_messages.push_back(
-                        fmt::format( "MGD 1.0 Compatibility requirement: Connections have to be specific down to the device level (Graph: {})", graph.name())
-                    );
-                }
-            }
-        }
-    }
-
     // Disable graph layout topologies for now
     for (const auto& graph : proto.graph_descriptors()) {
         if (graph.has_graph_topology()) {
             error_messages.push_back(
                 fmt::format( "MGD 1.0 Compatibility requirement: Graph layout topologies are not supported (Graph: {})", graph.name())
             );
-        }
-    }
-
-    // Check that the directions are set properly
-    for (const auto& graph : proto.graph_descriptors()) {
-        for (const auto& connection : graph.connections()) {
-            if (connection.routing_direction_size() != connection.nodes_size()) {
-                error_messages.push_back(fmt::format(
-                    "MGD 1.0 Compatibility requirement: Routing direction must have the same number of nodes (Graph: "
-                    "{})",
-                    graph.name()));
-            }
-            for (const auto& direction : connection.routing_direction()) {
-                if (direction == proto::RoutingDirection::INVALID) {
-                    error_messages.push_back(fmt::format(
-                        "MGD 1.0 Compatibility requirement: Routing direction must be valid (Graph: {})",
-                        graph.name()));
-                }
-            }
         }
     }
 
@@ -785,7 +753,7 @@ GlobalNodeId MeshGraphDescriptor::populate_graph_instance(
         // Check that the child instance created has the same type as rest of the graph descriptor
         if (child_instance.kind == NodeKind::Graph) {
             if (child_graph_type.empty()) {
-                child_graph_type = child_instance.type.c_str();
+                child_graph_type = child_instance.type;
             } else {
                 TT_FATAL(child_graph_type == child_instance.type, "Graph instance type {} does not match graph descriptor child type {}", std::string(child_graph_type), std::string(child_instance.type));
             }

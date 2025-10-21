@@ -208,6 +208,11 @@ struct OutboundReceiverChannelPointers {
     }
 
     FORCE_INLINE bool has_space_for_packet() const { return num_free_slots; }
+
+    FORCE_INLINE void advance_remote_receiver_buffer_index() {
+        remote_receiver_buffer_index =
+            BufferIndex{wrap_increment<RECEIVER_NUM_BUFFERS>(remote_receiver_buffer_index.get())};
+    }
 };
 
 /*

@@ -51,16 +51,6 @@ MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id) {
     return trace_id;
 }
 
-void EndTraceCapture(MeshDevice* device, uint8_t cq_id, const MeshTraceId& trace_id) {
-    device->end_mesh_trace(cq_id, trace_id);
-}
-
-void ReplayTrace(MeshDevice* device, uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) {
-    device->replay_mesh_trace(cq_id, trace_id, blocking);
-}
-
-void ReleaseTrace(MeshDevice* device, const MeshTraceId& trace_id) { device->release_mesh_trace(trace_id); }
-
 void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     if (!device->is_initialized()) {
         return;

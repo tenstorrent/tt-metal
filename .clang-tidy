@@ -19,7 +19,6 @@ Checks: >
   -bugprone-integer-division,
   -bugprone-narrowing-conversions,
   -bugprone-sizeof-expression,
-  -bugprone-switch-missing-default-case,
   -bugprone-unchecked-optional-access,
   -bugprone-unhandled-self-assignment,
   -bugprone-unused-local-non-trivial-variable,
@@ -116,7 +115,6 @@ Checks: >
   -llvmlibc-inline-function-decl,
   -llvmlibc-restrict-system-libc-headers,
   -misc-const-correctness,
-  -misc-definitions-in-headers,
   -misc-header-include-cycle,
   -misc-include-cleaner,
   -misc-no-recursion,
@@ -162,7 +160,6 @@ Checks: >
   -readability-convert-member-functions-to-static,
   -readability-else-after-return,
   -readability-enum-initial-value,
-  -readability-function-cognitive-complexity,
   -readability-function-size,
   -readability-identifier-length,
   -readability-implicit-bool-conversion,
@@ -176,7 +173,6 @@ Checks: >
   -readability-qualified-auto,
   -readability-redundant-casting,
   -readability-redundant-member-init,
-  -readability-redundant-string-cstr,
   -readability-redundant-string-init,
   -readability-reference-to-constructed-temporary,
   -readability-static-accessed-through-instance,
@@ -188,6 +184,8 @@ Checks: >
 CheckOptions:
   - key: readability-function-cognitive-complexity.IgnoreMacros
     value: true
+  - key: readability-function-cognitive-complexity.Threshold
+    value: 339
   - key: portability-simd-intrinsics.Suggest
     value: true
   # May enable later; for now activate the check with a lighter touch

@@ -32,47 +32,120 @@ set(IRAM_OPTIONS
     ENABLE_IRAM # With IRAM
 )
 
-# Get the appropriate SFPI tarball
-file(STRINGS "../sfpi-version.sh" SFPI)
-set(SFPI_arch "${CMAKE_HOST_SYSTEM_PROCESSOR}")
-foreach(tuple ${SFPI})
-    string(STRIP ${tuple} pair)
-    string(REPLACE "=" ";" pair ${pair})
-    list(LENGTH pair count)
-    if(count EQUAL 2)
-        list(GET pair 0 key)
-        list(GET pair 1 value)
-        if(key STREQUAL "sfpi_version")
-            set(SFPI_VERSION "${value}")
-        elseif(key STREQUAL "sfpi_url")
-            set(SFPI_URL "${value}")
-        elseif(key STREQUAL "sfpi_${SFPI_arch}_txz_md5")
-            set(SFPI_TXZ_MD5 "${value}")
-        endif()
-    endif()
-endforeach()
+# determine sfpi version information
+set(SFPI_ROOT "${PROJECT_SOURCE_DIR}/runtime/sfpi")
+file(MAKE_DIRECTORY ${SFPI_ROOT})
+# sfpi-version.sh generates a cmake script, which we include just below.
+execute_process(
+    COMMAND
+        ${CMAKE_CURRENT_SOURCE_DIR}/../sfpi-info.sh CMAKE txz
+    OUTPUT_FILE ${SFPI_ROOT}/sfpi-version.cmake
+    COMMAND_ERROR_IS_FATAL ANY
+)
+# this script sets a bunch of variables of the form SFPI_snake_case_name
+include(${SFPI_ROOT}/sfpi-version.cmake)
 
-if(NOT DEFINED SFPI_TXZ_MD5)
-    message(FATAL_ERROR "SFPI tarball for ${SFPI_arch} is not available")
+if(TT_USE_SYSTEM_SFPI)
+    # we'll use the system's version
+    set(SFPI_ROOT "/opt/tenstorrent/sfpi")
+elseif(NOT "${SFPI_md5}" STREQUAL "")
+    # download a toolchain as directed by sfpi_info's output
+    include(FetchContent)
+    FetchContent_Declare(
+        sfpi
+        URL
+            "${SFPI_url}/${SFPI_filename}"
+        URL_HASH "MD5=${SFPI_md5}"
+        SOURCE_DIR
+        "${SFPI_ROOT}"
+    )
+    FetchContent_MakeAvailable(sfpi)
+else()
+    # FIXME:This is where we'd clone sfpi and build it locally
+    # something like (untested meta-code)
+    # git clone -b ${SFPI_version} -depth 1 ${SFPI_repo} ${LOCAL_PATH}
+    # cd ${LOCAL_PATH}
+    # scripts/build.sh --test-tt
+    # tar -C build cf - sfpi | tar -C ${SFPI_ROOT} xf -
+    # add some caching so we don't do this every time!
+    # you'll have to install a bunch of packages for this to work
+    # Perhaps, sfpi-version.sh should be augmented to do all that,
+    # seems like the right place.
+    # if NOT EXISTS $LOCATION/sfpi.tgz
+    # sfpi-version.sh BUILD $LOCATION > sfpi-build.log
+    # endif
+    # tar xzf $LOCATION/sfpi.tgz -c ${SFPI_ROOT}/..
+    message(FATAL_ERROR "SFPI tarball for ${SFPI_arch} ${SFPI_dist} is not available")
 endif()
 
-include(FetchContent)
-FetchContent_Declare(
-    sfpi
-    URL
-        "${SFPI_URL}/v${SFPI_VERSION}/sfpi_${SFPI_VERSION}_${SFPI_arch}.txz"
-    URL_HASH "MD5=${SFPI_TXZ_MD5}"
-    SOURCE_DIR
-    "${PROJECT_SOURCE_DIR}/runtime/sfpi"
+set(GPP_CMD "${SFPI_ROOT}/compiler/bin/riscv-tt-elf-g++")
+if(NOT EXISTS "${GPP_CMD}")
+    message(FATAL_ERROR "GPP_CMD path '${GPP_CMD}' does not exist. Please check your configuration.")
+endif()
+
+execute_process(
+    COMMAND
+        ${GPP_CMD} --version
+    COMMAND
+        sed -e "1{s/^[^ ]* //;p}" -e d
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    OUTPUT_VARIABLE GPP_VERSION
 )
-FetchContent_MakeAvailable(sfpi)
+message(STATUS "Using SFPI compiler: ${GPP_CMD} ${GPP_VERSION}")
+# check this is the version we want (the system version might be wrong)
+string(REGEX REPLACE "^\\([^:]*:([^)]*)\\) .*$" "\\1" GPP_VERSION ${GPP_VERSION})
+if(NOT ${GPP_VERSION} STREQUAL ${SFPI_version})
+    message(FATAL_ERROR "SFPI compiler version ${GPP_VERSION} does not match required SFPI version ${SFPI_version}")
+endif()
+
+if(NOT TT_USE_SYSTEM_SFPI)
+    # Check each executable is loadable, as the user might not have installed the dependencies
+    # \tlibcsfml-window.so.2.2 => not found
+    # undefined symbol: blob\t(./a.out)
+    file(
+        GLOB SFPI_BINARIES
+        "${SFPI_ROOT}/compiler/bin/*"
+        "${SFPI_ROOT}/compiler/libexec/gcc/*"
+    )
+    execute_process(
+        COMMAND
+            echo ${SFPI_BINARIES}
+        COMMAND
+            sed "s/;/ /g"
+        COMMAND
+            xargs file
+        COMMAND
+            sed -e "/ELF ..-bit .SB executable,/{s/:.*//;p}" -e d
+        COMMAND
+            xargs ldd -d
+        COMMAND
+            sed -e "/=> not found/p" -e "/undefined symbol/{s/\t(.*)$//;p}" -e d
+        COMMAND
+            sort -u
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        OUTPUT_VARIABLE SFPI_UNMET
+    )
+    if(NOT "${SFPI_UNMET}" STREQUAL "")
+        message(NOTICE "Unsatisfied dependencies:\n${SFPI_UNMET}")
+        message(
+            FATAL_ERROR
+            "SFPI has unsatisfied dependencies. Either\n* set TT_USE_SYSTEM_SFPI and run install_dependencies.sh --install-sfpi, or\n* install the missing packages, or\n* (expert level) build your own sfpi and point sfpi-version at it"
+        )
+    endif()
+endif()
 
 foreach(ARCH IN LISTS ARCHS)
+    if(ARCH STREQUAL "quasar")
+        set(HW_VERSION_PATH "tt-2xx")
+    else()
+        set(HW_VERSION_PATH "tt-1xx")
+    endif()
+
     set(DEV_MEM_MAPS
-        "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/dev_mem_map.h"
-        "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/tensix_dev_map.h"
+        "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}/dev_mem_map.h"
+        "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}/tensix_dev_map.h"
     )
-    set(HW_INCLUDES "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}")
+    set(HW_INCLUDES "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}")
     set(HW_OUTPUT_DIR "${PROJECT_SOURCE_DIR}/runtime/hw/toolchain/${ARCH}")
     string(TOUPPER ${ARCH} ARCH_DEFINE)
 
@@ -136,26 +209,6 @@ foreach(ARCH IN LISTS ARCHS)
     endforeach()
 endforeach()
 
-if(TT_USE_SYSTEM_SFPI)
-    set(GPP_CMD "/opt/tenstorrent/sfpi/compiler/bin/riscv-tt-elf-g++")
-else()
-    set(GPP_CMD "${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv-tt-elf-g++")
-endif()
-
-if(NOT EXISTS "${GPP_CMD}")
-    message(FATAL_ERROR "GPP_CMD path '${GPP_CMD}' does not exist. Please check your configuration.")
-endif()
-
-execute_process(
-    COMMAND
-        ${GPP_CMD} --version
-    COMMAND
-        head -1
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    OUTPUT_VARIABLE GPP_VERSION
-)
-message(STATUS "Using SFPI compiler: ${GPP_CMD}, ${GPP_VERSION}")
-
 set(GPP_DEFINES -DTENSIX_FIRMWARE)
 
 # Define flags for each architecture
@@ -184,11 +237,17 @@ set(GPP_FLAGS_common
 
 # We are going to build 5 or 6 object files foreach ARCH
 foreach(ARCH IN LISTS ARCHS)
+    if(ARCH STREQUAL "quasar")
+        set(HW_VERSION_PATH "tt-2xx")
+    else()
+        set(HW_VERSION_PATH "tt-1xx")
+    endif()
     # These are the set of object files we are to build foreach ARCH
     set(HW_OBJ_SRC_PAIRS
-        "tmu-crt0.o:tt_metal/hw/toolchain/tmu-crt0.S"
         "substitutes.o:tt_metal/hw/toolchain/substitutes.cpp"
         "tdma_xmov.o:tt_metal/hw/firmware/src/tt-1xx/tdma_xmov.c"
+        "noc.o:tt_metal/hw/firmware/src/${HW_VERSION_PATH}/${ARCH}/noc.c"
+        "tmu-crt0.o:tt_metal/hw/toolchain/tmu-crt0.S"
     )
     set(ARCH_ALIAS ${ARCH})
 
@@ -202,11 +261,12 @@ foreach(ARCH IN LISTS ARCHS)
         )
     endif()
 
-    if(ARCH STREQUAL "quasar")
-        list(APPEND HW_OBJ_SRC_PAIRS "noc.o:tt_metal/hw/firmware/src/tt-2xx/noc.c")
-    else()
-        list(APPEND HW_OBJ_SRC_PAIRS "noc.o:tt_metal/hw/firmware/src/tt-1xx/${ARCH}/noc.c")
-    endif()
+    # TODO quasar should use crt0.S, missing some header file
+    # if(ARCH STREQUAL "quasar")
+    #     list(APPEND HW_OBJ_SRC_PAIRS "tmu-crt0.o:tt_metal/hw/firmware/src/${HW_VERSION_PATH}/${ARCH}/crt0.S")
+    # else()
+    #     list(APPEND HW_OBJ_SRC_PAIRS "tmu-crt0.o:tt_metal/hw/toolchain/tmu-crt0.S")
+    # endif()
 
     # Set GPP_FLAGS based on ARCH
     set(GPP_FLAGS
@@ -236,9 +296,10 @@ foreach(ARCH IN LISTS ARCHS)
     list(
         APPEND
         GPP_INCLUDES
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/${ARCH_ALIAS}_defines
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/noc
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}/${ARCH_ALIAS}_defines
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}/noc
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}/overlay
         -I${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/device/${ARCH}
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_ALIAS}/metal/common
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_ALIAS}/metal/llk_io
@@ -262,7 +323,7 @@ foreach(ARCH IN LISTS ARCHS)
             DEPENDS
                 ${PROJECT_SOURCE_DIR}/${HWSRC}
                 # If the compiler changes, rebuild
-                ../sfpi-version.sh
+                ../sfpi-version
             COMMENT "Building ${ARCH} hw lib ${HWOBJ}"
             VERBATIM
         )
@@ -316,24 +377,23 @@ target_sources(
             inc/accessor/page.h
             inc/atomic_rwptr.h
             inc/bit_utils.h
-            inc/blackhole/c_tensix_core.h
-            inc/blackhole/cfg_defines.h
-            inc/blackhole/core_config.h
-            inc/blackhole/dev_mem_map.h
-            inc/blackhole/eth_fw_api.h
-            inc/blackhole/eth_chan_noc_mapping.h
-            inc/blackhole/eth_fw_api.h
-            inc/blackhole/eth_l1_address_map.h
-            inc/blackhole/noc/noc.h
-            inc/blackhole/noc/noc_overlay_parameters.h
-            inc/blackhole/noc/noc_parameters.h
-            inc/blackhole/noc_nonblocking_api.h
-            inc/blackhole/stream_interface.h
-            inc/blackhole/stream_io_map.h
-            inc/blackhole/tdma_xmov.h
-            inc/blackhole/tensix.h
-            inc/blackhole/tensix_dev_map.h
-            inc/blackhole/tensix_types.h
+            inc/tt-1xx/blackhole/c_tensix_core.h
+            inc/tt-1xx/blackhole/cfg_defines.h
+            inc/tt-1xx/blackhole/core_config.h
+            inc/tt-1xx/blackhole/dev_mem_map.h
+            inc/tt-1xx/blackhole/eth_chan_noc_mapping.h
+            inc/tt-1xx/blackhole/eth_fw_api.h
+            inc/tt-1xx/blackhole/eth_l1_address_map.h
+            inc/tt-1xx/blackhole/noc/noc.h
+            inc/tt-1xx/blackhole/noc/noc_overlay_parameters.h
+            inc/tt-1xx/blackhole/noc/noc_parameters.h
+            inc/tt-1xx/blackhole/noc_nonblocking_api.h
+            inc/tt-1xx/blackhole/stream_interface.h
+            inc/tt-1xx/blackhole/stream_io_map.h
+            inc/tt-1xx/blackhole/tdma_xmov.h
+            inc/tt-1xx/blackhole/tensix.h
+            inc/tt-1xx/blackhole/tensix_dev_map.h
+            inc/tt-1xx/blackhole/tensix_types.h
             inc/circular_buffer.h
             inc/circular_buffer_init.h
             inc/cmd_defs.h
@@ -345,6 +405,7 @@ target_sources(
             inc/debug/dprint.h
             inc/debug/dprint_buffer.h
             inc/debug/dprint_pages.h
+            inc/debug/dprint_tensix.h
             inc/debug/dprint_tile.h
             inc/debug/eth_link_status.h
             inc/debug/fw_debug.h
@@ -362,32 +423,49 @@ target_sources(
             inc/ethernet/tunneling.h
             inc/firmware_common.h
             inc/mod_div_lib.h
+            inc/tt-2xx/quasar/c_tensix_core.h
+            inc/tt-2xx/quasar/cfg_defines.h
+            inc/tt-2xx/quasar/core_config.h
+            inc/tt-2xx/quasar/dev_mem_map.h
+            inc/tt-2xx/quasar/eth_chan_noc_mapping.h
+            inc/tt-2xx/quasar/eth_fw_api.h
+            inc/tt-2xx/quasar/eth_l1_address_map.h
+            inc/tt-2xx/quasar/noc/noc.h
+            inc/tt-2xx/quasar/noc/noc_overlay_parameters.h
+            inc/tt-2xx/quasar/noc/noc_parameters.h
+            inc/tt-2xx/quasar/noc_nonblocking_api.h
+            inc/tt-2xx/quasar/stream_interface.h
+            inc/tt-2xx/quasar/stream_io_map.h
+            inc/tt-2xx/quasar/tdma_xmov.h
+            inc/tt-2xx/quasar/tensix.h
+            inc/tt-2xx/quasar/tensix_dev_map.h
+            inc/tt-2xx/quasar/tensix_types.h
             inc/remote_circular_buffer_api.h
             inc/risc_attribs.h
-            inc/risc_common.h
+            inc/tt-1xx/risc_common.h
             inc/tensix_functions.h
             inc/utils/bfloat16.h
             inc/utils/float32.h
             inc/utils/int32.h
             inc/utils/utils.h
             inc/vptr_uint.h
-            inc/wormhole/c_tensix_core.h
-            inc/wormhole/core_config.h
-            inc/wormhole/dev_mem_map.h
-            inc/wormhole/eth_chan_noc_mapping.h
-            inc/wormhole/eth_fw_api.h
-            inc/wormhole/eth_l1_address_map.h
-            inc/wormhole/noc/noc.h
-            inc/wormhole/noc/noc_overlay_parameters.h
-            inc/wormhole/noc/noc_parameters.h
-            inc/wormhole/noc_nonblocking_api.h
-            inc/wormhole/stream_interface.h
-            inc/wormhole/stream_io_map.h
-            inc/wormhole/tdma_xmov.h
-            inc/wormhole/tensix.h
-            inc/wormhole/tensix_dev_map.h
-            inc/wormhole/wormhole_b0_defines/cfg_defines.h
-            inc/wormhole/wormhole_b0_defines/tensix_types.h
+            inc/tt-1xx/wormhole/c_tensix_core.h
+            inc/tt-1xx/wormhole/core_config.h
+            inc/tt-1xx/wormhole/dev_mem_map.h
+            inc/tt-1xx/wormhole/eth_chan_noc_mapping.h
+            inc/tt-1xx/wormhole/eth_fw_api.h
+            inc/tt-1xx/wormhole/eth_l1_address_map.h
+            inc/tt-1xx/wormhole/noc/noc.h
+            inc/tt-1xx/wormhole/noc/noc_overlay_parameters.h
+            inc/tt-1xx/wormhole/noc/noc_parameters.h
+            inc/tt-1xx/wormhole/noc_nonblocking_api.h
+            inc/tt-1xx/wormhole/stream_interface.h
+            inc/tt-1xx/wormhole/stream_io_map.h
+            inc/tt-1xx/wormhole/tdma_xmov.h
+            inc/tt-1xx/wormhole/tensix.h
+            inc/tt-1xx/wormhole/tensix_dev_map.h
+            inc/tt-1xx/wormhole/wormhole_b0_defines/cfg_defines.h
+            inc/tt-1xx/wormhole/wormhole_b0_defines/tensix_types.h
             inc/dataflow_api_addrgen.h
             inc/dataflow_api_common.h
             inc/socket_api.h

@@ -53,6 +53,11 @@ run_qwen25_vl_func() {
   fi
 }
 
+run_ds_r1_qwen_func() {
+  ds_r1_qwen=deepseek-ai/DeepSeek-R1-Distill-Qwen-14B
+  HF_MODEL=$ds_r1_qwen MESH_DEVICE=N300 pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1
+}
+
 run_gemma3_func() {
   HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it pytest models/demos/gemma3/demo/text_demo.py -k "ci-token-matching"
   echo "LOG_METAL: Gemma3 4B accuracy tests completed (text only)"
@@ -63,6 +68,10 @@ run_gemma3_perf() {
   echo "LOG_METAL: Gemma3 4B perf tests completed (text only)"
   HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it pytest models/demos/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
   echo "LOG_METAL: Gemma3 4B perf tests completed (text and vision)"
+}
+
+run_phi4_func() {
+  HF_MODEL=microsoft/phi-4 pytest models/tt_transformers/demo/simple_text_demo.py -k "accuracy and ci-token-matching"
 }
 
 run_segformer_func() {

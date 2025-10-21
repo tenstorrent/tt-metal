@@ -239,7 +239,7 @@ TEST_F(MeshEndToEnd2x4Tests, UntracedEltwiseAddTest) {
     std::vector<uint32_t> result_data(a_data.size(), 0);
     EnqueueReadMeshBuffer(cq, result_data, out_buffer, true /* blocking */);
 
-    auto transform_to_golden = [kValToAdd](const bfloat16& a) { return bfloat16(static_cast<float>(a) + kValToAdd); };
+    auto transform_to_golden = [](const bfloat16& a) { return bfloat16(static_cast<float>(a) + kValToAdd); };
     std::vector<bfloat16> result_vec = unpack_uint32_vec_into_bfloat16_vec(result_data, bfloat16_identity_transform);
     std::vector<bfloat16> golden_vec = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
 
@@ -299,20 +299,20 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseAddTest) {
 
     auto trace_id = BeginTraceCapture(mesh_device_.get(), cq.id());
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
-    EndTraceCapture(mesh_device_.get(), cq.id(), trace_id);
+    mesh_device_->end_mesh_trace(cq.id(), trace_id);
 
     EnqueueWriteMeshBuffer(cq, a_buffer, a_data, false /* blocking */);
     // Block to prevent wriitng during trace, which is illegal
     EnqueueWriteMeshBuffer(cq, b_buffer, b_data, true /* blocking */);
 
-    ReplayTrace(mesh_device_.get(), cq.id(), trace_id, false);
+    mesh_device_->replay_mesh_trace(cq.id(), trace_id, false);
 
-    ReleaseTrace(mesh_device_.get(), trace_id);
+    mesh_device_->release_mesh_trace(trace_id);
 
     std::vector<uint32_t> result_data(a_data.size(), 0);
     EnqueueReadMeshBuffer(cq, result_data, out_buffer, true /* blocking */);
 
-    auto transform_to_golden = [kValToAdd](const bfloat16& a) { return bfloat16(static_cast<float>(a) + kValToAdd); };
+    auto transform_to_golden = [](const bfloat16& a) { return bfloat16(static_cast<float>(a) + kValToAdd); };
 
     std::vector<bfloat16> result_vec = unpack_uint32_vec_into_bfloat16_vec(result_data, bfloat16_identity_transform);
     std::vector<bfloat16> golden_vec = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
@@ -363,20 +363,20 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseMulTest) {
 
     auto trace_id = BeginTraceCapture(mesh_device_.get(), cq.id());
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
-    EndTraceCapture(mesh_device_.get(), cq.id(), trace_id);
+    mesh_device_->end_mesh_trace(cq.id(), trace_id);
 
     EnqueueWriteMeshBuffer(cq, a_buffer, a_data, false /* blocking */);
     // Block to prevent wriitng during trace, which is illegal
     EnqueueWriteMeshBuffer(cq, b_buffer, b_data, true /* blocking */);
 
-    ReplayTrace(mesh_device_.get(), cq.id(), trace_id, false);
+    mesh_device_->replay_mesh_trace(cq.id(), trace_id, false);
 
-    ReleaseTrace(mesh_device_.get(), trace_id);
+    mesh_device_->release_mesh_trace(trace_id);
 
     std::vector<uint32_t> result_data(a_data.size(), 0);
     EnqueueReadMeshBuffer(cq, result_data, out_buffer, true /* blocking */);
 
-    auto transform_to_golden = [kValToMul](const bfloat16 a) { return bfloat16(a * bfloat16(kValToMul)); };
+    auto transform_to_golden = [](const bfloat16 a) { return bfloat16(a * bfloat16(kValToMul)); };
     std::vector<bfloat16> result_vec = unpack_uint32_vec_into_bfloat16_vec(result_data, bfloat16_identity_transform);
     std::vector<bfloat16> golden_vec = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
 
@@ -481,7 +481,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
     auto trace_id = BeginTraceCapture(mesh_device_.get(), kWorkloadCqId);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), multiply_and_subtract_mesh_workload, false);
-    EndTraceCapture(mesh_device_.get(), kWorkloadCqId, trace_id);
+    mesh_device_->end_mesh_trace(kWorkloadCqId, trace_id);
 
     uint32_t workload_0_src0_val = 2;
     uint32_t workload_0_src1_val = 3;
@@ -507,7 +507,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
     MeshEvent write_event = data_movement_cq.enqueue_record_event();
     workload_cq.enqueue_wait_for_event(write_event);
 
-    ReplayTrace(mesh_device_.get(), kWorkloadCqId, trace_id, false);
+    mesh_device_->replay_mesh_trace(kWorkloadCqId, trace_id, false);
 
     // Synchronize
     MeshEvent trace_event = workload_cq.enqueue_record_event();
