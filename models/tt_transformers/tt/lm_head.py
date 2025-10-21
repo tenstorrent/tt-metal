@@ -8,8 +8,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-
-# from models.tt_transformers.tt.ccl import tt_all_reduce
+from models.tt_transformers.tt.ccl import tt_all_reduce
 
 
 class LMHead(LightweightModule):
@@ -156,23 +155,27 @@ class LMHead(LightweightModule):
                 )
             )
 
-        # # Concatenate the outputs
-        # output = ttnn.concat(
-        #     outputs, dim=-1, memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
-        # )
+        # Concatenate the outputs
+        output = ttnn.concat(
+            outputs, dim=-1, memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
+        )
 
-        # output = tt_all_reduce(
-        #     output,
-        #     self.mesh_device,
-        #     self.tt_ccl,
-        #     cluster_axis=1,
-        #     dim=3 if self.args.is_galaxy else 0,
-        #     num_reduce_scatter_links=self.args.num_reduce_scatter_links,
-        #     num_all_gather_links=self.args.num_all_gather_links,
-        #     memory_config=ttnn.L1_MEMORY_CONFIG,
-        #     dtype=self.args.ccl_dtype,
-        #     sharded=False,
-        #     use_composite=True,
-        # )
+        # width = output.shape[-1]
+        # padding = math.ceil(width / self.num_devices / 32) * self.num_devices * 32 - width
+        output = ttnn.pad(output, (0, 0, 0, 16))
 
-        return outputs
+        output = tt_all_reduce(
+            output,
+            self.mesh_device,
+            self.tt_ccl,
+            cluster_axis=1,
+            dim=3 if self.args.is_galaxy else 0,
+            num_reduce_scatter_links=self.args.num_reduce_scatter_links,
+            num_all_gather_links=self.args.num_all_gather_links,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=self.args.ccl_dtype,
+            sharded=False,
+            use_composite=True,
+        )
+
+        return output

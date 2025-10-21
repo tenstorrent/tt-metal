@@ -399,6 +399,10 @@ class Attention(LightweightModule):
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
 
+        # print(f"QKV x: {x.shape} {x.memory_config}, wqkv: {self.wqkv.shape} {self.wqkv.memory_config}")
+        # print(f"QKV program_config: {self.model_config['XQKV_DECODE_PROGCFG']}, dtype: {self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16}")
+        # print(f"QKV compute_kernel_config: {self.li_qkv_decode_compute_kernel_cfg}")
+        # print(f"QKV memory_config: {ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG}")
         xqkv_fused_sharded = ttnn.linear(
             x,
             self.wqkv,
@@ -581,6 +585,10 @@ class Attention(LightweightModule):
                     num_buffers_per_channel=2,
                 )
 
+                # print(f"ATTN_ALL_GATHER_MATMUL_PROGCFG x: {all_gather_output.shape} {all_gather_output.memory_config}, wo: {self.wo.shape} {self.wo.memory_config}")
+                # print(f"ATTN_ALL_GATHER_MATMUL_PROGCFG program_config: {self.model_config['ATTN_ALL_GATHER_MATMUL_PROGCFG']}, dtype: {ttnn.bfloat8_b if self.TG else None}")
+                # print(f"ATTN_ALL_GATHER_MATMUL_PROGCFG compute_kernel_config: {self.li_o_decode_compute_kernel_cfg}")
+                # print(f"ATTN_ALL_GATHER_MATMUL_PROGCFG memory_config: {self.model_config['DECODE_RESIDUAL_MEMCFG']}")
                 dense_out_sharded = ttnn.linear(
                     all_gather_output,
                     self.wo,
@@ -684,6 +692,11 @@ class Attention(LightweightModule):
                 raise ValueError(f"seq_len {seq_len} must be divisible by {self.MAX_QKV_MM_SEQ_LEN}")
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
+        # breakpoint()
+        # print(f"QKV x: {x_11SH.shape} {x_11SH.memory_config()}, wqkv: {self.wqkv.shape} {self.wqkv.memory_config()}")
+        # print(f"QKV program_config: {self.model_config['XQKV_PREFILL_PROGCFG'](seq_len)}, dtype: {self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16}")
+        # print(f"QKV compute_kernel_config: {self.li_qkv_prefill_compute_kernel_cfg()}")
+        # print(f"QKV memory_config: {ttnn.DRAM_MEMORY_CONFIG}")
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
@@ -874,6 +887,11 @@ class Attention(LightweightModule):
                 num_buffers_per_channel=2,
             )
 
+        # breakpoint()
+        # print(f"WO x: {attn_output_11SH.shape} {attn_output_11SH.memory_config()}, wo: {self.wo.shape} {self.wo.memory_config()}")
+        # print(f"WO program_config: {self.model_config['WO_PREFILL_PROGCFG'](seq_len)}, dtype: {self.activation_dtype or ttnn.bfloat8_b}")
+        # print(f"WO compute_kernel_config: {self.li_o_prefill_compute_kernel_cfg}")
+        # print(f"WO memory_config: {ttnn.DRAM_MEMORY_CONFIG}")
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
