@@ -19,6 +19,7 @@
 #include "compute_kernel_api/transpose_wh.h"
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/memory.h"
+#include <tools/profiler/kernel_profiler.hpp>
 
 #include <array>
 
@@ -30,6 +31,7 @@ ALWI void REL() { release_dst(); }
 namespace NAMESPACE {
 
 void MAIN {
+    // DeviceZoneScopedN("FULL-COMPUTE");
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t blk = get_compile_time_arg_val(1);
@@ -56,8 +58,9 @@ void MAIN {
     constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // E[(x-E[x])^2]+eps
     constexpr auto cb_fusion = tt::CBIndex::c_22;  // stream gamma/beta
     constexpr auto cb_im_or_out = (do_gamma | do_beta) ? cb_fusion : cb_out;
-    constexpr auto cb_integers = tt::CBIndex::c_25;     // Tile containing consecutive integers [1, 2, ... TILE_HW]
-    constexpr auto cb_reciprocals = tt::CBIndex::c_26;  // Computed reciprocals for Welford's algorithm
+    // constexpr auto cb_integers = tt::CBIndex::c_25;     // Tile containing consecutive integers [1, 2, ... TILE_HW]
+    // constexpr auto cb_reciprocals = tt::CBIndex::c_26;  // Computed reciprocals for Welford's algorithm
+    constexpr auto cb_reciprocals = tt::CBIndex::c_25;  // Computed reciprocals for Welford's algorithm
 
     constexpr auto scaler0 = 0;
 
@@ -85,6 +88,8 @@ void MAIN {
         pack_reconfig_data_format(cb_ex);
     }
 
+    auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<std::array<uint32_t, W>>(cb_reciprocals, 0);
+
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         if constexpr (fuse_pre_add) {
             // x = in + b
@@ -110,11 +115,10 @@ void MAIN {
 
         // Simultaneous calculation of E[x] and Var[x] using Welford's algorithm
         // Generate reciprocals
-        kutil::compute::numeric::sfpu::generate_consecutive_reciprocal_tiles<W>(cb_integers, cb_reciprocals);
-        auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<std::array<uint32_t, W>>(cb_reciprocals, 0);
+        // kutil::compute::numeric::sfpu::generate_consecutive_reciprocal_tiles<W>(cb_integers, cb_reciprocals);
 
         // Run Welford's
-        reconfig_data_format_srca(cb_x);
+        // reconfig_data_format_srca(cb_x);
         transpose_wh_init_short(cb_x);
         welford_init();
         ACQ();
@@ -130,44 +134,51 @@ void MAIN {
         // Transpose dst1 and dst2 back to columns
         cb_reserve_back(cb_ex, onetile);
         cb_reserve_back(cb_ex2, onetile);
-
-        pack_reconfig_data_format(cb_ex);
-        pack_tile(dst1, cb_ex);
-        pack_reconfig_data_format(cb_ex2);
-        pack_tile(dst2, cb_ex2);
-
         tile_regs_commit();
-        tile_regs_release();
-
-        cb_push_back(cb_ex, onetile);
-        cb_push_back(cb_ex2, onetile);
-
-        cb_wait_front(cb_ex, onetile);
-        cb_wait_front(cb_ex2, onetile);
-        reconfig_data_format_srca(cb_ex);
-        transpose_wh_init_short(cb_ex);
-
-        tile_regs_acquire();
-        transpose_wh_tile(cb_ex, 0, dst1);
-        transpose_wh_tile(cb_ex2, 0, dst2);
-        tile_regs_commit();
-
-        cb_pop_front(cb_ex, onetile);
-        cb_pop_front(cb_ex2, onetile);
-
-        cb_reserve_back(cb_ex, onetile);
-        cb_reserve_back(cb_ex2, onetile);
-        pack_reconfig_data_format(cb_ex);
-
         tile_regs_wait();
         pack_tile(dst1, cb_ex);
-        pack_reconfig_data_format(cb_ex2);
         pack_tile(dst2, cb_ex2);
         tile_regs_release();
-
         cb_push_back(cb_ex, onetile);
         cb_push_back(cb_ex2, onetile);
-        REL();
+
+        // pack_reconfig_data_format(cb_ex);
+        // pack_tile(dst1, cb_ex);
+        // pack_reconfig_data_format(cb_ex2);
+        // pack_tile(dst2, cb_ex2);
+
+        // tile_regs_commit();
+        // tile_regs_release();
+
+        // cb_push_back(cb_ex, onetile);
+        // cb_push_back(cb_ex2, onetile);
+
+        // cb_wait_front(cb_ex, onetile);
+        // cb_wait_front(cb_ex2, onetile);
+        // reconfig_data_format_srca(cb_ex);
+        // transpose_wh_init_short(cb_ex);
+
+        // tile_regs_acquire();
+        // transpose_wh_tile(cb_ex, 0, dst1);
+        // transpose_wh_tile(cb_ex2, 0, dst2);
+        // tile_regs_commit();
+
+        // cb_pop_front(cb_ex, onetile);
+        // cb_pop_front(cb_ex2, onetile);
+
+        // cb_reserve_back(cb_ex, onetile);
+        // cb_reserve_back(cb_ex2, onetile);
+        // pack_reconfig_data_format(cb_ex);
+
+        // tile_regs_wait();
+        // pack_tile(dst1, cb_ex);
+        // pack_reconfig_data_format(cb_ex2);
+        // pack_tile(dst2, cb_ex2);
+        // tile_regs_release();
+
+        // cb_push_back(cb_ex, onetile);
+        // cb_push_back(cb_ex2, onetile);
+        // REL();
 
         // x - E[x]
         // Reuse cb_x since we didn't pop anything from it

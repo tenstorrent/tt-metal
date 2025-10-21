@@ -6,6 +6,7 @@
 #include "dataflow_api.h"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include <tools/profiler/kernel_profiler.hpp>
 
 template <typename T>
 void read_row_to_cb(
@@ -20,6 +21,7 @@ void read_row_to_cb(
     cb_push_back(cb_id, blk);
 }
 void kernel_main() {
+    // DeviceZoneScopedN("FULL-READER");
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t NCHt = get_arg_val<uint32_t>(1);
     uint32_t Wt = get_arg_val<uint32_t>(2);

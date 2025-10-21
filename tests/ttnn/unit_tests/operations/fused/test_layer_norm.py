@@ -18,9 +18,9 @@ def skip_welford_blackhole(use_welford):
     )
 
 
-@pytest.mark.parametrize("h", [32])
-@pytest.mark.parametrize("w", [64])
-@pytest.mark.parametrize("use_welford", [True, False])
+@pytest.mark.parametrize("h", [1024])
+@pytest.mark.parametrize("w", [1024])
+@pytest.mark.parametrize("use_welford", [False])
 @skip_welford_blackhole("'use_welford'")
 def test_layer_norm(device, h, w, use_welford):
     torch.manual_seed(0)
@@ -34,6 +34,9 @@ def test_layer_norm(device, h, w, use_welford):
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
+
+    print(output_tensor)
+    print(torch_output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
 

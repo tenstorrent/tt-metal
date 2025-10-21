@@ -61,6 +61,7 @@ bool CB_can_fit_in_L1(
     uint32_t in2_size,
     uint32_t in3_size,
     uint32_t im2_size,
+    uint32_t reciprocal_CB_size_bytes,
     uint32_t l1_size) {
     uint32_t sum = 0;
     sum += in0_size;
@@ -77,6 +78,7 @@ bool CB_can_fit_in_L1(
     sum += in2_size;
     sum += in3_size;
     sum += im2_size;
+    sum += reciprocal_CB_size_bytes;
     return sum < l1_size * 0.95;
 }
 operation::ProgramWithCallbacks layernorm_multi_core(
@@ -129,7 +131,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     tt::DataFormat beta_cb_data_format = beta.has_value()
                                              ? tt::tt_metal::datatype_to_dataformat_converter(beta.value().dtype())
                                              : tt::DataFormat::Float16_b;
-    tt::DataFormat integers_data_format = tt::DataFormat::Float32;
+    // tt::DataFormat integers_data_format = tt::DataFormat::Float32;
     tt::DataFormat reciprocal_cb_data_format = tt::DataFormat::Float32;
 
     uint32_t in_single_tile_size = tt::tile_size(in_data_format);
@@ -138,8 +140,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
     uint32_t gamma_single_tile_size = tt::tile_size(gamma_cb_data_format);
     uint32_t beta_single_tile_size = tt::tile_size(beta_cb_data_format);
-    uint32_t integers_single_tile_size = tt::tile_size(integers_data_format);
-    uint32_t reciprocal_single_tile_size = tt::tile_size(reciprocal_cb_data_format);
+    // uint32_t integers_single_tile_size = tt::tile_size(integers_data_format);
+    // uint32_t reciprocal_single_tile_size = tt::tile_size(reciprocal_cb_data_format);
 
     log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
     log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
@@ -166,8 +168,45 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
     uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
-    uint32_t num_reciprocal_tiles = use_welford ? tt::div_up(W, TILE_HW) : 0;
-    uint32_t reciprocal_CB_size = num_reciprocal_tiles * reciprocal_single_tile_size;
+    // uint32_t num_reciprocal_tiles = use_welford ? tt::div_up(W, TILE_HW) : 0;
+    uint32_t reciprocal_CB_size_bytes = 0;
+
+    uint32_t num_tile_rows = NC * Ht;
+    auto grid_size = device->compute_with_storage_grid_size();
+    auto
+        [num_cores,
+         all_cores,
+         core_group_1,
+         core_group_2,
+         num_tile_rows_per_core_group_1,
+         num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
+
+    // If using Welford, compute the reciprocals of an ascending sequence of integers
+    // and store them in a sharded tensor
+    std::optional<Tensor> recip_tensor = std::nullopt;
+    if (use_welford) {
+        const auto recip_dtype = tt::tt_metal::DataType::FLOAT32;
+        const ShardSpec shard_spec(all_cores, {1, W}, ShardOrientation::ROW_MAJOR);
+        const MemoryConfig mem_config =
+            MemoryConfig{tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec};
+        const TensorLayout tensor_layout(TensorLayout(recip_dtype, Layout::ROW_MAJOR, mem_config));
+        const Shape tensor_shape{num_cores, W};
+        const TensorSpec tensor_spec(tensor_shape, tensor_layout);
+        // Compute the reciprocals of an ascending sequence of integers
+        std::vector<float> reciprocals(num_cores * W);
+        for (uint32_t i = 0; i < W; i++) {
+            // Compute for first row
+            reciprocals[i] = 1.0f / (i + 1);
+        }
+        for (uint32_t i = 1; i < num_cores; i++) {
+            // Copy to other rows
+            std::copy(reciprocals.begin(), reciprocals.begin() + W, reciprocals.begin() + i * W);
+        }
+        recip_tensor =
+            Tensor::from_vector(std::move(reciprocals), tensor_spec, dynamic_cast<distributed::MeshDevice*>(device));
+
+        reciprocal_CB_size_bytes = recip_tensor.value().buffer()->aligned_size_per_bank();
+    }
 
     // For bert, tensor is packed as RM with width 32
     if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
@@ -221,6 +260,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         in2_t * bfloat16_tile_size,
         in3_t * bfloat16_tile_size,
         im2_t * single_tile_size,
+        reciprocal_CB_size_bytes,
         a.device()->l1_size_per_core());
     if (!rms_norm and !use_row_major_kernel) {
         if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and !cb_fits_in_L1) {
@@ -265,20 +305,49 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         num_beta_tiles,
         block_size);
 
-    uint32_t num_tile_rows = NC * Ht;
-    auto grid_size = device->compute_with_storage_grid_size();
-    auto
-        [num_cores,
-         all_cores,
-         core_group_1,
-         core_group_2,
-         num_tile_rows_per_core_group_1,
-         num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
+    // uint32_t num_tile_rows = NC * Ht;
+    // auto grid_size = device->compute_with_storage_grid_size();
+    // auto
+    //     [num_cores,
+    //      all_cores,
+    //      core_group_1,
+    //      core_group_2,
+    //      num_tile_rows_per_core_group_1,
+    //      num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
+
     Program program = CreateProgram();
+
+    // // If using Welford, compute the reciprocals of an ascending sequence of integers
+    // // and store them in a sharded tensor
+    // if (use_welford) {
+    //     const auto recip_dtype = tt::tt_metal::DataType::FLOAT32;
+    //     const ShardSpec shard_spec(all_cores, {1, W}, ShardOrientation::ROW_MAJOR);
+    //     const MemoryConfig mem_config = MemoryConfig{tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+    //     BufferType::L1, shard_spec}; const TensorLayout tensor_layout(TensorLayout(recip_dtype, Layout::ROW_MAJOR,
+    //     mem_config)); const Shape tensor_shape{num_cores, W}; const TensorSpec tensor_spec(tensor_shape,
+    //     tensor_layout);
+    //     // Compute the reciprocals of an ascending sequence of integers
+    //     std::vector<float> reciprocals(num_cores * W);
+    //     for (uint32_t i = 0; i < W; i++) {
+    //         // Compute for first row
+    //         reciprocals[i] = 1.0f / (i + 1);
+    //     }
+    //     for (uint32_t i = 1; i < num_cores; i++) {
+    //         // Copy to other rows
+    //         std::copy(reciprocals.begin(), reciprocals.begin() + W, reciprocals.begin() + i * W);
+    //     }
+    //     Tensor recip_tensor = Tensor::from_vector(std::move(reciprocals), tensor_spec);
+
+    //     CircularBufferConfig c_recip_config =
+    //     CircularBufferConfig(reciprocal_CB_size_bytes, {{tt::CBIndex::c_25, reciprocal_cb_data_format}})
+    //         .set_page_size(tt::CBIndex::c_25, reciprocal_CB_size_bytes)
+    //         .set_globally_allocated_address(*recip_tensor.buffer());
+    //     CreateCircularBuffer(program, all_cores, c_recip_config);
+    // }
 
     const auto fuse_pre_add = b.has_value();
 
@@ -470,18 +539,25 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         CreateCircularBuffer(program, all_cores, c_in1_config);
     }
     if (use_welford) {
-        // This is an integer tile of increasing values
-        CircularBufferConfig cb_integers_config =
-            CircularBufferConfig(integers_single_tile_size, {{tt::CBIndex::c_25, integers_data_format}})
-                .set_page_size(tt::CBIndex::c_25, integers_single_tile_size);
-        CreateCircularBuffer(program, all_cores, cb_integers_config);
-
-        // The reciprocal tiles
-        CircularBufferConfig cb_reciprocals_config =
-            CircularBufferConfig(reciprocal_CB_size, {{tt::CBIndex::c_26, reciprocal_cb_data_format}})
-                .set_page_size(tt::CBIndex::c_26, reciprocal_single_tile_size);
-        CreateCircularBuffer(program, all_cores, cb_reciprocals_config);
+        CircularBufferConfig c_recip_config =
+            CircularBufferConfig(reciprocal_CB_size_bytes, {{tt::CBIndex::c_25, reciprocal_cb_data_format}})
+                .set_page_size(tt::CBIndex::c_25, reciprocal_CB_size_bytes)
+                .set_globally_allocated_address(*recip_tensor.value().buffer());
+        CreateCircularBuffer(program, all_cores, c_recip_config);
     }
+    // if (use_welford) {
+    //     // This is an integer tile of increasing values
+    //     CircularBufferConfig cb_integers_config =
+    //         CircularBufferConfig(integers_single_tile_size, {{tt::CBIndex::c_25, integers_data_format}})
+    //             .set_page_size(tt::CBIndex::c_25, integers_single_tile_size);
+    //     CreateCircularBuffer(program, all_cores, cb_integers_config);
+
+    //     // The reciprocal tiles
+    //     CircularBufferConfig cb_reciprocals_config =
+    //         CircularBufferConfig(reciprocal_CB_size_bytes, {{tt::CBIndex::c_26, reciprocal_cb_data_format}})
+    //             .set_page_size(tt::CBIndex::c_26, reciprocal_single_tile_size);
+    //     CreateCircularBuffer(program, all_cores, cb_reciprocals_config);
+    // }
 
     uint32_t curr_row = 0;
     float winv = 1.0f / W;

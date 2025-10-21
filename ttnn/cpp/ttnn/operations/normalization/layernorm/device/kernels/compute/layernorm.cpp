@@ -25,12 +25,14 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "dprint_tensix.h"
+#include <tools/profiler/kernel_profiler.hpp>
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 
 namespace NAMESPACE {
 void MAIN {
+    // DeviceZoneScopedN("FULL-COMPUTE");
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t blk = get_compile_time_arg_val(1);

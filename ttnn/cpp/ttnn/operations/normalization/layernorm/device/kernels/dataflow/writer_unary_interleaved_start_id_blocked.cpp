@@ -4,8 +4,10 @@
 
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/dataflow/tile_generate.h"
+#include <tools/profiler/kernel_profiler.hpp>
 
 void kernel_main() {
+    // DeviceZoneScopedN("FULL-WRITER");
     namespace kutil = norm::kernel_util;
 
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -22,10 +24,13 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_id_out0);
 
     // Generate the integers tile if using Welford's algorithm
-    if (use_welford) {
-        kutil::dataflow::generate_incremented_tile<float, kutil::generic::policies::CBWaitPolicy::NoWait>(
-            cb_id_integers);
-    }
+    // if constexpr (use_welford) {
+    //     {
+    //         DeviceZoneScopedN("TEST-GENERATE-INTEGER-TILE");
+    //         kutil::dataflow::generate_incremented_tile<float, kutil::generic::policies::CBWaitPolicy::NoWait>(
+    //             cb_id_integers);
+    //     }
+    // }
 
     const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
 
