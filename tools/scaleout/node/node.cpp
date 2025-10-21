@@ -310,24 +310,24 @@ public:
 
         // Add LINKING_BOARD_1 connections
         auto* const lb1_connections = get_port_connections(&node, "LINKING_BOARD_1");
-        add_connection(lb1_connections, 1, 1, 2, 1);
-        add_connection(lb1_connections, 1, 2, 2, 2);
-        add_connection(lb1_connections, 3, 1, 4, 1);
-        add_connection(lb1_connections, 3, 2, 4, 2);
+        add_connection(lb1_connections, 1, 1, 3, 1);
+        add_connection(lb1_connections, 1, 2, 3, 2);
+        add_connection(lb1_connections, 2, 1, 4, 1);
+        add_connection(lb1_connections, 2, 2, 4, 2);
 
         // Add LINKING_BOARD_2 connections
         auto* const lb2_connections = get_port_connections(&node, "LINKING_BOARD_2");
-        add_connection(lb2_connections, 1, 1, 2, 1);
-        add_connection(lb2_connections, 1, 2, 2, 2);
-        add_connection(lb2_connections, 3, 1, 4, 1);
-        add_connection(lb2_connections, 3, 2, 4, 2);
+        add_connection(lb2_connections, 1, 1, 3, 1);
+        add_connection(lb2_connections, 1, 2, 3, 2);
+        add_connection(lb2_connections, 2, 1, 4, 1);
+        add_connection(lb2_connections, 2, 2, 4, 2);
 
         // Add LINKING_BOARD_3 connections
         auto* const lb3_connections = get_port_connections(&node, "LINKING_BOARD_3");
-        add_connection(lb3_connections, 1, 1, 3, 1);
-        add_connection(lb3_connections, 1, 2, 3, 2);
-        add_connection(lb3_connections, 2, 1, 4, 1);
-        add_connection(lb3_connections, 2, 2, 4, 2);
+        add_connection(lb3_connections, 1, 1, 2, 1);
+        add_connection(lb3_connections, 1, 2, 2, 2);
+        add_connection(lb3_connections, 3, 1, 4, 1);
+        add_connection(lb3_connections, 3, 2, 4, 2);
 
         // Add QSFP connections based on topology (one-hot encoded)
         if (static_cast<int>(topology) & static_cast<int>(BHGalaxyTopology::X_TORUS)) {  // X_TORUS bit
