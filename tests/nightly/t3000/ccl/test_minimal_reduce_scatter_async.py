@@ -1030,7 +1030,7 @@ def test_reduce_scatter_minimal_async_linear_sharded(
 MESH_SHAPE = (2, 4)
 LAYOUT = ttnn.TILE_LAYOUT
 
-NUM_ITERS = 2
+NUM_ITERS = 1
 
 
 def _valid_cluster_div(input_shape, dim, cluster_axis, mesh_shape, **kwargs):
@@ -1094,7 +1094,7 @@ def _get_tensors(
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("dim", [0, 1, 2, 3, 4, 5])
 @pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear, ttnn.Topology.Ring])
 def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, topology):
     if dim >= len(input_shape):
         pytest.skip("Invalid gather dim")
