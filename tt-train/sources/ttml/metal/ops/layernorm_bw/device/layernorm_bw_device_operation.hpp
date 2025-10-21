@@ -36,7 +36,7 @@ struct LayerNormBackwardDeviceOperation {
         const ttnn::Tensor& x_hat_tensor,
         const ttnn::Tensor& rstd_tensor,
         const ttnn::Tensor& dL_dout_tensor,
-        float epsilon = 1e-6F,
+        float epsilon = 1e-5F,
         const std::optional<ttnn::Tensor>& preallocated_dx = std::nullopt,
         const std::optional<ttnn::Tensor>& preallocated_dgamma_components = std::nullopt,
         const std::optional<ttnn::Tensor>& preallocated_dbeta_components = std::nullopt);

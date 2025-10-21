@@ -13,6 +13,7 @@ constexpr uint32_t cb_x_hat_idx = tt::CBIndex::c_2;       // x_hat (normalized i
 constexpr uint32_t cb_rstd_idx = tt::CBIndex::c_3;        // rstd from forward pass
 constexpr uint32_t cb_dL_out_idx = tt::CBIndex::c_4;      // upstream gradient
 constexpr uint32_t cb_mat_mul_reduce = tt::CBIndex::c_5;  // reduction vector
+constexpr uint32_t cb_zero = tt::CBIndex::c_19;           // reduction vector
 
 constexpr uint32_t packed_scaler = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
@@ -45,6 +46,8 @@ void kernel_main() {
 
     // Generate tile with scalar (1/N).
     generate_tile_with_packed_bfloat16_value(cb_scaler_idx, packed_scaler);
+
+    generate_tile_with_packed_bfloat16_value(cb_zero, 0);
     // Generate tile for matmul row reduce.
     generate_matmul_row_reduce_tile(cb_mat_mul_reduce);
 
@@ -79,33 +82,47 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_x_hat_idx, Wt);
         // If everything fits in L1, read all data for the row at once
-        if (r == start_row) {
-            // Read gamma only once for all rows when everything fits in L1
-            for (uint32_t c = 0; c < Wt; c += block_size) {
-                read_tiles(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes);
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_gamma_idx, Wt);
 
-            // DEBUG: Print first gamma tile (inputs to dy*gamma computation)
-            DPRINT << "READER: gamma tile 0:" << ENDL();
-            print_tile(cb_gamma_idx, 0, false);
-        }
-
-        // Read all row data at once
-        for (uint32_t c = 0; c < Wt; c += block_size) {
-            uint32_t row_tile_idx = (r * Wt) + c;
-
-            read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes);
-        }
+        read_tiles(cb_dL_out_idx, dL_out_address_generator, r * Wt, Wt, tile_bytes);
         noc_async_read_barrier();
         cb_push_back(cb_dL_out_idx, Wt);
 
-        // DEBUG: Print first dL_out (dy) tile for this row
         if (r == start_row) {
-            DPRINT << "READER: dy tile 0:" << ENDL();
-            print_tile(cb_dL_out_idx, 0, false);
+            // Read gamma only once for all rows when everything fits in L1
+            read_tiles(cb_gamma_idx, gamma_address_generator, 0, Wt, tile_bytes);
+            noc_async_read_barrier();
+            cb_push_back(cb_gamma_idx, Wt);
+
+            // for (uint32_t c = 0; c < Wt; c += 1) {
+            // // DEBUG: Print first gamma tile (inputs to dy*gamma computation)
+            //     DPRINT << "READER: gamma tile " << c << ":" << ENDL();
+            //     print_tile(cb_gamma_idx, c, false);
+            // }
         }
+        // // DEBUG: Print first dL_out (dy) tile for this row
+        // if (r == start_row) {
+        //     DPRINT << "READER: dy tile all cols:" << ENDL();
+        //     for (uint32_t c = 0; c < Wt; c += 1) {
+        //         DPRINT << "READER: dy tile " << c << ":" << ENDL();
+        //         print_tile(cb_dL_out_idx, c, false);
+        //     }
+        // }
+        // // DEBUG: Print first dL_out (dy) tile for this row
+        // if (r == start_row) {
+        //     DPRINT << "READER: x_norm tile all cols:" << ENDL();
+        //     for (uint32_t c = 0; c < Wt; c += 1) {
+        //         DPRINT << "READER: x_norm tile " << c << ":" << ENDL();
+        //         print_tile(cb_x_hat_idx, c, false);
+        //     }
+        // }
+        // // DEBUG: Print first dL_out (dy) tile for this row
+        // if (r == start_row) {
+        //     DPRINT << "READER: rstd tile all cols:" << ENDL();
+        //     for (uint32_t c = 0; c < Wt; c += 1) {
+        //         DPRINT << "READER: rstd tile " << c << ":" << ENDL();
+        //         print_tile(cb_rstd_idx, c, false);
+        //     }
+        // }
 #else
         // If not everything fits in L1, we need to read data multiple times per row
 
@@ -138,37 +155,34 @@ void kernel_main() {
         // Third pass: for computing dx
         for (uint32_t c = 0; c < Wt; c += block_size) {
             uint32_t row_tile_idx = (r * Wt) + c;
+            {
+                read_tiles(cb_x_hat_idx, x_hat_address_generator, row_tile_idx, block_size, tile_bytes);
+                read_tiles(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes);
+                read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes);
 
-            read_tiles(cb_x_hat_idx, x_hat_address_generator, row_tile_idx, block_size, tile_bytes);
-            read_tiles(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes);
-            read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes);
+                noc_async_read_barrier();
+                cb_push_back(cb_x_hat_idx, block_size);
+                cb_push_back(cb_gamma_idx, block_size);
+                cb_push_back(cb_dL_out_idx, block_size);
+            }
 
-            noc_async_read_barrier();
-            cb_push_back(cb_x_hat_idx, block_size);
-            cb_push_back(cb_gamma_idx, block_size);
-            cb_push_back(cb_dL_out_idx, block_size);
-        }
+            // Fourth pass: for computing dgamma_components
+            {
+                read_tiles(cb_x_hat_idx, x_hat_address_generator, row_tile_idx, block_size, tile_bytes);
+                read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes);
 
-        // Fourth pass: for computing dgamma_components
-        for (uint32_t c = 0; c < Wt; c += block_size) {
-            uint32_t row_tile_idx = (r * Wt) + c;
+                noc_async_read_barrier();
+                cb_push_back(cb_x_hat_idx, block_size);
+                cb_push_back(cb_dL_out_idx, block_size);
+            }
 
-            read_tiles(cb_x_hat_idx, x_hat_address_generator, row_tile_idx, block_size, tile_bytes);
-            read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes);
+            // Fifth pass: for computing dbeta_components
+            {
+                read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes);
 
-            noc_async_read_barrier();
-            cb_push_back(cb_x_hat_idx, block_size);
-            cb_push_back(cb_dL_out_idx, block_size);
-        }
-
-        // Fifth pass: for computing dbeta_components
-        for (uint32_t c = 0; c < Wt; c += block_size) {
-            uint32_t row_tile_idx = (r * Wt) + c;
-
-            read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes);
-
-            noc_async_read_barrier();
-            cb_push_back(cb_dL_out_idx, block_size);
+                noc_async_read_barrier();
+                cb_push_back(cb_dL_out_idx, block_size);
+            }
         }
 #endif
     }
