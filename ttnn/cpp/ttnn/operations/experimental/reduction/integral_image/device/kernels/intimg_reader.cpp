@@ -64,7 +64,6 @@ void kernel_main() {
     const uint32_t input_base_addr = get_arg_val<uint32_t>(0);
     constexpr auto ctas = get_ctas();
     using input_number_type = std_type_t<get_dataformat(ctas.input_cb)>;
-    // constexpr uint32_t tensor_size = ctas.num_batches * ctas.input_depth * 32 * 32;
     const auto input_addr_gtor = TensorAccessor(ctas.input_args, input_base_addr, get_tile_size(ctas.input_cb));
     const uint32_t num_slices_along_channels = block_depth_ceil(
         ctas.num_channels, ctas.block_depth);  // block_depth is expected to be a power of 2 (the default is the regular
