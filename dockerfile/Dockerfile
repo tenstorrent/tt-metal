@@ -83,7 +83,29 @@ ENV CCACHE_TEMPDIR=/tmp/ccache
 #############################################################
 FROM ci-build as build-artifacts
 
-COPY . /tt-metal
+# Copy files required for build only (omit scripts, docs, tests not needed for build
+
+# misc
+COPY tools /tt-metal/tools
+COPY tt_telemetry /tt-metal/tt_telemetry
+COPY cmake /tt-metal/cmake
+COPY tt-train /tt-metal/tt-train
+COPY build_metal.sh /tt-metal/build_metal.sh
+COPY CMakeLists.txt /tt-metal/CMakeLists.txt
+COPY CMakePresets.json /tt-metal/CMakePresets.json
+
+# tt-metal
+COPY tt_metal /tt-metal/tt_metal
+
+# ttnn
+COPY ttnn /tt-metal/ttnn
+
+# Tests
+COPY tests/CMakeLists.txt /tt-metal/tests/CMakeLists.txt
+COPY tests/tt_metal /tt-metal/tests/tt_metal
+COPY tests/tt_eager /tt-metal/tests/tt_eager
+COPY tests/ttnn /tt-metal/tests/ttnn
+
 WORKDIR /tt-metal
 
 # Override version to not rely at all on git
