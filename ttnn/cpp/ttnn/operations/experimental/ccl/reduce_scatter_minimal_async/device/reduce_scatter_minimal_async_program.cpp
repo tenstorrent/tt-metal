@@ -1103,15 +1103,17 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         return std::make_tuple(normalized_dim, input_tensor_C, input_tensor_B);
     };
 
-    const auto [normalized_dim, input_tensor_C, input_tensor_B] = map_nd_to_4d();
+    auto map_2d_to_4d = [&]() {
+        const uint32_t normalized_dim = std::get<0>(composite_common::normalize_dim_4d(dim, input_tensor_shape.rank()));
+        const uint32_t input_tensor_C = 1, input_tensor_B = 1;
 
-    // const uint32_t input_tensor_B = input_tensor_shape[0];
-    //  const uint32_t input_tensor_C = input_tensor_shape[-3];
+        return std::make_tuple(normalized_dim, input_tensor_C, input_tensor_B);
+    };
+
+    const auto [normalized_dim, input_tensor_C, input_tensor_B] =
+        (input_tensor_shape.rank() == 2) ? map_2d_to_4d() : map_nd_to_4d();
     const uint32_t input_tensor_Ht = input_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
     const uint32_t input_tensor_Wt = input_tensor_shape[-1] / tt::constants::TILE_WIDTH;
-
-    std::cout << "Norm dim: " << normalized_dim << " C: " << input_tensor_C << " B: " << input_tensor_B
-              << " H: " << input_tensor_Ht << " W: " << input_tensor_Wt << std::endl;
 
     uint32_t slice_C = input_tensor_C;
     uint32_t slice_Ht = input_tensor_Ht;

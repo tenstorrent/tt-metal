@@ -18,7 +18,13 @@ bool is_fabric_2d() {
 
 // Map a dimension of an ND tensor to 4D. If dim > than rank difference, subtract rank difference.
 std::tuple<uint32_t, int32_t> normalize_dim_4d(const uint32_t dim, const uint32_t rank) {
-    constexpr int32_t RANK_4D = 4;
+    constexpr int32_t RANK_4D = 4, RANK_2D = 2;
+
+    // special case for rank 2
+    if (rank == RANK_2D) {
+        return std::make_tuple(RANK_2D + dim, RANK_2D);
+    }
+
     const auto rank_diff = static_cast<int32_t>(rank) - RANK_4D;
     const auto normalized_dim = (dim < std::abs(rank_diff)) ? dim : dim - rank_diff;
 

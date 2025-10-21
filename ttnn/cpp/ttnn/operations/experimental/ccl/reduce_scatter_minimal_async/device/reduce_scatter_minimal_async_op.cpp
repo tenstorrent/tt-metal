@@ -27,8 +27,6 @@ void reduce_scatter_common_validates(
         page_size % input_tensor.buffer()->alignment() == 0,
         "reduce_scatter_minimal_async currently requires aligned pages");
 
-    TT_FATAL(dim != 0, "reduce_scatter_minimal_async does not support scattering on 0th dimension, got: {}", dim);
-
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(
         input_tensor.buffer() != nullptr,
@@ -38,9 +36,22 @@ void reduce_scatter_common_validates(
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "input_tensor must be on device");
     TT_FATAL(input_tensor.buffer() != nullptr, "input_tensor must have a buffer");
 
-    if (dim == 2 || dim == 3) {
+    const auto& rank = input_tensor.logical_shape().rank();
+
+    TT_FATAL(rank > 1, "reduce_scatter currently supports rank 2 tensors at minimum");
+    TT_FATAL(dim < rank, "Invalid scatter dim {} for rank {} tensor", dim, rank);
+
+    if (rank > 2) {
+        TT_FATAL(
+            dim != 0,
+            "reduce_scatter_minimal_async does not support scattering on 0th dimension (unless rank 2), got: {}",
+            dim);
+    }
+
+    const uint32_t normalized_dim = std::get<0>(composite_common::normalize_dim_4d(dim, rank));
+    if (normalized_dim == 2 || normalized_dim == 3) {
         const auto& input_shape = input_tensor.padded_shape();
-        uint32_t tile_size = dim == 2 ? tt::constants::TILE_HEIGHT : tt::constants::TILE_WIDTH;
+        uint32_t tile_size = normalized_dim == 2 ? tt::constants::TILE_HEIGHT : tt::constants::TILE_WIDTH;
         TT_FATAL(
             (input_shape[dim] / tile_size) % ring_size == 0,
             "Error, The number of tiles at input tensor dimension {} should be divisible by ring_size but the number "

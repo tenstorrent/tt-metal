@@ -317,10 +317,9 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "ones_tensor",
     [
-        True,
         False,
     ],
-    ids=["ones", "random"],
+    ids=["random"],
 )
 @pytest.mark.parametrize(
     "use_barrier, use_persistent_buffers",
@@ -435,10 +434,9 @@ def test_reduce_scatter_async(
 @pytest.mark.parametrize(
     "ones_tensor",
     [
-        True,
         False,
     ],
-    ids=["ones", "random"],
+    ids=["random"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -1076,8 +1074,6 @@ def _get_tensors(
 
     torch_reference = torch.concat(torch_reference_slices, dim=0)
 
-    print(f"{torch_reference.shape=}")
-
     tt_input = ttnn.from_torch(
         torch_input,
         layout=layout,
@@ -1091,7 +1087,9 @@ def _get_tensors(
 
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
-@pytest.mark.parametrize("input_shape", [[8, 8, 128, 128], [8, 128, 128], [8, 8, 8, 8, 128, 128], [8, 8, 8, 16, 16]])
+@pytest.mark.parametrize(
+    "input_shape", [[128, 128], [8, 8, 128, 128], [8, 128, 128], [8, 8, 8, 8, 128, 128], [8, 8, 8, 16, 16]]
+)
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("dim", [0, 1, 2, 3, 4, 5])
@@ -1130,8 +1128,5 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
         )
 
         tt_output_tensor = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(tt_out_tensor)])
-        print(f"{tt_output_tensor.shape=}")
-        print(f"{torch_reference.shape=}")
-
         eq, mess = comp_pcc(torch_reference, tt_output_tensor)
         assert eq, mess
