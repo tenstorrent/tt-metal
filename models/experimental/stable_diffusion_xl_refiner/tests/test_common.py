@@ -3,4 +3,4 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Refiner-specific constants
-SDXL_REFINER_L1_SMALL_SIZE = 14272
+SDXL_REFINER_L1_SMALL_SIZE = 15040
