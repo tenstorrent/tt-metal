@@ -22,6 +22,7 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
+#include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -146,12 +147,13 @@ void MAIN {
         reconfig_data_format(cb_inp, cb_stats_reduced);
         pack_reconfig_data_format(cb_x_minus_mean);
         sub_bcast_cols_init_short(cb_inp, cb_stats_reduced);
+        cb_wait_front(cb_stats_reduced, 1);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_inp, blk);
             cb_reserve_back(cb_x_minus_mean, blk);
             ACQ();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                sub_tiles_bcast_cols(cb_inp, cb_stats_reduced, wtr, 1, wtr);
+                sub_tiles_bcast_cols(cb_inp, cb_stats_reduced, wtr, 0, wtr);
                 pack_tile(wtr, cb_x_minus_mean);
             }
             REL();
@@ -165,12 +167,12 @@ void MAIN {
         /*
          * 1/sqrt(var + eps)
          */
-        cb_wait_front(cb_var, 1);
+        cb_wait_front(cb_stats_reduced, 2);
         cb_reserve_back(cb_recip_sqrt_var, 1);
-        reconfig_data_format(cb_var, cb_eps);
+        reconfig_data_format(cb_stats_reduced, cb_eps);
         pack_reconfig_data_format(cb_recip_sqrt_var);
 
-        add_tiles_init(cb_var, cb_eps);
+        add_tiles_init(cb_stats_reduced, cb_eps);
         ACQ();
         add_tiles(cb_var, cb_eps, 0, 0, 0);
         rsqrt_tile_init<LEGACY_RSQRT>();
@@ -178,7 +180,9 @@ void MAIN {
         pack_tile(0, cb_recip_sqrt_var);
         REL();
         cb_push_back(cb_recip_sqrt_var, 1);
-        cb_pop_front(cb_var, 1);
+
+        // free up CBs
+        cb_pop_front(cb_stats_reduced, stats_tile_stride);
 
         /*
          * norm x
