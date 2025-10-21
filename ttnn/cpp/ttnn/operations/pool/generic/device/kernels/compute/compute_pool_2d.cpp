@@ -291,9 +291,14 @@ void MAIN {
                         PACK((pack_untilize_uninit(pre_tilize_cb_id)));
 
                         // Workaround until #27504 is not closed
+                        // We should be calling tilizeA_B_uninit and for BFP4 output may be a reconfig_data_format
+                        // and also remove the tensix_syncs. Currently they are incomplete and hence the full call
+                        // to unpack_A_hw_configure.
                         tensix_sync();
-                        unary_op_init_common(pre_tilize_cb_id, out_cb_id);
+                        UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, false>(
+                            pre_tilize_cb_id)));
                         tensix_sync();
+                        pack_reconfig_data_format(out_cb_id);
 
                         fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
                         fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
@@ -302,9 +307,7 @@ void MAIN {
                         cb_push_back(out_cb_id, in_ntiles_c);
 
                         if constexpr (is_output_block_format) {
-                            tensix_sync();
-                            unary_op_init_common(in_cb_id_0, pre_tilize_cb_id);
-                            tensix_sync();
+                            pack_reconfig_data_format(pre_tilize_cb_id);
                         }
 
                         tilize_stick_counter = 0;
@@ -326,7 +329,8 @@ void MAIN {
                         pack_untilize_dest<partial_iter_output_tiles>(
                             out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
                     } else {
-                        pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                        pack_untilize_dest<max_tiles_per_iter>(
+                            out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
                     }
                     cb_push_back(out_cb_id, output_faces);
                     tile_regs_release();
