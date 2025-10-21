@@ -824,11 +824,18 @@ void TestDevice::create_sync_kernel() {
         sync_connection_manager.generate_mux_termination_local_args_for_core(sync_core, device_info_provider_);
     local_args.insert(local_args.end(), mux_termination_local_args.begin(), mux_termination_local_args.end());
 
-    std::vector<std::pair<size_t, size_t>> addresses_and_size_to_clear = {
-        {sender_memory_map_->get_result_buffer_address(), sender_memory_map_->get_result_buffer_size()},
-        {sender_memory_map_->get_global_sync_address(), sender_memory_map_->get_global_sync_region_size()},
-        {sender_memory_map_->get_local_sync_address(), sender_memory_map_->get_local_sync_region_size()},
-    };
+    std::vector<std::pair<size_t, size_t>> addresses_and_size_to_clear;
+
+    // Only clear result buffer from host if progress monitoring is enabled
+    if (progress_monitoring_enabled_) {
+        addresses_and_size_to_clear.push_back(
+            {sender_memory_map_->get_result_buffer_address(), sender_memory_map_->get_result_buffer_size()});
+    }
+
+    addresses_and_size_to_clear.push_back(
+        {sender_memory_map_->get_global_sync_address(), sender_memory_map_->get_global_sync_region_size()});
+    addresses_and_size_to_clear.push_back(
+        {sender_memory_map_->get_local_sync_address(), sender_memory_map_->get_local_sync_region_size()});
 
     // clear out mux termination sync address (if mux connections are present)
     if (!mux_termination_local_args.empty()) {
@@ -933,8 +940,13 @@ void TestDevice::create_sender_kernels() {
             connection_manager_.generate_mux_termination_local_args_for_core(core, device_info_provider_);
         local_args.insert(local_args.end(), mux_termination_local_args.begin(), mux_termination_local_args.end());
 
-        std::vector<std::pair<size_t, size_t>> addresses_and_size_to_clear = {
-            {sender_memory_map_->get_result_buffer_address(), sender_memory_map_->get_result_buffer_size()}};
+        std::vector<std::pair<size_t, size_t>> addresses_and_size_to_clear;
+
+        // Only clear result buffer from host if progress monitoring is enabled
+        if (progress_monitoring_enabled_) {
+            addresses_and_size_to_clear.push_back(
+                {sender_memory_map_->get_result_buffer_address(), sender_memory_map_->get_result_buffer_size()});
+        }
 
         // clear out local sync address (if line sync is enabled)
         if (global_sync_) {
@@ -1016,8 +1028,13 @@ void TestDevice::create_receiver_kernels() {
             rt_args.push_back(connection_idx);
         }
 
-        std::vector<std::pair<size_t, size_t>> addresses_and_size_to_clear = {
-            {receiver_memory_map_->get_result_buffer_address(), receiver_memory_map_->get_result_buffer_size()}};
+        std::vector<std::pair<size_t, size_t>> addresses_and_size_to_clear;
+
+        // Only clear result buffer from host if progress monitoring is enabled
+        if (progress_monitoring_enabled_) {
+            addresses_and_size_to_clear.push_back(
+                {receiver_memory_map_->get_result_buffer_address(), receiver_memory_map_->get_result_buffer_size()});
+        }
 
         // Local args for traffic configs
         std::vector<uint32_t> local_args;

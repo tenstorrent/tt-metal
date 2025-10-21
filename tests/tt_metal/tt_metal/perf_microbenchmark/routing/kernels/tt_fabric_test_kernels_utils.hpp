@@ -624,59 +624,96 @@ struct FabricConnectionArray {
     // Unified send operations (dispatch hidden from callers)
 
     // Wait for connection to have space
-    FORCE_INLINE void wait_for_empty_write_slot(uint8_t idx) {
-        if (is_mux[idx]) {
-            get_mux_connection(idx).wait_for_empty_write_slot();
+    template <bool BENCHMARK_MODE = false>
+    FORCE_INLINE void wait_for_empty_write_slot(void* conn_ptr, uint8_t idx) {
+        if constexpr (BENCHMARK_MODE) {
+            // Fast path: no runtime check, direct cast
+            static_cast<WorkerToFabricEdmSender*>(conn_ptr)->wait_for_empty_write_slot();
         } else {
-            get_fabric_connection(idx).wait_for_empty_write_slot();
+            // Normal path: runtime dispatch using cached is_mux array
+            if (is_mux[idx]) {
+                static_cast<MuxConnectionType*>(conn_ptr)->wait_for_empty_write_slot();
+            } else {
+                static_cast<WorkerToFabricEdmSender*>(conn_ptr)->wait_for_empty_write_slot();
+            }
         }
     }
 
     // Send header only (used for credit returns)
-    FORCE_INLINE void send_header_non_blocking(uint8_t idx, uint32_t header_addr) {
-        if (is_mux[idx]) {
-            get_mux_connection(idx).send_payload_flush_non_blocking_from_address(
+    template <bool BENCHMARK_MODE = false>
+    FORCE_INLINE void send_header_non_blocking(void* conn_ptr, uint8_t idx, uint32_t header_addr) {
+        if constexpr (BENCHMARK_MODE) {
+            static_cast<WorkerToFabricEdmSender*>(conn_ptr)->send_payload_flush_non_blocking_from_address(
                 header_addr, sizeof(PACKET_HEADER_TYPE));
         } else {
-            get_fabric_connection(idx).send_payload_flush_non_blocking_from_address(
-                header_addr, sizeof(PACKET_HEADER_TYPE));
+            if (is_mux[idx]) {
+                static_cast<MuxConnectionType*>(conn_ptr)->send_payload_flush_non_blocking_from_address(
+                    header_addr, sizeof(PACKET_HEADER_TYPE));
+            } else {
+                static_cast<WorkerToFabricEdmSender*>(conn_ptr)->send_payload_flush_non_blocking_from_address(
+                    header_addr, sizeof(PACKET_HEADER_TYPE));
+            }
         }
     }
 
     // Send payload without header (used for multi-part sends)
-    FORCE_INLINE void send_payload_without_header(uint8_t idx, uint32_t payload_addr, size_t size) {
-        if (is_mux[idx]) {
-            get_mux_connection(idx).send_payload_without_header_non_blocking_from_address(payload_addr, size);
+    template <bool BENCHMARK_MODE = false>
+    FORCE_INLINE void send_payload_without_header(void* conn_ptr, uint8_t idx, uint32_t payload_addr, size_t size) {
+        if constexpr (BENCHMARK_MODE) {
+            static_cast<WorkerToFabricEdmSender*>(conn_ptr)->send_payload_without_header_non_blocking_from_address(
+                payload_addr, size);
         } else {
-            get_fabric_connection(idx).send_payload_without_header_non_blocking_from_address(payload_addr, size);
+            if (is_mux[idx]) {
+                static_cast<MuxConnectionType*>(conn_ptr)->send_payload_without_header_non_blocking_from_address(
+                    payload_addr, size);
+            } else {
+                static_cast<WorkerToFabricEdmSender*>(conn_ptr)->send_payload_without_header_non_blocking_from_address(
+                    payload_addr, size);
+            }
         }
     }
 
     // Send header with flush (used for completing multi-part sends)
-    FORCE_INLINE void send_header_flush_blocking(uint8_t idx, uint32_t header_addr) {
-        if (is_mux[idx]) {
-            get_mux_connection(idx).send_payload_flush_blocking_from_address(header_addr, sizeof(PACKET_HEADER_TYPE));
-        } else {
-            get_fabric_connection(idx).send_payload_flush_blocking_from_address(
+    template <bool BENCHMARK_MODE = false>
+    FORCE_INLINE void send_header_flush_blocking(void* conn_ptr, uint8_t idx, uint32_t header_addr) {
+        if constexpr (BENCHMARK_MODE) {
+            static_cast<WorkerToFabricEdmSender*>(conn_ptr)->send_payload_flush_blocking_from_address(
                 header_addr, sizeof(PACKET_HEADER_TYPE));
+        } else {
+            if (is_mux[idx]) {
+                static_cast<MuxConnectionType*>(conn_ptr)->send_payload_flush_blocking_from_address(
+                    header_addr, sizeof(PACKET_HEADER_TYPE));
+            } else {
+                static_cast<WorkerToFabricEdmSender*>(conn_ptr)->send_payload_flush_blocking_from_address(
+                    header_addr, sizeof(PACKET_HEADER_TYPE));
+            }
         }
     }
 
     // Combined: send payload + header
+    template <bool BENCHMARK_MODE = false>
     FORCE_INLINE void send_payload_with_header(
-        uint8_t idx, uint32_t payload_addr, size_t payload_size, uint32_t header_addr) {
-        if (is_mux[idx]) {
-            auto& conn = get_mux_connection(idx);
+        void* conn_ptr, uint8_t idx, uint32_t payload_addr, size_t payload_size, uint32_t header_addr) {
+        if constexpr (BENCHMARK_MODE) {
+            auto* conn = static_cast<WorkerToFabricEdmSender*>(conn_ptr);
             if (payload_size > 0) {
-                conn.send_payload_without_header_non_blocking_from_address(payload_addr, payload_size);
+                conn->send_payload_without_header_non_blocking_from_address(payload_addr, payload_size);
             }
-            conn.send_payload_flush_non_blocking_from_address(header_addr, sizeof(PACKET_HEADER_TYPE));
+            conn->send_payload_flush_non_blocking_from_address(header_addr, sizeof(PACKET_HEADER_TYPE));
         } else {
-            auto& conn = get_fabric_connection(idx);
-            if (payload_size > 0) {
-                conn.send_payload_without_header_non_blocking_from_address(payload_addr, payload_size);
+            if (is_mux[idx]) {
+                auto* conn = static_cast<MuxConnectionType*>(conn_ptr);
+                if (payload_size > 0) {
+                    conn->send_payload_without_header_non_blocking_from_address(payload_addr, payload_size);
+                }
+                conn->send_payload_flush_non_blocking_from_address(header_addr, sizeof(PACKET_HEADER_TYPE));
+            } else {
+                auto* conn = static_cast<WorkerToFabricEdmSender*>(conn_ptr);
+                if (payload_size > 0) {
+                    conn->send_payload_without_header_non_blocking_from_address(payload_addr, payload_size);
+                }
+                conn->send_payload_flush_non_blocking_from_address(header_addr, sizeof(PACKET_HEADER_TYPE));
             }
-            conn.send_payload_flush_non_blocking_from_address(header_addr, sizeof(PACKET_HEADER_TYPE));
         }
     }
 };
@@ -688,8 +725,15 @@ struct LineSyncConfig {
         uint8_t connection_idx,
         const uint32_t packet_header_address,
         const uint32_t line_sync_val) :
-        connections_(connection_array), connection_idx_(connection_idx), line_sync_val(line_sync_val) {
+        connection_manager_(connection_array), connection_idx_(connection_idx), line_sync_val(line_sync_val) {
         packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_address);
+
+        // Cache connection pointer during initialization
+        if (connection_manager_->is_mux[connection_idx_]) {
+            connection_ptr_ = &connection_manager_->get_mux_connection(connection_idx_);
+        } else {
+            connection_ptr_ = &connection_manager_->get_fabric_connection(connection_idx_);
+        }
     }
 
     template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
@@ -708,9 +752,8 @@ struct LineSyncConfig {
     }
 
     void global_sync_start() {
-        // Send packet to remote devices
-        connections_->wait_for_empty_write_slot(connection_idx_);
-        connections_->send_header_non_blocking(connection_idx_, (uint32_t)packet_header);
+        connection_manager_->wait_for_empty_write_slot<false>(connection_ptr_, connection_idx_);
+        connection_manager_->send_header_non_blocking<false>(connection_ptr_, connection_idx_, (uint32_t)packet_header);
     }
 
     void global_sync_finish(uint8_t sync_iter) {
@@ -719,7 +762,8 @@ struct LineSyncConfig {
     }
 
 private:
-    FabricConnectionArray* connections_;
+    FabricConnectionArray* connection_manager_;
+    void* connection_ptr_;                                 // Cached connection pointer
     uint8_t connection_idx_;                               // Index into the connection array
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header;
     volatile tt_l1_ptr uint32_t* line_sync_ptr;
@@ -920,12 +964,19 @@ struct SenderKernelTrafficConfig {
         uint8_t connection_idx,
         const SenderTrafficConfigMetadata& metadata,
         const uint32_t packet_header_address) :
-        connections_(connection_array),
+        connection_manager_(connection_array),
         connection_idx_(connection_idx),
         metadata(metadata),
         noc_send_type_(static_cast<NocSendType>(0)),
         payload_buffer_(nullptr) {
         packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_address);
+
+        // Cache connection pointer during initialization
+        if (connection_manager_->is_mux[connection_idx_]) {
+            connection_ptr_ = &connection_manager_->get_mux_connection(connection_idx_);
+        } else {
+            connection_ptr_ = &connection_manager_->get_fabric_connection(connection_idx_);
+        }
 
         // Initialize function pointers to null (will be set in parse_and_setup_noc_send_type)
         noc_ops_.parse_and_setup = nullptr;
@@ -1001,7 +1052,7 @@ struct SenderKernelTrafficConfig {
         }
 
         // STEP 2: Wait for space
-        connections_->wait_for_empty_write_slot(connection_idx_);
+        connection_manager_->wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
 
         // STEP 3: Send packet
         if constexpr (!BENCHMARK_MODE) {
@@ -1009,13 +1060,14 @@ struct SenderKernelTrafficConfig {
                 payload_buffer_->fill_data(metadata.seed);
 
                 // Send payload without header
-                connections_->send_payload_without_header(
-                    connection_idx_, payload_buffer_->get_physical_address(), payload_size_bytes);
+                connection_manager_->send_payload_without_header<BENCHMARK_MODE>(
+                    connection_ptr_, connection_idx_, payload_buffer_->get_physical_address(), payload_size_bytes);
             }
         }
 
         // Send header
-        connections_->send_header_non_blocking(connection_idx_, (uint32_t)packet_header);
+        connection_manager_->send_header_non_blocking<BENCHMARK_MODE>(
+            connection_ptr_, connection_idx_, (uint32_t)packet_header);
 
         // STEP 4: Update state (after successful send)
         if constexpr (!BENCHMARK_MODE) {
@@ -1067,7 +1119,8 @@ private:
     }
 
 public:
-    FabricConnectionArray* connections_;
+    FabricConnectionArray* connection_manager_;
+    void* connection_ptr_;    // Cached connection pointer
     uint8_t connection_idx_;  // Index into the connection array
 
     SenderTrafficConfigMetadata metadata;
@@ -1625,10 +1678,17 @@ struct ReceiverCreditManager {
     template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
     void init(
         size_t& arg_idx, FabricConnectionArray* connections, uint8_t connection_idx, uint32_t credit_header_address) {
-        connections_ = connections;
+        connection_manager_ = connections;
         connection_idx_ = connection_idx;
         accumulated_credits_ = 0;
         enabled_ = true;
+
+        // Cache connection pointer during initialization
+        if (connection_manager_->is_mux[connection_idx_]) {
+            connection_ptr_ = &connection_manager_->get_mux_connection(connection_idx_);
+        } else {
+            connection_ptr_ = &connection_manager_->get_fabric_connection(connection_idx_);
+        }
 
         packet_header_ = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(credit_header_address);
         setup_packet_header<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(arg_idx, credit_header_address);
@@ -1659,8 +1719,9 @@ struct ReceiverCreditManager {
 
 private:
     FORCE_INLINE void send_credits() {
-        connections_->wait_for_empty_write_slot(connection_idx_);
-        connections_->send_header_non_blocking(connection_idx_, (uint32_t)packet_header_);
+        connection_manager_->wait_for_empty_write_slot<false>(connection_ptr_, connection_idx_);
+        connection_manager_->send_header_non_blocking<false>(
+            connection_ptr_, connection_idx_, (uint32_t)packet_header_);
     }
 
     FORCE_INLINE void send_credits(uint32_t num_credits) {
@@ -1671,11 +1732,13 @@ private:
         packet_header_->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
             noc_addr, static_cast<uint16_t>(num_credits), credit_fields_.atomic_inc_wrap});
 
-        connections_->wait_for_empty_write_slot(connection_idx_);
-        connections_->send_header_flush_blocking(connection_idx_, (uint32_t)packet_header_);
+        connection_manager_->wait_for_empty_write_slot<false>(connection_ptr_, connection_idx_);
+        connection_manager_->send_header_flush_blocking<false>(
+            connection_ptr_, connection_idx_, (uint32_t)packet_header_);
     }
 
-    FabricConnectionArray* connections_ = nullptr;
+    FabricConnectionArray* connection_manager_ = nullptr;
+    void* connection_ptr_ = nullptr;  // Cached connection pointer
     uint8_t connection_idx_ = 0;
     uint32_t accumulated_credits_ = 0;
     bool enabled_ = false;

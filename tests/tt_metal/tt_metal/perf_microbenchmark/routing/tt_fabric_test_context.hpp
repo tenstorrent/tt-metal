@@ -326,6 +326,7 @@ public:
             test_device.set_benchmark_mode(benchmark_mode_);
             test_device.set_global_sync(global_sync_);
             test_device.set_global_sync_val(global_sync_val_);
+            test_device.set_progress_monitoring_enabled(progress_config_.enabled);
 
             auto device_id = test_device.get_node_id();
             test_device.set_sync_core(device_global_sync_cores_[device_id]);

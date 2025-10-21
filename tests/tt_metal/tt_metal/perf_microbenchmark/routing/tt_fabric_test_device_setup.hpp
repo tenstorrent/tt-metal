@@ -295,6 +295,7 @@ public:
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
     void set_global_sync_val(uint32_t global_sync_val) { global_sync_val_ = global_sync_val; }
+    void set_progress_monitoring_enabled(bool enabled) { progress_monitoring_enabled_ = enabled; }
     void set_pristine_cores(std::vector<CoreCoord>&& cores) { pristine_cores_ = std::move(cores); }
     RoutingDirection get_forwarding_direction(const std::unordered_map<RoutingDirection, uint32_t>& hops) const;
     RoutingDirection get_forwarding_direction(const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const;
@@ -380,6 +381,7 @@ private:
     bool global_sync_ = false;
     uint32_t global_sync_val_ = 0;
     CoreCoord sync_core_coord_;
+    bool progress_monitoring_enabled_ = false;
 
     // Pristine cores for mux allocation (transferred from allocator)
     std::vector<CoreCoord> pristine_cores_;
