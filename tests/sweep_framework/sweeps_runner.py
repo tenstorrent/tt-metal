@@ -381,8 +381,8 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
                     )
                     logger.info(f"Program cache cleared and re-enabled (entries after: {num_entries_after})")
 
-                # Handle cache performance measurement
-                if config.measure_perf_with_cache:
+                    # TODO:Clear kernel cache when made available in ttnn. e2e perf is not available without ability to clear the kernel cache.
+
                     # First run (without cache) - measure uncached performance
                     results_uncached = test_module.run(**test_vector, device=device)
                     if type(results_uncached) == list:
@@ -396,7 +396,7 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
                     device_perf_uncached = None
                     if config.measure_device_perf:
                         device_perf_uncached = gather_single_test_perf(device, status_uncached)
-                        # Clear the profiler log file for the next run
+                        # Clear the profiler log file for the next run to isolate device perf measurements for uncached and cached
                         from tracy.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
                         import os
 
