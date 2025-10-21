@@ -246,7 +246,7 @@ operation::ProgramWithCallbacks argmax_single_core(
 
     const std::map<std::string, std::string> kernel_defines;
     const tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
-        program, kernel_path.c_str(), all_cores, tt::tt_metal::ReaderDataMovementConfig(ctime_args, kernel_defines));
+        program, kernel_path, all_cores, tt::tt_metal::ReaderDataMovementConfig(ctime_args, kernel_defines));
 
     // Runtime args
     const auto cores = grid_to_cores(num_cores, grid_size.x, grid_size.y, false);
