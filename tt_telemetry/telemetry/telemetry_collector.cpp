@@ -255,6 +255,7 @@ static void telemetry_thread(
                 cluster, distributed_context, hal.get(), rtoptions);
             topology_translation = std::make_unique<TopologyHelper>(cluster, psd);
             log_info(tt::LogAlways, "Created cluster, physical system descriptor, and HAL");
+            log_info(tt::LogAlways, "Our hostname is: {}", topology_translation->my_host_name);
 
             create_ethernet_metrics(
                 bool_metrics_, uint_metrics_, double_metrics_, cluster, fsd, topology_translation, hal);
