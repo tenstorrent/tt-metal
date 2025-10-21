@@ -394,7 +394,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
     std::vector<std::vector<uint32_t>> srcs;
     std::vector<std::vector<uint32_t>> dsts;
     while (num_pages_left) {
-        uint32_t num_pages = std::min(rand() % (config.max_num_pages_per_buffer) + 1, num_pages_left);
+        uint32_t num_pages = std::min((rand() % (config.max_num_pages_per_buffer)) + 1, num_pages_left);
         num_pages_left -= num_pages;
 
         uint32_t buf_size = num_pages * config.page_size;
@@ -563,7 +563,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
 
     vector<vector<uint32_t>> unique_vectors;
     for (uint32_t i = 0; i < config.num_unique_vectors; i++) {
-        uint32_t num_pages = rand() % (config.max_num_pages_per_buffer) + 1;
+        uint32_t num_pages = (rand() % (config.max_num_pages_per_buffer)) + 1;
         size_t buf_size = num_pages * config.page_size;
         unique_vectors.push_back(create_random_vector_of_bfloat16(
             buf_size, 100, std::chrono::system_clock::now().time_since_epoch().count()));

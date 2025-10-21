@@ -9,6 +9,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 
@@ -283,9 +284,9 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> create
                         const auto& pattern_meta_stride = meta_strides[i];
 
                         CoreCoord expected_core = {
-                            original_page_stride.start_core.x + r * pattern_meta_stride.core.x,
-                            original_page_stride.start_core.y + r * pattern_meta_stride.core.y};
-                        uint32_t expected_data = original_page_stride.start_data + r * pattern_meta_stride.data;
+                            original_page_stride.start_core.x + (r * pattern_meta_stride.core.x),
+                            original_page_stride.start_core.y + (r * pattern_meta_stride.core.y)};
+                        uint32_t expected_data = original_page_stride.start_data + (r * pattern_meta_stride.data);
 
                         if (current_page_stride.start_core != expected_core ||
                             current_page_stride.start_data != expected_data) {
@@ -986,8 +987,9 @@ operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& inp
             runtime_args_0.insert(runtime_args_0.end(), segment_kernel_0.begin(), segment_kernel_0.end());
 
             // Adjust read and write offsets to the correct stick address because we are splitting work across 2 kernels
-            const uint32_t adjusted_read_offset = args.read_offset + total_num_sticks_kernel_0 * local_stride_bytes;
-            const uint32_t adjusted_write_offset = args.write_offset + total_num_sticks_kernel_0 * remote_stride_bytes;
+            const uint32_t adjusted_read_offset = args.read_offset + (total_num_sticks_kernel_0 * local_stride_bytes);
+            const uint32_t adjusted_write_offset =
+                args.write_offset + (total_num_sticks_kernel_0 * remote_stride_bytes);
 
             const std::vector<uint32_t> segment_kernel_1 = {
                 args.write_size, adjusted_read_offset, args.bank_id, adjusted_write_offset};

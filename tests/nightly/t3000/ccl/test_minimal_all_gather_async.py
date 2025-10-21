@@ -42,8 +42,8 @@ def run_all_gather_impl(
     num_buffers_per_channel=None,
     allowed_pcc=1,
     skip_check=False,
-    all_gather_function=ttnn.experimental.all_gather_async,
     num_l1_banks=64,
+    all_gather_function=ttnn.experimental.all_gather_async,
 ):
     torch.manual_seed(0)
 
@@ -96,17 +96,32 @@ def run_all_gather_impl(
 
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
-    persistent_output_buffers = [
-        ttnn.from_torch(
-            torch.zeros(ag_output_shape),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ag_input_dtype,
-            memory_config=mem_config_ag,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        for _ in range(num_iters)
-    ]
+    if use_persistent_buffers:
+        if enable_trace:
+            persistent_output_buffers = [
+                ttnn.from_torch(
+                    torch.zeros(ag_output_shape),
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ag_input_dtype,
+                    memory_config=mem_config_ag,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+            ]
+        else:
+            persistent_output_buffers = [
+                ttnn.from_torch(
+                    torch.zeros(ag_output_shape),
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ag_input_dtype,
+                    memory_config=mem_config_ag,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+                for _ in range(num_iters)
+            ]
+    else:
+        persistent_output_buffers = []
 
     logger.info("Done creating persistent buffers")
 
@@ -122,14 +137,23 @@ def run_all_gather_impl(
         ag_output_tensor = torch.rand(ag_output_shape).bfloat16()
         ag_output_tensor_goldens_list.append(ag_output_tensor)
 
-        input_tensor_mesh_list.append(ag_output_tensor)
+        input_tensor_mesh = ttnn.from_torch(
+            ag_output_tensor,
+            device=mesh_device,
+            layout=layout,
+            dtype=ag_input_dtype,
+            memory_config=mem_config_input,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim),
+        )
+
+        input_tensor_mesh_list.append(input_tensor_mesh)
 
     ##### Perform the TT ops #####
     tt_all_gather_out_tensor_list = []
 
-    def run_op(i, input_tensor_mesh):
+    def run_op(i):
         tt_all_gather_out_tensor = all_gather_function(
-            input_tensor_mesh,
+            input_tensor_mesh_list[i],
             persistent_output_buffer=persistent_output_buffers[i] if use_persistent_buffers else None,
             dim=dim,
             multi_device_global_semaphore=ccl_semaphore_handles[i],
@@ -143,32 +167,18 @@ def run_all_gather_impl(
             num_workers_per_link=num_workers_per_link,
             num_buffers_per_channel=num_buffers_per_channel,
         )
-        return tt_all_gather_out_tensor
 
-    def run_op_wrapped(i):
-        input_tensor_mesh = ttnn.from_torch(
-            input_tensor_mesh_list[i],
-            device=mesh_device,
-            layout=layout,
-            dtype=ag_input_dtype,
-            memory_config=mem_config_input,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim),
-        )
-        return run_op(i, input_tensor_mesh), input_tensor_mesh
+        return tt_all_gather_out_tensor
 
     if enable_trace:
         # Compile the op
-        (tt_all_gather_out_tensor, input_tensor) = run_op_wrapped(0)
-        tt_ag_out = ttnn.from_device(tt_all_gather_out_tensor)
-        tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
-        tt_all_gather_out_tensor.deallocate()
-        tt_all_gather_out_tensor_list.append(tt_ag_out)
+        tt_all_gather_out_tensor = run_op(0)
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
         logger.info(f"Done compiling Op")
 
         # Capture the trace
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        tt_all_gather_out_tensor = run_op(0, input_tensor)
+        tt_all_gather_out_tensor = run_op(0)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
         logger.info(f"Done capturing trace")
@@ -177,17 +187,14 @@ def run_all_gather_impl(
         signpost("start")
         for i in range(num_iters):
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-            tt_all_gather_out_tensor.deallocate()
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+            tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
         logger.info(f"Done executing trace")
         signpost("stop")
     else:
         for i in range(num_iters):
-            (tt_all_gather_out_tensor, input_tensor) = run_op_wrapped(i)
-            input_tensor.deallocate()
-            tt_ag_out = ttnn.from_device(tt_all_gather_out_tensor)
-            tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
-            tt_all_gather_out_tensor.deallocate()
-            tt_all_gather_out_tensor_list.append(tt_ag_out)
+            tt_all_gather_out_tensor = run_op(i)
+            tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
 
             logger.info(f"Waiting for op")
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
@@ -196,9 +203,8 @@ def run_all_gather_impl(
             logger.info(f"Done iteration {i}")
 
     if not skip_check:
-        num_iters_check = 0 if enable_trace else num_iters
-        for i in range(num_iters_check):
-            tt_ag_out = tt_all_gather_out_tensor_list[i]
+        for i in range(num_iters):
+            tt_ag_out_tensor = tt_all_gather_out_tensor_list[i]
             torch_ag_out_tensor = ag_output_tensor_goldens_list[i if not enable_trace else 0]
 
             # Create expected output tensor based on which function is used
@@ -229,6 +235,8 @@ def run_all_gather_impl(
             else:
                 expected_tensor = torch_ag_out_tensor
 
+            tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
+            tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
             tt_ag_out = tt_ag_out[:, :, :, 0 : expected_tensor.shape[3]]
             eq, output = comp_pcc(tt_ag_out, expected_tensor, allowed_pcc)
             logger.info(f"{output}, iteration {i}, reversed={is_reversed}")
@@ -749,4 +757,74 @@ def test_all_gather_async_interleaved_to_sharded(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
+    )
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "ag_output_shape, dim, layout, ag_input_dtype",
+    [
+        # Gather on dim 0
+        ([1, 1, 8, 4096], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    ],
+    ids=[
+        "tt_training_test_one",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_ag",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (False, 3),
+    ],
+    ids=["check"],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_linear"],
+)
+def test_all_gather_async_2x4(
+    mesh_device,
+    ag_output_shape,
+    dim,
+    num_links,
+    ag_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_ag,
+    enable_trace,
+    all_gather_topology,
+    num_iters,
+):
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 4)))
+    run_all_gather_impl(
+        submesh_device,
+        submesh_device.get_num_devices(),
+        ag_output_shape,
+        dim,
+        num_links,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        all_gather_topology=all_gather_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        use_barrier=True,
+        use_persistent_buffers=False,
+        cluster_axis=1,
     )

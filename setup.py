@@ -4,6 +4,7 @@
 
 import os
 import glob
+import platform
 import shutil
 import subprocess
 import sys
@@ -25,14 +26,25 @@ readme_path = Path(__file__).absolute().parent / "README.md"
 readme = readme_path.read_text(encoding="utf-8")
 
 
-# Get the platform-specific lib directory name
-def get_lib_dir():
-    if sys.platform == "win32":
-        return "bin"  # Windows DLLs go in bin directory
-    elif sys.platform.startswith("linux"):
-        return "lib64" if os.path.exists("/usr/lib64") else "lib"
-    else:  # macOS and others
-        return "lib"
+def get_lib_dir() -> str:
+    """
+    Inspired by GNUInstallDirs logic:
+    default = 'lib'
+    upgrade to 'lib64' only on 64-bit Linux that is not Debian/Arch/Alpine.
+    """
+    libdir = "lib"
+
+    if platform.system() == "Linux":
+        # skip lib64 on Debian/Arch/Alpine
+        if not (
+            Path("/etc/debian_version").exists()
+            or Path("/etc/arch-release").exists()
+            or Path("/etc/alpine-release").exists()
+        ):
+            if platform.architecture()[0] == "64bit":
+                libdir = "lib64"
+
+    return libdir
 
 
 BUNDLE_SFPI = False
@@ -350,7 +362,7 @@ class CMakeBuild(build_ext):
             source_dir / "runtime", self.build_lib + "/ttnn/runtime", runtime_patterns, runtime_exclude_files
         )
         copy_tree_with_patterns(source_dir / "ttnn", self.build_lib + "/ttnn", ttnn_patterns)
-        copy_tree_with_patterns(source_dir / "ttnn/cpp", self.build_lib + "/ttnn/cpp", ttnn_cpp_patterns)
+        copy_tree_with_patterns(source_dir / "ttnn/cpp", self.build_lib + "/ttnn/ttnn/cpp", ttnn_cpp_patterns)
         copy_tree_with_patterns(source_dir / "tt_metal", self.build_lib + "/ttnn/tt_metal", tt_metal_patterns)
 
         # Move built final built _ttnn SO into appropriate location in ttnn Python tree in wheel
@@ -397,10 +409,12 @@ setup(
     package_dir={
         "": "ttnn",
         "tracy": "tools/tracy",
+        "triage": "tools/triage",
     },
     ext_modules=ext_modules,
     cmdclass=dict(build_ext=CMakeBuild, editable_wheel=EditableWheel),
     zip_safe=False,
     long_description=readme,
     long_description_content_type="text/markdown",
+    entry_points={"console_scripts": ["tt-triage = triage.triage:main"]},
 )

@@ -356,7 +356,9 @@ std::vector<chip_id_t> convert_1d_mesh_adjacency_to_row_major_vector(
 }
 
 std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(
-    const IntraMeshAdjacencyMap& topology_info, std::optional<chip_id_t> nw_corner_chip_id) {
+    const IntraMeshAdjacencyMap& topology_info,
+    std::optional<chip_id_t> nw_corner_chip_id,
+    std::optional<chip_id_t> ne_corner_chip_id) {
     // Check number of corners for 2D meshes
     TT_FATAL(
         topology_info.corners.size() == 4, "Error during physical chip discovery: missing connections in 2D mesh. Please check ethernet connection status");
@@ -405,28 +407,38 @@ std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(
     // 1) Distances from NW corner.
     auto dist_from_nw = compute_distances(nw_corner, topology_info.adjacency_map);
 
-    // 2) Identify the NE corner (distance of mesh_ew_size-1 from NW) and run a second
-    //    BFS from it to obtain dNE[chip].
+    // 2) Determine the NE corner: if provided, validate and use it; otherwise identify based on distances.
     chip_id_t ne_corner = nw_corner;  // initialise
     bool ne_found = false;
-    for (auto corner : topology_info.corners) {
-        if (corner == nw_corner) {
-            continue;
-        }
-        auto it = dist_from_nw.find(corner);
-        if (it != dist_from_nw.end() && it->second == topology_info.ew_size - 1) {
-            ne_corner = corner;
-            ne_found = true;
-            break;
-        }
-    }
-    if (!ne_found) {
-        // Fall back: pick any other corner; grid may be square so distance == mesh_ew_size-1 may not hold.
+    if (ne_corner_chip_id.has_value()) {
+        TT_FATAL(
+            std::find(topology_info.corners.begin(), topology_info.corners.end(), *ne_corner_chip_id) !=
+                topology_info.corners.end(),
+            "Provided NE corner chip {} is not a 2D corner",
+            *ne_corner_chip_id);
+        ne_corner = *ne_corner_chip_id;
+        ne_found = true;
+    } else {
+        // Identify the NE corner (distance of mesh_ew_size-1 from NW)
         for (auto corner : topology_info.corners) {
-            if (corner != nw_corner) {
+            if (corner == nw_corner) {
+                continue;
+            }
+            auto it = dist_from_nw.find(corner);
+            if (it != dist_from_nw.end() && it->second == topology_info.ew_size - 1) {
                 ne_corner = corner;
                 ne_found = true;
                 break;
+            }
+        }
+        if (!ne_found) {
+            // Fall back: pick any other corner; grid may be square so distance == mesh_ew_size-1 may not hold.
+            for (auto corner : topology_info.corners) {
+                if (corner != nw_corner) {
+                    ne_corner = corner;
+                    ne_found = true;
+                    break;
+                }
             }
         }
     }
@@ -455,7 +467,7 @@ std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(
         TT_FATAL(row >= 0 && row < mesh_rows, "Row {} out of bounds.", row);
         TT_FATAL(col >= 0 && col < mesh_cols, "Col {} out of bounds.", col);
 
-        size_t idx = static_cast<size_t>(row) * static_cast<size_t>(mesh_cols) + static_cast<size_t>(col);
+        size_t idx = (static_cast<size_t>(row) * static_cast<size_t>(mesh_cols)) + static_cast<size_t>(col);
         TT_FATAL(physical_chip_ids[idx] == static_cast<chip_id_t>(-1), "Duplicate mapping at index {}.", idx);
         physical_chip_ids[idx] = chip;
     }

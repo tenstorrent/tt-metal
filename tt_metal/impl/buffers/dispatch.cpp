@@ -259,10 +259,11 @@ public:
         Buffer* buffer,
         uint32_t total_pages_to_write,
         uint32_t cq_id,
-        tt::stl::Span<const uint32_t> expected_num_workers_completed) :
+        tt::stl::Span<const uint32_t> expected_num_workers_completed,
+        tt::stl::Span<const SubDeviceId> sub_device_ids) :
         buffer_page_mapping(buffer->get_buffer_page_mapping()),
         buffer(buffer),
-        are_pages_large(are_pages_larger_than_max_prefetch_cmd_size(*buffer)) {
+        are_pages_large(are_pages_larger_than_max_prefetch_cmd_size(*buffer, sub_device_ids.size())) {
         this->cq_id = cq_id;
         this->device = buffer->device();
         this->expected_num_workers_completed = expected_num_workers_completed;
@@ -379,9 +380,9 @@ int32_t calculate_num_pages_available_in_cq(
     return num_pages_available;
 }
 
-bool are_pages_larger_than_max_prefetch_cmd_size(const Buffer& buffer) {
+bool are_pages_larger_than_max_prefetch_cmd_size(const Buffer& buffer, uint32_t num_subdevices) {
     const CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    const uint32_t max_data_size = calculate_max_prefetch_data_size_bytes(dispatch_core_type);
+    const uint32_t max_data_size = calculate_max_prefetch_data_size_bytes(dispatch_core_type, num_subdevices);
     return buffer.aligned_page_size() > max_data_size;
 }
 
@@ -427,13 +428,14 @@ InterleavedBufferWriteDispatchParamsVariant initialize_interleaved_buf_dispatch_
     const Buffer& buffer,
     uint32_t cq_id,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
-    const BufferRegion& region) {
+    const BufferRegion& region,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
     InterleavedBufferWriteDispatchParamsVariant dispatch_params;
 
     uint32_t total_pages_to_write = region.size / buffer.page_size();
     const uint32_t dst_page_index = region.offset / buffer.page_size();
 
-    if (are_pages_larger_than_max_prefetch_cmd_size(buffer)) {
+    if (are_pages_larger_than_max_prefetch_cmd_size(buffer, sub_device_ids.size())) {
         const PartialPageSpec partial_page_spec = calculate_partial_page_spec(buffer);
         const uint32_t num_full_pages = total_pages_to_write;
         total_pages_to_write = num_full_pages * partial_page_spec.num_partial_pages_per_full_page;
@@ -484,9 +486,9 @@ void populate_interleaved_buffer_write_dispatch_cmds(
         for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_bytes;
              sysmem_address_offset += dispatch_params.page_size_to_write) {
             const uint64_t src_address_offset =
-                (uint64_t)num_full_pages_written * buffer.page_size() +
-                num_partial_pages_written_per_curr_full_pages * dispatch_params.partial_page_size() +
-                num_partial_pages_written_curr_txn * buffer.page_size();
+                ((uint64_t)num_full_pages_written * buffer.page_size()) +
+                (num_partial_pages_written_per_curr_full_pages * dispatch_params.partial_page_size()) +
+                (num_partial_pages_written_curr_txn * buffer.page_size());
             command_sequence.add_data(
                 (char*)src + src_address_offset, dispatch_params.data_size_to_copy, dispatch_params.page_size_to_write);
             num_partial_pages_written_curr_txn += 1;
@@ -510,6 +512,7 @@ void populate_interleaved_buffer_write_dispatch_cmds(
                 data_size_bytes);
         }
     }
+    command_sequence.align_write_offset();
 }
 
 void populate_sharded_buffer_write_dispatch_cmds(
@@ -531,16 +534,15 @@ void populate_sharded_buffer_write_dispatch_cmds(
     ptrdiff_t dst_offset = reinterpret_cast<ptrdiff_t>(dst - (uint8_t*)command_sequence.data());
     TT_ASSERT(dst_offset >= 0, "Offset into command sequence is negative");
     if (dispatch_params.write_large_pages()) {
+        const auto cur_host_page = *dispatch_params.core_page_mapping_it;
+        if (!cur_host_page) {
+            return;
+        }
         for (uint32_t i = 0; i < dispatch_params.pages_per_txn; ++i) {
-            const auto cur_host_page = *dispatch_params.core_page_mapping_it;
-            if (!cur_host_page) {
-                dst_offset += dispatch_params.page_size_to_write;
-                continue;
-            }
             const uint64_t src_offset =
                 (*cur_host_page * (uint64_t)buffer.page_size()) +
-                (dispatch_params.num_partial_pages_written_for_current_transaction_full_page() + i) *
-                    dispatch_params.partial_page_size();
+                ((dispatch_params.num_partial_pages_written_for_current_transaction_full_page() + i) *
+                 dispatch_params.partial_page_size());
             command_sequence.update_cmd_sequence(
                 dst_offset, (char*)(src) + src_offset, dispatch_params.data_size_to_copy);
             dst_offset += dispatch_params.page_size_to_write;
@@ -551,7 +553,7 @@ void populate_sharded_buffer_write_dispatch_cmds(
         while (true) {
             auto range = dispatch_params.core_page_mapping_it.next_range(end_device_page_offset);
             if (range.num_pages == 0) {
-                break;
+                return;
             }
             uint64_t src_offset = (uint64_t)(range.host_page_start) * dispatch_params.page_size_to_write;
             auto cmd_region_offset =
@@ -588,7 +590,12 @@ void issue_buffer_dispatch_command_sequence(
     uint32_t num_worker_counters = sub_device_ids.size();
     uint32_t data_size_bytes = dispatch_params.pages_per_txn * dispatch_params.page_size_to_write;
     tt::tt_metal::DeviceCommandCalculator calculator;
-    calculator.add_dispatch_write_linear<true, true>(data_size_bytes);
+    if constexpr (std::is_same_v<T, ShardedBufferWriteDispatchParams>) {
+        calculator.add_dispatch_write_linear<true, false>(data_size_bytes);
+    } else {
+        calculator.add_dispatch_write_paged<false>(dispatch_params.page_size_to_write, dispatch_params.pages_per_txn);
+    }
+    calculator.add_data<false>(data_size_bytes);
     if (dispatch_params.issue_wait) {
         for (int i = 0; i < num_worker_counters; ++i) {
             calculator.add_dispatch_wait();
@@ -633,11 +640,9 @@ void write_interleaved_buffer_to_device(
     uint32_t byte_offset_in_cq = MetalContext::instance().hal().get_alignment(
         HalMemType::HOST);  // data appended after CQ_PREFETCH_CMD_RELAY_INLINE
                             // + CQ_DISPATCH_CMD_WRITE_PAGED
+    dispatch_params.calculate_issue_wait();
+    update_offset_on_issue_wait_cmd(byte_offset_in_cq, dispatch_params.issue_wait, sub_device_ids.size());
     while (dispatch_params.total_pages_to_write > 0) {
-        dispatch_params.calculate_issue_wait();
-
-        update_offset_on_issue_wait_cmd(byte_offset_in_cq, dispatch_params.issue_wait, sub_device_ids.size());
-
         if (dispatch_params.is_page_offset_out_of_bounds()) {
             dispatch_params.update_params_to_be_within_bounds();
         }
@@ -678,15 +683,12 @@ void write_sharded_buffer_to_core(
     }
 
     dispatch_params.reset_params_for_core(core, core_page_mapping);
+    // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
+    uint32_t data_offset_bytes = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd));
+    dispatch_params.calculate_issue_wait();
+    update_offset_on_issue_wait_cmd(data_offset_bytes, dispatch_params.issue_wait, sub_device_ids.size());
 
     while (dispatch_params.core_num_pages_remaining_to_write != 0) {
-        // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
-        uint32_t data_offset_bytes = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd));
-
-        dispatch_params.calculate_issue_wait();
-
-        update_offset_on_issue_wait_cmd(data_offset_bytes, dispatch_params.issue_wait, sub_device_ids.size());
-
         const int32_t num_pages_available_in_cq =
             calculate_num_pages_available_in_cq(dispatch_params, buf_dispatch_constants, data_offset_bytes);
         if (num_pages_available_in_cq <= 0) {
@@ -725,7 +727,7 @@ void write_to_device_buffer(
 
     if (is_sharded(buffer.buffer_layout())) {
         ShardedBufferWriteDispatchParams dispatch_params(
-            &buffer, buffer.size() / buffer.page_size(), cq_id, expected_num_workers_completed);
+            &buffer, buffer.size() / buffer.page_size(), cq_id, expected_num_workers_completed, sub_device_ids);
         const std::vector<CoreCoord>& cores = dispatch_params.buffer_page_mapping->all_cores;
         // Since we read core by core we are reading the device pages sequentially
         for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
@@ -747,7 +749,8 @@ void write_to_device_buffer(
         auto root_buffer = buffer.root_buffer();
         auto region = buffer.root_buffer_region();
         InterleavedBufferWriteDispatchParamsVariant dispatch_params_variant =
-            initialize_interleaved_buf_dispatch_params(*root_buffer, cq_id, expected_num_workers_completed, region);
+            initialize_interleaved_buf_dispatch_params(
+                *root_buffer, cq_id, expected_num_workers_completed, region, sub_device_ids);
 
         InterleavedBufferWriteDispatchParams* dispatch_params = std::visit(
             ttsl::overloaded{

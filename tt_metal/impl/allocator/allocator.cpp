@@ -13,6 +13,7 @@
 #include <tt_stl/assert.hpp>
 #include "buffer_types.hpp"
 #include "impl/allocator/bank_manager.hpp"
+#include "impl/allocator/allocator_types.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
@@ -20,29 +21,29 @@ namespace tt {
 
 namespace tt_metal {
 
-Allocator::Allocator(const AllocatorConfig& alloc_config) : config_(alloc_config) {}
+Allocator::Allocator(const AllocatorConfig& alloc_config) : config_(std::make_unique<AllocatorConfig>(alloc_config)) {}
 
 void Allocator::validate_bank_assignments() const {
     TT_ASSERT(not bank_id_to_dram_channel_.empty() and not dram_channel_to_bank_ids_.empty());
-    TT_ASSERT(dram_channel_to_bank_ids_.size() == config_.num_dram_channels);
+    TT_ASSERT(dram_channel_to_bank_ids_.size() == config_->num_dram_channels);
     TT_ASSERT(not bank_id_to_logical_core_.empty() and not logical_core_to_bank_ids_.empty());
 }
 
 void Allocator::init_one_bank_per_channel() {
     // DRAM bank is between unreserved start and trace_region start: UNRESERVED | DRAM BANK | TRACE REGION
-    DeviceAddr dram_bank_size = config_.dram_bank_size - config_.dram_unreserved_base - config_.trace_region_size;
-    std::vector<int64_t> bank_offsets(config_.num_dram_channels);
-    for (uint32_t channel_id = 0; channel_id < config_.num_dram_channels; channel_id++) {
-        bank_offsets.at(channel_id) = static_cast<int32_t>(config_.dram_bank_offsets.at(channel_id));
+    DeviceAddr dram_bank_size = config_->dram_bank_size - config_->dram_unreserved_base - config_->trace_region_size;
+    std::vector<int64_t> bank_offsets(config_->num_dram_channels);
+    for (uint32_t channel_id = 0; channel_id < config_->num_dram_channels; channel_id++) {
+        bank_offsets.at(channel_id) = static_cast<int32_t>(config_->dram_bank_offsets.at(channel_id));
     }
     dram_manager_ = std::make_unique<BankManager>(
         BufferType::DRAM,
         bank_offsets,
         dram_bank_size,
-        config_.dram_alignment,
-        config_.dram_unreserved_base,
-        config_.disable_interleaved);
-    for (uint32_t bank_id = 0; bank_id < config_.num_dram_channels; bank_id++) {
+        config_->dram_alignment,
+        config_->dram_unreserved_base,
+        config_->disable_interleaved);
+    for (uint32_t bank_id = 0; bank_id < config_->num_dram_channels; bank_id++) {
         CoreCoord logical_core = CoreCoord{bank_id, 0};
         bank_id_to_dram_channel_.insert({bank_id, bank_id});
         dram_channel_to_bank_ids_.insert({bank_id, {bank_id}});
@@ -53,11 +54,11 @@ void Allocator::init_one_bank_per_channel() {
     trace_buffer_manager_ = std::make_unique<BankManager>(
         BufferType::TRACE,
         bank_offsets,
-        config_.trace_region_size,
-        config_.dram_alignment,
-        dram_bank_size + config_.dram_unreserved_base,
-        config_.disable_interleaved);
-    for (uint32_t bank_id = 0; bank_id < config_.num_dram_channels; bank_id++) {
+        config_->trace_region_size,
+        config_->dram_alignment,
+        dram_bank_size + config_->dram_unreserved_base,
+        config_->disable_interleaved);
+    for (uint32_t bank_id = 0; bank_id < config_->num_dram_channels; bank_id++) {
         CoreCoord logical_core = CoreCoord{bank_id, 0};
         bank_id_to_dram_channel_.insert({bank_id, bank_id});
         dram_channel_to_bank_ids_.insert({bank_id, {bank_id}});
@@ -66,21 +67,21 @@ void Allocator::init_one_bank_per_channel() {
 }
 
 void Allocator::init_one_bank_per_l1() {
-    TT_ASSERT(config_.l1_small_size == 0);
-    uint32_t num_l1_banks = config_.worker_grid.num_cores();
+    TT_ASSERT(config_->l1_small_size == 0);
+    uint32_t num_l1_banks = config_->worker_grid.num_cores();
     // Space up to L1 unreserved base is reserved for risc binaries, kernel args, debug and perf monitoring tools
-    DeviceAddr l1_bank_size = config_.worker_l1_size - config_.l1_unreserved_base;
+    DeviceAddr l1_bank_size = config_->worker_l1_size - config_->l1_unreserved_base;
     std::vector<int64_t> bank_offsets(num_l1_banks, 0);
     l1_manager_ = std::make_unique<BankManager>(
         BufferType::L1,
         bank_offsets,
         l1_bank_size,
-        config_.l1_alignment,
-        config_.l1_unreserved_base,
-        config_.disable_interleaved);
+        config_->l1_alignment,
+        config_->l1_unreserved_base,
+        config_->disable_interleaved);
 
     uint32_t bank_id = 0;
-    const auto& cores = corerange_to_cores(config_.worker_grid, std::nullopt, true);
+    const auto& cores = corerange_to_cores(config_->worker_grid, std::nullopt, true);
     for (const auto& logical_core : cores) {
         bank_id_to_logical_core_.insert({bank_id, logical_core});
         logical_core_to_bank_ids_[BufferType::L1].insert({logical_core, {bank_id}});
@@ -112,24 +113,24 @@ DeviceAddr Allocator::allocate_buffer(Buffer* buffer) {
     auto bottom_up = buffer->bottom_up();
     auto num_cores = buffer->num_cores();
     this->verify_safe_allocation();
-    if (config_.disable_interleaved) {
+    if (config_->disable_interleaved) {
         TT_FATAL(num_cores.has_value(), "Interleaved allocation is disabled, see validate_num_banks");
     }
     switch (buffer_type) {
         case BufferType::DRAM:
-            address = dram_manager_->allocate_buffer(size, page_size, bottom_up, config_.compute_grid, num_cores);
+            address = dram_manager_->allocate_buffer(size, page_size, bottom_up, config_->compute_grid, num_cores);
             break;
         case BufferType::L1:
-            address = l1_manager_->allocate_buffer(size, page_size, bottom_up, config_.compute_grid, num_cores);
+            address = l1_manager_->allocate_buffer(size, page_size, bottom_up, config_->compute_grid, num_cores);
             break;
         case BufferType::L1_SMALL: {
             TT_FATAL(num_cores.has_value(), "L1_SMALL only supports sharded allocations, see validate_num_banks");
-            address = l1_small_manager_->allocate_buffer(size, page_size, bottom_up, config_.compute_grid, num_cores);
+            address = l1_small_manager_->allocate_buffer(size, page_size, bottom_up, config_->compute_grid, num_cores);
             break;
         }
         case BufferType::TRACE:
             address =
-                trace_buffer_manager_->allocate_buffer(size, page_size, bottom_up, config_.compute_grid, num_cores);
+                trace_buffer_manager_->allocate_buffer(size, page_size, bottom_up, config_->compute_grid, num_cores);
             break;
         default: {
             TT_THROW("Unsupported buffer type!");
@@ -244,24 +245,26 @@ const std::vector<uint32_t>& Allocator::get_bank_ids_from_logical_core(
     return logical_core_to_bank_ids_.at(buffer_type).at(logical_core);
 }
 
-const AllocatorConfig& Allocator::get_config() const { return config_; }
+const AllocatorConfig& Allocator::get_config() const { return *config_; }
 
 uint32_t Allocator::get_alignment(BufferType buffer_type) const {
     switch (buffer_type) {
         case BufferType::DRAM:
-        case BufferType::TRACE: return config_.dram_alignment;
+        case BufferType::TRACE: return config_->dram_alignment;
         case BufferType::L1:
-        case BufferType::L1_SMALL: return config_.l1_alignment;
+        case BufferType::L1_SMALL: return config_->l1_alignment;
         default: {
             TT_THROW("Unsupported buffer type!");
         }
     }
 }
 
+size_t Allocator::get_worker_l1_size() const { return config_->worker_l1_size; }
+
 DeviceAddr Allocator::get_base_allocator_addr(const HalMemType& mem_type) const {
     switch (mem_type) {
-        case HalMemType::DRAM: return config_.dram_unreserved_base;
-        case HalMemType::L1: return config_.l1_unreserved_base;
+        case HalMemType::DRAM: return config_->dram_unreserved_base;
+        case HalMemType::L1: return config_->l1_unreserved_base;
         default: {
             TT_THROW("Allocator does not support allocating in {}", enchantum::to_string(mem_type));
         }
@@ -297,7 +300,7 @@ MemoryBlockTable Allocator::get_memory_block_table(const BufferType& buffer_type
     }
 }
 
-void Allocator::dump_memory_blocks(const BufferType& buffer_type, std::ofstream& out) const {
+void Allocator::dump_memory_blocks(const BufferType& buffer_type, std::ostream& out) const {
     std::lock_guard<std::mutex> lock(mutex_);
     switch (buffer_type) {
         case BufferType::DRAM: dram_manager_->dump_blocks(out); break;

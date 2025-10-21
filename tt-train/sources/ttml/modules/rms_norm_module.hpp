@@ -6,13 +6,13 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
-#include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
+#include "modules/module_base.hpp"
 #include "ops/rmsnorm_op.hpp"
 
 namespace ttml::modules {
 
-class RMSNormLayer : public autograd::ModuleBase {
+class RMSNormLayer : public ModuleBase {
 private:
     float m_epsilon = 1e-5F;
     bool m_use_composite = false;

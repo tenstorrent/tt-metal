@@ -17,7 +17,6 @@
 #include "buffer.hpp"
 #include "cq_shared_state.hpp"
 #include "command_queue.hpp"
-#include "command_queue_interface.hpp"
 #include "core_coord.hpp"
 #include "dispatch_settings.hpp"
 #include "event.hpp"

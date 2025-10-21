@@ -129,6 +129,8 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      topology: config-t3000
+      test-script: ./tests/scripts/t3000/run_t3000_profiler_tests.sh
     if: ${{ inputs.t3000-profiler }}
   t3000-perplexity-tests:
     needs: build-artifact

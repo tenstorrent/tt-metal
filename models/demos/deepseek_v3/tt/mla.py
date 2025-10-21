@@ -364,6 +364,7 @@ class MLA(AbstractModule):
             "wkv_a_ag_prefill": wkv_a_ag_config,
             "wkv_a_r_prefill": wkv_a_r_config,
             "wo_ag_prefill": wo_ag_config,
+            "mesh_device": mesh_device,
         }
 
     @classmethod
@@ -676,6 +677,7 @@ class MLA(AbstractModule):
             "flash_mla_ag_decode": flash_mla_ag_config,
             "flash_mla_rs_decode": flash_mla_rs_config,
             "wo_ag_decode": wo_ag_config,
+            "mesh_device": mesh_device,
         }
 
     @classmethod
@@ -713,9 +715,10 @@ class MLA(AbstractModule):
     @classmethod
     def create_page_table(
         cls,
-        page_table: torch.Tensor,
         paged_config: PagedAttentionConfig,
         mesh_device: ttnn.MeshDevice,
+        page_table: torch.Tensor | None = None,
+        batch_size: int = MAX_BATCH_SIZE,
     ) -> ttnn.Tensor:
         """Helper function to allocate the page table for MLA on device.
 
@@ -734,6 +737,15 @@ class MLA(AbstractModule):
             Device-allocated version of the page table representing the page table
         """  # TODO: update docs
         assert cls.is_device_supported(mesh_device), f"Mesh device shape {mesh_device.shape} must be supported by MLA."
+
+        if page_table is None:
+            max_num_blocks = paged_config.max_num_blocks
+            _, dp_factor = mesh_device.shape
+            batch_per_shard = even_int_div(batch_size, dp_factor)
+
+            page_table = torch.randperm(max_num_blocks, dtype=torch.int32)  # Randperm not necessary, but more rigorous
+            page_table = page_table.reshape(batch_per_shard, even_int_div(max_num_blocks, batch_per_shard))
+
         assert page_table.numel() == paged_config.max_num_blocks
 
         return ttnn.from_torch(
@@ -856,7 +868,11 @@ class MLA(AbstractModule):
         tt_q = RMSNorm.forward_decode(tt_q, cfg["q_norm"])
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
 
+        # Bug: https://github.com/tenstorrent/tt-metal/issues/29932
+        tt_q = ttnn.to_layout(tt_q, ttnn.ROW_MAJOR_LAYOUT)
         tt_q = ttnn.reshape(tt_q, (bsz, 1, num_heads_local, qk_head_dim))
+        tt_q = ttnn.to_layout(tt_q, ttnn.TILE_LAYOUT)
+
         tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [bsz, 1, num_heads_local, qk_nope_head_dim])
         tt_q_rope = ttnn.slice(tt_q, [0, 0, 0, qk_nope_head_dim], [bsz, 1, num_heads_local, qk_head_dim])
 
@@ -981,7 +997,11 @@ class MLA(AbstractModule):
         v_out = ttnn.experimental.all_gather_async(v_out, **cfg["wo_ag_decode"])  # [1, num_heads, bsz, v_head_dim]
         v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, bsz, num_heads, v_head_dim]
 
+        # Bug: https://github.com/tenstorrent/tt-metal/issues/29932
+        v_out = ttnn.to_layout(v_out, ttnn.ROW_MAJOR_LAYOUT)
         v_out = ttnn.reshape(v_out, (1, 1, bsz, num_heads * v_head_dim))
+        v_out = ttnn.to_layout(v_out, ttnn.TILE_LAYOUT)
+
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
 
         return out
@@ -1029,6 +1049,9 @@ class MLA(AbstractModule):
 
         tt_q = ttnn.experimental.reduce_scatter_minimal_async(tt_q, **cfg["wq_a_rs_prefill"])
         tt_q = ttnn.experimental.all_gather_async(tt_q, **cfg["wq_a_ag_prefill"])
+
+        # Bug: https://github.com/tenstorrent/tt-metal/issues/29935
+        ttnn.synchronize_device(cfg["mesh_device"])
 
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])

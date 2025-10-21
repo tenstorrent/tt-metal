@@ -76,5 +76,4 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: generated/test_reports/
           prefix: "test_reports_"

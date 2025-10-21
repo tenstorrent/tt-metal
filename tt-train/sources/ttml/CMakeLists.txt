@@ -8,8 +8,6 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/graph.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/graph.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/graph_utils.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/autograd/module_base.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/autograd/module_base.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/tensor.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/clip_grad_norm.cpp
@@ -96,6 +94,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/llama_block.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/lora_linear_module.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/lora_linear_module.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/module_base.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/module_base.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_head_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_head_attention.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_layer_perceptron.cpp
@@ -142,6 +142,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_base.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_base.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/remote_optimizer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/remote_optimizer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.cpp
@@ -255,9 +257,9 @@ set(METAL_OPS_FILES
 
 list(APPEND SOURCES ${METAL_OPS_FILES})
 
-# Check if Metalium::Metal target exists
+# Check if TT::Metalium target exists
 # If it does not exist, assume that we are building with tt-train as top level project
-if(NOT TARGET Metalium::Metal)
+if(NOT TARGET TT::Metalium)
     if("$ENV{TT_METAL_HOME}" STREQUAL "")
         message(FATAL_ERROR "TT_METAL_HOME is not set")
     endif()
@@ -268,9 +270,9 @@ if(NOT TARGET Metalium::Metal)
         "$ENV{TT_METAL_HOME}/tt_metal"
         "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd"
         "$ENV{TT_METAL_HOME}/tt_metal/third_party/tracy/public"
-        "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/wormhole"
-        "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/wormhole/wormhole_b0_defines"
-        "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/"
+        "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/wormhole"
+        "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/wormhole/wormhole_b0_defines"
+        "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/blackhole"
         "$ENV{TT_METAL_HOME}/tt_metal/api/"
         "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd/device/api"
         "$ENV{TT_METAL_HOME}/tt_metal/hostdevcommon/api"
@@ -291,7 +293,6 @@ if(NOT TARGET Metalium::Metal)
 
     # Try to find the library
     find_library(TT_METAL_LIBRARY NAMES "tt_metal" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
-    find_library(TTNN_LIBRARY NAMES "_ttnn.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
     find_library(TTNNCPP_LIBRARY NAMES "_ttnncpp.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
     find_library(DEVICE_LIBRARY NAMES "device" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
     find_library(TT_STL_LIBRARY NAMES "libtt_stl.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
@@ -312,9 +313,9 @@ if(NOT TARGET Metalium::Metal)
     endif()
 
     if(TT_METAL_LIBRARY)
-        add_library(Metalium::Metal SHARED IMPORTED)
+        add_library(TT::Metalium SHARED IMPORTED)
         set_target_properties(
-            Metalium::Metal
+            TT::Metalium
             PROPERTIES
                 IMPORTED_LOCATION
                     "${TT_METAL_LIBRARY}"
@@ -322,7 +323,7 @@ if(NOT TARGET Metalium::Metal)
                     "${METALIUM_INCLUDE_DIRS}"
         )
         target_link_libraries(
-            Metalium::Metal
+            TT::Metalium
             INTERFACE
                 ${DEVICE_LIBRARY}
                 Metalium::TT_STL
@@ -332,25 +333,10 @@ if(NOT TARGET Metalium::Metal)
     else()
         message(FATAL_ERROR "libtt_metal.so not found in ${METALIUM_LIB_PATH}")
     endif()
-    if(TTNN_LIBRARY)
-        add_library(Metalium::TTNN SHARED IMPORTED)
-        set_target_properties(
-            Metalium::TTNN
-            PROPERTIES
-                IMPORTED_LOCATION
-                    "${TTNN_LIBRARY}"
-                INTERFACE_INCLUDE_DIRECTORIES
-                    "${METALIUM_INCLUDE_DIRS}"
-        )
-        target_link_libraries(Metalium::TTNN INTERFACE Metalium::TT_STL)
-        message(STATUS "Successfully found _ttnn.so at ${TTNN_LIBRARY}")
-    else()
-        message(FATAL_ERROR "_ttnn.so not found in ${METALIUM_LIB_PATH}")
-    endif()
     if(TTNNCPP_LIBRARY)
-        add_library(Metalium::TTNNCPP SHARED IMPORTED)
+        add_library(TTNN::TTNN SHARED IMPORTED)
         set_target_properties(
-            Metalium::TTNNCPP
+            TTNN::TTNN
             PROPERTIES
                 IMPORTED_LOCATION
                     "${TTNNCPP_LIBRARY}"
@@ -369,7 +355,14 @@ add_library(ttml STATIC ${SOURCES})
 
 target_include_directories(ttml PUBLIC ${PROJECT_SOURCE_DIR})
 
-find_package(Python3 REQUIRED Development)
+find_package(
+    Python3
+    COMPONENTS
+        Development
+        Development.Module
+        Interpreter
+    REQUIRED
+)
 
 foreach(lib ${BoostPackages})
     target_include_directories(ttml SYSTEM PUBLIC ${Boost${lib}_SOURCE_DIR}/include)
@@ -460,3 +453,56 @@ if(NOT EXISTS "${TINYLLAMA_TOKENIZER_FILE}")
 else()
     message(STATUS "Tokenizer text file already exists at ${TINYLLAMA_TOKENIZER_FILE}, skipping download.")
 endif()
+
+set(TTML_SRC_NANOBIND
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/__init__.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_autograd.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_autograd.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_bfloat16.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_export_enum.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_fwd.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_models.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_models.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_modules.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_modules.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_ops.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_core.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_optimizers.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_optimizers.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.hpp
+)
+nanobind_add_module(
+    _ttml
+    STABLE_ABI NB_STATIC
+    ${TTML_SRC_NANOBIND}
+)
+target_link_libraries(
+    _ttml
+    PRIVATE
+        fmt::fmt-header-only
+        TT::Metalium
+        TTNN::TTNN
+        Python3::Python
+        ttml
+)
+target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
+install(
+    TARGETS
+        _ttml
+    ARCHIVE
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT tar
+)
+install(
+    TARGETS
+        _ttml
+        DESTINATION
+        ${PROJECT_SOURCE_DIR}/tt-train/sources/ttml
+        COMPONENT
+        tt_pybinds
+)

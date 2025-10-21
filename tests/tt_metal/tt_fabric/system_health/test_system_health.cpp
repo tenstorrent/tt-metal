@@ -220,7 +220,12 @@ TEST(Cluster, ReportIntermeshLinks) {
     for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
         if (all_intermesh_links.find(chip_id) != all_intermesh_links.end()) {
             auto links = all_intermesh_links.at(chip_id);
-            log_info(tt::LogTest, "Chip {}: {} inter-mesh ethernet links", chip_id, links.size());
+            log_info(
+                tt::LogTest,
+                "Chip {} {} : {} inter-mesh ethernet links",
+                chip_id,
+                get_physical_loc_str(chip_id, cluster.get_cluster_type()),
+                links.size());
             for (const auto& [channel, remote_connection] : links) {
                 tt::umd::CoreCoord eth_core =
                     cluster.get_soc_desc(chip_id).get_eth_core_for_channel(channel, CoordSystem::LOGICAL);

@@ -221,7 +221,7 @@ int main(int argc, char** argv) {
                         // add something not too large but different between tiles
                         auto val = std::bit_cast<uint16_t>(bfloat16(bcast_1value + (j % 7)));
                         ref_bcast_values[j] = val;
-                        ref_bcast_values_with_tile_padding[j % W + (j / W) * TILE_HEIGHT * W] = val;
+                        ref_bcast_values_with_tile_padding[(j % W) + ((j / W) * TILE_HEIGHT * W)] = val;
                     }
                     tiled_bcast_values = convert_layout<uint16_t>(
                         ref_bcast_values_with_tile_padding,

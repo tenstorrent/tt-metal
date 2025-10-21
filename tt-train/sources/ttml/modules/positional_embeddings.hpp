@@ -6,9 +6,9 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
-#include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
 #include "modules/dropout_module.hpp"
+#include "modules/module_base.hpp"
 
 namespace ttml::modules {
 
@@ -19,7 +19,7 @@ struct PositionalEmbeddingConfig {
     bool use_dropout_seed_per_device{true};
 };
 
-class PositionalEmbedding : public autograd::ModuleBase {
+class PositionalEmbedding : public ModuleBase {
 private:
     uint32_t m_sequence_length{};
     std::shared_ptr<DropoutLayer> m_dropout;
@@ -30,7 +30,7 @@ public:
     [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& input) override;
 };
 
-class TrainablePositionalEmbedding : public autograd::ModuleBase {
+class TrainablePositionalEmbedding : public ModuleBase {
     uint32_t m_sequence_length{};
     autograd::TensorPtr m_weight;
     std::shared_ptr<DropoutLayer> m_dropout;

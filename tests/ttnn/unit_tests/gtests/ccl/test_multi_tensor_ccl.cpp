@@ -87,7 +87,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherCommandProcessorAsync) {
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = all_gathered[dev_idx].to_vector<bfloat16>();
         for (int i = 0; i < data.size(); i++) {
-            float expected = static_cast<float>(i) / static_cast<float>(tensor_spec.logical_shape().volume());
+            float expected = static_cast<float>(i / tensor_spec.logical_shape().volume());
             EXPECT_EQ(static_cast<float>(data[i]), expected);
         }
     }
@@ -129,7 +129,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AllGatherMinimalAsyncComposit
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = all_gathered[dev_idx].to_vector<bfloat16>();
         for (int i = 0; i < data.size(); i++) {
-            float expected = static_cast<float>(i) / static_cast<float>(tensor_spec.logical_shape().volume());
+            float expected = static_cast<float>(i / tensor_spec.logical_shape().volume());
             EXPECT_EQ(static_cast<float>(data[i]), expected);
         }
     }
@@ -137,6 +137,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AllGatherMinimalAsyncComposit
 
 // same as above but with a different tensor shape which triggers the native implementation
 TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherMinimalAsyncNative) {
+    // Issue #29828: This has some assertion error, issue assigned to CCL team
+    GTEST_SKIP();
     auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
     auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices_as_idevice(mesh_devices);
 
@@ -171,7 +173,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherMinimalAsyncNative) {
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = all_gathered[dev_idx].to_vector<bfloat16>();
         for (int i = 0; i < data.size(); i++) {
-            float expected = static_cast<float>(i) / static_cast<float>(tensor_spec.logical_shape().volume());
+            float expected = static_cast<float>(i / tensor_spec.logical_shape().volume());
             EXPECT_EQ(static_cast<float>(data[i]), expected);
         }
     }

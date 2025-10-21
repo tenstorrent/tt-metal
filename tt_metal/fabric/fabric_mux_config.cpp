@@ -244,7 +244,7 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
 
     auto regions_to_clear = get_memory_regions_to_clear();
     const auto num_regions_to_clear = regions_to_clear.size();
-    args.reserve(num_regions_to_clear * 2 + 1);
+    args.reserve((num_regions_to_clear * 2) + 1);
     args.push_back(static_cast<uint32_t>(num_regions_to_clear));
     for (const auto& [address, size] : regions_to_clear) {
         args.push_back(static_cast<uint32_t>(address));

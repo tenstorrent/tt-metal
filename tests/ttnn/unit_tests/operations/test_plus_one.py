@@ -52,3 +52,31 @@ def test_plus_one_subdevice_nd(device, input_shape):
     )
     output_tensor = ttnn.to_torch(input_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize("w", [1, 4, 8, 32])
+@pytest.mark.parametrize("val", [-1, -100])
+def test_plus_one_with_neg_entries(device, w, val):
+    torch_input_tensor = torch.randint(32000, (w,))
+    mask = torch.rand(w) < 0.3
+    torch_input_tensor[mask] = val
+    torch_output_tensor = torch.where(torch_input_tensor < 0, torch_input_tensor, torch_input_tensor + 1)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.int32, device=device)
+    ttnn.plus_one(input_tensor, skip_negative_entries=True)
+    output_tensor = ttnn.to_torch(input_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize("input_shape", [(16, 32), (32, 32), (4, 16, 32), (4, 8, 16, 32)])
+@pytest.mark.parametrize("val", [-1, -100])
+def test_plus_one_with_neg_entries_nd(device, input_shape, val):
+    torch_input_tensor = torch.randint(32000, input_shape)
+    mask = torch.rand(input_shape) < 0.3
+    torch_input_tensor[mask] = val
+    torch_output_tensor = torch.where(torch_input_tensor < 0, torch_input_tensor, torch_input_tensor + 1)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.int32, device=device)
+    ttnn.plus_one(input_tensor, skip_negative_entries=True)
+    output_tensor = ttnn.to_torch(input_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)

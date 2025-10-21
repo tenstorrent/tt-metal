@@ -6,7 +6,6 @@
 
 #include <CLI/CLI.hpp>
 
-#include "autograd/module_base.hpp"
 #include "common.hpp"
 #include "core/distributed/distributed.hpp"
 #include "core/distributed/socket_manager.hpp"
@@ -115,7 +114,7 @@ int main(int argc, char **argv) {
         config.transformer_config);
 
     auto model = std::visit(
-        [&device_config](auto &&arg) -> std::shared_ptr<ttml::autograd::ModuleBase> {
+        [&device_config](auto &&arg) -> std::shared_ptr<ttml::modules::ModuleBase> {
             if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
                 if (device_config.enable_tp) {
                     return ttml::models::distributed::llama::create(arg);

@@ -17,7 +17,7 @@ from models.perf.perf_utils import prep_perf_report
 
 
 def get_expected_times(name):
-    base = {"yolov8s_world": (183.7, 0.038)}
+    base = {"yolov8s_world": (183.7, 0.0110)}
     return base[name]
 
 

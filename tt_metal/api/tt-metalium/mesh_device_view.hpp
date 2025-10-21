@@ -42,9 +42,6 @@ class MeshDevice;
 
 class MeshDeviceView {
 public:
-    using DeviceView = std::vector<IDevice*>;
-    using DeviceViews = std::vector<std::vector<IDevice*>>;
-
     // Constructors for MeshDeviceView for fully and partially local meshes.
     explicit MeshDeviceView(
         const MeshShape& shape,
@@ -56,9 +53,10 @@ public:
         const std::vector<tt::tt_fabric::FabricNodeId>& fabric_node_ids);
 
     // Get devices spanning the region defined by `range` in row-major order with start/end coordinates inclusive
-    [[nodiscard]] DeviceView get_devices(const MeshCoordinateRange& range) const;
-    [[nodiscard]] DeviceView get_devices(const MeshShape& submesh_shape) const;
-    [[nodiscard]] DeviceView get_devices() const;
+    [[nodiscard]] std::vector<IDevice*> get_devices(const MeshCoordinateRange& range) const;
+    [[nodiscard]] std::vector<IDevice*> get_devices() const;
+    [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids(const MeshCoordinateRange& range) const;
+    [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids() const;
     [[nodiscard]] size_t num_devices() const;
 
     [[nodiscard]] bool empty() const noexcept;
@@ -85,10 +83,10 @@ public:
     [[nodiscard]] bool is_mesh_2d() const;
     [[nodiscard]] size_t num_rows() const;
     [[nodiscard]] size_t num_cols() const;
-    [[nodiscard]] DeviceView get_devices_on_row(size_t row) const;
-    [[nodiscard]] DeviceView get_devices_on_column(size_t col) const;
-    [[nodiscard]] DeviceViews get_row_views() const;
-    [[nodiscard]] DeviceViews get_column_views() const;
+    [[nodiscard]] std::vector<IDevice*> get_devices_on_row(size_t row) const;
+    [[nodiscard]] std::vector<IDevice*> get_devices_on_column(size_t col) const;
+    [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids_on_row(size_t row) const;
+    [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids_on_column(size_t col) const;
 
     // These utility methods linearize the set of devices in a mesh into a line or ring.
     // Linearizing a mesh into a line asserts the condition that device[i-1] is connected to device[i].
@@ -108,6 +106,8 @@ public:
     [[nodiscard]] std::vector<MeshCoordinate> get_ring_coordinates() const;
     [[nodiscard]] std::vector<IDevice*> get_ring_devices() const;
     [[nodiscard]] std::vector<IDevice*> get_line_devices() const;
+    [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_ring_fabric_node_ids() const;
+    [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_line_fabric_node_ids() const;
 
     // Returns true if the view is fully local, i.e. all devices in the view are local.
     // Throws if the coordinate is out of bounds of this view.

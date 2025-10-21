@@ -174,10 +174,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_vi
         };
 
         uint32_t q_out_h_dim = num_blocks_written % q_out_h_tiles;
-        uint32_t q_out_tensor_tile_id = num_blocks_written / q_out_h_tiles * q_out_CHtWt + q_out_h_dim * q_out_w_tiles;
-        uint32_t v_out_tensor_tile_id = num_blocks_written / q_out_h_tiles * kv_out_CHtWt + q_out_h_dim * q_out_w_tiles;
-        uint32_t k_out_tensor_tile_id =
-            transpose_k_heads ? num_blocks_written / q_out_h_tiles * kv_out_CHtWt + q_out_h_dim : v_out_tensor_tile_id;
+        uint32_t q_out_tensor_tile_id =
+            (num_blocks_written / q_out_h_tiles * q_out_CHtWt) + (q_out_h_dim * q_out_w_tiles);
+        uint32_t v_out_tensor_tile_id =
+            (num_blocks_written / q_out_h_tiles * kv_out_CHtWt) + (q_out_h_dim * q_out_w_tiles);
+        uint32_t k_out_tensor_tile_id = transpose_k_heads
+                                            ? (num_blocks_written / q_out_h_tiles * kv_out_CHtWt) + q_out_h_dim
+                                            : v_out_tensor_tile_id;
 
         std::vector<uint32_t> writer_runtime_args = {
             (std::uint32_t)q_buffer->address(),  // q_tensor_addr

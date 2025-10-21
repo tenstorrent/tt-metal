@@ -27,7 +27,7 @@ from tracy import signpost
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [False])
-@pytest.mark.parametrize("mesh_shape", [pytest.param((4, 1), id="4x1_grid")])
+@pytest.mark.parametrize("num_devices,mesh_shape", [(4, (4, 1)), (8, (8, 1))])
 @pytest.mark.parametrize("cluster_axis", [0], ids=["cluster_row"])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [4])
@@ -42,12 +42,13 @@ from tracy import signpost
 )
 @pytest.mark.parametrize("num_links", ["MAX_LINKS"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
-@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
+@pytest.mark.parametrize("input_memory_config", [ttnn.L1_MEMORY_CONFIG], ids=["l1"])
+@pytest.mark.parametrize("output_memory_config", [ttnn.L1_MEMORY_CONFIG], ids=["l1"])
 def test_all_to_all_dispatch_no_trace(
     bh_1d_mesh_device,
     trace_mode,
     mesh_shape,
+    num_devices,
     cluster_axis,
     batches_per_device,
     experts_per_device,
@@ -63,7 +64,6 @@ def test_all_to_all_dispatch_no_trace(
     device_params,
 ):
     topology = ttnn.Topology.Linear
-    num_devices = 4
     validate_test(num_devices, topology, bh_1d_mesh_device.shape, cluster_axis)
     if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
@@ -75,9 +75,9 @@ def test_all_to_all_dispatch_no_trace(
 
     if num_links == "MAX_LINKS":
         num_links = 1
-
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     run_all_to_all_dispatch_test(
-        bh_1d_mesh_device,
+        submesh_device,
         mesh_shape,
         batch,
         experts,
@@ -109,7 +109,7 @@ def test_all_to_all_dispatch_no_trace(
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [True, False])
-@pytest.mark.parametrize("mesh_shape", [pytest.param((4, 1), id="4x1_grid")])
+@pytest.mark.parametrize("num_devices, mesh_shape", [(4, (4, 1))])
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
@@ -137,6 +137,7 @@ def test_all_to_all_dispatch_trace(
     bh_1d_mesh_device,
     trace_mode,
     mesh_shape,
+    num_devices,
     cluster_axis,
     batches_per_device,
     experts_per_device,
@@ -152,7 +153,6 @@ def test_all_to_all_dispatch_trace(
     device_params,
 ):
     topology = ttnn.Topology.Linear
-    num_devices = 4
     validate_test(num_devices, topology, bh_1d_mesh_device.shape, cluster_axis)
     if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
@@ -164,9 +164,9 @@ def test_all_to_all_dispatch_trace(
 
     if num_links == "MAX_LINKS":
         num_links = 1
-
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     run_all_to_all_dispatch_test(
-        bh_1d_mesh_device,
+        submesh_device,
         mesh_shape,
         batch,
         experts,

@@ -5,6 +5,7 @@
 #include "convert_to_hwc_program_factory.hpp"
 
 #include "tt-metalium/tt_backend_api_types.hpp"
+#include <tt-metalium/hal.hpp>
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
@@ -13,22 +14,42 @@ namespace ttnn::operations::experimental::cnn::detail {
 
 using namespace tt::constants;
 
+uint32_t compute_alignment_requirement_in_elements(const Tensor& input_tensor) {
+    const uint32_t element_size_bytes = input_tensor.element_size();
+    const uint32_t l1_alignment_bytes = tt::tt_metal::hal::get_l1_alignment();
+    return l1_alignment_bytes / element_size_bytes;
+}
+
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Tensor& a, Tensor& output) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // If we are pulling from DRAM we infer the shard shape by using the output shard spec
     const bool is_input_in_dram = a.buffer()->core_type() == CoreType::DRAM;
-    const uint32_t input_shard_height = is_input_in_dram ? output.shard_spec()->shape[1] : a.shard_spec()->shape[0];
-    const uint32_t input_shard_width = is_input_in_dram ? output.shard_spec()->shape[0] : a.shard_spec()->shape[1];
-    const CoreRangeSet input_core_grid = is_input_in_dram ? output.shard_spec()->grid : a.shard_spec()->grid;
-    const std::vector<CoreCoord> input_cores = corerange_to_cores(
-        input_core_grid, std::nullopt, a.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
 
-    TT_FATAL(input_shard_height <= TILE_HEIGHT, "Shard height must be 32 or smaller");
-    TT_FATAL(input_shard_height % 8 == 0, "Shard height must be mutliple of 8");
-    TT_FATAL(input_shard_width % TILE_WIDTH == 0, "Shard width must be multiple of tile width");
+    const uint32_t output_shard_height = output.shard_spec()->shape[0];
+    const uint32_t output_shard_width = output.shard_spec()->shape[1];
 
-    const auto create_circular_buffer = [&program, &input_core_grid](
+    const uint32_t l1_input_shard_height = is_input_in_dram ? a.logical_shape()[-2] : a.shard_spec()->shape[0];
+    const uint32_t l1_input_shard_width = is_input_in_dram ? output_shard_height : a.shard_spec()->shape[1];
+    const CoreRangeSet l1_input_core_grid = is_input_in_dram ? output.shard_spec()->grid : a.shard_spec()->grid;
+    const std::vector<CoreCoord> l1_input_cores = corerange_to_cores(
+        l1_input_core_grid, std::nullopt, a.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+
+    TT_FATAL(
+        l1_input_shard_height <= TILE_HEIGHT, "Shard height must be 32 or smaller (was {})", l1_input_shard_height);
+    TT_FATAL(
+        l1_input_shard_width % TILE_WIDTH == 0,
+        "Shard width must be multiple of tile width (was {})",
+        l1_input_shard_width);
+    const auto alignment_elements = compute_alignment_requirement_in_elements(output);
+    TT_FATAL(alignment_elements != 0, "Number of alignment elements cannot be 0");
+    TT_FATAL(
+        output_shard_width % alignment_elements == 0,
+        "Output shard width must be multiple of {} to satisfy alignment constraints (was {})",
+        alignment_elements,
+        output_shard_width);
+
+    const auto create_circular_buffer = [&program, &l1_input_core_grid](
                                             uint32_t index,
                                             uint32_t total_size,
                                             uint32_t page_size,
@@ -38,7 +59,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         if (buffer != nullptr) {
             config = config.set_globally_allocated_address(*buffer);
         }
-        return tt::tt_metal::CreateCircularBuffer(program, input_core_grid, config);
+        return tt::tt_metal::CreateCircularBuffer(program, l1_input_core_grid, config);
     };
 
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
@@ -47,17 +68,17 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     const uint32_t cb_in_id = tt::CBIndex::c_0;
     const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     const uint32_t input_element_size = tt::datum_size(input_format);
-    const uint32_t cb_in_page_size = input_shard_width * input_element_size;
-    const uint32_t cb_in_total_size = input_shard_height * cb_in_page_size;
+    const uint32_t cb_in_page_size = l1_input_shard_width * input_element_size;
+    const uint32_t cb_in_total_size = l1_input_shard_height * cb_in_page_size;
     const auto cb_in = create_circular_buffer(
         cb_in_id, cb_in_total_size, cb_in_page_size, input_format, is_input_in_dram ? nullptr : a.buffer());
 
     const uint32_t cb_in_tiled_id = tt::CBIndex::c_1;
-    const uint32_t cb_in_tiled_total_size = tt::div_up(input_shard_width, TILE_WIDTH) * intermediary_tile_size;
+    const uint32_t cb_in_tiled_total_size = tt::div_up(l1_input_shard_width, TILE_WIDTH) * intermediary_tile_size;
     const uint32_t cb_in_tiled_page_size = intermediary_tile_size;
     create_circular_buffer(cb_in_tiled_id, cb_in_tiled_total_size, cb_in_tiled_page_size, intermediary_format);
 
-    const uint32_t cb_in_transpose_total_size = tt::div_up(input_shard_width, TILE_WIDTH) * intermediary_tile_size;
+    const uint32_t cb_in_transpose_total_size = tt::div_up(l1_input_shard_width, TILE_WIDTH) * intermediary_tile_size;
     const uint32_t cb_in_transpose_page_size = intermediary_tile_size;
 
     const uint32_t cb_in_transpose_id0 = tt::CBIndex::c_2;
@@ -71,11 +92,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     const uint32_t cb_out_id = tt::CBIndex::c_4;
     const tt::DataFormat output_format = input_format;
     const uint32_t cb_out_total_size = cb_in_total_size;  // same size as input
-    const uint32_t cb_out_page_size = input_shard_height * input_element_size;
+    const uint32_t cb_out_page_size = l1_input_shard_height * input_element_size;
     const auto cb_out =
         create_circular_buffer(cb_out_id, cb_out_total_size, cb_out_page_size, output_format, output.buffer());
 
-    const uint32_t total_tiles_per_core = tt::div_up(input_shard_width, TILE_HEIGHT);
+    const uint32_t total_tiles_per_core = tt::div_up(l1_input_shard_width, TILE_HEIGHT);
     const uint32_t total_tiles_writer0 = tt::div_up(total_tiles_per_core, 2);
     const uint32_t total_tiles_writer1 = total_tiles_per_core - total_tiles_writer0;
     uint32_t output_stride_sticks = TILE_WIDTH;  // needed to stride output address when doing split writers
@@ -87,9 +108,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     const auto remote_buffer_type = a.buffer()->buffer_type();
     const auto [runtime_args_for_each_core, _, dram_write_stride_bytes, dram_read_stride_bytes] =
         data_movement::detail::compute_width_sharding_reshard_segments(
-            {input_shard_height, input_shard_width},
+            {l1_input_shard_height, l1_input_shard_width},
             a.shard_spec()->shape,  // dram shard shape
-            input_cores,
+            l1_input_cores,
             dram_input_cores,
             remote_buffer_type,
             remote_core_type,
@@ -97,15 +118,15 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
             2);
 
     // Split DRAM read across each kernel along tensor height since this is the best way to split work evenly
-    const uint32_t total_num_sticks_kernel_0 = input_shard_height / 2;
-    const uint32_t total_num_sticks_kernel_1 = input_shard_height - total_num_sticks_kernel_0;
+    const uint32_t total_num_sticks_kernel_0 = l1_input_shard_height / 2;
+    const uint32_t total_num_sticks_kernel_1 = l1_input_shard_height - total_num_sticks_kernel_0;
 
     std::vector<uint32_t> writer_compile_time_args0 = {
         cb_in_id,
         cb_in_transpose_id0,
         cb_out_id,
-        input_shard_height,
-        input_shard_width,
+        output_shard_width,   // output channels
+        output_shard_height,  // output hw
         total_tiles_writer0,
         output_stride_sticks,
         0,
@@ -120,8 +141,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         cb_in_id,
         cb_in_transpose_id1,
         cb_out_id,
-        input_shard_height,
-        input_shard_width,
+        output_shard_width,   // output channels
+        output_shard_height,  // output hw
         total_tiles_writer1,
         output_stride_sticks,
         output_stride_sticks,
@@ -138,25 +159,25 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         cb_in_transpose_id0,
         cb_in_transpose_id1,
         total_tiles_per_core,
-        input_shard_height,
+        l1_input_shard_height,
         is_input_in_dram};
 
     auto writer_kernel_id0 = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/writer_convert_to_hwc.cpp",
-        input_core_grid,
+        l1_input_core_grid,
         tt::tt_metal::ReaderDataMovementConfig(writer_compile_time_args0));
 
     auto writer_kernel_id1 = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/writer_convert_to_hwc.cpp",
-        input_core_grid,
+        l1_input_core_grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args1));
 
     tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/convert_to_hwc.cpp",
-        input_core_grid,
+        l1_input_core_grid,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = false,
@@ -166,7 +187,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     auto set_runtime_args = [cb_in,
                              cb_out,
                              is_input_in_dram,
-                             input_cores,
+                             l1_input_cores,
                              runtime_args_for_each_core,
                              writer_kernel_id0,
                              writer_kernel_id1,
@@ -177,7 +198,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
                              dram_write_stride_bytes](
                                 tt::tt_metal::Program& program, const Tensor& a, const Tensor& output) {
         if (is_input_in_dram) {
-            for (uint32_t core_idx = 0; core_idx < input_cores.size(); core_idx++) {
+            for (uint32_t core_idx = 0; core_idx < l1_input_cores.size(); core_idx++) {
                 const auto& args_for_all_segments = runtime_args_for_each_core[core_idx];
                 std::vector<uint32_t> runtime_args_0 = {remote_address, args_for_all_segments.size()};
                 std::vector<uint32_t> runtime_args_1 = {remote_address, args_for_all_segments.size()};
@@ -189,16 +210,16 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
                     // Adjust read and write offsets to the correct stick address because we are splitting work across 2
                     // kernels
                     const uint32_t adjusted_read_offset =
-                        args.read_offset + total_num_sticks_kernel_0 * dram_write_stride_bytes;
+                        args.read_offset + (total_num_sticks_kernel_0 * dram_write_stride_bytes);
                     const uint32_t adjusted_write_offset =
-                        args.write_offset + total_num_sticks_kernel_0 * dram_read_stride_bytes;
+                        args.write_offset + (total_num_sticks_kernel_0 * dram_read_stride_bytes);
 
                     const std::vector<uint32_t> segment_kernel_1 = {
                         args.write_size, adjusted_read_offset, args.bank_id, adjusted_write_offset};
                     runtime_args_1.insert(runtime_args_1.end(), segment_kernel_1.begin(), segment_kernel_1.end());
                 }
-                SetRuntimeArgs(program, writer_kernel_id0, input_cores[core_idx], runtime_args_0);
-                SetRuntimeArgs(program, writer_kernel_id1, input_cores[core_idx], runtime_args_1);
+                SetRuntimeArgs(program, writer_kernel_id0, l1_input_cores[core_idx], runtime_args_0);
+                SetRuntimeArgs(program, writer_kernel_id1, l1_input_cores[core_idx], runtime_args_1);
             }
         } else {
             tt::tt_metal::Buffer* a_buffer = a.buffer();

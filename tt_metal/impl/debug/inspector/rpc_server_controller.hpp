@@ -18,7 +18,7 @@ class RpcServerController {
 public:
     ~RpcServerController();
 
-    void start(const std::string& host, uint16_t port);
+    void start(std::string address);
     void stop();
 
     RpcServer& get_rpc_server();
@@ -37,8 +37,7 @@ private:
     std::string server_start_error_message{};
 
     // temp data used in background thread as initialization
-    std::string host{};
-    uint16_t port = 0;
+    std::string address{};
 
     void run_server();
 };

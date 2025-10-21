@@ -401,13 +401,13 @@ int main(int argc, char** argv) {
                 start = std::chrono::system_clock::now();
             }
             if (hammer_write_reg_g || hammer_pcie_g) {
-                auto sync_event = tt::tt_metal::distributed::EnqueueRecordEvent(cq);
+                auto sync_event = cq.enqueue_record_event();
 
                 bool done = false;
                 uint32_t addr = 0xfafafafa;
                 uint32_t offset = 0;
                 uint32_t page = 0;
-                uint32_t* pcie_base = (uint32_t*)host_pcie_base + pcie_offset / sizeof(uint32_t);
+                uint32_t* pcie_base = (uint32_t*)host_pcie_base + (pcie_offset / sizeof(uint32_t));
                 uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
                 while (!done) {
                     if (hammer_write_reg_g) {

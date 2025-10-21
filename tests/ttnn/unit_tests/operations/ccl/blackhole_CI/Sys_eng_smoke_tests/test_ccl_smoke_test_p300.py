@@ -11,7 +11,7 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_n
 
 
 # Test utilizes/transfers up to 3.93GB of space per device to nearly fill the dram
-@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize("num_links", [2])  # Check over all four links
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, all_gather_topology",
@@ -118,7 +118,7 @@ def test_ccl_ddr_smoke_test(
 # Test utilizes 1'478'492.16 bytes per core to nearly maximize 1.5MB size
 
 
-@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, all_gather_topology",

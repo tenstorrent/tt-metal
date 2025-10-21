@@ -264,7 +264,7 @@ run_t3000_resnet50_tests() {
   echo "LOG_METAL: Running run_t3000_resnet50_tests"
 
   # resnet50 8 chip demo test - 100 token generation with general weights (env flags set inside the test)
-  pytest -n auto models/demos/t3000/resnet50/demo/demo.py --timeout=720 ; fail+=$?
+  pytest -n auto models/demos/ttnn_resnet/tests/test_demo.py --timeout=720 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
