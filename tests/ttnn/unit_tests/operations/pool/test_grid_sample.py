@@ -25,8 +25,14 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ],
 )
 @pytest.mark.parametrize("grid_dtype", [ttnn.bfloat16, ttnn.float32])
-def test_grid_sample_random_grid(device, input_shape, grid_shape, grid_dtype):
+@pytest.mark.parametrize("mode", ["bilinear", "nearest"])
+@pytest.mark.parametrize("align_corners", [False, True])
+def test_grid_sample_random_grid(device, input_shape, grid_shape, grid_dtype, mode, align_corners):
     """Test grid_sample with completely random grid coordinates"""
+
+    # Skip invalid combinations: align_corners=True is only supported for nearest mode
+    if align_corners and mode == "bilinear":
+        pytest.skip("align_corners=True is only supported for nearest mode")
 
     torch.manual_seed(0)
 
@@ -37,7 +43,7 @@ def test_grid_sample_random_grid(device, input_shape, grid_shape, grid_dtype):
     torch_grid_f32 = torch.rand(grid_shape, dtype=torch.float32) * 2.0 - 1.0
 
     torch_output_nchw = F.grid_sample(
-        torch_input_nchw, torch_grid_f32, mode="bilinear", padding_mode="zeros", align_corners=False
+        torch_input_nchw, torch_grid_f32, mode=mode, padding_mode="zeros", align_corners=align_corners
     )
 
     torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
@@ -46,7 +52,7 @@ def test_grid_sample_random_grid(device, input_shape, grid_shape, grid_dtype):
 
     ttnn_grid = ttnn.from_torch(torch_grid_f32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=grid_dtype)
 
-    ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid)
+    ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid, mode=mode, align_corners=align_corners)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
     pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
@@ -76,7 +82,13 @@ def test_grid_sample_random_grid(device, input_shape, grid_shape, grid_dtype):
     ],
 )
 @pytest.mark.parametrize("grid_dtype", [ttnn.bfloat16, ttnn.float32])
-def test_grid_sample_near_uniform_grid(device, input_shape, grid_shape, grid_dtype):
+@pytest.mark.parametrize("mode", ["bilinear", "nearest"])
+@pytest.mark.parametrize("align_corners", [False, True])
+def test_grid_sample_near_uniform_grid(device, input_shape, grid_shape, grid_dtype, mode, align_corners):
+    # Skip invalid combinations: align_corners=True is only supported for nearest mode
+    if align_corners and mode == "bilinear":
+        pytest.skip("align_corners=True is only supported for nearest mode")
+
     torch.manual_seed(0)
 
     batch_size, grid_h, grid_w, _ = grid_shape
@@ -94,7 +106,7 @@ def test_grid_sample_near_uniform_grid(device, input_shape, grid_shape, grid_dty
     torch_grid += torch.randn(grid_shape) * 0.05
 
     torch_output_nchw = F.grid_sample(
-        torch_input_nchw, torch_grid, mode="bilinear", padding_mode="zeros", align_corners=False
+        torch_input_nchw, torch_grid, mode=mode, padding_mode="zeros", align_corners=align_corners
     )
 
     torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
@@ -103,7 +115,7 @@ def test_grid_sample_near_uniform_grid(device, input_shape, grid_shape, grid_dty
 
     ttnn_grid = ttnn.from_torch(torch_grid, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=grid_dtype)
 
-    ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid)
+    ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid, mode=mode, align_corners=align_corners)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
     pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
@@ -128,8 +140,14 @@ def test_grid_sample_near_uniform_grid(device, input_shape, grid_shape, grid_dty
         (2, 16, 16, 32),
     ],
 )
-def test_grid_sample_identity_transform(device, input_shape):
+@pytest.mark.parametrize("mode", ["bilinear", "nearest"])
+@pytest.mark.parametrize("align_corners", [False, True])
+def test_grid_sample_identity_transform(device, input_shape, mode, align_corners):
     """Test grid_sample with identity transformation (should return original image)"""
+
+    # Skip invalid combinations: align_corners=True is only supported for nearest mode
+    if align_corners and mode == "bilinear":
+        pytest.skip("align_corners=True is only supported for nearest mode")
 
     torch.manual_seed(0)
 
@@ -146,14 +164,14 @@ def test_grid_sample_identity_transform(device, input_shape):
     torch_input_nchw = torch_input_nhwc.permute(0, 3, 1, 2).to(torch.float32)
 
     torch_output_nchw = F.grid_sample(
-        torch_input_nchw, torch_grid, mode="bilinear", padding_mode="zeros", align_corners=False
+        torch_input_nchw, torch_grid, mode=mode, padding_mode="zeros", align_corners=align_corners
     )
     torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     ttnn_grid = ttnn.from_torch(torch_grid, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid)
+    ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid, mode=mode, align_corners=align_corners)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
     pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
@@ -175,8 +193,14 @@ def test_grid_sample_identity_transform(device, input_shape):
     "scale_factor",
     [0.5, 2.0, 1.5],  # Downsampling, upsampling, and mixed scaling
 )
-def test_grid_sample_scaling_patterns(device, input_shape, scale_factor):
+@pytest.mark.parametrize("mode", ["bilinear", "nearest"])
+@pytest.mark.parametrize("align_corners", [False, True])
+def test_grid_sample_scaling_patterns(device, input_shape, scale_factor, mode, align_corners):
     """Test grid_sample with different scaling patterns"""
+
+    # Skip invalid combinations: align_corners=True is only supported for nearest mode
+    if align_corners and mode == "bilinear":
+        pytest.skip("align_corners=True is only supported for nearest mode")
 
     torch.manual_seed(0)
 
@@ -196,7 +220,7 @@ def test_grid_sample_scaling_patterns(device, input_shape, scale_factor):
     torch_input_nchw = torch_input_nhwc.permute(0, 3, 1, 2).to(torch.float32)
 
     torch_output_nchw = F.grid_sample(
-        torch_input_nchw, torch_grid, mode="bilinear", padding_mode="zeros", align_corners=False
+        torch_input_nchw, torch_grid, mode=mode, padding_mode="zeros", align_corners=align_corners
     )
     torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
@@ -205,7 +229,7 @@ def test_grid_sample_scaling_patterns(device, input_shape, scale_factor):
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     ttnn_grid = ttnn.from_torch(torch_grid_bf16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid)
+    ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid, mode=mode, align_corners=align_corners)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
     pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
