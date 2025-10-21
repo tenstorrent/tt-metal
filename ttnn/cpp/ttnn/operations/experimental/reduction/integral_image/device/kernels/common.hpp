@@ -77,6 +77,26 @@ public:
     operator any_type_t() = delete;
 };
 
+template <typename addr_gen_t>
+FORCE_INLINE void write_to_dram(
+    uint32_t cb, const addr_gen_t& addr_gtor, uint32_t write_tile_id, uint32_t num_tiles = ONE_TILE) {
+    ReadCBGuard read_guard{cb, num_tiles};
+
+    uint32_t l1_read_addr{get_read_ptr(cb)};
+    noc_async_write_tile(write_tile_id, addr_gtor, l1_read_addr);
+    noc_async_write_barrier();
+}
+
+template <typename addr_gen_type>
+FORCE_INLINE void load_to_cb(
+    uint32_t cb, const addr_gen_type& addr_gtor, uint32_t read_tile_id, uint32_t num_tiles = ONE_TILE) {
+    WriteCBGuard write_guard{cb, num_tiles};
+
+    uint32_t l1_write_addr{get_write_ptr(cb)};
+    noc_async_read_tile(read_tile_id, addr_gtor, l1_write_addr);
+    noc_async_read_barrier();
+}
+
 FORCE_INLINE uint32_t portable_ilogb(uint32_t x) {
     // using std::isinf;
     // using std::isnan;
@@ -108,9 +128,10 @@ FORCE_INLINE uint32_t get_tile_id(
     uint32_t channels_slice_i,
     uint32_t row_block_i,
     uint32_t column_block_i,
-    uint32_t block_depth = 32) {
+    // uint32_t block_depth,
+    uint32_t generic_block_depth = 32) {
     const uint32_t tensor_face_block_size = channels_blocks_num * height_blocks_num;
-    const uint32_t tensor_face_thickness = tensor_face_block_size * block_depth;
+    const uint32_t tensor_face_thickness = tensor_face_block_size * generic_block_depth;
     const uint32_t block_first_tile_id =
         tensor_face_thickness * column_block_i + row_block_i * channels_blocks_num + channels_slice_i;
     const uint32_t tile_id = block_first_tile_id + inner_tile_stride * tensor_face_block_size;
@@ -119,7 +140,7 @@ FORCE_INLINE uint32_t get_tile_id(
     return tile_id;
 }
 
-FORCE_INLINE uint32_t block_depth_ceil(uint32_t value, uint32_t block_depth = 32) {
+FORCE_INLINE constexpr uint32_t block_depth_ceil(uint32_t value, uint32_t block_depth = 32) {
     return (value + block_depth - 1) / block_depth;
 }
 
