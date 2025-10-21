@@ -129,21 +129,11 @@ jobs:
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
-      version: "22.04"
-      build-umd-tests: true
-  build-artifact-profiler:
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
       tracy: true
       version: "22.04"
       build-umd-tests: true
   run-profiler-regression:
-    needs: [build-artifact-profiler, generate-matrix]
+    needs: [build-artifact, generate-matrix]
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
     strategy:
@@ -153,9 +143,9 @@ jobs:
     with:
       arch: "blackhole"
       runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
   umd-unit-tests:
     needs: [build-artifact, generate-matrix]
@@ -335,15 +325,15 @@ jobs:
 
   # LLMBox-only unit tests
   blackhole-llmbox-unit-tests:
-    needs: [build-artifact-profiler, generate-matrix]
+    needs: [build-artifact, generate-matrix]
     if: ${{ inputs.enable-llmbox-tests }}
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
     with:
       arch: blackhole
-      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
   # TT-CNN Unit Tests
   tt-cnn-unit-tests:

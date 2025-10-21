@@ -4,25 +4,31 @@
 #pragma once
 
 #include <tt_metal_profiler.hpp>
+#include "impl/context/metal_context.hpp"
 #include <tt_metal/impl/profiler/profiler_state.hpp>
 #include <tt_metal/impl/profiler/profiler_state_manager.hpp>
 
 #if defined(TRACY_ENABLE)
 
+#define TracyTTMetalTraceTrackingEnabled() \
+    tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_tracking()
+
 #define TracyTTMetalBeginMeshTrace(device_ids, trace_id)                                                            \
     if (tt::tt_metal::getDeviceProfilerState()) {                                                                   \
         for (auto device_id : (device_ids)) {                                                                       \
-            std::string trace_message = fmt::format("`TT_METAL_TRACE_BEGIN: {}, {}`", device_id, trace_id);         \
             tt::tt_metal::MetalContext::instance().profiler_state_manager()->mark_trace_begin(device_id, trace_id); \
-            TracyMessage(trace_message.c_str(), trace_message.size());                                              \
+            if (TracyTTMetalTraceTrackingEnabled()) {                                                               \
+                std::string trace_message = fmt::format("`TT_METAL_TRACE_BEGIN: {}, {}`", device_id, trace_id);     \
+                TracyMessage(trace_message.c_str(), trace_message.size());                                          \
+            }                                                                                                       \
         }                                                                                                           \
     }
 
 #define TracyTTMetalEndMeshTrace(device_ids, trace_id)                                                            \
     if (tt::tt_metal::getDeviceProfilerState()) {                                                                 \
         for (auto device_id : (device_ids)) {                                                                     \
-            std::string trace_message = fmt::format("`TT_METAL_TRACE_END: {}, {}`", device_id, trace_id);         \
             tt::tt_metal::MetalContext::instance().profiler_state_manager()->mark_trace_end(device_id, trace_id); \
+            std::string trace_message = fmt::format("`TT_METAL_TRACE_END: {}, {}`", device_id, trace_id);         \
             TracyMessage(trace_message.c_str(), trace_message.size());                                            \
         }                                                                                                         \
     }
@@ -30,18 +36,22 @@
 #define TracyTTMetalReplayMeshTrace(device_ids, trace_id)                                                            \
     if (tt::tt_metal::getDeviceProfilerState()) {                                                                    \
         for (auto device_id : (device_ids)) {                                                                        \
-            std::string trace_message = fmt::format("`TT_METAL_TRACE_REPLAY: {}, {}`", device_id, trace_id);         \
             tt::tt_metal::MetalContext::instance().profiler_state_manager()->mark_trace_replay(device_id, trace_id); \
-            TracyMessage(trace_message.c_str(), trace_message.size());                                               \
+            if (TracyTTMetalTraceTrackingEnabled()) {                                                                \
+                std::string trace_message = fmt::format("`TT_METAL_TRACE_REPLAY: {}, {}`", device_id, trace_id);     \
+                TracyMessage(trace_message.c_str(), trace_message.size());                                           \
+            }                                                                                                        \
         }                                                                                                            \
     }
 
-#define TracyTTMetalReleaseMeshTrace(device_ids, trace_id)                                                    \
-    if (tt::tt_metal::getDeviceProfilerState()) {                                                             \
-        for (auto device_id : (device_ids)) {                                                                 \
-            std::string trace_message = fmt::format("`TT_METAL_TRACE_RELEASE: {}, {}`", device_id, trace_id); \
-            TracyMessage(trace_message.c_str(), trace_message.size());                                        \
-        }                                                                                                     \
+#define TracyTTMetalReleaseMeshTrace(device_ids, trace_id)                                                        \
+    if (tt::tt_metal::getDeviceProfilerState()) {                                                                 \
+        for (auto device_id : (device_ids)) {                                                                     \
+            if (TracyTTMetalTraceTrackingEnabled()) {                                                             \
+                std::string trace_message = fmt::format("`TT_METAL_TRACE_RELEASE: {}, {}`", device_id, trace_id); \
+                TracyMessage(trace_message.c_str(), trace_message.size());                                        \
+            }                                                                                                     \
+        }                                                                                                         \
     }
 
 #define TracyTTMetalEnqueueMeshWorkloadTrace(mesh_device, mesh_workload, trace_id)                            \
@@ -52,12 +62,14 @@
                     auto device = (mesh_device)->get_device(coord);                                           \
                     tt::tt_metal::MetalContext::instance().profiler_state_manager()->add_runtime_id_to_trace( \
                         device->id(), *((trace_id).value()), program.get_runtime_id());                       \
-                    std::string trace_message = fmt::format(                                                  \
-                        "`TT_METAL_TRACE_ENQUEUE_PROGRAM: {}, {}, {}`",                                       \
-                        device->id(),                                                                         \
-                        *((trace_id).value()),                                                                \
-                        program.get_runtime_id());                                                            \
-                    TracyMessage(trace_message.c_str(), trace_message.size());                                \
+                    if (TracyTTMetalTraceTrackingEnabled()) {                                                 \
+                        std::string trace_message = fmt::format(                                              \
+                            "`TT_METAL_TRACE_ENQUEUE_PROGRAM: {}, {}, {}`",                                   \
+                            device->id(),                                                                     \
+                            *((trace_id).value()),                                                            \
+                            program.get_runtime_id());                                                        \
+                        TracyMessage(trace_message.c_str(), trace_message.size());                            \
+                    }                                                                                         \
                 });                                                                                           \
             }                                                                                                 \
         }                                                                                                     \

@@ -184,6 +184,8 @@ def main():
                 logger.error("No available port found")
                 sys.exit(1)
             logger.info(f"Using port {port}")
+            os.environ["TTNN_OP_PROFILER"] = "1"
+            os.environ["TT_METAL_PROFILER_TRACE_TRACKING"] = "1"
             doReport, captureProcess = run_report_setup(options.verbose, outputFolder, binaryFolder, port)
 
         if not doReport:
@@ -276,7 +278,7 @@ def main():
                 captureProcess.terminate()
                 captureProcess.communicate()
                 logger.error(
-                    f"No profiling data could be captured. Please make sure you are on the correct build. Use build_metal.sh --enable-profiler to build if you are not sure."
+                    f"No profiling data could be captured. Please make sure you are on a Tracy-enabled build (default)."
                 )
                 sys.exit(1)
 

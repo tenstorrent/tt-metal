@@ -246,8 +246,8 @@ jobs:
           echo "Args: ${args_fixme}"
           build_command="./build_metal.sh --build-dir build --build-type ${{ inputs.build-type }} --toolchain-path ${{ inputs.toolchain }} ${args_fixme} --enable-ccache --configure-only"
           echo "Build tracy: ${{ inputs.tracy }}"
-          if [ "${{ inputs.tracy }}" = "true" ]; then
-            build_command="$build_command --enable-profiler"
+          if [ "${{ inputs.tracy }}" = "false" ]; then
+            build_command="$build_command --disable-profiler"
           fi
           echo "Build distributed: ${{ inputs.distributed }}"
           if [ "${{ inputs.distributed }}" = "false" ]; then
@@ -383,11 +383,9 @@ jobs:
         run: |
           if [ "${{ inputs.tracy }}" = "true" ]; then
             echo "ENABLE_TRACY_BUILD=ON" >> $GITHUB_ENV
-            echo "CIBW_TEST_CMD=echo 'Skipping import test for profiler build'" >> $GITHUB_ENV
             echo "Building with Tracy profiler enabled"
           else
             echo "ENABLE_TRACY_BUILD=OFF" >> $GITHUB_ENV
-            echo "CIBW_TEST_CMD=python -c \"import ttnn\"" >> $GITHUB_ENV
             echo "Building without Tracy profiler"
           fi
 
@@ -405,7 +403,7 @@ jobs:
             CIBW_BUILD_TYPE="${{ inputs.build-type }}"
           CIBW_BEFORE_BUILD: "mkdir -p /tmp/ccache && ccache -z && ccache -p"
           CIBW_BEFORE_TEST: ccache -s
-          CIBW_TEST_COMMAND: ${{ env.CIBW_TEST_CMD }}
+          CIBW_TEST_COMMAND: 'python -c "import ttnn"'
           CIBW_MANYLINUX_X86_64_IMAGE: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
 
       - name: Set wheel artifact name
