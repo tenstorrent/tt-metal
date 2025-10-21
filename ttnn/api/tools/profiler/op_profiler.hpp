@@ -194,7 +194,7 @@ inline bool stop_tracy_zone(const std::string& name = "", uint32_t color = 0) {
     if (!call_stack.empty()) {
         callStackWasEmpty = false;
         TracyCZoneCtx ctx = call_stack.top();
-        if (name != "") {
+        if (!name.empty()) {
             TracyCZoneName(ctx, name.c_str(), name.length());
         }
         if (color != 0) {
