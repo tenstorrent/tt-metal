@@ -655,7 +655,7 @@ jobs:
         shell: bash
         run: |
           python - <<'PY' > /tmp/matrix.json
-          import os, json, math
+          import os, json, math, sys
           d = '/tmp/vectors'
           modules = sorted([f[:-5] for f in os.listdir(d) if f.endswith('.json')])
 
@@ -696,7 +696,7 @@ jobs:
           total_batches = len(batches)
           if total_batches > 256:
               print(f"Total batch count ({total_batches}) exceeds GitHub Actions matrix limit of 256. Please adjust BATCH_SIZE or reduce the number of modules.", file=sys.stderr)
-              exit 1
+              sys.exit(1)
           print(json.dumps({"module": modules, "batches": batches}))
           PY
           echo "matrix=$(cat /tmp/matrix.json)" >> "$GITHUB_OUTPUT"
