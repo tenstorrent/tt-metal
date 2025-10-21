@@ -78,6 +78,15 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
+            whoami
+            ls -lart /opt/tenstorrent
+            echo "hey"
+            ls -lart /opt/tenstorrent/sfpi/
+            echo "ha"
+            ls -lart /opt/tenstorrent/sfpi/compiler/
+            echo "gee"
+            ls -lart /opt/tenstorrent/sfpi/compiler/bin/
+            echo "lala"
             ./tests/scripts/multihost/run_dual_t3k_tests.sh
 
   multi-host-galaxy:
@@ -133,4 +142,13 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
+            whoami
+            ls -lart /opt/tenstorrent
+            echo "hey"
+            ls -lart /opt/tenstorrent/sfpi/
+            echo "ha"
+            ls -lart /opt/tenstorrent/sfpi/compiler/
+            echo "gee"
+            ls -lart /opt/tenstorrent/sfpi/compiler/bin/
+            echo "lala"
             ./tests/scripts/multihost/run_dual_galaxy_tests.sh
