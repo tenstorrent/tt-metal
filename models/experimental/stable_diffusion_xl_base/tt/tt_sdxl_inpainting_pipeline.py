@@ -71,57 +71,46 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
             start_latent_seed, int
         ), "start_latent_seed must be an integer or None"
 
-        img_latents_list = []
-        mask_list = []
-        masked_image_latents_list = []
-        for index in range(self.batch_size):
-            if start_latent_seed is not None:
-                torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed + index)
-            # the function returns img_latents, noise but we don't use noise at the moment, so discard it
-            img_latents = prepare_image_latents(
-                self.torch_pipeline,
-                self,
-                1,
-                num_channels_image_latents,
-                height,
-                width,
-                self.cpu_device,
-                all_prompt_embeds_torch.dtype,
-                torch_image,
-                self.pipeline_config.strength == 1,
-                True,  # Make this configurable
-                None,  # passed in latents
-            )
-            B, C, H, W = img_latents.shape  # 1, 4, 128, 128
-            img_latents = torch.permute(img_latents, (0, 2, 3, 1))  # [1, H, W, C]
-            img_latents = img_latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
-            img_latents_list.append(img_latents)
+        if start_latent_seed is not None:
+            torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed)
+        # the function returns img_latents, noise but we don't use noise at the moment, so discard it
+        img_latents = prepare_image_latents(
+            self.torch_pipeline,
+            self,
+            torch_image.shape[0],
+            num_channels_image_latents,
+            height,
+            width,
+            self.cpu_device,
+            all_prompt_embeds_torch.dtype,
+            torch_image,
+            self.pipeline_config.strength == 1,
+            True,  # Make this configurable
+            None,  # passed in latents
+        )
+        B, C, H, W = img_latents.shape  # 1, 4, 128, 128
+        img_latents = torch.permute(img_latents, (0, 2, 3, 1))  # [1, H, W, C]
+        tt_img_latents = img_latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
 
-            mask, masked_image_latents = prepare_mask_latents_inpainting(
-                self,
-                torch_mask,
-                torch_masked_image,
-                1,
-                height,
-                width,
-                all_prompt_embeds_torch.dtype,
-                self.cpu_device,
-                None,
-            )
+        mask, masked_image_latents = prepare_mask_latents_inpainting(
+            self,
+            torch_mask,
+            torch_masked_image,
+            torch_image.shape[0],
+            height,
+            width,
+            all_prompt_embeds_torch.dtype,
+            self.cpu_device,
+            None,
+        )
 
-            B, C, H, W = mask.shape
-            mask = torch.permute(mask, (0, 2, 3, 1))  # [1, H, W, C]
-            mask = mask.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
-            mask_list.append(mask)
+        B, C, H, W = mask.shape
+        mask = torch.permute(mask, (0, 2, 3, 1))  # [1, H, W, C]
+        tt_mask = mask.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
 
-            B, C, H, W = masked_image_latents.shape
-            masked_image_latents = torch.permute(masked_image_latents, (0, 2, 3, 1))  # [1, H, W, C]
-            masked_image_latents = masked_image_latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
-            masked_image_latents_list.append(masked_image_latents)
-
-        tt_img_latents = torch.cat(img_latents_list, dim=0)  # [batch_size, 1, H*W, C]
-        tt_mask = torch.cat(mask_list, dim=0)  # [batch_size, 1, H*W, C]
-        tt_masked_image_latents = torch.cat(masked_image_latents_list, dim=0)  # [batch_size, 1, H*W, C]
+        B, C, H, W = masked_image_latents.shape
+        masked_image_latents = torch.permute(masked_image_latents, (0, 2, 3, 1))  # [1, H, W, C]
+        tt_masked_image_latents = masked_image_latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
 
         self.extra_step_kwargs = self.torch_pipeline.prepare_extra_step_kwargs(None, 0.0)
         text_encoder_projection_dim = self.torch_pipeline.text_encoder_2.config.projection_dim

@@ -98,22 +98,30 @@ def run_demo_inference(
     mask_url = "https://raw.githubusercontent.com/CompVis/latent-diffusion/main/data/inpainting_examples/overture-creations-5sI6fQgYIuo_mask.png"
 
     height = width = 1024
-    image = load_image(img_url).resize((height, width))
-    mask_image = load_image(mask_url).resize((height, width))
+    image = [load_image(img_url).resize((height, width))]
+    mask_image = [load_image(mask_url).resize((height, width))]
 
-    init_image = tt_sdxl.torch_pipeline.image_processor.preprocess(
-        image, height=height, width=width, crops_coords=None, resize_mode="default"
-    )
-    init_image = init_image.to(dtype=torch.float32)
+    init_image = [
+        tt_sdxl.torch_pipeline.image_processor.preprocess(
+            i, height=height, width=width, crops_coords=None, resize_mode="default"
+        ).to(dtype=torch.float32)
+        for i in image
+    ]
+    init_image = torch.cat(init_image, dim=0)
 
-    mask = tt_sdxl.torch_pipeline.mask_processor.preprocess(
-        mask_image, height=height, width=width, crops_coords=None, resize_mode="default"
-    )
+    mask = [
+        tt_sdxl.torch_pipeline.mask_processor.preprocess(
+            m, height=height, width=width, crops_coords=None, resize_mode="default"
+        )
+        for m in mask_image
+    ]
+    mask = torch.cat(mask, dim=0)
 
     # This is used in the inpainting pipeline, if the following arguments are provided:
     # - masked_image_latents == None
     # - init_image.shape[1] != 4 (in tested cases, it is 3 (RGB))
-    masked_image = init_image * (mask < 0.5)
+    masked_image = [i * (m < 0.5) for i, m in zip(init_image, mask)]
+    masked_image = torch.stack(masked_image, dim=0)
 
     # 1. prepare masked image latents
     # 2. prepare mask latents
@@ -126,9 +134,9 @@ def run_demo_inference(
     ) = tt_sdxl.generate_input_tensors(
         all_prompt_embeds_torch=torch.randn(batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),
         torch_add_text_embeds=torch.randn(batch_size, 2, TEXT_ENCODER_2_PROJECTION_DIM),
-        torch_image=init_image,
-        torch_masked_image=masked_image,
-        torch_mask=mask,
+        torch_image=torch.randn(batch_size, 3, 1024, 1024),
+        torch_masked_image=torch.randn(batch_size, 3, 1024, 1024),
+        torch_mask=torch.randn(batch_size, 1, 1024, 1024),
     )
 
     tt_sdxl.compile_image_processing()
@@ -176,9 +184,9 @@ def run_demo_inference(
         ) = tt_sdxl.generate_input_tensors(
             all_prompt_embeds_torch=all_prompt_embeds_torch,
             torch_add_text_embeds=torch_add_text_embeds,
-            torch_image=init_image,
-            torch_masked_image=masked_image,
-            torch_mask=mask,
+            torch_image=init_image[iter * batch_size : (iter + 1) * batch_size],
+            torch_masked_image=masked_image[iter * batch_size : (iter + 1) * batch_size],
+            torch_mask=mask[iter * batch_size : (iter + 1) * batch_size],
             start_latent_seed=0,
             fixed_seed_for_batch=fixed_seed_for_batch,
         )
@@ -308,7 +316,7 @@ def prepare_device(mesh_device, use_cfg_parallel):
 )
 def test_demo(
     validate_fabric_compatibility,
-    device,
+    mesh_device,
     is_ci_env,
     prompt,
     negative_prompt,
@@ -322,9 +330,9 @@ def test_demo(
     use_cfg_parallel,
     fixed_seed_for_batch,
 ):
-    prepare_device(device, use_cfg_parallel)
+    prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
-        device,
+        mesh_device,
         is_ci_env,
         prompt,
         negative_prompt,

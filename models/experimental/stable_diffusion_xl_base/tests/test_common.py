@@ -576,7 +576,10 @@ def prepare_mask_latents_inpainting(
                     masked_image, generator=None
                 )
             else:
-                masked_image_latents = tt_inpainting_pipeline.tt_vae.encode(masked_image).latent_dist.sample()
+                masked_image_latents = [
+                    mask.sample() for mask in tt_inpainting_pipeline.tt_vae.encode(masked_image).latent_dist
+                ]
+                masked_image_latents = torch.cat(masked_image_latents, dim=0)
                 masked_image_latents = (
                     tt_inpainting_pipeline.torch_pipeline.vae.config.scaling_factor * masked_image_latents
                 )
