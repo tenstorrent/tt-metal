@@ -12,25 +12,25 @@
 
 namespace {
 
-template <typename addr_gen_t>
-FORCE_INLINE void write_to_dram(
-    uint32_t cb, const addr_gen_t& addr_gtor, uint32_t write_tile_id, uint32_t num_tiles = ONE_TILE) {
-    ReadCBGuard read_guard{cb, num_tiles};
+// template <typename addr_gen_t>
+// FORCE_INLINE void write_to_dram(
+//     uint32_t cb, const addr_gen_t& addr_gtor, uint32_t write_tile_id, uint32_t num_tiles = ONE_TILE) {
+//     ReadCBGuard read_guard{cb, num_tiles};
 
-    uint32_t l1_read_addr{get_read_ptr(cb)};
-    noc_async_write_tile(write_tile_id, addr_gtor, l1_read_addr);
-    noc_async_write_barrier();
-}
+//     uint32_t l1_read_addr{get_read_ptr(cb)};
+//     noc_async_write_tile(write_tile_id, addr_gtor, l1_read_addr);
+//     noc_async_write_barrier();
+// }
 
-template <typename addr_gen_type>
-FORCE_INLINE void load_to_cb(
-    uint32_t cb, const addr_gen_type& addr_gtor, uint32_t read_tile_id, uint32_t num_tiles = ONE_TILE) {
-    WriteCBGuard write_guard{cb, num_tiles};
+// template <typename addr_gen_type>
+// FORCE_INLINE void load_to_cb(
+//     uint32_t cb, const addr_gen_type& addr_gtor, uint32_t read_tile_id, uint32_t num_tiles = ONE_TILE) {
+//     WriteCBGuard write_guard{cb, num_tiles};
 
-    uint32_t l1_write_addr{get_write_ptr(cb)};
-    noc_async_read_tile(read_tile_id, addr_gtor, l1_write_addr);
-    noc_async_read_barrier();
-}
+//     uint32_t l1_write_addr{get_write_ptr(cb)};
+//     noc_async_read_tile(read_tile_id, addr_gtor, l1_write_addr);
+//     noc_async_read_barrier();
+// }
 
 template <typename output_addr_gen_t>
 FORCE_INLINE void receive_upper_block(
@@ -42,7 +42,8 @@ FORCE_INLINE void receive_upper_block(
     uint32_t num_blocks_in_row,
     uint32_t num_blocks_in_column,
     uint32_t num_slices_along_channels,
-    uint32_t block_depth = 32) {
+    uint32_t block_depth,
+    uint32_t generic_block_depth = 32) {
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
         const uint32_t read_tile_id = get_tile_id(
             num_blocks_in_row,
@@ -52,7 +53,8 @@ FORCE_INLINE void receive_upper_block(
             channels_slice_i,
             row_block_i,
             column_block_i,
-            block_depth);
+            // block_depth,
+            generic_block_depth);
         load_to_cb(cb_axis_3_buffer_write, output_addr_gen, read_tile_id, ONE_TILE);
     }
 }
@@ -67,7 +69,8 @@ FORCE_INLINE void output_block(
     uint32_t num_blocks_in_row,
     uint32_t num_blocks_in_column,
     uint32_t num_slices_along_channels,
-    uint32_t block_depth = 32) {
+    uint32_t block_depth,
+    uint32_t generic_block_depth = 32) {
     for (uint32_t inner_tile_stride = 0; inner_tile_stride < block_depth; ++inner_tile_stride) {
         const uint32_t write_tile_id = get_tile_id(
             num_blocks_in_row,
@@ -77,7 +80,8 @@ FORCE_INLINE void output_block(
             channels_slice_i,
             row_block_i,
             column_block_i,
-            block_depth);
+            // block_depth,
+            generic_block_depth);
         write_to_dram(cb_output, output_addr_gen, write_tile_id);
     }
 }
@@ -118,11 +122,11 @@ void kernel_main() {
     constexpr auto ctas = get_ctas();
     using output_number_type = std_type_t<get_dataformat(ctas.output_cb)>;
     const auto output_addr_gtor = TensorAccessor(ctas.output_args, output_base_addr, get_tile_size(ctas.output_cb));
-    const uint32_t num_slices_along_channels = block_depth_ceil(
+    constexpr uint32_t num_slices_along_channels = block_depth_ceil(
         ctas.num_channels, ctas.block_depth);  // block_depth is expected to be a power of 2 (the default is the regular
                                                // 32x32 tile's width/height size, that is, 32)
-    const uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
-    const uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, ctas.block_depth);
+    constexpr uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
+    constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, ctas.block_depth);
 
     for (uint32_t batch_i = 0; batch_i < ctas.num_batches;
          ++batch_i) {  // only one batch expected, unit tests don't cover more, also not everything is implemented in
@@ -142,11 +146,12 @@ void kernel_main() {
                             num_blocks_in_row,
                             num_blocks_in_column,
                             num_slices_along_channels,
-                            block_depth);
+                            block_depth,
+                            ctas.block_depth);
                         broadcast_last_row_to_all_rows_in_cube<output_number_type, decltype(output_addr_gtor)>(
                             output_addr_gtor, ctas.axis_3_buffer_0_cb, ctas.axis_3_buffer_1_cb, block_depth);
-                        DPRINT << "AFTER BROADCAST: channel/row/column/depth: " << channels_slice_i << "/"
-                               << row_chunk_i << "/" << column_block_i << "/" << block_depth << ENDL();
+                        // DPRINT << "AFTER BROADCAST: channel/row/column/depth: " << channels_slice_i << "/"
+                        //        << row_chunk_i << "/" << column_block_i << "/" << block_depth << ENDL();
                     }
                     output_block(
                         output_addr_gtor,
@@ -157,9 +162,10 @@ void kernel_main() {
                         num_blocks_in_row,
                         num_blocks_in_column,
                         num_slices_along_channels,
-                        block_depth);
-                    DPRINT << "AFTER OUTPUTTING A BLOCK: channel/row/column/depth: " << channels_slice_i << "/"
-                           << row_chunk_i << "/" << column_block_i << "/" << block_depth << ENDL();
+                        block_depth,
+                        ctas.block_depth);
+                    // DPRINT << "AFTER OUTPUTTING A BLOCK: channel/row/column/depth: " << channels_slice_i << "/"
+                    //        << row_chunk_i << "/" << column_block_i << "/" << block_depth << ENDL();
                 }
             }
         }

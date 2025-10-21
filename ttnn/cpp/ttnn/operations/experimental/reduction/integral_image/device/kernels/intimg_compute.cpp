@@ -98,7 +98,7 @@ FORCE_INLINE uint32_t get_tile_id(
     return tile_id;
 }
 
-FORCE_INLINE uint32_t block_depth_ceil(uint32_t value, uint32_t block_depth = 32) {
+FORCE_INLINE constexpr uint32_t block_depth_ceil(uint32_t value, uint32_t block_depth = 32) {
     return (value + block_depth - 1) / block_depth;
 }
 
@@ -128,7 +128,7 @@ struct IntImgComputeCTAs {
     const uint32_t num_batches;   // axis 1/4
 };
 
-FORCE_INLINE IntImgComputeCTAs get_ctas() {
+FORCE_INLINE constexpr IntImgComputeCTAs get_ctas() {
     return {
         get_compile_time_arg_val(0),
         get_compile_time_arg_val(1),
@@ -367,13 +367,13 @@ FORCE_INLINE void perform_intimg_along_row_chunk(
 namespace NAMESPACE {
 
 void MAIN {
-    const auto ctas{get_ctas()};
+    constexpr auto ctas{get_ctas()};
 
-    const uint32_t num_slices_along_channels = block_depth_ceil(
+    constexpr uint32_t num_slices_along_channels = block_depth_ceil(
         ctas.num_channels, ctas.block_depth);  // block_depth is expected to be a power of 2 (the default is the regular
                                                // 32x32 tile's width/height size)
-    const uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
-    const uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, ctas.block_depth);
+    constexpr uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
+    constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, ctas.block_depth);
 
     for (uint32_t channels_block_i = 0; channels_block_i < num_slices_along_channels; ++channels_block_i) {
         for (uint32_t rows_block_i = 0; rows_block_i < num_blocks_in_column; ++rows_block_i) {
