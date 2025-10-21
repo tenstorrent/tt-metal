@@ -180,12 +180,11 @@ RUN set -eu && \
         tar -cvhf /artifacts/ttm_any.tar ${ARTIFACT_PATHS}; \
     fi
 
+RUN python3 -m build --wheel -o /artifacts .
+
 FROM scratch AS artifacts
 COPY --from=build-artifacts /artifacts /artifacts
 COPY --from=build-artifacts /build /build
-
-FROM build-artifacts as evaluation
-CMD ["tail", "-f", "/dev/null"]
 
 #############################################################
 
@@ -271,6 +270,14 @@ COPY /dockerfile/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+FROM dev as evaluation
+CMD ["tail", "-f", "/dev/null"]
+COPY --from=artifacts /artifacts /artifacts
+COPY --from=artifacts /build /build
+
+RUN pip3 install /artifacts/*.whl
+RUN dpkg -i /build/*
 
 #############################################################
 
