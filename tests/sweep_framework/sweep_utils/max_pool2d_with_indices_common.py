@@ -54,7 +54,6 @@ def run_max_pool2d_with_indices(
         ttnn_activation = ttnn.from_torch(activation_permuted, dtype)
 
     ttnn_activation_device = ttnn.to_device(ttnn_activation, device)
-    start_time = start_measuring_time()
 
     # Use auto sharding as recommended by colleague for sweep tests
     # Let TTNN automatically select the best sharding scheme
@@ -78,11 +77,9 @@ def run_max_pool2d_with_indices(
         ceil_mode=ceil_mode,
     )
 
-    output_host = output.cpu()
-    indices_host = indices.cpu()
-    output_pytorch = torch.Tensor(ttnn.to_torch(output_host))
-    indices_pytorch = torch.Tensor(ttnn.to_torch(indices_host))
-    e2e_perf = stop_measuring_time(start_time)
+    output_pytorch = ttnn.to_torch(output)
+    # convert indexes to int64 for compatability with torch
+    indices_pytorch = ttnn.to_torch(indices, dtype=torch.int64)
 
     ## reference
     golden_pytorch, golden_indices = torch.nn.functional.max_pool2d(
