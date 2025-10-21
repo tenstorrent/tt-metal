@@ -50,8 +50,9 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather import (
     ],
 )
 @pytest.mark.parametrize("num_iters", [1])
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 2), id="1x2_grid")], indirect=True)
 def test_all_gather_on_n300_post_commit(
-    n300_mesh_device,
+    mesh_device,
     num_devices,
     output_shape,
     dim,
@@ -63,7 +64,7 @@ def test_all_gather_on_n300_post_commit(
     function_level_defaults,
 ):
     run_all_gather_on_n300_impl(
-        n300_mesh_device,
+        mesh_device,
         num_devices,
         output_shape,
         dim,
@@ -94,6 +95,7 @@ def test_all_gather_on_n300_post_commit(
 )
 @pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR])
 @pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 2), id="1x2_grid")], indirect=True)
 @pytest.mark.parametrize(
     "input_shape, input_shard_shape,shard_grid",
     (
@@ -110,7 +112,7 @@ def test_all_gather_on_n300_post_commit(
     ),
 )
 def test_all_gather_sharded_n300_post_commit(
-    n300_mesh_device,
+    mesh_device,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -125,7 +127,7 @@ def test_all_gather_sharded_n300_post_commit(
     function_level_defaults,
 ):
     run_all_gather_sharded_n300(
-        n300_mesh_device,
+        mesh_device,
         num_devices,
         input_shape,
         input_shard_shape,

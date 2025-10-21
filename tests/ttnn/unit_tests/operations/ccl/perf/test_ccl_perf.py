@@ -44,9 +44,10 @@ from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_TG_nightly import 
     ],
 )
 @pytest.mark.parametrize("num_iters", [20])
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 2), id="1x2_grid")], indirect=True)
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 1824800}], indirect=True)
 def test_all_gather_on_n300(
-    n300_mesh_device,
+    mesh_device,
     num_devices,
     output_shape,
     dim,
@@ -58,7 +59,7 @@ def test_all_gather_on_n300(
     function_level_defaults,
 ):
     run_all_gather_on_n300_impl(
-        n300_mesh_device,
+        mesh_device,
         num_devices,
         output_shape,
         dim,
@@ -219,9 +220,10 @@ def test_reduce_scatter_on_t3000(
 )
 @pytest.mark.parametrize("num_iters", [20])
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 2), id="1x2_grid")], indirect=True)
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 266240}], indirect=True)
 def test_reduce_scatter_on_n300(
-    n300_mesh_device,
+    mesh_device,
     num_devices,
     per_chip_output_shape,
     dim,
@@ -234,7 +236,7 @@ def test_reduce_scatter_on_n300(
     num_iters,
 ):
     run_reduce_scatter_test(
-        n300_mesh_device,
+        mesh_device,
         num_devices,
         per_chip_output_shape,
         dim,
