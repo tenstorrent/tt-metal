@@ -180,6 +180,10 @@ RUN set -eu && \
         tar -cvhf /artifacts/ttm_any.tar ${ARTIFACT_PATHS}; \
     fi
 
+COPY /dockerfile/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 
 FROM scratch AS artifacts
@@ -221,7 +225,6 @@ RUN if [ "$UBUNTU_VERSION" = "22.04" ]; then \
 #############################################################
 
 FROM ci-test AS dev
-
 
 ARG UBUNTU_VERSION=22.04
 # Install dev deps

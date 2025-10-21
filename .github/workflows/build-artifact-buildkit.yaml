@@ -192,11 +192,3 @@ jobs:
             --build-arg PROFILE=${{ inputs.profile }} \
             --build-arg SKIP_TT_TRAIN=${{ inputs.skip-tt-train }}
 
-      - name: List all stuff
-        run: |
-          ls
-          echo " ================= "
-          ls outputs
-          echo " ================= "
-          ls outputs/*
-          echo " ================= "
