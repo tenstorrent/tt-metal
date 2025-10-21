@@ -57,7 +57,7 @@ void set_mcast_header(
     // dst_dev_id is ignored since Low Latency Mesh Fabric does not support arbitrary 2D Mcasts yet
     // dst_mesh_id is ignored since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
     fabric_set_mcast_route(
-        (LowLatencyMeshPacketHeader*)packet_header, 0, 0, e_num_hops, w_num_hops, n_num_hops, s_num_hops);
+        (HybridMeshPacketHeader*)packet_header, 0, 0, e_num_hops, w_num_hops, n_num_hops, s_num_hops);
 }
 
 inline void setup_header_routing_2d(
@@ -82,7 +82,7 @@ inline void setup_header_routing_2d(
                 dst_mesh_id,
                 ew_dim);  // Ignored: Dynamic Routing does not need mesh dimensions
         } else {
-            fabric_set_unicast_route((LowLatencyMeshPacketHeader*)packet_header, dst_dev_id, dst_mesh_id);
+            fabric_set_unicast_route((HybridMeshPacketHeader*)packet_header, dst_dev_id, dst_mesh_id);
         }
     }
 }

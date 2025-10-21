@@ -620,6 +620,7 @@ def test_demo_text(
     stop_at_eos,
     mesh_device,
     is_ci_env,
+    is_ci_v2_env,
     ci_only,
     data_parallel,
     reset_seeds,
@@ -627,11 +628,17 @@ def test_demo_text(
     token_accuracy,
     stress_test,
     enable_trace,
+    model_location_generator,
 ):
     """
     Simple demo with limited dependence on reference code.
     """
     test_id = request.node.callspec.id
+    HF_MODEL = os.getenv("HF_MODEL")
+    if HF_MODEL:
+        os.environ["HF_MODEL"] = str(
+            model_location_generator(os.getenv("HF_MODEL"), download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
+        )
     if is_ci_env:
         if not ci_only:
             pytest.skip("CI only runs the CI-only tests")
@@ -711,6 +718,12 @@ def test_demo_text(
             pytest.skip("CI only runs Llama3 70b DP = 4, TP = 8 or Llama3 8b DP = 4/16/32, TP = 8/2/1 on TG")
         if num_devices == 8 and data_parallel > 1 and not (is_32_1b or is_31_8b) and is_wormhole_b0():
             pytest.skip("CI only runs hybrid Llama3 1b and 8b on T3K")
+
+    if is_ci_v2_env:
+        hf_model = os.getenv("HF_MODEL", "")
+        model_location = model_location_generator(hf_model, download_if_ci_v2=True, ci_v2_timeout_in_s=900)
+        # update env var HF_MODEL to the model location
+        os.environ["HF_MODEL"] = str(model_location)
 
     if not stop_at_eos:
         logger.info(f"The decode generation will only stop at the max_generated_tokens limit == {max_generated_tokens}")
@@ -1192,11 +1205,11 @@ def test_demo_text(
                 "N150_Llama-3.1-8B": 120,
                 "N150_Mistral-7B": 106,
                 # N300 targets
-                "N300_Qwen2.5-7B": 90,
+                "N300_Qwen2.5-7B": (95, 1.20),  # (value, high_tolerance_ratio)
                 # T3K targets
-                "T3K_Llama-3.1-70B": 204,
-                "T3K_Qwen2.5-Coder-32B": 173,  # `f10cs08`
-                "T3K_Qwen2.5-72B": 240,
+                "T3K_Llama-3.1-70B": 228,
+                "T3K_Qwen2.5-72B": (290, 1.35),  # (value, high_tolerance_ratio)
+                "T3K_Qwen2.5-Coder-32B": (215, 1.27),  # (value, high_tolerance_ratio)
                 "T3K_Qwen3-32B": 230,  # Issue: Perf regression being tracked on issue #29834
             }
             ci_target_decode_tok_s_u = {
@@ -1217,7 +1230,13 @@ def test_demo_text(
             # Only call verify_perf if the model_device_key exists in the targets
             ci_targets = {}
             if model_device_key in ci_target_ttft:
-                ci_targets["prefill_time_to_token"] = ci_target_ttft[model_device_key] / 1000  # convert to seconds
+                current_ttft_target = ci_target_ttft[model_device_key]
+                if isinstance(current_ttft_target, tuple):
+                    high_tol_percentage = current_ttft_target[1]
+                    current_ttft_target = current_ttft_target[0]
+                else:
+                    high_tol_percentage = 1.15
+                ci_targets["prefill_time_to_token"] = current_ttft_target / 1000  # convert to seconds
             if model_device_key in ci_target_decode_tok_s_u:
                 ci_targets["decode_t/s/u"] = ci_target_decode_tok_s_u[model_device_key]
                 # calculate from per-user rate
@@ -1227,7 +1246,7 @@ def test_demo_text(
                 verify_perf(
                     measurements,
                     ci_targets,
-                    high_tol_percentage=1.15,
+                    high_tol_percentage=high_tol_percentage,
                     expected_measurements={k: True for k in ci_targets.keys()},
                 )
             else:

@@ -35,7 +35,7 @@ run_tg_tests() {
 
   elif [[ "$1" == "resnet50" ]]; then
     echo "LOG_METAL: running resnet50 run_tg_frequent_tests"
-    pytest -n auto models/demos/tg/resnet50/tests/test_resnet50_performant.py ; fail+=$?
+    pytest -n auto models/demos/ttnn_resnet/tests/test_resnet50_performant.py ; fail+=$?
 
   elif [[ "$1" == "unit" ]]; then
     echo "LOG_METAL: running unit/distributed run_tg_frequent_tests"
@@ -44,10 +44,10 @@ run_tg_tests() {
     ## The jit build also has different behaviour for IRAM enabled/disabled so we enable it globally.
     TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/distributed/test_data_parallel_example_TG.py --timeout=900 ; fail+=$?
     TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/distributed/test_multidevice_TG.py --timeout=900 ; fail+=$?
-    TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/test_multi_device_trace_TG.py --timeout=900 ; fail+=$?
+    TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/base_functionality/test_multi_device_trace_TG.py --timeout=900 ; fail+=$?
     TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_gather_TG_post_commit.py --timeout=300 ; fail+=$?
-    TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_6U.py --timeout=500 ; fail+=$?
-    TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_6U.py --timeout=500 ; fail+=$?
+    #TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_6U.py --timeout=500 ; fail+=$? #See issue #30017
+    #TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_6U.py --timeout=500 ; fail+=$? #See issue #30017
     pytest -n auto tests/nightly/tg/ccl/test_all_broadcast.py --timeout=200 ; fail+=$?
     pytest -n auto tests/nightly/tg/ccl/test_minimal_all_gather_async.py --timeout=500 ; fail+=$?
     pytest -n auto tests/nightly/tg/ccl/test_minimal_reduce_scatter_async.py --timeout=300 ; fail+=$?

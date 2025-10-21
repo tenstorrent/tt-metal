@@ -1055,15 +1055,19 @@ void process_go_signal_mcast_cmd() {
             (uint32_t)&aligned_go_signal_storage[storage_offset], dst_noc_addr_multicast, sizeof(uint32_t));
         noc_nonposted_writes_acked[noc_index] += num_dests;
 
+        WAYPOINT("WCW");
         while (!stream_wrap_ge(
             NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), wait_count)) {
         }
+        WAYPOINT("WCD");
         cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0);
         noc_nonposted_writes_num_issued[noc_index] += 1;
     } else {
+        WAYPOINT("WCW");
         while (!stream_wrap_ge(
             NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), wait_count)) {
         }
+        WAYPOINT("WCD");
     }
 
     *aligned_go_signal_storage = go_signal_value;
