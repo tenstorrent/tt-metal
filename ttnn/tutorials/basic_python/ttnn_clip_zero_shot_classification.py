@@ -571,6 +571,7 @@ def main():
     model = CLIPModel.from_pretrained(
         "openai/clip-vit-base-patch32", cache_dir="ttnn_clip_zero_shot_image_classification/"
     )
+
     tokenizer = CLIPTokenizer.from_pretrained(
         "openai/clip-vit-base-patch32", cache_dir="ttnn_clip_zero_shot_image_classification/"
     )
