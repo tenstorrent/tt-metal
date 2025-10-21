@@ -800,11 +800,9 @@ jobs:
 
           echo "DEBUG generate-comment: Final TEAM_MEMBERS='$TEAM_MEMBERS'"
 
-          # Save TEAM_MEMBERS to GITHUB_ENV to avoid ARG_MAX limits
-          echo "TEAM_MEMBERS_DATA<<TEAM_EOF" >> $GITHUB_ENV
-          echo "$TEAM_MEMBERS" >> $GITHUB_ENV
-          echo "TEAM_EOF" >> $GITHUB_ENV
-          echo "Saved team members data to environment ($(echo "$TEAM_MEMBERS" | wc -c) bytes)"
+          # Save TEAM_MEMBERS to file to avoid ARG_MAX limits (file persists between steps in same job)
+          echo "$TEAM_MEMBERS" > "${RUNNER_TEMP}/team_members.txt"
+          echo "Saved team members data to ${RUNNER_TEMP}/team_members.txt ($(echo "$TEAM_MEMBERS" | wc -c) bytes)"
 
           # Collect pending and approved groups separately
           PENDING_GROUPS=""
@@ -1241,17 +1239,12 @@ jobs:
             fi
           done
 
-          ALL_SLACK_USERS=$(cat "$TEMP_USERS_FILE")
-          USER_COUNT=$(echo "$ALL_SLACK_USERS" | jq '. | length')
+          USER_COUNT=$(jq '. | length' "$TEMP_USERS_FILE")
           echo "✅ Successfully fetched $USER_COUNT Slack users across $PAGE_COUNT pages"
 
-          # Cleanup temp file
-          rm -f "$TEMP_USERS_FILE"
-
-          # Save to GITHUB_ENV for next step in this job (secure, runner-only)
-          echo "SLACK_USERS_CACHE<<SLACK_EOF" >> $GITHUB_ENV
-          echo "$ALL_SLACK_USERS" >> $GITHUB_ENV
-          echo "SLACK_EOF" >> $GITHUB_ENV
+          # Move to RUNNER_TEMP for persistence between steps (avoids environment size limits)
+          mv "$TEMP_USERS_FILE" "${RUNNER_TEMP}/slack_users_direct.json"
+          echo "Saved Slack users to ${RUNNER_TEMP}/slack_users_direct.json"
 
       - name: Send direct ping notification
         if: needs.parse-comment.outputs.is-direct-ping == 'true'
@@ -1264,9 +1257,10 @@ jobs:
           REQUESTER_LOGIN="${{ needs.parse-comment.outputs.comment-author }}"
           REQUESTER_NAME="$REQUESTER_LOGIN"
 
-          # Use Slack users from secure environment variable (set in previous step)
-          ALL_SLACK_USERS="$SLACK_USERS_CACHE"
-          echo "Loaded $(echo "$ALL_SLACK_USERS" | jq '. | length') Slack users from cache"
+          # Load Slack users from file (set in previous step)
+          ALL_SLACK_USERS=$(cat "${RUNNER_TEMP}/slack_users_direct.json")
+          USER_COUNT=$(echo "$ALL_SLACK_USERS" | jq '. | length')
+          echo "Loaded $USER_COUNT Slack users from cache"
 
           # Get full name for requester if available
           echo "DEBUG: REQUESTER_LOGIN='$REQUESTER_LOGIN', PR_AUTHOR_LOGIN='$PR_AUTHOR_LOGIN'"
@@ -1702,17 +1696,12 @@ jobs:
             fi
           done
 
-          ALL_SLACK_USERS=$(cat "$TEMP_USERS_FILE")
-          USER_COUNT=$(echo "$ALL_SLACK_USERS" | jq '. | length')
+          USER_COUNT=$(jq '. | length' "$TEMP_USERS_FILE")
           echo "✅ Successfully fetched $USER_COUNT Slack users across $PAGE_COUNT pages"
 
-          # Cleanup temp file
-          rm -f "$TEMP_USERS_FILE"
-
-          # Save to GITHUB_ENV for subsequent steps in this job (secure, runner-only)
-          echo "SLACK_USERS_CACHE<<SLACK_EOF" >> $GITHUB_ENV
-          echo "$ALL_SLACK_USERS" >> $GITHUB_ENV
-          echo "SLACK_EOF" >> $GITHUB_ENV
+          # Move to RUNNER_TEMP for persistence between steps (avoids environment size limits)
+          mv "$TEMP_USERS_FILE" "${RUNNER_TEMP}/slack_users.json"
+          echo "Saved Slack users to ${RUNNER_TEMP}/slack_users.json"
 
           # Output for next steps
           {
@@ -1731,9 +1720,9 @@ jobs:
         if: needs.parse-comment.outputs.is-direct-ping != 'true'
         id: select-owners
         run: |
-          # Read TEAM_MEMBERS from environment variable (set in generate-comment step)
-          TEAM_MEMBERS="$TEAM_MEMBERS_DATA"
-          echo "DEBUG: Loaded team members data ($(echo "$TEAM_MEMBERS" | wc -c) bytes)"
+          # Read TEAM_MEMBERS from file (saved in generate-comment step)
+          TEAM_MEMBERS=$(cat "${RUNNER_TEMP}/team_members.txt")
+          echo "DEBUG: Loaded team members data from file ($(echo "$TEAM_MEMBERS" | wc -c) bytes)"
 
           # Handle cases where analyze-codeowners job might be skipped (direct ping)
           TEAMS="${{ needs.analyze-codeowners.outputs.codeowners-teams || '' }}"
@@ -2134,14 +2123,15 @@ jobs:
           REQUESTER_LOGIN="${{ needs.parse-comment.outputs.comment-author || '' }}"
           REQUESTER_NAME="$REQUESTER_LOGIN"
 
-          # Use Slack users from secure environment variable (set in Setup for notifications step)
-          ALL_SLACK_USERS="$SLACK_USERS_CACHE"
+          # Load Slack users from file (set in Setup for notifications step)
+          ALL_SLACK_USERS=$(cat "${RUNNER_TEMP}/slack_users.json")
+          USER_COUNT=$(echo "$ALL_SLACK_USERS" | jq '. | length')
 
           echo "DEBUG Slack: SEND_SLACK='$SEND_SLACK'"
           echo "DEBUG Slack: SELECTED_OWNERS='$SELECTED_OWNERS'"
           echo "DEBUG Slack: SELECTED_SLACK_GROUPS='$SELECTED_SLACK_GROUPS'"
           echo "DEBUG Slack: NO_OWNERS_AVAILABLE='$NO_OWNERS_AVAILABLE'"
-          echo "DEBUG Slack: Using cached Slack users ($(echo "$ALL_SLACK_USERS" | jq '. | length') users)"
+          echo "DEBUG Slack: Using cached Slack users ($USER_COUNT users)"
 
           # Fetch PR title safely to avoid shell injection
           PR_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER"
