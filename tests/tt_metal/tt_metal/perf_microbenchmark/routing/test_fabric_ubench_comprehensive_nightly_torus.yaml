@@ -3,16 +3,17 @@ allocation_policies:
       max_configs_per_core: 4
 
 Tests:
-  # Linear tests
-  - name: "LinearMulticast"
+  # Torus tests
+  - name: "TorusAllToAllMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
-      topology: Linear
+      topology: Torus
+      torus_config: XY
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      ntype: [unicast_write, unicast_scatter_write]
       size: [16, 2048, 4096]
 
     defaults:
@@ -23,107 +24,33 @@ Tests:
       - type: all_to_all
         iterations: 3
 
-  - name: "UnidirLinearMulticast"
+  # Torus fused_atomic_inc tests are more inconsistent, so run them for extra iterations
+  - name: "TorusAllToAllMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
-      topology: Linear
+      topology: Torus
+      torus_config: XY
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
       size: [16, 2048, 4096]
 
     defaults:
       ftype: mcast
-      num_packets: 20000
+      ntype: fused_atomic_inc
+      num_packets: 100000
 
     patterns:
-      - type: unidirectional_linear
+      - type: all_to_all
         iterations: 3
 
-  - name: "SingleSenderLinearUnicastAllDevices"
+  - name: "TorusFullRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
-      topology: Linear
-
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [16, 2048, 4096]
-
-    defaults:
-      ftype: unicast
-      num_packets: 20000
-
-    patterns:
-      - type: one_to_all
-        iterations: 3
-
-  - name: "SingleSenderLinearMulticastAllDevices"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Linear
-
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [16, 2048, 4096]
-
-    defaults:
-      ftype: mcast
-      num_packets: 20000
-
-    patterns:
-      - type: one_to_all
-        iterations: 3
-
-  - name: "PerimeterLinearUnicast"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Linear
-
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [16, 2048, 4096]
-
-    defaults:
-      ftype: unicast
-      num_packets: 20000
-
-    patterns:
-      - type: perimeter_linear
-        iterations: 3
-
-  - name: "NeighborExchangeLinearUnicast"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Linear
-
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [16, 2048, 4096]
-
-    defaults:
-      ftype: unicast
-      num_packets: 20000
-
-    patterns:
-      - type: neighbor_exchange
-        iterations: 3
-
-  # Ring tests
-  - name: "FullRingMulticast"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Ring
+      topology: Torus
+      torus_config: XY
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
@@ -138,11 +65,12 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "FullRingUnicast"
+  - name: "TorusFullRingUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
-      topology: Ring
+      topology: Torus
+      torus_config: XY
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
@@ -157,11 +85,12 @@ Tests:
       - type: full_ring
         iterations: 3
 
-  - name: "HalfRingMulticast"
+  - name: "TorusHalfRingMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
-      topology: Ring
+      topology: Torus
+      torus_config: XY
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
@@ -176,31 +105,12 @@ Tests:
       - type: half_ring
         iterations: 3
 
-  # Mesh tests
-  - name: "MeshMulticast"
+  - name: "UnidirTorusMulticast"
     benchmark_mode: true
     sync: true
     fabric_setup:
-      topology: Mesh
-
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [16, 2048, 4096]
-
-    defaults:
-      ftype: mcast
-      num_packets: 20000
-
-    patterns:
-      - type: all_to_all
-        iterations: 3
-
-  - name: "UnidirMeshMulticast"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Mesh
+      topology: Torus
+      torus_config: XY
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
@@ -215,11 +125,12 @@ Tests:
       - type: unidirectional_linear
         iterations: 3
 
-  - name: "SingleSenderMeshUnicastAllDevices"
+  - name: "SingleSenderTorusUnicastAllDevices"
     benchmark_mode: true
     sync: true
     fabric_setup:
-      topology: Mesh
+      topology: Torus
+      torus_config: XY
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
@@ -234,11 +145,12 @@ Tests:
       - type: one_to_all
         iterations: 3
 
-  - name: "SingleSenderMeshMulticastAllDevices"
+  - name: "SingleSenderTorusMulticastAllDevices"
     benchmark_mode: true
     sync: true
     fabric_setup:
-      topology: Mesh
+      topology: Torus
+      torus_config: XY
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
@@ -253,11 +165,12 @@ Tests:
       - type: one_to_all
         iterations: 3
 
-  - name: "PerimeterMeshUnicast"
+  - name: "PerimeterTorusUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
-      topology: Mesh
+      topology: Torus
+      torus_config: XY
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
@@ -272,11 +185,12 @@ Tests:
       - type: perimeter_linear
         iterations: 3
 
-  - name: "NeighborExchangeMeshUnicast"
+  - name: "NeighborExchangeTorusUnicast"
     benchmark_mode: true
     sync: true
     fabric_setup:
-      topology: Mesh
+      topology: Torus
+      torus_config: XY
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
