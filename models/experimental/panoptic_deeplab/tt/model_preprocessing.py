@@ -399,9 +399,9 @@ def compute_panoptic_deeplab_input_shapes(input_height: int = 512, input_width: 
         shapes[f"{head_prefix}.decoder.res5.project_conv.project"] = (batch_size, res5_h, res5_w, 1280)
 
     # === SEMANTIC SEGMENTATION HEAD ===
-    # Input: decoder output at H/8 x W/8 (res3 resolution)
-    # Final output: H/4 x W/4 (upsampled 2x)
-    sem_h, sem_w = res3_h, res3_w
+    # Input: decoder output at H/4 x W/4 (res2 resolution)
+    # Final output: H x W (upsampled 4x)
+    sem_h, sem_w = res2_h, res2_w  # Fixed: decoder outputs at res2, not res3!
     shapes["semantic_head.head.0"] = (batch_size, sem_h, sem_w, 256)
     shapes["semantic_head.head.1"] = (batch_size, sem_h, sem_w, 256)
     shapes["semantic_head.predictor"] = (batch_size, sem_h, sem_w, 256)
@@ -459,6 +459,54 @@ def custom_preprocessor(model, name, input_shapes=None):
                 input_width=width,
                 batch_size=batch_size,
             )
+
+            # Pad predictor layers to tile-aligned output channels (32)
+            # TTNN conv2d requires output channels to be multiples of 32
+            original_out_channels = conv_config.out_channels
+            is_predictor = "predictor" in name.split(".")[-1]  # Check if last component contains "predictor"
+
+            if is_predictor:
+                logger.debug(
+                    f"[PADDING DEBUG] {name}: is_predictor=True, original_out_channels={original_out_channels}"
+                )
+
+            if is_predictor and original_out_channels < 32:
+                import torch
+                from dataclasses import replace
+
+                # Calculate padding needed to reach 32 channels
+                padded_out_channels = 32
+                padding_needed = padded_out_channels - original_out_channels
+
+                logger.info(
+                    f"Padding predictor layer '{name}' from {original_out_channels} to {padded_out_channels} output channels"
+                )
+
+                # Pad weights: [out_channels, in_channels, kernel_h, kernel_w]
+                # Convert TTNN tensor back to torch, pad, then convert back
+                # Use ROW_MAJOR layout for weights (conv2d requires ROW_MAJOR for host weights)
+                weight_torch = ttnn.to_torch(conv_config.weight)
+                weight_padded = torch.nn.functional.pad(weight_torch, (0, 0, 0, 0, 0, 0, 0, padding_needed), value=0.0)
+                weight_padded_ttnn = ttnn.from_torch(weight_padded, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+                # Pad bias if present: [1, 1, 1, out_channels]
+                bias_padded_ttnn = None
+                if conv_config.bias is not None:
+                    bias_torch = ttnn.to_torch(conv_config.bias)
+                    bias_padded = torch.nn.functional.pad(bias_torch, (0, padding_needed), value=0.0)
+                    bias_padded_ttnn = ttnn.from_torch(bias_padded, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+                # Create new config with padded weights (Conv2dConfiguration is frozen)
+                conv_config = replace(
+                    conv_config,
+                    out_channels=padded_out_channels,
+                    weight=weight_padded_ttnn,
+                    bias=bias_padded_ttnn if bias_padded_ttnn is not None else conv_config.bias,
+                )
+
+                # Store original output channels for slicing after forward pass
+                parameters["original_out_channels"] = original_out_channels
+
             parameters["conv_config"] = conv_config
 
             # Extract weight and bias from Conv2dConfiguration for fusion
@@ -518,6 +566,8 @@ def custom_preprocessor(model, name, input_shapes=None):
 
     # Handle standard PyTorch Conv2d layers (used in ResNet backbone)
     elif isinstance(model, nn.Conv2d):
+        if ".predictor" in name:
+            logger.debug(f"[PATH DEBUG nn.Conv2d] {name}: Processing in nn.Conv2d path")
         # Extract Conv2dConfiguration using TT CNN Builder API
         if input_shapes and name in input_shapes:
             batch_size, height, width, channels = input_shapes[name]
@@ -529,6 +579,54 @@ def custom_preprocessor(model, name, input_shapes=None):
                 input_width=width,
                 batch_size=batch_size,
             )
+
+            # Pad predictor layers to tile-aligned output channels (32)
+            # TTNN conv2d requires output channels to be multiples of 32
+            original_out_channels = conv_config.out_channels
+            is_predictor = "predictor" in name.split(".")[-1]  # Check if last component contains "predictor"
+
+            if is_predictor:
+                logger.debug(
+                    f"[PADDING DEBUG] {name}: is_predictor=True, original_out_channels={original_out_channels}"
+                )
+
+            if is_predictor and original_out_channels < 32:
+                import torch
+                from dataclasses import replace
+
+                # Calculate padding needed to reach 32 channels
+                padded_out_channels = 32
+                padding_needed = padded_out_channels - original_out_channels
+
+                logger.info(
+                    f"Padding predictor layer '{name}' from {original_out_channels} to {padded_out_channels} output channels"
+                )
+
+                # Pad weights: [out_channels, in_channels, kernel_h, kernel_w]
+                # Convert TTNN tensor back to torch, pad, then convert back
+                # Use ROW_MAJOR layout for weights (conv2d requires ROW_MAJOR for host weights)
+                weight_torch = ttnn.to_torch(conv_config.weight)
+                weight_padded = torch.nn.functional.pad(weight_torch, (0, 0, 0, 0, 0, 0, 0, padding_needed), value=0.0)
+                weight_padded_ttnn = ttnn.from_torch(weight_padded, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+                # Pad bias if present: [1, 1, 1, out_channels]
+                bias_padded_ttnn = None
+                if conv_config.bias is not None:
+                    bias_torch = ttnn.to_torch(conv_config.bias)
+                    bias_padded = torch.nn.functional.pad(bias_torch, (0, padding_needed), value=0.0)
+                    bias_padded_ttnn = ttnn.from_torch(bias_padded, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+                # Create new config with padded weights (Conv2dConfiguration is frozen)
+                conv_config = replace(
+                    conv_config,
+                    out_channels=padded_out_channels,
+                    weight=weight_padded_ttnn,
+                    bias=bias_padded_ttnn if bias_padded_ttnn is not None else conv_config.bias,
+                )
+
+                # Store original output channels for slicing after forward pass
+                parameters["original_out_channels"] = original_out_channels
+
             parameters["conv_config"] = conv_config
 
             # Extract weight and bias from Conv2dConfiguration for fusion

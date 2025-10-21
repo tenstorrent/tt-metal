@@ -88,6 +88,14 @@ def test_ttnn_insemb(device, model_location_generator):
             conv_w_dtype=ttnn.bfloat8_b,
         )
 
+        # Apply layer-specific configurations
+        logger.info("Applying ASPP layer overrides...")
+        model_configs.setup_aspp_layer_overrides()
+        logger.info("Applying decoder layer overrides...")
+        model_configs.setup_decoder_layer_overrides()
+        logger.info("Applying head layer overrides...")
+        model_configs.setup_head_layer_overrides()
+
         # Create TTNN model with fused parameters and centralized configuration
         ttnn_model = TtPanopticDeepLab(
             device=device,
@@ -113,12 +121,28 @@ def test_ttnn_insemb(device, model_location_generator):
     logger.info("Running TTNN instance embedding head test...")
     ttnn_center_out_tt, ttnn_offset_out_tt, _, _ = ttnn_model.instance_head(ttnn_features)
 
+    # Handle center output - slice back to original channels if padding was applied
     ttnn_center_out_torch = ttnn.to_torch(ttnn_center_out_tt).permute(0, 3, 1, 2)
+    center_original_channels = ttnn_model.instance_head.get_center_output_channels_for_slicing()
+    if center_original_channels is not None:
+        logger.info(
+            f"Slicing center output from {ttnn_center_out_torch.shape[1]} to {center_original_channels} channels in torch"
+        )
+        ttnn_center_out_torch = ttnn_center_out_torch[:, :center_original_channels, :, :]
+
     passed_center, msg_center = assert_with_pcc(torch_center_out, ttnn_center_out_torch, pcc=0.98)
     logger.info(f"Center PCC: {msg_center}")
     assert passed_center, f"Center PCC test failed: {msg_center}"
 
+    # Handle offset output - slice back to original channels if padding was applied
     ttnn_offset_out_torch = ttnn.to_torch(ttnn_offset_out_tt).permute(0, 3, 1, 2)
+    offset_original_channels = ttnn_model.instance_head.get_offset_output_channels_for_slicing()
+    if offset_original_channels is not None:
+        logger.info(
+            f"Slicing offset output from {ttnn_offset_out_torch.shape[1]} to {offset_original_channels} channels in torch"
+        )
+        ttnn_offset_out_torch = ttnn_offset_out_torch[:, :offset_original_channels, :, :]
+
     passed_offset, msg_offset = assert_with_pcc(torch_offset_out, ttnn_offset_out_torch, pcc=0.96)
     logger.info(f"Offset PCC: {msg_offset}")
     assert passed_offset, f"Offset PCC test failed: {msg_offset}"

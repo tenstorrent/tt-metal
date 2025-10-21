@@ -5,7 +5,6 @@ from typing import Dict, Optional, Tuple
 import ttnn
 from loguru import logger
 
-from models.tt_cnn.tt.builder import TtUpsample, UpsampleConfiguration
 from models.experimental.panoptic_deeplab.tt.tt_semseg import TtDeepLabV3PlusHead
 from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 
@@ -65,6 +64,11 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         )
         self.center_predictor = self._create_conv_layer(center_predictor_params, "instance_head.center_predictor")
 
+        # Store original output channels if padding was applied during preprocessing
+        if isinstance(center_predictor_params, dict) and "original_out_channels" in center_predictor_params:
+            self._center_output_original_channels = center_predictor_params["original_out_channels"]
+            logger.debug(f"Center predictor: stored original_out_channels={self._center_output_original_channels}")
+
         # --- Offset Prediction Branch - use builder API ---
         offset_head_params = parameters["offset_head"] if isinstance(parameters, dict) else parameters.offset_head
         self.offset_head_0 = self._create_conv_layer(offset_head_params[0], "instance_head.offset_head.0")
@@ -75,12 +79,30 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         )
         self.offset_predictor = self._create_conv_layer(offset_predictor_params, "instance_head.offset_predictor")
 
+        # Store original output channels if padding was applied during preprocessing
+        if isinstance(offset_predictor_params, dict) and "original_out_channels" in offset_predictor_params:
+            self._offset_output_original_channels = offset_predictor_params["original_out_channels"]
+            logger.debug(f"Offset predictor: stored original_out_channels={self._offset_output_original_channels}")
+
         # Final upsample - use builder API
         # Store scale factor for dynamic upsample creation during forward pass
         self.final_upsample_scale = (
             common_stride if isinstance(common_stride, tuple) else (common_stride, common_stride)
         )
         self.final_upsample_mode = "nearest"
+
+        # Initialize original output channels to None if not already set from parameters
+        if not hasattr(self, "_center_output_original_channels"):
+            self._center_output_original_channels = None
+        if not hasattr(self, "_offset_output_original_channels"):
+            self._offset_output_original_channels = None
+
+        # Store spatial dimensions for upsample (will be set during forward pass)
+        self._center_predictor_h = None
+        self._center_predictor_w = None
+        self._offset_predictor_h = None
+        self._offset_predictor_w = None
+
         logger.debug("TtPanopticDeepLabInsEmbedHead initialization complete")
 
     def forward(self, features: Dict[str, ttnn.Tensor]) -> Tuple[ttnn.Tensor, ttnn.Tensor, Dict, Dict]:
@@ -88,29 +110,81 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         center_logits, offset_logits = self.layers(features)
 
         # --- Final Upsample for Center ---
-        center_upsample_config = UpsampleConfiguration(
-            scale_factor=self.final_upsample_scale,
-            mode=self.final_upsample_mode,
-            input_height=center_logits.shape[1],
-            input_width=center_logits.shape[2],
-            batch_size=center_logits.shape[0],
-            channels=center_logits.shape[3],
+        # Use saved spatial dimensions (predictors may output in TILE_LAYOUT with padding)
+        current_h = self._center_predictor_h
+        current_w = self._center_predictor_w
+
+        # If flattened, reshape before upsample
+        if center_logits.shape[1] == 1 and center_logits.shape[2] == current_h * current_w:
+            logger.debug(
+                f"Reshaping flattened center output from {center_logits.shape} to [1, {current_h}, {current_w}, {center_logits.shape[3]}]"
+            )
+            center_logits = ttnn.reshape(
+                center_logits, (center_logits.shape[0], current_h, current_w, center_logits.shape[3])
+            )
+
+        # Convert to interleaved DRAM if sharded
+        if center_logits.is_sharded():
+            center_logits = ttnn.sharded_to_interleaved(center_logits, ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            center_logits = ttnn.to_memory_config(center_logits, ttnn.DRAM_MEMORY_CONFIG)
+
+        # Convert to ROW_MAJOR for upsample
+        center_logits = ttnn.to_layout(center_logits, ttnn.ROW_MAJOR_LAYOUT)
+
+        # Calculate scale factors
+        scale_h = self.final_upsample_scale[0]
+        scale_w = self.final_upsample_scale[1]
+        logger.debug(
+            f"Center: Upsampling from [{current_h}, {current_w}] with scale_factor=[{scale_h}, {scale_w}] to [{current_h * scale_h}, {current_w * scale_w}]"
         )
-        center_upsample = TtUpsample(center_upsample_config, self.device)
-        center_logits = center_upsample(center_logits)
+
+        # Upsample directly
+        center_logits = ttnn.upsample(center_logits, scale_factor=(scale_h, scale_w), mode=self.final_upsample_mode)
+
+        # Convert back to TILE_LAYOUT and DRAM
+        center_logits = ttnn.to_layout(center_logits, ttnn.TILE_LAYOUT)
+        center_logits = ttnn.to_memory_config(center_logits, ttnn.DRAM_MEMORY_CONFIG)
         logger.debug(f"TtPanopticDeepLabInsEmbedHead center upsample complete - shape: {center_logits.shape}")
 
         # --- Final Upsample for Offset ---
-        offset_upsample_config = UpsampleConfiguration(
-            scale_factor=self.final_upsample_scale,
-            mode=self.final_upsample_mode,
-            input_height=offset_logits.shape[1],
-            input_width=offset_logits.shape[2],
-            batch_size=offset_logits.shape[0],
-            channels=offset_logits.shape[3],
+        # Use saved spatial dimensions
+        current_h = self._offset_predictor_h
+        current_w = self._offset_predictor_w
+
+        # If flattened, reshape before upsample
+        if offset_logits.shape[1] == 1 and offset_logits.shape[2] == current_h * current_w:
+            logger.debug(
+                f"Reshaping flattened offset output from {offset_logits.shape} to [1, {current_h}, {current_w}, {offset_logits.shape[3]}]"
+            )
+            offset_logits = ttnn.reshape(
+                offset_logits, (offset_logits.shape[0], current_h, current_w, offset_logits.shape[3])
+            )
+
+        # Convert to interleaved DRAM if sharded
+        if offset_logits.is_sharded():
+            offset_logits = ttnn.sharded_to_interleaved(offset_logits, ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            offset_logits = ttnn.to_memory_config(offset_logits, ttnn.DRAM_MEMORY_CONFIG)
+
+        # Convert to ROW_MAJOR for upsample
+        offset_logits = ttnn.to_layout(offset_logits, ttnn.ROW_MAJOR_LAYOUT)
+
+        # Calculate scale factors
+        scale_h = self.final_upsample_scale[0]
+        scale_w = self.final_upsample_scale[1]
+        logger.debug(
+            f"Offset: Upsampling from [{current_h}, {current_w}] with scale_factor=[{scale_h}, {scale_w}] to [{current_h * scale_h}, {current_w * scale_w}]"
         )
-        offset_upsample = TtUpsample(offset_upsample_config, self.device)
-        offset_logits = offset_upsample(offset_logits)
+
+        # Upsample directly
+        offset_logits = ttnn.upsample(offset_logits, scale_factor=(scale_h, scale_w), mode=self.final_upsample_mode)
+
+        # Convert back to TILE_LAYOUT and DRAM
+        offset_logits = ttnn.to_layout(offset_logits, ttnn.TILE_LAYOUT)
+        offset_logits = ttnn.to_memory_config(offset_logits, ttnn.DRAM_MEMORY_CONFIG)
+
+        # Apply offset scaling
         offset_logits = ttnn.mul(offset_logits, self.common_stride)
         logger.debug(f"TtPanopticDeepLabInsEmbedHead offset upsample complete - shape: {offset_logits.shape}")
 
@@ -122,18 +196,55 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
 
         y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
 
+        # Save spatial dimensions for upsample (head convs have stride=1)
+        self._center_predictor_h = y.shape[1]
+        self._center_predictor_w = y.shape[2]
+        self._offset_predictor_h = y.shape[1]
+        self._offset_predictor_w = y.shape[2]
+        logger.debug(f"Saved predictor spatial dimensions: H={self._center_predictor_h}, W={self._center_predictor_w}")
+
         # --- Center Prediction Branch ---
+        logger.info(f"🔷 Executing conv: instance_head.center_head.0")
         center_y = self.center_head_0(y)
         center_y = self.activation(center_y)
+
+        logger.info(f"🔷 Executing conv: instance_head.center_head.1")
         center_y = self.center_head_1(center_y)
         center_y = self.activation(center_y)
+
+        # Convert to interleaved for predictor
+        if center_y.is_sharded():
+            center_y = ttnn.sharded_to_interleaved(center_y, ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            center_y = ttnn.to_memory_config(center_y, ttnn.DRAM_MEMORY_CONFIG)
+
+        logger.info(f"🔷 Executing conv: instance_head.center_predictor")
         center_logits = self.center_predictor(center_y)
 
         # --- Offset Prediction Branch ---
+        logger.info(f"🔷 Executing conv: instance_head.offset_head.0")
         offset_y = self.offset_head_0(y)
         offset_y = self.activation(offset_y)
+
+        logger.info(f"🔷 Executing conv: instance_head.offset_head.1")
         offset_y = self.offset_head_1(offset_y)
         offset_y = self.activation(offset_y)
+
+        # Convert to interleaved for predictor
+        if offset_y.is_sharded():
+            offset_y = ttnn.sharded_to_interleaved(offset_y, ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            offset_y = ttnn.to_memory_config(offset_y, ttnn.DRAM_MEMORY_CONFIG)
+
+        logger.info(f"🔷 Executing conv: instance_head.offset_predictor")
         offset_logits = self.offset_predictor(offset_y)
 
         return center_logits, offset_logits
+
+    def get_center_output_channels_for_slicing(self):
+        """Return the original (unpadded) center output channel count, or None if no padding was applied."""
+        return self._center_output_original_channels
+
+    def get_offset_output_channels_for_slicing(self):
+        """Return the original (unpadded) offset output channel count, or None if no padding was applied."""
+        return self._offset_output_original_channels

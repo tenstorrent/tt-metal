@@ -86,6 +86,10 @@ def test_ttnn_semseg(device, model_location_generator):
             conv_act_dtype=ttnn.bfloat8_b,
             conv_w_dtype=ttnn.bfloat8_b,
         )
+        # Setup layer overrides to enable optimized sharding
+        model_configs.setup_aspp_layer_overrides()  # ASPP (used in decoder)
+        model_configs.setup_decoder_layer_overrides()
+        model_configs.setup_head_layer_overrides()
 
         # Create TTNN model with fused parameters and centralized configuration
         ttnn_model = TtPanopticDeepLab(
@@ -113,6 +117,12 @@ def test_ttnn_semseg(device, model_location_generator):
     ttnn_out_tt, _ = ttnn_model.semantic_head(ttnn_features)
 
     ttnn_out_torch = ttnn.to_torch(ttnn_out_tt).permute(0, 3, 1, 2)
+
+    # Check if output was padded and needs slicing back to original channels
+    original_channels = ttnn_model.semantic_head.get_output_channels_for_slicing()
+    if original_channels is not None:
+        logger.info(f"Slicing output from {ttnn_out_torch.shape[1]} to {original_channels} channels in torch")
+        ttnn_out_torch = ttnn_out_torch[:, :original_channels, :, :]
 
     passed, msg = assert_with_pcc(torch_out, ttnn_out_torch, pcc=0.99)
     logger.info(f"Semantic segmentation PCC: {msg}")

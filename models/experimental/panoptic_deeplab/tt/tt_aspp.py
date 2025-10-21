@@ -186,20 +186,98 @@ class TtASPP(LightweightModule):
         # Process conv branches
         res = []
         for i, conv in enumerate(self.conv_branches):
-            branch_out = conv(x)
+            logger.info(f"🔷 Executing conv: aspp.convs.{i}")
+            logger.info(f"  Input x: shape={x.shape}, dtype={x.dtype}, layout={x.layout}, is_sharded={x.is_sharded()}")
 
-            # Channel-sliced convolutions may output in flattened format [N, 1, H*W, C]
-            # Reshape back to [N, H, W, C] and apply ReLU manually
-            if branch_out.shape[1] == 1 and branch_out.shape[2] == H * W:
+            # Special handling for branch 3: manual channel slicing with flattened format
+            # Block float dtypes require flattened format (1, 1, nhw, C) for dilated convolutions
+            if i == 3:
+                logger.info(
+                    f"  Branch 3 check: dtype={x.dtype}, has_slice_strategy={hasattr(conv.configuration, 'slice_strategy')}, slice_strategy={conv.configuration.slice_strategy if hasattr(conv.configuration, 'slice_strategy') else 'N/A'}"
+                )
+            if (
+                i == 3
+                and x.dtype == ttnn.bfloat8_b
+                and hasattr(conv.configuration, "slice_strategy")
+                and conv.configuration.slice_strategy is not None
+            ):
+                num_slices = conv.configuration.slice_strategy.get_num_slices()
+                logger.info(f"  Branch {i}: Manual channel slicing with {num_slices} slices in flattened format")
+
+                # Flatten input
+                x_flat = ttnn.reshape(x, (1, 1, H * W, C))
+                logger.info(f"    Flattened: {x.shape} -> {x_flat.shape}")
+
+                # Manually slice channels in flattened format and accumulate
+                channels_per_slice = C // num_slices
+                accumulated_output = None
+
+                for slice_idx in range(num_slices):
+                    start_ch = slice_idx * channels_per_slice
+                    end_ch = (slice_idx + 1) * channels_per_slice
+
+                    # Slice in flattened format: [1, 1, H*W, C]
+                    x_slice = ttnn.slice(
+                        x_flat,
+                        [0, 0, 0, start_ch],
+                        [1, 1, H * W, end_ch],
+                    )
+                    logger.info(f"      Slice {slice_idx}: channels [{start_ch}:{end_ch}], shape={x_slice.shape}")
+
+                    # Call conv without internal slicing (it will use flattened input directly)
+                    slice_out = conv._call_without_slicing(
+                        x_slice, in_channels_override=channels_per_slice, weight_slice_idx=slice_idx
+                    )
+
+                    # Move to avoid OOM
+                    slice_out = ttnn.move(slice_out)
+
+                    # Accumulate slices
+                    if slice_idx == 0:
+                        accumulated_output = ttnn.to_memory_config(slice_out, ttnn.DRAM_MEMORY_CONFIG)
+                    else:
+                        accumulated_output = ttnn.add(slice_out, accumulated_output, output_tensor=accumulated_output)
+
+                    # Deallocate slice output if not first
+                    if slice_idx > 0:
+                        slice_out.deallocate(True)
+
+                branch_out = accumulated_output
+                logger.info(f"    Accumulated output: {branch_out.shape}")
+
+                # Apply bias if it exists
+                if hasattr(conv, "bias") and conv.bias is not None:
+                    # Ensure bias is in correct layout and dtype
+                    bias = conv.bias
+                    if bias.layout != ttnn.TILE_LAYOUT or bias.dtype != branch_out.dtype:
+                        bias = ttnn.to_layout(bias, ttnn.TILE_LAYOUT, dtype=branch_out.dtype)
+                    branch_out = ttnn.add(branch_out, bias, output_tensor=branch_out)
+
+                # Reshape to NHWC and apply ReLU
                 branch_out = ttnn.reshape(branch_out, (N, H, W, branch_out.shape[3]))
-                # Apply ReLU manually (fused ReLU doesn't work with channel slicing)
                 branch_out = self.activation(branch_out)
+            else:
+                # Standard path for other branches
+                branch_out = conv(x)
+
+                # Channel-sliced convolutions may output in flattened format [N, 1, H*W, C]
+                # Reshape back to [N, H, W, C] and apply ReLU manually
+                if branch_out.shape[1] == 1 and branch_out.shape[2] == H * W:
+                    branch_out = ttnn.reshape(branch_out, (N, H, W, branch_out.shape[3]))
+                    # Apply ReLU manually (fused ReLU doesn't work with channel slicing)
+                    branch_out = self.activation(branch_out)
 
             res.append(branch_out)
 
         # Global average pooling branch
+        # If input is bfloat8_b, it needs to be flattened for pooling
+        x_for_pooling = x
+        if x.dtype == ttnn.bfloat8_b and x.shape[1] == H and x.shape[2] == W:
+            logger.info(f"  Flattening input for global pooling: {x.shape} -> (1, 1, {H*W}, {C})")
+            x_for_pooling = ttnn.reshape(x, (1, 1, H * W, C))
+
         pooled = ttnn.avg_pool2d(
-            input_tensor=x,
+            input_tensor=x_for_pooling,
             batch_size=N,
             input_h=H,
             input_w=W,
@@ -220,6 +298,7 @@ class TtASPP(LightweightModule):
         pooled = ttnn.to_memory_config(pooled, ttnn.DRAM_MEMORY_CONFIG)
 
         # Process pooled branch with conv
+        logger.info(f"🔷 Executing conv: aspp.convs.4")
         pooled = self.pool_conv(pooled)
 
         # Upsample pooled branch to match input spatial dimensions
@@ -255,6 +334,7 @@ class TtASPP(LightweightModule):
         logger.debug(f"TtASPP concatenated branches, shape: {res.shape}")
 
         # Project to final output
+        logger.info(f"🔷 Executing conv: aspp.project")
         res = self.project_conv(res)
         logger.debug(f"TtASPP forward pass complete - output shape: {res.shape}")
 

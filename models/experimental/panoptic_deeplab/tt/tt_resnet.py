@@ -127,14 +127,33 @@ class TtResNet(LightweightModule):
         x = self.stem(x)
         logger.debug(f"Stem complete - output: {x.shape}")
 
+        # Spatial dimensions for each stage (derived from model architecture)
+        # res2: H/4 x W/4, res3: H/8 x W/8, res4: H/16 x W/16, res5: H/16 x W/16
+        spatial_dims = {
+            "res2": (128, 256),  # For 512x1024 input
+            "res3": (64, 128),
+            "res4": (32, 64),
+            "res5": (32, 64),
+        }
+
         # Process residual layers and collect outputs
         outputs = {}
         for layer_name, layer in [("res2", self.res2), ("res3", self.res3), ("res4", self.res4), ("res5", self.res5)]:
             x = self._forward_res_layer(x, layer)
             if x.is_sharded():
-                outputs[layer_name] = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+                x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
             else:
-                outputs[layer_name] = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                x = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+            # Reshape if flattened [1, 1, H*W, C] -> [1, H, W, C]
+            expected_h, expected_w = spatial_dims[layer_name]
+            if x.shape[1] == 1 and x.shape[2] == expected_h * expected_w:
+                logger.debug(f"{layer_name}: Reshaping from {x.shape} to [1, {expected_h}, {expected_w}, {x.shape[3]}]")
+                x = ttnn.reshape(x, (1, expected_h, expected_w, x.shape[3]))
+
+            # Clone the output to store independently (backbone outputs are shared between heads)
+            # This prevents deallocation in subsequent stages from affecting stored outputs
+            outputs[layer_name] = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             logger.debug(f"{layer_name} complete - output: {outputs[layer_name].shape}")
 
         return outputs
