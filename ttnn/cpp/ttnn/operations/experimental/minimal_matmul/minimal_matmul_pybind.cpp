@@ -123,7 +123,7 @@ void py_bind_minimal_matmul(py::module& module) {
         Example
         -------
         >>> import ttnn
-        >>> a = ...  # TILE tensor with shape [M, K], dtype=DataType::BFLOAT16, on device
+        >>> a = ...  # TILE tensor with shape [M, K], dtype=ttnn.bfloat16, on device
         >>> b = ...  # TILE tensor with shape [K, N], same dtype/device as `a`
         >>> bias = ...  # Optional TILE tensor with shape [N]
         >>> y = ttnn.experimental.minimal_matmul(
