@@ -3,11 +3,14 @@ This is the Vision Transformer Block for Gemma-3-4b-it.
 This involves vision followed by MultiModalProjector processing
 """
 
+
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
 
+import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.gemma3.tt.gemma_vision_block import TtSiglipGemmaVisionModel
 from models.demos.gemma3.tt.multi_modal_projector import TtGemma3MultiModalProjector
@@ -62,8 +65,25 @@ class TtGemmaTransformerVision(LightweightModule):
             configuration=configuration,
         )
 
-    def forward(self, images):
-        vision_tokens = self.vision_encoder(images)[:, 0, :, :]
+        self.t_vision_encoder = 0
+        self.t_mmp = 0
+        self.n = 0
 
+    def forward(self, images):
+        self.n += 1
+
+        ttnn.synchronize_device(self.mesh_device)
+        t0 = time.perf_counter()
+        vision_tokens = self.vision_encoder(images)[:, 0, :, :]
+        ttnn.synchronize_device(self.mesh_device)
+        if self.n != 1:
+            self.t_vision_encoder += time.perf_counter() - t0
+
+        ttnn.synchronize_device(self.mesh_device)
+        t0 = time.perf_counter()
         vision_tokens = self.mmp(vision_tokens)
+        ttnn.synchronize_device(self.mesh_device)
+        if self.n != 1:
+            self.t_mmp += time.perf_counter() - t0
+
         return vision_tokens
