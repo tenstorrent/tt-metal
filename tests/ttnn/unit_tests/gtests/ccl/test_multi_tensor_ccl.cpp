@@ -73,6 +73,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AllGatherCommandProcessorAsyn
     std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {semaphore};
     tt::tt_metal::distributed::Synchronize(mesh_device_.get(), std::nullopt, std::vector<SubDeviceId>());
 
+    // TODO (#30692): Use the new all gather flow with aggregate and disaggregate once this issue is fixed.
     // auto all_gathered = ttnn::experimental::all_gather_command_processor_async(
     //     tensors,
     //     /* dim */ 0,

@@ -154,6 +154,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksCQ0) {
         // It does not support command queue ID as a parameter and internally uses command queue 0.
         std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {
             multi_device_global_semaphore};
+        // TODO (#30692): Use the new all gather flow with aggregate and disaggregate once this issue is fixed.
         // const std::vector<Tensor> gathered_tensors = ttnn::experimental::all_gather_command_processor_async(
         //     device_tensors,
         //     /* dim */ 0,
@@ -330,6 +331,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksCQ0CQ1) {
         // It does not support command queue ID as a parameter and internally uses command queue 0.
         std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {
             multi_device_global_semaphore};
+        // TODO (#30692): Use the new all gather flow with aggregate and disaggregate once this issue is fixed.
         // const std::vector<Tensor> gathered_tensors = ttnn::experimental::all_gather_command_processor_async(
         //     device_tensors,
         //     /* dim */ 0,
@@ -532,6 +534,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksMultithrea
         // It does not support command queue ID as a parameter and internally uses command queue 0.
         std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {
             multi_device_global_semaphore};
+        // TODO (#30692): Use the new all gather flow with aggregate and disaggregate once this issue is fixed.
         // const std::vector<Tensor> gathered_tensors = ttnn::experimental::all_gather_command_processor_async(
         //     device_tensors,
         //     /* dim */ 0,
