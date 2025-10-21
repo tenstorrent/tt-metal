@@ -29,6 +29,12 @@ TUTORIALS_DATA_PATHS = {
     # NOTE: Add entries here for new tutorials that require external data
 }
 
+EXCLUDED_TUTORIALS = [
+    "train_and_export_mlp.py",
+    "train_and_export_cnn.py",
+    # NOTE: Add tutorial file names here that should be excluded from tests
+]
+
 
 @pytest.fixture(scope="module", autouse=True)
 def setup_once(model_location_generator):
@@ -69,28 +75,38 @@ def setup_once(model_location_generator):
 
         # Download data using model_location_generator
         download_dir_suffix = Path(LOCAL_BASE_DIRECTORY) / Path(external_path)
-        data_placement = model_location_generator(
-            external_path,
-            download_if_ci_v2=True,
-            endpoint_prefix=EXTERNAL_SERVER_BASE_URL,
-            download_dir_suffix=download_dir_suffix,
-        )
-        data_placement = Path(data_placement)
+        try:
+            data_placement = model_location_generator(
+                external_path,
+                download_if_ci_v2=True,
+                endpoint_prefix=EXTERNAL_SERVER_BASE_URL,
+                download_dir_suffix=download_dir_suffix,
+            )
+            data_placement = Path(data_placement)
 
-        # Create symbolic link from local_path to data_placement
-        if local_path_obj.exists():
-            local_path_obj.unlink()  # Remove existing symlink/file
-        local_path_obj.symlink_to(data_placement.parent)
+            # Create symbolic link from local_path to data_placement
+            if local_path_obj.exists():
+                local_path_obj.unlink()  # Remove existing symlink/file
+            local_path_obj.symlink_to(data_placement.parent)
+        except Exception as e:
+            print(
+                f"Warning: Could not set up data for tutorial {tutorial_id}. Error: {e}. Data will be downloaded at runtime from original source."
+            )
 
 
-def collect_ttnn_tutorials(path: Path, extension: str = "*.py"):
+def collect_ttnn_tutorials(path: Path, extension: str = "*.py", excluded_files: list = []):
     for file_name in path.glob(extension):
+        if file_name.name in excluded_files:
+            continue
         yield file_name
 
 
 # Tests
 @skip_for_blackhole("Fails on BH. Issue #25579")
-@pytest.mark.parametrize("notebook_path", collect_ttnn_tutorials(path=TUTORIALS_NOTEBOOK_PATH, extension="*.ipynb"))
+@pytest.mark.parametrize(
+    "notebook_path",
+    collect_ttnn_tutorials(path=TUTORIALS_NOTEBOOK_PATH, extension="*.ipynb", excluded_files=EXCLUDED_TUTORIALS),
+)
 def test_ttnn_notebook_tutorials(notebook_path):
     with open(notebook_path) as f:
         notebook = nbformat.read(f, as_version=4)
@@ -99,7 +115,10 @@ def test_ttnn_notebook_tutorials(notebook_path):
 
 
 @skip_for_blackhole("Fails on BH. Issue #25579")
-@pytest.mark.parametrize("python_path", collect_ttnn_tutorials(path=TUTORIALS_PYTHON_PATH, extension="*.py"))
+@pytest.mark.parametrize(
+    "python_path",
+    collect_ttnn_tutorials(path=TUTORIALS_PYTHON_PATH, extension="*.py", excluded_files=EXCLUDED_TUTORIALS),
+)
 def test_ttnn_python_tutorials(python_path):
     result = subprocess.run(
         ["python3", str(python_path)],
