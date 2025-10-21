@@ -48,7 +48,6 @@ constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_6;  // reduction vector
 constexpr auto kDxCbIndex = tt::CBIndex::c_10;                // dx (input gradient)
 constexpr auto kDgammaComponentsCbIndex = tt::CBIndex::c_11;  // dgamma components
 constexpr auto kDbetaComponentsCbIndex = tt::CBIndex::c_12;   // dbeta components
-constexpr auto kDebugScaledSumCbIndex = tt::CBIndex::c_21;    // DEBUG: scaled dy*gamma sum
 
 // CBs with intermediate computations
 constexpr auto kXNormalizedCbIndex = tt::CBIndex::c_13;       // x_normalized = (x - mean) * rstd
@@ -192,11 +191,11 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
 
     // Check input shape is [B, 1, S, C]
     const auto& input_shape = input.logical_shape();
-    TT_FATAL(input_shape.rank() == 4, "Input tensor must be 4D [B, N, S, C], got shape {}", input_shape);
+    TT_FATAL(input_shape.rank() == 4, "Input tensor must be 4D [B, N, 1, C], got shape {}", input_shape);
 
     // Check gamma shape is [1, 1, 1, C]
     const auto& gamma_shape = gamma.logical_shape();
-    std::cout << "Gamma shape dfkjslkfjsldk: " << gamma_shape << std::endl;
+    std::cout << "Gamma shape: " << gamma_shape << std::endl;
     TT_FATAL(gamma_shape.rank() == 4, "Gamma tensor must be 4D [1, 1, 1, C], got shape {}", gamma_shape);
 
     // Check x_hat shape is [B, 1, S, C] - same as input
@@ -288,10 +287,6 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
         program, all_cores, kDgammaComponentsCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
     [[maybe_unused]] auto cb_dbeta_components = create_circular_buffer(
         program, all_cores, kDbetaComponentsCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
-
-    // DEBUG: CB for scaled dy*gamma sum output
-    [[maybe_unused]] auto cb_debug_scaled_sum = create_circular_buffer(
-        program, all_cores, kDebugScaledSumCbIndex, data_format, bfloat16_single_tile_size_bytes, 1);
 
     // Intermediate computation CBs
     [[maybe_unused]] auto cb_x_normalized = create_circular_buffer(

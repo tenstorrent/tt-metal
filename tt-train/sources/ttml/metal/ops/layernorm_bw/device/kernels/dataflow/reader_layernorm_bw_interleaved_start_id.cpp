@@ -60,7 +60,7 @@ void kernel_main() {
     }
     // Generate tile with scalar (1/N).
     generate_tile_with_packed_bfloat16_value(cb_scaler_idx, packed_scaler);
-
+    // Generate tile with zeros.
     generate_tile_with_packed_bfloat16_value(cb_zero, 0);
     // Generate tile for matmul row reduce.
     generate_matmul_row_reduce_tile(cb_mat_mul_reduce);
@@ -77,7 +77,6 @@ void kernel_main() {
     const auto dL_out_address_generator = TensorAccessor(dL_out_args, dL_out_address, tile_bytes);
 
     // Read input tensors row by row
-    // LayerNorm backward needs multiple passes over the data for sum computations
     uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; ++r) {
         // Read rstd once per row - rstd has shape [B,1,S,1]
@@ -85,58 +84,20 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_rstd_idx, 1);
 
-        // DEBUG: Print row number
-        if (r == start_row) {
-            DPRINT << "READER: Processing row " << r << ENDL();
-        }
-
 #ifdef EVERYTHING_FITS_IN_L1
-        // Read x_hat for the entire row when everything fits in L1
+        // If everything fits in L1, read all data for the row at once
         read_tiles(cb_x_hat_idx, x_hat_address_generator, r * Wt, Wt, tile_bytes);
         noc_async_read_barrier();
         cb_push_back(cb_x_hat_idx, Wt);
-        // If everything fits in L1, read all data for the row at once
-
         read_tiles(cb_dL_out_idx, dL_out_address_generator, r * Wt, Wt, tile_bytes);
         noc_async_read_barrier();
         cb_push_back(cb_dL_out_idx, Wt);
-
         if (r == start_row) {
             // Read gamma only once for all rows when everything fits in L1
             read_tiles(cb_gamma_idx, gamma_address_generator, 0, Wt, tile_bytes);
             noc_async_read_barrier();
             cb_push_back(cb_gamma_idx, Wt);
-
-            // for (uint32_t c = 0; c < Wt; c += 1) {
-            // // DEBUG: Print first gamma tile (inputs to dy*gamma computation)
-            //     DPRINT << "READER: gamma tile " << c << ":" << ENDL();
-            //     print_tile(cb_gamma_idx, c, false);
-            // }
         }
-        // // DEBUG: Print first dL_out (dy) tile for this row
-        // if (r == start_row) {
-        //     DPRINT << "READER: dy tile all cols:" << ENDL();
-        //     for (uint32_t c = 0; c < Wt; c += 1) {
-        //         DPRINT << "READER: dy tile " << c << ":" << ENDL();
-        //         print_tile(cb_dL_out_idx, c, false);
-        //     }
-        // }
-        // // DEBUG: Print first dL_out (dy) tile for this row
-        // if (r == start_row) {
-        //     DPRINT << "READER: x_norm tile all cols:" << ENDL();
-        //     for (uint32_t c = 0; c < Wt; c += 1) {
-        //         DPRINT << "READER: x_norm tile " << c << ":" << ENDL();
-        //         print_tile(cb_x_hat_idx, c, false);
-        //     }
-        // }
-        // // DEBUG: Print first dL_out (dy) tile for this row
-        // if (r == start_row) {
-        //     DPRINT << "READER: rstd tile all cols:" << ENDL();
-        //     for (uint32_t c = 0; c < Wt; c += 1) {
-        //         DPRINT << "READER: rstd tile " << c << ":" << ENDL();
-        //         print_tile(cb_rstd_idx, c, false);
-        //     }
-        // }
 #else
         // If not everything fits in L1, we need to read data multiple times per row
 
@@ -166,7 +127,7 @@ void kernel_main() {
             cb_push_back(cb_gamma_idx, block_size);
         }
 
-        // Third pass: for computing dx
+        // Three passes: for computing dx, dgamma_components, and dbeta_components
         for (uint32_t c = 0; c < Wt; c += block_size) {
             uint32_t row_tile_idx = (r * Wt) + c;
             {
@@ -180,7 +141,6 @@ void kernel_main() {
                 cb_push_back(cb_dL_out_idx, block_size);
             }
 
-            // Fourth pass: for computing dgamma_components
             {
                 read_tiles(cb_x_hat_idx, x_hat_address_generator, row_tile_idx, block_size, tile_bytes);
                 read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes);
@@ -190,7 +150,6 @@ void kernel_main() {
                 cb_push_back(cb_dL_out_idx, block_size);
             }
 
-            // Fifth pass: for computing dbeta_components
             {
                 read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes);
 
