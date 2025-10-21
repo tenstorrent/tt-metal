@@ -26,7 +26,7 @@ inputs:
   test_run_id:
     description: 'Run ID to use for testing (optional)'
     required: false
-    default: ''
+    default: '18691617073'
 
 outputs:
   total-runs:
