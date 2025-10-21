@@ -521,34 +521,6 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
 
 
 @pytest.fixture(scope="function")
-def n300_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
-    import ttnn
-
-    if ttnn.get_num_devices() < 2:
-        pytest.skip()
-
-    updated_device_params = get_updated_device_params(device_params)
-    fabric_config = updated_device_params.pop("fabric_config", None)
-    fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
-    reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
-    mesh_device = ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(1, 2),
-        **updated_device_params,
-    )
-
-    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
-    yield mesh_device
-
-    for submesh in mesh_device.get_submeshes():
-        ttnn.close_mesh_device(submesh)
-
-    ttnn.close_mesh_device(mesh_device)
-    reset_fabric(fabric_config)
-    del mesh_device
-
-
-@pytest.fixture(scope="function")
 def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
     import ttnn
 
@@ -683,8 +655,6 @@ def get_devices(request):
         devices = request.getfixturevalue("pcie_devices")
     elif "mesh_device" in request.fixturenames:
         devices = [request.getfixturevalue("mesh_device")]
-    elif "n300_mesh_device" in request.fixturenames:
-        devices = [request.getfixturevalue("n300_mesh_device")]
     elif "t3k_mesh_device" in request.fixturenames:
         devices = [request.getfixturevalue("t3k_mesh_device")]
     elif "pcie_mesh_device" in request.fixturenames:
