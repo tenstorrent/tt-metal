@@ -107,9 +107,7 @@ def test_div_fp32(device, ttnn_function):
         ttnn.divide,
     ],
 )
-# Torch: num/ 0 = inf and 0/0  nan;
-# TT: num/ 0 = inf but 0/0= 0 not nan and 1/0 is 170141183460469231731687303715884105728.000000000000000 not inf;
-# input_b must be non-zero
+# Test division when input_b is non-zero
 def test_div_bf16_nonzero(device, ttnn_function):
     x_torch = torch.tensor(
         [
@@ -137,9 +135,9 @@ def test_div_bf16_nonzero(device, ttnn_function):
         ],
         dtype=torch.bfloat16,
     )
-    # torch out in ttnn TorchTensor([[ 0.500000000000000, -1.000000000000000, -4.000000000000000,  1.000000000000000,                inf,               -inf,                nan,  0.000000000000000,  1.500000000000000]],
+    # torch out in ttnn TorchTensor([[ 0.500000000000000, -1.000000000000000, -4.000000000000000,  1.000000000000000, 0.000000000000000,  1.500000000000000]],
     #         dtype=torch.bfloat16)
-    # tt out in torch TorchTensor([[ 0.500000000000000, -1.000000000000000, -4.000000000000000,  1.000000000000000,                inf,               -inf,  0.000000000000000,  0.000000000000000,  1.500000000000000]],
+    # tt out in torch TorchTensor([[ 0.500000000000000, -1.000000000000000, -4.000000000000000,  1.000000000000000, 0.000000000000000,  1.500000000000000]],
     #         dtype=torch.bfloat16)
     golden_fn = ttnn.get_golden_function(ttnn_function)
     z_torch = golden_fn(x_torch, y_torch)

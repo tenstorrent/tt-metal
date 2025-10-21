@@ -766,7 +766,8 @@ Tensor BinaryOperationHypot<binary_op_type>::invoke(
         {},      // no post_activations
         {},      // no lhs_activations
         {},      // no rhs_activations
-        false);  // legacy_flag
+        false,   // legacy_flag
+        false);  // fast_and_approximate_mode
 }
 
 template struct BinaryOperation<BinaryOpType::ADD>;
