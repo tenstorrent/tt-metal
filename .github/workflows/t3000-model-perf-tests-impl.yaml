@@ -9,12 +9,6 @@ on:
       wheel-artifact-name:
         required: true
         type: string
-      build-artifact-profiler-name:
-        required: true
-        type: string
-      wheel-artifact-profiler-name:
-        required: true
-        type: string
       docker-image:
         required: true
         type: string
