@@ -360,8 +360,10 @@ class ModelOptimisations:
         )
         # Predictor layers output padded to tile-aligned channels (32 instead of 19)
         # Keep default TILE_LAYOUT since channels are now tile-aligned
+        # IMPORTANT: Predictors output raw logits - no activation!
         self.register_layer_override(
             "semantic_head.predictor",
+            activation=None,
             deallocate_activation=False,
         )
 
@@ -374,8 +376,10 @@ class ModelOptimisations:
                 deallocate_activation=False,
             )
         # Center predictor outputs padded to tile-aligned channels (32 instead of 2)
+        # IMPORTANT: Predictors output raw logits - no activation!
         self.register_layer_override(
             "instance_head.center_predictor",
+            activation=None,
             deallocate_activation=False,
         )
 
@@ -388,8 +392,10 @@ class ModelOptimisations:
                 deallocate_activation=False,
             )
         # Offset predictor outputs padded to tile-aligned channels (32 instead of 2)
+        # IMPORTANT: Predictors output raw logits - no activation!
         self.register_layer_override(
             "instance_head.offset_predictor",
+            activation=None,
             deallocate_activation=False,
         )
 
