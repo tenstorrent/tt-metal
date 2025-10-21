@@ -416,7 +416,7 @@ void kernel_main() {
 
     uint32_t writes_expected = 0;
     if constexpr (topology == Topology::Linear) {
-        if (direction == 1 && num_targets_backward_direction) {
+        if constexpr (direction == 1 && num_targets_backward_direction) {
             writes_expected = num_targets_forward_direction;
         } else if constexpr (direction == 0 && num_targets_forward_direction) {
             writes_expected = num_targets_backward_direction;
