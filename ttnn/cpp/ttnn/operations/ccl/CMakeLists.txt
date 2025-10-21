@@ -67,6 +67,7 @@ target_sources(
         all_gather/all_gather.cpp
         all_gather/device/all_gather_device_operation.cpp
         all_gather/device/all_gather_program_factory.cpp
+        all_reduce/all_reduce.cpp
         all_to_all_combine/all_to_all_combine.cpp
         all_to_all_combine/device/all_to_all_combine_device_operation.cpp
         all_to_all_combine/device/all_to_all_combine_program_factory.cpp
