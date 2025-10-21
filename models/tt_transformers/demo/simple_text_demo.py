@@ -202,6 +202,7 @@ def prepare_generator_args(
     max_seq_len,
     page_params,
     paged_attention,
+    num_layers=None,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
@@ -230,6 +231,7 @@ def prepare_generator_args(
             paged_attention_config=paged_attention_config,
             dtype=ttnn.bfloat8_b,
             state_dict=state_dict,
+            num_layers=num_layers,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -588,7 +590,7 @@ def prepare_generator_args(
     ids=["performance", "accuracy"],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": True, "trace_region_size": 30000000, "num_command_queues": 1}], indirect=True
+    "device_params", [{"fabric_config": True, "trace_region_size": 60000000, "num_command_queues": 1}], indirect=True
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -666,6 +668,7 @@ def test_demo_text(
     token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
     stress_test = request.config.getoption("--stress_test") or stress_test
     enable_trace = request.config.getoption("--enable_trace") or enable_trace
+    num_layers = request.config.getoption("--num_layers") or None
 
     if stress_test and token_accuracy:
         pytest.skip("Stress test cannot be run with token accuracy mode")
@@ -751,6 +754,7 @@ def test_demo_text(
         max_seq_len=max_seq_len,
         page_params=page_params,
         paged_attention=paged_attention,
+        num_layers=num_layers,
     )
 
     if token_accuracy:

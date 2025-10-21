@@ -59,3 +59,10 @@ def pytest_addoption(parser):
         type=bool,
         help="Whether to enable tracing",
     )
+    parser.addoption(
+        "--num_layers",
+        action="store",
+        default=None,
+        type=int,
+        help="Number of layers to use in the model (overrides the default from model config)",
+    )

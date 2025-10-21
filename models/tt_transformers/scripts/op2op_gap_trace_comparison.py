@@ -259,7 +259,7 @@ def run_tracy_profiling(hf_model, mesh_device, included_seq_lens, test_path=None
 
     # Construct the pytest command - always use trace-prefill and performance
     # pytest_cmd = f"pytest {test_path} -k 'trace-prefill and performance'"
-    pytest_cmd = f"pytest {test_path} -k 'batch-1 and performance'"
+    pytest_cmd = f"pytest {test_path} -k 'batch-1 and performance' --num_layers 1 --max_generated_tokens 2"
 
     # Construct the full tracy command
     tracy_cmd = f'python -m tracy -r -m -v -p "{pytest_cmd}"'
@@ -416,7 +416,7 @@ def main():
             }
 
             # Construct the pytest command
-            pytest_cmd = f"pytest {args.test_path} -k 'batch-1 and performance'"
+            pytest_cmd = f"pytest {args.test_path} -k 'batch-1 and performance' --num_layers 1 --max_generated_tokens 2"
 
             # Construct the full tracy command
             tracy_cmd = f'python -m tracy -r -m -v -p "{pytest_cmd}"'
