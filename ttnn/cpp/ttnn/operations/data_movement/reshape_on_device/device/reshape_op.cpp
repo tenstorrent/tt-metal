@@ -44,6 +44,31 @@ std::vector<ttnn::Tensor> ReshapeDeviceOperation::invoke(std::vector<Tensor> inp
     return tt::tt_metal::operation::run(*this, input_tensors);
 }
 
+void ReshapeDeviceOperation::set_output_tensors(std::vector<Tensor> output_tensors) {
+    output_tensors_ = output_tensors;
+}
+
+std::vector<Tensor> ReshapeDeviceOperation::get_output_tensors() const { return output_tensors_; }
+
+std::vector<Tensor> ReshapeDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+    if (output_tensors_.size() > 0) {
+        return output_tensors_;
+    }
+
+    auto output_specs = compute_output_specs(input_tensors);
+
+    // Create output tensors for each spec
+    std::vector<ttnn::Tensor> output_tensors;
+    for (const auto& spec : output_specs) {
+        // I am not entirely sure if this is true in any device...
+        auto output_tensor = tt::tt_metal::create_device_tensor(spec, input_tensors[0].device());
+        output_tensor = tt::tt_metal::set_tensor_id(output_tensor);
+        output_tensors.push_back(output_tensor);
+    }
+
+    return output_tensors;
+}
+
 void ReshapeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");

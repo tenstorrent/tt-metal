@@ -73,4 +73,16 @@ SplitDeviceOperation::create_op_performance_model(
     return result;
 }
 
+std::vector<Tensor> SplitDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+    if (output_tensors_.size() > 0) {
+        return output_tensors_;
+    }
+    auto output_specs = compute_output_specs(input_tensors);
+    return {create_device_tensor(output_specs[0], input_tensors[0].device())};
+}
+
+std::vector<Tensor> SplitDeviceOperation::get_output_tensors() const { return output_tensors_; }
+
+void SplitDeviceOperation::set_output_tensors(std::vector<Tensor> output_tensors) { output_tensors_ = output_tensors; }
+
 }  // namespace ttnn::operations::data_movement

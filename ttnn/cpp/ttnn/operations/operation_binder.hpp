@@ -36,20 +36,8 @@ static std::vector<ttnn::Tensor> bind_operation(
         std::move(operation_name),
         std::static_pointer_cast<ttnn::experimental::jit::IDeviceOperation>(args_ptr));
 
-    auto output_specs = args_ptr->compute_output_specs(inputs);
-
-    // Create output tensors for each spec
-    std::vector<ttnn::Tensor> output_tensors;
-    for (const auto& spec : output_specs) {
-        // I am not entirely sure if this is true in any device...
-        auto output_tensor = tt::tt_metal::create_device_tensor(spec, inputs[0].device());
-        output_tensor = tt::tt_metal::set_tensor_id(output_tensor);
-        output_tensor.set_producer_node(node_id);
-        output_tensors.push_back(output_tensor);
-    }
-
     if (jit_operation_type == JitOperationType::LAZY_JIT) {
-        return output_tensors;
+        return context.get_node(node_id)->create_output_tensors();
     }
 
     return args_ptr->invoke(inputs);

@@ -9,12 +9,21 @@ Node::Node(
     NodeId id,
     const std::vector<Tensor>& inputs,
     const std::string&& operation_name,
-    std::shared_ptr<IDeviceOperation>&& Args) :
-    id_(id), operation_name_(std::move(operation_name)), Args(std::move(Args)) {
+    std::shared_ptr<IDeviceOperation>&& args) :
+    id_(id), operation_name_(std::move(operation_name)) {
+    Args = std::move(args);
     inputs_.reserve(inputs.size());
     for (const auto& input : inputs) {
         inputs_.push_back(input);
     }
+
+    TT_FATAL(Args != nullptr, "Args is not set");
+    auto output_tensors = Args->create_output_tensors(inputs_);
+    for (auto& output_tensor : output_tensors) {
+        output_tensor.set_producer_node(id_);
+    }
+
+    Args->set_output_tensors(output_tensors);
 }
 
 NodeId Node::id() const { return id_; }
