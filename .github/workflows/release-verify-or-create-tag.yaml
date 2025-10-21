@@ -40,7 +40,7 @@ jobs:
 
       - name: Calculate version
         id: calculate-version
-        uses: tenstorrent/tt-metal/.github/actions/calculate-version@dpopov-fix-dev-tags
+        uses: tenstorrent/tt-metal/.github/actions/calculate-version@main
         with:
           tag-type: ${{ inputs.tag-type }}
 
