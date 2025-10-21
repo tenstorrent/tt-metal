@@ -31,7 +31,7 @@ void kernel_main() {
     for (uint32_t tile_id = dst_start_tile; tile_id < (dst_start_tile + total_tiles_per_core); ++tile_id) {
         cb_wait_front(dst_cb, 1);
         const uint32_t l1_read_addr = get_read_ptr(dst_cb);
-        const uint64_t dst_noc_addr = get_noc_addr(tile_id, dst_accessor);
+        const uint64_t dst_noc_addr = dst_accessor.get_noc_addr(tile_id);
         noc_async_write(l1_read_addr, dst_noc_addr, dst_tile_size);
         noc_async_write_barrier();
         cb_pop_front(dst_cb, 1);

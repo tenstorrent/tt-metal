@@ -31,7 +31,7 @@ void kernel_main() {
     for (uint32_t tile_id = src_start_tile; tile_id < (src_start_tile + total_tiles_per_core); ++tile_id) {
         cb_reserve_back(src_cb, 1);
         const uint32_t l1_write_addr = get_write_ptr(src_cb);
-        const uint64_t src_noc_addr = get_noc_addr(tile_id, src_accessor);
+        const uint64_t src_noc_addr = src_accessor.get_noc_addr(tile_id);
         noc_async_read(src_noc_addr, l1_write_addr, src_tile_size);
         noc_async_read_barrier();
         cb_push_back(src_cb, 1);
