@@ -84,3 +84,41 @@ target_compile_features(scaleout_tools PUBLIC cxx_std_20)
 target_precompile_headers(scaleout_tools REUSE_FROM TT::CommonPCH)
 
 install(TARGETS scaleout_tools EXPORT Metalium LIBRARY COMPONENT metalium-runtime FILE_SET api COMPONENT metalium-dev)
+
+add_executable(2d_big_mesh_cabling_gen src/2d_big_mesh_cabling_gen.cpp)
+
+set_target_properties(
+    2d_big_mesh_cabling_gen
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${CMAKE_BINARY_DIR}/tools/scaleout
+)
+
+target_include_directories(2d_big_mesh_cabling_gen SYSTEM PRIVATE ${CMAKE_BINARY_DIR}/tools/scaleout)
+
+target_link_libraries(
+    2d_big_mesh_cabling_gen
+    PRIVATE
+        scaleout_tools
+        protobuf::libprotobuf
+        cxxopts::cxxopts
+)
+
+add_executable(run_cabling_generator src/run_cabling_generator.cpp)
+
+set_target_properties(
+    run_cabling_generator
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${CMAKE_BINARY_DIR}/tools/scaleout
+)
+
+target_include_directories(run_cabling_generator SYSTEM PRIVATE ${CMAKE_BINARY_DIR}/tools/scaleout)
+
+target_link_libraries(
+    run_cabling_generator
+    PRIVATE
+        scaleout_tools
+        protobuf::libprotobuf
+        cxxopts::cxxopts
+)
