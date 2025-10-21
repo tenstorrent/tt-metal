@@ -1,0 +1,164 @@
+## Changelog - Release v0.62.0-dev20251015
+
+## 📦 Uncategorized
+
+- Add test weight caching to deepseek to decrease test times
+   - PR: #28901
+- [skip ci] Instrument ttnn pytests with tt-triage hang detection
+   - PR: #29967
+- [skip ci] Remove commented code in codeowners workflow
+   - PR: #29948
+- chore: update LLK submodule to 4c4f810
+   - PR: #29992
+- Segformer Performance Optimization
+   - PR: #29307
+- #27159: Add int32 support for sub_sfpu
+   - PR: #27822
+- #22103: BH tiny tiles watcher fix.
+   - PR: #29888
+- [skip ci] Update ttnn_basic_conv.ipynb
+   - PR: #29641
+- Fix pcc Segformer
+   - PR: #29998
+- [skip ci] Update ttnn_simplecnn_inference.ipynb
+   - PR: #29642
+- [skip ci] Update ttnn_multihead_attention.ipynb
+   - PR: #29266
+- [skip ci] Update ttnn_visualizer.md
+   - PR: #29803
+- Slightly adjust Falcon7b-glx CI perf targets
+   - PR: #30019
+- #28204: Create P300 upstream container
+   - PR: #29925
+- #0: move slow test_group_norm_DRAM parameters to nightly
+   - PR: #30020
+- Add prefill mode in deepseek demo
+   - PR: #29977
+- oft conv2d tests
+   - PR: #29969
+- #0: Deduplicate resnet code for T3K and TG
+   - PR: #29916
+- [skip ci] Add Galaxy pipelines to produce data workflow and remove the disabled TG pipelines
+   - PR: #29997
+- [skip ci] Fix test filter for P300 upstream test
+   - PR: #30032
+- #28623: [skip ci] Remove docker-run and containerize BH single card demos
+   - PR: #30024
+- [skip ci] Update ttnn_mlp_inference_mnist.ipynb
+   - PR: #28833
+- Fix GCC Debug build
+   - PR: #29794
+- [skip ci] Updating pipeline tracker 
+   - PR: #30031
+- Add back ttnn.reduce_scatter without global semaphores, persistent buffers and automatic decision making for hyperparameters, topology and links
+   - PR: #29985
+- #30012: [skip ci] Remove test_suite_bh_pcie_didt_tests from upstream container because it's failing. Will re-add later
+   - PR: #30045
+- [TT-Train] Fixed import typo in utils.py
+   - PR: #30044
+- Remove unused includes from programming examples
+   - PR: #30049
+- Splitting HW/INC between architectures
+   - PR: #29908
+- Bump TT-UMD
+   - PR: #29994
+- #28436: Add P300 vIOMMU runners to BH post-commit and nightly CI
+   - PR: #30040
+- Remove `library_tweaks.py`
+   - PR: #29936
+- Remove command_queue_interface.hpp from API directory
+   - PR: #29867
+- Blocking Global Semaphore Writes
+   - PR: #30062
+- #0: Changes to enable multi-device simulation using mock cluster descriptor
+   - PR: #30028
+- [skip ci] Add slack integration for codeowners PR requests ping
+   - PR: #30067
+- bugprone-switch-missing-default-case
+   - PR: #30056
+- Changed Linear to Ring topology for attention and MLP all-gather
+   - PR: #30001
+- Matmul Docs - Expand Memory Support Info
+   - PR: #30018
+- chore: bump umd to 246c05c
+   - PR: #30080
+- Bump resnet perf threshold on T3K and TG
+   - PR: #30014
+- #25928: where op documentation update
+   - PR: #29972
+- Fix build error for Lite Fabric
+   - PR: #30111
+- Run 4 jobs from BHPC in P100a-viommu
+   - PR: #30046
+- [skip ci] #0: remove non group codeowners for mmfusedreduce owned lines
+   - PR: #30061
+- Gather all Conv2D configuration in one location
+   - PR: #30059
+- Ignore unallocated meta-block during allocator statistics collection
+   - PR: #30075
+- Make CCL docstrings match implementation
+   - PR: #30108
+- BHPC: [skip ci] fix syntax issue with BH 20 cores
+   - PR: #30150
+- Update performance targets for Mamba and Shallow UNet
+   - PR: #30096
+- [skip ci] Automate release flow - triggering rc and prod builds
+   - PR: #29675
+- Fixing T3K Big Mesh 1x4 test
+   - PR: #30041
+- #26591: Migrate distributed Trace APIs
+   - PR: #30036
+- Run on civ1 for BH-DeskBox/LLMBox/LoudBox
+   - PR: #30158
+- [Fabric] Hybrid packet header (LowLatencyMeshPacketHeader to have additional fields)
+   - PR: #27987
+- group norm tests for oft model
+   - PR: #29968
+- tt-train TTML nanobind python bindings: make static object, disable LTO
+   - PR: #30058
+- Allow CALL and CALL_PLT same as JAL
+   - PR: #30145
+- Add missing API headers
+   - PR: #30064
+- [skip ci] Fix t3k Choose Your Own pipeline syntax
+   - PR: #30160
+- Fixing condition in plus_one kernel for skip_negative_entries=True based on pytest unit test failure
+   - PR: #30073
+- #29958: Add uint16 support to pad op
+   - PR: #30048
+- Generalize `ttnn.convert_to_hwc` to support arbitrary channel counts
+   - PR: #30097
+- chore: update LLK submodule to 58e4e4f
+   - PR: #30110
+- Implement Mochi VAE on device
+   - PR: #29793
+- Add optional pre-allocated intermediate tensor to P2P
+   - PR: #29288
+- Apply common subexpression elimination to some configuration strings
+   - PR: #30144
+- Enable more metal examples on ttsim
+   - PR: #30164
+- Matmul Activations - Generalise Unfused Activation for all Unary Ops
+   - PR: #30149
+- Create strongly typed Semaphore
+   - PR: #29869
+- Implement Multicore Tiled Pad
+   - PR: #29203
+- [skip ci] readability-function-cognitive-complexity
+   - PR: #30180
+- Resolve Protobuf Version Conflict
+   - PR: #29976
+- [skip ci] Improve codeowners ping Slack format
+   - PR: #30092
+- [UMD] Switch configure_tlb to use CoreCoord
+   - PR: #30168
+- #17481: Warn when dest in Float32 format is printed on wormhole
+   - PR: #29634
+- #14077: Update inf/nan functions ported to LLK and clean up faulty tests
+   - PR: #29963
+- [skip ci] Add step for setting default value for release-type
+   - PR: #30192
+- Enable Padding Support for Fold Operation on DRAM and L1 Sharded Tensors
+   - PR: #30008
+- (MINOR) Release v0.64.0 - First sync: Merge main into stable
+   - PR: #30214
