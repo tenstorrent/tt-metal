@@ -8,7 +8,8 @@ RUN dnf remove -y epel-release || true
 
 # Copy install dependencies script and required files
 COPY install_dependencies.sh /tmp/install_dependencies.sh
-COPY tt_metal/sfpi-version.sh /tmp/tt_metal/sfpi-version.sh
+COPY tt_metal/sfpi-info.sh /tmp/tt_metal/sfpi-info.sh
+COPY tt_metal/sfpi-version /tmp/tt_metal/sfpi-version
 
 # Install system dependencies using the install_dependencies.sh script
 # Use --docker flag for Docker-specific optimizations and --no-distributed

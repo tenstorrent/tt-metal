@@ -98,7 +98,8 @@ tt_metal/tools/profiler/noc_event_profiler.hpp @bgrady-tt @sohaibnadeemTT @mo-te
 tt_metal/tools/profiler/noc_event_profiler_utils.hpp @bgrady-tt @sohaibnadeemTT @mo-tenstorrent @tenstorrent/metalium-codeowners-large-changes
 
 # metal misc
-tt_metal/sfpi-version.sh @nathan-TT @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
+tt_metal/sfpi-info.sh @nathan-TT @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
+tt_metal/sfpi-version @nathan-TT @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 tt_metal/tt_metal.cpp @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @aliuTT @ayerofieiev-tt @tenstorrent/metalium-codeowners-large-changes
 tt_metal/**/profiler/**/CMakeLists.txt @mo-tenstorrent @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
@@ -223,14 +224,23 @@ tests/ttnn/nightly/unit_tests/operations/eltwise/ @patrickroberts @sjameelTT @nt
 tests/nightly/t3000/ @tenstorrent/metalium-codeowners-large-changes @tenstorrent/metalium-developers-ops-data-movement
 tests/nightly/tg/ @tenstorrent/metalium-codeowners-large-changes @tenstorrent/metalium-developers-ops-data-movement
 tests/nightly/single_card/ @tenstorrent/metalium-codeowners-large-changes
-tests/sweep_framework/sweeps @tenstorrent/metalium-codeowners-large-changes @stevendae
+tests/sweep_framework/sweeps @tenstorrent/metalium-codeowners-large-changes @stevendae @cmaryanTT @ntarafdar @bbradelTT
 tests/sweep_framework/sweeps/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT @tenstorrent/metalium-codeowners-large-changes
 tests/sweep_framework/sweeps/conv2d/  @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
+tests/sweep_framework/sweeps/conv_transpose2d/  @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
+tests/sweep_framework/sweeps/max_pool2d/  @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
+tests/sweep_framework/sweeps/pooling/  @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 tests/sweep_framework/sweeps/data_movement/  @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
 tests/sweep_framework/sweeps/fused/  @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-codeowners-large-changes
 tests/sweep_framework/sweeps/normalization/  @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-codeowners-large-changes
 tests/sweep_framework/sweeps/matmul/  @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-codeowners-large-changes
 tests/sweep_framework/sweeps/reduction/  @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-codeowners-large-changes
+tests/sweep_framework/sweeps/ccl/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
+tests/sweep_framework/sweeps/composite/ @patrickroberts @sjameelTT @ntarafdar @dchenTT @tenstorrent/metalium-codeowners-large-changes
+tests/sweep_framework/sweeps/creation/ @omilyutin-tt @patrickroberts @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
+tests/sweep_framework/sweeps/embedding/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
+tests/sweep_framework/sweeps/embedding_bw/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
+tests/sweep_framework/sweeps/losses/ @patrickroberts @sjameelTT @ntarafdar @dchenTT @tenstorrent/metalium-codeowners-large-changes
 tests/sweep_framework/sweep_utils/adaptive_pool2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 tests/sweep_framework/sweep_utils/conv2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 tests/sweep_framework/sweep_utils/conv_transpose2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
@@ -347,6 +357,7 @@ tt-train/** @dmakoviichuk-tt @rfurko-tt @ayerofieiev-tt @tenstorrent/metalium-co
 
 # tt-telemetry
 tt_telemetry/** @btrzynadlowski-tt @tt-asaigal @kluongTT @cfjchu @tt-aho @omilyutin-tt @SeanNijjar @aliuTT @Riddy21 @agupta-tt @tenstorrent/metalium-codeowners-large-changes
+tt_telemetry/docker/ @btrzynadlowski-tt @kluongTT @tenstorrent/metalium-codeowners-large-changes @tenstorrent/metalium-developers-infra
 
 # .clang-tidy files - Metalium infra team owns all clang-tidy configuration files
 **/.clang-tidy @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
