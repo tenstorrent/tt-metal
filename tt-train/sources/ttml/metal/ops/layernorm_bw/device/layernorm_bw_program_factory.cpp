@@ -26,9 +26,10 @@ constexpr auto kComputeKernelPath =
 
 // Reader buffer indices
 constexpr uint32_t kGammaBufferIdx = 0;
-constexpr uint32_t kXHatBufferIdx = 1U;
-constexpr uint32_t kRstdBufferIdx = 2U;
-constexpr uint32_t kDLdoutBufferIdx = 3U;
+constexpr uint32_t kInputBufferIdx = 1U;
+constexpr uint32_t kMeanBufferIdx = 2U;
+constexpr uint32_t kRstdBufferIdx = 3U;
+constexpr uint32_t kDLdoutBufferIdx = 4U;
 
 // Writer buffer indices
 constexpr uint32_t kDxBufferIdx = 0;
@@ -39,10 +40,12 @@ constexpr uint32_t kDbetaComponentsBufferIdx = 2U;
 constexpr auto kScalerCbIndex = tt::CBIndex::c_0;        // 1/N scaler
 constexpr auto kMaskWCbIndex = tt::CBIndex::c_1;         // mask for width dimension
 constexpr auto kGammaCbIndex = tt::CBIndex::c_2;         // gamma (scale parameter)
-constexpr auto kXHatCbIndex = tt::CBIndex::c_3;          // x_hat (normalized input) from forward pass
+constexpr auto kXHatCbIndex = tt::CBIndex::c_3;          // x_hat (computed as (input - mean) * rstd)
 constexpr auto kRstdCbIndex = tt::CBIndex::c_4;          // rstd from forward pass
 constexpr auto kDLoutCbIndex = tt::CBIndex::c_5;         // upstream gradient
 constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_6;  // reduction vector
+constexpr auto kInputCbIndex = tt::CBIndex::c_7;         // input tensor
+constexpr auto kMeanCbIndex = tt::CBIndex::c_8;          // mean from forward pass
 
 // CBs with output data
 constexpr auto kDxCbIndex = tt::CBIndex::c_10;                // dx (input gradient)
@@ -88,6 +91,8 @@ bool fits_in_l1_check(
     const uint64_t mask_memory = kNumMaskTiles * bfloat16_single_tile_size_bytes;
     const uint64_t gamma_memory = Wt * bfloat16_single_tile_size_bytes;
     const uint64_t x_hat_memory = Wt * bfloat16_single_tile_size_bytes;
+    const uint64_t input_memory = Wt * bfloat16_single_tile_size_bytes;
+    const uint64_t mean_memory = kNumRstdTiles * bfloat16_single_tile_size_bytes;  // same shape as rstd
     const uint64_t rstd_memory = kNumRstdTiles * bfloat16_single_tile_size_bytes;
     const uint64_t dL_dout_memory = Wt * bfloat16_single_tile_size_bytes;
     const uint64_t matmul_reduce_memory = kNumMatMulReduceTiles * bfloat16_single_tile_size_bytes;
@@ -104,10 +109,10 @@ bool fits_in_l1_check(
     const uint64_t dy_gamma_xnorm_sum_memory = kNumDyGammaXnormSumTiles * float32_single_tile_size_bytes;
 
     // Total L1 memory required
-    const uint64_t required_L1_in_bytes = scaler_memory + mask_memory + gamma_memory + x_hat_memory + rstd_memory +
-                                          dL_dout_memory + matmul_reduce_memory + dx_memory + dgamma_components_memory +
-                                          dbeta_components_memory + x_normalized_memory + dy_gamma_memory +
-                                          dy_gamma_sum_memory + dy_gamma_xnorm_sum_memory;
+    const uint64_t required_L1_in_bytes =
+        scaler_memory + mask_memory + gamma_memory + x_hat_memory + input_memory + mean_memory + rstd_memory +
+        dL_dout_memory + matmul_reduce_memory + dx_memory + dgamma_components_memory + dbeta_components_memory +
+        x_normalized_memory + dy_gamma_memory + dy_gamma_sum_memory + dy_gamma_xnorm_sum_memory;
 
     return required_L1_in_bytes <= available_L1_in_bytes;
 }
@@ -127,7 +132,8 @@ void assign_per_core_runtime_args(
     tt::tt_metal::Program& program,
     const LayerNormBackwardKernels& kernels,
     const tt::tt_metal::Buffer* gamma_buffer,
-    const tt::tt_metal::Buffer* x_hat_buffer,
+    const tt::tt_metal::Buffer* input_buffer,
+    const tt::tt_metal::Buffer* mean_buffer,
     const tt::tt_metal::Buffer* rstd_buffer,
     const tt::tt_metal::Buffer* dLdout_buffer,
     const tt::tt_metal::Buffer* dx_buffer,
@@ -158,7 +164,8 @@ void assign_per_core_runtime_args(
             kernels.reader,
             core,
             {gamma_buffer->address(),
-             x_hat_buffer->address(),
+             input_buffer->address(),
+             mean_buffer->address(),
              rstd_buffer->address(),
              dLdout_buffer->address(),
              num_rows_written,
@@ -185,7 +192,7 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     tensor_return_value_t& output) {
     const auto& input = tensor_args.input;
     const auto& gamma = tensor_args.gamma;
-    const auto& x_hat = tensor_args.x_hat;
+    const auto& mean = tensor_args.mean;
     const auto& rstd = tensor_args.rstd;
     const auto& dLdout = tensor_args.dL_dout;
 
@@ -198,9 +205,9 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     std::cout << "Gamma shape: " << gamma_shape << std::endl;
     TT_FATAL(gamma_shape.rank() == 4, "Gamma tensor must be 4D [1, 1, 1, C], got shape {}", gamma_shape);
 
-    // Check x_hat shape is [B, 1, S, C] - same as input
-    const auto& x_hat_shape = x_hat.logical_shape();
-    TT_FATAL(x_hat_shape.rank() == 4, "X_hat tensor must be 4D [B, N, S, C], got shape {}", x_hat_shape);
+    // Check mean shape is [B, 1, S, 1]
+    const auto& mean_shape = mean.logical_shape();
+    TT_FATAL(mean_shape.rank() == 4, "Mean tensor must be 4D [B, 1, S, 1], got shape {}", mean_shape);
 
     // Check rstd shape is [B, 1, S, 1]
     // Note: LayerNorm computes statistics across N and C dimensions, so dimension 1 is 1
@@ -258,8 +265,8 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     std::cout << "Everything fits in L1: " << everything_fits_in_l1 << std::endl;
 
     const uint32_t num_input_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
-
     const uint32_t num_x_hat_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
+    const uint32_t num_mean_tiles = kNumRstdTiles;  // same as rstd
 
     auto data_format = input_data_format;
     // auto precise_data_format = tt::DataFormat::Float32;
@@ -279,6 +286,10 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
         program, all_cores, kDLoutCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
     [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
         program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMatMulReduceTiles);
+    [[maybe_unused]] auto cb_input = create_circular_buffer(
+        program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+    [[maybe_unused]] auto cb_mean = create_circular_buffer(
+        program, all_cores, kMeanCbIndex, data_format, bfloat16_single_tile_size_bytes, num_mean_tiles);
 
     // Output CBs
     [[maybe_unused]] auto cb_dx = create_circular_buffer(
@@ -322,11 +333,17 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
         "Gamma buffer must be in DRAM. Gamma buffer of type {}",
         enchantum::to_string(gamma_buffer->buffer_type()));
 
-    auto* x_hat_buffer = x_hat.buffer();
+    auto* input_buffer = input.buffer();
     TT_FATAL(
-        x_hat_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
-        "X_hat buffer must be in DRAM. X_hat buffer of type {}",
-        enchantum::to_string(x_hat_buffer->buffer_type()));
+        input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
+        "Input buffer must be in DRAM. Input buffer of type {}",
+        enchantum::to_string(input_buffer->buffer_type()));
+
+    auto* mean_buffer = mean.buffer();
+    TT_FATAL(
+        mean_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
+        "Mean buffer must be in DRAM. Mean buffer of type {}",
+        enchantum::to_string(mean_buffer->buffer_type()));
 
     auto* rstd_buffer = rstd.buffer();
     TT_FATAL(
@@ -369,7 +386,8 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     LayerNormBackwardKernels kernels;
     std::vector<uint32_t> reader_compile_time_args{packed_scaler, block_size, mask_w, Wt};
     tt::tt_metal::TensorAccessorArgs(gamma_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(x_hat_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(mean_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(rstd_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(dLdout_buffer).append_to(reader_compile_time_args);
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
@@ -415,7 +433,8 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
         program,
         kernels,
         gamma_buffer,
-        x_hat_buffer,
+        input_buffer,
+        mean_buffer,
         rstd_buffer,
         dLdout_buffer,
         dx_buffer,
@@ -456,7 +475,8 @@ void LayerNormBackwardProgramFactory::override_runtime_arguments(
     auto& core_group_2 = shared_variables.core_group_2;
 
     auto* gamma_buffer = tensor_args.gamma.buffer();
-    auto* x_hat_buffer = tensor_args.x_hat.buffer();
+    auto* input_buffer = tensor_args.input.buffer();
+    auto* mean_buffer = tensor_args.mean.buffer();
     auto* rstd_buffer = tensor_args.rstd.buffer();
     auto* dLdout_buffer = tensor_args.dL_dout.buffer();
 
@@ -475,7 +495,8 @@ void LayerNormBackwardProgramFactory::override_runtime_arguments(
             {
                 auto& runtime_args = reader_runtime_args[core.x][core.y];
                 runtime_args[kGammaBufferIdx] = gamma_buffer->address();
-                runtime_args[kXHatBufferIdx] = x_hat_buffer->address();
+                runtime_args[kInputBufferIdx] = input_buffer->address();
+                runtime_args[kMeanBufferIdx] = mean_buffer->address();
                 runtime_args[kRstdBufferIdx] = rstd_buffer->address();
                 runtime_args[kDLdoutBufferIdx] = dLdout_buffer->address();
             }
@@ -497,7 +518,8 @@ void LayerNormBackwardProgramFactory::override_runtime_arguments(
             {
                 auto& runtime_args = reader_runtime_args[core.x][core.y];
                 runtime_args[kGammaBufferIdx] = gamma_buffer->address();
-                runtime_args[kXHatBufferIdx] = x_hat_buffer->address();
+                runtime_args[kInputBufferIdx] = input_buffer->address();
+                runtime_args[kMeanBufferIdx] = mean_buffer->address();
                 runtime_args[kRstdBufferIdx] = rstd_buffer->address();
                 runtime_args[kDLdoutBufferIdx] = dLdout_buffer->address();
             }

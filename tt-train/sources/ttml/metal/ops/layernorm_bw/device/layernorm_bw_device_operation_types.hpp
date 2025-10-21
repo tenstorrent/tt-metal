@@ -17,7 +17,7 @@ struct operation_attributes_t {
 struct tensor_args_t {
     ttnn::Tensor input;
     ttnn::Tensor gamma;                                          // scale parameter (learnable weight)
-    ttnn::Tensor x_hat;                                          // normalized input (x - mean) * rstd from forward pass
+    ttnn::Tensor mean;                                           // mean from forward pass
     ttnn::Tensor rstd;                                           // reciprocal std from forward pass
     ttnn::Tensor dL_dout;                                        // gradient from upstream
     std::optional<ttnn::Tensor> preallocated_dx = std::nullopt;  // dx (input gradient)

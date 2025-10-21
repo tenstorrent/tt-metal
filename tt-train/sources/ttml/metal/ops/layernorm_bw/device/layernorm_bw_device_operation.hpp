@@ -33,7 +33,7 @@ struct LayerNormBackwardDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& gamma_tensor,
-        const ttnn::Tensor& x_hat_tensor,
+        const ttnn::Tensor& mean_tensor,
         const ttnn::Tensor& rstd_tensor,
         const ttnn::Tensor& dL_dout_tensor,
         float epsilon = 1e-5F,

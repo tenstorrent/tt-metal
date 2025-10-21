@@ -10,10 +10,11 @@
 constexpr uint32_t cb_scaler_idx = tt::CBIndex::c_0;      // 1/N scaler
 constexpr uint32_t cb_mask_w_idx = tt::CBIndex::c_1;      // mask for width dimension
 constexpr uint32_t cb_gamma_idx = tt::CBIndex::c_2;       // gamma (scale parameter)
-constexpr uint32_t cb_x_hat_idx = tt::CBIndex::c_3;       // x_hat (normalized input) from forward pass
 constexpr uint32_t cb_rstd_idx = tt::CBIndex::c_4;        // rstd from forward pass
 constexpr uint32_t cb_dL_out_idx = tt::CBIndex::c_5;      // upstream gradient
 constexpr uint32_t cb_mat_mul_reduce = tt::CBIndex::c_6;  // reduction vector
+constexpr uint32_t cb_input_idx = tt::CBIndex::c_7;       // input tensor
+constexpr uint32_t cb_mean_idx = tt::CBIndex::c_8;        // mean from forward pass
 constexpr uint32_t cb_zero = tt::CBIndex::c_19;           // reduction vector
 
 constexpr uint32_t packed_scaler = get_compile_time_arg_val(0);
@@ -46,7 +47,8 @@ inline void read_tiles(
 void kernel_main() {
     uint32_t runtime_args_counter = 0U;
     uint32_t gamma_address = get_arg_val<uint32_t>(runtime_args_counter++);
-    uint32_t x_hat_address = get_arg_val<uint32_t>(runtime_args_counter++);
+    uint32_t input_address = get_arg_val<uint32_t>(runtime_args_counter++);
+    uint32_t mean_address = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t rstd_address = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t dL_out_address = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -67,28 +69,34 @@ void kernel_main() {
 
     const uint32_t tile_bytes = get_tile_size(cb_scaler_idx);
     constexpr auto gamma_args = TensorAccessorArgs<4>();
-    constexpr auto x_hat_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
-    constexpr auto rstd_args = TensorAccessorArgs<x_hat_args.next_compile_time_args_offset()>();
+    constexpr auto input_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+    constexpr auto mean_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    constexpr auto rstd_args = TensorAccessorArgs<mean_args.next_compile_time_args_offset()>();
     constexpr auto dL_out_args = TensorAccessorArgs<rstd_args.next_compile_time_args_offset()>();
 
     const auto gamma_address_generator = TensorAccessor(gamma_args, gamma_address, tile_bytes);
-    const auto x_hat_address_generator = TensorAccessor(x_hat_args, x_hat_address, tile_bytes);
+    const auto input_address_generator = TensorAccessor(input_args, input_address, tile_bytes);
+    const auto mean_address_generator = TensorAccessor(mean_args, mean_address, tile_bytes);
     const auto rstd_address_generator = TensorAccessor(rstd_args, rstd_address, tile_bytes);
     const auto dL_out_address_generator = TensorAccessor(dL_out_args, dL_out_address, tile_bytes);
 
     // Read input tensors row by row
     uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; ++r) {
-        // Read rstd once per row - rstd has shape [B,1,S,1]
+        // Read rstd and mean once per row - both have shape [B,1,S,1]
         read_tiles(cb_rstd_idx, rstd_address_generator, r, 1, tile_bytes);
         noc_async_read_barrier();
         cb_push_back(cb_rstd_idx, 1);
 
+        read_tiles(cb_mean_idx, mean_address_generator, r, 1, tile_bytes);
+        noc_async_read_barrier();
+        cb_push_back(cb_mean_idx, 1);
+
 #ifdef EVERYTHING_FITS_IN_L1
         // If everything fits in L1, read all data for the row at once
-        read_tiles(cb_x_hat_idx, x_hat_address_generator, r * Wt, Wt, tile_bytes);
+        read_tiles(cb_input_idx, input_address_generator, r * Wt, Wt, tile_bytes);
         noc_async_read_barrier();
-        cb_push_back(cb_x_hat_idx, Wt);
+        cb_push_back(cb_input_idx, Wt);
         read_tiles(cb_dL_out_idx, dL_out_address_generator, r * Wt, Wt, tile_bytes);
         noc_async_read_barrier();
         cb_push_back(cb_dL_out_idx, Wt);
@@ -117,12 +125,12 @@ void kernel_main() {
         for (uint32_t c = 0; c < Wt; c += block_size) {
             uint32_t row_tile_idx = (r * Wt) + c;
 
-            read_tiles(cb_x_hat_idx, x_hat_address_generator, row_tile_idx, block_size, tile_bytes);
+            read_tiles(cb_input_idx, input_address_generator, row_tile_idx, block_size, tile_bytes);
             read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes);
             read_tiles(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes);
 
             noc_async_read_barrier();
-            cb_push_back(cb_x_hat_idx, block_size);
+            cb_push_back(cb_input_idx, block_size);
             cb_push_back(cb_dL_out_idx, block_size);
             cb_push_back(cb_gamma_idx, block_size);
         }
@@ -131,22 +139,22 @@ void kernel_main() {
         for (uint32_t c = 0; c < Wt; c += block_size) {
             uint32_t row_tile_idx = (r * Wt) + c;
             {
-                read_tiles(cb_x_hat_idx, x_hat_address_generator, row_tile_idx, block_size, tile_bytes);
+                read_tiles(cb_input_idx, input_address_generator, row_tile_idx, block_size, tile_bytes);
                 read_tiles(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes);
                 read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes);
 
                 noc_async_read_barrier();
-                cb_push_back(cb_x_hat_idx, block_size);
+                cb_push_back(cb_input_idx, block_size);
                 cb_push_back(cb_gamma_idx, block_size);
                 cb_push_back(cb_dL_out_idx, block_size);
             }
 
             {
-                read_tiles(cb_x_hat_idx, x_hat_address_generator, row_tile_idx, block_size, tile_bytes);
+                read_tiles(cb_input_idx, input_address_generator, row_tile_idx, block_size, tile_bytes);
                 read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes);
 
                 noc_async_read_barrier();
-                cb_push_back(cb_x_hat_idx, block_size);
+                cb_push_back(cb_input_idx, block_size);
                 cb_push_back(cb_dL_out_idx, block_size);
             }
 
