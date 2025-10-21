@@ -8,7 +8,6 @@
 
 #include "argmax_common.hpp"
 
-#include "debug/dprint.h" 
 
 void kernel_main() {
     // Runtime args
