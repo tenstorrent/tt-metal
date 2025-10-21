@@ -18,7 +18,7 @@ on:
       distributed:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Build with distributed enabled (Adds OpenMPI dependency)"
       build-wheel:
         required: false
