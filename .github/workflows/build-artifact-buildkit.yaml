@@ -18,7 +18,7 @@ on:
       distributed:
         required: false
         type: boolean
-        default: false
+        default: true
         description: "Build with distributed enabled (Adds OpenMPI dependency)"
       build-wheel:
         required: false
@@ -32,7 +32,7 @@ on:
       version:
         required: false
         type: string
-        default: "22.04"
+        default: "24.04"
       architecture:
         required: false
         type: string
@@ -190,5 +190,6 @@ jobs:
             --build-arg BUILD_UMD_TESTS=${{ inputs.build-umd-tests }} \
             --build-arg TOOLCHAIN_FILE=${{ inputs.toolchain }} \
             --build-arg PROFILE=${{ inputs.profile }} \
-            --build-arg SKIP_TT_TRAIN=${{ inputs.skip-tt-train }}
+            --build-arg SKIP_TT_TRAIN=${{ inputs.skip-tt-train }} \
+            --build-arg UBUNTU_VERSION=${{ inputs.version }} 
 
