@@ -103,8 +103,16 @@ class LlamaForCausalLM(Generator):
 
     @classmethod
     def initialize_vllm_model(
-        cls, hf_config, mesh_device, max_batch_size, max_seq_len=131072, n_layers=None, tt_data_parallel=1
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len=131072,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations=None,
     ):
+        assert optimizations is None, "Custom optimizations are not supported for this model"
         # max_seq_len = 128
         # n_layers = 1
         tt_model, model_args = initialize_vllm_text_transformer(
