@@ -107,7 +107,7 @@
 <p>The following set of commands will generate perf reports for <code class="docutils literal notranslate"><span class="pre">resnet</span></code> as an example.</p>
 <div class="highlight-sh notranslate">
 <div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span><span class="nv">$TT_METAL_HOME</span>
-build_metal.sh<span class="w"> </span>--enable-profiler
+build_metal.sh
 ./tools/tracy/profile_this.py<span class="w"> </span>-n<span class="w"> </span>resnet<span class="w"> </span>-c<span class="w"> </span><span class="s2">"pytest models/demos/resnet/tests/test_perf_resnet.py::test_perf_bare_metal[20-0.0185-25]"</span>
 </pre></div>
 </div>
