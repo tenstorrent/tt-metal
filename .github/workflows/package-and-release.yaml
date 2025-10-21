@@ -258,11 +258,20 @@ jobs:
           fetch-depth: 0
       - name: Fetch all tags
         run: git fetch --tags --force origin
-      - name: Get latest release version
+      - name: Get latest release candidate version
         id: get-latest-release
         run: |
-          latestReleaseVersion=$(curl -s https://api.github.com/repos/tenstorrent/tt-metal/releases/latest | jq -r .tag_name)
-          echo "Latest release version: $latestReleaseVersion"
+          # Get the latest release candidate (pre-release with -rc suffix)
+          # Sort by published_at in descending order to ensure we get the most recent
+          latestReleaseVersion=$(curl -s https://api.github.com/repos/tenstorrent/tt-metal/releases | jq -r 'sort_by(.  ) | reverse | .[] | select(.prerelease == true and (.tag_name | contains("-rc"))) | .tag_name' | head -1)
+
+          # Fallback to latest release if no RC found
+          if [ -z "$latestReleaseVersion" ] || [ "$latestReleaseVersion" = "null" ]; then
+            echo "No release candidate found, falling back to latest release"
+            latestReleaseVersion=$(curl -s https://api.github.com/repos/tenstorrent/tt-metal/releases/latest | jq -r .tag_name)
+          fi
+
+          echo "Latest release candidate version: $latestReleaseVersion"
           echo "latest-release-version=$latestReleaseVersion" >> "$GITHUB_OUTPUT"
       - name: Check for new commits since latest release
         id: check-new-commits
