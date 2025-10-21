@@ -9,35 +9,6 @@
 
 #include "debug/dprint.h"
 
-template <uint32_t bank_base_address, uint32_t page_size, bool use_vc>
-FORCE_INLINE void noc_async_read_tile_dram_sharded(
-    uint32_t src_addr, uint32_t dest_addr, uint32_t bank_id = 0, const uint32_t vc = 0) {
-    uint32_t src_addr_;
-    uint32_t src_noc_xy;
-
-    src_addr_ = src_addr + bank_base_address;
-    src_addr_ += bank_to_dram_offset[bank_id];
-    src_noc_xy = dram_bank_to_noc_xy[noc_index][bank_id];
-
-    WAYPOINT("NRTW");
-    DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc_index, get_noc_addr_helper(src_noc_xy, src_addr_), dest_addr, page_size);
-    while (!noc_cmd_buf_ready(noc_index, NCRISC_RD_CMD_BUF));
-    WAYPOINT("NRTD");
-
-    if constexpr (use_vc) {
-        uint32_t noc_rd_cmd_field =
-            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc);
-        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
-    }
-
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_LO, dest_addr);
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO, src_addr_);           // (uint32_t)src_addr
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_COORDINATE, src_noc_xy);  // src_addr >> 32
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE, page_size);              // len_bytes
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    noc_reads_num_issued[noc_index] += 1;
-}
-
 void kernel_main() {
     constexpr uint32_t input_addr = get_compile_time_arg_val(0);
     constexpr uint32_t input_start_tile_id = get_compile_time_arg_val(1);
@@ -72,8 +43,6 @@ void kernel_main() {
         uint32_t curr_block_size_bytes = curr_num_pages * curr_page_size;
         uint32_t curr_layer_size_bytes = curr_num_blocks * curr_block_size_bytes;
 
-        // uint32_t src_base_addr =
-        //     noc_async_read_tile_dram_sharded_set_state<true>(input_addr, curr_page_size, bank_id, vc);
         uint64_t src_base_addr = get_noc_addr_from_bank_id<true>(bank_id, input_addr);
         noc_async_read_one_packet_set_state<true>(src_base_addr, curr_page_size, vc);
         src_read_addr = src_read_addr_offset_bytes;
@@ -85,7 +54,7 @@ void kernel_main() {
         //     auto l1_write_addr = get_write_ptr(cb_id);
 
         //     for (uint32_t h = 0; h < curr_num_pages; ++h) {
-        //         noc_async_read_tile_dram_sharded_with_state(src_base_addr, src_read_addr, l1_write_addr);
+        //         noc_async_read_one_packet_with_state(src_base_addr + src_read_addr, l1_write_addr);
         //         src_read_addr += curr_page_size;
         //         l1_write_addr += curr_page_size;
         //     }
@@ -111,8 +80,6 @@ void kernel_main() {
 
             uint32_t temp_l1_write_addr = l1_write_addr;
             for (uint32_t h = 0; h < curr_num_pages; ++h) {
-                // noc_async_read_tile_dram_sharded_with_state_with_trid(
-                //     src_base_addr, src_read_addr, temp_l1_write_addr, curr_block_trid);
                 noc_async_read_tile_dram_sharded_with_state_with_trid(
                     src_base_addr, src_read_addr, temp_l1_write_addr, curr_block_trid);
                 src_read_addr += curr_page_size;

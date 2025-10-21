@@ -25,42 +25,21 @@ void kernel_main() {
     DeviceTimestampedData("Transaction size in bytes", num_banks * pages_per_bank * page_size_bytes);
     DeviceTimestampedData("Test id", test_id);
 
-    constexpr bool use_tds = false;  // for testing regular stateful read vs tile dram sharded stateful read
-
     uint32_t dst_addr = l1_addr;
 
     {
         DeviceZoneScopedN("RISCV0");
-        if constexpr (use_tds) {
-            for (uint32_t i = 0; i < num_of_transactions; i++) {
-                dst_addr = l1_addr;
-                for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
-                    uint32_t dram_base_addr =
-                        noc_async_read_tile_dram_sharded_set_state<true>(src_addr, page_size_bytes, bank_id);
-                    for (uint32_t page_id = 0; page_id < pages_per_bank; page_id++) {
-                        noc_async_read_tile_dram_sharded_with_state(
-                            dram_base_addr, page_id * page_size_bytes, dst_addr);
-                        dst_addr += page_size_bytes;
-                    }
+        for (uint32_t i = 0; i < num_of_transactions; i++) {
+            dst_addr = l1_addr;
+            for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
+                uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, src_addr);
+                noc_async_read_one_packet_set_state(src_noc_addr, page_size_bytes);
+                for (uint32_t i = 0; i < pages_per_bank; i++) {
+                    noc_async_read_one_packet_with_state(src_noc_addr + i * page_size_bytes, dst_addr);
+                    dst_addr += page_size_bytes;
                 }
             }
-            noc_async_read_barrier();
-        } else {
-            for (uint32_t i = 0; i < num_of_transactions; i++) {
-                dst_addr = l1_addr;
-                for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
-                    uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, src_addr);
-                    noc_async_read_one_packet_set_state(src_noc_addr, page_size_bytes);
-                    for (uint32_t i = 0; i < pages_per_bank; i++) {
-                        noc_async_read_one_packet_with_state(src_noc_addr + i * page_size_bytes, dst_addr);
-                        // noc_async_read_tile_dram_sharded_set_trid(1);
-                        // noc_async_read_tile_dram_sharded_with_state_with_trid(src_noc_addr, i * page_size_bytes,
-                        // dst_addr, 1);
-                        dst_addr += page_size_bytes;
-                    }
-                }
-            }
-            noc_async_read_barrier();
         }
+        noc_async_read_barrier();
     }
 }

@@ -2030,78 +2030,9 @@ inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
 
 // clang-format off
 /**
- * Sets the stateful registers for an asynchronous read for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size).
- * This is similar to \a noc_async_read_set_state, except that the source location is determined by the bank_base_address and bank_id.
- * In addition, the VC used for the transactions can also be configured.
- *
- * Return value: source address
- *
- * | Argument                   | Description                               | Data type | Valid range                                            | required |
- * |----------------------------|-------------------------------------------|-----------|--------------------------------------------------------|----------|
- * | bank_base_address          | Base address where DRAM banks are located | uint32_t  | 0..1MB                                                 | True     |
- * | page_size                  | Size of data transfer in bytes            | uint32_t  | 0..1MB                                                 | True     |
- * | bank_id                    | DRAM bank id                              | uint32_t  | Refer to relevant yaml in "tt_metal/soc_descriptors"   | False    |
- * | vc                         | Which VC to use for the transaction       | uint32_t  | 0-3 (Unicast VCs)                                      | False    |
- * | noc                        | Which NOC to use for the transaction      | uint8_t   | 0 or 1                                                 | False    |
- * | use_vc (template argument) | Enable custom VC usage                    | bool      | True or False                                          | False    |
- */
-// clang-format on
-template <bool use_vc>
-FORCE_INLINE uint32_t noc_async_read_tile_dram_sharded_set_state(
-    uint32_t bank_base_address,
-    uint32_t page_size,
-    uint32_t bank_id = 0,
-    const uint32_t vc = 0,
-    uint8_t noc = noc_index) {
-    uint32_t src_addr_ = bank_base_address + bank_to_dram_offset[bank_id];
-    uint32_t src_noc_xy = dram_bank_to_noc_xy[noc][bank_id];
-    uint64_t src_noc_addr = get_noc_addr_helper(src_noc_xy, src_addr_);
-
-    DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
-    RECORD_NOC_EVENT_WITH_ADDR(
-        NocEventType::READ_DRAM_SHARDED_SET_STATE, uint64_t(src_noc_xy) << 32, page_size, (use_vc) ? vc : -1);
-
-    WAYPOINT("NRTW");
-    ncrisc_noc_read_set_state<DM_DEDICATED_NOC, true /* one_packet */, use_vc>(
-        noc, read_cmd_buf, src_noc_addr, page_size, vc);
-    WAYPOINT("NRTD");
-
-    return src_addr_;
-}
-
-// clang-format off
-/**
  * Initiates an asynchronous read for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size).
- * This is similar to \a noc_async_read_with_state, except that the source location is determined by the src_base_addr and src_addr.
- *
- * Return value: None
- *
- * | Argument      | Description                                    | Data type | Valid range         | required |
- * |---------------|------------------------------------------------|-----------|-------------------- |----------|
- * | src_base_addr | Base address of source location                | uint32_t  | 0..1MB              | True     |
- * | src_addr      | Address in local L1 memory on source core      | uint32_t  | 0..1MB              | True     |
- * | dest_addr     | Address in local L1 memory on destination core | uint32_t  | 0..1MB              | True     |
- * | noc           | Which NOC to use for the transaction           | uint8_t   | 0 or 1              | False    |
- */
-// clang-format on
-FORCE_INLINE
-void noc_async_read_tile_dram_sharded_with_state(
-    uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT(NocEventType::READ_DRAM_SHARDED_WITH_STATE);
-
-    uint32_t src_local_addr = src_base_addr + src_addr;
-
-    WAYPOINT("NRTW");
-    ncrisc_noc_read_with_state<noc_mode, true /* inc_num_issued */, true /* one_packet */>(
-        noc, read_cmd_buf, src_local_addr, dest_addr);
-    WAYPOINT("NRTD");
-}
-
-// clang-format off
-/**
- * Initiates an asynchronous read for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size).
- * This is similar to \a noc_async_read_tile_dram_sharded_with_state, except that this is used when the transaction
- * id is set.
+ * This is similar to \a noc_async_read_tile_dram_sharded_with_state (now deprecated; see \a noc_async_read_one_packet_with_state),
+ * except that this is used when the transaction id is set.
  *
  * Return value: None
  *
