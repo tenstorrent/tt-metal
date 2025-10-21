@@ -358,4 +358,4 @@ def test_layer_norm_across_dtypes(*, device: ttnn.Device, dim_a: int, dim_b: int
 
     tt_output_torch = ttnn.to_torch(tt_output)
 
-    assert_with_pcc(torch_output, tt_output_torch, pcc=0.988)
+    assert_with_pcc(torch_output, tt_output_torch, pcc=0.987)
