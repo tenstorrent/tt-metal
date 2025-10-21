@@ -276,6 +276,8 @@ CMD ["tail", "-f", "/dev/null"]
 COPY --from=artifacts /artifacts /artifacts
 COPY --from=artifacts /build /build
 
+RUN ls /build 
+RUN ls /artifacts
 RUN pip3 install /artifacts/*.whl
 RUN dpkg -i /build/*
 
