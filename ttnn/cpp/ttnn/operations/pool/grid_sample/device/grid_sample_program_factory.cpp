@@ -214,10 +214,20 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
         tt::tt_metal::TensorAccessorArgs(*grid_tensor.buffer()).append_to(reader_compile_time_args);
     }
 
-    const std::string reader_kernel_path =
-        is_sharded ? "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/dataflow/reader_grid_sample_sharded.cpp"
-                   : "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/dataflow/"
-                     "reader_grid_sample_interleaved_start_id.cpp";
+    // Select reader kernel based on mode and sharding
+    std::string reader_kernel_path;
+    if (mode == "nearest") {
+        reader_kernel_path = is_sharded ? "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/dataflow/"
+                                          "reader_grid_sample_sharded_nearest.cpp"
+                                        : "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/dataflow/"
+                                          "reader_grid_sample_interleaved_start_id_nearest.cpp";
+    } else {  // bilinear mode
+        reader_kernel_path =
+            is_sharded
+                ? "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/dataflow/reader_grid_sample_sharded.cpp"
+                : "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/dataflow/"
+                  "reader_grid_sample_interleaved_start_id.cpp";
+    }
 
     // Create kernels
     auto create_reader_config = [&](const std::vector<uint32_t>& args, auto processor, auto noc) {

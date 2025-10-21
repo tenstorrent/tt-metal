@@ -13,15 +13,15 @@ namespace grid_sample {
 
 struct ExecuteGridSample {
     /**
-     * Grid sample operation for spatial sampling with bilinear interpolation.
+     * Grid sample operation for spatial sampling with interpolation.
      *
-     * Samples input tensor at grid locations using bilinear interpolation.
+     * Samples input tensor at grid locations using specified interpolation.
      * Grid coordinates are expected to be normalized to [-1, 1] range.
      *
      * Args:
      *   input_tensor: Input tensor of shape (N, C, H_in, W_in)
      *   grid: Sampling grid of shape (N, H_out, W_out, 2) with coordinates in [-1, 1]
-     *   mode: Interpolation mode, currently only "bilinear" is supported
+     *   mode: Interpolation mode, "bilinear" and "nearest" are supported
      *   padding_mode: How to handle out-of-bounds coordinates, currently only "zeros" is supported
      *   use_precomputed_grid: Whether to use precomputed grid coordinates, currently only false is supported
      *   memory_config: Memory configuration for the output tensor

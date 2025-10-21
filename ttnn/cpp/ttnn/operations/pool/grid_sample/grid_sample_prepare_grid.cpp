@@ -23,7 +23,70 @@ using namespace tt::tt_metal;
 
 namespace {
 
-// Helper function to create host buffer for grid preprocessing
+// Helper function for nearest neighbor preprocessing
+template <typename InputType, typename OutputType>
+tt::tt_metal::HostBuffer create_host_buffer_for_nearest_preprocessing(
+    const Tensor& input_tensor,
+    const ttnn::Shape& output_shape,
+    const std::vector<uint32_t>& tensor_input_shape,
+    DataType output_dtype) {
+    auto input_buffer = tt::tt_metal::host_buffer::get_as<InputType>(input_tensor);
+    std::vector<OutputType> output_buffer(output_shape.volume());
+
+    // Extract dimensions
+    uint32_t input_h = tensor_input_shape[1];
+    uint32_t input_w = tensor_input_shape[2];
+
+    // Extract dimensions from grid tensor shape
+    auto grid_shape = input_tensor.logical_shape();
+    uint32_t grid_n = grid_shape[0];
+    uint32_t grid_h = grid_shape[1];
+    uint32_t grid_w = grid_shape[2];
+
+    // Scale factors for coordinate transformation (align_corners=False)
+    float height_scale = static_cast<float>(input_h) * 0.5f;
+    float height_offset = height_scale - 0.5f;
+    float width_scale = static_cast<float>(input_w) * 0.5f;
+    float width_offset = width_scale - 0.5f;
+
+    // Process each grid point
+    for (uint32_t n = 0; n < grid_n; n++) {
+        for (uint32_t h = 0; h < grid_h; h++) {
+            for (uint32_t w = 0; w < grid_w; w++) {
+                // Calculate input indices for grid coordinates
+                uint32_t x_idx = (((n * grid_h + h) * grid_w + w) * 2) + 0;  // x coordinate
+                uint32_t y_idx = (((n * grid_h + h) * grid_w + w) * 2) + 1;  // y coordinate
+
+                // Extract normalized coordinates [-1, 1]
+                float x_coord = static_cast<float>(input_buffer[x_idx]);
+                float y_coord = static_cast<float>(input_buffer[y_idx]);
+
+                // Transform to image coordinates
+                float h_coord_image = (y_coord * height_scale) + height_offset;
+                float w_coord_image = (x_coord * width_scale) + width_offset;
+
+                // For nearest neighbor: round to nearest pixel
+                int32_t h_nearest = static_cast<int32_t>(std::round(h_coord_image));
+                int32_t w_nearest = static_cast<int32_t>(std::round(w_coord_image));
+
+                // Boundary checks (clamp to valid range for out-of-bounds access)
+                h_nearest = std::max(0, std::min(h_nearest, static_cast<int32_t>(input_h) - 1));
+                w_nearest = std::max(0, std::min(w_nearest, static_cast<int32_t>(input_w) - 1));
+
+                // Calculate output indices
+                uint32_t output_base = (((n * grid_h + h) * grid_w + w) * 2);
+
+                // Store nearest pixel coordinates
+                output_buffer[output_base + 0] = static_cast<OutputType>(h_nearest);  // h coordinate
+                output_buffer[output_base + 1] = static_cast<OutputType>(w_nearest);  // w coordinate
+            }
+        }
+    }
+
+    return tt::tt_metal::HostBuffer(std::move(output_buffer));
+}
+
+// Helper function to create host buffer for bilinear grid preprocessing
 template <typename InputType, typename OutputType>
 tt::tt_metal::HostBuffer create_host_buffer_for_grid_preprocessing(
     const Tensor& input_tensor,
@@ -123,10 +186,16 @@ Tensor convert_grid_tensor(
     const Tensor& input_tensor,
     const ttnn::Shape& output_shape,
     const std::vector<uint32_t>& tensor_input_shape,
+    const std::string& mode,
     DataType output_dtype) {
     auto compute = [&](const tt::tt_metal::HostBuffer& input_host_buffer) {
-        return create_host_buffer_for_grid_preprocessing<InputType, OutputType>(
-            input_tensor, output_shape, tensor_input_shape, output_dtype);
+        if (mode == "nearest") {
+            return create_host_buffer_for_nearest_preprocessing<InputType, OutputType>(
+                input_tensor, output_shape, tensor_input_shape, output_dtype);
+        } else {  // bilinear mode
+            return create_host_buffer_for_grid_preprocessing<InputType, OutputType>(
+                input_tensor, output_shape, tensor_input_shape, output_dtype);
+        }
     };
 
     const TensorSpec output_spec(
@@ -143,6 +212,7 @@ Tensor convert_grid_tensor(
 ttnn::Tensor prepare_grid_sample_grid(
     const ttnn::Tensor& grid,
     const std::vector<uint32_t>& input_shape,
+    const std::string& mode,
     const std::string& padding_mode,
     const std::optional<DataType>& output_dtype) {
     // Validate inputs
@@ -150,6 +220,7 @@ ttnn::Tensor prepare_grid_sample_grid(
     TT_FATAL(grid.layout() == Layout::ROW_MAJOR, "Grid tensor must be in row major layout");
     TT_FATAL(grid.logical_shape().rank() == 4, "Grid tensor must be 4D");
     TT_FATAL(grid.logical_shape()[-1] == 2, "Grid tensor last dimension must be 2 (x, y coordinates)");
+    TT_FATAL(mode == "bilinear" || mode == "nearest", "Mode must be either 'bilinear' or 'nearest'");
     TT_FATAL(padding_mode == "zeros", "Currently only 'zeros' padding mode is supported");
     TT_FATAL(input_shape.size() == 4, "Input shape must have 4 dimensions [N, H, W, C]");
     TT_FATAL(
@@ -162,14 +233,15 @@ ttnn::Tensor prepare_grid_sample_grid(
     // Validate input grid data type
     TT_FATAL(grid.dtype() == DataType::FLOAT32, "Currently only float32 input grid is supported");
 
-    // Calculate output shape: (N, H_out, W_out, 6)
+    // Calculate output shape based on mode
     auto grid_shape = grid.logical_shape();
-    ttnn::Shape output_shape({grid_shape[0], grid_shape[1], grid_shape[2], 6});
+    uint32_t output_channels = (mode == "nearest") ? 2 : 6;  // nearest: 2 coords, bilinear: 2 coords + 4 weights
+    ttnn::Shape output_shape({grid_shape[0], grid_shape[1], grid_shape[2], output_channels});
 
     // Dispatch based on output data type
     switch (out_dtype) {
         case DataType::BFLOAT16:
-            return convert_grid_tensor<float, bfloat16>(grid, output_shape, input_shape, out_dtype);
+            return convert_grid_tensor<float, bfloat16>(grid, output_shape, input_shape, mode, out_dtype);
         default: TT_THROW("Unsupported output data type for prepare_grid_sample_grid: {}", out_dtype);
     }
 }

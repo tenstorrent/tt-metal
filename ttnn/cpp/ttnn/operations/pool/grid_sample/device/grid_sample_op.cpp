@@ -87,7 +87,9 @@ void GridSample::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(grid_tensor.layout() == Layout::ROW_MAJOR, "Grid tensor must be ROW_MAJOR layout");
 
     // Parameter validation - currently only support fixed configuration
-    TT_FATAL(mode_ == "bilinear", "Only bilinear interpolation mode is currently supported");
+    TT_FATAL(
+        mode_ == "bilinear" || mode_ == "nearest",
+        "Only bilinear and nearest interpolation modes are currently supported");
     TT_FATAL(padding_mode_ == "zeros", "Only zeros padding mode is currently supported");
 
     // Memory layout validation - support interleaved and height sharded
