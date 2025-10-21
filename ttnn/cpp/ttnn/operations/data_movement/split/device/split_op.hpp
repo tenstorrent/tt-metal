@@ -46,6 +46,13 @@ struct SplitDeviceOperation : public ttnn::experimental::jit::IDeviceOperation {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
+
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const override;
+    std::vector<Tensor> get_output_tensors() const override;
+    void set_output_tensors(std::vector<Tensor> output_tensors) override;
+
+private:
+    std::vector<Tensor> output_tensors_;
 };
 
 }  // namespace ttnn::operations::data_movement

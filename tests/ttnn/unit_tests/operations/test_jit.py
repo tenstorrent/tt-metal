@@ -45,7 +45,7 @@ def test_split(input_shape, device):
 @pytest.mark.parametrize(
     "input_shape, target_shape",
     [
-        ((1, 1, 64, 96), (1, 1, 96, 64)),
+        ((1, 1, 32, 64), (1, 1, 64, 32)),
     ],
 )
 def test_reshape(input_shape, target_shape, device):
@@ -57,9 +57,17 @@ def test_reshape(input_shape, target_shape, device):
     torch_tensor = torch.randn((N, C, H, W), dtype=torch.float32)
 
     ttnn_tensor = ttnn.Tensor(torch_tensor, ttnn.float32).to(ttnn.TILE_LAYOUT).to(device)
+
+    print(torch_tensor)
+    print(ttnn_tensor)
+
     reshaped_tensor = ttnn.jit_reshape(ttnn_tensor, target_shape[0], target_shape[1], target_shape[2], target_shape[3])
     assert reshaped_tensor.producer_node() is not None
     assert reshaped_tensor.producer_node() != 0
     assert list(reshaped_tensor.padded_shape) == list(target_shape)
 
-    ttnn.to_torch(reshaped_tensor) == torch.reshape(torch_tensor, target_shape)
+    reshaped_tensor_to_torch = ttnn.to_torch(reshaped_tensor)
+    print(reshaped_tensor_to_torch)
+    reshaped_torch_tensor = torch.reshape(torch_tensor, target_shape)
+    print(reshaped_torch_tensor)
+    assert reshaped_tensor_to_torch == reshaped_torch_tensor

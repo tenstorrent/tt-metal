@@ -18,6 +18,10 @@ struct IDeviceOperation {
 
     virtual std::vector<Tensor> invoke(std::vector<Tensor> input_tensors) = 0;
     virtual ~IDeviceOperation() = default;
+
+    virtual std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const = 0;
+    virtual std::vector<Tensor> get_output_tensors() const = 0;
+    virtual void set_output_tensors(std::vector<Tensor> output_tensors) = 0;
 };
 
 }  // namespace ttnn::experimental::jit

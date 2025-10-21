@@ -35,6 +35,9 @@ public:
     void set_is_materialized(bool is_materialized) { is_materialized_ = is_materialized; }
     bool is_materialized() const { return is_materialized_; }
 
+    const std::vector<Tensor>& outputs() const { return outputs_; }
+    std::vector<Tensor> create_output_tensors() const { return Args->create_output_tensors(inputs_); }
+
 private:
     NodeId id_;
     std::string operation_name_;
@@ -42,6 +45,7 @@ private:
     std::vector<NodeId> output_nodes_;
     std::shared_ptr<IDeviceOperation> Args;
     bool is_materialized_ = false;
+    std::vector<Tensor> outputs_;
 };
 
 }  // namespace ttnn::experimental::jit
