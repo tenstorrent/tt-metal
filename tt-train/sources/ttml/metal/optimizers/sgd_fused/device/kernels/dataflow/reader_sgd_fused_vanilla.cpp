@@ -14,6 +14,9 @@ constexpr auto cb_grad_idx = tt::CBIndex::c_1;
 constexpr auto cb_momentum_in_idx = tt::CBIndex::c_2;
 
 constexpr auto cb_bcast_lr_idx = tt::CBIndex::c_7;
+constexpr auto cb_bcast_momentum_idx = tt::CBIndex::c_8;
+constexpr auto cb_bcast_dampening_idx = tt::CBIndex::c_9;
+constexpr auto cb_bcast_weight_decay_idx = tt::CBIndex::c_10;
 
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 constexpr uint32_t Wt = get_compile_time_arg_val(1);
@@ -41,7 +44,11 @@ void kernel_main() {
     const uint32_t grad_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t momentum_in_addr = get_arg_val<uint32_t>(runtime_args_counter++);
 
-    const uint32_t lr = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t packed_lr = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t packed_momentum = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t packed_dampening = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t packed_weight_decay = get_arg_val<uint32_t>(runtime_args_counter++);
+
     const uint32_t num_tiles_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t start_tile = get_arg_val<uint32_t>(runtime_args_counter++);
 
@@ -56,11 +63,10 @@ void kernel_main() {
 #if USE_MOMENTUM
     const auto momentum_in_addr_gen = TensorAccessor(momentum_in_args, momentum_in_addr, tile_size_bytes);
 #endif
-    float lr_float = uint32_to_float(lr);
-    uint16_t lr_bf16 = float_to_bfloat16(lr_float);
-    uint32_t packed_lr = (static_cast<uint32_t>(lr_bf16) << 16) | lr_bf16;
-
     generate_bcast_scalar_bfloat16(cb_bcast_lr_idx, packed_lr);
+    generate_bcast_scalar_bfloat16(cb_bcast_momentum_idx, packed_momentum);
+    generate_bcast_scalar_bfloat16(cb_bcast_dampening_idx, packed_dampening);
+    generate_bcast_scalar_bfloat16(cb_bcast_weight_decay_idx, packed_weight_decay);
 
     uint32_t end_tile = start_tile + num_tiles_to_process;
     for (uint32_t tile_idx = start_tile; tile_idx < end_tile; tile_idx += block_size) {
