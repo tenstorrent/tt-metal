@@ -337,8 +337,8 @@ class Parameter:
                 n = device.shape[mesh_axis]
                 if local_shape[tensor_dim] % n != 0:
                     msg = (
-                        f"shape {total_shape} cannot be evenly distributed over mesh {device.shape} "
-                        f"along tensor dim {tensor_dim}"
+                        f"tensor with shape {total_shape} cannot be evenly distributed over mesh with shape "
+                        f"{tuple(device.shape)} along mesh axis {mesh_axis} and tensor dimension {tensor_dim} "
                     )
                     raise ValueError(msg)
                 local_shape[tensor_dim] //= n
