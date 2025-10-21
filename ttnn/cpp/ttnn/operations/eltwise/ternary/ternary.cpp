@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "where.hpp"
+#include "ternary.hpp"
 
 #include <utility>
 #include <variant>
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "device/where_device_operation.hpp"
-#include "device/where_utils.hpp"
+#include "device/ternary_device_operation.hpp"
+#include "device/ternary_op_utils.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 
 namespace ttnn {
@@ -21,14 +21,13 @@ namespace ternary_utils {
 
 // where - ternary operator y = (predicate) ? value_true : value_false; elementwise
 // y = (predicate >= 0)*value_true + (predicate < 0)*value_false
-
 Tensor where_impl(
     const Tensor& predicate,
     const auto& value_true,
     const auto& value_false,
     const MemoryConfig& memory_config,
     const std::optional<Tensor>& output) {
-    log_debug(tt::LogOp, "Where Legacy");
+    log_info(tt::LogOp, "Where Legacy");
     using FusedActivations = tt::stl::Span<const unary::EltwiseUnaryWithParam>;
     constexpr auto dtype = std::nullopt;
     const auto get_multiplied = [&](const Tensor& condition, const auto& value) -> Tensor {
@@ -86,8 +85,8 @@ namespace {
 inline bool is_sharded(const Tensor& t) { return t.memory_config().is_sharded(); }
 inline bool is_sharded(const std::optional<MemoryConfig>& mc) { return mc.has_value() && mc->is_sharded(); }
 inline bool is_sharded(const std::optional<Tensor>& t) { return t.has_value() && t->memory_config().is_sharded(); }
-inline bool is_invalid_bcast(const ttnn::operations::ternary::WhereBroadcastType& broadcast_type) {
-    return broadcast_type == ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST;
+inline bool is_invalid_bcast(const ttnn::operations::ternary::TernaryBroadcastType& broadcast_type) {
+    return broadcast_type == ttnn::operations::ternary::TernaryBroadcastType::INVALID_BCAST;
 }
 
 // TTT: tensor, tensor, tensor
@@ -115,8 +114,9 @@ Tensor invoke_impl(
     }
     std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
 
-    log_debug(tt::LogOp, "Where LLK - TTT");
-    return ttnn::prim::where(
+    log_info(tt::LogOp, "Where LLK - TTT");
+    return ttnn::prim::ternary(
+        TernaryOpType::WHERE,
         std::move(condition),
         t_true,
         t_false,
@@ -151,8 +151,9 @@ Tensor invoke_impl(
     }
 
     std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
-    log_debug(tt::LogOp, "Where LLK - TTS");
-    return ttnn::prim::where(
+    log_info(tt::LogOp, "Where LLK - TTS");
+    return ttnn::prim::ternary(
+        TernaryOpType::WHERE,
         std::move(condition),
         t_true,
         scalar_false,
@@ -186,8 +187,9 @@ Tensor invoke_impl(
     }
 
     std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_false.dtype());
-    log_debug(tt::LogOp, "Where LLK - TST");
-    return ttnn::prim::where(
+    log_info(tt::LogOp, "Where LLK - TST");
+    return ttnn::prim::ternary(
+        TernaryOpType::WHERE,
         std::move(condition),
         scalar_true,
         t_false,
@@ -203,7 +205,7 @@ Tensor invoke_impl(
     float t_false,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    log_debug(tt::LogOp, "Where LLK - TSS");
+    log_info(tt::LogOp, "Where LLK - TSS");
     unary::UnaryOpType op_type = unary::UnaryOpType::WHERE_TSS;
     return ttnn::operations::unary::Unary_chain::invoke(
         condition,

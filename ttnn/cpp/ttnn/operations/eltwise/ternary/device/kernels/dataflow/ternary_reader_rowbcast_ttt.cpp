@@ -25,7 +25,7 @@ void kernel_main() {
     const uint32_t C = get_arg_val<uint32_t>(11);
     const uint32_t Ht = get_arg_val<uint32_t>(12);
     const uint32_t Wt = get_arg_val<uint32_t>(13);
-    const uint32_t cND = get_arg_val<uint32_t>(14);         // collapsed dims > 5
+    const uint32_t cND = get_arg_val<uint32_t>(14);  // collapsed dims > 5
 
     // True tensor parameters (args 15-19)
     const uint32_t nD_stride_b = get_arg_val<uint32_t>(15);

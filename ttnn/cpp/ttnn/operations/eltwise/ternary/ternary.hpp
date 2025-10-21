@@ -8,6 +8,7 @@
 #include <variant>
 
 #include "ttnn/decorators.hpp"
+#include "ttnn/operations/eltwise/ternary/common/ternary_op_types.hpp"
 
 namespace ttnn {
 
@@ -15,6 +16,7 @@ namespace operations {
 
 namespace ternary {
 
+// Where Operation
 struct WhereOperation {
     static Tensor invoke(
         const Tensor& predicate,
@@ -27,6 +29,7 @@ struct WhereOperation {
 }  // namespace ternary
 }  // namespace operations
 
+// Register the where operation
 constexpr auto where = ttnn::register_operation<"ttnn::where", operations::ternary::WhereOperation>();
 
 }  // namespace ttnn

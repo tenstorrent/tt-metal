@@ -7,42 +7,26 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/eltwise/ternary/common/ternary_op_types.hpp"
 
 namespace ttnn::operations::ternary {
 
-enum class WhereVariant {
-    TTT,  // tensor-tensor-tensor
-    TTS,  // tensor-tensor-scalar
-    TST,  // tensor-scalar-tensor
-    TSS,  // tensor-scalar-scalar
-};
-
-enum class WhereBroadcastType {
-    NONE,
-    OUTER_BCAST,     // bcast for outer dims -5, -4, -3, no subtile bcast.
-    COL_BCAST,       // bcast for W-dim and outer dims -5, -4, -3.
-    ROW_BCAST,       // Row broadcast for H-dim
-    SCALAR_BCAST,    // Scalar broadcast for TTT: Either A or B or C can be (1,1)
-    SCALAR_A_BCAST,  // A = (1,1) B = (H,W )
-    SCALAR_B_BCAST,  // A = (H,W) B = (1,1)
-    INVALID_BCAST,   // All other unsupported bcast cases go here for now
-};
-
-struct WhereDeviceOperation {
+struct TernaryDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct operation_attributes_t {
-        WhereVariant where_variant;
-        WhereBroadcastType broadcast_type;
+        TernaryOpType ternary_op_type;
+        TernaryVariant ternary_variant;
+        TernaryBroadcastType broadcast_type;
         tt::tt_metal::MemoryConfig memory_config;
         DataType input_dtype;
         std::optional<DataType> dtype;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
 
-        // Scalar values for TTS/TST variants
-        std::optional<float> value_true_scalar;
-        std::optional<float> value_false_scalar;
+        // Scalar values for TTS/TST/TSS variants
+        std::optional<float> scalar_input_a;  // For TST/TSS
+        std::optional<float> scalar_input_b;  // For TTS/TSS
 
         tt::stl::hash::hash_t to_hash() const;
 
@@ -50,13 +34,13 @@ struct WhereDeviceOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& predicate;
-        std::optional<Tensor> value_true;
-        std::optional<Tensor> value_false;
+        const Tensor& input_tensor_a;          // First input (predicate for where, input for lerp)
+        std::optional<Tensor> input_tensor_b;  // Second input (value_true for where, end for lerp)
+        std::optional<Tensor> input_tensor_c;  // Third input (value_false for where, weight for lerp)
         std::optional<Tensor> optional_output_tensor;
     };
 
-    struct WhereProgramFactory {
+    struct TernaryProgramFactory {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle reader_kernel_id{};
             tt::tt_metal::KernelHandle writer_kernel_id{};
@@ -78,7 +62,7 @@ struct WhereDeviceOperation {
             tensor_return_value_t& output);
     };
 
-    using program_factory_t = std::variant<WhereProgramFactory>;
+    using program_factory_t = std::variant<TernaryProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
@@ -90,27 +74,30 @@ struct WhereDeviceOperation {
 
     // tensor-tensor-tensor invocation (TTT)
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& predicate,
-        const Tensor& value_true,
-        const Tensor& value_false,
+        TernaryOpType op_type,
+        const Tensor& input_a,
+        const Tensor& input_b,
+        const Tensor& input_c,
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<Tensor>& optional_output_tensor);
 
     // tensor-tensor-scalar invocation (TTS)
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& predicate,
-        const Tensor& value_true,
-        float value_false_scalar,
+        TernaryOpType op_type,
+        const Tensor& input_a,
+        const Tensor& input_b,
+        float scalar_c,
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<Tensor>& optional_output_tensor);
 
     // tensor-scalar-tensor invocation (TST)
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& predicate,
-        float value_true_scalar,
-        const Tensor& value_false,
+        TernaryOpType op_type,
+        const Tensor& input_a,
+        float scalar_b,
+        const Tensor& input_c,
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<Tensor>& optional_output_tensor);
@@ -119,5 +106,6 @@ struct WhereDeviceOperation {
 }  // namespace ttnn::operations::ternary
 
 namespace ttnn::prim {
-constexpr auto where = ttnn::register_operation<"ttnn::prim::where", ttnn::operations::ternary::WhereDeviceOperation>();
+constexpr auto ternary =
+    ttnn::register_operation<"ttnn::prim::ternary", ttnn::operations::ternary::TernaryDeviceOperation>();
 }  // namespace ttnn::prim
