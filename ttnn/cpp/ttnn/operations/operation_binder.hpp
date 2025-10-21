@@ -28,6 +28,8 @@ static std::vector<ttnn::Tensor> bind_operation(
     // Create shared_ptr to hold the args
     auto args_ptr = std::move(operation);
 
+    args_ptr->validate(inputs);
+
     // Add node to context
     auto node_id = context.create_node(
         inputs,
