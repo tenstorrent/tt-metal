@@ -51,7 +51,7 @@ def test_ttnn_aspp(device, model_location_generator):
 
     pytorch_input = torch.randn(batch_size, input_channels, input_height, input_width, dtype=torch.bfloat16)
     ttnn_input = ttnn.from_torch(
-        pytorch_input.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        pytorch_input.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
     )
 
     try:

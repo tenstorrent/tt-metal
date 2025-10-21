@@ -301,14 +301,15 @@ class ModelOptimisations:
                 f"decoder.{stage}.project_conv", slice_strategy=None, deallocate_activation=False
             )
 
-        # Decoder fuse convolutions - use HeightSharded strategy to avoid width sharding
+        # Decoder fuse convolutions
         for stage in ["res4", "res3", "res2"]:
             # fuse_conv.0
             fuse_conv_0_path = f"decoder.{stage}.fuse_conv.0"
             if iteration_index == 0 and stage in ["res3", "res2"]:
                 # res3 and res2 stages use channel slicing with HeightSharded strategy
-                # res2 has higher spatial resolution (128x256 vs res3's 64x128) so needs slicing too
-                num_slices = 5 if stage == "res3" else 8  # res2 needs more slices due to larger resolution
+                # res2 has higher spatial resolution (128x256 vs res3's 64x128) so needs more slicing
+                # Reduced slice counts now that we use bfloat8_b inputs (was 5/8, now 2/4)
+                num_slices = 2 if stage == "res3" else 4  # res2 needs more slices due to larger resolution
                 act_block_h = 32 if stage == "res3" else 64  # res2 needs larger act_block_h
                 self.register_layer_override(
                     fuse_conv_0_path,
@@ -319,19 +320,20 @@ class ModelOptimisations:
                 )
             else:
                 # Other stages (res4) use height slicing with HeightSharded strategy
+                # Reduced from 4 to 2 now that we use bfloat8_b inputs
                 self.register_layer_override(
                     fuse_conv_0_path,
-                    slice_strategy=HeightSliceStrategyConfiguration(num_slices=4),
+                    slice_strategy=HeightSliceStrategyConfiguration(num_slices=2),
                     sharding_strategy=HeightShardedStrategyConfiguration(),
                     deallocate_activation=False,
                 )
 
-            # fuse_conv.1: Always use height slicing with HeightSharded strategy
-            # res2 needs more slices due to higher spatial resolution (128x256 vs others)
-            num_slices_fuse1 = 16 if stage == "res2" else 2
+            # fuse_conv.1: Use width slicing with HeightSharded strategy (matches panoptic unit tests)
+            # Panoptic tests show these convs use WidthSlice with num_slices=0 (auto)
+            # for 128x256 and even 256x512 resolutions
             self.register_layer_override(
                 f"decoder.{stage}.fuse_conv.1",
-                slice_strategy=HeightSliceStrategyConfiguration(num_slices=num_slices_fuse1),
+                slice_strategy=WidthSliceStrategyConfiguration(num_slices=0),
                 sharding_strategy=HeightShardedStrategyConfiguration(),
                 deallocate_activation=False,
             )
@@ -340,22 +342,21 @@ class ModelOptimisations:
         """
         Setup layer-specific overrides for head convolutions.
 
-        All head convolutions use height slicing with HeightSharded strategy
-        to avoid width sharding performance issues.
+        All head convolutions use width slicing with HeightSharded strategy
+        to match panoptic unit tests.
         """
-        # Semantic segmentation head - use height slicing with HeightSharded strategy
-        # Head convs have stride=1 and process [128, 256] spatial resolution (4x larger than before fix)
-        # Use aggressive slicing (num_slices=8) with act_block_h_override to fit in L1
+        # Semantic segmentation head - use width slicing (matches unit test config)
+        # Unit test: (1, 256, 256, 128, 256, SliceWidth, 0, bfloat8_b, (3,3), (1,1), (1,1), (1,1), None, LoFi, HS, 3)
         self.register_layer_override(
             "semantic_head.head.0",
-            slice_strategy=HeightSliceStrategyConfiguration(num_slices=8),
-            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
+            slice_strategy=WidthSliceStrategyConfiguration(num_slices=0),
+            sharding_strategy=HeightShardedStrategyConfiguration(),
             deallocate_activation=False,
         )
         self.register_layer_override(
             "semantic_head.head.1",
-            slice_strategy=HeightSliceStrategyConfiguration(num_slices=8),
-            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
+            slice_strategy=WidthSliceStrategyConfiguration(num_slices=0),
+            sharding_strategy=HeightShardedStrategyConfiguration(),
             deallocate_activation=False,
         )
         # Predictor layers output padded to tile-aligned channels (32 instead of 19)
@@ -367,12 +368,13 @@ class ModelOptimisations:
             deallocate_activation=False,
         )
 
-        # Instance embedding head - center - use HeightSharded strategy
+        # Instance embedding head - center - use width slicing (inferred from semantic head pattern)
+        # Similar resolution (128x256) to semantic head, so use same strategy
         for i in [0, 1]:
             self.register_layer_override(
                 f"instance_head.center_head.{i}",
-                slice_strategy=HeightSliceStrategyConfiguration(num_slices=8),
-                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
+                slice_strategy=WidthSliceStrategyConfiguration(num_slices=0),
+                sharding_strategy=HeightShardedStrategyConfiguration(),
                 deallocate_activation=False,
             )
         # Center predictor outputs padded to tile-aligned channels (32 instead of 2)
@@ -383,12 +385,13 @@ class ModelOptimisations:
             deallocate_activation=False,
         )
 
-        # Instance embedding head - offset - use HeightSharded strategy
+        # Instance embedding head - offset - use width slicing (inferred from semantic head pattern)
+        # Similar resolution (128x256) to semantic head, so use same strategy
         for i in [0, 1]:
             self.register_layer_override(
                 f"instance_head.offset_head.{i}",
-                slice_strategy=HeightSliceStrategyConfiguration(num_slices=8),
-                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
+                slice_strategy=WidthSliceStrategyConfiguration(num_slices=0),
+                sharding_strategy=HeightShardedStrategyConfiguration(),
                 deallocate_activation=False,
             )
         # Offset predictor outputs padded to tile-aligned channels (32 instead of 2)

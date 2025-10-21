@@ -53,7 +53,7 @@ def test_ttnn_semseg(device, model_location_generator):
     }
 
     ttnn_features: Dict[str, ttnn.Tensor] = {
-        name: ttnn.from_torch(tensor.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        name: ttnn.from_torch(tensor.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
         for name, tensor in torch_features.items()
     }
 
