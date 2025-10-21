@@ -47,7 +47,7 @@
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include "tt-metalium/program.hpp"
 #include "program/program_impl.hpp"
-#include "semaphore.hpp"
+#include "impl/buffers/semaphore.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <tt_stl/enum.hpp>
