@@ -31,6 +31,9 @@ constexpr uint32_t kParamAddrIdx = 0;
 constexpr uint32_t kGradAddrIdx = 1U;
 constexpr uint32_t kMomentumBufferInAddrIdx = 2U;
 constexpr uint32_t kBcastLrIdx = 3U;
+constexpr uint32_t kBcastMomentumIdx = 4U;
+constexpr uint32_t kBcastDampeningIdx = 5U;
+constexpr uint32_t kBcastWeightDecayIdx = 6U;
 // compute runtime args
 constexpr uint32_t kLrIdx = 0U;
 constexpr uint32_t kMomentumIdx = 1U;
@@ -48,7 +51,11 @@ constexpr auto kMomentumOutCbIndex = tt::CBIndex::c_4;
 constexpr auto kMomentumToDramCbIndex = tt::CBIndex::c_5;
 
 constexpr auto kUpdateCbIndex = tt::CBIndex::c_6;
+
 constexpr auto kBcastLrCbIndex = tt::CBIndex::c_7;
+constexpr auto kBcastMomentumCbIndex = tt::CBIndex::c_8;
+constexpr auto kBcastDampeningCbIndex = tt::CBIndex::c_9;
+constexpr auto kBcastWeightDecayCbIndex = tt::CBIndex::c_10;
 
 constexpr auto kOutputCbIndex = tt::CBIndex::c_16;
 
@@ -88,6 +95,18 @@ void assign_per_core_runtime_args(
     uint32_t num_tiles_per_core_group_2,
     const tt::tt_metal::CoreRangeSet& core_group_1,
     const tt::tt_metal::CoreRangeSet& core_group_2) {
+    bfloat16 bfloat_lr = bfloat16::truncate(lr);
+    uint32_t packed_lr = pack_two_bfloat16_into_uint32({bfloat_lr, bfloat_lr});
+
+    bfloat16 bfloat_momentum = bfloat16::truncate(momentum);
+    uint32_t packed_momentum = pack_two_bfloat16_into_uint32({bfloat_momentum, bfloat_momentum});
+
+    bfloat16 bfloat_dampening = bfloat16::truncate(dampening);
+    uint32_t packed_dampening = pack_two_bfloat16_into_uint32({bfloat_dampening, bfloat_dampening});
+
+    bfloat16 bfloat_weight_decay = bfloat16::truncate(weight_decay);
+    uint32_t packed_weight_decay = pack_two_bfloat16_into_uint32({bfloat_weight_decay, bfloat_weight_decay});
+
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -109,7 +128,10 @@ void assign_per_core_runtime_args(
             {param_buffer->address(),
              grad_buffer->address(),
              momentum_buffer != nullptr ? momentum_buffer->address() : 0,
-             std::bit_cast<uint32_t>(lr),
+             packed_lr,
+             packed_momentum,
+             packed_dampening,
+             packed_weight_decay,
              num_tiles_per_core,
              num_tiles_written});
 
@@ -241,6 +263,15 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     [[maybe_unused]] auto cb_bcast_lr = create_circular_buffer(
         program, all_cores, kBcastLrCbIndex, tt::DataFormat::Float16_b, bfloat16_single_tile_size_bytes, 1U);
 
+    [[maybe_unused]] auto cb_bcast_momentum = create_circular_buffer(
+        program, all_cores, kBcastMomentumCbIndex, tt::DataFormat::Float16_b, bfloat16_single_tile_size_bytes, 1U);
+
+    [[maybe_unused]] auto cb_bcast_dampening = create_circular_buffer(
+        program, all_cores, kBcastDampeningCbIndex, tt::DataFormat::Float16_b, bfloat16_single_tile_size_bytes, 1U);
+
+    [[maybe_unused]] auto cb_bcast_weight_decay = create_circular_buffer(
+        program, all_cores, kBcastWeightDecayCbIndex, tt::DataFormat::Float16_b, bfloat16_single_tile_size_bytes, 1U);
+
     [[maybe_unused]] auto cb_output = create_circular_buffer(
         program, all_cores, kOutputCbIndex, output_data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
 
@@ -361,6 +392,18 @@ void SGDFusedProgramFactory::override_runtime_arguments(
         core_group_2.ranges().empty() ? compute_group_1_runtime_args
                                       : GetRuntimeArgs(program, sgd_fused_compute_kernel_group_2_id);
 
+    bfloat16 bfloat_lr = bfloat16::truncate(lr);
+    uint32_t packed_lr = pack_two_bfloat16_into_uint32({bfloat_lr, bfloat_lr});
+
+    bfloat16 bfloat_momentum = bfloat16::truncate(momentum);
+    uint32_t packed_momentum = pack_two_bfloat16_into_uint32({bfloat_momentum, bfloat_momentum});
+
+    bfloat16 bfloat_dampening = bfloat16::truncate(dampening);
+    uint32_t packed_dampening = pack_two_bfloat16_into_uint32({bfloat_dampening, bfloat_dampening});
+
+    bfloat16 bfloat_weight_decay = bfloat16::truncate(weight_decay);
+    uint32_t packed_weight_decay = pack_two_bfloat16_into_uint32({bfloat_weight_decay, bfloat_weight_decay});
+
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -371,7 +414,10 @@ void SGDFusedProgramFactory::override_runtime_arguments(
             runtime_args[kGradAddrIdx] = grad_buffer->address();
             runtime_args[kMomentumBufferInAddrIdx] =
                 momentum_buffer_unwrapped != nullptr ? momentum_buffer_unwrapped->address() : 0;
-            runtime_args[kBcastLrIdx] = std::bit_cast<uint32_t>(lr);
+            runtime_args[kBcastLrIdx] = packed_lr;
+            runtime_args[kBcastMomentumIdx] = packed_momentum;
+            runtime_args[kBcastDampeningIdx] = packed_dampening;
+            runtime_args[kBcastWeightDecayIdx] = packed_weight_decay;
         }
         if (core_group_1.contains(core)) {
             auto& runtime_args = compute_group_1_runtime_args[core.x][core.y];
