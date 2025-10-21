@@ -9,7 +9,7 @@ import pandas as pd
 import click
 from loguru import logger
 
-from tracy.common import PROFILER_LOGS_DIR
+from tracy.common import PROFILER_LOGS_DIR, PROFILER_CPP_DEVICE_OPS_PERF_REPORT
 from tracy.process_model_log import get_latest_ops_log_filename
 
 
@@ -17,7 +17,7 @@ def compare_ops_logs(python_ops_perf_report=None, cpp_ops_perf_report=None):
     if not python_ops_perf_report:
         python_ops_perf_report = get_latest_ops_log_filename()
     if not cpp_ops_perf_report:
-        cpp_ops_perf_report = PROFILER_LOGS_DIR / "cpp_ops_device_perf_report.csv"
+        cpp_ops_perf_report = PROFILER_LOGS_DIR / PROFILER_CPP_DEVICE_OPS_PERF_REPORT
 
     logger.info(f"Comparing {python_ops_perf_report} with {cpp_ops_perf_report}")
 
