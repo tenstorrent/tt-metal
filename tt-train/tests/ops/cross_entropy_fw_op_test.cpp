@@ -31,7 +31,30 @@ protected:
     }
 };
 
-xt::xarray<float> calculate_cross_entropy_loss(const xt::xarray<float>& input, const xt::xarray<uint32_t>& target) {
+// xt::xarray<float> calculate_cross_entropy_loss(
+//     const xt::xarray<float>& input, const xt::xarray<uint32_t>& target, const uint32_t ignore_index = 1000000000U) {
+//     const uint32_t N = target.shape(0);
+//     const uint32_t C = 1U;
+//     const uint32_t H = target.shape(1);
+//     const uint32_t W = 1U;
+//     xt::xarray<float> target_inputs = xt::zeros<float>({N, C, H, W});
+
+//     for (size_t n = 0; n < N; ++n) {
+//         for (size_t h = 0; h < H; ++h) {
+//             size_t class_index = target(n, h) == ignore_index ? 0U : target(n, h);
+//             target_inputs(n, 0, h, 0) = input(n, 0, h, class_index);
+//         }
+//     }
+
+//     xt::xarray<float> max_input = xt::amax(input, -1, xt::keep_dims);
+//     xt::xarray<float> shifted_input = input - max_input;
+//     xt::xarray<float> log_exp_sum_test = xt::log(xt::sum(xt::exp(shifted_input), -1, xt::keep_dims));
+//     xt::xarray<float> result = -target_inputs + max_input + log_exp_sum_test;
+//     return result;
+// }
+
+xt::xarray<float> calculate_cross_entropy_loss(
+    const xt::xarray<float>& input, const xt::xarray<uint32_t>& target, const uint32_t ignore_index = 1000000000U) {
     const uint32_t N = target.shape(0);
     const uint32_t C = 1U;
     const uint32_t H = target.shape(1);
@@ -41,7 +64,18 @@ xt::xarray<float> calculate_cross_entropy_loss(const xt::xarray<float>& input, c
     for (size_t n = 0; n < N; ++n) {
         for (size_t h = 0; h < H; ++h) {
             size_t class_index = target(n, h);
-            target_inputs(n, 0, h, 0) = input(n, 0, h, class_index);
+            
+            // Handle ignore_index safely
+            if (class_index == ignore_index) {
+                target_inputs(n, 0, h, 0) = 0.0f;  // Set to 0 for ignored positions
+            } else {
+                // Bounds check to prevent segfault
+                if (class_index < input.shape(-1)) {
+                    target_inputs(n, 0, h, 0) = input(n, 0, h, class_index);
+                } else {
+                    target_inputs(n, 0, h, 0) = 0.0f;  // Fallback for invalid indices
+                }
+            }
         }
     }
 
@@ -49,6 +83,16 @@ xt::xarray<float> calculate_cross_entropy_loss(const xt::xarray<float>& input, c
     xt::xarray<float> shifted_input = input - max_input;
     xt::xarray<float> log_exp_sum_test = xt::log(xt::sum(xt::exp(shifted_input), -1, xt::keep_dims));
     xt::xarray<float> result = -target_inputs + max_input + log_exp_sum_test;
+    
+    // Zero out ignored positions in the final result
+    for (size_t n = 0; n < N; ++n) {
+        for (size_t h = 0; h < H; ++h) {
+            if (target(n, h) == ignore_index) {
+                result(n, 0, h, 0) = 0.0f;
+            }
+        }
+    }
+    
     return result;
 }
 
@@ -151,6 +195,55 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Batch) {
     target.print();
 
     auto result = ttml::metal::cross_entropy_fw(input, target);
+    std::cout << "CrossEntropyForward_Test:\nResult:\n";
+    result.print();
+
+    auto expected_result = calculate_cross_entropy_loss(input_tensor, target_tensor);
+
+    auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
+    std::cout << "Expected Result:\n";
+    expected_result_print.print();
+
+    // Check if the result is close to the expected result
+    auto result_xtensor = core::to_xtensor(result);
+    assert((result_xtensor.shape() == expected_result.shape()));
+    EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
+}
+
+TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Batch_Ignore_Index) {
+    using namespace ttml;
+
+    const uint32_t N = 1U, C = 1U, H = 32U, W = 256U;
+    const uint32_t ignore_index = 1000000000U;
+
+    std::mt19937 gen(42);
+    xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
+    auto& rng = ttml::autograd::ctx().get_generator();
+    uint32_t seed = rng();
+    ttml::core::parallel_generate(
+        std::span{input_tensor.data(), input_tensor.size()},
+        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
+        seed);
+    xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
+
+    std::uniform_int_distribution<uint32_t> class_dist(0, W - 1);
+    for (uint32_t n = 0; n < N; ++n) {
+        for (uint32_t h = 0; h < H; ++h) {
+            uint32_t true_class = class_dist(gen);
+            target_tensor(n, h) = (h % 2 == 0) ? true_class : ignore_index;
+        }
+    }
+
+    auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
+    std::cout << "Input Logits:\n";
+    input.print();
+
+    auto target = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+        target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
+    std::cout << "Input Target Indexes:\n";
+    target.print();
+
+    auto result = ttml::metal::cross_entropy_fw(input, target, ignore_index);
     std::cout << "CrossEntropyForward_Test:\nResult:\n";
     result.print();
 

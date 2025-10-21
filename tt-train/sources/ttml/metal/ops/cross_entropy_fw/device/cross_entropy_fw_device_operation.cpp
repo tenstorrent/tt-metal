@@ -4,9 +4,9 @@
 
 #include "cross_entropy_fw_device_operation.hpp"
 
-#include "cross_entropy_fw_program_factory.hpp"
-
 #include <enchantum/enchantum.hpp>
+
+#include "cross_entropy_fw_program_factory.hpp"
 
 namespace ttml::metal::ops::cross_entropy_fw::device {
 
@@ -117,9 +117,12 @@ ttsl::hash::hash_t CrossEntropyForwardDeviceOperation::compute_program_hash(
 std::tuple<operation_attributes_t, tensor_args_t> CrossEntropyForwardDeviceOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& target_tensor,
+    const uint32_t ignore_index,
     const std::optional<ttnn::Tensor>& preallocated_output) {
     return {
-        operation_attributes_t{},
+        operation_attributes_t{
+            .ignore_index = ignore_index,
+        },
         tensor_args_t{
             .input = input_tensor,
             .target = target_tensor,

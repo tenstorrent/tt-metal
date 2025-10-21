@@ -8,7 +8,9 @@
 
 namespace ttml::metal::ops::cross_entropy_fw::device {
 
-struct operation_attributes_t {};
+struct operation_attributes_t {
+    const uint32_t ignore_index{1000000000U};
+};
 
 struct tensor_args_t {
     const ttnn::Tensor& input;

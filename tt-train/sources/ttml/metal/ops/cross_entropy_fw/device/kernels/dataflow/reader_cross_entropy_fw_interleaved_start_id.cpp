@@ -25,6 +25,7 @@ void kernel_main() {
     constexpr uint32_t cb_scaler_idx = tt::CBIndex::c_4;  // used for reduction
     constexpr uint32_t cb_input_tile = tt::CBIndex::c_5;
     constexpr uint32_t cb_target_logits = tt::CBIndex::c_6;
+    constexpr uint32_t cb_ignore_index_mask = tt::CBIndex::c_7;
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
@@ -32,6 +33,7 @@ void kernel_main() {
     constexpr uint32_t target_indexes_page_size = get_compile_time_arg_val(3);
     constexpr uint32_t tiled_H = get_compile_time_arg_val(4);
     constexpr uint32_t target_indexes_read_page_size = get_compile_time_arg_val(5);
+    constexpr uint32_t ignore_index = get_compile_time_arg_val(6);
 
     constexpr uint32_t onetile = 1U;
 #ifdef DO_MASK_W
@@ -75,8 +77,11 @@ void kernel_main() {
     }
     cb_push_back(cb_scaler_idx, onetile);
 
+    generate_matmul_row_reduce_tile(cb_ignore_index_mask);
+    cb_wait_front(cb_ignore_index_mask, onetile);
+
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
-    constexpr auto input_args = TensorAccessorArgs<6>();
+    constexpr auto input_args = TensorAccessorArgs<7>();
     constexpr auto target_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     const auto input_address_generator = TensorAccessor(input_args, input_address, tile_bytes);
     const auto target_indexes_address_generator = TensorAccessor(target_args, target_address, target_indexes_page_size);
@@ -106,24 +111,40 @@ void kernel_main() {
         uint32_t l1_input_tile_write_addr = get_write_ptr(cb_input_tile);
         uint32_t l1_target_logits_write_addr = get_write_ptr(cb_target_logits);
 
+        /*
+         * For each row, read target indexes, then read input logits by target indexes to create target logits buffer
+         * Generate mask with 0.0 or 1.0 values depending on ignore_index
+         */
+
+        auto ignore_index_mask_l1_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(cb_ignore_index_mask));
         auto target_indexes_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_target_idx));
         for (uint32_t h = 0; h < TILE_HEIGHT; ++h) {
             uint32_t target_value_idx = h;  // only first row of the tile is used
 
             uint32_t target_value = target_indexes_l1_ptr[target_value_idx];
-
-            noc_async_read_tile(idx + (target_value / TILE_WIDTH), input_address_generator, l1_input_tile_write_addr);
-            noc_async_read_barrier();
-
-            auto read_input_tile_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(cb_input_tile));
-
-            auto target_logits_write_l1_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_target_logits_write_addr);
-
-            auto idx_inside_tile = get_tilized_idx(h, target_value);  // only first row of the tile is used
             uint32_t inplace_idx = get_tilized_idx(h, 0);
-            target_logits_write_l1_ptr[inplace_idx] = read_input_tile_l1_ptr[idx_inside_tile];
+
+            if (target_value == ignore_index) {
+                ignore_index_mask_l1_ptr[inplace_idx] = zero;
+            } else {
+                noc_async_read_tile(
+                    idx + (target_value / TILE_WIDTH), input_address_generator, l1_input_tile_write_addr);
+                noc_async_read_barrier();
+
+                auto read_input_tile_l1_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(cb_input_tile));
+
+                auto target_logits_write_l1_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_target_logits_write_addr);
+
+                auto idx_inside_tile = get_tilized_idx(h, target_value);  // only first row of the tile is used
+                target_logits_write_l1_ptr[inplace_idx] = read_input_tile_l1_ptr[idx_inside_tile];
+                ignore_index_mask_l1_ptr[inplace_idx] = one;
+            }
         }
+
+        print_tile(cb_ignore_index_mask, 0);
 
         cb_push_back(cb_target_logits, onetile);
 

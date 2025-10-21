@@ -38,11 +38,12 @@ constexpr auto cb_mask = tt::CBIndex::c_2;
 constexpr auto cb_max_mask = tt::CBIndex::c_3;
 constexpr auto cb_scaler = tt::CBIndex::c_4;  // used to reduction
 constexpr auto cb_target_logits = tt::CBIndex::c_6;
-constexpr auto cb_max_value_before_reduction = tt::CBIndex::c_7;
-constexpr auto cb_max_value_after_reduction = tt::CBIndex::c_8;
-constexpr auto cb_exp_sum_before_reduction = tt::CBIndex::c_9;
-constexpr auto cb_exp_sum_after_reduction = tt::CBIndex::c_10;
-constexpr auto cb_output = tt::CBIndex::c_11;
+constexpr auto cb_ignore_index_mask = tt::CBIndex::c_7;
+constexpr auto cb_max_value_before_reduction = tt::CBIndex::c_8;
+constexpr auto cb_max_value_after_reduction = tt::CBIndex::c_9;
+constexpr auto cb_exp_sum_before_reduction = tt::CBIndex::c_10;
+constexpr auto cb_exp_sum_after_reduction = tt::CBIndex::c_11;
+constexpr auto cb_output = tt::CBIndex::c_12;
 
 constexpr uint32_t onetile = 1;
 
@@ -349,6 +350,8 @@ void MAIN {
     init_sfpu(cb_input, cb_output);
     binary_op_init_common(cb_input, cb_target_logits, cb_output);
 
+    cb_wait_front(cb_ignore_index_mask, onetile);
+
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         find_max_value_in_row();  // find max value in each row
         reduce_max_value();       // reduce max value to cb_max_value_after_reduction
@@ -378,6 +381,14 @@ void MAIN {
             /* tile_idx */ 0,
             /* tile_idx */ 0,
             result_register);
+        
+        // apply ignore index mask
+        reconfig_data_format(cb_ignore_index_mask, cb_ignore_index_mask);
+        copy_tile_init(cb_ignore_index_mask);
+        copy_tile(cb_ignore_index_mask, /* tile_idx */ 0, /* register_idx */ result_register + 1U);
+
+        mask_tile_init();
+        mask_tile(result_register, result_register + 1U);  // apply ignore index mask
 
         tile_regs_commit();
 
@@ -402,6 +413,7 @@ void MAIN {
         cb_pop_front(cb_max_mask, onetile);
     }
     cb_pop_front(cb_scaler, onetile);
+    cb_pop_front(cb_ignore_index_mask, onetile);
 }
 
 }  // namespace NAMESPACE
