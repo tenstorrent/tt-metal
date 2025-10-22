@@ -43,6 +43,7 @@ void MAIN {
     constexpr uint32_t use_padded_mask = get_compile_time_arg_val(25) == 1;
     constexpr uint32_t is_chunked = get_compile_time_arg_val(26) == 1;
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(27);
+    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(28);
 
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
@@ -166,9 +167,11 @@ void MAIN {
                     // K-range = [k_low, k_high)
                     // does_overlap = not (q_low >= k_high or k_low >= q_high)
                     // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional check
-                    if constexpr (is_causal) {
-                        if (!(q_low_idx >= k_high_idx)) {
-                            /* QK += MASK */
+                    if constexpr (is_causal || sliding_window_size > 0) {
+                        /* QK += MASK */
+                        if (!(q_low_idx >= k_high_idx) || sliding_window_size > 0) {
+                            // If no sliding window - simple causal case - only apply along the diagonal
+                            // Otherwise, apply mask for all chunks
                             reconfig_data_format(cb_qk_im, cb_mask_in);
                             add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
                         }
