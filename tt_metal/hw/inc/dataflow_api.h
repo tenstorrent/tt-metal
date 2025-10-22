@@ -561,8 +561,10 @@ inline void noc_async_read(
  * |-----------------------------------|----------------------------------------------------|-----------|------------------------------------------|----------|
  * | src_noc_addr                      | Encoding of the source NOC location (x,y)+address  | uint64_t  | Results of \a get_noc_addr calls         | True     |
  * | size                              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                                   | True     |
+ * | vc                                | Which VC to use for the transaction                | uint32_t  | 0-3 (Unicast VCs)                        | False    |
  * | noc                               | Which NOC to use for the transaction               | uint8_t   | 0 or 1                                   | False    |
  * | max_page_size (template argument) | Maximum size of a single transaction in bytes      | uint32_t  | Any uint32_t number                      | False    |
+ * | use_vc (template argument)        | Enable custom VC usage                             | bool      | True or False                            | False    |
  */
 // clang-format on
 template <bool use_vc = false>
@@ -591,8 +593,10 @@ FORCE_INLINE void noc_async_read_one_packet_set_state(
  * |-----------------------------------|----------------------------------------------------|-----------|-------------------- |----------|
  * | src_local_l1_addr                 | Address in local L1 memory on source core          | uint32_t  | 0..1MB              | True     |
  * | dst_local_l1_addr                 | Address in local L1 memory on destination core     | uint32_t  | 0..1MB              | True     |
+ * | vc                                | Which VC to use for the transaction                | uint32_t  | 0-3 (Unicast VCs)   | False    |
  * | noc                               | Which NOC to use for the transaction               | uint8_t   | 0 or 1              | False    |
  * | inc_num_issued (template argument)| Whether issued read counter should be increment    | uint32_t  | Any uint32_t number | False    |
+ * | use_vc (template argument)        | Enable custom VC usage                             | bool      | True or False       | False    |
  */
 // clang-format on
 template <bool inc_num_issued = true, bool use_vc = false>
