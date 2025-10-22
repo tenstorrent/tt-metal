@@ -54,7 +54,7 @@ auto def_overload(py::class_<Func>& cls, const Extra&... extra) {
 }
 
 template <typename Func, typename Derived, typename... Args>
-void def_overloads(py::class_<Func>& cls, OverloadsFor<Derived, Args...>) {
+void def_overloads(py::class_<Func>& cls, const OverloadsFor<Derived, Args...>&) {
     using mp_pybind_map = mp::mp_list<
         // also bind const Tensor& wherever ExpressionView is bound
         mp::mp_list<ExpressionView, const Tensor&>
@@ -75,12 +75,12 @@ void def_overloads(py::class_<Func>& cls, OverloadsFor<Derived, Args...>) {
 }
 
 template <typename Func, typename... Overloads>
-void def_overloads(py::class_<Func>& cls, ttsl::overloaded<Overloads...> functor) {
-    (..., def_overloads(cls, static_cast<Overloads>(functor)));
+void def_overloads(py::class_<Func>& cls, const ttsl::overloaded<Overloads...>& functor) {
+    (..., def_overloads(cls, static_cast<const Overloads&>(functor)));
 }
 
 template <typename Func>
-void def_functor(py::handle scope, const std::string& name, Func functor) {
+void def_functor(py::handle scope, const std::string& name, const Func& functor) {
     static_assert(
         not ttsl::short_type_name<Func>.ends_with('>'),
         "Func must be a non-template strong type like OverloadedBinaryFn, not a template specialization like "
@@ -96,7 +96,7 @@ void def_functor(py::handle scope, const std::string& name, Func functor) {
 }
 
 template <typename Func, typename Operation>
-void def_rbinary(py::class_<Func>& cls, const std::string& name, Operation operation) {
+void def_rbinary(py::class_<Func>& cls, const std::string& name, const Operation& operation) {
     const auto with_tensor = [=](const Func& first, const Tensor& second) { return operation(first, second); };
     const auto with_param = [=](const Func& first, Param second) { return operation(first, second); };
 
@@ -105,7 +105,7 @@ void def_rbinary(py::class_<Func>& cls, const std::string& name, Operation opera
 }
 
 template <typename Func, typename Operation>
-void def_binary(py::class_<Func>& cls, const std::string& name, Operation operation) {
+void def_binary(py::class_<Func>& cls, const std::string& name, const Operation& operation) {
     const auto with_expression_view = [=](const Func& first, ExpressionView second) {
         return operation(first, second);
     };
