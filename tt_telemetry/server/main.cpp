@@ -178,7 +178,14 @@ int main(int argc, char* argv[]) {
         "disable-telemetry",
         "Disables collection of telemetry. Only permitted in aggregator mode, which by default also collects local "
         "telemetry.",
-        cxxopts::value<bool>()->default_value("false"));
+        cxxopts::value<bool>()->default_value("false"))(
+        "disable-watchdog",
+        "Disables the watchdog timer that monitors the telemetry thread",
+        cxxopts::value<bool>()->default_value("false"))(
+        "watchdog-timeout",
+        "Watchdog timeout in seconds (default: 10). Watchdog will terminate the process if the telemetry thread "
+        "does not advance within this time.",
+        cxxopts::value<int>()->default_value("10"));
 
     auto result = options.parse(argc, argv);
 
@@ -197,6 +204,13 @@ int main(int argc, char* argv[]) {
     }
     bool telemetry_enabled = !result["disable-telemetry"].as<bool>();
 
+    // Watchdog configuration
+    bool watchdog_disabled = result["disable-watchdog"].as<bool>();
+    int watchdog_timeout = result["watchdog-timeout"].as<int>();
+    if (watchdog_disabled) {
+        watchdog_timeout = 0;  // 0 indicates disabled
+    }
+
     // Are we in collector (collect telemetry and export on collection endpoint) or aggregator
     // (connect to collectors and aggregate) mode?
     bool aggregator_mode = result.contains("aggregate-from");
@@ -210,6 +224,11 @@ int main(int argc, char* argv[]) {
     }
     log_info(tt::LogAlways, "Application mode: {}", aggregator_mode ? "AGGREGATOR" : "COLLECTOR");
     log_info(tt::LogAlways, "Telemetry collection: {}", telemetry_enabled ? "ENABLED" : "DISABLED");
+    if (watchdog_timeout > 0) {
+        log_info(tt::LogAlways, "Watchdog: ENABLED (timeout: {} seconds)", watchdog_timeout);
+    } else {
+        log_info(tt::LogAlways, "Watchdog: DISABLED");
+    }
 
     // Parse aggregate-from endpoints
     std::vector<std::string> aggregate_endpoints;
@@ -257,7 +276,7 @@ int main(int argc, char* argv[]) {
         auto rtoptions = tt::llrt::RunTimeOptions();
         std::string fsd_filepath = result["fsd"].as<std::string>();
         tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd = load_fsd(result["fsd"].as<std::string>());
-        run_telemetry_collector(telemetry_enabled, subscribers, aggregate_endpoints, rtoptions, fsd);
+        run_telemetry_collector(telemetry_enabled, subscribers, aggregate_endpoints, rtoptions, fsd, watchdog_timeout);
     }
 
     // Run until finished
