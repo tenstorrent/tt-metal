@@ -98,7 +98,7 @@ TensorMemoryLayout get_memory_layout(const Tensor& a, const std::optional<Tensor
     if (!b.has_value()) {
         return TensorMemoryLayout::INTERLEAVED;
     }
-    // c is first prefered
+    // c is first preferred
     if (c.memory_config().is_sharded()) {
         return c.memory_config().memory_layout();
     }
@@ -132,7 +132,7 @@ inline auto is_uneven(const Tensor& t) {
 }
 
 bool is_native_L1_sharding(const Tensor& a, const std::optional<Tensor>& b, const Tensor& c) {
-    // scalar value treate as interleaved
+    // scalar value treated as interleaved
     if (!b.has_value()) {
         return false;
     }

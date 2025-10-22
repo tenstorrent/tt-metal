@@ -44,6 +44,8 @@ static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor load_fsd(const st
 
     if (!google::protobuf::TextFormat::ParseFromString(fsd_content, &fsd)) {
         throw std::runtime_error("Failed to parse FSD protobuf from file: " + fsd_filename);
+    } else {
+        log_info(tt::LogAlways, "Read FSD file from {}: {} bytes", fsd_filename, fsd_content.size());
     }
 
     return fsd;
@@ -76,8 +78,8 @@ std::vector<std::string> split_comma_separated(const std::string& input) {
  Main
 **************************************************************************************************/
 
-static uint64_t get_unique_chip_id(const std::unique_ptr<tt::umd::Cluster>& cluster, chip_id_t chip_id) {
-    const std::unordered_map<chip_id_t, uint64_t>& chip_to_unique_id =
+static uint64_t get_unique_chip_id(const std::unique_ptr<tt::umd::Cluster>& cluster, tt::ChipId chip_id) {
+    const std::unordered_map<tt::ChipId, uint64_t>& chip_to_unique_id =
         cluster->get_cluster_description()->get_chip_unique_ids();
     try {
         return chip_to_unique_id.at(chip_id);
@@ -88,7 +90,7 @@ static uint64_t get_unique_chip_id(const std::unique_ptr<tt::umd::Cluster>& clus
 }
 
 static void test_print_link_health() {
-    std::cout << "Num PCIE devices: " << PCIDevice::enumerate_devices_info().size() << std::endl;
+    std::cout << "Num PCIE devices: " << tt::umd::PCIDevice::enumerate_devices_info().size() << std::endl;
     std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>();
     std::unique_ptr<tt::tt_metal::Hal> hal = create_hal(cluster);
     uint32_t link_up_addr =
@@ -96,9 +98,7 @@ static void test_print_link_health() {
 
     std::cout << "Internal Connections" << std::endl << "--------------------" << std::endl;
 
-    const std::map<
-        tt::umd::chip_id_t,
-        std::map<tt::umd::ethernet_channel_t, std::tuple<tt::umd::chip_id_t, tt::umd::ethernet_channel_t>>>
+    const std::map<tt::ChipId, std::map<tt::EthernetChannel, std::tuple<tt::ChipId, tt::EthernetChannel>>>
         ethernet_connections = get_ordered_ethernet_connections(cluster);
 
     for (const auto& [chip_id, remote_chip_and_channel_by_channel] : ethernet_connections) {
@@ -108,8 +108,8 @@ static void test_print_link_health() {
         // Iterate each channel and its remote endpoints
         for (const auto& [channel, remote_chip_and_channel] : remote_chip_and_channel_by_channel) {
             // Remote chip...
-            tt::umd::chip_id_t remote_chip_id;
-            tt::umd::ethernet_channel_t remote_channel;
+            tt::ChipId remote_chip_id;
+            tt::EthernetChannel remote_channel;
             std::tie(remote_chip_id, remote_channel) = remote_chip_and_channel;
 
             // Print
@@ -127,9 +127,7 @@ static void test_print_link_health() {
     // Remote off-cluster links
     std::cout << std::endl << "External Connections" << std::endl << "--------------------" << std::endl;
 
-    const std::map<
-        tt::umd::chip_id_t,
-        std::map<tt::umd::ethernet_channel_t, std::tuple<uint64_t, tt::umd::ethernet_channel_t>>>
+    const std::map<tt::ChipId, std::map<tt::EthernetChannel, std::tuple<uint64_t, tt::EthernetChannel>>>
         remote_ethernet_connections = get_ordered_ethernet_connections_to_remote_devices(cluster);
 
     for (const auto& [chip_id, remote_chip_and_channel_by_channel] : remote_ethernet_connections) {
@@ -142,7 +140,7 @@ static void test_print_link_health() {
         for (const auto& [channel, remote_chip_and_channel] : remote_chip_and_channel_by_channel) {
             // Remote chip...
             uint64_t remote_chip_unique_id;
-            tt::umd::ethernet_channel_t remote_channel;
+            tt::EthernetChannel remote_channel;
             std::tie(remote_chip_unique_id, remote_channel) = remote_chip_and_channel;
 
             // Print
@@ -180,7 +178,14 @@ int main(int argc, char* argv[]) {
         "disable-telemetry",
         "Disables collection of telemetry. Only permitted in aggregator mode, which by default also collects local "
         "telemetry.",
-        cxxopts::value<bool>()->default_value("false"));
+        cxxopts::value<bool>()->default_value("false"))(
+        "disable-watchdog",
+        "Disables the watchdog timer that monitors the telemetry thread",
+        cxxopts::value<bool>()->default_value("false"))(
+        "watchdog-timeout",
+        "Watchdog timeout in seconds (default: 10). Watchdog will terminate the process if the telemetry thread "
+        "does not advance within this time.",
+        cxxopts::value<int>()->default_value("10"));
 
     auto result = options.parse(argc, argv);
 
@@ -199,6 +204,13 @@ int main(int argc, char* argv[]) {
     }
     bool telemetry_enabled = !result["disable-telemetry"].as<bool>();
 
+    // Watchdog configuration
+    bool watchdog_disabled = result["disable-watchdog"].as<bool>();
+    int watchdog_timeout = result["watchdog-timeout"].as<int>();
+    if (watchdog_disabled) {
+        watchdog_timeout = 0;  // 0 indicates disabled
+    }
+
     // Are we in collector (collect telemetry and export on collection endpoint) or aggregator
     // (connect to collectors and aggregate) mode?
     bool aggregator_mode = result.contains("aggregate-from");
@@ -212,6 +224,11 @@ int main(int argc, char* argv[]) {
     }
     log_info(tt::LogAlways, "Application mode: {}", aggregator_mode ? "AGGREGATOR" : "COLLECTOR");
     log_info(tt::LogAlways, "Telemetry collection: {}", telemetry_enabled ? "ENABLED" : "DISABLED");
+    if (watchdog_timeout > 0) {
+        log_info(tt::LogAlways, "Watchdog: ENABLED (timeout: {} seconds)", watchdog_timeout);
+    } else {
+        log_info(tt::LogAlways, "Watchdog: DISABLED");
+    }
 
     // Parse aggregate-from endpoints
     std::vector<std::string> aggregate_endpoints;
@@ -259,7 +276,7 @@ int main(int argc, char* argv[]) {
         auto rtoptions = tt::llrt::RunTimeOptions();
         std::string fsd_filepath = result["fsd"].as<std::string>();
         tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd = load_fsd(result["fsd"].as<std::string>());
-        run_telemetry_collector(telemetry_enabled, subscribers, aggregate_endpoints, rtoptions, fsd);
+        run_telemetry_collector(telemetry_enabled, subscribers, aggregate_endpoints, rtoptions, fsd, watchdog_timeout);
     }
 
     // Run until finished

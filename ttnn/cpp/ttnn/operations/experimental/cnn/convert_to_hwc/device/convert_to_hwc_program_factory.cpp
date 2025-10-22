@@ -24,7 +24,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // If we are pulling from DRAM we infer the shard shape by using the output shard spec
-    const bool is_input_in_dram = a.buffer()->core_type() == CoreType::DRAM;
+    const bool is_input_in_dram = a.buffer()->core_type() == tt::CoreType::DRAM;
 
     const uint32_t output_shard_height = output.shard_spec()->shape[0];
     const uint32_t output_shard_width = output.shard_spec()->shape[1];

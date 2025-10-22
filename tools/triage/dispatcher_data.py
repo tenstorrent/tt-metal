@@ -14,6 +14,7 @@ Description:
 
 from dataclasses import dataclass
 import os
+
 from inspector_data import run as get_inspector_data, InspectorData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from triage import triage_singleton, ScriptConfig, run_script, log_check
@@ -61,8 +62,6 @@ class DispatcherData:
         self.programs = inspector_data.getPrograms().programs
         self.kernels = {kernel.watcherKernelId: kernel for program in self.programs for kernel in program.kernels}
         self.use_rpc_kernel_find = True
-        if len(self.kernels) == 0:
-            raise TTTriageError("No kernels found in inspector data.")
         # Cache build_env per device to avoid multiple RPC calls
         # Each device needs to have its own build_env to get the correct firmware path
         self._build_env_cache = {}
@@ -87,6 +86,18 @@ class DispatcherData:
             # Use build_env for initial firmware paths
             brisc_elf_path = os.path.join(build_env.firmwarePath, "brisc", "brisc.elf")
             idle_erisc_elf_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
+            active_erisc_elf_name = "erisc" if run_checks.devices[0].is_wormhole() else "active_erisc"
+            active_erisc_elf_path = os.path.join(
+                build_env.firmwarePath, active_erisc_elf_name, active_erisc_elf_name + ".elf"
+            )
+
+            # On blackhole we have 2 modes (1-ERISC and 2-ERISC)
+            # By checking if the subordinate active erisc elf exists, we can determine in which mode we are
+            if run_checks.devices[0].is_blackhole():
+                self._is_2_erisc_mode = os.path.exists(
+                    os.path.join(build_env.firmwarePath, "subordinate_active_erisc", "subordinate_active_erisc.elf")
+                )
+
         except Exception as e:
             raise TTTriageError(
                 f"Failed to get firmware path from Inspector RPC: {e}\n"
@@ -94,29 +105,14 @@ class DispatcherData:
                 "Set TT_METAL_INSPECTOR_RPC=1 when running your Metal application."
             )
 
-        # Check if firmware elf paths exist
-        if not os.path.exists(brisc_elf_path):
-            raise TTTriageError(f"BRISC ELF file {brisc_elf_path} does not exist.")
-
-        if not os.path.exists(idle_erisc_elf_path):
-            raise TTTriageError(f"IDLE ERISC ELF file {idle_erisc_elf_path} does not exist.")
-
         self._brisc_elf = elfs_cache[brisc_elf_path]
         self._idle_erisc_elf = elfs_cache[idle_erisc_elf_path]
-
-        # Check if debug info is obtained correctly
-        if not self._brisc_elf:
-            raise TTTriageError(
-                f"Failed to extract DWARF info from ELF file {brisc_elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
-            )
-        if not self._idle_erisc_elf:
-            raise TTTriageError(
-                f"Failed to extract DWARF info from ELF file {idle_erisc_elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
-            )
+        self._active_erisc_elf = elfs_cache[active_erisc_elf_path]
 
         # Access the value of enumerator for supported blocks
         self._ProgrammableCoreTypes_TENSIX = self._brisc_elf.enumerators["ProgrammableCoreType::TENSIX"].value
         self._ProgrammableCoreTypes_IDLE_ETH = self._brisc_elf.enumerators["ProgrammableCoreType::IDLE_ETH"].value
+        self._ProgrammableCoreTypes_ACTIVE_ETH = self._brisc_elf.enumerators["ProgrammableCoreType::ACTIVE_ETH"].value
 
         # Enumerators for tensix block
         self._enum_values_tenisx = {
@@ -137,13 +133,14 @@ class DispatcherData:
             },
         }
 
-        # Blackhole has ERISC1 processor type
-        try:
-            self._enum_values_eth["ProcessorTypes"]["ERISC1"] = self._idle_erisc_elf.enumerators[
-                "EthProcessorTypes::DM1"
-            ].value
-        except:
-            pass
+        # EthProcessorTypes::DM1 is only available on blackhole
+        # ERISC1 behaves like DM0 if 1 ERISC mode is used
+        if "EthProcessorTypes::DM1" in self._idle_erisc_elf.enumerators:
+            self._enum_values_eth["ProcessorTypes"]["ERISC1"] = (
+                self._idle_erisc_elf.enumerators["EthProcessorTypes::DM1"].value
+                if self._is_2_erisc_mode
+                else self._idle_erisc_elf.enumerators["EthProcessorTypes::DM0"].value
+            )
 
         # Go message states are constant values in the firmware elf, so we cache them
         def empty_mem_reader(addr: int, size_bytes: int, elements_to_read: int) -> list[int]:
@@ -193,11 +190,18 @@ class DispatcherData:
             fw_elf = self._brisc_elf
             programmable_core_type = self._ProgrammableCoreTypes_TENSIX
             enum_values = self._enum_values_tenisx
-        else:
-            # For eth, use the idle erisc elf
+        elif location in location._device.idle_eth_block_locations:
+            # For idle eth, use the idle erisc elf
             fw_elf = self._idle_erisc_elf
             programmable_core_type = self._ProgrammableCoreTypes_IDLE_ETH
             enum_values = self._enum_values_eth
+        elif location in location._device.active_eth_block_locations:
+            # For active eth, use the active erisc elf
+            fw_elf = self._active_erisc_elf
+            programmable_core_type = self._ProgrammableCoreTypes_ACTIVE_ETH
+            enum_values = self._enum_values_eth
+        else:
+            raise TTTriageError(f"Unsupported block type: {location._device.get_block_type(location)}")
 
         # Get the build_env for the device to get the correct firmware path
         # Each device may have different firmware paths based on its build configuration
@@ -304,24 +308,54 @@ class DispatcherData:
 
         # Construct the firmware path from the build_env instead of relative paths
         # This ensures we get the correct firmware path for this device and build config
-        if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
-            firmware_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
-        elif proc_name.lower() == "erisc1":
-            firmware_path = os.path.join(build_env.firmwarePath, "subordinate_idle_erisc", "subordinate_idle_erisc.elf")
+        if location in location._device.active_eth_block_locations:
+            if proc_name.lower() == "erisc":
+                firmware_path = os.path.join(build_env.firmwarePath, "erisc", "erisc.elf")
+            elif proc_name.lower() == "erisc0":
+                firmware_path = os.path.join(build_env.firmwarePath, "active_erisc", "active_erisc.elf")
+            elif proc_name.lower() == "erisc1":
+                firmware_path = (
+                    os.path.join(build_env.firmwarePath, "subordinate_active_erisc", "subordinate_active_erisc.elf")
+                    if self._is_2_erisc_mode
+                    else os.path.join(build_env.firmwarePath, "active_erisc", "active_erisc.elf")
+                )
+
         else:
-            firmware_path = os.path.join(build_env.firmwarePath, proc_name.lower(), f"{proc_name.lower()}.elf")
+            if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
+                firmware_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
+            elif proc_name.lower() == "erisc1":
+                firmware_path = os.path.join(
+                    build_env.firmwarePath, "subordinate_idle_erisc", "subordinate_idle_erisc.elf"
+                )
+            else:
+                firmware_path = os.path.join(build_env.firmwarePath, proc_name.lower(), f"{proc_name.lower()}.elf")
         firmware_path = os.path.realpath(firmware_path)
 
         if kernel:
-            if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
-                kernel_path = kernel.path + "/idle_erisc/idle_erisc.elf"
-            elif proc_name.lower() == "erisc1":
-                kernel_path = kernel.path + "/subordinate_idle_erisc/subordinate_idle_erisc.elf"
+            if location in location._device.active_eth_block_locations:
+                if proc_name.lower() == "erisc":
+                    kernel_path = kernel.path + "/erisc/erisc.elf"
+                elif proc_name.lower() == "erisc0":
+                    kernel_path = kernel.path + "/active_erisc/active_erisc.elf" if self._is_2_erisc_mode else None
+                elif proc_name.lower() == "erisc1":
+                    kernel_path = (
+                        kernel.path + "/subordinate_active_erisc/subordinate_active_erisc.elf"
+                        if self._is_2_erisc_mode
+                        else kernel.path + "/active_erisc/active_erisc.elf"
+                    )
             else:
-                kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
+                if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
+                    kernel_path = kernel.path + "/idle_erisc/idle_erisc.elf"
+                elif proc_name.lower() == "erisc1":
+                    kernel_path = kernel.path + "/subordinate_idle_erisc/subordinate_idle_erisc.elf"
+                else:
+                    kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
             kernel_path = os.path.realpath(kernel_path)
-            if proc_name == "NCRISC" and location._device._arch == "wormhole_b0":
+            if proc_name == "NCRISC" and location._device.is_wormhole():
                 kernel_offset = 0xFFC00000
+            # In wormhole we only use text offset to calculate the kernel offset for active ETH
+            elif location in location._device.active_eth_block_locations and location._device.is_wormhole():
+                kernel_offset = kernel_text_offset
             else:
                 kernel_offset = kernel_config_base + kernel_text_offset
         else:
