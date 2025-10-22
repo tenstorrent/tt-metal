@@ -242,7 +242,7 @@ def test_binary_sharded_bcast_no_identical(
     "a_shape, b_shape",
     (
         (torch.Size([5, 7, 64, 128]), torch.Size([5, 7, 64, 128])),
-        (torch.Size([5, 7, 63, 127]), torch.Size([5, 7, 63, 127])),
+        (torch.Size([64 * 5 * 7, 127]), torch.Size([64 * 5 * 7, 127])),
     ),
 )
 @pytest.mark.parametrize(
@@ -1490,23 +1490,12 @@ def test_binary_sharded_bcast_scalar_value_uneven(
 @pytest.mark.parametrize(
     "a_shape, shard_type, shard_size, core_range",
     (
-        # [
-        #     torch.Size([1, 4 * 32]),
-        #     ttnn.ShardStrategy.WIDTH,
-        #     [1, 4 * 32],
-        #     ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 0))}),
-        # ],
-        # [
-        #     torch.Size([1, 4 * 32]),
-        #     ttnn.ShardStrategy.BLOCK,
-        #     [1, 32],
-        #     ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 0))}),
-        # ],
         [
-            torch.Size([1, 31]),
+            # shape cannot be uneven shard
+            torch.Size([63, 32]),
             ttnn.ShardStrategy.HEIGHT,
-            [1, 31],
-            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 0))}),
+            [32, 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))}),
         ],
     ),
 )
@@ -1528,11 +1517,9 @@ def test_binary_sharded_scalar_invalid_row_major(scalar, a_shape, shard_type, sh
             dtype=ttnn.bfloat16,
             device=device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            # layout=ttnn.TILE_LAYOUT,
             memory_config=a_sharded_config,
         )
 
-        # tt_out = ttnn.add(a_tt, scalar, memory_config=a_sharded_config, use_legacy=None)
         tt_out = ttnn.add(a_tt, scalar, use_legacy=None)
 
 
@@ -1618,20 +1605,23 @@ def test_binary_sharded_bcast_w_size(a_shape, b_shape, a_shard_size, b_shard_siz
 @pytest.mark.parametrize(
     "a_shape, b_shape, shard_type, shard_size, core_range",
     (
-        # [
-        #     torch.Size([64, 33]),
-        #     torch.Size([64, 33]),
-        #     ttnn.ShardStrategy.HEIGHT,
-        #     [32, 33],
-        #     ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))}),
-        # ],
-        # [
-        #     torch.Size([64, 4 * 32]),
-        #     torch.Size([64, 4 * 32]),
-        #     ttnn.ShardStrategy.WIDTH,
-        #     [64, 4 * 32],
-        #     ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 0))}),
-        # ],
+        # for row major layout, shard shape must be divisible by tile height and width
+        [
+            torch.Size([64, 33]),
+            torch.Size([64, 33]),
+            ttnn.ShardStrategy.HEIGHT,
+            [32, 33],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))}),
+        ],
+        # for row major layout, width sharding is not supported
+        [
+            torch.Size([64, 4 * 32]),
+            torch.Size([64, 4 * 32]),
+            ttnn.ShardStrategy.WIDTH,
+            [64, 4 * 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 0))}),
+        ],
+        # for row major layout, block sharding is not supported
         [
             torch.Size([64, 4 * 32]),
             torch.Size([64, 4 * 32]),
@@ -1706,7 +1696,7 @@ def test_binary_sharded_invalid_row_major_layout(
         ],
     ),
 )
-def test_binary_sharded_row_major_layout(
+def test_binary_sharded_row_major_layout_mixed(
     dtype_pt, dtype_tt, a_shape, b_shape, shard_type, shard_size, core_range, device
 ):
     torch.manual_seed(0)
@@ -1739,11 +1729,16 @@ def test_binary_sharded_row_major_layout(
         b_pt,
         dtype=dtype_tt,
         device=device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         memory_config=b_sharded_config,
     )
     out_pt = torch.add(a_pt, b_pt)
     out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=a_sharded_config, use_legacy=None)
+    out_tt_sharded = ttnn.to_torch(out_tt_sharded)
+    assert_with_pcc(out_tt_sharded, out_pt)
+
+    out_pt = torch.add(a_pt, b_pt)
+    out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=None)
     out_tt_sharded = ttnn.to_torch(out_tt_sharded)
     assert_with_pcc(out_tt_sharded, out_pt)
 

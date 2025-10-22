@@ -371,7 +371,9 @@ inline auto invoke_binary_ng(
     // RM is never BFLOAT8 or BFLOAT4 so we can assume it goes in here.
     if (not typecast_a and not typecast_b) {
         const auto input_a_rm = detail::is_layout(lhs, Layout::ROW_MAJOR);
-        const auto input_b_rm = detail::is_layout(rhs, Layout::ROW_MAJOR);
+        // For scalar case, check if we need layout conversion
+        constexpr bool is_scalar_rhs = !requires { rhs.dtype(); };
+        const auto input_b_rm = is_scalar_rhs ? false : detail::is_layout(rhs, Layout::ROW_MAJOR);
         const auto input_a = detail::to_layout(lhs, Layout::TILE);
         const auto input_b = detail::to_layout(rhs, Layout::TILE);
 
@@ -396,7 +398,8 @@ inline auto invoke_binary_ng(
         // if both inputs are in row major, convert the output to row major
         // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
         // since it leads to better perf
-        if (input_a_rm and input_b_rm) {
+        // For scalar case, only convert if lhs was ROW_MAJOR AND result can be safely converted
+        if (input_a_rm and (input_b_rm or is_scalar_rhs)) {
             return detail::to_layout(result, Layout::ROW_MAJOR);
         }
 
