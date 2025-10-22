@@ -16,12 +16,12 @@ ENV PATH="$CARGO_HOME/bin:$PATH"
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
 COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
-RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker
+# --docker skips installing hugepages. Skipping as we're technically on BM
+RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 
 #############################################################
 
 FROM base AS ci-build
-
 # Install ccache from upstream; Apt's version for 20.04 predates remote_storage support
 RUN mkdir -p /usr/local/bin && wget -O /tmp/ccache.tar.xz https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2-linux-x86_64.tar.xz && \
     tar -xf /tmp/ccache.tar.xz -C /usr/local/bin --strip-components=1 && \
@@ -62,21 +62,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Set up virtual environment
-ENV PYTHON_ENV_DIR=/opt/venv
-RUN umask 000 && python3 -m venv $PYTHON_ENV_DIR
-
-# Ensure the virtual environment is used for all Python-related commands
-ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
-ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
-
-# Ensure the virtual environment is activated on shell startup
-RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
+# Skipping the whole venv thing
 
 # Numpy needed for tt-train to build
 RUN python3 -m pip install --no-cache-dir build numpy setuptools
-
-RUN git config --global --add safe.directory '*'
 
 ENV CCACHE_TEMPDIR=/tmp/ccache
 
@@ -112,7 +101,6 @@ WORKDIR /tt-metal
 
 # Override version to not rely at all on git
 RUN sed -i 's/set(fallbackVersion "\$Format:%(describe)\$")/set(fallbackVersion "0.0.0")/; s/set(fallbackHash "\$Format:%h\$")/set(fallbackHash "000")/' cmake/version.cmake
-
 
 ARG SKIP_TT_TRAIN="true"
 ARG BUILD_TYPE="Release"
@@ -151,7 +139,8 @@ RUN set -eu && \
     echo "Build command: ${BUILD_COMMAND}" && \
     ${BUILD_COMMAND}
 
-RUN cmake --build build --target install
+# this pollutes the system - likely needs --components... (if some missing)
+RUN cmake --build build --target install 
 
 # Conditional profiling step
 RUN set -eu && \
