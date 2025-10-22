@@ -92,7 +92,6 @@ void format_metric(
     std::string_view unit_label,
     uint64_t timestamp) {
     // Write HELP and TYPE (only once per unique metric name)
-    // Note: In production, you'd track which metrics have been written to avoid duplicates
     output << "# HELP " << metric_name << " " << help_text << "\n";
     output << "# TYPE " << metric_name << " gauge\n";
 
