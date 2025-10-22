@@ -7,21 +7,21 @@ ARG UBUNTU_VERSION=22.04
 FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
+
 ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
 ENV PATH="$CARGO_HOME/bin:$PATH"
 
+# Install runtime deps
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
 COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
-
 # --docker skips installing hugepages. Skipping as we're technically on BM
 RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 
 #############################################################
 
 FROM base AS ci-build
-ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 # Install ccache from upstream; Apt's version for 20.04 predates remote_storage support
 RUN mkdir -p /usr/local/bin && wget -O /tmp/ccache.tar.xz https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2-linux-x86_64.tar.xz && \
@@ -63,7 +63,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Skipping the whole venv thing
+ENV PYTHON_ENV_DIR=/opt/venv
+RUN umask 000 && python3 -m venv $PYTHON_ENV_DIR
+
+# Ensure the virtual environment is used for all Python-related commands
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Ensure the virtual environment is activated on shell startup
+RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 # Numpy needed for tt-train to build
 RUN python3 -m pip install --no-cache-dir build numpy setuptools
@@ -72,8 +80,6 @@ ENV CCACHE_TEMPDIR=/tmp/ccache
 
 #############################################################
 FROM ci-build as build-artifacts
-ENV PIP_BREAK_SYSTEM_PACKAGES=1
-
 
 # Copy files required for build only (omit scripts, docs, tests not needed for build
 # misc
@@ -104,6 +110,7 @@ WORKDIR /tt-metal
 
 # Override version to not rely at all on git
 RUN sed -i 's/set(fallbackVersion "\$Format:%(describe)\$")/set(fallbackVersion "0.0.0")/; s/set(fallbackHash "\$Format:%h\$")/set(fallbackHash "000")/' cmake/version.cmake
+
 
 ARG SKIP_TT_TRAIN="true"
 ARG BUILD_TYPE="Release"
@@ -181,7 +188,6 @@ COPY --from=build-artifacts /build /build
 #############################################################
 
 FROM ci-build AS ci-test
-ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 ARG UBUNTU_VERSION=22.04
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
@@ -214,7 +220,6 @@ RUN if [ "$UBUNTU_VERSION" = "22.04" ]; then \
 #############################################################
 
 FROM ci-test AS dev
-ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 ARG UBUNTU_VERSION=22.04
 # Install dev deps
