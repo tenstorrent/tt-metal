@@ -83,9 +83,9 @@ inline void llk_unpack_AB(
 
     std::uint32_t offset_in_elements = 0;
 
-    if constexpr (BType == BroadcastType::ROW && unpack_src_format[operandB_id] == DataFormat::Float16_b) {
-        constexpr std::uint32_t BYTES_PER_ELEMENT = 2;  // For now only support 16 bit wide data
+    constexpr std::uint32_t BYTES_PER_ELEMENT = 2;  // For now only support 16 bit wide data
 
+    if (BType == BroadcastType::ROW && unpack_src_format[operandB_id] == static_cast<int32_t>(DataFormat::Float16_b)) {
         if (row_index_in_tile_b > 15) {
             offset_in_elements = 512 + (row_index_in_tile_b - 16) * 16;
         } else {

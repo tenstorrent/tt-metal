@@ -64,30 +64,6 @@ inline void llk_unpack_AB_init(
     _llk_unpack_AB_init_<BType>(face_r_dim, num_faces, narrow_tile, transpose, acc_to_dest);
 }
 
-/*
-        uint32_t OFFSET_IN_ELEMENTS = 0;
-
-        if (BCAST_ROW_INDEX > 15)
-        {
-            // Row is in faces 2 and 3
-            // Need to skip faces 0 and 1 (each face has 16*16=256 elements)
-            // So skip 2*256 = 512 elements, then add row offset within face 2
-            OFFSET_IN_ELEMENTS = 512 + (BCAST_ROW_INDEX - 16) * 16;
-        }
-        else
-        {
-            // Row is in faces 0 and 1
-            OFFSET_IN_ELEMENTS = BCAST_ROW_INDEX * 16;
-        }
-        constexpr uint32_t BYTES_PER_ELEMENT = sizeof(uint16_t); // 2 bytes for Float16_b
-
-        uint32_t srcB_address = L1_ADDRESS(buffer_B[i] + OFFSET_IN_ELEMENTS * BYTES_PER_ELEMENT);
-
-        // Unpack with broadcast type applied to srcB
-        _llk_unpack_AB_<BROADCAST_TYPE>(L1_ADDRESS(buffer_A[i]), srcB_address);
-
-*/
-
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB(
     const std::uint32_t operandA,
@@ -106,10 +82,9 @@ inline void llk_unpack_AB(
     std::uint32_t address_b = base_address_b + offset_address_b;
 
     std::uint32_t offset_in_elements = 0;
+    constexpr std::uint32_t BYTES_PER_ELEMENT = 2;  // For now only support 16 bit wide data
 
-    if constexpr (BType == BroadcastType::ROW && unpack_src_format[operandB_id] == DataFormat::Float16_b) {
-        constexpr std::uint32_t BYTES_PER_ELEMENT = 2;  // For now only support 16 bit wide data
-
+    if (BType == BroadcastType::ROW && unpack_src_format[operandB_id] == static_cast<int32_t>(DataFormat::Float16_b)) {
         if (row_index_in_tile_b > 15) {
             offset_in_elements = 512 + (row_index_in_tile_b - 16) * 16;
         } else {
