@@ -19,8 +19,7 @@ namespace ttnn::operations::normalization {
  * dimension. The operation creates a new output tensor.
  */
 struct ExecuteSoftmaxBackward {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& softmax_output_tensor, const ttnn::Tensor& grad_tensor, uint32_t dim);
+    static ttnn::Tensor invoke(const ttnn::Tensor& softmax_output_tensor, const ttnn::Tensor& grad_tensor, int32_t dim);
 };
 }  // namespace ttnn::operations::normalization
 

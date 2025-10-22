@@ -4,7 +4,9 @@
 
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
+#define BROADCAST_TYPE BroadcastType::COL
 
+#include <compute_kernel_api/bcast.h>
 #include <compute_kernel_api/common.h>
 #include <compute_kernel_api/tile_move_copy.h>
 #include <compute_kernel_api/eltwise_binary.h>
@@ -20,7 +22,7 @@ inline void reduce_tile_to_cb(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32
     tile_regs_acquire();
     cb_wait_front(icb1, onetile);
 
-    reduce_init<reduce_type, reduce_dim>(ocb, icb0, icb1);  // TODO: can I init once?
+    reduce_init<reduce_type, reduce_dim>(ocb, icb0, icb1);
     for (uint32_t x = 0; x < size; ++x) {
         cb_wait_front(icb0, x + 1);  // must be a cumulative wait for correctness
 
@@ -29,13 +31,6 @@ inline void reduce_tile_to_cb(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32
     }
     reduce_uninit();
     tile_regs_commit();
-
-    // if (pop0) {
-    //     cb_pop_front(icb0, pop0);
-    // }
-    // if (pop1) {
-    //     cb_pop_front(icb1, pop1);
-    // }
 
     tile_regs_wait();
     pack_tile(dst0, ocb);
@@ -80,10 +75,10 @@ ALWI void fused_sub_mul(
     // sum_reduce_cb always has the scalar at index 0
     cb_reserve_back(intermed_cb_id, 1);
 
-    sub_tiles_init(src1_cb_id, sum_reduce_cb_id);
+    sub_bcast_cols_init_short(src1_cb_id, sum_reduce_cb_id);
 
     tile_regs_acquire();
-    sub_tiles(src1_cb_id, sum_reduce_cb_id, src1_tile_idx, 0, 0);  // grad[w] - sum[0]
+    sub_tiles_bcast<BROADCAST_TYPE>(src1_cb_id, sum_reduce_cb_id, src1_tile_idx, 0, 0);  // grad[w] - sum[0]
     tile_regs_commit();
 
     tile_regs_wait();
@@ -132,12 +127,11 @@ void MAIN {
 
     // Process each row
     for (uint32_t row = 0; row < num_rows; ++row) {
-        // Step 1: Compute y * grad for all tiles in the row (element-wise multiplication)
         // Wait for reader to provide all input tiles
         cb_wait_front(y_cb_id, width_in_tiles);
         cb_wait_front(grad_cb_id, width_in_tiles);
 
-        // Step 1: multiply y * grad
+        // Step 1: Compute y * grad for all tiles in the row (element-wise multiplication)
         mul_tiles_init(y_cb_id, grad_cb_id);
         for (uint32_t w = 0; w < width_in_tiles; ++w) {
             elementwise_multiply(y_cb_id, grad_cb_id, mul_cb_id, w, w);

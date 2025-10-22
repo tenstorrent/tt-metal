@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from numpy import absolute
+import os
 import torch
 import pytest
 import ttnn
@@ -18,6 +19,9 @@ def moreh_softmax_backward_reference(
     softmax_output: ttnn.Tensor, grad: ttnn.Tensor, dim: int, device: ttnn.Device
 ) -> torch.Tensor:
     """Reference using moreh's softmax_backward implementation"""
+    # moreh supports only insigned int for dim, so normalize it here
+    if dim < 0:
+        dim = len(softmax_output.shape) + dim
     # Use moreh softmax_backward operation
     tt_output_moreh = ttnn.operations.moreh.softmax_backward(softmax_output, grad, dim)
     return ttnn.to_torch(tt_output_moreh)
@@ -34,7 +38,11 @@ def moreh_softmax_backward_reference(
 )
 @pytest.mark.parametrize(
     "dtype",
-    [ttnn.bfloat16, ttnn.float32],
+    [
+        # ttnn.float32,
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+    ],
 )
 @pytest.mark.parametrize(
     "range",
@@ -62,32 +70,23 @@ def test_bw_softmax(input_shapes, dtype, range, dim, device):
     # Test moreh reference implementation
     pt_output_tensor_moreh = moreh_softmax_backward_reference(tt_softmax_tensor, grad_tensor, dim, device)
 
-    torch.set_printoptions(threshold=10_000)
+    # Debug output (enable with TTNN_DEBUG_OUTPUT=1 environment variable)
+    if os.environ.get("TTNN_DEBUG_OUTPUT", "0") == "1":
+        torch.set_printoptions(threshold=10_000)
 
-    # Write outputs to separate files for analysis
-    with open("softmax_backward_fused_output.txt", "w") as f:
-        f.write(f"pt_output_tensor_fused: {pt_output_tensor_fused}")
+        # Write outputs to separate files for analysis
+        with open("softmax_backward_fused_output.txt", "w") as f:
+            f.write(f"pt_output_tensor_fused: {pt_output_tensor_fused}")
 
-    with open("softmax_backward_reference_output.txt", "w") as f:
-        f.write(f"pt_output_tensor_reference: {pt_output_tensor_reference}")
+        with open("softmax_backward_reference_output.txt", "w") as f:
+            f.write(f"pt_output_tensor_reference: {pt_output_tensor_reference}")
 
-    with open("softmax_backward_moreh_output.txt", "w") as f:
-        f.write(f"pt_output_tensor_moreh: {pt_output_tensor_moreh}")
+        with open("softmax_backward_moreh_output.txt", "w") as f:
+            f.write(f"pt_output_tensor_moreh: {pt_output_tensor_moreh}")
 
-    with open("softmax_backward_diff.txt", "w") as f:
-        f.write(f"diff (fused vs reference): {pt_output_tensor_fused - pt_output_tensor_reference}")
-        f.write(f"\ndiff (fused vs moreh): {pt_output_tensor_fused - pt_output_tensor_moreh}")
-        f.write(f"\ndiff (reference vs moreh): {pt_output_tensor_reference - pt_output_tensor_moreh}")
+        with open("softmax_backward_diff.txt", "w") as f:
+            f.write(f"diff (fused vs reference): {pt_output_tensor_fused - pt_output_tensor_reference}")
+            f.write(f"\ndiff (fused vs moreh): {pt_output_tensor_fused - pt_output_tensor_moreh}")
+            f.write(f"\ndiff (reference vs moreh): {pt_output_tensor_reference - pt_output_tensor_moreh}")
 
-    # Use multiply operator to compute the reference output for now
-    # reference = ttnn.multiply(tt_softmax_tensor, grad_tensor)
-    # pt_output_tensor_reference = ttnn.to_torch(reference)
-
-    relative_tolerance = 0.01
-    absolute_tolerance = 0.1
-    assert torch.allclose(
-        pt_output_tensor_fused,
-        pt_output_tensor_reference,
-        rtol=relative_tolerance,
-        atol=absolute_tolerance,
-    )
+    assert torch.equal(pt_output_tensor_fused, pt_output_tensor_moreh)

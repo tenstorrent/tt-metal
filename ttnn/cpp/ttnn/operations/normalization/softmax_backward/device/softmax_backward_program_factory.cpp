@@ -68,9 +68,9 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
     const uint32_t tiles_per_core = (num_rows + num_cores - 1) / num_cores;
 
     // Data formats
-    const auto input_data_format = datatype_to_dataformat_converter(softmax_output.dtype());
-    const auto output_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
-    const auto intermed_data_format = DataFormat::Float16_b;  // Use bfloat16 for intermediate calculations
+    const DataFormat input_data_format = datatype_to_dataformat_converter(softmax_output.dtype());
+    const DataFormat output_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
+    const DataFormat intermed_data_format = DataFormat::Float16_b;  // Use bfloat16 for intermediate calculations
 
     const uint32_t input_tile_size = tile_size(input_data_format);
     const uint32_t output_tile_size = tile_size(output_data_format);
@@ -207,8 +207,8 @@ void SoftmaxBackwardProgramFactory::override_runtime_arguments(
     auto& num_cores = cached_program.shared_variables.num_cores;
     auto& num_cores_y = cached_program.shared_variables.num_cores_y;
 
-    const auto& softmax_output = tensor_args.softmax_output;
-    const auto& upstream_grad = tensor_args.upstream_grad;
+    const Tensor& softmax_output = tensor_args.softmax_output;
+    const Tensor& upstream_grad = tensor_args.upstream_grad;
 
     auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);

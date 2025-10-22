@@ -32,9 +32,10 @@ void SoftmaxBackwardDeviceOperation::validate_on_program_cache_miss(
         "Softmax output and upstream gradient tensors must have the same shape");
 
     // Validate tensor dtypes are supported
+    // TODO: support float32
     TT_ASSERT(
-        softmax_output.dtype() == DataType::BFLOAT16 || softmax_output.dtype() == DataType::FLOAT32,
-        "Softmax backward only supports BFLOAT16 and FLOAT32 dtypes");
+        softmax_output.dtype() == DataType::BFLOAT16 || softmax_output.dtype() == DataType::BFLOAT8_B,
+        "Softmax backward only supports BFLOAT16 and BFLOAT8_B dtypes");
     TT_ASSERT(
         upstream_grad.dtype() == softmax_output.dtype(),
         "Softmax output and upstream gradient must have the same dtype");
@@ -46,8 +47,10 @@ void SoftmaxBackwardDeviceOperation::validate_on_program_cache_miss(
     // Validate dimension
     const auto rank = softmax_output.logical_shape().rank();
     TT_FATAL(
-        attributes.dim == rank - 1 || attributes.dim == static_cast<uint32_t>(-1),
-        "Currently only supporting softmax_backward on last dimension");
+        attributes.dim == rank - 1,
+        "Currently only supporting softmax_backward on last dimension (got dim={}, rank={})",
+        attributes.dim,
+        rank);
 }
 
 void SoftmaxBackwardDeviceOperation::validate_on_program_cache_hit(
