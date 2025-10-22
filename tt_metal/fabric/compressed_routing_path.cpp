@@ -6,6 +6,7 @@
 #include "compressed_routing_path.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/api/tt-metalium/control_plane.hpp"
+#include "tt_metal/fabric/fabric_context.hpp"
 
 namespace tt::tt_fabric {
 
@@ -91,6 +92,8 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
         uint8_t ew_direction = 0;
 
         uint16_t prev_chip = src_chip_id;
+        auto topology = control_plane.get_fabric_context().get_fabric_topology();
+        bool is_torus = (topology == tt::tt_fabric::Topology::Torus);
         for (uint16_t curr_chip : best_chip_sequence) {
             uint16_t prev_row = prev_chip / ew_dim;
             uint16_t prev_col = prev_chip % ew_dim;
@@ -101,14 +104,28 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
             int dc = static_cast<int>(curr_col) - static_cast<int>(prev_col);
 
             if (dr != 0) {
-                uint8_t step_dir = (dr == 1 || dr == -(static_cast<int>(ns_dim) - 1)) ? 1 : 0;
+                // Count NS hop; set direction only on first NS step
                 if (ns_hops == 0) {
+                    uint8_t step_dir;
+                    if (is_torus) {
+                        // Wrap-aware: treat a delta of -(ns_dim-1) as SOUTH (wrap), and +1 as SOUTH
+                        step_dir = (dr == 1 || dr == -(static_cast<int>(ns_dim) - 1));
+                    } else {  // Mesh
+                        step_dir = (dr > 0);
+                    }
                     ns_direction = step_dir;
                 }
                 ++ns_hops;
             } else if (dc != 0) {
-                uint8_t step_dir = (dc == 1 || dc == -(static_cast<int>(ew_dim) - 1)) ? 1 : 0;
+                // Count EW hop; set direction only on first EW step
                 if (ew_hops == 0) {
+                    uint8_t step_dir;
+                    if (is_torus) {
+                        // Wrap-aware: treat a delta of -(ew_dim-1) as EAST (wrap), and +1 as EAST
+                        step_dir = (dc == 1 || dc == -(static_cast<int>(ew_dim) - 1));
+                    } else {  // Mesh
+                        step_dir = (dc > 0);
+                    }
                     ew_direction = step_dir;
                 }
                 ++ew_hops;
