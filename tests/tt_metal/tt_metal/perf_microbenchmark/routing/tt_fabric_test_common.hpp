@@ -500,7 +500,7 @@ public:
         }
 
         const MeshCoordinate& src_coord = get_device_coord(src_node);
-        return compute_destination_nodes_from_hops(src_coord, hops, chip_send_type);
+        return compute_destination_nodes_from_hops(src_node, src_coord, hops, chip_send_type);
     }
 
     bool are_devices_linear(const std::vector<FabricNodeId>& node_ids) const override {
@@ -1508,14 +1508,18 @@ private:
         return hops;
     }
 
+    // In a multi-host setup, we currently dont store info about how the meshes are connected across hosts
+    // So we only compute destinations within the local mesh from hops
     std::vector<FabricNodeId> compute_destination_nodes_from_hops(
+        const FabricNodeId& src_node,
         const MeshCoordinate& src_coord,
         const std::unordered_map<RoutingDirection, uint32_t>& hops,
         ChipSendType send_type) const {
+        // for now src_node is only passed for multicast, since we dont allow unicast hop expansion across hosts
         if (send_type == ChipSendType::CHIP_UNICAST) {
             return compute_unicast_destinations(src_coord, hops);
         } else if (send_type == ChipSendType::CHIP_MULTICAST) {
-            return compute_multicast_destinations(src_coord, hops);
+            return compute_multicast_destinations(src_node, src_coord, hops);
         } else {
             TT_THROW("Unsupported send type: {}", send_type);
             return {};
@@ -1599,14 +1603,17 @@ private:
     }
 
     std::vector<FabricNodeId> compute_multicast_destinations(
-        const MeshCoordinate& src_coord, const std::unordered_map<RoutingDirection, uint32_t>& hops) const {
+        const FabricNodeId& src_node,
+        const MeshCoordinate& src_coord,
+        const std::unordered_map<RoutingDirection, uint32_t>& hops) const {
+        // src_node is needed to grab the right mesh id to convert from coord to node id
         // Assume hops is pre-split single map from builder - simulate directly
         auto visited = simulate_multicast_split(src_coord, hops);
 
         std::unordered_set<FabricNodeId> unique_nodes;
         for (const auto& coord : visited) {
             if (coord != src_coord) {
-                unique_nodes.insert(get_fabric_node_id(coord));
+                unique_nodes.insert(get_fabric_node_id(src_node.mesh_id, coord));
             }
         }
 
