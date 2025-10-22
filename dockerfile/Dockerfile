@@ -281,6 +281,7 @@ RUN dpkg -i /build/tt-metalium_0.0.0~ubuntu24.04_amd64.deb
 RUN dpkg -i /build/tt-nn_0.0.0~ubuntu24.04_amd64.deb
 RUN dpkg -i /build/*
 
+ENV LD_LIBRARY_PATH="/opt/openmpi-v5.0.7-ulfm/lib:$LD_LIBRARY_PATH"
 RUN pip3 install /artifacts/ttnn-0.0.0.dev0-cp312-cp312-linux_x86_64.whl
 
 COPY . ./tt-metal
