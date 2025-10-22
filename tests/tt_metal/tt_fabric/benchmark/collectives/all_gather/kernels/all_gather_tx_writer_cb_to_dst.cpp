@@ -97,11 +97,6 @@ void kernel_main() {
     zero_l1_buf(reinterpret_cast<uint32_t*>(const_cast<PACKET_HEADER_TYPE*>(hdr_N)), sizeof(PACKET_HEADER_TYPE));
     zero_l1_buf(reinterpret_cast<uint32_t*>(const_cast<PACKET_HEADER_TYPE*>(hdr_S)), sizeof(PACKET_HEADER_TYPE));
 
-    auto mh_W = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_W);
-    auto mh_E = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_E);
-    auto mh_N = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_N);
-    auto mh_S = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_S);
-    // Low-latency mesh header view for route programming
     auto mh_W_ll = reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(hdr_W);
     auto mh_E_ll = reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(hdr_E);
     auto mh_N_ll = reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(hdr_N);
@@ -178,7 +173,6 @@ void kernel_main() {
                 DPRINT << "writer:N route&send page " << i << ENDL();
             }
             fabric_set_mcast_route(mh_N_ll, 0, 0, e_hops, w_hops, n_hops, 0);
-            volatile tt_l1_ptr uint32_t* __p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mh_N);
             hdr_N->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
             conn_N.send_payload_without_header_non_blocking_from_address(page_l1_addr, PAGE_SIZE);
             conn_N.send_payload_flush_non_blocking_from_address((uint32_t)hdr_N, sizeof(PACKET_HEADER_TYPE));
@@ -190,7 +184,6 @@ void kernel_main() {
                 DPRINT << "writer:S route&send page " << i << ENDL();
             }
             fabric_set_mcast_route(mh_S_ll, 0, 0, e_hops, w_hops, 0, s_hops);
-            volatile tt_l1_ptr uint32_t* __p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mh_S);
             // Push first 8 words of header
             hdr_S->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
             DPRINT << "writer:S route&send page " << i << ENDL();
@@ -207,7 +200,6 @@ void kernel_main() {
             hdr_W->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
             if (should_log(i)) {
                 DPRINT << "writer:W route&send page " << i << ENDL();
-                volatile tt_l1_ptr uint32_t* __p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mh_W);
             }
             conn_W.send_payload_without_header_non_blocking_from_address(page_l1_addr, PAGE_SIZE);
             conn_W.send_payload_flush_non_blocking_from_address((uint32_t)hdr_W, sizeof(PACKET_HEADER_TYPE));
@@ -250,40 +242,40 @@ void kernel_main() {
     const uint32_t sem_noc_lo = static_cast<uint32_t>(sem_noc & 0xffffffffu);
     DPRINT << "writer: sem_noc[hi:lo]=0x" << sem_noc_hi << ":0x" << sem_noc_lo << ENDL();
 
-    // If a trunk (N or S) exists, send the atomic on the trunk only (it fans out E/W as needed).
-    // Otherwise (single-row), send two atomics: one on E and one on W (each side of the row).
+    // If any trunk (N or S) exists, send atomics on each present trunk.
+    // Only when there is NO trunk (single row) do we send atomics on E/W.
+    const bool any_trunk = (use_N || use_S);
+
     if (use_N) {
         conn_N.wait_for_empty_write_slot();
         DPRINT << "writer:N atomic_inc" << ENDL();
         fabric_set_mcast_route(mh_N_ll, 0, 0, e_hops, w_hops, n_hops, 0);
         hdr_N->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
         conn_N.send_payload_flush_non_blocking_from_address((uint32_t)hdr_N, sizeof(PACKET_HEADER_TYPE));
-    } else if (use_S) {
+    }
+
+    if (use_S) {
         conn_S.wait_for_empty_write_slot();
         DPRINT << "writer:S atomic_inc" << ENDL();
         fabric_set_mcast_route(mh_S_ll, 0, 0, e_hops, w_hops, 0, s_hops);
         hdr_S->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
         conn_S.send_payload_flush_non_blocking_from_address((uint32_t)hdr_S, sizeof(PACKET_HEADER_TYPE));
-    } else {
-        // Single-row: bump both directions so every chip on the row gets exactly one bump
-        if (use_W) {
-            conn_W.wait_for_empty_write_slot();
-            DPRINT << "writer:W atomic_inc" << ENDL();
-            fabric_set_mcast_route(mh_W_ll, 0, 0, 0, w_hops, 0, 0);
-            hdr_W->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
-            {
-                volatile tt_l1_ptr uint32_t* __p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mh_W);
-            }
-            conn_W.send_payload_blocking_from_address((uint32_t)hdr_W, sizeof(PACKET_HEADER_TYPE));
-        }
-        if (use_E) {
-            conn_E.wait_for_empty_write_slot();
-            DPRINT << "writer:E atomic_inc" << ENDL();
-            fabric_set_mcast_route(mh_E_ll, 0, 0, e_hops, 0, 0, 0);
-            hdr_E->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
-            // Use flush on the last send so fabric pushes promptly
-            conn_E.send_payload_flush_non_blocking_from_address((uint32_t)hdr_E, sizeof(PACKET_HEADER_TYPE));
-        }
+    }
+
+    // Single-row case: no trunk present → atomics on both row directions as needed
+    if (!any_trunk && use_W) {
+        conn_W.wait_for_empty_write_slot();
+        DPRINT << "writer:W atomic_inc" << ENDL();
+        fabric_set_mcast_route(mh_W_ll, 0, 0, 0, w_hops, 0, 0);
+        hdr_W->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
+        conn_W.send_payload_blocking_from_address((uint32_t)hdr_W, sizeof(PACKET_HEADER_TYPE));
+    }
+    if (!any_trunk && use_E) {
+        conn_E.wait_for_empty_write_slot();
+        DPRINT << "writer:E atomic_inc" << ENDL();
+        fabric_set_mcast_route(mh_E_ll, 0, 0, e_hops, 0, 0, 0);
+        hdr_E->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
+        conn_E.send_payload_flush_non_blocking_from_address((uint32_t)hdr_E, sizeof(PACKET_HEADER_TYPE));
     }
 
     noc_semaphore_inc(sem_noc, 1);
