@@ -2035,8 +2035,8 @@ inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
 // clang-format off
 /**
  * Initiates an asynchronous read for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size).
- * This is similar to \a noc_async_read_tile_dram_sharded_with_state (now deprecated; see \a noc_async_read_one_packet_with_state),
- * except that this is used when the transaction id is set.
+ * Must first set the transaction id using \a noc_async_read_tile_dram_sharded_set_trid and the stateful registers
+ * using an API such as \a noc_async_read_one_packet_set_state.
  *
  * Return value: None
  *
