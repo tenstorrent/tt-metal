@@ -173,7 +173,6 @@ Checks: >
   -readability-qualified-auto,
   -readability-redundant-casting,
   -readability-redundant-member-init,
-  -readability-redundant-string-cstr,
   -readability-redundant-string-init,
   -readability-reference-to-constructed-temporary,
   -readability-static-accessed-through-instance,

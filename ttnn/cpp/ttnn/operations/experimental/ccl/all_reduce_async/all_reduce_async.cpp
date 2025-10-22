@@ -9,7 +9,6 @@
 #include "ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_command_processor_async/device/all_gather_command_processor_async_op.hpp"
 #include "device/all_reduce_async_op.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
@@ -26,16 +25,6 @@
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-
-namespace {
-inline bool is_fabric_2d() {
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
-
-    return (
-        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D ||
-        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
-}
-}  // namespace
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -197,7 +186,8 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         interleaved_tensor = ttnn::sharded_to_interleaved(padded_tensor, working_memory_config, std::nullopt);
     }
 
-    if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) || is_fabric_2d()) {
+    if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) ||
+        composite_common::is_fabric_2d()) {
         // All reduce = all gather + local reduce
         composite_dim = 0;
         auto reshaped_tensor = ttnn::reshape(
@@ -289,7 +279,8 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         composite_common::use_composite_all_gather(padded_tensor, composite_dim, out_memory_config);
     bool composite_reduce_scatter =
         composite_common::use_composite_reduce_scatter(padded_tensor, composite_dim, cluster_axis);
-    if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) || is_fabric_2d()) {
+    if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) ||
+        composite_common::is_fabric_2d()) {
         // All reduce = all gather + local reduce
         composite_dim = 0;
         auto reshaped_tensor = ttnn::reshape(
