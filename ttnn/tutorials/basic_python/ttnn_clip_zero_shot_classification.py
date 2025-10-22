@@ -574,11 +574,9 @@ def main():
 
     # If TTNN_TUTORIALS_MODELS_CLIP_PATH is set, use it as the cache directory to avoid requests to Hugging Face
     cache_dir = os.getenv("TTNN_TUTORIALS_MODELS_CLIP_PATH")
-
-    cache_dir = "ttnn_clip_zero_shot_image_classification"
     if cache_dir is not None:
-        clip_model_location = f"{cache_dir}/model"
-        tokenizer_location = f"{cache_dir}/tokenizer"
+        clip_model_location = os.path.join(cache_dir, "model")
+        tokenizer_location = os.path.join(cache_dir, "tokenizer")
 
     # Load model weights (download if cache_dir was not set)
     model = CLIPModel.from_pretrained(clip_model_location)
