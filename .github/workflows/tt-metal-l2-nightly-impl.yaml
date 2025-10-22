@@ -534,8 +534,7 @@ jobs:
     name: ttnn nightly transformers tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+        format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
       - name: ⬇️  Setup Job
