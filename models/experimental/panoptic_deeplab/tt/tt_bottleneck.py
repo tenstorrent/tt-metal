@@ -191,7 +191,7 @@ class TtBottleneck(LightweightModule):
         logger.debug(f"TtBottleneck {self.block_id} conv1 complete, output shape: {out.shape}")
 
         # dilated convs in res5 experience huge circular buffers if input is L1 sharded
-        if "res5" in self.block_id:
+        if any(["res5.1", "res5.2" in self.block_id]):
             out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
 
         # Conv2 + separate ReLU (BatchNorm fused into Conv2)

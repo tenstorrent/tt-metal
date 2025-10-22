@@ -64,6 +64,9 @@ class ModelOptimisations:
         # Start with default overrides
         overrides = self.default_overrides.copy()
 
+        # HACK
+        self.register_layer_override(conv_path, name=conv_path)
+
         # Apply layer-specific overrides if available
         if conv_path is not None and conv_path in self.layer_overrides:
             overrides.update(self.layer_overrides[conv_path])
@@ -158,6 +161,8 @@ class ModelOptimisations:
             "res2.0.conv3",
             slice_strategy=WidthSliceStrategyConfiguration(num_slices=2),
             sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=1 * 32),  # 4 tiles
+            # slice_strategy=L1FullSliceStrategyConfiguration(),
+            # sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=1 * 32),  # 4 tiles
         )
         self.register_layer_override(
             "res2.1.conv3",

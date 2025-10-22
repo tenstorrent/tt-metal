@@ -170,6 +170,7 @@ class Conv2dConfiguration:
     reallocate_halo_output: bool = True
 
     config_tensors_in_dram: bool = False
+    name: str = "Conv2d"
 
     @classmethod
     def convert_torch_weight_and_bias_to_ttnn(cls, weight, bias=None, mesh_mapper=None):
@@ -644,6 +645,35 @@ class TtConv2d:
         return accumulated_output
 
     def __call__(self, x):
+        from loguru import logger
+
+        # Get all kwargs that will be passed to ttnn.conv2d
+        conv2d_kwargs = self.get_conv2d_kwargs()
+
+        # Log all arguments passed to ttnn.conv2d in parseable format
+        logger.warning(
+            f"CONV2D_ARGS:{self.configuration.name}:"
+            f"input_tensor_dtype={x.dtype if hasattr(x, 'dtype') else 'N/A'},"
+            f"weight_tensor_dtype={self.weight.dtype if hasattr(self.weight, 'dtype') else 'N/A'},"
+            f"bias_tensor={self.bias is not None},"
+            f"return_output_dim=False,"
+            f"return_weights_and_bias=True,"
+            f"compute_config={self.compute_config},"
+            f"input_height={conv2d_kwargs.get('input_height')},"
+            f"input_width={conv2d_kwargs.get('input_width')},"
+            f"in_channels={conv2d_kwargs.get('in_channels')},"
+            f"out_channels={conv2d_kwargs.get('out_channels')},"
+            f"batch_size={conv2d_kwargs.get('batch_size')},"
+            f"kernel_size={conv2d_kwargs.get('kernel_size')},"
+            f"stride={conv2d_kwargs.get('stride')},"
+            f"padding={conv2d_kwargs.get('padding')},"
+            f"dilation={conv2d_kwargs.get('dilation')},"
+            f"groups={conv2d_kwargs.get('groups')},"
+            f"dtype={conv2d_kwargs.get('dtype')},"
+            f"device={conv2d_kwargs.get('device')},"
+            f"conv_config={conv2d_kwargs.get('conv_config')},"
+            f"slice_config={conv2d_kwargs.get('slice_config')}"
+        )
         if not self.weight_slices:
             # No slicing
             x, [self.weight, self.bias] = ttnn.conv2d(
