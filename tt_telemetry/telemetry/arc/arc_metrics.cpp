@@ -34,7 +34,7 @@ void create_arc_metrics(
     const std::unique_ptr<TopologyHelper>& topology_translation,
     const std::unique_ptr<tt::tt_metal::Hal>& hal) {
     log_info(tt::LogAlways, "Creating ARC firmware metrics...");
-    tt::umd::tt_ClusterDescriptor* cluster_descriptor = cluster->get_cluster_description();
+    tt::umd::ClusterDescriptor* cluster_descriptor = cluster->get_cluster_description();
 
     // Iterate through all chips and create ARC metrics for MMIO-capable ones
     for (tt::ChipId chip_id : cluster_descriptor->get_all_chips()) {
