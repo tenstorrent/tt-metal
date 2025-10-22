@@ -22,14 +22,9 @@ void kernel_main() {
     constexpr uint32_t local_weight_height_blocks = get_compile_time_arg_val(10);
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(11);
     constexpr uint32_t bias_cb_id = get_compile_time_arg_val(12);
-    constexpr auto s_weight_args = TensorAccessorArgs<13>();
+    constexpr bool fuse_bias = get_compile_time_arg_val(13);
+    constexpr auto s_weight_args = TensorAccessorArgs<14>();
     constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
-
-#ifdef FUSE_BIAS
-    constexpr bool has_bias = true;
-#else
-    constexpr bool has_bias = false;
-#endif
 
     uint32_t i = 0;
     const uint32_t init_weight_start_tile_id = get_arg_val<uint32_t>(i);
@@ -44,10 +39,8 @@ void kernel_main() {
 
     const uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
     const auto s_weight = TensorAccessor(s_weight_args, weight_addr_dram_base, weight_tile_nbytes);
-#ifdef FUSE_BIAS
     const uint32_t bias_pagesize = get_tile_size(bias_cb_id);
     const auto s_bias = TensorAccessor(s_bias_args, bias_addr_dram_base, bias_pagesize);
-#endif
     bool to_load_bias = true;
 
     for (uint32_t act_block_h_index = 0; act_block_h_index < act_num_blocks_h; act_block_h_index++) {
@@ -102,17 +95,17 @@ void kernel_main() {
             }
             weight_start_tile_id += weight_next_block_this_core_stride_h;
             if (to_load_bias) {
-#ifdef FUSE_BIAS
-                cb_reserve_back(bias_cb_id, weight_block_width_ntiles);
-                uint32_t bias_l1_addr = get_write_ptr(bias_cb_id);
-                for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
-                    noc_async_read_tile(bias_start_tile_id, s_bias, bias_l1_addr);
-                    bias_l1_addr += bias_pagesize;
-                    bias_start_tile_id += 1;
+                if constexpr (fuse_bias) {
+                    cb_reserve_back(bias_cb_id, weight_block_width_ntiles);
+                    uint32_t bias_l1_addr = get_write_ptr(bias_cb_id);
+                    for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
+                        noc_async_read_tile(bias_start_tile_id, s_bias, bias_l1_addr);
+                        bias_l1_addr += bias_pagesize;
+                        bias_start_tile_id += 1;
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(bias_cb_id, weight_block_width_ntiles);
                 }
-                noc_async_read_barrier();
-                cb_push_back(bias_cb_id, weight_block_width_ntiles);
-#endif
                 to_load_bias = false;
             }
         }
