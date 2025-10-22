@@ -189,71 +189,18 @@ class TtASPP(LightweightModule):
             logger.info(f"🔷 Executing conv: aspp.convs.{i}")
             logger.info(f"  Input x: shape={x.shape}, dtype={x.dtype}, layout={x.layout}, is_sharded={x.is_sharded()}")
 
-            # Special handling for branch 3: manual channel slicing with flattened format
+            # Special handling for branch 3: needs flattened format for bfloat8_b dilated convolutions
             # Block float dtypes require flattened format (1, 1, nhw, C) for dilated convolutions
-            if i == 3:
-                logger.info(
-                    f"  Branch 3 check: dtype={x.dtype}, has_slice_strategy={hasattr(conv.configuration, 'slice_strategy')}, slice_strategy={conv.configuration.slice_strategy if hasattr(conv.configuration, 'slice_strategy') else 'N/A'}"
-                )
-            if (
-                i == 3
-                and x.dtype == ttnn.bfloat8_b
-                and hasattr(conv.configuration, "slice_strategy")
-                and conv.configuration.slice_strategy is not None
-            ):
-                num_slices = conv.configuration.slice_strategy.get_num_slices()
-                logger.info(f"  Branch {i}: Manual channel slicing with {num_slices} slices in flattened format")
+            if i == 3 and x.dtype == ttnn.bfloat8_b:
+                logger.info(f"  Branch {i}: Flattening input for bfloat8_b dilated convolution")
+                # Flatten input to required format for bfloat8_b dilated convs
+                x_for_conv = ttnn.reshape(x, (1, 1, H * W, C))
+                logger.info(f"    Flattened: {x.shape} -> {x_for_conv.shape}")
 
-                # Flatten input
-                x_flat = ttnn.reshape(x, (1, 1, H * W, C))
-                logger.info(f"    Flattened: {x.shape} -> {x_flat.shape}")
+                # Call conv with channel slicing handled by the wrapper
+                branch_out = conv(x_for_conv)
 
-                # Manually slice channels in flattened format and accumulate
-                channels_per_slice = C // num_slices
-                accumulated_output = None
-
-                for slice_idx in range(num_slices):
-                    start_ch = slice_idx * channels_per_slice
-                    end_ch = (slice_idx + 1) * channels_per_slice
-
-                    # Slice in flattened format: [1, 1, H*W, C]
-                    x_slice = ttnn.slice(
-                        x_flat,
-                        [0, 0, 0, start_ch],
-                        [1, 1, H * W, end_ch],
-                    )
-                    logger.info(f"      Slice {slice_idx}: channels [{start_ch}:{end_ch}], shape={x_slice.shape}")
-
-                    # Call conv without internal slicing (it will use flattened input directly)
-                    slice_out = conv._call_without_slicing(
-                        x_slice, in_channels_override=channels_per_slice, weight_slice_idx=slice_idx
-                    )
-
-                    # Move to avoid OOM
-                    slice_out = ttnn.move(slice_out)
-
-                    # Accumulate slices
-                    if slice_idx == 0:
-                        accumulated_output = ttnn.to_memory_config(slice_out, ttnn.DRAM_MEMORY_CONFIG)
-                    else:
-                        accumulated_output = ttnn.add(slice_out, accumulated_output, output_tensor=accumulated_output)
-
-                    # Deallocate slice output if not first
-                    if slice_idx > 0:
-                        slice_out.deallocate(True)
-
-                branch_out = accumulated_output
-                logger.info(f"    Accumulated output: {branch_out.shape}")
-
-                # Apply bias if it exists
-                if hasattr(conv, "bias") and conv.bias is not None:
-                    # Ensure bias is in correct layout and dtype
-                    bias = conv.bias
-                    if bias.layout != ttnn.TILE_LAYOUT or bias.dtype != branch_out.dtype:
-                        bias = ttnn.to_layout(bias, ttnn.TILE_LAYOUT, dtype=branch_out.dtype)
-                    branch_out = ttnn.add(branch_out, bias, output_tensor=branch_out)
-
-                # Reshape to NHWC and apply ReLU
+                # Reshape back to NHWC format and apply ReLU
                 branch_out = ttnn.reshape(branch_out, (N, H, W, branch_out.shape[3]))
                 branch_out = self.activation(branch_out)
             else:

@@ -221,74 +221,40 @@ class TtDeepLabV3PlusHead(LightweightModule):
                     f"  Size mismatch! Expected [{proj_x.shape[1]}, {proj_x.shape[2]}] but will get [{y_height * scale_h}, {y_width * scale_w}]"
                 )
 
-            # Manual channel slicing for upsample (similar to ASPP)
-            # Convert to ROW_MAJOR for bilinear upsampling
+            # Use TtUpsample wrapper with channel slicing
+            from models.tt_cnn.tt.builder import TtUpsample, UpsampleConfiguration, ChannelSliceStrategyConfiguration
+
+            # Convert to interleaved DRAM if sharded
             if y.is_sharded():
                 y = ttnn.sharded_to_interleaved(y, ttnn.DRAM_MEMORY_CONFIG)
             else:
                 y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
 
+            # Convert to ROW_MAJOR for bilinear upsampling
             y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
 
             # Reshape if flattened (to_layout may flatten to [N, 1, H*W, C])
             if y.shape[1] == 1 and y.shape[2] == y_height * y_width:
                 y = ttnn.reshape(y, (y_batch, y_height, y_width, y_channels))
 
-            # Check allocation before slicing for upsample
-            if not y.is_allocated():
-                logger.warning(f"Decoder upsample stage {i+1}: input y is NOT allocated before slicing!")
-            else:
-                logger.debug(
-                    f"Decoder upsample stage {i+1}: input y is allocated (shape={y.shape}, dtype={y.dtype}, layout={y.layout})"
-                )
+            logger.debug(
+                f"Decoder upsample stage {i+1}: input shape={y.shape}, dtype={y.dtype}, layout={y.layout}, scale_factors=({scale_h}, {scale_w})"
+            )
 
-            # Manual channel slicing: split into 4 slices
-            num_slices = 4
-            channels_per_slice = y_channels // num_slices
-            sliced_outputs = []
+            # Create dynamic upsample configuration with channel slicing
+            upsample_config = UpsampleConfiguration(
+                input_height=y_height,
+                input_width=y_width,
+                channels=y_channels,
+                batch_size=y_batch,
+                scale_factor=(scale_h, scale_w),
+                mode="bilinear",
+                slice_strategy=ChannelSliceStrategyConfiguration(num_slices=4),
+            )
+            upsample_layer = TtUpsample(upsample_config, self.device)
+            y_upsampled = upsample_layer(y)
 
-            for slice_idx in range(num_slices):
-                start_channel = slice_idx * channels_per_slice
-                end_channel = start_channel + channels_per_slice
-
-                # Slice channels
-                y_slice = y[:, :, :, start_channel:end_channel]
-
-                # Check allocation before upsample
-                if not y_slice.is_allocated():
-                    logger.warning(
-                        f"Decoder upsample slice {slice_idx}: input y_slice is NOT allocated before upsample!"
-                    )
-                else:
-                    logger.debug(
-                        f"Decoder upsample slice {slice_idx}: input y_slice is allocated (shape={y_slice.shape}, dtype={y_slice.dtype}, layout={y_slice.layout})"
-                    )
-
-                # Upsample this slice
-                y_slice_upsampled = ttnn.upsample(y_slice, scale_factor=(scale_h, scale_w), mode="bilinear")
-
-                # Check allocation after upsample
-                if not y_slice_upsampled.is_allocated():
-                    logger.warning(
-                        f"Decoder upsample slice {slice_idx}: output y_slice_upsampled is NOT allocated after upsample!"
-                    )
-                else:
-                    logger.debug(
-                        f"Decoder upsample slice {slice_idx}: output y_slice_upsampled is allocated (shape={y_slice_upsampled.shape}, dtype={y_slice_upsampled.dtype}, layout={y_slice_upsampled.layout})"
-                    )
-
-                # Ensure consistent memory layout for concatenation
-                if y_slice_upsampled.is_sharded():
-                    y_slice_upsampled = ttnn.sharded_to_interleaved(y_slice_upsampled, ttnn.DRAM_MEMORY_CONFIG)
-                else:
-                    y_slice_upsampled = ttnn.to_memory_config(y_slice_upsampled, ttnn.DRAM_MEMORY_CONFIG)
-
-                sliced_outputs.append(y_slice_upsampled)
-
-            # Concatenate slices back together (all in DRAM interleaved now)
-            y_upsampled = ttnn.concat(sliced_outputs, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-            # Convert back to TILE_LAYOUT
+            # Convert back to TILE_LAYOUT and DRAM
             y_upsampled = ttnn.to_layout(y_upsampled, ttnn.TILE_LAYOUT)
             y_upsampled = ttnn.to_memory_config(y_upsampled, ttnn.DRAM_MEMORY_CONFIG)
 

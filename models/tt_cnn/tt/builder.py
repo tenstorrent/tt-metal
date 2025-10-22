@@ -585,6 +585,13 @@ class TtConv2d:
 
     def _apply_channel_slicing(self, x):
         """Apply channel slicing to the input tensor and return the result."""
+        # check for flattened input tensor
+        is_flattened = (
+            x.shape[0] == 1
+            and x.shape[1] == 1
+            and x.shape[2]
+            == self.configuration.batch_size * self.configuration.input_height * self.configuration.input_width
+        )
         # slice input
         input_slices = []
         for i in range(self.configuration.slice_strategy.get_num_slices()):
@@ -598,9 +605,13 @@ class TtConv2d:
                         i * self.configuration.in_channels // self.configuration.slice_strategy.get_num_slices(),
                     ],
                     [
-                        self.configuration.batch_size,
-                        self.configuration.input_height,
-                        self.configuration.input_width,
+                        self.configuration.batch_size if not is_flattened else 1,
+                        self.configuration.input_height if not is_flattened else 1,
+                        self.configuration.input_width
+                        if not is_flattened
+                        else self.configuration.batch_size
+                        * self.configuration.input_height
+                        * self.configuration.input_width,
                         (i + 1) * self.configuration.in_channels // self.configuration.slice_strategy.get_num_slices(),
                     ],
                 )
@@ -615,19 +626,10 @@ class TtConv2d:
             slice_kwargs = self.get_conv2d_kwargs()
             slice_kwargs["in_channels"] = channels_per_slice
 
-            # Create zero bias for comparison mode (channel slicing applies bias after accumulation)
-            # Match bias dtype to weight dtype from configuration
-            import torch
-
-            zero_bias = torch.zeros(1, 1, 1, self.configuration.out_channels, dtype=torch.bfloat16)
-            slice_bias = ttnn.from_torch(
-                zero_bias, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=self.configuration.weights_dtype
-            )
-
             output_slice, self.weight_slices[i] = ttnn.conv2d(
                 input_tensor=input_slices[i],
                 weight_tensor=self.weight_slices[i],
-                bias_tensor=slice_bias,
+                bias_tensor=None,
                 return_output_dim=False,
                 return_weights_and_bias=True,
                 compute_config=self.compute_config,
@@ -652,75 +654,18 @@ class TtConv2d:
 
         return accumulated_output
 
-    def _call_without_slicing(self, x, in_channels_override=None, weight_slice_idx=None, apply_bias=False):
-        """Call conv2d without internal channel slicing, optionally overriding in_channels.
-
-        This is used when channel slicing is handled externally (e.g., for flattened inputs with bfloat8_b).
-
-        Args:
-            x: Input tensor
-            in_channels_override: Override the in_channels parameter
-            weight_slice_idx: Index of the weight slice to use (if weight slicing is configured)
-            apply_bias: Whether to return the actual bias or use zero bias (for accumulation)
-        """
-        # Get the appropriate weight slice if specified
-        weight_to_use = self.weight
-        if self.weight_slices and weight_slice_idx is not None:
-            if 0 <= weight_slice_idx < len(self.weight_slices):
-                weight_to_use = self.weight_slices[weight_slice_idx]
-
-        # Get the weight dtype
-        weight_dtype = self.configuration.weights_dtype
-
-        # Always use zero bias for sliced convolutions (bias is applied after accumulation)
-        import torch
-
-        zero_bias = torch.zeros(1, 1, 1, self.configuration.out_channels, dtype=torch.bfloat16)
-        bias_to_use = ttnn.from_torch(zero_bias, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=weight_dtype)
-
-        # Get kwargs and override in_channels if specified
-        kwargs = self.get_conv2d_kwargs()
-        if in_channels_override is not None:
-            kwargs["in_channels"] = in_channels_override
-
-        x, [weight_to_use, returned_bias] = ttnn.conv2d(
-            input_tensor=x,
-            weight_tensor=weight_to_use,
-            bias_tensor=bias_to_use,
-            return_output_dim=False,
-            return_weights_and_bias=True,
-            compute_config=self.compute_config,
-            **kwargs,
-        )
-
-        return x
-
     def __call__(self, x):
         if not self.weight_slices:
             # No slicing
-            # Create zero bias for comparison mode if bias is None
-            bias_to_use = self.bias
-            if bias_to_use is None:
-                import torch
-
-                zero_bias = torch.zeros(1, 1, 1, self.configuration.out_channels, dtype=torch.bfloat16)
-                # Match bias dtype to weight dtype from configuration for comparison mode
-                bias_to_use = ttnn.from_torch(
-                    zero_bias, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=self.configuration.weights_dtype
-                )
-
-            x, [self.weight, returned_bias] = ttnn.conv2d(
+            x, [self.weight, self.bias] = ttnn.conv2d(
                 input_tensor=x,
                 weight_tensor=self.weight,
-                bias_tensor=bias_to_use,
+                bias_tensor=self.bias,
                 return_output_dim=False,
                 return_weights_and_bias=True,
                 compute_config=self.compute_config,
                 **self.get_conv2d_kwargs(),
             )
-            # Only update self.bias if it was originally None and we created a temporary one
-            if self.bias is not None:
-                self.bias = returned_bias
         else:
             x = self._apply_channel_slicing(x)
 
@@ -841,6 +786,13 @@ class TtUpsample:
 
     def _apply_channel_slicing(self, x):
         """Apply channel slicing to the input tensor and return the result."""
+        # check for flattened input tensor
+        is_flattened = (
+            x.shape[0] == 1
+            and x.shape[1] == 1
+            and x.shape[2]
+            == self.configuration.batch_size * self.configuration.input_height * self.configuration.input_width
+        )
         # Slice input tensor along channel dimension
         input_slices = []
         for i in range(self.num_slices):
@@ -851,9 +803,13 @@ class TtUpsample:
                 x,
                 [0, 0, 0, start_channel],
                 [
-                    self.configuration.batch_size,
-                    self.configuration.input_height,
-                    self.configuration.input_width,
+                    self.configuration.batch_size if not is_flattened else 1,
+                    self.configuration.input_height if not is_flattened else 1,
+                    self.configuration.input_width
+                    if not is_flattened
+                    else self.configuration.batch_size
+                    * self.configuration.input_height
+                    * self.configuration.input_width,
                     end_channel,
                 ],
             )
