@@ -335,7 +335,8 @@ def run_conv(
     out = out[:, :, :, :output_channels]
 
     ref = torch.permute(ref, (0, 2, 3, 1))
-
+    # print(f"ref: {ref}\n\n\n")
+    # print(f"out: {out}")
     if custom_pcc is not None:
         pcc = custom_pcc
     else:
@@ -5148,8 +5149,8 @@ def test_resnet50_conv_p150(
         (57, 24, 2, 32, 3, 3, 1, 1, 1, 1, 64),# weird shape example
     ),
 )
-@pytest.mark.parametrize("act_double_buffer", [True, False])
-@pytest.mark.parametrize("force_split_reader", [True, False])
+@pytest.mark.parametrize("act_double_buffer", [False,True])
+@pytest.mark.parametrize("force_split_reader", [True,False])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_conv_block_sharding(
     device,

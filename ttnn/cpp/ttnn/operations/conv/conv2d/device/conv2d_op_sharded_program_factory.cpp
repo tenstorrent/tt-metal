@@ -400,7 +400,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     uint32_t act_block_h_datums_split = act_block_h_nsubblocks_split * tt::constants::TILE_HEIGHT;
     uint32_t act_block_h_datums_split_last = act_block_h_nsubblocks_split_last * tt::constants::TILE_HEIGHT;
 
-    const bool split_mcast_enabled = enable_split_reader && block_sharded;
+    const bool split_mcast_enabled = enable_split_reader && block_sharded && !skip_activation_mcast;
 
     uint32_t act_block_num_tiles_split = act_block_h_nsubblocks_split * act_block_w_ntiles;
     uint32_t act_block_num_tiles_split_last = act_block_h_nsubblocks_split_last * act_block_w_ntiles;
@@ -959,24 +959,31 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             (uint32_t)stride_w,
             (uint32_t)filter_h};
 
-        // Add split mcast args (always present when split reader is enabled)
-        split_reader_args.push_back(act_first_reader_tilize_done_semaphore_id);
-        split_reader_args.push_back(act_second_reader_mcast_done_semaphore_id);
-        split_reader_args.push_back(act_mcast_sender_semaphore_id_second);
-        split_reader_args.push_back(act_mcast_receiver_semaphore_id_second);
-        split_reader_args.push_back(
-            (uint32_t)(act_block_num_tiles_split_last * tilized_act_tile_size));  // act_mcast_sender_size_bytes_second
-        split_reader_args.push_back(
-            (uint32_t)(act_block_num_tiles_split * tilized_act_tile_size));  // offset for second reader mcast
-        split_reader_args.push_back(static_cast<uint32_t>(transpose_mcast));
-        split_reader_args.push_back(get_cb_info_by_name(cb_info, Conv2dCb::L1_ARRAY).index);
-        split_reader_args.push_back(get_cb_info_by_name(cb_info, Conv2dCb::ACT).index);
-        split_reader_args.push_back(get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index);
-        split_reader_args.push_back(static_cast<uint32_t>(
-            (uint32_t)(transpose_mcast ? num_cores_y - 1 : num_cores_x - 1)));  // act_mcast_num_dests;
-        split_reader_args.push_back(static_cast<uint32_t>(
-            (uint32_t)(transpose_mcast ? num_cores_y - 1 : num_cores_x - 1)));  // act_mcast_num_cores;
-
+        const uint32_t act_cb_block_cnt = get_cb_info_by_name(cb_info, Conv2dCb::ACT).num_pages /
+                                          (act_block_num_tiles_split + act_block_num_tiles_split_last);
+        if (block_sharded) {
+            // Add split mcast args (always present when split reader is enabled)
+            split_reader_args.push_back(act_first_reader_tilize_done_semaphore_id);
+            split_reader_args.push_back(act_second_reader_mcast_done_semaphore_id);
+            split_reader_args.push_back(act_mcast_sender_semaphore_id_second);
+            split_reader_args.push_back(act_mcast_receiver_semaphore_id_second);
+            split_reader_args.push_back((uint32_t)(act_block_num_tiles_split_last *
+                                                   tilized_act_tile_size));  // act_mcast_sender_size_bytes_second
+            split_reader_args.push_back(
+                (uint32_t)(act_block_num_tiles_split * tilized_act_tile_size));  // first offset for second reader mcast
+            split_reader_args.push_back(
+                (uint32_t)(((act_cb_block_cnt > 1) ? (2 * act_block_num_tiles_split + act_block_num_tiles_split_last)
+                                                   : act_block_num_tiles_split) *
+                           tilized_act_tile_size));  // second offset for second reader mcast
+            split_reader_args.push_back(static_cast<uint32_t>(transpose_mcast));
+            split_reader_args.push_back(get_cb_info_by_name(cb_info, Conv2dCb::L1_ARRAY).index);
+            split_reader_args.push_back(get_cb_info_by_name(cb_info, Conv2dCb::ACT).index);
+            split_reader_args.push_back(get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index);
+            split_reader_args.push_back(static_cast<uint32_t>(
+                (uint32_t)(transpose_mcast ? num_cores_y - 1 : num_cores_x - 1)));  // act_mcast_num_dests;
+            split_reader_args.push_back(static_cast<uint32_t>(
+                (uint32_t)(transpose_mcast ? num_cores_y - 1 : num_cores_x - 1)));  // act_mcast_num_cores;
+        }
         if (split_reader_cb_shared) {
             const tt::DataFormat halo_output_df =
                 get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).data_format;
@@ -986,8 +993,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
                 skip_activation_mcast ? 1 : 1 + get_num_cores_channels_from_parallel_config(parallel_config);
             // get total number of blocks in the ACT CB so that we can compute the loop around when moving write
             // pointer in second reader
-            const uint32_t act_cb_block_cnt = get_cb_info_by_name(cb_info, Conv2dCb::ACT).num_pages /
-                                              (act_block_num_tiles_split + act_block_num_tiles_split_last);
 
             // In cases where the overlapped buffer is double buffered and number of push_backs done on NCRISC is odd,
             // there are two addresses that need to be written to on the BRISC side for the second reader.
@@ -1211,7 +1216,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     for (const CoreRange& core_range : mcast_sender_cores.ranges()) {
         for (const CoreCoord& core : core_range) {
             if (populate_skipped_work_cores && !output_cores.contains(core)) {
-                // TODO: add args for split mcast
                 std::vector<uint32_t> args = std::vector<uint32_t>(15, 0);
                 args[10] = weights_mcast_sender_semaphore_id;
                 args[11] = weights_mcast_receiver_semaphore_id;
@@ -1220,6 +1224,35 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
                 args[13] =
                     static_cast<uint32_t>(false);        // is_receiver_core, is always false for cores in this category
                 args[14] = static_cast<uint32_t>(true);  //  skip work
+                if (split_mcast_enabled) {
+                    if (transpose_mcast) {
+                        CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)num_cores_y - 1};
+                        CoreCoord bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+                        std::vector<uint32_t> act_mcast_coords = setup_mcast_args(
+                            is_writer_noc_0,
+                            bottom_core_physical.x,
+                            top_left_core_physical.y,
+                            bottom_core_physical.x,
+                            bottom_right_core_physical.y);
+                        args.insert(args.end(), act_mcast_coords.begin(), act_mcast_coords.end());
+                        args.push_back(core.y);                  // act_mcast_sender_id
+                        args.push_back(bottom_core_physical.x);  // act_mcast_sender_noc_x
+                        args.insert(args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());
+                    } else {
+                        CoreCoord core_physical = device->worker_core_from_logical_core(core);
+                        std::vector<uint32_t> act_mcast_coords = setup_mcast_args(
+                            is_writer_noc_0,
+                            top_left_core_physical.x,
+                            core_physical.y,
+                            out_bottom_right_core_physical.x,
+                            core_physical.y);
+                        args.insert(args.end(), act_mcast_coords.begin(), act_mcast_coords.end());
+                        args.push_back(core.x);           // act_mcast_sender_id
+                        args.push_back(core_physical.y);  // act_mcast_sender_noc_x
+                        args.insert(args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());
+                    }
+                }
+
                 SetRuntimeArgs(program, writer_mcast_sender_id, core, args);
                 continue;
             }

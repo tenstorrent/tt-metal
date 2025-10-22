@@ -49,14 +49,15 @@ void kernel_main() {
     const uint32_t act_mcast_sender_semaphore_addr_second = get_semaphore(get_compile_time_arg_val(30));
     const uint32_t act_mcast_receiver_semaphore_addr_second = get_semaphore(get_compile_time_arg_val(31));
     constexpr uint32_t act_mcast_sender_size_bytes_second = get_compile_time_arg_val(32);
-    constexpr uint32_t act_mcast_first_reader_offset = get_compile_time_arg_val(33);
+    constexpr uint32_t act_mcast_first_offset = get_compile_time_arg_val(33);
+    constexpr uint32_t act_mcast_second_offset = get_compile_time_arg_val(34);
 
-    constexpr bool transpose_mcast = get_compile_time_arg_val(34);
-    constexpr uint32_t cb_l1_array = get_compile_time_arg_val(35);
-    constexpr uint32_t cb_id_act = get_compile_time_arg_val(36);
-    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(37);
-    constexpr uint32_t act_mcast_num_dests = get_compile_time_arg_val(38);
-    constexpr uint32_t act_mcast_num_cores = get_compile_time_arg_val(39);
+    constexpr bool transpose_mcast = get_compile_time_arg_val(35);
+    constexpr uint32_t cb_l1_array = get_compile_time_arg_val(36);
+    constexpr uint32_t cb_id_act = get_compile_time_arg_val(37);
+    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(38);
+    constexpr uint32_t act_mcast_num_dests = get_compile_time_arg_val(39);
+    constexpr uint32_t act_mcast_num_cores = get_compile_time_arg_val(40);
 
     volatile tt_l1_ptr uint32_t* act_first_reader_tilize_done_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_first_reader_tilize_done_semaphore_addr);
@@ -72,10 +73,10 @@ void kernel_main() {
     // Synchronization is required: the main reader signals when CB space is reserved,
     // and the second reader signals when it has finished writing its portion.
     constexpr bool split_reader_cb_shared = true;
-    const uint32_t act_split_reader_reserve_done_semaphore_addr = get_semaphore(get_compile_time_arg_val(40));
-    const uint32_t act_split_reader_write_done_semaphore_addr = get_semaphore(get_compile_time_arg_val(41));
-    constexpr uint32_t act_write_offset = get_compile_time_arg_val(42);
-    constexpr uint32_t act_write_offset_last = get_compile_time_arg_val(43);
+    const uint32_t act_split_reader_reserve_done_semaphore_addr = get_semaphore(get_compile_time_arg_val(41));
+    const uint32_t act_split_reader_write_done_semaphore_addr = get_semaphore(get_compile_time_arg_val(42));
+    constexpr uint32_t act_write_offset = get_compile_time_arg_val(43);
+    constexpr uint32_t act_write_offset_last = get_compile_time_arg_val(44);
 
     volatile tt_l1_ptr uint32_t* act_split_reader_reserve_done_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_reserve_done_semaphore_addr);
@@ -161,10 +162,9 @@ void kernel_main() {
     constexpr uint32_t act_w_num_outer = window_outer;  // Same as conv_act_c_blocks in reader
 
     // Calculate addresses for second half
-    uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id) + act_mcast_first_reader_offset;
-    uint64_t act_multicast_data_addr =
-        act_multicast_noc_addr | (get_write_ptr(cb_id_act) + act_mcast_first_reader_offset);
-    uint32_t self_write_start_address = get_write_ptr(cb_id_act) + act_mcast_first_reader_offset;
+    uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id) + act_mcast_first_offset;
+    uint32_t act_mcast_offset = act_mcast_first_offset;
+    constexpr uint32_t act_mcast_offset_sum = act_mcast_first_offset + act_mcast_second_offset;
 #endif
 // read in bias if enabled (done only once for all batches)
 #ifdef FUSE_BIAS
@@ -222,12 +222,17 @@ void kernel_main() {
                 }
                 if constexpr (!split_reader_cb_shared) {
                     cb_push_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
+                } else {
+                    act_mcast_offset = act_mcast_offset_sum - act_mcast_offset;
                 }
 #endif
                 for (uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer;
                      weight_tile_h_outer_i++) {
 #if defined(SPLIT_READER) && !defined(SKIP_ACT_MCAST)
                     if (weight_tile_h_outer_i == act_mcast_sender_id) {
+                        uint64_t act_multicast_data_addr =
+                            act_multicast_noc_addr | (get_write_ptr(cb_id_act) + act_mcast_offset);
+                        uint32_t self_write_start_address = get_write_ptr(cb_id_act) + act_mcast_offset;
                         noc_semaphore_wait(
                             act_mcast_sender_semaphore_addr_ptr_second,
                             act_mcast_num_dests + (is_receiver_core_act ? 0 : 1));
@@ -250,7 +255,7 @@ void kernel_main() {
                             } else {
                                 noc_async_write(
                                     get_noc_addr(tilized_act_start_address),
-                                    self_write_start_address,
+                                    get_noc_addr(self_write_start_address),
                                     act_mcast_sender_size_bytes_second);
                                 noc_async_write_barrier();
                             }
@@ -308,6 +313,7 @@ void kernel_main() {
                         // Wait for VALID from sender
                         noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr_second, VALID);
                     }
+                    act_mcast_offset = act_mcast_offset_sum - act_mcast_offset;
 #endif  // SKIP_ACT_MCAST
 
                     // MCAST RECEIVE WEIGHTS
