@@ -327,7 +327,8 @@ void test_bert() {
             ttnn::random::uniform(
                 bfloat16(-1.0f), bfloat16(1.0f), ttnn::Shape({1, 1, TILE_HEIGHT, TILE_WIDTH}), Layout::TILE)
                 .to_device(device, dram_memory_config),
-            ttnn::Shape({1, 1, 1, TILE_WIDTH})));
+            ttnn::Shape({1, 1, 1, TILE_WIDTH}),
+            ttnn::Shape({1, 1, TILE_HEIGHT, TILE_WIDTH})));
 
     auto run_bert = [&]() {
         log_debug(tt::LogTest, "run_bert started");
