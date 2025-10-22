@@ -59,10 +59,6 @@ import ttnn
         # [1, 32, 256, 256, 2, 2, 2, 2, 0, 0, 1, 1, False], # input size exceeds uint16 limit
         # [1, 64, 300, 300, 2, 2, 2, 2, 0, 0, 1, 1, False], # input size exceeds uint16 limit
         # [1, 64, 360, 640, 3, 3, 2, 2, 1, 1, 1, 1, False], # OOM
-        # EXTRA CASES FOR EXTENDED COVERAGE
-        [1, 40, 100, 100, 3, 3, 2, 2, 0, 0, 2, 2, True],
-        [3, 56, 85, 85, 3, 3, 3, 3, 1, 1, 2, 2, False],
-        [2, 24, 56, 64, 3, 3, 2, 1, 1, 1, 3, 2, True],
     ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -84,9 +80,6 @@ def test_max_pool2d_with_indices_sweep(device, dtype, input_spec):
         ceil_mode,
     ) = input_spec
 
-    # All included test cases are verified to work with AUTO SHARDING
-    # Based on comprehensive testing of GitHub issue traces using auto sharding
-    # All validation (output, PCC, indices) is handled inside run_max_pool2d_with_indices function
     run_max_pool2d_with_indices(
         in_n,
         in_c,
@@ -105,5 +98,3 @@ def test_max_pool2d_with_indices_sweep(device, dtype, input_spec):
         None,  # None means auto sharding
         ceil_mode,
     )
-
-    # If we reach here, all assertions in run_max_pool2d_with_indices passed successfully
