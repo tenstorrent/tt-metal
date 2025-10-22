@@ -219,6 +219,12 @@ public:
         thread_binding::set_worker_affinity(worker, cpu_core_for_worker);
     }
 
+    // Delete copy and move operations as this class manages a thread and should not be copied or moved
+    NumaAwareExecutor(const NumaAwareExecutor&) = delete;
+    NumaAwareExecutor& operator=(const NumaAwareExecutor&) = delete;
+    NumaAwareExecutor(NumaAwareExecutor&&) = delete;
+    NumaAwareExecutor& operator=(NumaAwareExecutor&&) = delete;
+
     ~NumaAwareExecutor() {
         // Destructor called in main thread.
         // Wait to ensure that the worker thread has completed.
