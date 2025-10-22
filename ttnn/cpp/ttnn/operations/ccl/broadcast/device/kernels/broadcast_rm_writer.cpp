@@ -210,10 +210,7 @@ void kernel_main() {
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
         noc_semaphore_inc(out_ready_sem_noc_addr, 1);
 
-        close_connections(fabric_connection);
-
-        noc_async_write_barrier();
-    } else {
+        // 3. wait for mcast output ready semaphore
         if (wait_output_semaphore) {
             volatile tt_l1_ptr uint32_t* sem_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr);
@@ -224,6 +221,21 @@ void kernel_main() {
         if (reset_global_semaphore) {
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
         }
+
+        close_connections(fabric_connection);
+
+        noc_async_write_barrier();
+    } else {
+        if (wait_output_semaphore) {
+            volatile tt_l1_ptr uint32_t* sem_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr);
+            noc_semaphore_wait(sem_ptr, out_ready_sem_wait_value);
+        }
+
+        if (reset_global_semaphore) {
+            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
+        }
+
         close_connections(fabric_connection);
 
         noc_async_write_barrier();
