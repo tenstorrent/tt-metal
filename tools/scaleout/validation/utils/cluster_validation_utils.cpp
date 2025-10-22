@@ -208,6 +208,7 @@ void configure_cross_host_kernels(
     const size_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
     const size_t dst_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
+    std::vector<uint32_t> all_zeros(inputs.size(), 0);
     for (const auto& host_neighbor : physical_system_descriptor.get_host_neighbors(host_name)) {
         const auto& exit_nodes = physical_system_descriptor.get_connecting_exit_nodes(host_name, host_neighbor);
         for (const auto& exit_node : exit_nodes) {
@@ -233,7 +234,6 @@ void configure_cross_host_kernels(
                 tt::tt_metal::SetRuntimeArgs(
                     my_program, sender_kernel, my_coord, {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size});
             } else {
-                std::vector<uint32_t> all_zeros(inputs.size(), 0);
                 tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                     my_chip, my_device->ethernet_core_from_logical_core(my_coord), all_zeros, dst_eth_l1_byte_address);
                 tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(my_chip);
@@ -615,7 +615,7 @@ LinkMetricsResult send_traffic_and_validate_links(
                 devices,
                 d_size,
                 pkt_size_bytes);
-            fwd = !fwd;
+            fwd = !fwd;  // Toggle direction to test bidirectional traffic across links
         }
     }
 
@@ -997,10 +997,12 @@ void reset_local_link(ChipId src_chip, ChipId dst_chip, uint8_t src_chan, uint8_
 
     const auto& sender_soc_desc = cluster.get_soc_desc(src_chip);
     const auto& receiver_soc_desc = cluster.get_soc_desc(dst_chip);
+    auto logical_src_coord = sender_soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
+    auto logical_dst_coord = receiver_soc_desc.get_eth_core_for_channel(dst_chan, CoordSystem::LOGICAL);
     auto src_coord = cluster.get_virtual_coordinate_from_logical_coordinates(
-        src_chip, sender_soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL), CoreType::ETH);
+        src_chip, tt_xy_pair(logical_src_coord.x, logical_src_coord.y), CoreType::ETH);
     auto dst_coord = cluster.get_virtual_coordinate_from_logical_coordinates(
-        dst_chip, receiver_soc_desc.get_eth_core_for_channel(dst_chan, CoordSystem::LOGICAL), CoreType::ETH);
+        dst_chip, tt_xy_pair(logical_dst_coord.x, logical_dst_coord.y), CoreType::ETH);
 
     cluster.write_core(src_chip, src_coord, set, 0x1EFC);
     cluster.write_core(dst_chip, dst_coord, set, 0x1EFC);
@@ -1222,8 +1224,8 @@ void reset_cross_node_ethernet_links(
     }
 
     for (size_t i = 0; i < cross_node_links_to_reset.size(); i++) {
-        auto link = cross_node_links_to_reset[i];
-        auto reset_pair = cross_node_reset_pairs[i];
+        const auto& link = cross_node_links_to_reset[i];
+        const auto& reset_pair = cross_node_reset_pairs[i];
 
         auto src_chip_id = asic_id_to_chip_id[*link.asic_id];
         const auto& src_soc_desc = cluster.get_soc_desc(src_chip_id);
@@ -1305,7 +1307,8 @@ bool generate_link_metrics(
 }
 
 AsicTopology generate_asic_topology_from_connections(
-    std::set<PhysicalChannelConnection> physical_connections, PhysicalSystemDescriptor& physical_system_descriptor) {
+    const std::set<PhysicalChannelConnection>& physical_connections,
+    PhysicalSystemDescriptor& physical_system_descriptor) {
     AsicTopology asic_topology;
     std::unordered_map<tt_metal::AsicID, std::set<tt_metal::AsicID>> visited;
     std::unordered_map<tt_metal::AsicID, std::unordered_map<tt_metal::AsicID, uint32_t>> visited_idx;

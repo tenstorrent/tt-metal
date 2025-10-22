@@ -180,7 +180,7 @@ std::vector<::ResetPair> deserialize_reset_pairs_from_bytes(const std::vector<ui
         reset_pair.src_rank = proto_reset_pair.src_rank();
         reset_pair.dst_rank = proto_reset_pair.dst_rank();
 
-        reset_pairs.push_back(std::move(reset_pair));
+        reset_pairs.push_back(reset_pair);
     }
 
     return reset_pairs;

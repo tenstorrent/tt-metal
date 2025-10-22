@@ -249,7 +249,6 @@ void PhysicalSystemDescriptor::clear() {
 
 void PhysicalSystemDescriptor::run_local_discovery() {
     this->clear();
-    auto target_devices = cluster_->get_target_mmio_device_ids();
     if (using_mock_cluster_desc_) {
         cluster_desc_ = std::make_unique<tt::umd::ClusterDescriptor>(*cluster_->get_cluster_description());
     } else {

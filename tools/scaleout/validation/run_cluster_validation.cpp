@@ -233,10 +233,10 @@ int main(int argc, char* argv[]) {
     bool links_reset = false;
     // Ethernet Link Retraining through SW is currently only supported for Wormhole
     bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
-    constexpr uint32_t MAX_RETRAINS =
+    constexpr uint32_t MAX_RETRAINS_BEFORE_FAILURE =
         5;  // If links don't come up after 5 retrains, the system is in an unrecoverable state.
     uint32_t num_retrains = 0;
-    while (missing_asic_topology.size() && link_retrain_supported && num_retrains < MAX_RETRAINS) {
+    while (!missing_asic_topology.empty() && link_retrain_supported && num_retrains < MAX_RETRAINS_BEFORE_FAILURE) {
         reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
         links_reset = true;
         num_retrains++;
@@ -244,7 +244,7 @@ int main(int argc, char* argv[]) {
         missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
     }
 
-    if (num_retrains == MAX_RETRAINS && missing_asic_topology.size()) {
+    if (num_retrains == MAX_RETRAINS_BEFORE_FAILURE && !missing_asic_topology.empty()) {
         TT_THROW("Encountered unrecoverable state. Please check the system and try again.");
         return -1;
     }

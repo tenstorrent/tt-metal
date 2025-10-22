@@ -62,6 +62,7 @@ void reset_ethernet_links(
     const PhysicalSystemDescriptor& physical_system_descriptor, const tt_metal::AsicTopology& asic_topology);
 
 tt_metal::AsicTopology generate_asic_topology_from_connections(
-    std::set<PhysicalChannelConnection> physical_connections, PhysicalSystemDescriptor& physical_system_descriptor);
+    const std::set<PhysicalChannelConnection>& physical_connections,
+    PhysicalSystemDescriptor& physical_system_descriptor);
 
 }  // namespace tt::scaleout_tools
