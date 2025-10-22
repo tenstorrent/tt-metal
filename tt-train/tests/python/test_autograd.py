@@ -6,7 +6,6 @@ import pytest
 import os
 import sys
 
-sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/sources/ttml')
 import ttml  # noqa: E402
 
 
@@ -27,7 +26,12 @@ def supported_autograd_types_except(*except_types):
 
 
 def do_test_numpy_autograd_conversion(
-    tensor_data, numpy_type, autograd_type, layout, expect_type_exception, expect_runtime_exception
+    tensor_data,
+    numpy_type,
+    autograd_type,
+    layout,
+    expect_type_exception,
+    expect_runtime_exception,
 ):
     numpy_tensor = np.array(tensor_data, dtype=numpy_type)
     type_error = False
@@ -42,14 +46,18 @@ def do_test_numpy_autograd_conversion(
     if autograd_type:
         if layout:
             try:
-                autograd_tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, layout=layout, new_type=autograd_type)
+                autograd_tensor = ttml.autograd.Tensor.from_numpy(
+                    numpy_tensor, layout=layout, new_type=autograd_type
+                )
             except TypeError as e:
                 type_error = handle_error(e, expect_type_exception, type_error)
             except RuntimeError as e:
                 runtime_error = handle_error(e, expect_runtime_exception, runtime_error)
         else:
             try:
-                autograd_tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, new_type=autograd_type)
+                autograd_tensor = ttml.autograd.Tensor.from_numpy(
+                    numpy_tensor, new_type=autograd_type
+                )
             except TypeError as e:
                 type_error = handle_error(e, expect_type_exception, type_error)
             except RuntimeError as e:
@@ -57,7 +65,9 @@ def do_test_numpy_autograd_conversion(
     else:
         if layout:
             try:
-                autograd_tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, layout=layout)
+                autograd_tensor = ttml.autograd.Tensor.from_numpy(
+                    numpy_tensor, layout=layout
+                )
             except TypeError as e:
                 type_error = handle_error(e, expect_type_exception, type_error)
             except RuntimeError as e:
@@ -75,7 +85,9 @@ def do_test_numpy_autograd_conversion(
         assert (autograd_tensor.to_numpy(new_type=autograd_type) == numpy_tensor).all()
         for new_type in supported_autograd_types_except(autograd_type):
             try:
-                assert (autograd_tensor.to_numpy(new_type=new_type) == numpy_tensor).all()
+                assert (
+                    autograd_tensor.to_numpy(new_type=new_type) == numpy_tensor
+                ).all()
             except TypeError as e:
                 type_error = handle_error(e, expect_type_exception, type_error)
             except RuntimeError as e:
@@ -91,63 +103,173 @@ all_test_cases = [
     (default_tensor_data, np.float32, None, ttml.Layout.ROW_MAJOR),
     (default_tensor_data, np.float32, None, ttml.Layout.TILE),
     (default_tensor_data, np.float32, ttml.autograd.DataType.BFLOAT16, None),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.BFLOAT16, ttml.Layout.ROW_MAJOR),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.BFLOAT16, ttml.Layout.TILE),
+    (
+        default_tensor_data,
+        np.float32,
+        ttml.autograd.DataType.BFLOAT16,
+        ttml.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        np.float32,
+        ttml.autograd.DataType.BFLOAT16,
+        ttml.Layout.TILE,
+    ),
     (default_tensor_data, np.float32, ttml.autograd.DataType.BFLOAT4_B, None),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.BFLOAT4_B, ttml.Layout.ROW_MAJOR),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.BFLOAT4_B, ttml.Layout.TILE),
+    (
+        default_tensor_data,
+        np.float32,
+        ttml.autograd.DataType.BFLOAT4_B,
+        ttml.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        np.float32,
+        ttml.autograd.DataType.BFLOAT4_B,
+        ttml.Layout.TILE,
+    ),
     (default_tensor_data, np.float32, ttml.autograd.DataType.BFLOAT8_B, None),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.BFLOAT8_B, ttml.Layout.ROW_MAJOR),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.BFLOAT8_B, ttml.Layout.TILE),
+    (
+        default_tensor_data,
+        np.float32,
+        ttml.autograd.DataType.BFLOAT8_B,
+        ttml.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        np.float32,
+        ttml.autograd.DataType.BFLOAT8_B,
+        ttml.Layout.TILE,
+    ),
     (default_tensor_data, np.float32, ttml.autograd.DataType.FLOAT32, None),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.FLOAT32, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.float32,
+        ttml.autograd.DataType.FLOAT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
     (default_tensor_data, np.float32, ttml.autograd.DataType.FLOAT32, ttml.Layout.TILE),
     (default_tensor_data, np.float32, ttml.autograd.DataType.INT32, None),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.INT32, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.float32,
+        ttml.autograd.DataType.INT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
     (default_tensor_data, np.float32, ttml.autograd.DataType.INT32, ttml.Layout.TILE),
     (default_tensor_data, np.float32, ttml.autograd.DataType.UINT32, None),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.UINT32, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.float32,
+        ttml.autograd.DataType.UINT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
     (default_tensor_data, np.float32, ttml.autograd.DataType.UINT32, ttml.Layout.TILE),
     (default_tensor_data, np.int32, None, None),
     (default_tensor_data, np.int32, None, ttml.Layout.ROW_MAJOR),
     (default_tensor_data, np.int32, None, ttml.Layout.TILE),
     (default_tensor_data, np.int32, ttml.autograd.DataType.BFLOAT16, None),
-    (default_tensor_data, np.int32, ttml.autograd.DataType.BFLOAT16, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.int32,
+        ttml.autograd.DataType.BFLOAT16,
+        ttml.Layout.ROW_MAJOR,
+    ),
     (default_tensor_data, np.int32, ttml.autograd.DataType.BFLOAT16, ttml.Layout.TILE),
     (default_tensor_data, np.int32, ttml.autograd.DataType.BFLOAT4_B, None),
-    (default_tensor_data, np.int32, ttml.autograd.DataType.BFLOAT4_B, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.int32,
+        ttml.autograd.DataType.BFLOAT4_B,
+        ttml.Layout.ROW_MAJOR,
+    ),
     (default_tensor_data, np.int32, ttml.autograd.DataType.BFLOAT4_B, ttml.Layout.TILE),
     (default_tensor_data, np.int32, ttml.autograd.DataType.BFLOAT8_B, None),
-    (default_tensor_data, np.int32, ttml.autograd.DataType.BFLOAT8_B, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.int32,
+        ttml.autograd.DataType.BFLOAT8_B,
+        ttml.Layout.ROW_MAJOR,
+    ),
     (default_tensor_data, np.int32, ttml.autograd.DataType.BFLOAT8_B, ttml.Layout.TILE),
     (default_tensor_data, np.int32, ttml.autograd.DataType.FLOAT32, None),
     (default_tensor_data, np.int32, ttml.autograd.DataType.FLOAT32, ttml.Layout.TILE),
     (default_tensor_data, np.int32, ttml.autograd.DataType.INT32, None),
-    (default_tensor_data, np.int32, ttml.autograd.DataType.INT32, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.int32,
+        ttml.autograd.DataType.INT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
     (default_tensor_data, np.int32, ttml.autograd.DataType.INT32, ttml.Layout.TILE),
     (default_tensor_data, np.int32, ttml.autograd.DataType.UINT32, None),
-    (default_tensor_data, np.int32, ttml.autograd.DataType.UINT32, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.int32,
+        ttml.autograd.DataType.UINT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
     (default_tensor_data, np.int32, ttml.autograd.DataType.UINT32, ttml.Layout.TILE),
     (default_tensor_data, np.uint32, None, None),
     (default_tensor_data, np.uint32, None, ttml.Layout.ROW_MAJOR),
     (default_tensor_data, np.uint32, None, ttml.Layout.TILE),
     (default_tensor_data, np.uint32, ttml.autograd.DataType.BFLOAT16, None),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.BFLOAT16, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.uint32,
+        ttml.autograd.DataType.BFLOAT16,
+        ttml.Layout.ROW_MAJOR,
+    ),
     (default_tensor_data, np.uint32, ttml.autograd.DataType.BFLOAT16, ttml.Layout.TILE),
     (default_tensor_data, np.uint32, ttml.autograd.DataType.BFLOAT4_B, None),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.BFLOAT4_B, ttml.Layout.ROW_MAJOR),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.BFLOAT4_B, ttml.Layout.TILE),
+    (
+        default_tensor_data,
+        np.uint32,
+        ttml.autograd.DataType.BFLOAT4_B,
+        ttml.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        np.uint32,
+        ttml.autograd.DataType.BFLOAT4_B,
+        ttml.Layout.TILE,
+    ),
     (default_tensor_data, np.uint32, ttml.autograd.DataType.BFLOAT8_B, None),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.BFLOAT8_B, ttml.Layout.ROW_MAJOR),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.BFLOAT8_B, ttml.Layout.TILE),
+    (
+        default_tensor_data,
+        np.uint32,
+        ttml.autograd.DataType.BFLOAT8_B,
+        ttml.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        np.uint32,
+        ttml.autograd.DataType.BFLOAT8_B,
+        ttml.Layout.TILE,
+    ),
     (default_tensor_data, np.uint32, ttml.autograd.DataType.FLOAT32, None),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.FLOAT32, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.uint32,
+        ttml.autograd.DataType.FLOAT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
     (default_tensor_data, np.uint32, ttml.autograd.DataType.FLOAT32, ttml.Layout.TILE),
     (default_tensor_data, np.uint32, ttml.autograd.DataType.INT32, None),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.INT32, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.uint32,
+        ttml.autograd.DataType.INT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
     (default_tensor_data, np.uint32, ttml.autograd.DataType.INT32, ttml.Layout.TILE),
     (default_tensor_data, np.uint32, ttml.autograd.DataType.UINT32, None),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.UINT32, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.uint32,
+        ttml.autograd.DataType.UINT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
     (default_tensor_data, np.uint32, ttml.autograd.DataType.UINT32, ttml.Layout.TILE),
 ]
 
@@ -174,74 +296,184 @@ def cases_except(cases, *cases_to_skip):
 """cases which violate format conversion rules codified in C++ nanobind python bindings"""
 unsupported_format_cases = [
     (default_tensor_data, np.float32, ttml.autograd.DataType.BFLOAT4_B, None),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.BFLOAT4_B, ttml.Layout.ROW_MAJOR),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.BFLOAT4_B, ttml.Layout.TILE),
+    (
+        default_tensor_data,
+        np.float32,
+        ttml.autograd.DataType.BFLOAT4_B,
+        ttml.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        np.float32,
+        ttml.autograd.DataType.BFLOAT4_B,
+        ttml.Layout.TILE,
+    ),
     (default_tensor_data, np.float32, ttml.autograd.DataType.BFLOAT8_B, None),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.BFLOAT8_B, ttml.Layout.ROW_MAJOR),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.BFLOAT8_B, ttml.Layout.TILE),
+    (
+        default_tensor_data,
+        np.float32,
+        ttml.autograd.DataType.BFLOAT8_B,
+        ttml.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        np.float32,
+        ttml.autograd.DataType.BFLOAT8_B,
+        ttml.Layout.TILE,
+    ),
     (default_tensor_data, np.int32, ttml.autograd.DataType.BFLOAT4_B, None),
-    (default_tensor_data, np.int32, ttml.autograd.DataType.BFLOAT4_B, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.int32,
+        ttml.autograd.DataType.BFLOAT4_B,
+        ttml.Layout.ROW_MAJOR,
+    ),
     (default_tensor_data, np.int32, ttml.autograd.DataType.BFLOAT4_B, ttml.Layout.TILE),
     (default_tensor_data, np.int32, ttml.autograd.DataType.BFLOAT8_B, None),
-    (default_tensor_data, np.int32, ttml.autograd.DataType.BFLOAT8_B, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.int32,
+        ttml.autograd.DataType.BFLOAT8_B,
+        ttml.Layout.ROW_MAJOR,
+    ),
     (default_tensor_data, np.int32, ttml.autograd.DataType.BFLOAT8_B, ttml.Layout.TILE),
     (default_tensor_data, np.uint32, ttml.autograd.DataType.BFLOAT4_B, None),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.BFLOAT4_B, ttml.Layout.ROW_MAJOR),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.BFLOAT4_B, ttml.Layout.TILE),
+    (
+        default_tensor_data,
+        np.uint32,
+        ttml.autograd.DataType.BFLOAT4_B,
+        ttml.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        np.uint32,
+        ttml.autograd.DataType.BFLOAT4_B,
+        ttml.Layout.TILE,
+    ),
     (default_tensor_data, np.uint32, ttml.autograd.DataType.BFLOAT8_B, None),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.BFLOAT8_B, ttml.Layout.ROW_MAJOR),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.BFLOAT8_B, ttml.Layout.TILE),
+    (
+        default_tensor_data,
+        np.uint32,
+        ttml.autograd.DataType.BFLOAT8_B,
+        ttml.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        np.uint32,
+        ttml.autograd.DataType.BFLOAT8_B,
+        ttml.Layout.TILE,
+    ),
 ]
 
 """cases which violate typecast rules codified in TTNN C++"""
 typecast_issue_cases = [
     (default_tensor_data, np.float32, None, ttml.Layout.ROW_MAJOR),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.FLOAT32, ttml.Layout.ROW_MAJOR),
-    (default_tensor_data, np.int32, ttml.autograd.DataType.FLOAT32, ttml.Layout.ROW_MAJOR),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.FLOAT32, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.float32,
+        ttml.autograd.DataType.FLOAT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        np.int32,
+        ttml.autograd.DataType.FLOAT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        np.uint32,
+        ttml.autograd.DataType.FLOAT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
 ]
 
 """TODO: multiplication cases which get the wrong answer"""
 multiplication_issue_cases = [
     (default_tensor_data, np.float32, ttml.autograd.DataType.UINT32, None),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.UINT32, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.float32,
+        ttml.autograd.DataType.UINT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
     (default_tensor_data, np.float32, ttml.autograd.DataType.UINT32, ttml.Layout.TILE),
     (default_tensor_data, np.int32, ttml.autograd.DataType.UINT32, None),
-    (default_tensor_data, np.int32, ttml.autograd.DataType.UINT32, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.int32,
+        ttml.autograd.DataType.UINT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
     (default_tensor_data, np.int32, ttml.autograd.DataType.UINT32, ttml.Layout.TILE),
     (default_tensor_data, np.uint32, None, None),
     (default_tensor_data, np.uint32, None, ttml.Layout.ROW_MAJOR),
     (default_tensor_data, np.uint32, None, ttml.Layout.TILE),
     (default_tensor_data, np.uint32, ttml.autograd.DataType.UINT32, None),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.UINT32, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.uint32,
+        ttml.autograd.DataType.UINT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
     (default_tensor_data, np.uint32, ttml.autograd.DataType.UINT32, ttml.Layout.TILE),
 ]
 
 """TODO: division cases which get the wrong answer"""
 division_issue_cases = [
     (default_tensor_data, np.float32, ttml.autograd.DataType.INT32, None),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.INT32, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.float32,
+        ttml.autograd.DataType.INT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
     (default_tensor_data, np.float32, ttml.autograd.DataType.INT32, ttml.Layout.TILE),
     (default_tensor_data, np.float32, ttml.autograd.DataType.UINT32, None),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.UINT32, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.float32,
+        ttml.autograd.DataType.UINT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
     (default_tensor_data, np.float32, ttml.autograd.DataType.UINT32, ttml.Layout.TILE),
     (default_tensor_data, np.int32, None, None),
     (default_tensor_data, np.int32, None, ttml.Layout.ROW_MAJOR),
     (default_tensor_data, np.int32, None, ttml.Layout.TILE),
     (default_tensor_data, np.int32, ttml.autograd.DataType.INT32, None),
-    (default_tensor_data, np.int32, ttml.autograd.DataType.INT32, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.int32,
+        ttml.autograd.DataType.INT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
     (default_tensor_data, np.int32, ttml.autograd.DataType.INT32, ttml.Layout.TILE),
     (default_tensor_data, np.int32, ttml.autograd.DataType.UINT32, None),
-    (default_tensor_data, np.int32, ttml.autograd.DataType.UINT32, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.int32,
+        ttml.autograd.DataType.UINT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
     (default_tensor_data, np.int32, ttml.autograd.DataType.UINT32, ttml.Layout.TILE),
     (default_tensor_data, np.uint32, None, None),
     (default_tensor_data, np.uint32, None, ttml.Layout.ROW_MAJOR),
     (default_tensor_data, np.uint32, None, ttml.Layout.TILE),
     (default_tensor_data, np.uint32, ttml.autograd.DataType.INT32, None),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.INT32, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.uint32,
+        ttml.autograd.DataType.INT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
     (default_tensor_data, np.uint32, ttml.autograd.DataType.INT32, ttml.Layout.TILE),
     (default_tensor_data, np.uint32, ttml.autograd.DataType.UINT32, None),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.UINT32, ttml.Layout.ROW_MAJOR),
+    (
+        default_tensor_data,
+        np.uint32,
+        ttml.autograd.DataType.UINT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
     (default_tensor_data, np.uint32, ttml.autograd.DataType.UINT32, ttml.Layout.TILE),
 ]
 
@@ -269,7 +501,9 @@ def test_numpy_autograd_conversion(tensor_data, numpy_type, autograd_type, layou
     "tensor_data, numpy_type, autograd_type, layout",
     unsupported_format_cases,
 )
-def test_numpy_autograd_conversion_expecting_type_error(tensor_data, numpy_type, autograd_type, layout):
+def test_numpy_autograd_conversion_expecting_type_error(
+    tensor_data, numpy_type, autograd_type, layout
+):
     return do_test_numpy_autograd_conversion(
         tensor_data=tensor_data,
         numpy_type=numpy_type,
@@ -284,7 +518,9 @@ def test_numpy_autograd_conversion_expecting_type_error(tensor_data, numpy_type,
     "tensor_data, numpy_type, autograd_type, layout",
     typecast_issue_cases,
 )
-def test_numpy_autograd_conversion_expecting_runtime_error(tensor_data, numpy_type, autograd_type, layout):
+def test_numpy_autograd_conversion_expecting_runtime_error(
+    tensor_data, numpy_type, autograd_type, layout
+):
     return do_test_numpy_autograd_conversion(
         tensor_data=tensor_data,
         numpy_type=numpy_type,
@@ -300,12 +536,18 @@ def make_tensors(tensor_data, numpy_type, autograd_type, layout):
 
     if autograd_type:
         if layout:
-            autograd_tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, layout=layout, new_type=autograd_type)
+            autograd_tensor = ttml.autograd.Tensor.from_numpy(
+                numpy_tensor, layout=layout, new_type=autograd_type
+            )
         else:
-            autograd_tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, new_type=autograd_type)
+            autograd_tensor = ttml.autograd.Tensor.from_numpy(
+                numpy_tensor, new_type=autograd_type
+            )
     else:
         if layout:
-            autograd_tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, layout=layout)
+            autograd_tensor = ttml.autograd.Tensor.from_numpy(
+                numpy_tensor, layout=layout
+            )
         else:
             autograd_tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor)
     return (numpy_tensor, autograd_tensor)
@@ -320,7 +562,9 @@ def make_tensors(tensor_data, numpy_type, autograd_type, layout):
     ),
 )
 def test_binary_operators_add(tensor_data, numpy_type, autograd_type, layout):
-    numpy_tensor, autograd_tensor = make_tensors(tensor_data, numpy_type, autograd_type, layout)
+    numpy_tensor, autograd_tensor = make_tensors(
+        tensor_data, numpy_type, autograd_type, layout
+    )
 
     sum = autograd_tensor + autograd_tensor
     assert (sum.to_numpy() == (numpy_tensor + numpy_tensor)).all()
@@ -335,7 +579,9 @@ def test_binary_operators_add(tensor_data, numpy_type, autograd_type, layout):
     ),
 )
 def test_binary_operators_diff(tensor_data, numpy_type, autograd_type, layout):
-    numpy_tensor, autograd_tensor = make_tensors(tensor_data, numpy_type, autograd_type, layout)
+    numpy_tensor, autograd_tensor = make_tensors(
+        tensor_data, numpy_type, autograd_type, layout
+    )
 
     diff = autograd_tensor - autograd_tensor
 
@@ -352,7 +598,9 @@ def test_binary_operators_diff(tensor_data, numpy_type, autograd_type, layout):
     ),
 )
 def test_binary_operators_mul(tensor_data, numpy_type, autograd_type, layout):
-    numpy_tensor, autograd_tensor = make_tensors(tensor_data, numpy_type, autograd_type, layout)
+    numpy_tensor, autograd_tensor = make_tensors(
+        tensor_data, numpy_type, autograd_type, layout
+    )
 
     mul = autograd_tensor * autograd_tensor
     mul_float = autograd_tensor * 10.0
@@ -371,7 +619,9 @@ def test_binary_operators_mul(tensor_data, numpy_type, autograd_type, layout):
     ),
 )
 def test_binary_operators_div(tensor_data, numpy_type, autograd_type, layout):
-    numpy_tensor, autograd_tensor = make_tensors(tensor_data, numpy_type, autograd_type, layout)
+    numpy_tensor, autograd_tensor = make_tensors(
+        tensor_data, numpy_type, autograd_type, layout
+    )
 
     div = autograd_tensor.__div__(autograd_tensor)
 
