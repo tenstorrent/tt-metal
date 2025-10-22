@@ -179,8 +179,14 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
                 TT_THROW("Unknown cluster type for P150 board with {} chips", num_chips);
             }
         } else if (board_type == BoardType::P300) {
-            TT_FATAL(num_chips == 2, "Unknown cluster type for P300 board with {}", num_chips);
-            cluster_type = tt::tt_metal::ClusterType::P300;
+            // PCIe is enabled to both chips on the P300 board
+            if (num_chips == 2) {
+                cluster_type = tt::tt_metal::ClusterType::P300;
+            } else if (num_chips == 4) {
+                cluster_type = tt::tt_metal::ClusterType::P300_X2;
+            } else {
+                TT_THROW("Unknown cluster type for P300 board with {} chips", num_chips);
+            }
         } else if (board_type == BoardType::UBB) {
             cluster_type = tt::tt_metal::ClusterType::GALAXY;
         } else if (board_type == BoardType::UBB_BLACKHOLE) {
