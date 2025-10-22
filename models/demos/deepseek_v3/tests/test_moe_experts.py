@@ -14,6 +14,7 @@ import ttnn
 # Import from local reference files instead of HuggingFace
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP as ReferenceExpert
 from models.demos.deepseek_v3.tt.experts import Experts as TTExperts
+from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
@@ -21,7 +22,6 @@ from models.demos.deepseek_v3.utils.test_utils import (
     dequantize_state_dict,
     get_model_config,
     get_test_weight_config,
-    load_state_dict,
     run_module_forward,
 )
 
@@ -51,7 +51,7 @@ class DeepseekV3MoEExperts(nn.Module):
         return torch.cat(outputs, dim=0)
 
 
-def create_combined_state_dict(module_path: str, model_path: Path) -> dict:
+def create_combined_state_dict(module_path: str, model_path: Path, state_dict: dict[str, torch.Tensor]) -> dict:
     """
     Create a combined state_dict from multiple experts state_dicts.
     """
@@ -60,15 +60,16 @@ def create_combined_state_dict(module_path: str, model_path: Path) -> dict:
     base_path = ".".join(parts[:-1])
     s, e = module_path.split(".")[-1].split("-")
     s, e = int(s), int(e)
-    state_dict = {}
+    out_state_dict = {}
     for i in range(s, e + 1):
         module_path_i = f"{base_path}.{i}"
-        state_dict_i = load_state_dict(model_path, module_path_i)
+        # state_dict_i = load_state_dict(model_path, module_path_i)
+        state_dict_i = sub_state_dict(state_dict, module_path_i + ".")
         for k, v in state_dict_i.items():
             k_ = f"{base_path.split('.')[-1]}.{i}.{k}"
-            state_dict[k_] = v
+            out_state_dict[k_] = v
 
-    return state_dict
+    return out_state_dict
 
 
 @pytest.mark.parametrize(
@@ -98,6 +99,7 @@ def test_forward_pass(
     model_path: Path,
     force_recalculate_weight_config,
     set_deterministic_env,
+    state_dict: dict[str, torch.Tensor],
 ):
     batch_size = 1
 
@@ -113,7 +115,7 @@ def test_forward_pass(
         force_recalculate_weight_config = True
     else:
         assert weight_type == "real"
-        state_dict = create_combined_state_dict(module_path, model_path)
+        state_dict = create_combined_state_dict(module_path, model_path, state_dict)
         reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
     reference_output = reference_model(torch_input)
 

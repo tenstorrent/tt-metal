@@ -12,13 +12,13 @@ from torch.nn import Embedding as EmbeddingReference
 import ttnn
 from models.demos.deepseek_v3.tt.embedding.embedding1d import Embedding1D
 from models.demos.deepseek_v3.tt.embedding.embedding2d import Embedding2D
+from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
     get_model_config,
     get_test_weight_config,
     load_reference_io_tensors_for_module,
-    load_state_dict,
     run_module_forward,
 )
 
@@ -59,6 +59,7 @@ def test_embedding_forward_pass(
     cache_path,
     force_recalculate_weight_config,
     set_deterministic_env,
+    state_dict,
 ):
     logger.info("Setting up reference IO")
     module_path = "model.embed_tokens"
@@ -78,7 +79,8 @@ def test_embedding_forward_pass(
         cache_path = tmp_path
         force_recalculate_weight_config = True
     else:
-        state_dict = load_state_dict(model_path, module_path)
+        # state_dict = load_state_dict(model_path, module_path)
+        state_dict = sub_state_dict(state_dict, module_path + ".")
         torch_input, reference_output = load_reference_io_tensors_for_module(
             mode, module_path, batch_size_or_seq_len, 1
         )

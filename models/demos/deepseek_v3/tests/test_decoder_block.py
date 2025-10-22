@@ -19,7 +19,7 @@ from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_1d import MoEDe
 from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_2d import MoEDecoderBlock2D
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
@@ -28,7 +28,6 @@ from models.demos.deepseek_v3.utils.test_utils import (
     get_model_config,
     get_rope_tensors,
     get_test_weight_config,
-    load_state_dict,
     paged_cache_from_torch,
     run_reference_with_attention,
     torch_cache_from_transformers_single_layer,
@@ -43,10 +42,12 @@ def generate_reference_io(
     seq_len: int,
     batch_size: int,
     mode: str,
+    state_dict: dict[str, torch.Tensor],
 ):
     reference_model = DeepseekV3DecoderLayer(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
     if module_path is not None:
-        state_dict = load_state_dict(model_path, module_path)
+        # state_dict = load_state_dict(model_path, module_path)
+        state_dict = sub_state_dict(state_dict, module_path + ".")
         reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
     else:
         # This needs to be disabled as deterministic way to quantize weights is not supported
@@ -86,6 +87,7 @@ def run_test_forward_pass_decoder1d(
     model_path,
     ccl,
     force_recalculate_weight_config,
+    state_dict,
 ):
     # Check params
     if mode == "prefill":
@@ -94,7 +96,14 @@ def run_test_forward_pass_decoder1d(
         assert mode == "decode" and seq_len == 1, "Decode only supports a sequence length of 1"
 
     state_dict, position_ids, torch_input, reference_output, input_cache, _ = generate_reference_io(
-        model_path, module_path, hf_config_short, reference_layer_idx, seq_len, batch_size, mode
+        model_path,
+        module_path,
+        hf_config_short,
+        reference_layer_idx,
+        seq_len,
+        batch_size,
+        mode,
+        state_dict,
     )
 
     # Set up page config
@@ -188,6 +197,7 @@ def run_test_forward_pass_decoder2d(
     model_path,
     ccl,
     force_recalculate_weight_config,
+    state_dict,
 ):
     # Check params
     if mode == "prefill":
@@ -198,7 +208,14 @@ def run_test_forward_pass_decoder2d(
         batch_size = batch_size_per_row * mesh_device.shape[0]
 
     state_dict, position_ids, torch_input, reference_output, input_cache, _ = generate_reference_io(
-        model_path, module_path, hf_config_short, reference_layer_idx, seq_len, batch_size, mode
+        model_path,
+        module_path,
+        hf_config_short,
+        reference_layer_idx,
+        seq_len,
+        batch_size,
+        mode,
+        state_dict,
     )
 
     # Set up page config
@@ -319,6 +336,7 @@ def test_forward_pass(
     force_recalculate_weight_config,
     test_closure,
     set_deterministic_env,
+    state_dict,
 ):
     if module_path is None:  # Do not cache random weights
         cache_path = tmp_path
@@ -337,6 +355,7 @@ def test_forward_pass(
         model_path,
         ccl,
         force_recalculate_weight_config,
+        state_dict,
     )
 
 

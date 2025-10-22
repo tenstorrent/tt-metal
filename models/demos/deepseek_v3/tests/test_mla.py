@@ -14,7 +14,7 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Attention
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
@@ -22,7 +22,6 @@ from models.demos.deepseek_v3.utils.test_utils import (
     get_model_config,
     get_rope_tensors,
     get_test_weight_config,
-    load_state_dict,
     paged_cache_from_torch,
     run_reference_with_attention,
     torch_cache_from_paged,
@@ -55,6 +54,7 @@ def generate_reference_io(
     seq_len: int,
     batch_size: int,
     mode: str,
+    state_dict: dict[str, torch.Tensor],
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor | None, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     if module_path is None:
         reference_model = DeepseekV3Attention(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
@@ -64,7 +64,8 @@ def generate_reference_io(
         )
     else:
         reference_model = DeepseekV3Attention(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
-        state_dict = load_state_dict(model_path, module_path)
+        # state_dict = load_state_dict(model_path, module_path)
+        state_dict = sub_state_dict(state_dict, module_path + ".")
         dequantized_state_dict = dequantize_state_dict(state_dict, hf_config)
         reference_model.load_state_dict(dequantized_state_dict)
 
@@ -166,6 +167,7 @@ def run_test_forward_pass_mla1d(
     model_path,
     module_path,
     force_recalculate_weight_config,
+    state_dict,
 ):
     # Check params
     if mode == "prefill":
@@ -176,7 +178,7 @@ def run_test_forward_pass_mla1d(
     # Get reference IO
     logger.info("Setting up reference IO")
     state_dict, position_ids, torch_input, reference_output, input_cache, output_cache = generate_reference_io(
-        model_path, module_path, hf_config_short, layer_idx, seq_len, batch_size, mode
+        model_path, module_path, hf_config_short, layer_idx, seq_len, batch_size, mode, state_dict
     )
 
     # Set up page config
@@ -297,6 +299,7 @@ def run_test_forward_pass_mla2d(
     model_path,
     module_path,
     force_recalculate_weight_config,
+    state_dict,
 ):
     # Check params
     if mode == "prefill":
@@ -309,7 +312,7 @@ def run_test_forward_pass_mla2d(
     # Get reference IO
     logger.info("Setting up reference IO")
     state_dict, position_ids, torch_input, reference_output, input_cache, output_cache = generate_reference_io(
-        model_path, module_path, hf_config_short, layer_idx, seq_len, batch_size, mode
+        model_path, module_path, hf_config_short, layer_idx, seq_len, batch_size, mode, state_dict
     )
 
     # Set up page config
@@ -441,6 +444,7 @@ def test_forward_pass(
     force_recalculate_weight_config,
     test_closure,
     set_deterministic_env,
+    state_dict,
 ):
     # Hardcoded arguments; can later change them to test arguments if needed
     layer_idx = 0
@@ -462,6 +466,7 @@ def test_forward_pass(
         model_path,
         module_path,
         force_recalculate_weight_config,
+        state_dict,
     )
 
 
