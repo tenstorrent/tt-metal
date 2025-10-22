@@ -57,6 +57,11 @@ namespace tt::tt_fabric {
 
 namespace {
 
+// Get the physical chip ids for a mesh
+std::unordered_map<ChipId, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(ChipId chip_id) {
+    return tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(chip_id);
+}
+
 template <typename CONNECTIVITY_MAP_T>
 void build_golden_link_counts(
     CONNECTIVITY_MAP_T const& golden_connectivity_map,
@@ -478,42 +483,32 @@ void ControlPlane::load_physical_chip_mapping(
 
 void ControlPlane::validate_mesh_connections(MeshId mesh_id) const {
     MeshShape mesh_shape = routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id);
-
-    // Get the local mesh coordinate range (only the portion owned by this host)
-    const auto& mesh_coord_range = this->get_coord_range(mesh_id, MeshScope::LOCAL);
-
-    auto get_asic_id_from_mesh_coord = [&](const MeshCoordinate& mesh_coord) -> tt::tt_metal::AsicID {
+    auto get_physical_chip_id = [&](const MeshCoordinate& mesh_coord) {
         auto fabric_chip_id = this->routing_table_generator_->mesh_graph->coordinate_to_chip(mesh_id, mesh_coord);
-        auto fabric_node_id = FabricNodeId(mesh_id, fabric_chip_id);
-
-        chip_id_t physical_chip_id = logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
-
-        // Convert physical chip id to asic id using topology mapper if available
-        auto asic_id = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(physical_chip_id);
-        return tt::tt_metal::AsicID{asic_id};
+        return logical_mesh_chip_id_to_physical_chip_id_mapping_.at(FabricNodeId(mesh_id, fabric_chip_id));
     };
-
-    auto validate_asic_connections = [&](const MeshCoordinate& mesh_coord, const MeshCoordinate& other_mesh_coord) {
-        tt::tt_metal::AsicID asic_id = get_asic_id_from_mesh_coord(mesh_coord);
-        tt::tt_metal::AsicID other_asic_id = get_asic_id_from_mesh_coord(other_mesh_coord);
-
-        // Use physical system descriptor to validate connections
-        auto eth_connections = physical_system_descriptor_->get_eth_connections(asic_id, other_asic_id);
+    auto validate_chip_connections = [&](const MeshCoordinate& mesh_coord, const MeshCoordinate& other_mesh_coord) {
+        ChipId physical_chip_id = get_physical_chip_id(mesh_coord);
+        ChipId physical_chip_id_other = get_physical_chip_id(other_mesh_coord);
+        auto eth_links = get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
+        auto eth_links_to_other = eth_links.find(physical_chip_id_other);
         TT_FATAL(
-            !eth_connections.empty(), "ASIC {} not connected to ASIC {} in mesh {}", asic_id, other_asic_id, mesh_id);
+            eth_links_to_other != eth_links.end(),
+            "Chip {} not connected to chip {}",
+            physical_chip_id,
+            physical_chip_id_other);
     };
-
-    // Validate connections only for the local portion of the mesh
+    const auto& mesh_coord_range = this->get_coord_range(mesh_id, MeshScope::LOCAL);
     for (const auto& mesh_coord : mesh_coord_range) {
+        ChipId physical_chip_id = get_physical_chip_id(mesh_coord);
         MeshCoordinate mesh_coord_next{mesh_coord[0], (mesh_coord[1] + 1) % mesh_shape[1]};
         MeshCoordinate mesh_coord_next_row{(mesh_coord[0] + 1) % mesh_shape[0], mesh_coord[1]};
-
-        // Only validate connections to neighbors that are also in the local mesh portion
+        const auto& eth_links = get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
         if (mesh_coord_range.contains(mesh_coord_next)) {
-            validate_asic_connections(mesh_coord, mesh_coord_next);
+            validate_chip_connections(mesh_coord, mesh_coord_next);
         }
         if (mesh_coord_range.contains(mesh_coord_next_row)) {
-            validate_asic_connections(mesh_coord, mesh_coord_next_row);
+            validate_chip_connections(mesh_coord, mesh_coord_next_row);
         }
     }
 }
