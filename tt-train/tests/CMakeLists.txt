@@ -6,7 +6,10 @@ set(SOURCES
     core/n300_utils_test.cpp
     core/scoped_test.cpp
     core/clip_grad_norm_test.cpp
+<<<<<<< HEAD
     core/random_tests.cpp
+=======
+>>>>>>> 4bcee3238c (cleaning)
     model/linear_regression_ddp_test.cpp
     model/nano_gpt_test.cpp
     model/model_names_test.cpp
@@ -55,6 +58,10 @@ set(SOURCES
     ops/softmax_test.cpp
     ops/silu_op_test.cpp
     ops/sdpa_fw_op_test.cpp
+<<<<<<< HEAD
+=======
+    ops/layer_norm_op_fused_test.cpp
+>>>>>>> 4bcee3238c (cleaning)
 )
 
 add_executable(ttml_tests ${SOURCES})
