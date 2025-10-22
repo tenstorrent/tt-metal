@@ -442,7 +442,7 @@ TEST(MultiHost, TestQuadGalaxyFabric1DSanity) {
 TEST(MultiHost, TestBHQB4x4ControlPlaneInit) {
     // This test is intended for Blackhole 4x4 mesh spanning 2x2 hosts (BHQB)
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::P150_X4) {
-        log_info(tt::LogTest, "This test is only for Blackhole Galaxy (BHQB)");
+        log_info(tt::LogTest, "This test is only for Blackhole QuietBox (BHQB)");
         GTEST_SKIP();
     }
 
@@ -458,7 +458,7 @@ TEST(MultiHost, TestBHQB4x4ControlPlaneInit) {
 
 TEST(MultiHost, TestBHQB4x4Fabric2DSanity) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::P150_X4) {
-        log_info(tt::LogTest, "This test is only for Blackhole Galaxy (BHQB)");
+        log_info(tt::LogTest, "This test is only for Blackhole QuietBox (BHQB)");
         GTEST_SKIP();
     }
 
@@ -489,7 +489,7 @@ TEST(MultiHost, TestBHQB4x4Fabric2DSanity) {
 
 TEST(MultiHost, TestBHQB4x4Fabric1DSanity) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::P150_X4) {
-        log_info(tt::LogTest, "This test is only for Blackhole Galaxy (BHQB)");
+        log_info(tt::LogTest, "This test is only for Blackhole QuietBox (BHQB)");
         GTEST_SKIP();
     }
 
