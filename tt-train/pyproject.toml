@@ -9,7 +9,8 @@ build-backend = "scikit_build_core.build"
 
 [tool.scikit-build]
 minimum-version = "0.4"
-build-dir = "build/{wheel_tag}"
+#build-dir = "build/{wheel_tag}"
+build-dir = "build"
 wheel.packages = ["sources/ttml"]
 
 [project]
