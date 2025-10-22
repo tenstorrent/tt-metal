@@ -62,6 +62,18 @@ struct IntImgProgramFactory {
         const CoreRangeSet& core_range_set,
         const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
         const std::vector<uint32_t>& runtime_args = {});
+
+    static CoreRangeSet generate_core_range_set(const Shape& input_shape, uint32_t block_depth) {
+        CoreRangeSet core_range_set;
+        const uint32_t num_channels = input_shape[3];
+        const uint32_t input_height = input_shape[2];
+        const uint32_t input_depth = input_shape[1];
+        constexpr uint32_t num_slices_along_channels = block_depth_ceil(num_channels, block_depth);
+        constexpr uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
+        constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, ctas.block_depth);
+
+        return core_range_set;
+    }
 };
 
 }  // namespace ttnn::operations::experimental::reduction
