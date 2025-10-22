@@ -254,6 +254,14 @@ size_t MeshCoordinateRange::dims() const { return start_.dims(); }
 const MeshCoordinate& MeshCoordinateRange::start_coord() const { return start_; }
 const MeshCoordinate& MeshCoordinateRange::end_coord() const { return end_; }
 
+MeshCoordinate::BoundaryMode MeshCoordinateRange::get_boundary_mode() const {
+    if (wraparound_shape_.has_value()) {
+        return MeshCoordinate::BoundaryMode::WRAP;
+    } else {
+        return MeshCoordinate::BoundaryMode::NONE;
+    }
+}
+
 MeshShape MeshCoordinateRange::shape() const {
     tt::stl::SmallVector<uint32_t> shape_dims;
     if (!wraparound_shape_.has_value()) {

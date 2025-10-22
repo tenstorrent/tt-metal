@@ -500,15 +500,16 @@ void ControlPlane::validate_mesh_connections(MeshId mesh_id) const {
     };
     const auto& mesh_coord_range = this->get_coord_range(mesh_id, MeshScope::LOCAL);
     for (const auto& mesh_coord : mesh_coord_range) {
-        ChipId physical_chip_id = get_physical_chip_id(mesh_coord);
-        MeshCoordinate mesh_coord_next{mesh_coord[0], (mesh_coord[1] + 1) % mesh_shape[1]};
-        MeshCoordinate mesh_coord_next_row{(mesh_coord[0] + 1) % mesh_shape[0], mesh_coord[1]};
-        const auto& eth_links = get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
-        if (mesh_coord_range.contains(mesh_coord_next)) {
-            validate_chip_connections(mesh_coord, mesh_coord_next);
+        auto mode = mesh_coord_range.get_boundary_mode();
+
+        auto col_neighbor = mesh_coord.get_neighbor(mesh_shape, 1, 1, mode);
+        auto row_neighbor = mesh_coord.get_neighbor(mesh_shape, 1, 0, mode);
+
+        if (col_neighbor.has_value() && mesh_coord_range.contains(*col_neighbor)) {
+            validate_chip_connections(mesh_coord, *col_neighbor);
         }
-        if (mesh_coord_range.contains(mesh_coord_next_row)) {
-            validate_chip_connections(mesh_coord, mesh_coord_next_row);
+        if (row_neighbor.has_value() && mesh_coord_range.contains(*row_neighbor)) {
+            validate_chip_connections(mesh_coord, *row_neighbor);
         }
     }
 }

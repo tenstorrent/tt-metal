@@ -910,7 +910,13 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping() {
             auto [col_start, col_end] = minimal_circular_span(unique_c, shape[1]);
             MeshCoordinate start(row_start, col_start);
             MeshCoordinate end(row_end, col_end);
-            range_map.emplace(host, MeshCoordinateRange(start, end, shape));
+
+            bool wraparound = row_start > row_end || col_start > col_end;
+            if (wraparound) {
+                range_map.emplace(host, MeshCoordinateRange(start, end, shape));
+            } else {
+                range_map.emplace(host, MeshCoordinateRange(start, end));
+            }
         }
     }
 

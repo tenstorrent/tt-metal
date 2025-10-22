@@ -144,6 +144,12 @@ public:
     // Returns the shape of the coordinate range (dimensions).
     MeshShape shape() const;
 
+    // Returns the boundary mode of the range.
+    MeshCoordinate::BoundaryMode get_boundary_mode() const;
+
+    // Returns the wraparound shape if enabled.
+    const std::optional<MeshShape>& wraparound_shape() const { return wraparound_shape_; }
+
     // Returns true if the range contains the given coordinate.
     bool contains(const MeshCoordinate& coord) const;
 
