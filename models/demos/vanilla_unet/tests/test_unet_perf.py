@@ -67,6 +67,7 @@ def create_unet_pipeline_model(model):
     return run
 
 
+@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "device_params",
     [
