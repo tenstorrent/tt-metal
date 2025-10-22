@@ -659,9 +659,16 @@ def get_hf_model_name(model_path: str) -> str:
 
 
 def get_hf_tt_cache_path(model_path: str) -> str:
-    model_name = get_hf_model_name(model_path)
     tt_cache_home = os.getenv("TT_CACHE_HOME", "/mnt/MLPerf/huggingface/tt_cache/")
-    return os.path.join(tt_cache_home, model_name)
+    if not os.path.exists(tt_cache_home):
+        tt_cache_home = "model_cache"
+
+    model_name = get_hf_model_name(model_path)
+    tt_cache_path = os.path.join(tt_cache_home, model_name)
+    if not os.path.exists(tt_cache_path):
+        os.makedirs(tt_cache_path, exist_ok=True)
+
+    return tt_cache_path
 
 
 def create_tt_model(
