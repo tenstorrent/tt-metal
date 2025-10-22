@@ -29,7 +29,7 @@ chmod +x install.sh
 > | Device               | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
 > |----------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
 > | Galaxy               | Ubuntu 22.04    | 3.10     | v2.3.0 or above    | fw_pack-18.12.0.fwbundle (v18.12.0)         | v3.0.28 or above      | N/A                          |
-> | Blackhole            | Ubuntu 22.04    | 3.10     | v2.3.0 or above    | fw_pack-18.12.0.fwbundle (v18.12.0)         | v3.0.28 or above      | N/A                          |
+> | Blackhole            | Ubuntu 22.04    | 3.10     | v2.4.1 or above    | fw_pack-18.12.0.fwbundle (v18.12.0)         | v3.0.31 or above      | N/A                          |
 
 - If required, add the following flags for specifying dependencies versions:
 
