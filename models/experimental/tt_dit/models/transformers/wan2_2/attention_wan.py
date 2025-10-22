@@ -215,13 +215,10 @@ class WanAttention:
         k_1BNF = self.norm_k(k_1BNF, compute_kernel_config=self.rmsnorm_compute_kernel_config)
 
         def create_heads(inp):
-            # Unfortunate hack - we don't have a split_heads operation that takes unfused qkv
-            # Can pass None kv input and 0 KV heads to create_qkv_heads to create just Q heads, but it's suspicious
             out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
                 inp,
-                ttnn.concat([inp, inp], dim=-1),
                 num_heads=self.n_local_heads,
-                num_kv_heads=self.n_local_heads,
+                num_kv_heads=0,
                 transpose_k_heads=False,
             )
             return out
