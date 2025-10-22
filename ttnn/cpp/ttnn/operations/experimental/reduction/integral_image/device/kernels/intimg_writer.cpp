@@ -148,10 +148,10 @@ void kernel_main() {
                             num_slices_along_channels,
                             block_depth,
                             ctas.block_depth);
-                        broadcast_last_row_to_all_rows_in_cube<output_number_type, decltype(output_addr_gtor)>(
-                            output_addr_gtor, ctas.axis_3_buffer_0_cb, ctas.axis_3_buffer_1_cb, block_depth);
-                        // DPRINT << "AFTER BROADCAST: channel/row/column/depth: " << channels_slice_i << "/"
-                        //        << row_chunk_i << "/" << column_block_i << "/" << block_depth << ENDL();
+                        // broadcast_last_row_to_all_rows_in_cube<output_number_type, decltype(output_addr_gtor)>(
+                        //     output_addr_gtor, ctas.axis_3_buffer_0_cb, ctas.axis_3_buffer_1_cb, block_depth);
+                        // // DPRINT << "AFTER BROADCAST: channel/row/column/depth: " << channels_slice_i << "/"
+                        // //        << row_chunk_i << "/" << column_block_i << "/" << block_depth << ENDL();
                     }
                     output_block(
                         output_addr_gtor,

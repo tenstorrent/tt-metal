@@ -275,18 +275,47 @@ FORCE_INLINE void propagate_tile_into_cube(
     }
 }
 
-FORCE_INLINE void get_and_propagate_adder_cube(
-    uint32_t cb_cumsum_stage_X, uint32_t cb_axis_3_buffer_read, uint32_t cb_output, uint32_t block_depth = 32) {
-    // there is the necessity to receive a block
+// FORCE_INLINE void get_and_propagate_adder_cube(
+//     uint32_t cb_cumsum_stage_X, uint32_t cb_axis_3_buffer_read, uint32_t cb_output, uint32_t block_depth = 32) {
+//     // there is the necessity to receive a block
 
+//     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
+//         ReadCBGuard cb_cumsum_stage_X_read_guard{cb_cumsum_stage_X, ONE_TILE};
+//         ReadCBGuard cb_axis_3_buffer_read_guard{cb_axis_3_buffer_read, ONE_TILE};
+//         WriteCBGuard cb_output_write_guard{cb_output, ONE_TILE};
+//         tile_regs_acquire();
+
+//         add_tiles_init(cb_cumsum_stage_X, cb_output);
+//         add_tiles(cb_cumsum_stage_X, cb_axis_3_buffer_read, FIRST_TILE, FIRST_TILE, WORKING_REG);
+
+//         tile_regs_wait();
+//         tile_regs_commit();
+
+//         pack_reconfig_data_format(cb_output);
+//         pack_tile(WORKING_REG, cb_output, FIRST_TILE);
+
+//         tile_regs_release();
+//     }
+// }
+// cb_axis_3_buffer_read is the upper block provided by writer
+FORCE_INLINE void get_upper_block_apply_last_row_bcast_and_propagate_onto_lower_block(
+    uint32_t cb_cumsum_stage_X, uint32_t cb_output, uint32_t cb_axis_3_buffer_read, uint32_t block_depth = 32) {
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
-        ReadCBGuard cb_cumsum_stage_X_read_guard{cb_cumsum_stage_X, ONE_TILE};
-        ReadCBGuard cb_axis_3_buffer_read_guard{cb_axis_3_buffer_read, ONE_TILE};
-        WriteCBGuard cb_output_write_guard{cb_output, ONE_TILE};
+        ReadCBGuard cb_cumsum_stage_X_guard{cb_cumsum_stage_X, ONE_TILE};          // cb0
+        ReadCBGuard cb_axis_3_buffer_read_guard{cb_axis_3_buffer_read, ONE_TILE};  // cb1
+        WriteCBGuard cb_output_write_guard{cb_output, ONE_TILE};                   // cb_out
         tile_regs_acquire();
 
-        add_tiles_init(cb_cumsum_stage_X, cb_output);
-        add_tiles(cb_cumsum_stage_X, cb_axis_3_buffer_read, FIRST_TILE, FIRST_TILE, WORKING_REG);
+        binary_op_init_common(cb_cumsum_stage_X, cb_axis_3_buffer_read, cb_output);
+        UNPACK((llk_unpack_AB_init<BroadcastType::ROW>()));
+        UNPACK((llk_unpack_AB(cb0, cb1, FIRST_TILE, FIRST_TILE, 31)));
+
+        MATH((llk_math_eltwise_binary<
+              EltwiseBinaryType::ELWADD,
+              BroadcastType::ROW,
+              false,  // if anything, investigate later
+              0,
+              EltwiseBinaryReuseDestType::NONE>(WORKING_REG, false)));
 
         tile_regs_wait();
         tile_regs_commit();
@@ -297,7 +326,6 @@ FORCE_INLINE void get_and_propagate_adder_cube(
         tile_regs_release();
     }
 }
-
 template <typename ctas_t>
 FORCE_INLINE void perform_intimg_along_row_chunk(
     const ctas_t& ctas, uint32_t num_blocks_in_row, uint32_t rows_block_i) {
@@ -333,10 +361,12 @@ FORCE_INLINE void perform_intimg_along_row_chunk(
                 // consume: cb_cumsum_stage_1 32t
                 // produce: cb_cumsum_stage_2 32t
                 cumsum_cube_axis_3(ctas.cumsum_stage_1_cb, ctas.cumsum_stage_2_cb, block_depth);
-                // consume: cb_cumsum_stage_2 32tm axis_3_buffer_1_cb 32t
-                // produce: cb_output 1t x32
-                get_and_propagate_adder_cube(
-                    ctas.cumsum_stage_2_cb, ctas.axis_3_buffer_1_cb, ctas.output_cb, block_depth);
+                // // consume: cb_cumsum_stage_2 32tm axis_3_buffer_1_cb 32t
+                // // produce: cb_output 1t x32
+                // get_and_propagate_adder_cube(
+                //     ctas.cumsum_stage_2_cb, ctas.axis_3_buffer_1_cb, ctas.output_cb, block_depth);
+                get_upper_block_apply_last_row_bcast_and_propagate_onto_lower_block(
+                    ctas.cumsum_stage_2_cb, ctas.output_cb, ctas.axis_3_buffer_0_cb)
             } else {
                 // consume: cb_cumsum_stage_1 32t
                 // produce: cb_output 1t x32
@@ -349,10 +379,12 @@ FORCE_INLINE void perform_intimg_along_row_chunk(
                 // consume: cb_cumsum_stage_0 32t
                 // produce: cumsummed down cube (cb_cumsum_stage_1 32t)
                 cumsum_cube_axis_3(ctas.cumsum_stage_0_cb, ctas.cumsum_stage_1_cb, block_depth);
-                // consume: cb_cumsum_stage_1 32t, axis_3_buffer_1_cb 32t
-                // produce: cb_output 1t x32
-                get_and_propagate_adder_cube(
-                    ctas.cumsum_stage_1_cb, ctas.axis_3_buffer_1_cb, ctas.output_cb, block_depth);
+                // // consume: cb_cumsum_stage_1 32t, axis_3_buffer_1_cb 32t
+                // // produce: cb_output 1t x32
+                // get_and_propagate_adder_cube(
+                //     ctas.cumsum_stage_1_cb, ctas.axis_3_buffer_1_cb, ctas.output_cb, block_depth);
+                get_upper_block_apply_last_row_bcast_and_propagate_onto_lower_block(
+                    ctas.cumsum_stage_1_cb, ctas.output_cb, ctas.axis_3_buffer_0_cb)
             } else {
                 // consume: cb_cumsum_stage_0 32t
                 // produce: cumsummed down cube (cb_output 1t x32)
