@@ -11,7 +11,7 @@ import torch.nn.functional as F
 
 # from models.experimental.oft.reference.resnet import BasicBlock
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters_resnet
-from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 from loguru import logger
@@ -239,6 +239,7 @@ class GroupNormDRAM:
         logger.debug(
             f"input_tensor_tilized shape: {input_tensor_tilized.shape} padded shape: {input_tensor_tilized.padded_shape}"
         )
+        logger.debug(f"ITT {input_tensor_tilized}\n")
         [gamma_t, beta_t], input_mask_tensor = ttnn.dram_group_norm_params_from_torch(
             [self.weight, self.bias], self.channels, self.num_groups, device, core_grid=grid_size, return_mask=True
         )
@@ -336,7 +337,7 @@ def test_tt_topdownblock_with_8_basicblocks(device, n, in_ch, out_ch, h, w, stri
         TTBasicBlock(
             device,
             params_list[i],
-            params_list[i].conv_args,
+            params_list[i].layer_args,
             inplanes=in_ch,
             planes=out_ch,
             stride=stride,
