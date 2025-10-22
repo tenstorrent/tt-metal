@@ -281,7 +281,7 @@ jobs:
           git commit -m "Add new feature (MINOR): User dashboard"
           git tag v1.1.0-rc1
           git tag v1.1.0-rc2
-          echo "Created multiple RC tags"
+          echo "Created multiple RC tags and one MINOR commit"
 
       - name: Test RC increment
         id: test-rc-increment
