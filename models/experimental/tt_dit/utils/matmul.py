@@ -51,6 +51,33 @@ grid_88_configs = {
 }
 
 
+# Known best blockings for 8x9 core grid for specific (M, K, N) shapes
+# Each value is a tuple: (M_block_size, K_block_size, N_block_size)
+grid_89_configs = {
+    (32, 2432, 3648): (2, 4, 8),
+    (1024, 2432, 1920): (4, 4, 8),
+    (352, 2432, 1920): (2, 4, 4),
+    (1024, 2560, 608): (4, 4, 4),
+    (352, 2560, 608): (2, 4, 4),
+    (1024, 2432, 2432): (4, 4, 16),
+    (352, 2432, 2432): (2, 4, 16),
+    (32, 3072, 3072): (2, 4, 16),
+    (32, 3072, 1536): (2, 4, 8),
+    (5632, 3072, 2304): (8, 8, 8),
+    (128, 1536, 2304): (2, 8, 2),
+    (5632, 3072, 768): (8, 8, 4),
+    (128, 3072, 384): (2, 4, 4),
+    (5632, 3072, 4096): (8, 8, 8),
+    (5632, 2048, 3072): (8, 8, 4),
+    (128, 1536, 2048): (4, 4, 4),
+    (128, 1024, 1536): (2, 4, 4),
+    (9472, 5120, 1280): (8, 8, 8),
+    (128, 5120, 1280): (2, 16, 2),
+    (9472, 5120, 3456): (8, 8, 8),
+    (9472, 3456, 5120): (8, 8, 8),
+}
+
+
 def get_matmul_config(M, K, N, core_grid):
     # Default to 8x8x8 with subblock 2x2 when unknown
     subblock_h = 2
@@ -64,6 +91,8 @@ def get_matmul_config(M, K, N, core_grid):
     # Only use lookup for 8x8 grid; otherwise default
     if getattr(core_grid, "x", None) == 8 and getattr(core_grid, "y", None) == 8:
         config_tuple = grid_88_configs.get((M, K, N))
+    elif getattr(core_grid, "x", None) == 8 and getattr(core_grid, "y", None) == 9:
+        config_tuple = grid_89_configs.get((M, K, N))
 
     if config_tuple is None:
         M_block_size, K_block_size, N_block_size = 8, 8, 8
