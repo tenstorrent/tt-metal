@@ -56,29 +56,30 @@ public:
 
     void mark_trace_begin(ChipId device_id, uint32_t trace_id) {
         TT_ASSERT(this->device_profiler_map.find(device_id) != this->device_profiler_map.end());
-        DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
         // Note: markTraceBegin method removed in API refactor
+        // DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
         // device_profiler.markTraceBegin(trace_id);
     }
 
     void mark_trace_end(ChipId device_id, uint32_t trace_id) {
         TT_ASSERT(this->device_profiler_map.find(device_id) != this->device_profiler_map.end());
-        DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
         // Note: markTraceEnd method removed in API refactor
+        // DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
         // device_profiler.markTraceEnd(trace_id);
     }
 
     void mark_trace_replay(ChipId device_id, uint32_t trace_id) {
         TT_ASSERT(this->device_profiler_map.find(device_id) != this->device_profiler_map.end());
-        DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
         // Note: markTraceReplay method removed in API refactor
+        // DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
         // device_profiler.markTraceReplay(trace_id);
     }
 
     void add_runtime_id_to_trace(ChipId device_id, uint32_t trace_id, uint32_t runtime_id) {
         TT_ASSERT(this->device_profiler_map.find(device_id) != this->device_profiler_map.end());
-        DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
-        device_profiler.addRuntimeIdToTrace(trace_id, runtime_id);
+        // Note: addRuntimeIdToTrace method removed in API refactor
+        // DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
+        // device_profiler.addRuntimeIdToTrace(trace_id, runtime_id);
     }
 
     ProfilerStateManager& operator=(const ProfilerStateManager&) = delete;

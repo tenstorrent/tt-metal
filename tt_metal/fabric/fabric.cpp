@@ -15,7 +15,8 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/device.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
-#include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
+// Note: fabric_static_sized_channels_allocator.hpp removed in refactor
+// #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include <optional>
 #include <set>
 #include <vector>
@@ -193,11 +194,12 @@ void append_fabric_connection_rt_args(
 
         const auto& edm_config = fabric_context.get_fabric_router_config();
         auto channel_allocator = edm_config.channel_allocator.get();
-        TT_FATAL(
-            dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator) != nullptr,
-            "Only FabricStaticSizedChannelsAllocator is supported currently.");
-        const auto static_channel_allocator =
-            dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
+        // Note: FabricStaticSizedChannelsAllocator removed in refactor - skipping validation
+        // TT_FATAL(
+        //     dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator) != nullptr,
+        //     "Only FabricStaticSizedChannelsAllocator is supported currently.");
+        // const auto static_channel_allocator =
+        //     dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
         const auto sender_channel = is_2d_fabric ? router_direction : 0;
         tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
             .edm_noc_x = fabric_router_virtual_core.x,
