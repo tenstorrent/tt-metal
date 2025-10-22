@@ -210,20 +210,20 @@ def prep_perf_report(
 
     # Add measurements for the key performance metrics
     # Convert string values back to float for measurements
-    benchmark_data.add_measurement(profiler, 0, step_name, "Inference Time (sec)", inference_time)
-    benchmark_data.add_measurement(profiler, 0, step_name, "Compile Time (sec)", compile_time)
-    benchmark_data.add_measurement(profiler, 0, step_name, "Throughput (batch*inf/sec)", float(device_throughput))
-    benchmark_data.add_measurement(profiler, 0, step_name, "First Run (sec)", inference_and_compile_time)
-    benchmark_data.add_measurement(profiler, 0, step_name, "Expected Inference Time (sec)", expected_inference_time)
-    benchmark_data.add_measurement(profiler, 0, step_name, "Expected Compile Time (sec)", expected_compile_time)
+    benchmark_data.add_measurement(profiler, 0, step_name, "inference_time_s", inference_time)
+    benchmark_data.add_measurement(profiler, 0, step_name, "compile_time_s", compile_time)
+    benchmark_data.add_measurement(profiler, 0, step_name, "throughput_iter_per_s", float(device_throughput))
+    benchmark_data.add_measurement(profiler, 0, step_name, "first_run_s", inference_and_compile_time)
+    benchmark_data.add_measurement(profiler, 0, step_name, "expected_inference_time_s", expected_inference_time)
+    benchmark_data.add_measurement(profiler, 0, step_name, "expected_compile_time_s", expected_compile_time)
 
     if inference_time_cpu is not None:
-        benchmark_data.add_measurement(profiler, 0, step_name, "Inference Time CPU (sec)", inference_time_cpu)
+        benchmark_data.add_measurement(profiler, 0, step_name, "inference_time_cpu_s", inference_time_cpu)
         benchmark_data.add_measurement(
             profiler,
             0,
             step_name,
-            "Throughput CPU (batch*inf/sec)",
+            "throughput_cpu_iter_per_s",
             float(cpu_throughput) if cpu_throughput != "unknown" else 0.0,
         )
 
