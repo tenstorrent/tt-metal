@@ -9,12 +9,6 @@ on:
       wheel-artifact-name:
         required: true
         type: string
-      build-artifact-profiler-name:
-        required: true
-        type: string
-      wheel-artifact-profiler-name:
-        required: true
-        type: string
       docker-image:
         required: true
         type: string
@@ -160,15 +154,15 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
         timeout-minutes: 10
         with:
-          build-artifact-name: ${{ inputs.build-artifact-profiler-name }}
-          wheel-artifact-name: ${{ inputs.wheel-artifact-profiler-name }}
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Extract files
         run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
-          name: ${{ inputs.wheel-artifact-profiler-name }}
+          name: ${{ inputs.wheel-artifact-name }}
       - name: Enable Performance mode
         uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
