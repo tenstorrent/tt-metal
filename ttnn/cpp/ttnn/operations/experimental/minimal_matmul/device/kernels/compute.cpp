@@ -81,7 +81,15 @@ void matmul_blocks(
 
             for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
                 matmul_block(
-                    in0_cb, in1_cb, in0_index, in1_index, dst_index, false, subblock_w, subblock_h, K_block_tiles);
+                    in0_cb,
+                    in1_cb,
+                    in0_index,
+                    in1_index,
+                    dst_index,
+                    false /*transpose*/,
+                    subblock_w,
+                    subblock_h,
+                    K_block_tiles);
                 in0_index++;
                 in1_index += full_N_block_tiles;
             }

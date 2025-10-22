@@ -142,27 +142,10 @@ void py_bind_minimal_matmul(py::module& module) {
         ... )
         >>> y.shape  # [M, N]
         )doc",
-        ttnn::pybind_overload_t{
-            [](const decltype(ttnn::experimental::minimal_matmul)& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& weight_tensor,
-               const std::optional<ttnn::Tensor>& bias_tensor,
-               const std::optional<unary::UnaryWithParam>& fused_activation,
-               const std::optional<const MinimalMatmulConfig>& config,
-               const std::optional<const MemoryConfig>& memory_config,
-               const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-                return self(
-                    input_tensor,
-                    weight_tensor,
-                    bias_tensor,
-                    fused_activation,
-                    config,
-                    memory_config,
-                    compute_kernel_config);
-            },
-            py::kw_only(),
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::arg("weight_tensor"),
+            py::kw_only(),
             py::arg("bias_tensor") = std::nullopt,
             py::arg("fused_activation") = std::nullopt,
             py::arg("config") = std::nullopt,

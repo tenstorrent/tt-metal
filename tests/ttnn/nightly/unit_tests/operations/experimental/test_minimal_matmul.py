@@ -91,8 +91,8 @@ def run_test_linear(
         compute_with_storage_grid_size=core_grid,
     )
     tt_output = ttnn.experimental.minimal_matmul(
-        input_tensor=tt_input,
-        weight_tensor=tt_weight,
+        tt_input,
+        tt_weight,
         bias_tensor=tt_bias if use_bias else None,
         fused_activation=activation_fn,
         compute_kernel_config=compute_config,
