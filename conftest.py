@@ -455,17 +455,13 @@ def system_mesh_device(request, silicon_arch_name, device_params):
 
     request.node.pci_ids = ttnn.get_pcie_device_ids()
 
-    # Get the system mesh shape which represents the maximum available devices
-    # in the optimal configuration for the hardware
     system_mesh_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()
     system_mesh_shape = system_mesh_desc.shape()
 
-    # Extract the mesh dimensions
     mesh_rows = system_mesh_shape[0]
     mesh_cols = system_mesh_shape[1]
     num_devices_requested = mesh_rows * mesh_cols
 
-    # Skip if requested more devices than available
     if not ttnn.using_distributed_env() and num_devices_requested > ttnn.get_num_devices():
         pytest.skip("System mesh requests more devices than available. Test not applicable for machine")
 
