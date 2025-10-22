@@ -47,7 +47,7 @@
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include "tt-metalium/program.hpp"
 #include "program/program_impl.hpp"
-#include "semaphore.hpp"
+#include "impl/buffers/semaphore.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <tt_stl/enum.hpp>
@@ -1276,7 +1276,6 @@ void SetRuntimeArgs(
     stl::Span<const uint32_t> runtime_args) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32, program, kernel_id, core_spec, runtime_args);
-    ZoneScoped;
     std::visit([&](auto&& core_spec) { SetRuntimeArgsImpl(program, kernel_id, core_spec, runtime_args); }, core_spec);
 }
 
