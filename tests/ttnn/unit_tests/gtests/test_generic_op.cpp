@@ -799,7 +799,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmulFromBinary) {
     // 1. Set the binary path prefix for the device.
     tt::tt_metal::experimental::SetKernelBinaryPathPrefix(device, binary_kernel_path);
 
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == tt::umd::BoardType::P150) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == tt::BoardType::P150) {
         GTEST_SKIP();
     }
     log_info(tt::LogTest, "Running ttnn matmul");
