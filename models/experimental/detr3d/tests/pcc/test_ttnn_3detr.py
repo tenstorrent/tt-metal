@@ -39,21 +39,23 @@ def test_3detr_model(encoder_only, input_shape, device):
     PCC_THRESHOLD = 0.95
     CHECK_AUX_OUTPUTS = False  # Set to True to enable PCC check for auxiliary outputs
     SKIP_KEYS = ["angle_continuous", "objectness_prob"]  # Keys to skip in PCC comparison
+    LOAD_REAL_INPUT = False
 
     args = Detr3dArgs()
     dataset_config = SunrgbdDatasetConfig()
 
     # Define the shape and range
-    # import pdb; pdb.set_trace()
-    # input_dict= torch.load("models/experimental/detr3d/resources/inputs.pt", map_location='cpu')
-    min_val = -1.8827
-    max_val = 8.3542
-    pc = (max_val - min_val) * torch.rand(input_shape) + min_val
-    input_dict = {
-        "point_clouds": pc,
-        "point_cloud_dims_min": torch.min(pc, 1)[0],
-        "point_cloud_dims_max": torch.max(pc, 1)[0],
-    }
+    if LOAD_REAL_INPUT:
+        input_dict = torch.load("models/experimental/detr3d/resources/inputs.pt", map_location="cpu")
+    else:
+        min_val = -1.8827
+        max_val = 8.3542
+        pc = (max_val - min_val) * torch.rand(input_shape) + min_val
+        input_dict = {
+            "point_clouds": pc,
+            "point_cloud_dims_min": torch.min(pc, 1)[0],
+            "point_cloud_dims_max": torch.max(pc, 1)[0],
+        }
 
     ref_module, _ = build_3detr(args, dataset_config)
     load_torch_model_state(ref_module)

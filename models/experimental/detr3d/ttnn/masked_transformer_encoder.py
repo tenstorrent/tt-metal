@@ -290,8 +290,8 @@ class TtnnMaskedTransformerEncoder(LightweightModule):
         for idx, layer in enumerate(self.layers):
             attn_mask = None
             if self.masking_radius[idx] > 0:
-                # attn_mask, xyz_dist = self.compute_mask(xyz, self.masking_radius[idx], xyz_dist)
-                attn_mask, xyz_dist = self.compute_mask_ttnn(xyz, self.masking_radius[idx], xyz_dist)
+                attn_mask, xyz_dist = self.compute_mask(xyz, self.masking_radius[idx], xyz_dist)  # Torch based mask gen
+                # attn_mask, xyz_dist = self.compute_mask_ttnn(xyz, self.masking_radius[idx], xyz_dist) # FIXME: Minor pcc drop
                 attn_mask = ttnn.unsqueeze(attn_mask, 1)
 
             output = ttnn.permute(output, (1, 0, 2))
