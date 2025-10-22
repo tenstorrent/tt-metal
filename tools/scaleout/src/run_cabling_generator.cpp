@@ -29,14 +29,19 @@ bool file_exists(const std::string& path) {
 }
 
 InputConfig parse_arguments(int argc, char** argv) {
-    cxxopts::Options options("run_cabling_generator", "Generate factory system descriptor and cabling guide from cluster and deployment descriptors");
+    cxxopts::Options options(
+        "run_cabling_generator",
+        "Generate factory system descriptor and cabling guide from cluster and deployment descriptors");
 
-    options.add_options()
-        ("c,cluster", "Path to the cluster descriptor file (.textproto)", cxxopts::value<std::string>())
-        ("d,deployment", "Path to the deployment descriptor file (.textproto)", cxxopts::value<std::string>())
-        ("o,output", "Name suffix for output files (without extensions) - optional, defaults to empty", cxxopts::value<std::string>()->default_value(""))
-        ("s,simple", "Generate simple CSV output (hostname-based) instead of detailed location information (rack, shelf, etc.)", cxxopts::value<bool>()->default_value("false")->implicit_value("true"))
-        ("h,help", "Print usage information");
+    options.add_options()(
+        "c,cluster", "Path to the cluster descriptor file (.textproto)", cxxopts::value<std::string>())(
+        "d,deployment", "Path to the deployment descriptor file (.textproto)", cxxopts::value<std::string>())(
+        "o,output",
+        "Name suffix for output files (without extensions) - optional, defaults to empty",
+        cxxopts::value<std::string>()->default_value(""))(
+        "s,simple",
+        "Generate simple CSV output (hostname-based) instead of detailed location information (rack, shelf, etc.)",
+        cxxopts::value<bool>()->default_value("false")->implicit_value("true"))("h,help", "Print usage information");
 
     try {
         auto result = options.parse(argc, argv);
@@ -47,11 +52,15 @@ InputConfig parse_arguments(int argc, char** argv) {
             std::cout << "  - out/scaleout/factory_system_descriptor_<output_name>.textproto" << std::endl;
             std::cout << "  - out/scaleout/cabling_guide_<output_name>.csv" << std::endl;
             std::cout << "\nExamples:" << std::endl;
-            std::cout << "  " << argv[0] << " --cluster cluster.textproto --deployment deployment.textproto" << std::endl;
+            std::cout << "  " << argv[0] << " --cluster cluster.textproto --deployment deployment.textproto"
+                      << std::endl;
             std::cout << "  # Generates files with default names (no suffix)" << std::endl;
-            std::cout << "  " << argv[0] << " --cluster cluster.textproto --deployment deployment.textproto --output test" << std::endl;
+            std::cout << "  " << argv[0]
+                      << " --cluster cluster.textproto --deployment deployment.textproto --output test" << std::endl;
             std::cout << "  # Generates detailed CSV with rack/shelf information" << std::endl;
-            std::cout << "  " << argv[0] << " --cluster cluster.textproto --deployment deployment.textproto --output test --simple" << std::endl;
+            std::cout << "  " << argv[0]
+                      << " --cluster cluster.textproto --deployment deployment.textproto --output test --simple"
+                      << std::endl;
             std::cout << "  # Generates simple CSV with hostname information only" << std::endl;
             exit(0);
         }
@@ -77,16 +86,20 @@ InputConfig parse_arguments(int argc, char** argv) {
 
         // Validate deployment descriptor file
         if (!file_exists(config.deployment_descriptor_path)) {
-            throw std::invalid_argument("Deployment descriptor file not found: '" + config.deployment_descriptor_path + "'");
+            throw std::invalid_argument(
+                "Deployment descriptor file not found: '" + config.deployment_descriptor_path + "'");
         }
 
         // Validate file extensions
         if (!config.cluster_descriptor_path.ends_with(".textproto")) {
-            throw std::invalid_argument("Cluster descriptor file should have .textproto extension: '" + config.cluster_descriptor_path + "'");
+            throw std::invalid_argument(
+                "Cluster descriptor file should have .textproto extension: '" + config.cluster_descriptor_path + "'");
         }
 
         if (!config.deployment_descriptor_path.ends_with(".textproto")) {
-            throw std::invalid_argument("Deployment descriptor file should have .textproto extension: '" + config.deployment_descriptor_path + "'");
+            throw std::invalid_argument(
+                "Deployment descriptor file should have .textproto extension: '" + config.deployment_descriptor_path +
+                "'");
         }
 
         // Check for invalid filename characters (only if output name is not empty)
@@ -94,7 +107,8 @@ InputConfig parse_arguments(int argc, char** argv) {
             const std::string invalid_chars = "<>:\"/|?*";
             for (char c : config.output_name) {
                 if (invalid_chars.find(c) != std::string::npos) {
-                    throw std::invalid_argument("Output name contains invalid character '" + std::string(1, c) + "'. Avoid: " + invalid_chars);
+                    throw std::invalid_argument(
+                        "Output name contains invalid character '" + std::string(1, c) + "'. Avoid: " + invalid_chars);
                 }
             }
         }
@@ -111,7 +125,6 @@ InputConfig parse_arguments(int argc, char** argv) {
 int main(int argc, char** argv) {
     try {
         InputConfig config = parse_arguments(argc, argv);
-
         std::cout << "Generating cabling configuration..." << std::endl;
         std::cout << "  Cluster descriptor: " << config.cluster_descriptor_path << std::endl;
         std::cout << "  Deployment descriptor: " << config.deployment_descriptor_path << std::endl;

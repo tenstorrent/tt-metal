@@ -33,7 +33,8 @@ function(GENERATE_PROTO_FILES PROTO_FILE)
             ${GENERATED_CC}
             ${GENERATED_H}
         COMMAND
-            $<TARGET_FILE:protobuf::protoc> --experimental_allow_proto3_optional --cpp_out=${PROTO_GENERATED_DIR} -I
+            $<TARGET_FILE:protobuf::protoc> --experimental_allow_proto3_optional --cpp_out=${PROTO_GENERATED_DIR}
+            --python_out=${PROTO_GENERATED_DIR} -I
             ${PROTO_DIR} ${PROTO_FILE}
         DEPENDS
             protobuf::protoc
