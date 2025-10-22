@@ -10,7 +10,6 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/mesh_socket.hpp>
 #include <tt_stl/reflection.hpp>
 #include "ttnn/operation.hpp"

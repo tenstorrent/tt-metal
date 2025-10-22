@@ -4,7 +4,6 @@
 
 #include <tt-metalium/work_split.hpp>
 #include <vector>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"

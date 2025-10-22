@@ -6,8 +6,6 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/math.hpp"
 
-#include <tt-metalium/constants.hpp>
-
 #include <optional>
 
 using uint32_t = std::uint32_t;

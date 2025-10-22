@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/constants.hpp>
 #include "slice_write_op.hpp"
 #include "slice_write_program_factory.hpp"
 #include <tt_stl/assert.hpp>

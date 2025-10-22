@@ -4,8 +4,6 @@
 
 #include "ttnn/common/queue_id.hpp"
 
-#include <tt-metalium/constants.hpp>
-
 #include "all_gather.hpp"
 #include "device/all_gather_device_operation.hpp"
 #include "ttnn/run_operation.hpp"

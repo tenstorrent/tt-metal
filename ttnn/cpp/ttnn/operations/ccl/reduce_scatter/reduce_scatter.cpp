@@ -4,8 +4,6 @@
 
 #include "ttnn/common/queue_id.hpp"
 
-#include <tt-metalium/constants.hpp>
-
 #include "reduce_scatter.hpp"
 #include "device/reduce_scatter_device_operation.hpp"
 #include "ttnn/run_operation.hpp"

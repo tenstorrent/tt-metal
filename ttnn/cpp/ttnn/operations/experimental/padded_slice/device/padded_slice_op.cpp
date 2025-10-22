@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/constants.hpp>
 #include "padded_slice_op.hpp"
 #include "padded_slice_program_factory.hpp"
 #include "ttnn/tensor/types.hpp"

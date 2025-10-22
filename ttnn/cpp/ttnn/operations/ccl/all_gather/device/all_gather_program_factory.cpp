@@ -5,7 +5,6 @@
 #include "all_gather_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <unordered_map>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/core_coord.hpp>

@@ -5,7 +5,6 @@
 #include "view.hpp"
 
 #include "ttnn/run_operation.hpp"
-#include <tt-metalium/constants.hpp>
 #include <ttnn/operations/functions.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/storage.hpp"

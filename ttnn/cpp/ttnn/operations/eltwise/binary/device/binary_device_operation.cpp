@@ -6,7 +6,6 @@
 
 #include <utility>
 
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 
