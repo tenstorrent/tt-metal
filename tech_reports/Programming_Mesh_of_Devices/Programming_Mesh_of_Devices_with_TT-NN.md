@@ -58,7 +58,7 @@ MeshDevice is a virtual device abstraction that bundles together multiple physic
 
 To optimize performance, MeshDevice implements several key optimizations:
 - **Kernel Compilation Broadcasting**: When kernels are compiled for execution on a MeshDevice, the compilation artifacts are automatically broadcasted to all devices in the mesh where applicable, avoiding redundant per-device compilation.
-- **Data Broadcasting**: For replicated tensors (where the same data needs to exist on multiple devices), MeshDevice leverages the mesh topology to efficiently broadcast data across devices rather than performing individual writes to each device.
+- **Data Broadcasting**: For replicated tensors (where the same data needs to exist on multiple devices), the runtime leverages the replicated topology to minimize any host-side processing and efficiently broadcast data across devices.
 - **Unified Command Dispatch**: Operations are dispatched through mesh-aware command queues that coordinate execution across all devices, ensuring lock-step parallel execution.
 
 While MeshDevice provides these performance optimizations, it maintains explicit control over data distribution and communication patterns. MeshDevice does not hide the distributed nature of the computation - users must explicitly specify:
