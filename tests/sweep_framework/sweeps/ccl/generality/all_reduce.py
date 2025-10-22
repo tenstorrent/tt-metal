@@ -199,7 +199,9 @@ def _get_tensors(input_shape, cluster_axis, mesh_shape, math_op, dtype, layout, 
     # The final result is then replicated back to all devices.
     torch_reference = _reference_map_op(math_op)(torch.stack([torch_input] * num_devices_in_cluster), dim=0)
 
-    input_memory_config, output_memory_config = get_mem_configs(buffer_type, shard_specs, torch_reference.shape)
+    input_memory_config, output_memory_config = get_mem_configs(
+        buffer_type, shard_specs, torch_reference.shape, tile_layout=(layout == ttnn.TILE_LAYOUT)
+    )
 
     tt_input = ttnn.from_torch(
         torch_input,

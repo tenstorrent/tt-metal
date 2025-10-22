@@ -137,7 +137,9 @@ def _get_tensors(input_shape, mesh_shape, dim, cluster_axis, dtype, buffer_type,
     replicate_dim = mesh_shape[cluster_axis] if cluster_axis is not None else prod(mesh_shape)
     torch_reference = torch_input.repeat(tuple((1 if i != dim else replicate_dim) for i in range(len(input_shape))))
 
-    input_memory_config, output_memory_config = get_mem_configs(buffer_type, shard_specs, torch_reference.shape)
+    input_memory_config, output_memory_config = get_mem_configs(
+        buffer_type, shard_specs, torch_reference.shape, tile_layout=(layout == ttnn.TILE_LAYOUT)
+    )
 
     assert input_memory_config.memory_layout == output_memory_config.memory_layout
 

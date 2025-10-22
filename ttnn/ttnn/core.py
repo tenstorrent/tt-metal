@@ -40,6 +40,12 @@ def is_sharded(tensor) -> bool:
     return tensor.is_sharded()
 
 
+# Python Alignment constraints
+L1_ALIGNMENT = 16
+DRAM_READ_ALIGNMENT_WH = 32
+DRAM_READ_ALIGNMENT_BH = 64
+DRAM_WRITE_ALIGNMENT = 16
+
 get_memory_config = ttnn._ttnn.core.get_memory_config
 light_metal_begin_capture = ttnn._ttnn.core.light_metal_begin_capture
 light_metal_end_capture = ttnn._ttnn.core.light_metal_end_capture
@@ -232,15 +238,16 @@ def create_sharded_memory_config_(
     shape: Union[ttnn.Shape, Tuple[int, ...], List[int]],
     core_grid: Union[ttnn.CoreGrid, ttnn.CoreRangeSet],
     strategy: Union[ShardStrategy, TensorMemoryLayout],
-    orientation,
+    orientation=None,
     use_height_and_width_as_shard_shape: bool = False,
     tile_layout: bool = False,
 ) -> MemoryConfig:
     """
-    create_sharded_memory_config(shape: Union[ttnn.Shape, Tuple[int, ...], List[int]], core_grid: Union[ttnn.CoreGrid, ttnn.CoreRangeSet], strategy: ShardStrategy, orientation: Optional[ShardOrientation] = None, use_height_and_width_as_shard_shape: bool = False) -> MemoryConfig
+    create_sharded_memory_config(shape: Union[ttnn.Shape, Tuple[int, ...], List[int]], core_grid: Union[ttnn.CoreGrid, ttnn.CoreRangeSet], strategy: ShardStrategy, orientation: Optional[ShardOrientation] = None, use_height_and_width_as_shard_shape: bool = False, tile_layout = False) -> MemoryConfig
 
     Creates a MemoryConfig object with a sharding spec, required for sharded ops.
     Currently sharding only supports L1 tensors.
+    Adds the required allignment restrictions on shard shape in Tiled and Row Major
 
     Args:
         * :attr:`shape`: the shape of the tensor
@@ -254,6 +261,7 @@ def create_sharded_memory_config_(
     Example::
         >>> tensor = ttnn.create_sharded_memory_config((5, 8), (320,64), ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR)
     """
+    TILE_ALLIGNMENT_REQUIREMENT = 32
 
     if not isinstance(shape, (list, tuple, ttnn.Shape)):
         raise RuntimeError("Invalid input shape")
@@ -275,10 +283,10 @@ def create_sharded_memory_config_(
     else:
         raise RuntimeError("Invalid type of sharding strategy")
 
-    if isinstance(orientation, ShardOrientation):
-        if orientation is None:
-            shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
-        elif orientation == ShardOrientation.ROW_MAJOR:
+    if orientation is None:
+        shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
+    elif isinstance(orientation, ShardOrientation):
+        if orientation == ShardOrientation.ROW_MAJOR:
             shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
         elif orientation == ShardOrientation.COL_MAJOR:
             shard_orientation = ttnn.ShardOrientation.COL_MAJOR
@@ -333,23 +341,53 @@ def create_sharded_memory_config_(
             if grid_size.y * grid_size.x != total_num_cores:
                 raise RuntimeError("Invalid CoreRangeSet for block sharding strategy")
             if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
-                tensor_height_padded = roundup(tensor_height, grid_size.y * 32) if tile_layout else tensor_height
-                shard_shape = divup(tensor_height_padded, grid_size.y), divup(tensor_width, grid_size.x)
-
+                tensor_height_padded = (
+                    roundup(tensor_height, grid_size.y * TILE_ALLIGNMENT_REQUIREMENT) if tile_layout else tensor_height
+                )
+                tensor_width_padded = (
+                    roundup(tensor_width, grid_size.x * TILE_ALLIGNMENT_REQUIREMENT)
+                    if tile_layout
+                    else roundup(tensor_width, grid_size.x * L1_ALIGNMENT)
+                )  # Required for 16B alignment in L1 tile width,
+                shard_shape = divup(tensor_height_padded, grid_size.y), divup(tensor_width_padded, grid_size.x)
             elif shard_orientation == ttnn.ShardOrientation.COL_MAJOR:
-                tensor_height_padded = roundup(tensor_height, grid_size.x * 32) if tile_layout else tensor_height
-                shard_shape = divup(tensor_height_padded, grid_size.x), divup(tensor_width, grid_size.y)
+                tensor_height_padded = (
+                    roundup(tensor_height, grid_size.x * TILE_ALLIGNMENT_REQUIREMENT) if tile_layout else tensor_height
+                )
+                tensor_width_padded = (
+                    roundup(tensor_width, grid_size.y * TILE_ALLIGNMENT_REQUIREMENT)
+                    if tile_layout
+                    else roundup(tensor_width, grid_size.y * L1_ALIGNMENT)
+                )  # Required for 16B alignment in L1 tile width,
+                shard_shape = divup(tensor_height_padded, grid_size.x), divup(tensor_width_padded, grid_size.y)
             else:
                 raise RuntimeError("Invalid shard orientation")
         elif tensor_memory_layout == TensorMemoryLayout.HEIGHT_SHARDED:
-            tensor_height_padded = roundup(tensor_height, total_num_cores) if tile_layout else tensor_height
-            shard_shape = divup(tensor_height_padded, total_num_cores), tensor_width
+            tensor_height_padded = (
+                roundup(tensor_height, total_num_cores * TILE_ALLIGNMENT_REQUIREMENT) if tile_layout else tensor_height
+            )
+            tensor_width_padded = (
+                roundup(tensor_width, TILE_ALLIGNMENT_REQUIREMENT)
+                if tile_layout
+                else roundup(tensor_width, L1_ALIGNMENT)
+            )  # Required for 16B alignment in L1 tile width,
+            shard_shape = divup(tensor_height_padded, total_num_cores), tensor_width_padded
         elif tensor_memory_layout == TensorMemoryLayout.WIDTH_SHARDED:
-            shard_shape = tensor_height, divup(tensor_width, total_num_cores)
+            tensor_height_padded = roundup(tensor_height, TILE_ALLIGNMENT_REQUIREMENT) if tile_layout else tensor_height
+            tensor_width_padded = (
+                roundup(tensor_width, total_num_cores * TILE_ALLIGNMENT_REQUIREMENT)
+                if tile_layout
+                else roundup(tensor_width, total_num_cores * L1_ALIGNMENT)
+            )  # Required for 16B alignment in L1 tile width
+            shard_shape = tensor_height_padded, divup(tensor_width_padded, total_num_cores)
         else:
             raise RuntimeError("Invalid sharding scheme")
 
-    if tile_layout and shard_shape[0] % 32 != 0 and shard_shape[1] % 32 != 0:
+    if (
+        tile_layout
+        and shard_shape[0] % TILE_ALLIGNMENT_REQUIREMENT != 0
+        and shard_shape[1] % TILE_ALLIGNMENT_REQUIREMENT != 0
+    ):
         raise RuntimeError("Incorrect tensor shape")
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
     memory_config = MemoryConfig(tensor_memory_layout, BufferType.L1, shard_spec)

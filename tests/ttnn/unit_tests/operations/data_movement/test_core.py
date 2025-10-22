@@ -415,23 +415,36 @@ def test_shard_with_corerangeset(
         ([1, 1, 1024, 1024], ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.COL_MAJOR, ttnn.CoreGrid(y=2, x=2)),
         ([1, 1, 128, 1024], ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=4)),
         ([1, 1, 1024, 128], ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.COL_MAJOR, ttnn.CoreGrid(y=4, x=2)),
+        ([1, 1, 1023, 1020], ttnn.ShardStrategy.WIDTH, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=2)),
+        ([1, 1, 1023, 1020], ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=2)),
+        ([1, 1, 1023, 1020], ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=2)),
+        ([1, 1, 1023, 1020], ttnn.ShardStrategy.WIDTH, ttnn.ShardOrientation.COL_MAJOR, ttnn.CoreGrid(y=2, x=2)),
+        ([1, 1, 1023, 1020], ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.COL_MAJOR, ttnn.CoreGrid(y=2, x=2)),
+        ([1, 1, 1023, 1020], ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.COL_MAJOR, ttnn.CoreGrid(y=2, x=2)),
+        ([1, 1, 99, 1024], ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=4)),
+        ([1, 1, 1024, 99], ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.COL_MAJOR, ttnn.CoreGrid(y=4, x=2)),
+        ([1, 1, 1, 1], ttnn.ShardStrategy.WIDTH, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=2)),
+        ([1, 1, 1, 1], ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=2)),
+        ([1, 1, 1, 1], ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=2)),
     ],
 )
-def test_create_sharded_memory_config(device, shape, strategy, orientation, core_grid):
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_create_sharded_memory_config(device, shape, strategy, orientation, core_grid, layout):
     input_data = torch.randn(shape, dtype=torch.bfloat16)
     x = ttnn.from_torch(
         input_data,
         device=device,
-        layout=ttnn.TILE_LAYOUT,
+        layout=layout,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
     )
-    shard_config = ttnn.create_sharded_memory_config(
+    shard_config = ttnn.create_sharded_memory_config_(
         shape=shape,
         core_grid=core_grid,
         strategy=strategy,
         orientation=orientation,
         use_height_and_width_as_shard_shape=False,
+        tile_layout=(layout == ttnn.TILE_LAYOUT),
     )
 
     x_t = ttnn.to_memory_config(x, memory_config=shard_config, dtype=ttnn.bfloat16)
