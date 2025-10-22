@@ -281,11 +281,14 @@ static void cpu_sgd_step(
         float g_t = g_orig;
         if (weight_decay != 0.0f)
             g_t += weight_decay * theta;
+
         if (dampening != 0.0f)
             g_t *= (1.0f - dampening);
 
-        // momentum update
-        float m_t = (has_momentum && momentum_val != 0.0f) ? (g_t + momentum_val * m_prev) : g_t;
+        float m_t = g_t;
+        if (has_momentum && momentum_val != 0.0f) {
+            m_t = g_t + momentum_val * m_prev;
+        }
 
         float update = nesterov ? (g_t + momentum_val * m_t) : m_t;
 
@@ -521,8 +524,8 @@ TEST_P(SGDFusedParityTest, UpdateParityOneStep) {
 }
 
 static const ParityCase kCases[] = {
-    {{1, 1, 1, 32}, 1e-2f, 0.0f, 0.0f, 0.0f, false, "Vanilla_Vec32"},
-    {{1, 1, 1, 64}, 1e-2f, 0.0f, 0.0f, 0.0f, false, "Vanilla_Vec64"},
+    {{1, 1, 1, 32}, 1e-3f, 0.0f, 0.0f, 0.0f, false, "Vanilla_Vec32"},
+    {{1, 1, 1, 64}, 1e-3f, 0.0f, 0.0f, 0.0f, false, "Vanilla_Vec64"},
     {{1, 1, 1, 64}, 1e-3f, 0.0f, 0.0f, 1e-2f, false, "L2_Vec64"},
     {{1, 1, 32, 64}, 1e-3f, 0.9f, 0.0f, 0.0f, false, "Mom_Seq32x64"},
     {{1, 1, 32, 64}, 1e-3f, 0.9f, 0.1f, 0.0f, false, "Mom_Damp_Seq32x64"},
@@ -536,12 +539,18 @@ static const ParityCase kBigCases[] = {
     // A "fatter" single vector (~262k params)
     {{1, 1, 1, 262'144}, 1e-2f, 0.0f, 0.0f, 0.0f, false, "Vanilla_Vec262k"},
 
+    {{4, 8, 1024, 128}, 1e-3f, 0.0f, 0.0f, 1e-4f, false, "Vanilla_L2_B4H8_S1024_C128"},
     // Transformer-like blocks in the low millions of elements
     // 4 * 8 * 1024 * 128 = 4,194,304
+    {{4, 8, 1024, 128}, 1e-1f, 0.9f, 0.0f, 0.0f, true, "Nesterov_B4H8_S1024_C128"},
     {{4, 8, 1024, 128}, 1e-3f, 0.9f, 0.0f, 1e-4f, true, "Nesterov_L2_B4H8_S1024_C128"},
+
+    {{4, 8, 1024, 128}, 1e-3f, 0.9f, 0.0f, 0.0f, false, "Mom_B4H8_S1024_C128"},
 
     // 2 * 16 * 2048 * 128 = 8,388,608
     {{2, 16, 2048, 128}, 5e-4f, 0.9f, 0.1f, 0.0f, false, "Mom_Damp_B2H16_S2048_C128"},
+
+    {{2, 16, 2048, 128}, 5e-4f, 0.9f, 0.1f, 1e-4f, false, "Mom_Damp_L2_B2H16_S2048_C128"},
 };
 
 INSTANTIATE_TEST_SUITE_P(SGDFusedVsCPUParity_Big, SGDFusedParityTest, ::testing::ValuesIn(kBigCases), CaseName);
@@ -549,15 +558,17 @@ INSTANTIATE_TEST_SUITE_P(SGDFusedVsCPUParity_Big, SGDFusedParityTest, ::testing:
 // --- HUGE test cases ----------------------------------------------
 static const ParityCase kHugeCases[] = {
     // ~1.0M params vector — fast and stresses contiguous path
-    {{1, 1, 1, 1'048'576}, 1e-2f, 0.0f, 0.0f, 0.0f, false, "Vanilla_Vec1M"},
+    {{1, 1, 1, 1'048'576}, 1e-3f, 0.0f, 0.0f, 0.0f, false, "Vanilla_Vec1M"},
 
     // A bigger transformer-like block (~16.7M elems):
     // 4 * 16 * 2048 * 128 = 16,777,216
     {{4, 16, 2048, 128}, 1e-3f, 0.9f, 0.0f, 1e-4f, true, "Nesterov_L2_B4H16_S2048_C128"},
+    {{4, 16, 2048, 128}, 1e-3f, 0.9f, 0.0f, 0.0f, true, "Nesterov_B4H16_S2048_C128"},
 
     // Wide MLP-style layer (~67.1M elems):
     // 8 * 16 * 2048 * 256 = 67,108,864
     {{8, 16, 2048, 256}, 5e-4f, 0.9f, 0.0f, 1e-4f, true, "Nesterov_L2_B8H16_S2048_C256"},
+    {{8, 16, 2048, 256}, 1e-1f, 0.9f, 0.0f, 1e-4f, true, "Anotha_Nesterov_L2_B8H16_S2048_C256"},
 
     // Long-sequence stress (~134.2M elems):
     // 4 * 32 * 4096 * 256 = 134,217,728
