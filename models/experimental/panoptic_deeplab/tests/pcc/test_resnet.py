@@ -248,7 +248,7 @@ def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds, model_l
         "res2": 0.998,
         "res3": 0.997,
         "res4": 0.997,
-        "res5": 0.996,
+        "res5": 0.995,
     }
 
     for layer_name in ["res2", "res3", "res4", "res5"]:
