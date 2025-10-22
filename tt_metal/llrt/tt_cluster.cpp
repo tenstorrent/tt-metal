@@ -316,6 +316,7 @@ void Cluster::initialize_device_drivers() {
     this->start_driver(default_params);
     this->generate_virtual_to_umd_coord_mapping();
     this->generate_virtual_to_profiler_flat_id_mapping();
+    this->verify_eth_fw_capability();
 }
 
 void Cluster::assert_risc_reset() {
@@ -856,6 +857,17 @@ void Cluster::verify_sw_fw_versions(
         TT_FATAL(fw == fw_first_eth_core, "FW versions are not the same across different ethernet cores");
         TT_FATAL(sw.major == fw.major, "SW/FW major version number out of sync");
         TT_FATAL(sw.minor <= fw.minor, "SW version is newer than FW version");
+    }
+}
+
+void Cluster::verify_eth_fw_capability() const {
+    // get_ethernet_fw_version is not supported in the simulation environment
+    if (rtoptions_.get_simulator_enabled()) {
+        return;
+    }
+    const auto fw_version = this->driver_->get_ethernet_fw_version();
+    if (fw_version) {
+        hal_.verify_eth_fw_version(fw_version.value());
     }
 }
 
