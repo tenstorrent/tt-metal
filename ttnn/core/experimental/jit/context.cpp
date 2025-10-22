@@ -1,10 +1,9 @@
 #include "ttnn/experimental/jit/context.hpp"
 #include "ttnn/experimental/jit/node.hpp"
-#include <algorithm>
 #include <stdexcept>
 
 #include <spdlog/spdlog.h>
-#pragma optimize("", off)
+
 namespace {
 constexpr size_t INITIAL_NODES_CAPACITY = 1024;
 }
@@ -70,12 +69,40 @@ const std::vector<Node>& Context::get_all_nodes() const { return nodes_; }
 std::vector<Node>& Context::get_all_nodes() { return nodes_; }
 
 void Context::execute_node(NodeId id) {
-    std::vector<NodeId> nodes = topological_sort({id});
+    std::unordered_set<NodeId> nodes_to_execute = get_dependencies(id);
+    // Now do topological sort on the full dependency set
+    std::vector<NodeId> nodes = topological_sort(nodes_to_execute);
     log_info(tt::LogOp, "LAZY MODE: Executing {} node(s) in topological order", nodes.size());
     for (auto node_id : nodes) {
         auto node = get_node(node_id);
         if (node != nullptr) {
             log_info(tt::LogOp, "LAZY MODE: Executing node {} - operation '{}'", node_id, node->operation_name());
+
+            // Materialize inputs: replace placeholder tensors with actual outputs from producer nodes
+            auto& inputs = node->inputs_mut();
+            for (size_t i = 0; i < inputs.size(); ++i) {
+                auto producer_node_id = inputs[i].producer_node();
+                if (producer_node_id != 0) {
+                    // This input is a placeholder from a producer node
+                    const Node* producer = get_node(producer_node_id);
+                    if (producer != nullptr && producer->is_materialized()) {
+                        const auto& producer_outputs = producer->outputs();
+                        // For now, assume single output or match by tensor_id later
+                        // TODO: Handle multiple outputs properly
+                        if (!producer_outputs.empty()) {
+                            // Replace placeholder with first (and typically only) output
+                            // TODO: This assumes single output - need to track output index for multi-output ops
+                            inputs[i] = producer_outputs[0];
+                            log_info(
+                                tt::LogOp,
+                                "LAZY MODE: Materialized input {} from producer node {}",
+                                i,
+                                producer_node_id);
+                        }
+                    }
+                }
+            }
+
             node->execute();
             log_info(tt::LogOp, "LAZY MODE: Completed node {} - operation '{}'", node_id, node->operation_name());
         }
@@ -84,39 +111,30 @@ void Context::execute_node(NodeId id) {
 }
 
 // Build dependency graph from output tensors
-std::unordered_set<NodeId> Context::get_dependencies(const std::vector<Tensor>& outputs) const {
-    std::unordered_set<NodeId> deps;
-    std::vector<NodeId> to_visit;
+std::unordered_set<NodeId> Context::get_dependencies(NodeId id) const {
+    // Build a set of all nodes we need to execute
+    std::unordered_set<NodeId> dependencies;
+    dependencies.insert(id);
 
-    // Start from output tensors
-    for (const auto& tensor : outputs) {
-        // if the tensor has a producer and the producer node is not materialized, add it to the to_visit list
-        // this avoids reevaluating parts of the graph that have already been materialized
-        if (tensor.producer_node() != 0 && !get_node(tensor.producer_node())->is_materialized()) {
-            to_visit.push_back(tensor.producer_node());
-        }
-    }
-
-    // DFS to find all dependencies
+    // Add all dependencies by traversing inputs
+    std::vector<NodeId> to_visit = {id};
     while (!to_visit.empty()) {
         NodeId current = to_visit.back();
         to_visit.pop_back();
 
-        if (deps.count(current)) {
-            continue;
-        }
-        deps.insert(current);
-
-        if (const Node* node = get_node(current)) {
+        const Node* node = get_node(current);
+        if (node) {
             for (const auto& input : node->inputs()) {
-                if (input.producer_node() != 0) {
-                    to_visit.push_back(input.producer_node());
+                NodeId input_producer = input.producer_node();
+                if (input_producer != 0 && !dependencies.count(input_producer)) {
+                    dependencies.insert(input_producer);
+                    to_visit.push_back(input_producer);
                 }
             }
         }
     }
 
-    return deps;
+    return dependencies;
 }
 
 std::vector<NodeId> Context::topological_sort(const std::unordered_set<NodeId>& node_set) const {
@@ -162,6 +180,29 @@ void Context::clear() {
     nodes_.clear();
     id_to_index_.clear();
     next_id_ = 1;
+}
+
+Tensor Context::get_materialized_tensor(const Tensor& placeholder) const {
+    NodeId producer_id = placeholder.producer_node();
+    if (producer_id == 0) {
+        // Not a lazy tensor, return as is
+        return placeholder;
+    }
+
+    std::cout << "[Context::get_materialized_tensor] producer_id: " << producer_id << std::endl;
+    const Node* producer = get_node(producer_id);
+    if (producer == nullptr || !producer->is_materialized()) {
+        TT_THROW("Producer node not found or not materialized");
+    }
+
+    const auto& outputs = producer->outputs();
+    if (outputs.empty()) {
+        TT_THROW("Producer node has no outputs");
+    }
+
+    // For now, assume single output or return first output
+    // TODO: Handle multiple outputs by matching tensor IDs
+    return outputs[0];
 }
 
 Context& Context::instance() {

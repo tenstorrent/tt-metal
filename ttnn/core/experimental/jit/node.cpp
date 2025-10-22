@@ -24,6 +24,8 @@ std::string_view Node::operation_name() const { return operation_name_; }
 
 const std::vector<ttnn::Tensor>& Node::inputs() const { return inputs_; }
 
+std::vector<ttnn::Tensor>& Node::inputs_mut() { return inputs_; }
+
 const std::vector<NodeId>& Node::output_nodes() const { return output_nodes_; }
 
 void Node::add_output_node(NodeId node_id) { output_nodes_.push_back(node_id); }
@@ -32,7 +34,10 @@ void Node::execute() {
     TT_FATAL(Args != nullptr, "Args is not set");
     // Temporarily disable lazy mode during execution to prevent re-entry
     ttnn::lazy_mode::ScopedDisable disable_lazy;
-    Args->invoke(inputs_);
+
+    // Execute the operation with the (now materialized) inputs
+    outputs_ = Args->invoke(inputs_);
+
     is_materialized_ = true;
 }
 

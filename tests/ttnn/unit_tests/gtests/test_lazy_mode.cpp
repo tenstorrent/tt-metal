@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <cstdlib>
 
+#include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -43,7 +44,6 @@ protected:
 
 // Test: Simple unary operations in lazy mode with verification
 TEST_F(LazyModeFixture, SimpleUnaryOperationsLazy) {
-    auto& device = *device_;
     auto& context = ttnn::experimental::jit::Context::instance();
 
     log_info(tt::LogTest, "==== Starting SimpleUnaryOperationsLazy test ====");
@@ -52,8 +52,29 @@ TEST_F(LazyModeFixture, SimpleUnaryOperationsLazy) {
     ASSERT_TRUE(ttnn::lazy_mode::is_lazy_enabled()) << "Lazy mode should be enabled";
 
     // Create input tensor
-    ttnn::Shape shape({32, 64});
-    const auto input_tensor = ttnn::ones(shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
+    ttnn::Shape shape({32, 32});
+    // const auto input_tensor = ttnn::ones(shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
+    // Set half of values to -1
+    auto spec = TensorSpec(
+        shape,
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(ttnn::TILE_LAYOUT),
+            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM)));
+
+    std::vector<bfloat16> data(shape.volume(), 1.0f);
+    for (int i = 0; i < shape.volume(); i++) {
+        if (i % 3 == 0) {
+            data[i] = -1.0f;
+        }
+        if (i % 3 == 1) {
+            data[i] = 0.0f;
+        }
+    }
+    auto input_tensor = Tensor::from_vector(data, spec, device_);
+
+    ttnn::set_printoptions(TensorPrintProfile::Full);
+    // log_info(tt::LogTest, "Input tensor: {}", input_tensor.write_to_string());
 
     log_info(tt::LogTest, "Created input tensor with shape [{}, {}]", shape[0], shape[1]);
 
@@ -71,8 +92,9 @@ TEST_F(LazyModeFixture, SimpleUnaryOperationsLazy) {
     log_info(tt::LogTest, "Executing lazy graph...");
     context.execute_node(sqrt_output.producer_node());
 
-    // Get lazy result to host for comparison
-    const auto lazy_result = ttnn::from_device(sqrt_output);
+    // Get the materialized tensor and bring it to host for comparison
+    const auto materialized_output = context.get_materialized_tensor(sqrt_output);
+    const auto lazy_result = ttnn::from_device(materialized_output);
 
     // Clear the lazy graph and disable lazy mode
     context.clear();
@@ -81,7 +103,8 @@ TEST_F(LazyModeFixture, SimpleUnaryOperationsLazy) {
 
     // Run the same operations in eager mode
     log_info(tt::LogTest, "Running same operations in eager mode for verification...");
-    const auto input_tensor_eager = ttnn::ones(shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
+    // Create the same input data for eager mode
+    const auto input_tensor_eager = Tensor::from_vector(data, spec, device_);
     const auto relu_eager = ttnn::relu(input_tensor_eager);
     const auto exp_eager = ttnn::exp(relu_eager);
     const auto sqrt_eager = ttnn::sqrt(exp_eager);

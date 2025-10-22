@@ -26,6 +26,7 @@ public:
     std::string_view operation_name() const;
 
     const std::vector<Tensor>& inputs() const;
+    std::vector<Tensor>& inputs_mut();
     const std::vector<NodeId>& output_nodes() const;
 
     void add_output_node(NodeId node_id);
@@ -35,10 +36,13 @@ public:
     void set_is_materialized(bool is_materialized) { is_materialized_ = is_materialized; }
     bool is_materialized() const { return is_materialized_; }
 
+    const std::vector<Tensor>& outputs() const { return outputs_; }
+
 private:
     NodeId id_;
     std::string operation_name_;
     std::vector<Tensor> inputs_;
+    std::vector<Tensor> outputs_;
     std::vector<NodeId> output_nodes_;
     std::shared_ptr<IDeviceOperation> Args;
     bool is_materialized_ = false;

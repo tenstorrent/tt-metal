@@ -18,7 +18,7 @@ public:
     const std::vector<Node>& get_all_nodes() const;
     std::vector<Node>& get_all_nodes();
 
-    std::unordered_set<NodeId> get_dependencies(const std::vector<ttnn::Tensor>& outputs) const;
+    std::unordered_set<NodeId> get_dependencies(NodeId id) const;
 
     std::vector<NodeId> topological_sort(const std::unordered_set<NodeId>& node_set) const;
 
@@ -35,6 +35,9 @@ public:
     std::vector<const Node*> find_nodes(const std::string& operation_name) const;
 
     void execute_node(NodeId id);
+
+    // Get the materialized output tensor for a placeholder tensor
+    Tensor get_materialized_tensor(const Tensor& placeholder) const;
 
 private:
     std::vector<Node> nodes_;
