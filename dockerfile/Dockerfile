@@ -16,8 +16,7 @@ ENV PATH="$CARGO_HOME/bin:$PATH"
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
 COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
-# --docker skips installing hugepages. Skipping as we're technically on BM
-RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
+RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker
 
 #############################################################
 
