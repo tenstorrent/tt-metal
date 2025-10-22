@@ -80,7 +80,7 @@ def run_unet_model(
     model_location_generator,
     iterations=1,
 ):
-    assert is_ci_v2_env and input_shape[1] != 4, "Currently only vanilla SDXL UNet is supported in CI v2"
+    assert not (is_ci_v2_env and input_shape[1] != 4), "Currently only vanilla SDXL UNet is supported in CI v2"
     model_name = (
         "stabilityai/stable-diffusion-xl-base-1.0"
         if input_shape[1] == 4
