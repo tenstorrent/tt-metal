@@ -22,7 +22,7 @@ Current performance for two systems are detailed below. Performance is measured 
 | System    | CFG | SP | TP | Current Performance |
 |-----------|-----|----|----|---------------------|
 | QuietBox  | 1   | 2  | 4  | 1260s               |
-| Galaxy    | 1   | 8  | 4  | ___s                |
+| Galaxy    | 1   | 8  | 4  | 391s                |
 
 
 

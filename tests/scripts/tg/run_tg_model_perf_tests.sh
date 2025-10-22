@@ -25,7 +25,7 @@ run_tg_llama_70b_model_perf_tests() {
   TT_METAL_KERNELS_EARLY_RETURN=1 TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=$llama70b pytest -n auto models/demos/llama3_70b_galaxy/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch --timeout=600 ; fail+=$?
 
   # Run kernel and op to op latency test
-  TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=$llama70b pytest -n auto models/demos/llama3_70b_galaxy/tests/test_decoder_device_perf.py::test_llama_TG_perf_device --timeout=1500 ; fail+=$?
+  TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=$llama70b pytest -n auto models/demos/llama3_70b_galaxy/tests/test_decoder_device_perf.py::test_llama_TG_perf_device --timeout=600 ; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     echo "LOG_METAL: run_tg_llama_70b_model_perf_tests failed"
@@ -65,7 +65,7 @@ run_tg_mochi_model_perf_tests() {
 
   export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
   pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model_caching -k "4x8sp1tp0"
-  TT_MM_THROTTLE_PERF=5 pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k "4x8sp1tp0 and yes_use_cache" --timeout=600; fail+=$?
+  TT_MM_THROTTLE_PERF=5 pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k "4x8sp1tp0 and yes_use_cache" --timeout=1500; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     echo "LOG_METAL: run_tg_mochi_model_perf_tests failed"

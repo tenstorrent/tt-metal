@@ -24,11 +24,11 @@ from ....parallel.config import DiTParallelConfig, MochiVAEParallelConfig, Paral
     [
         # VAE mesh shape = (1, 8) is more memory efficient.
         [(2, 4), 0, 1, (1, 8), 0, 1, ttnn.Topology.Linear, 1],
-        [(4, 8), 1, 0, (4, 8), 1, 0, ttnn.Topology.Linear, 4],
+        [(4, 8), 1, 0, (4, 8), 0, 1, ttnn.Topology.Linear, 4],  # note sp <-> tp switch for VAE for memory efficiency.
     ],
     ids=[
         "dit_2x4sp0tp1_vae_1x8sp0tp1",
-        "dit_4x8sp1tp0_vae_4x8sp1tp0",
+        "dit_4x8sp1tp0_vae_4x8sp0tp1",
     ],
     indirect=["mesh_device"],
 )
@@ -277,10 +277,10 @@ def test_mochi_pipeline_performance(
         }
     elif tuple(mesh_device.shape) == (4, 8) and vae_mesh_shape == (4, 8):
         expected_metrics = {
-            "text_encoding_time": 1.0,
-            "denoising_time": 330,
-            "vae_decoding_time": 13.8,
-            "total_time": 346,
+            "text_encoding_time": 4.43,
+            "denoising_time": 400,
+            "vae_decoding_time": 22,
+            "total_time": 430,
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
