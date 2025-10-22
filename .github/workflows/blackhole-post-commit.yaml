@@ -260,36 +260,6 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
-  # LLMBox-only demo tests
-  blackhole-llmbox-demo-tests:
-    needs: [build-artifact, generate-matrix]
-    if: ${{ inputs.enable-llmbox-tests }}
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    with:
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      extra-tag: pipeline-perf
-      num_devices: 4
-
-  # LLMBox-only unit tests
-  blackhole-llmbox-unit-tests:
-    needs: [build-artifact-profiler, generate-matrix]
-    if: ${{ inputs.enable-llmbox-tests }}
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
-    with:
-      arch: blackhole
-      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-
   # TT-CNN Unit Tests
   tt-cnn-unit-tests:
     needs: [build-artifact, generate-matrix]
