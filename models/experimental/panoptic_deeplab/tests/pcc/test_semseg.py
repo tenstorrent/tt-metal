@@ -66,7 +66,6 @@ def test_ttnn_semseg(device, model_location_generator):
             decoder_channels=decoder_channels,
             sem_seg_head_channels=sem_seg_head_channels,
             ins_embed_head_channels=ins_embed_head_channels,
-            norm="SyncBN",
             train_size=train_size,
             weights_path=complete_weights_path,
         )
@@ -87,9 +86,9 @@ def test_ttnn_semseg(device, model_location_generator):
             conv_w_dtype=ttnn.bfloat8_b,
         )
         # Setup layer overrides to enable optimized sharding
-        model_configs.setup_aspp_layer_overrides()  # ASPP (used in decoder)
-        model_configs.setup_decoder_layer_overrides()
-        model_configs.setup_head_layer_overrides()
+        model_configs.setup_aspp()  # ASPP (used in decoder)
+        model_configs.setup_decoder()
+        model_configs.setup_heads()
 
         # Create TTNN model with fused parameters and centralized configuration
         ttnn_model = TtPanopticDeepLab(
@@ -101,7 +100,6 @@ def test_ttnn_semseg(device, model_location_generator):
             decoder_channels=decoder_channels,
             sem_seg_head_channels=sem_seg_head_channels,
             ins_embed_head_channels=ins_embed_head_channels,
-            norm="",
             train_size=train_size,
             model_configs=model_configs,
         )

@@ -66,7 +66,6 @@ def test_panoptic_deeplab(device, model_location_generator):
             decoder_channels=decoder_channels,
             sem_seg_head_channels=sem_seg_head_channels,
             ins_embed_head_channels=ins_embed_head_channels,
-            norm="SyncBN",
             train_size=train_size,
             weights_path=complete_weights_path,
         )
@@ -92,13 +91,13 @@ def test_panoptic_deeplab(device, model_location_generator):
 
         # Apply layer-specific configurations
         logger.info("Applying ResNet backbone configurations...")
-        model_configs.setup_resnet_test_configs()
+        model_configs.setup_resnet_backbone()
         logger.info("Applying ASPP layer overrides...")
-        model_configs.setup_aspp_layer_overrides()
+        model_configs.setup_aspp()
         logger.info("Applying decoder layer overrides...")
-        model_configs.setup_decoder_layer_overrides()
+        model_configs.setup_decoder()
         logger.info("Applying head layer overrides...")
-        model_configs.setup_head_layer_overrides()
+        model_configs.setup_heads()
 
         # Create TTNN model with fused parameters and centralized configuration
         ttnn_model = TtPanopticDeepLab(
@@ -110,7 +109,6 @@ def test_panoptic_deeplab(device, model_location_generator):
             decoder_channels=decoder_channels,
             sem_seg_head_channels=sem_seg_head_channels,
             ins_embed_head_channels=ins_embed_head_channels,
-            norm="",
             train_size=train_size,
             model_configs=model_configs,
         )

@@ -29,7 +29,6 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         aspp_dropout: float,
         decoder_channels,
         common_stride: int,
-        norm: str,
         train_size: Optional[Tuple],
         model_configs=None,
     ):
@@ -39,7 +38,6 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
             parameters=decoder_params,
             device=device,
             input_shape=input_shape,
-            norm=norm,
             num_classes=None,  # decoder_only mode
             project_channels=project_channels,
             aspp_dilations=aspp_dilations,
@@ -50,7 +48,6 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
             model_configs=model_configs,
         )
         assert self.decoder_only
-        use_bias = norm == ""
         decoder_out_ch = decoder_channels[0]
         logger.debug(f"Initializing TtPanopticDeepLabInsEmbedHead with head_channels: {head_channels}")
 
@@ -206,11 +203,9 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         # --- Center Prediction Branch ---
         logger.info(f"🔷 Executing conv: instance_head.center_head.0")
         center_y = self.center_head_0(y)
-        center_y = self.activation(center_y)
 
         logger.info(f"🔷 Executing conv: instance_head.center_head.1")
         center_y = self.center_head_1(center_y)
-        center_y = self.activation(center_y)
 
         # Convert to interleaved for predictor
         if center_y.is_sharded():
@@ -224,11 +219,9 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         # --- Offset Prediction Branch ---
         logger.info(f"🔷 Executing conv: instance_head.offset_head.0")
         offset_y = self.offset_head_0(y)
-        offset_y = self.activation(offset_y)
 
         logger.info(f"🔷 Executing conv: instance_head.offset_head.1")
         offset_y = self.offset_head_1(offset_y)
-        offset_y = self.activation(offset_y)
 
         # Convert to interleaved for predictor
         if offset_y.is_sharded():

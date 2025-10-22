@@ -51,7 +51,6 @@ def create_panoptic_models(device, weights_path):
         decoder_channels=decoder_channels,
         sem_seg_head_channels=sem_seg_head_channels,
         ins_embed_head_channels=ins_embed_head_channels,
-        norm="SyncBN",
         train_size=train_size,
         weights_path=weights_path,
     )
@@ -75,7 +74,7 @@ def create_panoptic_models(device, weights_path):
         conv_w_dtype=ttnn.bfloat8_b,
     )
     # Apply ResNet-specific configurations to match test_conv2d_panoptic
-    model_configs.setup_resnet_test_configs()
+    model_configs.setup_resnet_backbone()
 
     # Create TTNN model with fused parameters and centralized configuration
     ttnn_model = TtPanopticDeepLab(
@@ -87,7 +86,6 @@ def create_panoptic_models(device, weights_path):
         decoder_channels=decoder_channels,
         sem_seg_head_channels=sem_seg_head_channels,
         ins_embed_head_channels=ins_embed_head_channels,
-        norm="",
         train_size=train_size,
         model_configs=model_configs,
     )

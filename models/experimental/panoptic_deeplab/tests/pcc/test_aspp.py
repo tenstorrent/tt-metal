@@ -63,7 +63,6 @@ def test_ttnn_aspp(device, model_location_generator):
             decoder_channels=decoder_channels,
             sem_seg_head_channels=sem_seg_head_channels,
             ins_embed_head_channels=ins_embed_head_channels,
-            norm="SyncBN",
             train_size=train_size,
             weights_path=complete_weights_path,
         )
@@ -84,7 +83,7 @@ def test_ttnn_aspp(device, model_location_generator):
             conv_w_dtype=ttnn.bfloat8_b,
         )
         # Setup ASPP layer overrides to enable channel slicing for dilated convolutions
-        model_configs.setup_aspp_layer_overrides()
+        model_configs.setup_aspp()
 
         # Create TTNN model with fused parameters and centralized configuration
         ttnn_model = TtPanopticDeepLab(
@@ -96,7 +95,6 @@ def test_ttnn_aspp(device, model_location_generator):
             decoder_channels=decoder_channels,
             sem_seg_head_channels=sem_seg_head_channels,
             ins_embed_head_channels=ins_embed_head_channels,
-            norm="",
             train_size=train_size,
             model_configs=model_configs,
         )

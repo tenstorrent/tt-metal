@@ -5,7 +5,7 @@ from typing import Dict, List, Union, Optional, Tuple
 import ttnn
 from loguru import logger
 
-from models.experimental.panoptic_deeplab.tt.tt_aspp import TtASPP, get_ttnn_activation
+from models.experimental.panoptic_deeplab.tt.tt_aspp import TtASPP
 from models.tt_cnn.tt.builder import TtConv2d
 from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 from models.common.lightweightmodule import LightweightModule
@@ -31,7 +31,6 @@ class TtDeepLabV3PlusHead(LightweightModule):
         aspp_dropout: float,
         decoder_channels: List[int],
         common_stride: int,
-        norm: str,
         train_size: Optional[Tuple],
         num_classes: Optional[int] = None,
         model_configs=None,
@@ -51,7 +50,6 @@ class TtDeepLabV3PlusHead(LightweightModule):
         self.decoder_only = num_classes is None
         self.device = device
         self.model_configs = model_configs
-        self.activation = get_ttnn_activation("relu")
 
         # Initialize decoder with all stages
         self._initialize_decoder(
@@ -62,7 +60,6 @@ class TtDeepLabV3PlusHead(LightweightModule):
             decoder_channels,
             aspp_dilations,
             aspp_dropout,
-            norm,
             train_size,
         )
 
@@ -97,12 +94,10 @@ class TtDeepLabV3PlusHead(LightweightModule):
         decoder_channels,
         aspp_dilations,
         aspp_dropout,
-        norm,
         train_size,
     ):
         """Initialize decoder stages"""
         self.decoder = {}
-        use_bias = norm == ""
 
         for idx, in_channel in enumerate(in_channels):
             decoder_stage = {}
@@ -131,7 +126,6 @@ class TtDeepLabV3PlusHead(LightweightModule):
                     dilations=aspp_dilations,
                     device=self.device,
                     pool_kernel_size=pool_kernel_size,
-                    norm=norm,
                     activation="relu",
                     dropout=aspp_dropout,
                     parameters=project_conv_params,
@@ -200,7 +194,6 @@ class TtDeepLabV3PlusHead(LightweightModule):
             stage = self.decoder[f_key]
             logger.info(f"🔷 Executing conv: decoder.{f_key}.project_conv")
             proj_x = stage["project_conv"](x)
-            proj_x = self.activation(proj_x)
             proj_x = ttnn.to_memory_config(proj_x, ttnn.DRAM_MEMORY_CONFIG)
             logger.debug(f"TtDeepLabV3PlusHead fusion stage {i+1} projection complete, shape: {proj_x.shape}")
 
@@ -273,14 +266,11 @@ class TtDeepLabV3PlusHead(LightweightModule):
             ttnn.deallocate(previous_y)
             ttnn.deallocate(proj_x)
             ttnn.deallocate(y_upsampled)
-
-            # Use single conv versions - slicing handled by config
+            # Use single conv versions - slicing handled by config, ReLU is fused
             logger.info(f"🔷 Executing conv: decoder.{f_key}.fuse_conv.0")
             y_conv0 = stage["fuse_conv_0"](y)
             ttnn.deallocate(y)
 
-            # Channel-sliced convolutions may output in flattened format [N, 1, H*W, C]
-            # Reshape back to [N, H, W, C] if needed (using saved shape as reference)
             is_flattened = y_conv0.shape[1] == 1 and y_conv0.shape[2] == expected_H * expected_W
             if is_flattened:
                 N = y_conv0.shape[0]
@@ -290,15 +280,15 @@ class TtDeepLabV3PlusHead(LightweightModule):
                     f"Reshaped channel-sliced fuse_conv_0 output from [1, 1, {expected_H * expected_W}, {C}] to [{N}, {expected_H}, {expected_W}, {C}]"
                 )
 
-            y_act0 = self.activation(y_conv0)
+            # Only apply manual ReLU for channel-sliced fuse_conv.0 (res3, res2)
+            if f_key in ["res3", "res2"]:
+                y_conv0 = ttnn.relu(y_conv0)
+
+            ttnn.to_memory_config(y_conv0, ttnn.DRAM_MEMORY_CONFIG)
+            logger.info(f"🔷 Executing conv: decoder.{f_key}.fuse_conv.1")
+            y_conv1 = stage["fuse_conv_1"](y_conv0)
             ttnn.deallocate(y_conv0)
 
-            ttnn.to_memory_config(y_act0, ttnn.DRAM_MEMORY_CONFIG)
-            logger.info(f"🔷 Executing conv: decoder.{f_key}.fuse_conv.1")
-            y_conv1 = stage["fuse_conv_1"](y_act0)
-            ttnn.deallocate(y_act0)
-
-            # Height-sliced convolutions may also output in flattened format
             is_flattened_conv1 = y_conv1.shape[1] == 1 and y_conv1.shape[2] == expected_H * expected_W
             if is_flattened_conv1:
                 N = y_conv1.shape[0]
@@ -308,8 +298,8 @@ class TtDeepLabV3PlusHead(LightweightModule):
                     f"Reshaped height-sliced fuse_conv_1 output from [1, 1, {expected_H * expected_W}, {C}] to [{N}, {expected_H}, {expected_W}, {C}]"
                 )
 
-            y = self.activation(y_conv1)
-            ttnn.deallocate(y_conv1)
+            # fuse_conv.1 uses width slicing, so fused ReLU is used
+            y = y_conv1
 
         logger.debug(f"TtDeepLabV3PlusHead layers complete - final output shape: {y.shape}")
         return y
@@ -328,7 +318,6 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         input_shape: Dict[str, ShapeSpec],
         head_channels: int,
         num_classes: int,
-        norm: str,
         project_channels: List[int],
         aspp_dilations: List[int],
         aspp_dropout: float,
@@ -343,7 +332,6 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
             parameters=decoder_params,
             device=device,
             input_shape=input_shape,
-            norm=norm,
             num_classes=None,
             project_channels=project_channels,
             aspp_dilations=aspp_dilations,
@@ -354,7 +342,6 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
             model_configs=model_configs,
         )
         assert self.decoder_only
-        use_bias = norm == ""
         decoder_out_ch = decoder_channels[0]
         logger.debug(f"Initializing TtPanopticDeepLabSemSegHead with {num_classes} classes")
 
@@ -490,17 +477,13 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
 
         logger.info(f"🔷 Executing conv: semantic_head.head.0")
         y = self.head_0(y)
-        y = self.activation(y)
 
-        # Reshape if flattened by height-sliced conv
         if y.shape[1] == 1 and y.shape[2] == self._actual_head_h * self._actual_head_w:
             y = ttnn.reshape(y, (y.shape[0], self._actual_head_h, self._actual_head_w, y.shape[3]))
 
         logger.info(f"🔷 Executing conv: semantic_head.head.1")
         y = self.head_1(y)
-        y = self.activation(y)
 
-        # Reshape if flattened by height-sliced conv
         if y.shape[1] == 1 and y.shape[2] == self._actual_head_h * self._actual_head_w:
             y = ttnn.reshape(y, (y.shape[0], self._actual_head_h, self._actual_head_w, y.shape[3]))
 

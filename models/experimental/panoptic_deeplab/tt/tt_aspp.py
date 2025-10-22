@@ -4,85 +4,10 @@
 from math import floor
 
 import ttnn
-from typing import Any
 from loguru import logger
 
 from models.tt_cnn.tt.builder import TtConv2d
 from models.common.lightweightmodule import LightweightModule
-
-
-def get_ttnn_activation(activation_name: str):
-    """Returns a ttnn activation function."""
-    if activation_name.lower() == "silu":
-        return ttnn.silu
-    elif activation_name.lower() == "relu":
-        return ttnn.relu
-    else:
-        raise NotImplementedError(f"Activation '{activation_name}' not supported in ttnn.")
-
-
-def get_ttnn_norm(norm_name: str, num_channels: int, device, norm_params: Any = None):
-    """
-    Returns a ttnn normalization function.
-
-    Args:
-        norm_name: Type of normalization ('BN'/'SyncBN', 'GN', 'LN', or '')
-        num_channels: Number of channels to normalize
-        device: TTNN device
-        norm_params: Optional dictionary with pre-trained normalization parameters
-                    Expected keys: 'weight', 'bias', 'running_mean', 'running_var'
-    """
-    if norm_name.lower() in ["bn", "syncbn", "batchnorm"]:
-        # BatchNorm / SyncBN implementation
-        if norm_params is not None:
-            weight = norm_params.weight
-            bias = norm_params.bias
-            running_mean = norm_params.running_mean
-            running_var = norm_params.running_var
-        else:
-            weight = ttnn.ones((1, num_channels, 1, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-            bias = ttnn.zeros((1, num_channels, 1, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-            running_mean = ttnn.zeros(
-                (1, num_channels, 1, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-            )
-            running_var = ttnn.ones(
-                (1, num_channels, 1, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-            )
-
-        def batch_norm_fn(x):
-            x_nchw = ttnn.permute(x, (0, 3, 1, 2))
-
-            x_normed = ttnn.batch_norm(
-                x_nchw,
-                running_mean=running_mean,
-                running_var=running_var,
-                weight=weight,
-                bias=bias,
-                eps=1e-5,
-                training=False,
-            )
-
-            x_nhwc = ttnn.permute(x_normed, (0, 2, 3, 1))
-
-            return x_nhwc
-
-        return batch_norm_fn
-    elif norm_name.lower() == "gn":
-        num_groups = 32
-        weight = ttnn.ones((1, 1, 1, num_channels), device=device, layout=ttnn.TILE_LAYOUT)
-        bias = ttnn.zeros((1, 1, 1, num_channels), device=device, layout=ttnn.TILE_LAYOUT)
-        return lambda x: ttnn.group_norm(x, num_groups=num_groups, weight=weight, bias=bias)
-    elif norm_name.lower() == "ln":
-        weight = ttnn.ones((1, 1, 1, num_channels), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        bias = ttnn.zeros((1, 1, 1, num_channels), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-
-        return lambda x: ttnn.layer_norm(x, weight=weight, bias=bias)
-    elif norm_name == "":
-        return lambda x: x  # No-op
-    else:
-        raise NotImplementedError(
-            f"Normalization '{norm_name}' not supported. Supported: 'BN'/'SyncBN', 'GN', 'LN', or '' (none)."
-        )
 
 
 class TtASPP(LightweightModule):
@@ -104,7 +29,6 @@ class TtASPP(LightweightModule):
         in_channels: int,
         out_channels: int,
         dilations,
-        norm: str,
         activation: str,
         dropout: float = 0.0,
         pool_kernel_size,
@@ -120,7 +44,6 @@ class TtASPP(LightweightModule):
         use_bias = False
 
         self.device = device
-        self.activation = ttnn.relu  # For manual ReLU on channel-sliced branches
         self.pool_kernel_size = pool_kernel_size
 
         self.conv_branches = []
@@ -189,30 +112,29 @@ class TtASPP(LightweightModule):
             logger.info(f"🔷 Executing conv: aspp.convs.{i}")
             logger.info(f"  Input x: shape={x.shape}, dtype={x.dtype}, layout={x.layout}, is_sharded={x.is_sharded()}")
 
+            # Branches 1-3 use channel slicing and need manual ReLU
+            # Branch 0 uses no slicing and can use fused ReLU
+            needs_manual_relu = i in [1, 2, 3]
+
             # Special handling for branch 3: needs flattened format for bfloat8_b dilated convolutions
             # Block float dtypes require flattened format (1, 1, nhw, C) for dilated convolutions
             if i == 3 and x.dtype == ttnn.bfloat8_b:
                 logger.info(f"  Branch {i}: Flattening input for bfloat8_b dilated convolution")
-                # Flatten input to required format for bfloat8_b dilated convs
                 x_for_conv = ttnn.reshape(x, (1, 1, H * W, C))
                 logger.info(f"    Flattened: {x.shape} -> {x_for_conv.shape}")
 
-                # Call conv with channel slicing handled by the wrapper
                 branch_out = conv(x_for_conv)
-
-                # Reshape back to NHWC format and apply ReLU
                 branch_out = ttnn.reshape(branch_out, (N, H, W, branch_out.shape[3]))
-                branch_out = self.activation(branch_out)
+                if needs_manual_relu:
+                    branch_out = ttnn.relu(branch_out)
             else:
-                # Standard path for other branches
                 branch_out = conv(x)
 
-                # Channel-sliced convolutions may output in flattened format [N, 1, H*W, C]
-                # Reshape back to [N, H, W, C] and apply ReLU manually
                 if branch_out.shape[1] == 1 and branch_out.shape[2] == H * W:
                     branch_out = ttnn.reshape(branch_out, (N, H, W, branch_out.shape[3]))
-                    # Apply ReLU manually (fused ReLU doesn't work with channel slicing)
-                    branch_out = self.activation(branch_out)
+
+                if needs_manual_relu:
+                    branch_out = ttnn.relu(branch_out)
 
             res.append(branch_out)
 
