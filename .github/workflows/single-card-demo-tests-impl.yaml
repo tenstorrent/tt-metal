@@ -228,10 +228,10 @@ jobs:
         if: ${{ !matrix.test-group.civ2-compatible }}
         run: |
           if [ -d "/mnt/MLPerf" ] && mountpoint -q /mnt/MLPerf; then
-            echo "✓ Weka is mounted at /mnt/MLPerf"
+            echo "CIv1: ✓ Weka is mounted at /mnt/MLPerf"
             ls -al /mnt/MLPerf/bit_error_tests
           else
-            echo "✗ Weka is not mounted at /mnt/MLPerf"
+            echo "CIv2: ✗ Weka is not mounted at /mnt/MLPerf"
             exit 1
           fi
       - name: Run demo regression tests
