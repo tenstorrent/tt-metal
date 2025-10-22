@@ -6,8 +6,8 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_fused)
 set_target_properties(
     ttnn_op_eltwise_fused
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            false
+        INTERFACE_HEADER_TO_VERIFY
+            api
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
