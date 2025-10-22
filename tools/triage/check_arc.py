@@ -20,8 +20,6 @@ from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.hardware.noc_block import NocBlock
-from ttexalens.hw.tensix.blackhole.blackhole import BlackholeDevice
-from ttexalens.hw.tensix.wormhole.wormhole import WormholeDevice
 from ttexalens.tt_exalens_lib import read_arc_telemetry_entry
 import utils
 from utils import RED, BLUE, GREEN, ORANGE, RST
@@ -113,9 +111,9 @@ def check_arc(device: Device):
         (postcode & 0xFFFF0000) == 0xC0DE0000,
         f"ARC postcode: {RED}0x{postcode:08x}{RST}. Expected {BLUE}0xc0de____{RST}",
     )
-    if type(device) == WormholeDevice:
+    if device.is_wormhole():
         return check_wormhole_arc(arc, postcode)
-    elif type(device) == BlackholeDevice:
+    elif device.is_blackhole():
         return check_blackhole_arc(arc, postcode)
     else:
         utils.DEBUG(f"Unsupported architecture for check_arc: {device._arch}")
