@@ -27,10 +27,12 @@ runs:
       shell: bash
       run: |
         # Get all tags matching exact semver format v{number}.{number}.{number} excluding any with dashes
-        latest_semver=$(git tag -l | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -v '-' | sort -V | tail -1)
-        if [ -z "$latest_semver" ]; then
+        tags=$(git tag -l | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -v '-' || true)
+        if [ -z "$tags" ]; then
           echo "No semver tags found, using v0.0.0"
           latest_semver="v0.0.0"
+        else
+          latest_semver=$(echo "$tags" | sort -V | tail -1)
         fi
         echo "Latest semver tag: $latest_semver"
         echo "latest_semver=$latest_semver" >> "$GITHUB_OUTPUT"
