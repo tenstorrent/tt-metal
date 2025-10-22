@@ -265,6 +265,7 @@ public:
 private:
     void init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     void deallocate_impl(bool force);
+    void assign_id();
 };
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
