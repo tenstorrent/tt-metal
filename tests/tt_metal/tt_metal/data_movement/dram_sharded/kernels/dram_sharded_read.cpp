@@ -7,8 +7,8 @@
 #include "dataflow_api.h"
 #include "tensix_types.h"
 
-#include "debug/dprint.h"
-#include "debug/dprint_pages.h"
+// #include "debug/dprint.h"
+// #include "debug/dprint_pages.h"
 
 // DRAM to L1 read
 void kernel_main() {
