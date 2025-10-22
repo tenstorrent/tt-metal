@@ -22,6 +22,14 @@ jobs:
         with:
           fetch-depth: 0  # Fetch all history for git tag operations
 
+      # Clean up existing tags to simulate a repository with no tags
+      - name: Remove all existing tags for clean test
+        run: |
+          echo "Removing all existing tags to simulate clean repository"
+          git tag -d $(git tag -l) || echo "No tags to delete"
+          echo "Remaining tags after cleanup:"
+          git tag -l
+
       # Test 1: Normal release with no previous tags
       - name: Test 1 - No previous tags (should create v0.0.0)
         id: test-no-tags
