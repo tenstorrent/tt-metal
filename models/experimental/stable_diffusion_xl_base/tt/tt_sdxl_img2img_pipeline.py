@@ -119,7 +119,7 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
 
         original_size = (height, width)
         target_size = (height, width)
-        crops_coords_top_left = (0, 0)
+        crops_coords_top_left = self.pipeline_config.crop_coords_top_left
 
         add_time_ids, negative_add_time_ids = self.torch_pipeline._get_add_time_ids(
             original_size,

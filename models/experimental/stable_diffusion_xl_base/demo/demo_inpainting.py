@@ -44,19 +44,34 @@ def run_demo_inference(
     strength,
     use_cfg_parallel,
     fixed_seed_for_batch,
+    prompt_2=None,
+    negative_prompt_2=None,
+    crop_coords_top_left=(0, 0),
+    guidance_rescale=0.0,
+    timesteps=None,
+    sigmas=None,
 ):
     batch_size = list(ttnn_device.shape)[1] if use_cfg_parallel else ttnn_device.get_num_devices()
 
     start_from, _ = evaluation_range
 
+    assert 0.0 <= guidance_rescale <= 1.0, f"guidance_rescale must be in [0.0, 1.0], got {guidance_rescale}"
+
+    assert not (timesteps is not None and sigmas is not None), "Cannot pass both timesteps and sigmas. Choose one."
+
     if isinstance(prompts, str):
         prompts = [prompts]
+
+    if prompt_2 is not None and isinstance(prompt_2, str):
+        prompt_2 = [prompt_2]
 
     needed_padding = (batch_size - len(prompts) % batch_size) % batch_size
     if isinstance(negative_prompts, list):
         assert len(negative_prompts) == len(prompts), "prompts and negative_prompt lists must be the same length"
 
     prompts = prompts + [""] * needed_padding
+    if prompt_2 is not None:
+        prompt_2 = prompt_2 + [""] * needed_padding
     if isinstance(negative_prompts, list):
         negative_prompts = negative_prompts + [""] * needed_padding
 
@@ -88,6 +103,8 @@ def run_demo_inference(
             strength=strength,
             is_galaxy=is_galaxy(),
             use_cfg_parallel=use_cfg_parallel,
+            crop_coords_top_left=crop_coords_top_left,
+            guidance_rescale=guidance_rescale,
         ),
     )
 
@@ -166,10 +183,19 @@ def run_demo_inference(
             else negative_prompts
         )
 
+        prompts_2_batch = (
+            prompt_2[iter * batch_size : (iter + 1) * batch_size] if isinstance(prompt_2, list) else prompt_2
+        )
+        negative_prompts_2_batch = (
+            negative_prompt_2[iter * batch_size : (iter + 1) * batch_size]
+            if isinstance(negative_prompt_2, list)
+            else negative_prompt_2
+        )
+
         (
             all_prompt_embeds_torch,
             torch_add_text_embeds,
-        ) = tt_sdxl.encode_prompts(prompts_batch, negative_prompts_batch)
+        ) = tt_sdxl.encode_prompts(prompts_batch, negative_prompts_batch, prompts_2_batch, negative_prompts_2_batch)
 
         # This is a hack to get things working, but essentially:
         # We start with num_inference_steps == 20 say, generate_input_tensors() will reduce this to 19, and it will
@@ -314,6 +340,13 @@ def prepare_device(mesh_device, use_cfg_parallel):
     ],
     ids=("with_trace", "no_trace"),
 )
+@pytest.mark.parametrize(
+    "prompt_2, negative_prompt_2, crop_coords_top_left, guidance_rescale, timesteps, sigmas",
+    [
+        (None, None, (0, 0), 0.0, None, None),
+    ],
+    ids=["default_additional_parameters"],
+)
 def test_demo(
     validate_fabric_compatibility,
     mesh_device,
@@ -329,6 +362,12 @@ def test_demo(
     strength,
     use_cfg_parallel,
     fixed_seed_for_batch,
+    prompt_2,
+    negative_prompt_2,
+    crop_coords_top_left,
+    guidance_rescale,
+    timesteps,
+    sigmas,
 ):
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
@@ -345,4 +384,10 @@ def test_demo(
         strength,
         use_cfg_parallel,
         fixed_seed_for_batch,
+        prompt_2,
+        negative_prompt_2,
+        crop_coords_top_left,
+        guidance_rescale,
+        timesteps,
+        sigmas,
     )

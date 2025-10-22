@@ -125,7 +125,7 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
 
         original_size = (height, width)
         target_size = (height, width)
-        crops_coords_top_left = (0, 0)
+        crops_coords_top_left = self.pipeline_config.crop_coords_top_left
 
         add_time_ids, negative_add_time_ids = self.torch_pipeline._get_add_time_ids(
             original_size,
@@ -200,6 +200,7 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
                 self.ag_semaphores,
                 capture_trace=False,
                 use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
+                guidance_rescale=self.pipeline_config.guidance_rescale,
             )
             ttnn.synchronize_device(self.ttnn_device)
             profiler.end("warmup_run")
@@ -261,6 +262,7 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
             output_shape=self.output_shape,
             tid_vae=self.tid_vae if hasattr(self, "tid_vae") else None,
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
+            guidance_rescale=self.pipeline_config.guidance_rescale,
         )
         return imgs
 
@@ -411,6 +413,7 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
             self.ag_semaphores,
             capture_trace=False,
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
+            guidance_rescale=self.pipeline_config.guidance_rescale,
         )
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("capture_model_trace")
