@@ -7,21 +7,22 @@ ARG UBUNTU_VERSION=22.04
 FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
-
 ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
 ENV PATH="$CARGO_HOME/bin:$PATH"
 
-# Install runtime deps
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
 COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
+
 # --docker skips installing hugepages. Skipping as we're technically on BM
 RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 
 #############################################################
 
 FROM base AS ci-build
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
+
 # Install ccache from upstream; Apt's version for 20.04 predates remote_storage support
 RUN mkdir -p /usr/local/bin && wget -O /tmp/ccache.tar.xz https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2-linux-x86_64.tar.xz && \
     tar -xf /tmp/ccache.tar.xz -C /usr/local/bin --strip-components=1 && \
@@ -71,6 +72,8 @@ ENV CCACHE_TEMPDIR=/tmp/ccache
 
 #############################################################
 FROM ci-build as build-artifacts
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
+
 
 # Copy files required for build only (omit scripts, docs, tests not needed for build
 # misc
@@ -178,6 +181,7 @@ COPY --from=build-artifacts /build /build
 #############################################################
 
 FROM ci-build AS ci-test
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 ARG UBUNTU_VERSION=22.04
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
@@ -210,6 +214,7 @@ RUN if [ "$UBUNTU_VERSION" = "22.04" ]; then \
 #############################################################
 
 FROM ci-test AS dev
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 ARG UBUNTU_VERSION=22.04
 # Install dev deps
