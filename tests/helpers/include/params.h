@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <type_traits>
 
 // Include auto-generated build configuration
@@ -32,22 +33,15 @@ constexpr bool unpack_to_dest = UNPACKING_TO_DEST;
 /*DATA FORMAT CONFIGURATION*/
 
 // Given input and output formats, infer the rest of the format configuration
-#if DATA_FORMAT_INFERENCE_MODEL
-
-// If the input is exponentB, we cannot convert it to Float16 without enabling fp32 mode in dest;
-// this is considered a format combination outlier, so we enable dest_acc
-constexpr bool is_fp32_dest_acc_en =
-    dest_acc_en_input || is_format_combination_outlier(static_cast<DataFormat>(UNPACK_A_IN), static_cast<DataFormat>(PACK_OUT), dest_acc_en_input);
-
-// Get Data Formats
-inline constexpr std::array<FormatConfig, L1_to_L1_ITERATIONS> formats_array =
-    data_formats<static_cast<DataFormat>(UNPACK_A_IN), static_cast<DataFormat>(PACK_OUT), dest_acc_en_input, L1_to_L1_ITERATIONS>();
-
-constexpr auto& formats = formats_array[0];
-
-#else // Not inferring formats — all formats are pre-defined. Set format configuration directly.
 constexpr bool is_fp32_dest_acc_en = dest_acc_en_input; // dest_acc doesn't require adjustment; configuration is hard-coded
-constexpr FormatConfig formats     = FormatConfig(UNPACK_A_IN, UNPACK_A_OUT, MATH_FORMAT, PACK_IN, PACK_OUT);
+
+// Build formats configurations L1-L1 run(s)
+#if FUSED_MULTIPLE_RUNS
+constexpr std::array<FormatConfig, L1_to_L1_ITERATIONS> formats_array = {
+    {FormatConfig(UNPACK_A_IN_LIST[0], UNPACK_A_OUT_LIST[0], MATH_FORMAT_LIST[0], PACK_IN_LIST[0], PACK_OUT_LIST[0]),
+     FormatConfig(UNPACK_A_IN_LIST[1], UNPACK_A_OUT_LIST[1], MATH_FORMAT_LIST[1], PACK_IN_LIST[1], PACK_OUT_LIST[1])}};
+#else
+constexpr FormatConfig formats = FormatConfig(UNPACK_A_IN, UNPACK_A_OUT, MATH_FORMAT, PACK_IN, PACK_OUT);
 #endif
 
 // Tile count validation - applies to all kernel variants (UNPACK, MATH, PACK)
