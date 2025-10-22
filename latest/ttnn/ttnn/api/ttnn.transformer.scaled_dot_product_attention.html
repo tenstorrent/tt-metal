@@ -162,8 +162,9 @@ The implementation is FlashAttention-2.”</p>
 <ul class="simple">
 <li><p><strong>attn_mask</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>. [b x 1 x s x s]. Head broadcasting is implied.</p></li>
 <li><p><strong>is_causal</strong> (<em>bool</em>) – Defaults to <cite>true</cite>.</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>scale</strong> (<em>float</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>sliding_window_size</strong> (<em>int</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>. Size of sliding window for attention. If provided &amp;&amp; is_causal, only attends to the last <cite>sliding_window_size</cite> tokens. If provided &amp;&amp; !is_causal, attends to a window of size <cite>sliding_window_size</cite> centered at the current position.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>program_config</strong> (<em>SDPAProgramConfig</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
 </ul>
