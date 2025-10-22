@@ -412,6 +412,15 @@ FORCE_INLINE void send_next_data(
 
     while (internal_::eth_txq_is_busy(sender_txq_id)) {
     };
+    // Minimal trace of the remote stream register bump (pkts_sent):
+    // 0xE1: [23:16]=reg_id, [15:8]=sender_ch, [7:0]=delta
+#if defined(WATCHER_ENABLED)
+    // WATCHER_RING_BUFFER_PUSH(
+    //     0xE1000000u
+    //     | (((uint32_t)to_receiver_pkts_sent_id & 0xFFu) << 16)
+    //     | (((uint32_t)sender_channel_index & 0xFFu) << 8)
+    //     | (packets_to_forward & 0xFFu));
+#endif
     remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(packets_to_forward);
 }
 
@@ -1553,7 +1562,7 @@ void run_sender_channel_step_impl(
     static uint32_t prev_packed = 0xFFFFFFFF;      // detect changes only
     // One-time per channel: identify which sender channel this instance is
     if (prev_free_slots == 0xFFFFFFFF) {
-        WATCHER_RING_BUFFER_PUSH(0xFA000000u | (uint32_t)sender_channel_index);
+        // WATCHER_RING_BUFFER_PUSH(0xFA000000u | (uint32_t)sender_channel_index);
     }
     // If the receiver has space, and we have one or more packets unsent from producer, then send one
     // TODO: convert to loop to send multiple packets back to back (or support sending multiple packets in one shot)
@@ -1572,7 +1581,7 @@ void run_sender_channel_step_impl(
     uint32_t packed = 0xB0000000u | ((free_slots & 0xFFu) << 12) | ((uint32_t)can_send << 2) |
                       ((uint32_t)has_unsent_packet << 1) | ((uint32_t)receiver_has_space_for_packet << 0);
     if (packed != prev_packed || free_slots != prev_free_slots) {
-        WATCHER_RING_BUFFER_PUSH(packed);
+        // WATCHER_RING_BUFFER_PUSH(packed);
         prev_packed = packed;
         prev_free_slots = free_slots;
     }
@@ -1595,7 +1604,7 @@ void run_sender_channel_step_impl(
         if constexpr (!UPDATE_PKT_HDR_ON_RX_CH) {
             update_packet_header_before_eth_send<sender_channel_index>(pkt_header);
         }
-        WATCHER_RING_BUFFER_PUSH(0xC0000000u | (send_ctr & 0x00FFFFFFu));
+        // WATCHER_RING_BUFFER_PUSH(0xC0000000u | (send_ctr & 0x00FFFFFFu));
         send_next_data<sender_channel_index, to_receiver_pkts_sent_id, SKIP_CONNECTION_LIVENESS_CHECK>(
             local_sender_channel,
             local_sender_channel_worker_interface,
@@ -1734,7 +1743,27 @@ void run_receiver_channel_step_impl(
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender) {
+    // Announce once which receiver channel & stream-reg we're polling
+#if defined(WATCHER_ENABLED)
+    {
+        static bool __announced = false;
+        if (!__announced) {
+            // [31:20]=0xE23, [19:16]=receiver_channel, [15:8]=stream-reg id
+            WATCHER_RING_BUFFER_PUSH(
+                0xE2300000u | ((uint32_t)receiver_channel << 16) | ((uint32_t)to_receiver_pkts_sent_id << 8));
+            __announced = true;
+        }
+    }
+#endif
     auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
+#if defined(WATCHER_ENABLED)
+    if (pkts_received_since_last_check > 0) {
+        // Credit seen (>0): [31:20]=0xE24, [19:16]=ch, [15:8]=reg, [7:0]=credit (clamped)
+        WATCHER_RING_BUFFER_PUSH(
+            0xE2400000u | ((uint32_t)receiver_channel << 16) | ((uint32_t)to_receiver_pkts_sent_id << 8) |
+            ((uint32_t)(pkts_received_since_last_check & 0xFFu)));
+    }
+#endif
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     bool unwritten_packets;
     if constexpr (enable_first_level_ack) {
@@ -1744,6 +1773,11 @@ void run_receiver_channel_step_impl(
         if (pkts_received) {
             // currently only support processing one packet at a time, so we only decrement by 1
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+#if defined(WATCHER_ENABLED)
+            // Consumed one credit (ACK=ON): [31:20]=0xE25, [19:16]=ch, [15:8]=reg, [7:0]=1
+            WATCHER_RING_BUFFER_PUSH(
+                0xE2500000u | ((uint32_t)receiver_channel << 16) | ((uint32_t)to_receiver_pkts_sent_id << 8) | 0x01u);
+#endif
             receiver_send_received_ack(
                 receiver_channel_response_credit_sender, ack_counter.get_buffer_index(), local_receiver_channel);
             ack_counter.increment();
@@ -1839,6 +1873,11 @@ void run_receiver_channel_step_impl(
             wr_sent_counter.increment();
             // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+#if defined(WATCHER_ENABLED)
+            // Consumed one credit (ACK=OFF): [31:20]=0xE25, [19:16]=ch, [15:8]=reg, [7:0]=1
+            WATCHER_RING_BUFFER_PUSH(
+                0xE2500000u | ((uint32_t)receiver_channel << 16) | ((uint32_t)to_receiver_pkts_sent_id << 8) | 0x01u);
+#endif
         }
     }
 
