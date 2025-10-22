@@ -50,6 +50,7 @@
 #include "ttnn/operations/data_movement/sort/sort_pybind.hpp"
 #include "ttnn/operations/data_movement/gather/gather_pybind.hpp"
 #include "ttnn/operations/data_movement/gather/tosa/gather_tosa_pybind.hpp"
+#include "ttnn/operations/data_movement/reshape_on_device/reshape_experimental_pybind.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -86,6 +87,7 @@ void py_module(py::module& module) {
     py_bind_interleaved_to_sharded_partial(module);
     py_bind_repeat(module);
     py_bind_reshape(module);
+    py_bind_experimental_reshape(module);
     py_bind_reshape_view(module);
     py_bind_view(module);
     py_bind_reshard(module);
