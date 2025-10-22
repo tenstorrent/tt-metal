@@ -39,6 +39,7 @@ class TtnnGenericMLP(LightweightModule):
                         device,
                         activation=activation,
                         return_dims=True,
+                        math_fidelity=ttnn.MathFidelity.HiFi2,
                         shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                     )
                 )

@@ -21,6 +21,7 @@ class TtnnSharedMLP(LightweightModule):
             is_dealloc_act=True,
             return_dims=True,
             shard_layout=shard_layout,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
         )
         self.conv2 = TtnnConv2D(
             module.layer1.conv,
@@ -31,6 +32,7 @@ class TtnnSharedMLP(LightweightModule):
             return_dims=True,
             shard_layout=shard_layout,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
         )
         self.conv3 = TtnnConv2D(
             module.layer2.conv,
@@ -41,6 +43,7 @@ class TtnnSharedMLP(LightweightModule):
             return_dims=True,
             shard_layout=shard_layout,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
         )
 
     def forward(self, features):

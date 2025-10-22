@@ -81,15 +81,12 @@ def test_transformer_encoder_layer_inference(
     attn_mask = attn_mask.view(bsz * nhead, n, n)
     attn_mask_ttnn = ttnn.unsqueeze(attn_mask_ttnn, 1)
 
-    # Create positional embeddings
-    pos = torch.randn(seq_len, batch_size, d_model, dtype=torch.float32)
-
     # Get reference output with explicit None masks
     with torch.no_grad():
         ref_output = reference_model(
             src_input,
             src_mask=attn_mask,
-            pos=pos,
+            pos=None,
         )
 
     parameters = preprocess_model_parameters(

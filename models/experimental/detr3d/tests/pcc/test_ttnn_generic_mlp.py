@@ -150,10 +150,10 @@ def test_ttnn_generic_mlp(
         output_use_activation,
         output_use_norm,
         weight_init_name,
-    ).to(torch.bfloat16)
+    )
     load_torch_model_state(torch_model, weight_key_prefix)
 
-    x = torch.randn(x_shape, dtype=torch.bfloat16)
+    x = torch.randn(x_shape)
     torch_out = torch_model(x)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model,

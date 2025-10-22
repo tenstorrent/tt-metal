@@ -108,6 +108,8 @@ class TtnnConv2D(LightweightModule):
         return_dims=False,
         reshape_output=False,
         memory_config=None,
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
     ):
         super().__init__()
         self.conv = conv
@@ -121,10 +123,10 @@ class TtnnConv2D(LightweightModule):
         self.cache = cache
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=math_fidelity,
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
-            math_approx_mode=True,
+            math_approx_mode=math_approx_mode,
         )
         self.is_dealloc_act = is_dealloc_act
         self.conv_config = ttnn.Conv2dConfig(
