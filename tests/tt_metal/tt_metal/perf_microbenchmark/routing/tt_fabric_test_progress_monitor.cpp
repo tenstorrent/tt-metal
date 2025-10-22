@@ -13,6 +13,7 @@
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_fabric::fabric_tests {
 
@@ -79,7 +80,7 @@ DeviceProgress TestProgressMonitor::poll_device_senders(const MeshCoordinate& co
 
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    chip_id_t physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(progress.device_id);
+    const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(progress.device_id);
 
     auto* device_info = ctx_->get_device_info_provider();
     uint32_t result_addr = ctx_->get_sender_memory_map().get_result_buffer_address();
