@@ -196,24 +196,14 @@ jobs:
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_qb.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_lb.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_p300.py \
-            tests/ttnn/unit_tests/operations/ccl/perf/test_ccl_async_perf.py \
-            tests/ttnn/unit_tests/operations/ccl/perf/test_ccl_perf.py \
             tests/ttnn/unit_tests/operations/ccl/test_ag_rs_llama_prefill_TG.py \
-            tests/ttnn/unit_tests/operations/ccl/test_all_gather.py \
-            tests/ttnn/unit_tests/operations/ccl/test_all_gather_N300_post_commit.py \
-            tests/ttnn/unit_tests/operations/ccl/test_all_gather_TG_nightly.py \
-            tests/ttnn/unit_tests/operations/ccl/test_all_gather_TG_post_commit.py \
-            tests/ttnn/unit_tests/operations/ccl/test_all_gather_async_TG_nightly.py \
-            tests/ttnn/unit_tests/operations/ccl/test_all_gather_llama_perf_sweep.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_gather_matmul.py \
-            tests/ttnn/unit_tests/operations/ccl/test_all_gather_nightly.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_reduce_async.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_reduce_t3000_frequent.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_6U.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_t3000.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_6U.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_t3000.py \
-            tests/ttnn/unit_tests/operations/ccl/test_barrier_t3000_frequent.py \
             tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py \
             tests/ttnn/unit_tests/operations/ccl/test_fabric_ccl.py \
             tests/ttnn/unit_tests/operations/ccl/test_llama_prefill_ccl_ops.py \
@@ -226,7 +216,6 @@ jobs:
             tests/ttnn/unit_tests/operations/ccl/test_minimals.py \
             tests/ttnn/unit_tests/operations/ccl/test_moe_ccl_end_to_end.py \
             tests/ttnn/unit_tests/operations/ccl/test_new_all_broadcast.py \
-            tests/ttnn/unit_tests/operations/ccl/test_new_all_gather.py \
             tests/ttnn/unit_tests/operations/ccl/test_new_all_reduce.py \
             tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py \
             tests/ttnn/unit_tests/operations/ccl/test_qkv_all_reduce_minimal.py \
