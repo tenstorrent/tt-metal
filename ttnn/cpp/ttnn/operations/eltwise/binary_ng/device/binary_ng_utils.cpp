@@ -492,8 +492,10 @@ void add_activation_defines(
         });
 }
 
-std::map<std::string, std::string> make_dataflow_defines(const DataType dtype, const DataType b_dtype) {
+std::map<std::string, std::string> make_dataflow_defines(
+    const DataType dtype, const std::optional<DataType> b_dtype_opt) {
     std::map<std::string, std::string> defines;
+    const auto b_dtype = b_dtype_opt.value_or(dtype);
     // to maintain backward compatibility, we need to support both dtype and b_dtype
     if (dtype == DataType::FLOAT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
@@ -585,6 +587,8 @@ ShardSpec adjust_to_shape(const ShardSpec& shard_spec, const ttnn::Shape& from_s
     uint32_t to_width = to_shape[-1];
 
     // Adjust shard shape based on full volume ratios
+    TT_FATAL(from_volume_except_width > 0, "Invalid from_shape: volume is zero");
+    TT_FATAL(from_width > 0, "Invalid from_shape: width dimension is zero");
     ret.shape[0] = std::max((ret.shape[0] * to_volume_except_width) / from_volume_except_width, 32u);
     ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, 32u);
     return ret;

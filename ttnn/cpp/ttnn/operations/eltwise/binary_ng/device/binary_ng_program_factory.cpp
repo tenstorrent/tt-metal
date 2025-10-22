@@ -119,6 +119,11 @@ bool is_native_L1_sharding(const Tensor& a, const std::optional<Tensor>& b, cons
         if (is_uneven(a) || is_uneven(*b) || is_uneven(c)) {
             return false;
         }
+        if (a.memory_config().buffer_type() == BufferType::DRAM ||
+            b->memory_config().buffer_type() == BufferType::DRAM ||
+            c.memory_config().buffer_type() == BufferType::DRAM) {
+            return false;
+        }
         if ((a.memory_config().is_sharded() && a.memory_config().buffer_type() == BufferType::L1)) {
             return true;
         }
@@ -151,13 +156,11 @@ std::optional<AllShardSpecs> get_shard_specs(const Tensor& a, const std::optiona
     auto b_shape = b.has_value() ? b->padded_shape() : ttnn::Shape{1, 1};
     const auto& c_shape = c.padded_shape();
 
-    ShardSpec c_shard_spec = c_sharded   ? *c.shard_spec()
-                             : a_sharded ? adjust_to_shape(*a.shard_spec(), a_shape, c_shape)
-                                         : adjust_to_shape(*b->shard_spec(), b_shape, c_shape);
+    TT_FATAL(c.shard_spec().has_value(), "C must have a shard spec");
     return AllShardSpecs{
-        a_sharded ? *a.shard_spec() : adjust_to_shape(c_shard_spec, c_shape, a_shape),
-        b_sharded ? *b->shard_spec() : adjust_to_shape(c_shard_spec, c_shape, b_shape),
-        c_shard_spec};
+        a_sharded ? *a.shard_spec() : adjust_to_shape(*c.shard_spec(), c_shape, a_shape),
+        b_sharded ? *b->shard_spec() : adjust_to_shape(*c.shard_spec(), c_shape, b_shape),
+        *c.shard_spec()};
 }
 
 uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout memory_layout) {
@@ -737,8 +740,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         compute_kernel = kernel_config.compute_kernel;
     }
 
-    // to maintain backward compatibility, old writer kernel only needs b_dtype
-    auto writer_defines = make_dataflow_defines(b_dtype, a_dtype);
+    auto writer_defines = make_dataflow_defines(b_dtype);
     writer_defines["SRC_SHARDED"] = b_sharded ? "1" : "0";
     writer_defines["DST_SHARDED"] = (c_sharded && CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(
                                                       tensor_args.input_tensor_a, tensor_args.input_tensor_b, c))

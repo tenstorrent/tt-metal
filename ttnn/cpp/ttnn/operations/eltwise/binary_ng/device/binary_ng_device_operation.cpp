@@ -142,13 +142,6 @@ DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {
     return this->dtype.value_or(this->input_dtype);
 }
 
-inline void validate_sharding(
-    TensorMemoryLayout memory_layout_x,
-    const ShardSpec& shard_spec_x,
-    TensorMemoryLayout memory_layout_y,
-    const ShardSpec& shard_spec_y,
-    SubtileBroadcastType subtile_broadcast_type) {}
-
 void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // We don't support sharding for now
@@ -187,10 +180,6 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "LHS operand must be either sharded or interleaved");
-    } else {
-        TT_FATAL(
-            input_tensor_a.memory_config().buffer_type() == BufferType::L1,
-            "Sharded input tensor A memory config must be in L1");
     }
 
     bool output_sharded = attributes.memory_config.is_sharded();
@@ -198,9 +187,6 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Output must be interleaved or sharded");
-    } else {
-        TT_FATAL(
-            attributes.memory_config.buffer_type() == BufferType::L1, "Sharded output memory config must be in L1");
     }
 
     bool tensor_b_sharded = false;
@@ -216,44 +202,7 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 input_tensor_b->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
                 "RHS operand must be either sharded or interleaved");
-        } else {
-            TT_FATAL(
-                input_tensor_b->memory_config().buffer_type() == BufferType::L1,
-                "Sharded input tensor B memory config must be in L1");
         }
-    }
-
-    // Validate that all shard specs match
-    if (tensor_a_sharded) {
-        if (tensor_b_sharded) {
-            validate_sharding(
-                input_tensor_a.memory_config().memory_layout(),
-                *input_tensor_a.shard_spec(),
-                input_tensor_b->memory_config().memory_layout(),
-                *input_tensor_b->shard_spec(),
-                attributes.subtile_broadcast_type);
-        }
-        if (output_sharded) {
-            validate_sharding(
-                input_tensor_a.memory_config().memory_layout(),
-                *input_tensor_a.shard_spec(),
-                attributes.memory_config.memory_layout(),
-                attributes.memory_config.shard_spec().value_or(*input_tensor_a.shard_spec()),
-                attributes.subtile_broadcast_type);
-        }
-    } else if (tensor_b_sharded) {
-        if (output_sharded) {
-            validate_sharding(
-                input_tensor_b->memory_config().memory_layout(),
-                *input_tensor_b->shard_spec(),
-                attributes.memory_config.memory_layout(),
-                attributes.memory_config.shard_spec().value_or(*input_tensor_b->shard_spec()),
-                attributes.subtile_broadcast_type);
-        }
-    } else if (output_sharded) {
-        TT_FATAL(
-            attributes.memory_config.shard_spec().has_value(),
-            "Sharded output memory config must have shard spec if neither input is sharded");
     }
 }
 
