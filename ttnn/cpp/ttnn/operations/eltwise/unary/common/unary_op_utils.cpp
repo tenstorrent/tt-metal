@@ -879,6 +879,8 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::ALT_COMPLEX_ROTATE90);
     } else if (name == "hardmish") {
         return UnaryWithParam(UnaryOpType::HARDMISH, static_cast<float>(true));
+    } else if (name == "hardsigmoid") {
+        return UnaryWithParam(UnaryOpType::HARDSIGMOID);
     }
     TT_THROW("Unknown unary op: {}", name);
 }
@@ -915,6 +917,7 @@ std::string unary_with_param_to_string(const UnaryWithParam& unary_op) {
         case UnaryOpType::SOFTPLUS: return "softplus";
         case UnaryOpType::ALT_COMPLEX_ROTATE90: return "alt_complex_rotate90";
         case UnaryOpType::HARDMISH: return "hardmish";
+        case UnaryOpType::HARDSIGMOID: return "hardsigmoid";
         default: TT_THROW("Unsupported unary op type: {}", static_cast<int>(unary_op.op_type));
     }
 }

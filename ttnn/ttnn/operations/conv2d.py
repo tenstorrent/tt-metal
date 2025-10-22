@@ -174,6 +174,7 @@ def get_torch_act_func_from_string(activation):
         ttnn.UnaryOpType.SOFTPLUS: torch.nn.functional.softplus,
         ttnn.UnaryOpType.GELU: torch.nn.functional.gelu,
         ttnn.UnaryOpType.SQRT: torch.sqrt,
+        ttnn.UnaryOpType.HARDSIGMOID: torch.nn.functional.hardsigmoid,
     }
 
     # Handle None activation

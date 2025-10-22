@@ -684,6 +684,7 @@ def test_conv_features_multi_device(
         ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH),
         ttnn.UnaryWithParam(ttnn.UnaryOpType.SQRT),
         ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDSIGMOID),
     ],
 )
 def test_conv_activation(
