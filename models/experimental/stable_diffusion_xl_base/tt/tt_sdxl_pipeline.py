@@ -37,6 +37,7 @@ class TtSDXLPipelineConfig:
     use_cfg_parallel: bool = False
     crop_coords_top_left: tuple = (0, 0)
     guidance_rescale: float = 0.0
+    skip_vae_decode: bool = False
     _debug_mode: bool = False
     _torch_pipeline_type = StableDiffusionXLPipeline
 
@@ -347,6 +348,7 @@ class TtSDXLPipeline(LightweightModule):
                 use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
                 guidance_rescale=self.guidance_rescale,
                 one_minus_guidance_rescale=self.one_minus_guidance_rescale,
+                skip_vae_decode=self.pipeline_config.skip_vae_decode,
             )
             ttnn.synchronize_device(self.ttnn_device)
             profiler.end("warmup_run")
@@ -487,6 +489,7 @@ class TtSDXLPipeline(LightweightModule):
         fixed_seed_for_batch=False,
         timesteps=None,
         sigmas=None,
+        input_latents=None,
     ):
         # Generate user input tensors for the TT model.
 
@@ -508,25 +511,30 @@ class TtSDXLPipeline(LightweightModule):
             start_latent_seed, int
         ), "start_latent_seed must be an integer or None"
 
-        latents_list = []
-        for index in range(self.batch_size):
-            if start_latent_seed is not None:
-                torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed + index)
-            latents = self.torch_pipeline.prepare_latents(
-                1,
-                num_channels_latents,
-                height,
-                width,
-                all_prompt_embeds_torch.dtype,
-                self.cpu_device,
-                None,
-                None,
-            )
-            B, C, H, W = latents.shape  # 1, 4, 128, 128
-            latents = torch.permute(latents, (0, 2, 3, 1))  # [1, H, W, C]
-            latents = latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
-            latents_list.append(latents)
-        tt_latents = torch.cat(latents_list, dim=0)  # [batch_size, 1, H*W, C]
+        if input_latents is not None:
+            # Use provided latents (e.g., from base pipeline for refiner)
+            tt_latents = input_latents
+        else:
+            # Generate random latents
+            latents_list = []
+            for index in range(self.batch_size):
+                if start_latent_seed is not None:
+                    torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed + index)
+                latents = self.torch_pipeline.prepare_latents(
+                    1,
+                    num_channels_latents,
+                    height,
+                    width,
+                    all_prompt_embeds_torch.dtype,
+                    self.cpu_device,
+                    None,
+                    None,
+                )
+                B, C, H, W = latents.shape  # 1, 4, 128, 128
+                latents = torch.permute(latents, (0, 2, 3, 1))  # [1, H, W, C]
+                latents = latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
+                latents_list.append(latents)
+            tt_latents = torch.cat(latents_list, dim=0)  # [batch_size, 1, H*W, C]
 
         self.extra_step_kwargs = self.torch_pipeline.prepare_extra_step_kwargs(None, 0.0)
         text_encoder_projection_dim = self.torch_pipeline.text_encoder_2.config.projection_dim
@@ -581,6 +589,21 @@ class TtSDXLPipeline(LightweightModule):
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("prepare_input_tensors")
 
+    def set_input_latents(self, latents):
+        # Load pre-denoised latents from base pipeline into refiner.
+        # Used when refiner continues denoising from base output.
+
+        assert self.allocated_device_tensors, "Device tensors are not allocated"
+
+        logger.info("Setting input latents for refiner...")
+        profiler.start("set_input_latents")
+
+        # Copy latents to device tensor
+        ttnn.copy_host_to_device_tensor(latents, self.tt_latents_device)
+
+        ttnn.synchronize_device(self.ttnn_device)
+        profiler.end("set_input_latents")
+
     def generate_images(self):
         # SDXL inference run.
         assert self.image_processing_compiled, "Image processing is not compiled"
@@ -611,6 +634,7 @@ class TtSDXLPipeline(LightweightModule):
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
             guidance_rescale=self.guidance_rescale,
             one_minus_guidance_rescale=self.one_minus_guidance_rescale,
+            skip_vae_decode=self.pipeline_config.skip_vae_decode,
         )
         self._reset_num_inference_steps()
         return imgs
@@ -638,6 +662,7 @@ class TtSDXLPipeline(LightweightModule):
                 model_config=self.tt_model_config,
                 debug_mode=pipeline_config._debug_mode,
             )
+            # Skip VAE for refiner pipelines
             self.tt_vae = (
                 TtAutoencoderKL(
                     self.ttnn_device,
@@ -645,7 +670,7 @@ class TtSDXLPipeline(LightweightModule):
                     self.tt_model_config,
                     debug_mode=pipeline_config._debug_mode,
                 )
-                if pipeline_config.vae_on_device
+                if pipeline_config.vae_on_device and not pipeline_config.skip_vae_decode
                 else None
             )
             self.tt_scheduler = TtEulerDiscreteScheduler(
@@ -790,6 +815,7 @@ class TtSDXLPipeline(LightweightModule):
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
             guidance_rescale=self.guidance_rescale,
             one_minus_guidance_rescale=self.one_minus_guidance_rescale,
+            skip_vae_decode=self.pipeline_config.skip_vae_decode,
         )
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("capture_model_trace")
