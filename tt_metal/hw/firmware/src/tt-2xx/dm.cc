@@ -163,7 +163,7 @@ int main() {
         asm("wfi");
     } else {  // This is DM0
         device_setup();
-        deassert_all_reset();
+        // deassert_all_reset();
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
