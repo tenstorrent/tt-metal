@@ -31,7 +31,7 @@
 #include "program/program_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
-#include "semaphore.hpp"
+#include "impl/buffers/semaphore.hpp"
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tracy/Tracy.hpp"
