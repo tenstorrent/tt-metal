@@ -276,6 +276,9 @@ jobs:
       - name: Test multiple RC tags
         run: |
           git tag v1.0.0
+          echo "new feature" > test-minor.txt
+          git add test-minor.txt
+          git commit -m "Add new feature (MINOR): User dashboard"
           git tag v1.1.0-rc1
           git tag v1.1.0-rc2
           echo "Created multiple RC tags"
