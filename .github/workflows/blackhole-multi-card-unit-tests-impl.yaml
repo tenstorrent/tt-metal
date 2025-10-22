@@ -32,6 +32,8 @@ jobs:
             runner-label: BH-LoudBox
           - name: P300 unit tests
             runner-label: P300-viommu
+          - name: QuietBox Global Edition unit tests
+            runner-label: BH-QB-GE
         test-group:
           - name: fabric 1D unit tests
             cmd: |

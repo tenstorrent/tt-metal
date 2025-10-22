@@ -107,7 +107,7 @@ test_suite_bh_multi_pcie_metal_unit_tests() {
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     ./build/test/tt_metal/unit_tests_eth
-    if [[ "$hw_topology" == "blackhole_llmbox" ]]; then
+    if [[ "$hw_topology" == "blackhole_llmbox" ]] || [[ "$hw_topology" == "blackhole_qb_ge" ]]; then
         pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_qb.py
     elif [[ "$hw_topology" == "blackhole_loudbox" ]]; then
         pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_lb.py
@@ -117,12 +117,12 @@ test_suite_bh_multi_pcie_metal_unit_tests() {
 }
 
 test_suite_bh_multi_pcie_llama_demo_tests() {
-    echo "[upstream-tests] Running BH LLMBox upstream Llama demo model tests"
+    echo "[upstream-tests] Running BH multi-pcie upstream Llama demo model tests for topology: $hw_topology"
     verify_llama_dir_
 
     if [[ "$hw_topology" == "blackhole_deskbox" ]] || [[ "$hw_topology" == "blackhole_p300" ]]; then
         local data_parallel_devices="2"
-    elif [[ "$hw_topology" == "blackhole_llmbox" ]]; then
+    elif [[ "$hw_topology" == "blackhole_llmbox" ]] || [[ "$hw_topology" == "blackhole_qb_ge" ]]; then
         local data_parallel_devices="4"
     elif [[ "$hw_topology" == "blackhole_loudbox" ]]; then
         local data_parallel_devices="8"
@@ -137,12 +137,12 @@ test_suite_bh_multi_pcie_llama_demo_tests() {
 }
 
 test_suite_bh_multi_pcie_llama_stress_tests() {
-    echo "[upstream-tests] Running BH LLMBox upstream Llama stress model tests"
+    echo "[upstream-tests] Running BH multi-pcie upstream Llama stress model tests for topology: $hw_topology"
     verify_llama_dir_
 
     if [[ "$hw_topology" == "blackhole_deskbox" ]] || [[ "$hw_topology" == "blackhole_p300" ]]; then
         local data_parallel_devices="2"
-    elif [[ "$hw_topology" == "blackhole_llmbox" ]]; then
+    elif [[ "$hw_topology" == "blackhole_llmbox" ]] || [[ "$hw_topology" == "blackhole_qb_ge" ]]; then
         local data_parallel_devices="4"
     elif [[ "$hw_topology" == "blackhole_loudbox" ]]; then
         local data_parallel_devices="8"
@@ -245,6 +245,10 @@ test_suite_bh_multi_pcie_metal_unit_tests
 test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
+hw_topology_test_suites["blackhole_qb_ge"]="
+test_suite_bh_multi_pcie_metal_unit_tests
+test_suite_bh_pcie_didt_tests
+test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["wh_6u"]="test_suite_wh_6u_model_unit_tests
 test_suite_wh_6u_llama_demo_tests
