@@ -15,11 +15,12 @@ from ....parallel.manager import CCLManager
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
+from ....utils.test import ring_params, line_params
 from diffusers import WanTransformer3DModel
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, num_links",
+    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology",
     [
         # [(1, 1), 0, 1, 1],
         # [(1, 2), 0, 1, 1],
@@ -28,11 +29,11 @@ from diffusers import WanTransformer3DModel
         # [(2, 1), 1, 0, 1],
         # [(2, 2), 0, 1, 1],
         # [(2, 2), 1, 0, 1],
-        [(2, 4), 0, 1, 1],
-        [(2, 4), 1, 0, 1],
+        [(2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear],
+        [(2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear],
         # [(1, 8), 1, 0, 1],
-        [(4, 8), 0, 1, 4],
-        [(4, 8), 1, 0, 4],
+        [(4, 8), 0, 1, 4, ring_params, ttnn.Topology.Ring],
+        [(4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring],
     ],
     ids=[
         # "1x1sp0tp1",
@@ -48,7 +49,7 @@ from diffusers import WanTransformer3DModel
         "4x8sp0tp1",
         "4x8sp1tp0",
     ],
-    indirect=["mesh_device"],
+    indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
     "T, H, W",
@@ -61,7 +62,6 @@ from diffusers import WanTransformer3DModel
 )
 @pytest.mark.parametrize("prompt_seq_len", [None, 26, 126], ids=["no_prompt", "short_prompt", "long_prompt"])
 @pytest.mark.parametrize("is_fsdp", [True], ids=["yes_fsdp"])
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_wan_attention(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
@@ -72,6 +72,7 @@ def test_wan_attention(
     W: int,
     prompt_seq_len: int,
     is_fsdp: bool,
+    topology: ttnn.Topology,
 ) -> None:
     torch_dtype = torch.float32
 
@@ -113,7 +114,7 @@ def test_wan_attention(
     ccl_manager = CCLManager(
         mesh_device=mesh_device,
         num_links=num_links,
-        topology=ttnn.Topology.Linear,
+        topology=topology,
     )
 
     parallel_config = DiTParallelConfig(
