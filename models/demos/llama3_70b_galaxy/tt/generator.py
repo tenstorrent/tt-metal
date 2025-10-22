@@ -645,9 +645,11 @@ class Generator:
         # Check if tensor is distributed across mesh devices (vocab_size // 8 indicates sharding)
         # If so, convert from distributed TT tensor to consolidated torch tensor
         if tt_out.shape[-1] >= self.model.vocab_size // 8:
+            logger.info(f"Detected logit shape {tt_out.shape}, pruning to vocab size {self.model.vocab_size}")
             ttnn.synchronize_device(self.mesh_device)
             return tt_out[0, 0, :, : self.model.vocab_size].unsqueeze(1)
 
+        logger.info(f"Didn't detect, Returning tt_out shape {tt_out.shape}")
         # If not sharded (it is a sampled token), convert directly from device tensor to torch tensor
         return tt_out[0, 0, 0, :]
 
