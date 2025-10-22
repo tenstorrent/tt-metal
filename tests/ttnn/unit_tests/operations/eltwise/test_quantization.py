@@ -146,23 +146,6 @@ def test_requant_per_tensor_2d(device, x0, x1, input_dtype):
     check_match_ratio(input_tr, result_tr, input_dtype)
 
 
-def calculate_scale_zero_point_per_channel(input_tensor, axis, q_min, q_max):
-    axis_size = input_tensor.shape[axis]
-    i_min = [0.0] * axis_size
-    i_max = [0.0] * axis_size
-    # Slice the input along the axis, get min & max of the slice
-    for i in range(axis_size):
-        i_min[i] = torch.min(torch.select(input_tensor, axis, i)).item()
-        i_max[i] = torch.max(torch.select(input_tensor, axis, i)).item()
-    i_min = torch.tensor(i_min, dtype=torch.float32)
-    i_max = torch.tensor(i_max, dtype=torch.float32)
-
-    scale = torch.div(torch.sub(i_max, i_min), q_max - q_min)
-    zero_point = torch.sub(q_min, torch.div(i_min, scale)).int()
-
-    return (scale, zero_point)
-
-
 @pytest.mark.parametrize("x0", [32])
 @pytest.mark.parametrize("x1", [32])
 @pytest.mark.parametrize("input_dtype", [ttnn.float32])
