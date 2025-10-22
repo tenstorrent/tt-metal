@@ -265,6 +265,13 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
                     col_min_planes.at(mesh_coord_y));
             }
 
+            // TEMPORARY WORKAROUND: Following code block is disabled as a temporary measure
+            // See: https://github.com/tenstorrent/tt-metal/issues/30899
+            log_warning(
+                tt::LogMetal,
+                "BigMesh routing plane synchronization is temporarily disabled. "
+                "See https://github.com/tenstorrent/tt-metal/issues/30899 for details.");
+#if 0
             // Collect row and column mins from all hosts in a BigMesh
             auto rows_min = *std::min_element(row_min_planes.begin(), row_min_planes.end());
             auto cols_min = *std::min_element(col_min_planes.begin(), col_min_planes.end());
@@ -302,6 +309,8 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
                 apply_count(fabric_node_id, RoutingDirection::N, col_min_planes.at(mesh_coord_y));
                 apply_count(fabric_node_id, RoutingDirection::S, col_min_planes.at(mesh_coord_y));
             }
+#endif // TEMPORARY WORKAROUND - see issue #30899
+
         }
     }
 }
