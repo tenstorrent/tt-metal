@@ -71,14 +71,15 @@ void py_bind_broadcast(pybind11::module& module) {
 
         Example:
             >>> sender_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
+            >>> num_devices = 4
             >>> device_tensors = []
             >>> for device_idx in range(num_devices):
-            >>> if device_idx == sender_coord_tuple[cluster_axis]:
-                   device_tensors.append(sender_tensor)
-            >>> else:
-                   device_tensors.append(torch.zeros_like(sender_tensor))
+                    if device_idx == sender_coord_tuple[cluster_axis]:
+                        device_tensors.append(sender_tensor)
+                    else:
+                        device_tensors.append(torch.zeros_like(sender_tensor))
             >>> mesh_tensor_torch = torch.cat(device_tensors, dim=-1)
-            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
+            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 4))
             >>> sender_coord = MeshCoordinate((0, 0))
             >>> mesh_mapper_config = ttnn.MeshMapperConfig(
                     [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)], ttnn.MeshShape(1, num_devices)
@@ -89,8 +90,7 @@ void py_bind_broadcast(pybind11::module& module) {
                             device=mesh_device,
                             layout=layout,
                             memory_config=mem_config,
-                            mesh_mapper=)
-            >>> ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device, mesh_mapper=ttnn.create_mesh_mapper(mesh_device,mesh_mapper_config)
+                            mesh_mapper=ttnn.create_mesh_mapper(mesh_device,mesh_mapper_config))
             >>> output = ttnn.broadcast(ttnn_tensor, sender_coord)
 
         )doc");
