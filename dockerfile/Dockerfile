@@ -275,6 +275,14 @@ CMD ["tail", "-f", "/dev/null"]
 COPY --from=artifacts /artifacts /artifacts
 COPY --from=artifacts /build /build
 
+RUN apt update && apt install -y nlohmann-json3-dev libxtensor-dev
+
+RUN dpkg -i /build/tt-metalium_0.0.0~ubuntu24.04_amd64.deb
+RUN dpkg -i /build/tt-nn_0.0.0~ubuntu24.04_amd64.deb
+RUN dpkg -i /build/*
+
+RUN pip3 install /artifacts/ttnn-0.0.0.dev0-cp312-cp312-linux_x86_64.whl
+
 COPY . ./tt-metal
 
 #############################################################
