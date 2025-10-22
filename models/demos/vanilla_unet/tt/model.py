@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.vanilla_unet_new.tt.config import TtUNetLayerConfigs, UpconvConfiguration
+from models.demos.vanilla_unet.tt.config import TtUNetLayerConfigs, UpconvConfiguration
 from models.tt_cnn.tt.builder import TtConv2d, TtMaxPool2d
 
 

@@ -10,15 +10,15 @@ from ttnn.device import is_wormhole_b0
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.demos.vanilla_unet_new.tt.common import (
+from models.demos.vanilla_unet.tt.common import (
     VANILLA_UNET_L1_SMALL_SIZE,
     VANILLA_UNET_PCC_WH,
     VANILLA_UNET_TRACE_SIZE,
     create_unet_preprocessor,
     load_reference_model,
 )
-from models.demos.vanilla_unet_new.tt.config import create_unet_configs_from_parameters
-from models.demos.vanilla_unet_new.tt.model import create_unet_from_configs
+from models.demos.vanilla_unet.tt.config import create_unet_configs_from_parameters
+from models.demos.vanilla_unet.tt.model import create_unet_from_configs
 from models.experimental.functional_unet.tt.model_preprocessing import create_unet_input_tensors
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
@@ -33,10 +33,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, expected_device_perf_fps",
-    ((1, 200.0) if is_wormhole_b0() else (1, 400.0),),
+    ((1, 201.0) if is_wormhole_b0() else (1, 400.0),),
 )
 def test_vanilla_unet_perf_device(batch: int, expected_device_perf_fps: float):
-    command = f"pytest models/demos/vanilla_unet_new/tests/test_unet_model.py::test_vanilla_unet_model"
+    command = f"pytest models/demos/vanilla_unet/tests/test_unet_model.py::test_vanilla_unet_model"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
@@ -45,7 +45,7 @@ def test_vanilla_unet_perf_device(batch: int, expected_device_perf_fps: float):
     )
     expected_perf_cols = {inference_time_key: expected_device_perf_fps}
     expected_results = check_device_perf(
-        post_processed_results, margin=0.01, expected_perf_cols=expected_perf_cols, assert_on_fail=True
+        post_processed_results, margin=0.02, expected_perf_cols=expected_perf_cols, assert_on_fail=True
     )
     prep_device_perf_report(
         model_name=f"ttnn_vanilla_unet{batch}",

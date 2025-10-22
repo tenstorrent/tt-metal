@@ -7,7 +7,7 @@ import os
 import torch
 
 import ttnn
-from models.demos.vanilla_unet_new.reference.model import UNet
+from models.demos.vanilla_unet.reference.model import UNet
 
 VANILLA_UNET_L1_SMALL_SIZE = 12 * 8192
 VANILLA_UNET_TRACE_SIZE = 218088
@@ -16,9 +16,9 @@ VANILLA_UNET_PCC_WH = 0.97700
 
 def load_reference_model(model_location_generator=None):
     if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
-        weights_path = "models/demos/vanilla_unet_new/unet.pt"
+        weights_path = "models/demos/vanilla_unet/unet.pt"
         if not os.path.exists(weights_path):
-            os.system("bash models/demos/vanilla_unet_new/weights_download.sh")
+            os.system("bash models/demos/vanilla_unet/weights_download.sh")
     else:
         weights_path = (
             model_location_generator("vision-models/unet_vanilla", model_subdir="", download_if_ci_v2=True) / "unet.pt"
