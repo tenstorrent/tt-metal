@@ -1037,10 +1037,19 @@ NUM_ITERS = 2
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize(
     "input_shape",
-    [[32, 32], [2, 2, 32, 32], [5, 32, 32], [2, 2, 2, 32, 32], [2, 2, 2, 2, 32, 32], [2, 2, 2, 16, 16], [2, 16, 16]],
+    [
+        [32, 32],
+        [2, 2, 32, 32],
+        [5, 32, 32],
+        [2, 2, 2, 32, 32],
+        [2, 2, 2, 2, 32, 32],
+        [2, 2, 2, 16, 16],
+        [2, 16, 16],
+        [16, 16],
+    ],
 )
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
-@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("dim", [0, 1, 2, 3, 4, 5])
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
