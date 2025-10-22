@@ -1,0 +1,20 @@
+# Prometheus configuration file for scraping TT-Metal telemetry metrics
+
+global:
+  scrape_interval: 15s     # Scrape targets every 15 seconds
+  evaluation_interval: 15s # Evaluate rules every 15 seconds
+
+# Scrape configurations
+scrape_configs:
+  # Default target - localhost
+  - job_name: 'tt-telemetry'
+    static_configs:
+      - targets: ['host.docker.internal:8080']
+        labels:
+          instance: 'localhost'
+
+  # Additional targets can be added via command-line or by editing this file
+  # Example:
+  # - targets: ['sjc-wh-05:54168']
+  #   labels:
+  #     instance: 'sjc-wh-05'
