@@ -32,14 +32,6 @@ jobs:
       version: 22.04
       build-wheel: true
       build-umd-tests: true
-  build-artifact-profiler:
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      version: 22.04
-      build-wheel: true
       tracy: true
   get-image-tags:
     runs-on: ubuntu-latest
@@ -75,7 +67,7 @@ jobs:
   build-images:
     needs:
       - build-artifact
-      - build-artifact-profiler
+      - build-artifact
       - get-image-tags
     permissions:
       packages: write
@@ -95,8 +87,8 @@ jobs:
           - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
             test-command: tests/scripts/wh_6u/run_wh_6u_upstream_profiler_tests.sh
             hw-topology: wh_6u
-            build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
             techdebt-install-ttt-reqs: true
           - image-tag: ${{ needs.get-image-tags.outputs.bh-image-tag }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
@@ -107,8 +99,8 @@ jobs:
           - image-tag: ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
             test-command: tests/scripts/single_card/run_bh_upstream_profiler_tests.sh
             hw-topology: blackhole
-            build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
           - image-tag: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh

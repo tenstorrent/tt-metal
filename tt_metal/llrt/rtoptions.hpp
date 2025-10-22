@@ -95,6 +95,7 @@ struct InspectorSettings {
 };
 
 class RunTimeOptions {
+    bool is_root_dir_set = false;
     std::string root_dir;
 
     bool is_cache_dir_env_var_set = false;
@@ -131,6 +132,7 @@ class RunTimeOptions {
     bool profiler_sync_enabled = false;
     bool profiler_mid_run_dump = false;
     bool profiler_trace_profiler = false;
+    bool profiler_trace_tracking = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
     std::string profiler_noc_events_report_path;
@@ -226,6 +228,7 @@ public:
     RunTimeOptions(const RunTimeOptions&) = delete;
     RunTimeOptions& operator=(const RunTimeOptions&) = delete;
 
+    bool is_root_dir_specified() const { return this->is_root_dir_set; }
     static void set_root_dir(const std::string& root_dir);
     const std::string& get_root_dir() const;
 
@@ -414,6 +417,7 @@ public:
     bool get_profiler_do_dispatch_cores() const { return profile_dispatch_cores; }
     bool get_profiler_sync_enabled() const { return profiler_sync_enabled; }
     bool get_profiler_trace_only() const { return profiler_trace_profiler; }
+    bool get_profiler_trace_tracking() const { return profiler_trace_tracking; }
     bool get_profiler_mid_run_dump() const { return profiler_mid_run_dump; }
     bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
@@ -509,7 +513,9 @@ public:
 
     // If true, enables code profiling for receiver channel forward operations
     bool get_enable_fabric_code_profiling_rx_ch_fwd() const { return fabric_profiling_settings.enable_rx_ch_fwd; }
-    void set_enable_fabric_code_profiling_rx_ch_fwd(bool enable) { fabric_profiling_settings.enable_rx_ch_fwd = enable; }
+    void set_enable_fabric_code_profiling_rx_ch_fwd(bool enable) {
+        fabric_profiling_settings.enable_rx_ch_fwd = enable;
+    }
 
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
