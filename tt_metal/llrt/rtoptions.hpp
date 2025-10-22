@@ -56,14 +56,14 @@ enum RunTimeDebugClass {
 };
 
 enum WatcherEnablementMode : uint8_t {
-    // Watcher is disabled
-    DISABLED = 0,
     // Enable watcher for user kernels
     USER = 1 << 0,
     // Enable watcher for dispatch
     DISPATCH = 1 << 1,
     // Enable watcher for fabric
     FABRIC = 1 << 2,
+    // Last value for counting / iterating purposes
+    COUNT = 1 << 3,
 
     // Common combinations (bitwise OR)
     // Enable watcher for user and dispatch kernels
@@ -108,7 +108,7 @@ struct TargetSelection {
 
 struct WatcherSettings {
     bool enabled = false;
-    WatcherEnablementMode enablement_mode = WatcherEnablementMode::DISABLED;
+    WatcherEnablementMode enablement_mode = WatcherEnablementMode::ALL;
     bool dump_all = false;
     bool append = false;
     bool auto_unpause = false;

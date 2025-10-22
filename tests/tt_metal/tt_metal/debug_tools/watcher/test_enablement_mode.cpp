@@ -64,9 +64,9 @@ public:
             LogTest,
             "Watcher enablement mode set to: 0x{:02x} (DISPATCH={}, FABRIC={}, USER={})",
             static_cast<uint8_t>(test_enablement_mode_),
-            (test_enablement_mode_ & llrt::WatcherEnablementMode::DISPATCH) != llrt::WatcherEnablementMode::DISABLED,
-            (test_enablement_mode_ & llrt::WatcherEnablementMode::FABRIC) != llrt::WatcherEnablementMode::DISABLED,
-            (test_enablement_mode_ & llrt::WatcherEnablementMode::USER) != llrt::WatcherEnablementMode::DISABLED);
+            (test_enablement_mode_ & llrt::WatcherEnablementMode::DISPATCH),
+            (test_enablement_mode_ & llrt::WatcherEnablementMode::FABRIC),
+            (test_enablement_mode_ & llrt::WatcherEnablementMode::USER));
 
         MeshWatcherFixture::SetUp();
     }
@@ -82,13 +82,6 @@ static void RunTest(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     HalProgrammableCoreType programmable_core_type,
     llrt::WatcherEnablementMode enablement_mode) {
-    ASSERT_EQ(enablement_mode & llrt::WatcherEnablementMode::USER, llrt::WatcherEnablementMode::DISABLED)
-        << "Test configuration error: USER mode should not be enabled for this test";
-    ASSERT_NE(
-        enablement_mode & (llrt::WatcherEnablementMode::DISPATCH | llrt::WatcherEnablementMode::FABRIC),
-        llrt::WatcherEnablementMode::DISABLED)
-        << "Test configuration error: At least DISPATCH or FABRIC should be enabled";
-
     // Set up program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -183,7 +176,7 @@ static void RunTestWithUserEnabled(
     HalProgrammableCoreType programmable_core_type,
     llrt::WatcherEnablementMode enablement_mode) {
     // Verify that USER mode IS enabled
-    ASSERT_NE(enablement_mode & llrt::WatcherEnablementMode::USER, llrt::WatcherEnablementMode::DISABLED)
+    ASSERT_TRUE(enablement_mode & llrt::WatcherEnablementMode::USER)
         << "Test configuration error: USER mode should be enabled for this test";
 
     // Set up program
@@ -317,9 +310,9 @@ public:
             LogTest,
             "Watcher enablement mode set to: 0x{:02x} (DISPATCH={}, FABRIC={}, USER={})",
             static_cast<uint8_t>(test_enablement_mode_),
-            (test_enablement_mode_ & llrt::WatcherEnablementMode::DISPATCH) != llrt::WatcherEnablementMode::DISABLED,
-            (test_enablement_mode_ & llrt::WatcherEnablementMode::FABRIC) != llrt::WatcherEnablementMode::DISABLED,
-            (test_enablement_mode_ & llrt::WatcherEnablementMode::USER) != llrt::WatcherEnablementMode::DISABLED);
+            (test_enablement_mode_ & llrt::WatcherEnablementMode::DISPATCH),
+            (test_enablement_mode_ & llrt::WatcherEnablementMode::FABRIC),
+            (test_enablement_mode_ & llrt::WatcherEnablementMode::USER));
 
         MeshWatcherFixture::SetUp();
     }

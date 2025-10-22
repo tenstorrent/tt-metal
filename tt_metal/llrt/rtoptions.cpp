@@ -355,14 +355,16 @@ void RunTimeOptions::ParseWatcherEnv() {
         watcher_settings.interval_ms = sleep_val;
     }
 
-    watcher_settings.enablement_mode = WatcherEnablementMode::DISABLED;
+    watcher_settings.enablement_mode = WatcherEnablementMode::ALL;
     const char* watcher_enablement_mode_str = getenv("TT_METAL_WATCHER_KERNELS");
     // Split by comma
     std::vector<std::string> enablement_modes;
+    log_info(tt::LogMetal, "watcher_enablement_mode_str {}", watcher_enablement_mode_str);
     if (watcher_enablement_mode_str != nullptr) {
         std::stringstream ss(watcher_enablement_mode_str);
         std::string mode;
         while (std::getline(ss, mode, ',')) {
+            log_info(tt::LogMetal, "Enabling watcher for {}", mode);
             enablement_modes.push_back(mode);
         }
     }
@@ -374,7 +376,7 @@ void RunTimeOptions::ParseWatcherEnv() {
         } else if (mode == "FABRIC") {
             watcher_settings.enablement_mode |= llrt::WatcherEnablementMode::FABRIC;
         } else {
-            TT_THROW("Invalid watcher enablement mode: {}", mode);
+            TT_THROW("Invalid TT_METAL_WATCHER_KERNELS value {}", mode);
         }
     }
     watcher_settings.dump_all = (getenv("TT_METAL_WATCHER_DUMP_ALL") != nullptr);

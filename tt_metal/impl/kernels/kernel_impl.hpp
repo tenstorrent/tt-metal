@@ -180,10 +180,8 @@ public:
 
     void register_kernel_elf_paths_with_watcher(IDevice& device) const;
 
-    KernelType get_kernel_type() const { return this->kernel_type_; }
     // This needs to be set before compiling the kernel
     void set_kernel_type(KernelType kernel_type);
-    bool is_watcher_enabled() const { return this->watcher_enabled_; }
 
     static KernelImpl& from(Kernel& kernel) {
         // KernelImpl and subclasses are the only implementations of Kernel.
@@ -220,12 +218,6 @@ protected:
     std::unordered_map<ChipId, std::vector<const ll_api::memory*>> binaries_;
 
     std::vector<std::string> file_paths(IDevice& device) const;
-
-private:
-    // The kernel type
-    KernelType kernel_type_ = KernelType::USER;
-    // If watcher is enabled for this kernel
-    bool watcher_enabled_ = false;
 };
 
 class DataMovementKernel : public KernelImpl {
