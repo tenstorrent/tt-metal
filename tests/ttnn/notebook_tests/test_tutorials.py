@@ -31,7 +31,7 @@ TUTORIALS_DATA_PATHS = {
     "ttnn_clip_zero_shot_image_classification": {
         LOCAL_SOURCE_PATH_KEY: "./ttnn_clip_zero_shot_image_classification/",
         EXTERNAL_SOURCE_PATH_KEY: "ttnn_clip_zero_shot_image_classification",
-        ENVIRONMENT_VARIABLE_MODEL: "TTNN_TUTORIALS_MODELS_CLIP_PATH",
+        ENVIRONMENT_VARIABLE_MODEL: "TTNN_TUTORIALS_MODELS_CLIP_PATH",  # Send model path as environment variable (avoids hard-coding value in notebook)
     }
     # NOTE: Add entries here for new tutorials that require external data
 }
@@ -97,6 +97,7 @@ def setup_once(model_location_generator):
                 local_path_obj.unlink()  # Remove existing symlink/file
             local_path_obj.symlink_to(data_placement.parent)
 
+            # Set environment variable if set
             if environment_variable_model is not None:
                 os.environ[environment_variable_model] = local_path
         except Exception as e:
