@@ -43,7 +43,6 @@ def test_with_ops(device):
         output = ttnn.matmul(a, b, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=8, x=8))
 
 
-@pytest.mark.parametrize("system_mesh_device", indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_type": ttnn.DispatchCoreType.WORKER}, {"dispatch_core_type": ttnn.DispatchCoreType.ETH}],
