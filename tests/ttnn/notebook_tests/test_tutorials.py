@@ -27,7 +27,7 @@ LOCAL_BASE_DIRECTORY = "tutorials_data"
 
 TUTORIALS_DATA_PATHS = {
     "ttnn_simplecnn_inference": {LOCAL_SOURCE_PATH_KEY: "./data", EXTERNAL_SOURCE_PATH_KEY: "ttnn_simplecnn_inference"},
-    # NOTE: Add entries here for new tutorials that require external data
+    # NOTE: Add entries here for new tutorials that require external data.
 }
 
 EXCLUDED_TUTORIALS = [
