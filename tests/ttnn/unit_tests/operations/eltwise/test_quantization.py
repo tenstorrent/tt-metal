@@ -31,6 +31,23 @@ def calculate_scale_zero_point_per_tensor(torch_input_tensor, q_min, q_max):
     return (scale, zero_point)
 
 
+def calculate_scale_zero_point_per_channel(input_tensor, axis, q_min, q_max):
+    axis_size = input_tensor.shape[axis]
+    i_min = [0.0] * axis_size
+    i_max = [0.0] * axis_size
+    # Slice the input along the axis, get min & max of the slice
+    for i in range(axis_size):
+        i_min[i] = torch.min(torch.select(input_tensor, axis, i)).item()
+        i_max[i] = torch.max(torch.select(input_tensor, axis, i)).item()
+    i_min = torch.tensor(i_min, dtype=torch.float32)
+    i_max = torch.tensor(i_max, dtype=torch.float32)
+
+    scale = torch.div(torch.sub(i_max, i_min), q_max - q_min)
+    zero_point = torch.sub(q_min, torch.div(i_min, scale)).int()
+
+    return (scale, zero_point)
+
+
 # PCC can't catch the case that the output tensor is all zeros (or any other constant)
 # Torch.allclose is sensitive to outliers (e.g. quant-dequant of 3e-5 when most other values are around 1e-1)
 # Instead, we assert that over 98% of the elements in the tensors are close enough
