@@ -15,7 +15,7 @@ from models.common.utility_functions import (
 )
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import FeedForward
+from models.demos.llama3_70b_galaxy.reference.qwen import FeedForward
 
 
 @torch.no_grad()
@@ -151,7 +151,7 @@ def test_qwen_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
         tt_output_torch = tt_output_torch[:, :1, :, : model_args.dim]
 
         ref_input = torch_input[:, :, :, : model_args.dim]
-        reference_output = reference_model(ref_input)
+        reference_output = reference_model(ref_input)[:, :, :1, :]
 
         pcc_required = 0.99
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)

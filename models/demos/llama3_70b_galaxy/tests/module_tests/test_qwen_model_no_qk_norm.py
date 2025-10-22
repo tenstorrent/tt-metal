@@ -14,7 +14,7 @@ from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.sampling import TTSampling
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
+from models.demos.llama3_70b_galaxy.reference.qwen import Transformer
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.common.utility_functions import (
     comp_pcc,
@@ -186,7 +186,7 @@ def test_qwen_model_no_qk_norm_inference(
         encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in prompts]
 
     if run_ref_pt:
-        reference_model = Transformer(model_args)
+        reference_model = Transformer(model_args, llama3=False)
         reference_model.load_state_dict(reference_state_dict)
 
     # Embedding on host

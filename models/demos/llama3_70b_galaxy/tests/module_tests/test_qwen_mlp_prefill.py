@@ -15,7 +15,7 @@ from models.common.utility_functions import (
 )
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import FeedForward
+from models.demos.llama3_70b_galaxy.reference.qwen import FeedForward
 
 
 @torch.no_grad()

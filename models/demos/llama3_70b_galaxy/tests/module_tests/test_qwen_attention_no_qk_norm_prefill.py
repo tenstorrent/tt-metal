@@ -13,7 +13,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
     get_rot_transformation_mat,
     PagedAttentionConfig,
 )
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention, precompute_freqs_cis
+from models.demos.llama3_70b_galaxy.reference.qwen import Attention, precompute_freqs_cis
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,

@@ -8,7 +8,7 @@ from loguru import logger
 import ttnn
 from models.demos.llama3_70b_galaxy.tt.lm_head import LMHead
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import ColumnParallelLinear
+from models.demos.llama3_70b_galaxy.reference.qwen import ColumnParallelLinear
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,

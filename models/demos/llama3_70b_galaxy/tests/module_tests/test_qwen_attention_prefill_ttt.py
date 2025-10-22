@@ -6,7 +6,7 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
+from models.demos.llama3_70b_galaxy.reference.qwen import precompute_freqs_cis
 from models.demos.llama3_70b_galaxy.tt.llama_attention import TtLlamaAttention
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -16,7 +16,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
     precompute_freqs,
     PagedAttentionConfig,
 )
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
+from models.demos.llama3_70b_galaxy.reference.qwen import Attention
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.common.utility_functions import (
     comp_pcc,
