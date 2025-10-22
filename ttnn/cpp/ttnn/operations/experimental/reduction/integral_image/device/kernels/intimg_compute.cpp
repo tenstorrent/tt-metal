@@ -297,6 +297,7 @@ FORCE_INLINE void propagate_tile_into_cube(
 //         tile_regs_release();
 //     }
 // }
+
 // cb_axis_3_buffer_read is the upper block provided by writer
 FORCE_INLINE void get_upper_block_apply_last_row_bcast_and_propagate_onto_lower_block(
     uint32_t cb_cumsum_stage_X, uint32_t cb_output, uint32_t cb_axis_3_buffer_read, uint32_t block_depth = 32) {
@@ -307,8 +308,9 @@ FORCE_INLINE void get_upper_block_apply_last_row_bcast_and_propagate_onto_lower_
         tile_regs_acquire();
 
         binary_op_init_common(cb_cumsum_stage_X, cb_axis_3_buffer_read, cb_output);
-        UNPACK((llk_unpack_AB_init<BroadcastType::ROW>()));
-        UNPACK((llk_unpack_AB(cb0, cb1, FIRST_TILE, FIRST_TILE, 31)));
+        UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(cb_cumsum_stage_X, cb_axis_3_buffer_read)));
+        UNPACK(
+            (llk_unpack_AB<BroadcastType::ROW>(cb_cumsum_stage_X, cb_axis_3_buffer_read, FIRST_TILE, FIRST_TILE, 31)));
 
         MATH((llk_math_eltwise_binary<
               EltwiseBinaryType::ELWADD,
@@ -326,6 +328,7 @@ FORCE_INLINE void get_upper_block_apply_last_row_bcast_and_propagate_onto_lower_
         tile_regs_release();
     }
 }
+
 template <typename ctas_t>
 FORCE_INLINE void perform_intimg_along_row_chunk(
     const ctas_t& ctas, uint32_t num_blocks_in_row, uint32_t rows_block_i) {
@@ -366,7 +369,7 @@ FORCE_INLINE void perform_intimg_along_row_chunk(
                 // get_and_propagate_adder_cube(
                 //     ctas.cumsum_stage_2_cb, ctas.axis_3_buffer_1_cb, ctas.output_cb, block_depth);
                 get_upper_block_apply_last_row_bcast_and_propagate_onto_lower_block(
-                    ctas.cumsum_stage_2_cb, ctas.output_cb, ctas.axis_3_buffer_0_cb)
+                    ctas.cumsum_stage_2_cb, ctas.output_cb, ctas.axis_3_buffer_0_cb, block_depth);
             } else {
                 // consume: cb_cumsum_stage_1 32t
                 // produce: cb_output 1t x32
@@ -384,7 +387,7 @@ FORCE_INLINE void perform_intimg_along_row_chunk(
                 // get_and_propagate_adder_cube(
                 //     ctas.cumsum_stage_1_cb, ctas.axis_3_buffer_1_cb, ctas.output_cb, block_depth);
                 get_upper_block_apply_last_row_bcast_and_propagate_onto_lower_block(
-                    ctas.cumsum_stage_1_cb, ctas.output_cb, ctas.axis_3_buffer_0_cb)
+                    ctas.cumsum_stage_1_cb, ctas.output_cb, ctas.axis_3_buffer_0_cb, block_depth);
             } else {
                 // consume: cb_cumsum_stage_0 32t
                 // produce: cumsummed down cube (cb_output 1t x32)

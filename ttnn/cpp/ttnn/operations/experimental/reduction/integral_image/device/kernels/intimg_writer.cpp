@@ -120,7 +120,7 @@ FORCE_INLINE void broadcast_last_row_to_all_rows_in_cube(
 void kernel_main() {
     const uint32_t output_base_addr = get_arg_val<uint32_t>(0);
     constexpr auto ctas = get_ctas();
-    using output_number_type = std_type_t<get_dataformat(ctas.output_cb)>;
+    // using output_number_type = std_type_t<get_dataformat(ctas.output_cb)>;
     const auto output_addr_gtor = TensorAccessor(ctas.output_args, output_base_addr, get_tile_size(ctas.output_cb));
     constexpr uint32_t num_slices_along_channels = block_depth_ceil(
         ctas.num_channels, ctas.block_depth);  // block_depth is expected to be a power of 2 (the default is the regular
