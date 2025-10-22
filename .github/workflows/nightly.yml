@@ -9,7 +9,7 @@ on:
       pytest_markers:
         description: "Pytest mark expression for testing (e.g., 'nightly', 'perf')"
         required: false
-        default: "nightly"
+        default: "not perf"
         type: string
 
 permissions:
@@ -31,7 +31,7 @@ jobs:
       docker_image: ${{ needs.build-images.outputs.docker-image }}
       runs_on: tt-ubuntu-2204-n150-stable
       test_splits: 10
-      pytest_markers: ${{ inputs.pytest_markers || 'nightly' }}
+      pytest_markers: ${{ inputs.pytest_markers || 'not perf' }}
       random_order: true
       timeout_minutes: 240
 
@@ -43,7 +43,7 @@ jobs:
       docker_image: ${{ needs.build-images.outputs.docker-image }}
       runs_on: tt-ubuntu-2204-p150b-stable
       test_splits: 10
-      pytest_markers: ${{ inputs.pytest_markers || 'nightly' }}
+      pytest_markers: ${{ inputs.pytest_markers || 'not perf' }}
       random_order: true
       timeout_minutes: 240
 
