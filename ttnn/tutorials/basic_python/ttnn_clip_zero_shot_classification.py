@@ -13,6 +13,7 @@ import requests
 from io import BytesIO
 import time
 import safetensors.torch
+import os
 
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize, InterpolationMode
 
@@ -565,16 +566,22 @@ def main():
     # Initialize TT-NN device for hardware acceleration
     open_ttnn()
 
-    tokenizer = CLIPTokenizer.from_pretrained(
-        "openai/clip-vit-base-patch32", cache_dir="ttnn_clip_zero_shot_image_classification/"
-    )
-
     # Load pre-trained CLIP model and convert weights to TT-NN format
     logger.info("Loading pre-trained CLIP model...")
 
-    model = CLIPModel.from_pretrained(
-        "openai/clip-vit-base-patch32", cache_dir="ttnn_clip_zero_shot_image_classification/"
-    )
+    clip_model_location = "openai/clip-vit-base-patch32"  # Default: downloading from Hugging Face
+    tokenizer_location = "openai/clip-vit-base-patch32"  # Default: downloading from Hugging Face
+
+    # If TTNN_TUTORIALS_MODELS_CLIP_PATH is set, use it as the cache directory to avoid requests to Hugging Face
+    cache_dir = os.getenv("TTNN_TUTORIALS_MODELS_CLIP_PATH")
+    if cache_dir is not None:
+        clip_model_location = f"{cache_dir}/model"
+        tokenizer_location = f"{cache_dir}/tokenizer"
+
+    # Load model weights (download if cache_dir was not set)
+    model = CLIPModel.from_pretrained(clip_model_location)
+
+    tokenizer = CLIPTokenizer.from_pretrained(tokenizer_location)
 
     state_dict = convert_model_to_ttnn(model.state_dict())
 
