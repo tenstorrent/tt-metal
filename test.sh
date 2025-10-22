@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --nodes=17
+#SBATCH --nodes=16
 #SBATCH --partition=debug
 #SBATCH --job-name=test
 #SBATCH --output=test_%j.out
@@ -10,4 +10,4 @@ export TT_METAL_HOME="/data/ttuser/rsong/tt-metal"
 export PYTHONPATH="/data/ttuser/rsong/tt-metal"
 source python_env/bin/activate
 
-tt-run --verbose ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestClosetBoxTTSwitchControlPlaneInit"
+tt-run --verbose ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestClosetBoxTTSwitchControlPlaneInit" --rank-binding tests/tt_metal/distributed/config/wh_closetbox_rank_bindings.yaml

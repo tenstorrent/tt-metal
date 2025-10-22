@@ -47,10 +47,4 @@ rank_bindings:
   - rank: 15
     mesh_id: 15
 
-  - rank: 16
-    mesh_id: 16
-
-  - rank: 17
-    mesh_id: 17
-
 mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_mgd.textproto"
