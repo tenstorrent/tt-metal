@@ -42,7 +42,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/constants.hpp
     api/tt-metalium/control_plane.hpp
     api/tt-metalium/core_coord.hpp
-    api/tt-metalium/data_format.hpp
     api/tt-metalium/data_types.hpp
     api/tt-metalium/device.hpp
     api/tt-metalium/device_pool.hpp
@@ -91,7 +90,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/program_descriptors.hpp
     api/tt-metalium/routing_table_generator.hpp
     api/tt-metalium/runtime_args_data.hpp
-    api/tt-metalium/semaphore.hpp
     api/tt-metalium/shape.hpp
     api/tt-metalium/shape2d.hpp
     api/tt-metalium/shape_base.hpp
