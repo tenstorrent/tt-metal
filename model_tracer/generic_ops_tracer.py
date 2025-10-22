@@ -21,16 +21,6 @@ import tempfile
 import argparse
 from datetime import datetime
 
-# Set up environment
-sys.path.insert(0, "/home/ubuntu/tt-metal")
-os.chdir("/home/ubuntu/tt-metal")
-
-os.environ["ARCH_NAME"] = "wormhole_b0"
-os.environ["TT_METAL_HOME"] = "/home/ubuntu/tt-metal"
-os.environ["PYTHONPATH"] = "/home/ubuntu/tt-metal"
-os.environ["TT_METAL_ENV"] = "dev"
-os.environ["TT_METAL_GRAPH_TRACE"] = "1"
-
 
 def create_tracing_plugin(output_dir):
     """
