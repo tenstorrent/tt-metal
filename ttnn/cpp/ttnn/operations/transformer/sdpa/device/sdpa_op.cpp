@@ -335,7 +335,8 @@ operation::ProgramWithCallbacks ScaledDotProductAttention::create_program(
         this->compute_kernel_config,
         this->program_config,
         this->use_mla.value_or(false),
-        this->head_dim_v.value_or(0));
+        this->head_dim_v.value_or(0),
+        this->sliding_window_size);
 }
 
 operation::OpPerformanceModel ScaledDotProductAttention::create_op_performance_model(
