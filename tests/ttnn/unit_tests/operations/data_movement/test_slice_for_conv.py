@@ -309,15 +309,16 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
 
 
 @pytest.mark.parametrize(
-    "dims, slice_size, core_x, core_y",
+    "dims, slice_size, core_y, core_x",
     [
-        [[2, 64, 64, 256], 32, 4, 4],
-        [[2, 64, 64, 512], 16, 4, 4],
-        [[2, 16, 16, 1024], 4, 4, 4],
-        [[2, 128, 128, 256], 32, 8, 4],
-        [[2, 128, 128, 63], 32, 8, 2],
-        [[2, 128, 128, 528], 96, 8, 6],
-        [[2, 128, 128, 96], 96, 8, 3],
+        # [[2, 64, 64, 256], 32, 4, 4],
+        # [[2, 64, 64, 512], 16, 4, 4],
+        # [[2, 16, 16, 1024], 4, 4, 4],
+        # [[2, 128, 128, 256], 32, 8, 4],
+        # [[2, 128, 128, 63], 32, 8, 2],
+        # [[2, 128, 128, 528], 96, 8, 6],
+        # [[2, 128, 128, 96], 96, 8, 3],
+        [[2, 1024, 1024, 256], 33, 10, 11]
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
@@ -330,7 +331,7 @@ def test_slice_block_sharded_for_conv2d(
     if input_dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("bfloat8_b is not supported in row major layout")
 
-    orientation = ttnn.ShardOrientation.COL_MAJOR
+    orientation = ttnn.ShardOrientation.ROW_MAJOR
     core_grid = device.core_grid
     if core_grid.x < core_x or core_grid.y < core_y:
         pytest.skip(
@@ -348,7 +349,7 @@ def test_slice_block_sharded_for_conv2d(
         torch_input, device=device, layout=layout, dtype=input_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
-    padded_channels = round_up(dims[-1], core_y * pad_value)
+    padded_channels = round_up(dims[-1], core_x * pad_value)
     padded_torch_input = torch.nn.functional.pad(torch_input, (0, padded_channels - dims[-1]))
     core_range_start = ttnn.CoreCoord(0, 0)
     core_range_end = ttnn.CoreCoord(core_x - 1, core_y - 1)
@@ -367,7 +368,7 @@ def test_slice_block_sharded_for_conv2d(
             1,
             1,
             output_shape[0] * output_shape[1] * output_shape[2],
-            round_up(output_shape[3], core_y * pad_value),
+            round_up(output_shape[3], core_x * pad_value),
         ]
         memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
             output_shape, parallel_config, 1

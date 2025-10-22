@@ -184,7 +184,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
         reader_kernel_args[addr_offset] = num_sticks_per_core;
         reader_kernel_args.insert(reader_kernel_args.end(), id_per_dim.begin(), id_per_dim.end());
 
-        log_debug(
+        log_trace(
             tt::LogOp,
             "For Core {}, start_id : {}, start_addr : {}, width_offset : {}, num_sticks_per_core : {}, "
             "this_input_row_size_bytes : {}",
@@ -410,7 +410,8 @@ get_padded_slice_runtime_args_tile_sharded_output(
     [[maybe_unused]] uint32_t output_row_size_bytes = output_shard_shape[1] * output_tensor.element_size();
     uint32_t output_row_size_elems = output_shard_shape[1];
 
-    uint32_t input_channels_num_tiles = tt::div_up(input_padded_shape[3], tt::constants::TILE_WIDTH);
+    uint32_t input_channels_num_elems = input_padded_shape[3];
+
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
 
     std::vector<uint32_t> num_output_tiles_per_dim(num_dims);
@@ -519,7 +520,8 @@ get_padded_slice_runtime_args_tile_sharded_output(
 
         const uint32_t width_offset_elems = core_w_index * output_row_size_elems;
         const uint32_t width_offset_start_tile = width_offset_elems / TILE_WIDTH;
-        const uint32_t width_offset_end_tile = tt::div_up(width_offset_elems + output_row_size_elems, TILE_WIDTH);
+        const uint32_t width_offset_end_tile =
+            tt::div_up(std::min(width_offset_elems + output_row_size_elems, input_channels_num_elems), TILE_WIDTH);
         const uint32_t this_core_num_tiles_per_channel = width_offset_end_tile - width_offset_start_tile;
         const uint32_t misalignment_bytes = width_offset_elems % TILE_WIDTH * output_tensor.element_size();
 
@@ -612,7 +614,8 @@ get_padded_slice_runtime_args_tile_sharded_output(
             "For Core {}, Input Start ID {}, End ID {}, Output Start Coord: {}, End Coord : {}, Input Start Coord: {}, "
             "End Coord "
             ": {}, Num Full Rows "
-            ": {}, Num Tiles : {}",
+            ": {}, Num Tiles : {}"
+            " This Core Num Tiles Per Channel: {}",
             core,
             input_start_id,
             input_end_id,
@@ -621,7 +624,8 @@ get_padded_slice_runtime_args_tile_sharded_output(
             start_index_in_input_per_dim,
             end_index_in_input_per_dim,
             num_full_rows,
-            num_tiles_this_core);
+            num_tiles_this_core,
+            this_core_num_tiles_per_channel);
 
         uint32_t addr_offset = 2;
         reader_kernel_args[addr_offset++] = input_start_id + width_offset_start_tile;
@@ -649,27 +653,27 @@ get_padded_slice_runtime_args_tile_sharded_output(
             num_tiles_this_core / max_num_tiles_per_row,  // number of tiles to read
         };
 
-        int this_core_output_channels_end_tile = width_offset_start_tile + this_core_num_tiles_per_channel;
-        uint32_t output_channels_padding_ntiles =
-            std::max<int>(this_core_output_channels_end_tile - input_channels_num_tiles, 0);
+        int this_core_output_channels_end_elem = width_offset_elems + output_row_size_elems;
+        uint32_t output_channels_padding_elems =
+            std::max<int>(this_core_output_channels_end_elem - input_channels_num_elems, 0);
 
         log_trace(
             tt::LogOp,
-            "Core = {}, width_offset elems = {} to {}, tiles = {} to {}, input_channels_num_tiles = {}, "
+            "Core = {}, width_offset elems = {} to {}, tiles = {} to {}, input_channels_num_elems = {}, "
             "output_channels_padding = {}",
             core,
             core_w_index * output_row_size_elems,
             (core_w_index + 1) * output_row_size_elems,
             width_offset_start_tile,
             width_offset_end_tile,
-            input_channels_num_tiles,
-            output_channels_padding_ntiles);
+            input_channels_num_elems,
+            output_channels_padding_elems);
 
         std::vector<uint32_t> writer_kernel_args = {
             num_tiles_this_core,
             max_num_tiles_per_row,
             num_sticks_per_core,
-            output_channels_padding_ntiles,
+            output_channels_padding_elems,
             misalignment_bytes};
         writer_kernel_args.insert(writer_kernel_args.end(), reversed_start_index.begin(), reversed_start_index.end());
         writer_kernel_args.insert(
@@ -678,7 +682,6 @@ get_padded_slice_runtime_args_tile_sharded_output(
         ret_val[core_index] = {reader_kernel_args, compute_kernel_args, writer_kernel_args};
         core_index++;
     }
-    log_debug(tt::LogOp, "Runtime args = {}", ret_val);
     return ret_val;
 }
 
@@ -789,6 +792,7 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         "output_row_size_bytes: {}, num_output_sticks_per_core: {}",
         output_row_size_bytes,
         num_output_sticks_per_core);
+
     auto cb_output_tuple = tt::tt_metal::create_cb(
         cb_output_index,
         program,
