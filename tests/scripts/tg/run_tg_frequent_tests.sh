@@ -61,7 +61,7 @@ run_tg_tests() {
   elif [[ "$1" == "mochi" ]]; then
     echo "LOG_METAL: running mochi run_tg_frequent_tests"
     pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_vae_mochi.py -k "decoder and 4link-load_dit-large_latent or conv3d_1x1x1 or -4link-l768" --timeout=1500; fail+=$?
-    pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_attention_mochi.py -k "short_seq"; fail+=$?
+    pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_attention_mochi.py -k "short_seq and 4x8"; fail+=$?
     pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py -k "4x8 and short_seq and not yes_load_cache and not model_caching"; fail+=$?
 
   else

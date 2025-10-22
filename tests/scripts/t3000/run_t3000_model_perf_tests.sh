@@ -120,7 +120,7 @@ run_t3000_mochi_tests() {
 
   echo "LOG_METAL: Running run_t3000_mochi_tests"
 
-  export TT_DIT_CACHE_DIR="/mnt/MLPerf/tt_dnn-models/mochi/genmo-mochi-1-preview"
+  export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
   pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model_caching -k "2x4sp0tp1"
   pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k "2x4sp0tp1 and yes_use_cache" --timeout 1800; fail+=$?
 
