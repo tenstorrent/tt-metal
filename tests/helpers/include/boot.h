@@ -34,7 +34,11 @@ inline void device_setup()
 
 inline void clear_trisc_soft_reset()
 {
+#ifdef ARCH_QUASAR
+    constexpr uint32_t TRISC_SOFT_RESET_MASK = 0x3000;
+#else
     constexpr uint32_t TRISC_SOFT_RESET_MASK = 0x7000;
+#endif
 
     uint32_t soft_reset = ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0);
     soft_reset &= ~TRISC_SOFT_RESET_MASK;
