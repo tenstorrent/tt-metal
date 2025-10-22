@@ -130,7 +130,7 @@ runs:
         tagType="${{ inputs.tag-type }}"
 
         if [ "$tagType" = "rc" ]; then
-          currentNumberRCs=$(git tag | grep "$baseVersion"-rc | wc -l)
+          currentNumberRCs=$(git tag | grep "$baseVersion"-rc || true | wc -l)
           newNumber=$(($currentNumberRCs+1))
           version="$baseVersion-rc$newNumber"
         elif [ "$tagType" = "dev" ]; then
