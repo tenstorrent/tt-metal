@@ -192,7 +192,7 @@ def generate_text_tt(
     causal_mask,
     temperature,
     logits_mask_tensor,
-    max_gen_tokens=100,
+    max_gen_tokens=576,
     pad_token_id=None,
     return_with_prompt=False,
 ):
@@ -247,11 +247,11 @@ def generate_text_tt(
         next_token_idx = max_sequence_length - 1 if len(prompt_tokens) > max_sequence_length else len(window) - 1
         next_token = int(next_token_tensor.to_numpy(composer=composer).reshape(-1, 1)[next_token_idx][0])
 
-        generated_tokens.append(next_token)
-        prompt_tokens.append(next_token)
-
         if next_token == tokenizer.eos_token_id:
             break
+
+        generated_tokens.append(next_token)
+        prompt_tokens.append(next_token)
 
     # Decode once at the end
     out = tokenizer.decode(generated_tokens)
@@ -584,9 +584,9 @@ def train():
             scaled_loss.backward(False)
             ttml.autograd.AutoContext.get_instance().reset_graph()
 
-        # Synchronize gradients if DDP is enabled
-        # if device_config.enable_ddp:
-        #     ttml.core.distributed.synchronize_parameters(tt_model.parameters())
+        #Synchronize gradients if DDP is enabled
+        if device_config.enable_ddp:
+            ttml.core.distributed.synchronize_parameters(tt_model.parameters())
 
         # Optimizer step after micro-steps
         optim.step()
