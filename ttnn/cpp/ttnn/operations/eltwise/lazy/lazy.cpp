@@ -141,7 +141,7 @@ Function LogicalBinaryFn::operator()(Param first, ExpressionView second) const {
 
 template <typename Input, typename Other>
     requires std::constructible_from<Param, Input> or std::constructible_from<Param, Other>
-auto _where(ExpressionView condition, Input input, Other other) {
+auto _where(ExpressionView condition, const Input& input, const Other& other) {
     return (lazy::nez(condition) * input) + (lazy::eqz(condition) * other);
 }
 
@@ -180,13 +180,13 @@ inline auto _where(ExpressionView condition, ExpressionView input, ExpressionVie
 }
 
 template <typename Input, typename Other>
-constexpr auto _where(bool condition, Input input, Other other) {
+constexpr auto _where(bool condition, const Input& input, const Other& other) {
     return condition ? input : other;
 }
 
 template <typename Condition, typename Input, typename... Other>
     requires(sizeof...(Other) > 1)
-constexpr auto _where(Condition condition, Input input, Other... other) {
+constexpr auto _where(const Condition& condition, const Input& input, const Other&... other) {
     return lazy::_where(condition, input, lazy::_where(other...));
 }
 
