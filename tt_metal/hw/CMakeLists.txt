@@ -499,6 +499,11 @@ target_sources(
             inc/dataflow_api_common.h
             inc/socket_api.h
             inc/socket.h
+            inc/views/accessor_view.h
+            inc/views/compute_view.h
+            inc/views/tile_views.h
+            inc/views/transform_view.h
+            inc/views/type_traits.h
             # Toolchain
             toolchain/erisc-b0-app.ld
             toolchain/erisc-b0-app-sections.ld
