@@ -63,7 +63,7 @@ class TtAutoencoderKL(LightweightModule):
         B, C, H, W = hidden_states.shape
 
         initial_batch_size = hidden_states.shape[0]
-        hidden_states = torch.permute(hidden_states, (0, 2, 3, 1))  # NHWC to NCHW
+        hidden_states = torch.permute(hidden_states, (0, 2, 3, 1))
         hidden_states = torch.reshape(hidden_states, (B, 1, H * W, C))
         hidden_states = ttnn.from_torch(
             hidden_states,

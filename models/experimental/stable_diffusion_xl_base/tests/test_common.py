@@ -500,7 +500,7 @@ def prepare_image_latents(
     cpu_device = torch.device("cpu")
     image = image.to(device=cpu_device, dtype=dtype)
 
-    if tt_pipeline.pipeline_config.vae_on_device == True:
+    if tt_pipeline.pipeline_config.vae_on_device:
         image_latents = [latent.sample() for latent in tt_pipeline.tt_vae.encode(image).latent_dist]
         image_latents = torch.cat(image_latents, dim=0)
     else:

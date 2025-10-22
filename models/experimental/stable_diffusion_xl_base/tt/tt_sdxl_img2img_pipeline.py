@@ -33,17 +33,17 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
         B, C, H, W = 1, self.num_in_channels_unet, 128, 128
         self.tt_latents_shape = [B, C, H, W]
 
-    def set_strength(self, strength: int):
+    def set_strength(self, strength: float):
         # When changing strength, the timesteps and latents need to be recreated.
         self.pipeline_config.strength = strength
         self.generated_input_tensors = False
 
-    def set_aesthetic_score(self, aesthetic_score: int):
+    def set_aesthetic_score(self, aesthetic_score: float):
         # When changing strength, the timesteps and latents need to be recreated.
         self.pipeline_config.aesthetic_score = aesthetic_score
         self.generated_input_tensors = False
 
-    def set_negative_aesthetic_score(self, negative_aesthetic_score: int):
+    def set_negative_aesthetic_score(self, negative_aesthetic_score: float):
         # When changing strength, the timesteps and latents need to be recreated.
         self.pipeline_config.negative_aesthetic_score = negative_aesthetic_score
         self.generated_input_tensors = False
