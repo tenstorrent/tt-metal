@@ -531,7 +531,7 @@ std::string function_name(DataType dtype, Ternary operation) {
 
 void format_to_kernel_string(
     std::back_insert_iterator<std::string> out, DataType dtype, Operation operation, std::size_t rt_offset) {
-    return std::visit(
+    std::visit(
         ttsl::overloaded{
             [&](UnaryWithParam alternative) {
                 fmt::format_to(
@@ -623,7 +623,8 @@ void format_to_debug_string(std::back_insert_iterator<std::string> out, Function
 
 void format_to_debug_string(std::back_insert_iterator<std::string> out, ExpressionView expression) {
     if (auto function = expression.function()) {
-        return lazy::format_to_debug_string(out, *function);
+        lazy::format_to_debug_string(out, *function);
+        return;
     }
 
     fmt::format_to(out, "{}", enchantum::to_string(expression.cb_index()));
