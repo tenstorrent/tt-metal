@@ -441,11 +441,6 @@ TEST(MultiHost, TestQuadGalaxyFabric1DSanity) {
 }
 
 TEST(MultiHost, TestClosetBoxTTSwitchControlPlaneInit) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
-        log_info(tt::LogTest, "This test is only for N300 2x2");
-        GTEST_SKIP();
-    }
-
     auto& instance = tt::tt_metal::MetalContext::instance();
 
     // Get the host name
