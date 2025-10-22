@@ -3,7 +3,7 @@ name: "(Galaxy) demo tests"
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *' # This cron schedule runs demo tests every day at 12am UTC
+    - cron: "0 0 * * *" # This cron schedule runs demo tests every day at 12am UTC
     - cron: "0 9 * * 1,3,6" # frequency of galaxy tests
 jobs:
   build-artifact:
@@ -27,6 +27,7 @@ jobs:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/galaxy-deepseek-tests-impl.yaml
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.event.schedule == "0 9 * * 1,3,6") }}
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
