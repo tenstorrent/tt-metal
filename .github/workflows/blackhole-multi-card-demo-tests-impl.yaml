@@ -98,6 +98,10 @@ jobs:
             pip install -r /work/models/tt_transformers/requirements.txt
           fi
           ${{ matrix.test-group.cmd }}
+      - name: Print tt-smi data on failure
+        if: ${{ failure() }}
+        run: |
+          tt-smi -s
       - name: Save environment data
         if: ${{ contains(matrix.test-group.name, 'llama') && !cancelled() }}
         timeout-minutes: 15
