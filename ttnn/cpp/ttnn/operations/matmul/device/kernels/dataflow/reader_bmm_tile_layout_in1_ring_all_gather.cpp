@@ -115,7 +115,6 @@ void kernel_main() {
     uint32_t dram_read_offset_bytes = 0;
     uint32_t l1_write_addr_in1;
     uint32_t l1_read_addr_in1 = 0;
-    // uint32_t in1_base_addr = 0;
 
     if constexpr (in1_is_dram_sharded) {
         in1_shard_width_offset_bytes = in1_shard_width_in_dram * in1_single_tile_size_bytes;
