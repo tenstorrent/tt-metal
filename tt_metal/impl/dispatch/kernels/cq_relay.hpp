@@ -217,11 +217,7 @@ public:
         uint64_t noc_dest_addr = get_noc_addr_helper(dest_noc_xy, sem_addr);
 
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
-        packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            noc_dest_addr,
-            n,
-            std::numeric_limits<uint16_t>::max(),
-        });
+        packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_dest_addr, n});
         tt::tt_fabric::fabric_atomic_inc<mux_num_buffers_per_channel>(edm, packet_header);
 #else
         noc_semaphore_inc(get_noc_addr_helper(dest_noc_xy, get_semaphore<fd_core_type>(dest_sem_id)), n, noc_idx);
@@ -254,10 +250,7 @@ public:
 
         packet_header->to_noc_fused_unicast_write_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                dst_ptr,
-                get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)),
-                n,
-                std::numeric_limits<uint16_t>::max()},
+                dst_ptr, get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)), n},
             length);
 
         tt::tt_fabric::fabric_async_write<mux_num_buffers_per_channel>(edm, packet_header, data_ptr, length);

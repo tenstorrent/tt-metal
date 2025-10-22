@@ -319,8 +319,7 @@ inline void fabric_send_noc_unicast_with_semaphore(
             tt::tt_fabric::linear::to_noc_fused_unicast_write_atomic_inc(
                 align(curr_packet_size, alignment),
                 packet_header,
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                    noc_remote_semaphore_address, increment_value, 32, flush},
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_remote_semaphore_address, increment_value, flush},
                 payload_page_id,
                 addrgen,
                 offset);
@@ -422,7 +421,7 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only(
     bool flush) {
     // Set up packet header for semaphore increment
     packet_header->to_noc_unicast_atomic_inc(
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_remote_semaphore_address, increment_value, 32, flush});
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_remote_semaphore_address, increment_value, flush});
 
     uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
@@ -553,7 +552,7 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_1d(
     bool flush) {
     // Set up packet header for semaphore increment
     packet_header->to_noc_unicast_atomic_inc(
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_remote_semaphore_address, increment_value, 32, flush});
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_remote_semaphore_address, increment_value, flush});
 
     uint32_t distance =
         manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);

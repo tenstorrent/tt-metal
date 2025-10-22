@@ -102,10 +102,8 @@ void kernel_main() {
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr + packet_header_size);
         const uint64_t sem_noc_addr =
             safe_get_noc_addr(packet_receiver_core_x, packet_receiver_core_y, receiver_semaphore_address, 0);
-        sem_inc_packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            sem_noc_addr,
-            static_cast<uint16_t>(1),  // increment 1
-            32});
+        sem_inc_packet_header->to_noc_unicast_atomic_inc(
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sem_noc_addr, static_cast<uint16_t>(1)});  // increment 1
 
         const uint32_t base_receiver_l1_addr = get_read_ptr(fabric_receiver_cb_id);
 

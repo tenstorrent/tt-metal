@@ -192,9 +192,7 @@ void kernel_main() {
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
     auto* pkt_hdr_sem_inc = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
     pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-        out_ready_sem_noc_addr_in_pkt,
-        static_cast<uint16_t>(1),  // increment 1
-        32});
+        out_ready_sem_noc_addr_in_pkt, static_cast<uint16_t>(1)});  // increment 1
 
     // Write the unicast packet
     if constexpr (num_targets_in_direction) {

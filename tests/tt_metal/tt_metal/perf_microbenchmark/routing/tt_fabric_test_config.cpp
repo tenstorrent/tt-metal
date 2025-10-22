@@ -126,9 +126,6 @@ ParsedTrafficPatternConfig YamlConfigParser::parse_traffic_pattern_config(const 
     if (pattern_yaml["atomic_inc_val"]) {
         config.atomic_inc_val = parse_scalar<uint16_t>(pattern_yaml["atomic_inc_val"]);
     }
-    if (pattern_yaml["atomic_inc_wrap"]) {
-        config.atomic_inc_wrap = parse_scalar<uint16_t>(pattern_yaml["atomic_inc_wrap"]);
-    }
     if (pattern_yaml["mcast_start_hops"]) {
         config.mcast_start_hops = parse_scalar<uint32_t>(pattern_yaml["mcast_start_hops"]);
     }

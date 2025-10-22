@@ -133,7 +133,6 @@ void kernel_main() {
                 num_tiles_to_read_this_core * tensor0_page_size,
                 sema_noc_addr,
                 static_cast<uint16_t>(1),
-                static_cast<uint16_t>(32),
                 false);
             noc_async_writes_flushed();
         } else {
