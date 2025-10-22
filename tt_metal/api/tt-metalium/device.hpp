@@ -226,8 +226,6 @@ public:
     // Kernel binary path prefix for pre-compiled kernels (experimental)
     virtual void set_kernel_binary_path_prefix(const std::string& prefix) = 0;
     virtual const std::string& get_kernel_binary_path_prefix() const = 0;
-
-    static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
 };
 
 }  // namespace tt_metal

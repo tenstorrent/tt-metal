@@ -64,6 +64,18 @@ struct KernelSource {
         const KernelImpl* kernel,
         int processor_index,
         const std::string& jit_target_path = "") const;
+
+    static std::string_view source_type_to_string(KernelSource::SourceType source_type) {
+        switch (source_type) {
+            case FILE_PATH: return "FILE_PATH";
+            case SOURCE_CODE:
+                return "SOURCE_CODE";
+            case BINARY_PATH:
+                return "BINARY_PATH";
+            default:
+                return "UNKNOWN";
+        }
+    }
 };
 
 

@@ -58,6 +58,10 @@ string get_kernel_source_to_include(const KernelSource& kernel_src) {
             return "#include \"" + kernel_src.path_.string() + "\"\n";
         }
         case KernelSource::SOURCE_CODE: return kernel_src.source_;
+        case KernelSource::BINARY_PATH: {
+            // For binary kernels, no source code needs to be included since they're already compiled
+            return "";
+        }
     }
     ttsl::unreachable();
 }
