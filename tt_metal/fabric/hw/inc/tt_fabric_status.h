@@ -5,12 +5,12 @@
 #pragma once
 #include <string_view>
 
-constexpr uint32_t TT_FABRIC_STAUS_MASK = 0xabc00000;
-constexpr uint32_t TT_FABRIC_STATUS_STARTED = TT_FABRIC_STAUS_MASK | 0x0;
-constexpr uint32_t TT_FABRIC_STATUS_PASS = TT_FABRIC_STAUS_MASK | 0x1;
-constexpr uint32_t TT_FABRIC_STATUS_TIMEOUT = TT_FABRIC_STAUS_MASK | 0xdead0;
-constexpr uint32_t TT_FABRIC_STATUS_BAD_HEADER = TT_FABRIC_STAUS_MASK | 0xdead1;
-constexpr uint32_t TT_FABRIC_STATUS_DATA_MISMATCH = TT_FABRIC_STAUS_MASK | 0x3;
+constexpr uint32_t TT_FABRIC_STATUS_MASK = 0xabc00000;
+constexpr uint32_t TT_FABRIC_STATUS_STARTED = TT_FABRIC_STATUS_MASK | 0x0;
+constexpr uint32_t TT_FABRIC_STATUS_PASS = TT_FABRIC_STATUS_MASK | 0x1;
+constexpr uint32_t TT_FABRIC_STATUS_TIMEOUT = TT_FABRIC_STATUS_MASK | 0xdead0;
+constexpr uint32_t TT_FABRIC_STATUS_BAD_HEADER = TT_FABRIC_STATUS_MASK | 0xdead1;
+constexpr uint32_t TT_FABRIC_STATUS_DATA_MISMATCH = TT_FABRIC_STATUS_MASK | 0x3;
 
 // indexes of return values in test results buffer
 constexpr uint32_t TT_FABRIC_STATUS_INDEX = 0;
@@ -43,3 +43,17 @@ enum class pkt_dest_size_choices_t {
     RANDOM = 0,
     SAME_START_RNDROBIN_FIX_SIZE = 1  // max packet size used
 };
+
+constexpr uint32_t FABRIC_ROUTER_INITIALIZATION_STARTED = TT_FABRIC_STATUS_MASK | 0x0;
+constexpr uint32_t FABRIC_ROUTER_TXQ_INITIALIZED = TT_FABRIC_STATUS_MASK | 0x2;
+constexpr uint32_t FABRIC_ROUTER_STREAM_REG_INITIALIZED = TT_FABRIC_STATUS_MASK | 0x4;
+constexpr uint32_t FABRIC_ROUTER_EDM_STARTED = TT_FABRIC_STATUS_MASK | 0x6;
+constexpr uint32_t FABRIC_ROUTER_OBJECT_SETUP_STARTED = TT_FABRIC_STATUS_MASK | 0x8;
+constexpr uint32_t FABRIC_ROUTER_TEST_5 = 0x1;
+constexpr uint32_t FABRIC_ROUTER_TEST_6 = 0x1;
+constexpr uint32_t FABRIC_ROUTER_TEST_7 = 0x1;
+constexpr uint32_t FABRIC_ROUTER_TEST_8 = 0x1;
+constexpr uint32_t FABRIC_ROUTER_TEST_9 = 0x1;
+constexpr uint32_t FABRIC_ROUTER_TEST_10 = 0x1;
+constexpr uint32_t FABRIC_ROUTER_TEST_11 = 0x1;
+constexpr uint32_t FABRIC_ROUTER_TEST_12 = 0x1;
