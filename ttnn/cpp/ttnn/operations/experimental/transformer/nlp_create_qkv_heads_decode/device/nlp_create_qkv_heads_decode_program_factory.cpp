@@ -68,7 +68,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
 
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
-    uint32_t head_tiles = head_dim / TILE_WIDTH;
+    uint32_t head_tiles = (head_dim + TILE_WIDTH - 1) / TILE_WIDTH;
     uint32_t head_size = head_tiles * single_tile_size;
 
     uint32_t element_size = input_tensor.element_size();
@@ -222,7 +222,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
 
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
-    uint32_t head_tiles = head_dim / TILE_WIDTH;
+    uint32_t head_tiles = (head_dim + TILE_WIDTH - 1) / TILE_WIDTH;
     uint32_t head_size = head_tiles * single_tile_size;
 
     uint32_t element_size = input_tensor.element_size();
@@ -500,7 +500,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
 
     const uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
-    const uint32_t head_tiles = head_dim / TILE_WIDTH;
+    const uint32_t head_tiles = (head_dim + TILE_WIDTH - 1) / TILE_WIDTH;
     const uint32_t head_size = head_tiles * single_tile_size;
 
     const uint32_t element_size = input_tensor.element_size();
