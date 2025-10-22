@@ -504,7 +504,10 @@ def prepare_image_latents(
         image_latents = [latent.sample() for latent in tt_pipeline.tt_vae.encode(image).latent_dist]
         image_latents = torch.cat(image_latents, dim=0)
     else:
-        image_latents = torch_pipeline.vae.encode(image).latent_dist.sample()
+        image_latents = [
+            torch_pipeline.vae.encode(img).latent_dist.sample() for img in torch.chunk(image, chunks=batch_size, dim=0)
+        ]
+        image_latents = torch.cat(image_latents, dim=0)
     image_latents = tt_pipeline.torch_pipeline.vae.config.scaling_factor * image_latents
     image_latents = image_latents.repeat(batch_size // image_latents.shape[0], 1, 1, 1)
 
