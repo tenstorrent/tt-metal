@@ -236,7 +236,11 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
 
         // Split the longer axis tiles across partitions (ceil)
         const uint32_t longer_tiles = output_is_wide ? N_tiles : M_tiles;
-        const uint32_t tiles_per_partition = tt::div_up(longer_tiles, partitions);
+        // Ensure that the longer tiles divides by the number of partitions and the grid size of the axis that is not
+        // partitioned
+        const uint32_t padded_longer_tiles =
+            tt::round_up(longer_tiles, partitions * (output_is_wide ? grid_size.x : grid_size.y));
+        const uint32_t tiles_per_partition = tt::div_up(padded_longer_tiles, partitions);
 
         for (uint32_t p = 0; p < partitions; ++p) {
             // Local core grid for this partition:
@@ -261,19 +265,17 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 local_transpose_core_grid ? local_grid_size_y : local_grid_size_x;
 
             // Partition slice on the longer axis
-            const uint32_t part_start_tile = std::min(p * tiles_per_partition, longer_tiles);
-            const uint32_t part_end_tile = std::min((p + 1) * tiles_per_partition, longer_tiles);
-            const uint32_t part_len_tiles = (part_end_tile > part_start_tile) ? (part_end_tile - part_start_tile) : 0u;
+            const uint32_t part_start_tile = p * tiles_per_partition;
+            const uint32_t part_end_tile = (p + 1) * tiles_per_partition;
+            const uint32_t part_len_tiles = part_end_tile - part_start_tile;
 
             // Local logical M/N in tiles for this partition
             const uint32_t local_M_tiles = output_is_wide ? M_tiles : part_len_tiles;
             const uint32_t local_N_tiles = output_is_wide ? part_len_tiles : N_tiles;
 
             // Local paddings and per-core ranges
-            const uint32_t local_padded_M_tiles = tt::round_up(local_M_tiles, local_in0_parallel_axis_cores);
-            const uint32_t local_padded_N_tiles = tt::round_up(local_N_tiles, local_in1_parallel_axis_cores);
-            const uint32_t local_M_tiles_per_core = local_padded_M_tiles / local_in0_parallel_axis_cores;
-            const uint32_t local_N_tiles_per_core = local_padded_N_tiles / local_in1_parallel_axis_cores;
+            const uint32_t local_M_tiles_per_core = tt::div_up(local_M_tiles, local_in0_parallel_axis_cores);
+            const uint32_t local_N_tiles_per_core = tt::div_up(local_N_tiles, local_in1_parallel_axis_cores);
 
             const uint32_t padded_K_tiles = tt::round_up(K_tiles, K_block_tiles);
             const uint32_t K_blocks = padded_K_tiles / K_block_tiles;
@@ -343,12 +345,12 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             log_info(tt::LogOp, "in1_is_output_writer: {}", in1_is_output_writer);
 
             std::vector<uint32_t> in0_sender_compile_time_args = {
-                local_M_tiles,
-                local_padded_M_tiles,
+                M_tiles,
+                M_tiles,
                 K_tiles,
                 padded_K_tiles,
-                local_N_tiles,
-                local_padded_N_tiles,
+                N_tiles,
+                N_tiles,
                 M_block_tiles,
                 K_block_tiles,
                 N_block_tiles,
@@ -389,7 +391,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                     .defines = defines});
 
             std::vector<uint32_t> in0_receiver_compile_time_args = in0_sender_compile_time_args;
-            in0_receiver_compile_time_args.back() = false;  // is_injector_core = false
+            in0_receiver_compile_time_args[18] = false;  // is_injector_core = false
             // Conditionally create in0 receiver kernel only if needed
             // in0 forwards along X when transposed, else along Y
             bool create_in0_receiver = local_transpose_core_grid ? (local_grid_size_y > 1) : (local_grid_size_x > 1);
@@ -408,12 +410,12 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             }
 
             std::vector<uint32_t> in1_sender_compile_time_args = {
-                local_M_tiles,
-                local_padded_M_tiles,
+                M_tiles,
+                M_tiles,
                 K_tiles,
                 padded_K_tiles,
-                local_N_tiles,
-                local_padded_N_tiles,
+                N_tiles,
+                N_tiles,
                 M_block_tiles,
                 K_block_tiles,
                 N_block_tiles,
@@ -443,7 +445,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                     .defines = defines});
 
             std::vector<uint32_t> in1_receiver_compile_time_args = in1_sender_compile_time_args;
-            in1_receiver_compile_time_args.back() = false;  // is_injector_core = false
+            in1_receiver_compile_time_args[18] = false;  // is_injector_core = false
             // Conditionally create in1 receiver kernel only if needed
             // in1 forwards along Y when transposed, else along X
             bool create_in1_receiver = local_transpose_core_grid ? (local_grid_size_x > 1) : (local_grid_size_y > 1);
@@ -522,9 +524,6 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
 
             for (uint32_t core_id = 0; core_id < local_num_cores; ++core_id) {
                 CoreCoord core = cores.at(core_id);
-                uint32_t in0_idx = local_transpose_core_grid ? core.x : core.y;
-                uint32_t in1_idx = local_transpose_core_grid ? core.y : core.x;
-
                 CoreCoord left_core = {start.x, core.y};
                 CoreCoord top_core = {core.x, start.y};
 
@@ -549,16 +548,33 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 auto in1_prev_core = clamped_prev(in1_core_order, in1_core_order_index);
                 auto in1_next_core = clamped_next(in1_core_order, in1_core_order_index);
 
+                log_info(
+                    tt::LogOp,
+                    "in0_core_order_index: {}, in1_core_order_index: {}",
+                    in0_core_order_index,
+                    in1_core_order_index);
+
                 auto in0_prev_core_physical = device->worker_core_from_logical_core(in0_prev_core);
                 auto in0_next_core_physical = device->worker_core_from_logical_core(in0_next_core);
                 auto in1_prev_core_physical = device->worker_core_from_logical_core(in1_prev_core);
                 auto in1_next_core_physical = device->worker_core_from_logical_core(in1_next_core);
 
                 // Per-core M/N ranges with global partition offsets applied on the longer axis
-                uint32_t M_start_tile = local_M_tiles_per_core * in0_idx + (output_is_wide ? 0u : part_start_tile);
-                uint32_t M_end_tile = local_M_tiles_per_core * (in0_idx + 1) + (output_is_wide ? 0u : part_start_tile);
-                uint32_t N_start_tile = local_N_tiles_per_core * in1_idx + (output_is_wide ? part_start_tile : 0u);
-                uint32_t N_end_tile = local_N_tiles_per_core * (in1_idx + 1) + (output_is_wide ? part_start_tile : 0u);
+                // uint32_t M_start_tile = local_M_tiles_per_core * in0_idx + (output_is_wide ? 0u : part_start_tile);
+                // uint32_t M_end_tile = local_M_tiles_per_core * (in0_idx + 1) + (output_is_wide ? 0u :
+                // part_start_tile); uint32_t N_start_tile = local_N_tiles_per_core * in1_idx + (output_is_wide ?
+                // part_start_tile : 0u); uint32_t N_end_tile = local_N_tiles_per_core * (in1_idx + 1) + (output_is_wide
+                // ? part_start_tile : 0u); DEBUG
+                uint32_t relative_index_in0 = in1_core_order_index;  // This is the index of the core on the core_grid
+                                                                     // axis that in0 is parallel over
+                uint32_t relative_index_in1 = in0_core_order_index;  // This is the index of the core on the core_grid
+                                                                     // axis that in1 is parallel over
+                uint32_t M_start_tile =
+                    relative_index_in0 * local_M_tiles_per_core + (output_is_wide ? 0u : part_start_tile);
+                uint32_t M_end_tile = M_start_tile + local_M_tiles_per_core;
+                uint32_t N_start_tile =
+                    relative_index_in1 * local_N_tiles_per_core + (output_is_wide ? part_start_tile : 0u);
+                uint32_t N_end_tile = N_start_tile + local_N_tiles_per_core;
 
                 uint32_t defer_write_k_block = (local_transpose_core_grid ? core.x : core.y) * k_blocks_per_core;
                 defer_write_k_block = std::min(defer_write_k_block, K_blocks - 1);
@@ -622,6 +638,14 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                     is_in1_sender,
                     is_in0_sink,
                     is_in1_sink);
+
+                log_info(
+                    tt::LogOp,
+                    "M_start_tile: {}, M_end_tile: {}, N_start_tile: {}, N_end_tile: {}",
+                    M_start_tile,
+                    M_end_tile,
+                    N_start_tile,
+                    N_end_tile);
 
                 std::vector<uint32_t> compute_runtime_args = {
                     M_start_tile,
