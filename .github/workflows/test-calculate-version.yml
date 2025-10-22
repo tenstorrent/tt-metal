@@ -4,11 +4,11 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'actions/calculate-version/**'
+      - '.github/actions/calculate-version/**'
   pull_request:
     branches: [ main ]
     paths:
-      - 'actions/calculate-version/**'
+      - '.github/actions/calculate-version/**'
   workflow_dispatch:
 
 jobs:
