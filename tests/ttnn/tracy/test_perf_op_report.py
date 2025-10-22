@@ -4,8 +4,15 @@
 
 import pytest
 
-from tracy.process_model_log import post_process_ops_log, run_device_profiler
+from tracy.process_model_log import (
+    post_process_ops_log,
+    run_device_profiler,
+    get_latest_ops_log_filename,
+    get_profiler_folder,
+)
 from models.common.utility_functions import skip_for_blackhole
+from tracy.compare_ops_logs import compare_ops_logs
+from tracy.common import generate_logs_folder, PROFILER_CPP_DEVICE_OPS_PERF_REPORT
 
 
 @pytest.fixture(scope="class")
@@ -22,9 +29,17 @@ def do_postproc(request, run_test):
     return columns, run_test
 
 
-@pytest.fixture(scope="class", autouse=True)
+@pytest.fixture(scope="class")
 def run_test_do_post_proc(request, do_postproc):
     return do_postproc
+
+
+@pytest.fixture(scope="class")
+def run_test_do_cpp_post_proc(request):
+    assert "command" in request.param, "Bad test setup, command not found in test setup dict"
+    assert "name" in request.param, "Bad test setup, name not found in test setup dict"
+    run_device_profiler(request.param["command"], request.param["name"], cpp_post_process=True)
+    return request
 
 
 def verify_equal(received, expected, column):
@@ -104,3 +119,22 @@ class TestTensorIO:
             "OUTPUT_0_X_PAD[LOGICAL]": "32[16]",
         }
         verify_columns(received_columns, expected_columns, verify_equal)
+
+
+cpp_post_proc_test = {
+    "name": "Ops",
+    "command": 'pytest "tests/ttnn/tracy/test_trace_runs.py::test_with_ops"',
+}
+
+
+@pytest.mark.parametrize(
+    "run_test_do_cpp_post_proc", [pytest.param(cpp_post_proc_test, id=cpp_post_proc_test["name"])], indirect=True
+)
+class TestCppPostProc:
+    def test_cpp_post_proc(self, run_test_do_cpp_post_proc):
+        request = run_test_do_cpp_post_proc
+        python_ops_perf_report = get_latest_ops_log_filename(request.param["name"])
+        cpp_ops_perf_report = (
+            generate_logs_folder(get_profiler_folder(request.param["name"])) / PROFILER_CPP_DEVICE_OPS_PERF_REPORT
+        )
+        compare_ops_logs(python_ops_perf_report=python_ops_perf_report, cpp_ops_perf_report=cpp_ops_perf_report)
