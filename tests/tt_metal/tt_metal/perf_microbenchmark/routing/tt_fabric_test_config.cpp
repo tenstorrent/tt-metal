@@ -444,7 +444,7 @@ void CmdlineParser::print_help() {
         "built_tests.yaml.");
     log_info(
         LogTest,
-        "  --filter <testname>           Specify a filter for the test suite in form filter_type.filter_value"
+        "  --filter <testname>           Specify a filter for the test suite in the form filter_type.filter_value"
         " eg. topology.Ring");
     log_info(LogTest, "");
     log_info(LogTest, "Progress Monitoring Options:");
