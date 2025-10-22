@@ -406,7 +406,7 @@ class Generator:
     ):
         if sampling_params is None:
             return_logits = True
-            read_from_device = False
+            # read_from_device = False
             reset_inputs = True
         else:
             return_logits = False
