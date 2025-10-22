@@ -13,6 +13,8 @@ namespace ttnn {
 namespace operations::experimental::reduction {
 
 struct IntImgOperation {
+    static void validate(const Tensor& input_tensor);
+
     static Tensor invoke(const Tensor& input_tensor);
 };
 
