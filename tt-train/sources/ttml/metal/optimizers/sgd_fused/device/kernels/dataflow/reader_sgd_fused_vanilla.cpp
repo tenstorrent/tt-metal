@@ -13,10 +13,10 @@ constexpr auto cb_param_in_idx = tt::CBIndex::c_0;
 constexpr auto cb_grad_idx = tt::CBIndex::c_1;
 constexpr auto cb_momentum_in_idx = tt::CBIndex::c_2;
 
-constexpr auto cb_bcast_lr_idx = tt::CBIndex::c_7;
-constexpr auto cb_bcast_momentum_idx = tt::CBIndex::c_8;
-constexpr auto cb_bcast_dampening_idx = tt::CBIndex::c_9;
-constexpr auto cb_bcast_weight_decay_idx = tt::CBIndex::c_10;
+constexpr auto cb_bcast_lr_idx = tt::CBIndex::c_8;
+constexpr auto cb_bcast_momentum_idx = tt::CBIndex::c_9;
+constexpr auto cb_bcast_dampening_idx = tt::CBIndex::c_10;
+constexpr auto cb_bcast_weight_decay_idx = tt::CBIndex::c_11;
 
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 constexpr uint32_t Wt = get_compile_time_arg_val(1);
