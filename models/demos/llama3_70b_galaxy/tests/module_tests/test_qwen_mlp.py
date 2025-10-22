@@ -68,7 +68,6 @@ def test_qwen_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
         hidden_dim=25600,
         multiple_of=1,
         ffn_dim_multiplier=None,
-        llama3=False,
     )
     reference_model.load_state_dict(partial_state_dict_ref)
 

@@ -111,7 +111,7 @@ def test_qwen_attention_inference_prefill_ttt(
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
-    reference_model_custom = Attention(args=model_args, llama3=False)  # Enable QK norm with llama3=True
+    reference_model_custom = Attention(args=model_args)
     reference_model_custom.load_state_dict(partial_state_dict)
     logger.info(f"Reference Model Loaded with QK norm support")
 

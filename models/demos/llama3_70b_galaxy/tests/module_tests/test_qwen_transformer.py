@@ -89,7 +89,7 @@ def test_qwen_transformer_inference(
             )
         )
     }
-    reference_model = Transformer(model_args, llama3=False)
+    reference_model = Transformer(model_args)
     reference_model.load_state_dict(reference_state_dict)
 
     generation_start_pos = 0

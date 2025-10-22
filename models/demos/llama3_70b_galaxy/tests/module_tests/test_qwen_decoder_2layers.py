@@ -97,7 +97,7 @@ def test_qwen_decoder_2layers_inference(
         partial_state_dict = {
             k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if k.startswith(first_layer_prefix)
         }
-        reference_model = TransformerBlock(layer_id=layer_idx, args=model_args, llama3=False)
+        reference_model = TransformerBlock(layer_id=layer_idx, args=model_args)
         reference_model.load_state_dict(partial_state_dict)
         reference_models.append(reference_model)
 

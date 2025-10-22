@@ -81,7 +81,7 @@ def test_qwen_decoder_inference_prefill(
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
 
-    reference_model = TransformerBlock(layer_id=0, args=model_args, llama3=False)  # Enable QK norm with llama3=True
+    reference_model = TransformerBlock(layer_id=0, args=model_args)
     reference_model.load_state_dict(partial_state_dict)
 
     generation_start_pos = 0

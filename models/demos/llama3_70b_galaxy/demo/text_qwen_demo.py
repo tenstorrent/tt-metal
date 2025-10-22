@@ -457,7 +457,6 @@ def create_tt_qwen_model(
             "trace_region_size": 102000000,
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            # "worker_l1_size": 1345000,
             "fabric_config": True,
         }
     ],
@@ -680,9 +679,9 @@ def test_qwen_demo_text(
         if pcc_check:
             vocab_size = 151936  # Qwen vocab size
             if is_ci_env or galaxy_type == "6U":
-                ref_output_path = f"/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-70B-Instruct/qwen3_70b_text_demo_ref_outputs/qwen3_70b_ref_outputs_{num_layers}L_decode.refpt"
+                ref_output_path = f"/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-70B-Instruct/qwen3_70b_text_demo_ref_outputs/qwen3_32b_ref_outputs_{num_layers}L_decode.refpt"
             else:
-                ref_output_path = f"/proj_sw/user_dev/qwen3_70b_text_demo_ref_outputs/qwen3_70b_ref_outputs_{num_layers}L_decode.refpt"
+                ref_output_path = f"/proj_sw/user_dev/qwen3_70b_text_demo_ref_outputs/qwen3_32b_ref_outputs_{num_layers}L_decode.refpt"
             assert os.path.exists(ref_output_path), f"Reference output file with path {ref_output_path} does not exist!"
             torch_reference = torch.load(ref_output_path)
             assert torch_reference["all_ref_logits"].shape == (

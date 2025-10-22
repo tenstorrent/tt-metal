@@ -121,116 +121,61 @@ def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
 
 
 class Attention(nn.Module):
-    def __init__(self, args: ModelArgs, llama3: bool = True):
+    def __init__(self, args: ModelArgs):
         super().__init__()
-        self.n_kv_heads = args.n_heads if args.n_kv_heads is None else args.n_kv_heads
-        model_parallel_size = 1  # fs_init.get_model_parallel_world_size()
-        self.n_local_heads = args.n_heads // model_parallel_size
-        self.n_local_kv_heads = self.n_kv_heads // model_parallel_size
-        self.n_rep = self.n_local_heads // self.n_local_kv_heads
-        self.head_dim = args.dim // args.n_heads
-        self.qk_norm = not llama3  # Use llama3 flag to determine QK norm usage
+        self.head_dim = 128
+        self.n_local_heads = 64
+        self.n_local_kv_heads = 8
+        self.n_rep = 8
 
-        if llama3:
-            self.wq = ColumnParallelLinear(
-                args.dim,
-                args.n_heads * self.head_dim,
-                bias=False,
-                gather_output=False,
-                init_method=lambda x: x,
-            )
-            self.wk = ColumnParallelLinear(
-                args.dim,
-                self.n_kv_heads * self.head_dim,
-                bias=False,
-                gather_output=False,
-                init_method=lambda x: x,
-            )
-            self.wv = ColumnParallelLinear(
-                args.dim,
-                self.n_kv_heads * self.head_dim,
-                bias=False,
-                gather_output=False,
-                init_method=lambda x: x,
-            )
-            self.wo = RowParallelLinear(
-                args.n_heads * self.head_dim,
-                args.dim,
-                bias=False,
-                input_is_parallel=True,
-                init_method=lambda x: x,
-            )
+        self.wq = ColumnParallelLinear(
+            5120,
+            8192,
+            bias=False,
+            gather_output=False,
+            init_method=lambda x: x,
+        )
+        self.wk = ColumnParallelLinear(
+            5120,
+            1024,
+            bias=False,
+            gather_output=False,
+            init_method=lambda x: x,
+        )
+        self.wv = ColumnParallelLinear(
+            5120,
+            1024,
+            bias=False,
+            gather_output=False,
+            init_method=lambda x: x,
+        )
+        self.wo = RowParallelLinear(
+            8192,
+            5120,
+            bias=False,
+            input_is_parallel=True,
+            init_method=lambda x: x,
+        )
 
-            self.cache_k = torch.zeros(
-                (
-                    args.max_batch_size,
-                    args.max_seq_len,
-                    self.n_local_kv_heads,
-                    self.head_dim,
-                )
+        self.cache_k = torch.zeros(
+            (
+                32,
+                args.max_seq_len,
+                8,
+                128,
             )
-            self.cache_v = torch.zeros(
-                (
-                    args.max_batch_size,
-                    args.max_seq_len,
-                    self.n_local_kv_heads,
-                    self.head_dim,
-                )
+        )
+        self.cache_v = torch.zeros(
+            (
+                32,
+                args.max_seq_len,
+                8,
+                128,
             )
-        else:
-            self.head_dim = 128
-            self.n_local_heads = 64
-            self.n_local_kv_heads = 8
-            self.n_rep = 8
+        )
 
-            self.wq = ColumnParallelLinear(
-                5120,
-                8192,
-                bias=False,
-                gather_output=False,
-                init_method=lambda x: x,
-            )
-            self.wk = ColumnParallelLinear(
-                5120,
-                1024,
-                bias=False,
-                gather_output=False,
-                init_method=lambda x: x,
-            )
-            self.wv = ColumnParallelLinear(
-                5120,
-                1024,
-                bias=False,
-                gather_output=False,
-                init_method=lambda x: x,
-            )
-            self.wo = RowParallelLinear(
-                8192,
-                5120,
-                bias=False,
-                input_is_parallel=True,
-                init_method=lambda x: x,
-            )
-
-            self.cache_k = torch.zeros(
-                (
-                    32,
-                    args.max_seq_len,
-                    8,
-                    128,
-                )
-            )
-            self.cache_v = torch.zeros(
-                (
-                    32,
-                    args.max_seq_len,
-                    8,
-                    128,
-                )
-            )
-
-            self.q_norm = RMSNorm(self.head_dim)
-            self.k_norm = RMSNorm(self.head_dim)
+        self.q_norm = RMSNorm(self.head_dim)
+        self.k_norm = RMSNorm(self.head_dim)
 
     def forward(
         self,
@@ -246,15 +191,14 @@ class Attention(nn.Module):
         xk = xk.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
         xv = xv.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
 
-        # Apply QK norm if enabled
-        if self.qk_norm:
-            d = xq.size(-1)
-            xq = self.q_norm(xq)
-            xk = self.k_norm(xk)
+        # Apply QK norm
+        d = xq.size(-1)
+        xq = self.q_norm(xq)
+        xk = self.k_norm(xk)
 
-            # scale = 1.0 / math.sqrt(d)
-            # xq = xq * scale
-            # xk = xk * scale
+        # scale = 1.0 / math.sqrt(d)
+        # xq = xq * scale
+        # xk = xk * scale
 
         xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
 
@@ -290,18 +234,10 @@ class FeedForward(nn.Module):
         hidden_dim: int,
         multiple_of: int,
         ffn_dim_multiplier: Optional[float],
-        llama3: bool = True,
     ):
         super().__init__()
-        if llama3:
-            hidden_dim = int(2 * hidden_dim / 3)
-            # custom dim factor multiplier
-            if ffn_dim_multiplier is not None:
-                hidden_dim = int(ffn_dim_multiplier * hidden_dim)
-            hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
-        else:
-            hidden_dim = 25600
-            dim = 5120
+        hidden_dim = 25600
+        dim = 5120
 
         self.w1 = ColumnParallelLinear(dim, hidden_dim, bias=False, gather_output=False, init_method=lambda x: x)
         self.w2 = RowParallelLinear(hidden_dim, dim, bias=False, input_is_parallel=True, init_method=lambda x: x)
@@ -312,18 +248,17 @@ class FeedForward(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, layer_id: int, args: ModelArgs, llama3: bool = True):
+    def __init__(self, layer_id: int, args: ModelArgs):
         super().__init__()
         self.n_heads = args.n_heads
         self.dim = args.dim
         self.head_dim = args.dim // args.n_heads
-        self.attention = Attention(args, llama3)
+        self.attention = Attention(args)
         self.feed_forward = FeedForward(
             dim=args.dim,
             hidden_dim=4 * args.dim,
             multiple_of=args.multiple_of,
             ffn_dim_multiplier=args.ffn_dim_multiplier,
-            llama3=llama3,
         )
         self.layer_id = layer_id
         self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
@@ -347,7 +282,7 @@ class TransformerBlock(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, params: ModelArgs, llama3=True, seq_len=32):
+    def __init__(self, params: ModelArgs, seq_len=32):
         super().__init__()
         self.params = params
         self.vocab_size = params.vocab_size
@@ -360,27 +295,18 @@ class Transformer(nn.Module):
 
         self.layers = torch.nn.ModuleList()
         for layer_id in range(params.n_layers):
-            self.layers.append(TransformerBlock(layer_id, params, llama3))
+            self.layers.append(TransformerBlock(layer_id, params))
 
         self.norm = RMSNorm(params.dim, eps=params.norm_eps)
         self.output = ColumnParallelLinear(params.dim, params.vocab_size, bias=False, init_method=lambda x: x)
 
-        if llama3:
-            self.freqs_cis = precompute_freqs_cis(
-                params.dim // params.n_heads,
-                params.max_seq_len * 2,
-                params.rope_theta,
-                params.use_scaled_rope,
-                params.rope_scaling_factor,
-            )
-        else:
-            self.freqs_cis = precompute_freqs_cis(
-                8192 // 64,
-                params.max_seq_len * 2,
-                params.rope_theta,
-                params.use_scaled_rope,
-                params.rope_scaling_factor,
-            )
+        self.freqs_cis = precompute_freqs_cis(
+            8192 // 64,
+            params.max_seq_len * 2,
+            params.rope_theta,
+            params.use_scaled_rope,
+            params.rope_scaling_factor,
+        )
 
     @torch.inference_mode()
     def forward(self, embeddings: torch.Tensor, start_pos: int, mode: str = "decode"):

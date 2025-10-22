@@ -186,7 +186,7 @@ def test_qwen_model_no_qk_norm_inference(
         encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in prompts]
 
     if run_ref_pt:
-        reference_model = Transformer(model_args, llama3=False)
+        reference_model = Transformer(model_args)
         reference_model.load_state_dict(reference_state_dict)
 
     # Embedding on host

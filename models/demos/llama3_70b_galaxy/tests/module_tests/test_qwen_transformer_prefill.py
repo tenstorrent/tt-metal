@@ -107,7 +107,7 @@ def test_qwen_transformer_inference_prefill(
     encoded_prompt = tokenizer.encode(prompt)[:seq_len]
 
     if run_ref_pt:
-        reference_model = Transformer(model_args, llama3=False)
+        reference_model = Transformer(model_args)
         reference_model.load_state_dict(reference_state_dict)
     # Embedding on host
     embd = HostEmbedding(model_args)

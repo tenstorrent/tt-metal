@@ -83,7 +83,7 @@ def test_qwen_attention_no_qk_norm_inference_prefill(
         for k, v in state_dict.items()
         if k.startswith(first_layer_prefix) and "q_norm" not in k and "k_norm" not in k
     }
-    reference_model = Attention(args=model_args, llama3=False)  # No QK norm with llama3=False
+    reference_model = Attention(args=model_args)
     reference_model.load_state_dict(partial_state_dict)
 
     # pre-compute the rotational embedding matrix and send to device

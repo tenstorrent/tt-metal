@@ -109,6 +109,14 @@ def initialize_vllm_text_transformer_qwen(
     dtype=ttnn.bfloat8_b,
     optimizations=LlamaOptimizations.performance,
 ):
+    if envs.VLLM_USE_V1:
+        # tt_data_parallel is the total number of DP kv caches, so need to divide by the DP factor of attention.
+        dp_attention_factor = mesh_device.shape[1]
+        assert (
+            tt_data_parallel % dp_attention_factor == 0
+        ), f"Total DP ({tt_data_parallel}) must be divisible by dp_attention_factor ({dp_attention_factor})"
+        tt_data_parallel = tt_data_parallel // dp_attention_factor
+
     submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
     # Load model args, weights
     model_args = []
@@ -135,9 +143,9 @@ def initialize_vllm_text_transformer_qwen(
         tt_model_i = TtTransformer(
             args=model_args[i],
             mesh_device=submesh,
-            dtype=ttnn.bfloat8_b,
+            dtype=dtype,
             state_dict=state_dict,
-            weight_cache_path=model_args[i].weight_cache_path(ttnn.bfloat8_b),
+            weight_cache_path=model_args[i].weight_cache_path(dtype),
             use_paged_kv_cache=True,
             mode="prefill",
             enable_prefetcher_performance_mode=True,
@@ -207,8 +215,16 @@ class QwenForCausalLM(Generator):
 
     @classmethod
     def initialize_vllm_model(
-        cls, hf_config, mesh_device, max_batch_size, max_seq_len=131072, n_layers=None, tt_data_parallel=1
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len=131072,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations=None,
     ):
+        assert optimizations is None, "Custom optimizations are not supported for this model"
         # max_seq_len = 128
         # n_layers = 1
         tt_model, model_args = initialize_vllm_text_transformer_qwen(
