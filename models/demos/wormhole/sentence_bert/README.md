@@ -11,17 +11,11 @@ Resource link - [source](https://huggingface.co/emrecan/bert-base-turkish-cased-
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-    - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
 
 ## How to Run
 - Use the following command to run the model:
 ```
 pytest --disable-warnings models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model
-```
-
-###  Performant Model with Trace+2CQ
-```
-pytest --disable-warnings models/demos/wormhole/sentence_bert/tests/perf/test_sentence_bert_e2e_performant.py::test_e2e_performant_sentencebert
 ```
 
 ###  Performant Model with Trace+2CQ

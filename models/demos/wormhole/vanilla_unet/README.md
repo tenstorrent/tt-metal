@@ -6,13 +6,11 @@
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-   - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
 
 
 ## How to run (480x640 resolution)
 
 Use the following command to run the inference pipeline:
-
     ```
     pytest models/demos/vanilla_unet/tests/pcc/test_ttnn_unet.py::test_unet
     ```
@@ -21,7 +19,6 @@ Use the following command to run the inference pipeline:
 #### Single Device (BS=1):
 
 - For `480x640`, end-2-end perf is `60` FPS
-
     ```sh
     pytest models/demos/wormhole/vanilla_unet/tests/perf/test_e2e_performant.py::test_e2e_performant
     ```
@@ -29,7 +26,6 @@ Use the following command to run the inference pipeline:
 #### Multi Device (DP=2, N300):
 
 - For `480x640`, end-2-end perf is `119` FPS
-
     ```sh
     pytest models/demos/wormhole/vanilla_unet/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
     ```
@@ -38,7 +34,6 @@ Use the following command to run the inference pipeline:
 
 #### Single image
 - Use the following command to run the demo for `480x640` resolution:
-
     ```
     pytest models/demos/wormhole/vanilla_unet/demo/demo.py::test_unet_demo_single_image
     ```
@@ -49,17 +44,13 @@ Use the following command to run the inference pipeline:
 ### Evaluation test:
 
 #### Single Device (BS=1):
-
 - Use the following command to run the performant evaluation with Trace+2CQs:
-
     ```sh
     pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet
     ```
 
 #### Multi Device (DP=2, N300):
-
 - Use the following command to run the performant evaluation with Trace+2CQs:
-
     ```sh
     pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet_dp
     ```

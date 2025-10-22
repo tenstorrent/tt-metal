@@ -31,8 +31,6 @@ pytest --disable-warnings models/demos/wormhole/vit/tests/test_demo_vit_ttnn_inf
 
 -  For inference device OPs analysis, use the following command to run the demo:
 ```sh
-# Build with ./build_metal.sh
-
 # To manually inspect ops
 ./tools/tracy/profile_this.py -n vit -c "pytest --disable-warnings models/demos/wormhole/vit/tests/test_vit_device_perf.py::test_vit_device_ops"
 

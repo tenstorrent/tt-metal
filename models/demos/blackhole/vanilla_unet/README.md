@@ -6,7 +6,6 @@
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-   - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
 
 
 ## How to run (480x640 resolution)
@@ -21,7 +20,6 @@ Use the following command to run the inference pipeline:
 #### Single Device (BS=1):
 
 - For `480x640`, end-2-end perf is `115` FPS (**On P150**)
-
     ```sh
     pytest models/demos/blackhole/vanilla_unet/tests/perf/test_e2e_performant.py::test_e2e_performant
     ```
