@@ -361,6 +361,10 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
             launch_msg.kernel_config().ncrisc_kernel_size16() = (iram_text_size + 15) >> 4;
         }
     };
+
+    this->verify_eth_fw_version_func_ = [](tt::umd::tt_version /*eth_fw_version*/) {
+        // No checks
+    };
 }
 
 }  // namespace tt_metal
