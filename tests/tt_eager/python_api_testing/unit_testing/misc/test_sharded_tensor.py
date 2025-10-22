@@ -41,7 +41,7 @@ def print_tiles(tiled_tensor, num_tiles_height, num_tiles_width):
 
 
 def get_tensor(shape, dtype):
-    if dtype in {torch.int16, torch.int32}:
+    if dtype in {torch.uint16, torch.int16, torch.uint32, torch.int32}:
         torch_tensor = torch.randint(0, 1024, shape, dtype=dtype)
     else:
         torch_tensor = torch.rand(shape, dtype=dtype)

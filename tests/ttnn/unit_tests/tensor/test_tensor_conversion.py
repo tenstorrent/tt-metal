@@ -36,7 +36,7 @@ def test_tensor_conversion_with_tt_dtype(python_lib, shape, tt_dtype, convert_to
     if python_lib == torch:
         dtype = tt_dtype_to_torch_dtype[tt_dtype]
 
-        if dtype in {torch.uint8, torch.int16, torch.int32}:
+        if dtype in {torch.uint8, torch.uint16, torch.int16, torch.uint32, torch.int32}:
             py_tensor = torch.randint(torch.iinfo(dtype).min, torch.iinfo(dtype).max, shape, dtype=dtype)
         else:
             py_tensor = torch.rand(shape, dtype=dtype)
@@ -48,7 +48,7 @@ def test_tensor_conversion_with_tt_dtype(python_lib, shape, tt_dtype, convert_to
             pytest.skip("ttnn.bfloat16 dtype is not supported yet for numpy tensors!")
         dtype = tt_dtype_to_np_dtype[tt_dtype]
 
-        if dtype in {np.ubyte, np.int16, np.int32}:
+        if dtype in {np.ubyte, np.uint16, np.int16, np.uint32, np.int32}:
             py_tensor = np.random.randint(np.iinfo(dtype).min, np.iinfo(dtype).max, shape, dtype=dtype)
         else:
             py_tensor = np.random.random(shape).astype(dtype=dtype)
@@ -124,7 +124,7 @@ def test_tensor_conversion_with_python_dtype(python_lib, shape, python_dtype_str
     if python_lib == torch:
         dtype = string_to_torch_dtype[python_dtype_str]
 
-        if dtype in {torch.uint8, torch.int16, torch.int32, torch.int64}:
+        if dtype in {torch.uint8, torch.uint16, torch.int16, torch.uint32, torch.int32, torch.int64}:
             py_tensor = torch.randint(torch.iinfo(dtype).min, torch.iinfo(dtype).max, shape, dtype=dtype)
         else:
             py_tensor = torch.rand(shape, dtype=dtype)
@@ -136,7 +136,7 @@ def test_tensor_conversion_with_python_dtype(python_lib, shape, python_dtype_str
             pytest.skip("{} dtype is not supported yet for numpy tensors!".format(python_dtype_str))
         dtype = string_to_np_dtype[python_dtype_str]
 
-        if dtype in {np.ubyte, np.int16, np.int32, np.int64}:
+        if dtype in {np.ubyte, np.uint16, np.int16, np.uint32, np.int32, np.int64}:
             py_tensor = np.random.randint(np.iinfo(dtype).min, np.iinfo(dtype).max, shape, dtype=dtype)
         else:
             py_tensor = np.random.random(shape).astype(dtype=dtype)
@@ -154,7 +154,7 @@ def test_tensor_conversion_with_python_dtype(python_lib, shape, python_dtype_str
     elif python_lib == np:
         py_tensor_after_round_trip = tt_tensor.to_numpy()
 
-    if python_dtype_str in ("int64", "float16"):
+    if python_dtype_str in ("int16", "int64", "float16"):
         pytest.xfail(
             "{} dtype is incorrectly handled in ttnn tensors, so roundtrip tests are not working!".format(
                 python_dtype_str

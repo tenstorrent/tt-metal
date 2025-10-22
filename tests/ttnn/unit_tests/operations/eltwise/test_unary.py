@@ -695,6 +695,9 @@ def test_unary_zero_comp_uint_ttnn(input_shapes, low, high, torch_dtype, ttnn_dt
     golden_tensor = golden_function(in_data)
 
     output_tensor = ttnn.to_torch(output_tensor)
+    # Convert output tensor to bool to match golden function output type for comparison
+    if golden_tensor.dtype == torch.bool:
+        output_tensor = output_tensor.bool()
     assert torch.equal(golden_tensor, output_tensor)
 
 

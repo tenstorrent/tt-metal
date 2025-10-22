@@ -18,8 +18,8 @@ import numpy as np
 # Dictionaries for converting dtypes
 tt_dtype_to_torch_dtype = {
     ttnn.uint8: torch.uint8,
-    ttnn.uint16: torch.int16,
-    ttnn.uint32: torch.int32,
+    ttnn.uint16: torch.uint16,
+    ttnn.uint32: torch.uint32,
     ttnn.int32: torch.int32,
     ttnn.float32: torch.float,
     ttnn.bfloat16: torch.bfloat16,
@@ -29,8 +29,8 @@ tt_dtype_to_torch_dtype = {
 
 tt_dtype_to_np_dtype = {
     ttnn.uint8: np.ubyte,
-    ttnn.uint16: np.int16,
-    ttnn.uint32: np.int32,
+    ttnn.uint16: np.uint16,
+    ttnn.uint32: np.uint32,
     ttnn.int32: np.int32,
     ttnn.float32: np.float32,
     ttnn.bfloat8_b: np.float32,

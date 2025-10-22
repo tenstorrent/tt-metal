@@ -20,11 +20,11 @@ torch.manual_seed(0)
 
 def random_torch_tensor(dtype, shape):
     if dtype == ttnn.uint16:
-        return torch.randint(0, 2**15, shape, dtype=torch.int16)
+        return torch.randint(0, 2**16, shape, dtype=torch.uint16)
     if dtype == ttnn.int32:
         return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
     if dtype == ttnn.uint32:
-        return torch.randint(0, 2**31, shape, dtype=torch.int32)
+        return torch.randint(0, 2**32, shape, dtype=torch.uint32)
     return torch.rand(shape).bfloat16().float()
 
 
