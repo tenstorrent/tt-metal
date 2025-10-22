@@ -3,9 +3,8 @@ name: "(Galaxy) demo tests"
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
-    - cron: "0 9 * * 1,3,6" # frequency of deepseek tests
-    
+    - cron: '0 0 * * *' # This cron schedule runs demo tests every day at 12am UTC
+    - cron: "0 9 * * 1,3,6" # frequency of galaxy tests
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
