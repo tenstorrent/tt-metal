@@ -74,7 +74,7 @@ jobs:
           /usr/bin/${{ inputs.product }}-validation-smoke --gtest_filter="MeshDispatchFixture.TensixFailOnDuplicateKernelCreationDataflow" || true
 
       - name: Clear coverage from warmup
-        if: ${{ inputs.upload-coverage == 'true' }}
+        if: ${{ inputs.upload-coverage }}
         run: |
           rm -f /work/coverage/*.profraw || true
 
@@ -92,7 +92,7 @@ jobs:
           /usr/bin/${{ inputs.product }}-validation-smoke
 
       - name: Merge LLVM coverage
-        if: ${{ inputs.upload-coverage == 'true' }}
+        if: ${{ inputs.upload-coverage }}
         run: |
           shopt -s nullglob || true
           files=(/work/coverage/*.profraw)
@@ -103,7 +103,7 @@ jobs:
           fi
 
       - name: Export LCOV (llvm-cov)
-        if: ${{ inputs.upload-coverage == 'true' }}
+        if: ${{ inputs.upload-coverage }}
         run: |
           if [ -f /work/coverage/coverage.profdata ]; then
             objects=(
@@ -123,14 +123,14 @@ jobs:
 
       - name: Checkout repository for Codecov mapping
         uses: actions/checkout@v4
-        if: ${{ inputs.upload-coverage == 'true' }}
+        if: ${{ inputs.upload-coverage }}
         with:
           submodules: recursive
           fetch-depth: 1
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
-        if: ${{ !cancelled() && inputs.upload-coverage == 'true' && (
+        if: ${{ !cancelled() && inputs.upload-coverage && (
               (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false)
               || (github.event_name == 'push' && github.ref_name == 'main')
             ) }}

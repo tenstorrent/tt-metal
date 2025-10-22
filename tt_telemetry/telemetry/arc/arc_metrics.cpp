@@ -7,6 +7,8 @@
  *
  * TODO:
  * -----
+ * - Only create chips specified by FSD? At the very least, should capture downed chips but we
+ *   would need a way to test this and create metrics that are in a bad state.
  * - How to handle cases where an ARC telemetry value is not returned by FirmwareInfoProvider?
  *   For now, we set it to 0. But maybe we want to stop updating it at all and retain the old
  *   stale value instead?
@@ -31,10 +33,11 @@ void create_arc_metrics(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const std::unique_ptr<TopologyHelper>& topology_translation,
     const std::unique_ptr<tt::tt_metal::Hal>& hal) {
+    log_info(tt::LogAlways, "Creating ARC firmware metrics...");
     tt::umd::tt_ClusterDescriptor* cluster_descriptor = cluster->get_cluster_description();
 
     // Iterate through all chips and create ARC metrics for MMIO-capable ones
-    for (chip_id_t chip_id : cluster_descriptor->get_all_chips()) {
+    for (tt::ChipId chip_id : cluster_descriptor->get_all_chips()) {
         // Check if this chip has MMIO capability (is a local chip)
         if (cluster_descriptor->is_chip_mmio_capable(chip_id)) {
             tt::umd::TTDevice* device = cluster->get_tt_device(chip_id);
@@ -43,6 +46,12 @@ void create_arc_metrics(
                 std::optional<tt::tt_metal::ASICDescriptor> asic_descriptor =
                     topology_translation->get_asic_descriptor_for_local_chip(chip_id);
                 TT_FATAL(asic_descriptor.has_value(), "No ASIC descriptor for chip ID {}", chip_id);
+                log_info(
+                    tt::LogAlways,
+                    "Creating ARC firmware metrics for tray_id={}, asic_location={}, chip_id={}...",
+                    *asic_descriptor.value().tray_id,
+                    *asic_descriptor.value().asic_location,
+                    chip_id);
 
                 // Get FirmwareInfoProvider from the device
                 auto firmware_provider = device->get_firmware_info_provider();
@@ -113,10 +122,24 @@ void create_arc_metrics(
                         "BoardTemperature",
                         [firmware_provider]() { return firmware_provider->get_board_temperature(); },
                         MetricUnit::CELSIUS));
+                } else {
+                    log_error(
+                        tt::LogAlways,
+                        "Unable to create ARC firmware metrics for tray_id={}, asic_location={}, chip_id={}, because "
+                        "firmware provider does not exist",
+                        *asic_descriptor.value().tray_id,
+                        *asic_descriptor.value().asic_location,
+                        chip_id);
                 }
+            } else {
+                log_error(
+                    tt::LogAlways,
+                    "Unable to create ARC firmware metrics for chip_id={} because device is not accessible",
+                    chip_id);
             }
         }
     }
+
     log_info(tt::LogAlways, "Created ARC metrics using FirmwareInfoProvider");
 }
 

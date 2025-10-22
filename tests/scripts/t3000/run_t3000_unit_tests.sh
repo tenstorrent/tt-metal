@@ -103,11 +103,11 @@ run_t3000_ttnn_tests() {
   ./build/test/ttnn/unit_tests_ttnn_ccl_ops
   ./build/test/ttnn/unit_tests_ttnn_accessor
   ./build/test/ttnn/test_ccl_multi_cq_multi_device
-  pytest tests/ttnn/unit_tests/test_multi_device_trace.py ; fail+=$?
-  pytest tests/ttnn/unit_tests/test_multi_device_events.py ; fail+=$?
-  pytest tests/ttnn/unit_tests/operations/test_prefetcher.py::test_run_prefetcher_post_commit_multi_device ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/test_multi_device.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/test_multi_device_async.py ; fail+=$?
+  pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_trace.py ; fail+=$?
+  pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_events.py ; fail+=$?
+  pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher.py::test_run_prefetcher_post_commit_multi_device ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/base_functionality/test_multi_device.py ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/base_functionality/test_multi_device_async.py ; fail+=$?
   pytest tests/ttnn/distributed/test_tensor_parallel_example_T3000.py ; fail+=$?
   pytest tests/ttnn/distributed/test_data_parallel_example.py ; fail+=$?
   pytest tests/ttnn/distributed/test_hybrid_data_tensor_parallel_example_T3000.py ; fail+=$?
@@ -148,7 +148,8 @@ run_t3000_ttnn_multiprocess_tests() {
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async_2x4
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/unit_tests/operations/ccl/test_new_all_broadcast.py::test_all_broadcast_sharded_2x4
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_t3000.py::test_all_to_all_combine_no_trace_submesh
-  tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv "tests/ttnn/unit_tests/operations/point_to_point/test_point_to_point.py::test_point_to_point[silicon_arch_name=wormhole_b0-dtype=torch.bfloat16-shape_coords=((1, 1, 1, 16), ((0, 0), (0, 1)))-tile-mesh_device=(2, 4)-device_params={'fabric_config': <FabricConfig.FABRIC_1D: 1>}]"
+  # Re-enable this test when we have more T3K availability
+  # tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv "tests/ttnn/unit_tests/operations/point_to_point/test_point_to_point.py::test_point_to_point[silicon_arch_name=wormhole_b0-dtype=torch.bfloat16-shape_coords=((1, 1, 1, 16), ((0, 0), (0, 1)))-tile-mesh_device=(2, 4)-device_params={'fabric_config': <FabricConfig.FABRIC_1D: 1>}]"
 }
 
 run_t3000_falcon7b_tests() {
@@ -531,16 +532,16 @@ run_t3000_ccl_tests() {
   pytest -n auto tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_ttnn_all_gather[wormhole_b0-fabric_ring-perf-mem_config_input0-mem_config_ag0-dit_shape-1link-mesh_device0]
   # 2D fabric case – hanging on main? tracking with issue #30250
   # pytest -n auto tests/nightly/t3000/2d_ccl/test_minimal_all_gather_async.py::test_all_gather_async_training_shapes[wormhole_b0-fabric_2d_dynamic_linear-check-mem_config_input0-mem_config_ag0-tt_training_test_one-mesh_device0-1link]
-  # training shapes
-  pytest -n auto tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_training_shapes[wormhole_b0-fabric_linear-check-mem_config_input0-mem_config_ag0-tt_training_test_four-mesh_device0-1link]
+  # training shapes - Re-enable this test when we have more T3K availability
+  # pytest -n auto tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_training_shapes[wormhole_b0-fabric_linear-check-mem_config_input0-mem_config_ag0-tt_training_test_four-mesh_device0-1link]
 
   # reduce scatter: 1 ring, 1 line, 1 2d, 1 sharded should be covered
   # sharded intermediate case with cluster axis 1
   pytest -n auto tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_minimal_async_linear_sharded
   # composite case
   pytest -n auto tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async_training_shapes[wormhole_b0-fabric_linear-random-check-mem_config_input0-mem_config_rs0-tt_training_test_one-mesh_device0-1link]
-  # long trace test on dim=1 with ring, currently hanging when run in the suite even though it passes when run in isolation
-  pytest -n auto tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-fabric_ring-barrier_without_persistent_buffers-random-perf-mem_config_input0-mem_config_rs0-scatter_dim_1_test_one-1link-mesh_device0]
+  # long trace test on dim=1 with ring, currently hanging when run in the suite even though it passes when run in isolation - Re-enable this test when we have more T3K availability
+  # pytest -n auto tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-fabric_ring-barrier_without_persistent_buffers-random-perf-mem_config_input0-mem_config_rs0-scatter_dim_1_test_one-1link-mesh_device0]
   # long running dim = 3 trace test without barrier and with persistent buffers
   pytest -n auto tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-fabric_ring-no_barrier_with_persistent_buffers-random-perf-mem_config_input0-mem_config_rs0-padded_dim_2_test_one-1link-mesh_device0]
 
@@ -564,8 +565,8 @@ run_t3000_ccl_tests() {
 
   # all to all combine: 1 test for 1d ring and 1 for 2d should be enough
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_t3000.py::test_all_to_all_combine_no_trace[silicon_arch_name=wormhole_b0-dtype=DataType.BFLOAT16-topology=None-dram-dram-num_iters=2-scheme=random-local_reduce=True-seq=2-hidden_size=7000-select_experts_k=8-experts_per_device=8-batches_per_device=8-fabric_1d_ring_axis_1]
-  # fabric 2d test on cluster axis 0
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_t3000.py::test_all_to_all_combine_no_trace[silicon_arch_name=wormhole_b0-dtype=DataType.BFLOAT16-topology=None-dram-dram-num_iters=2-scheme=random-local_reduce=True-seq=2-hidden_size=7000-select_experts_k=8-experts_per_device=8-batches_per_device=8-fabric_2d_axis_0]
+  # fabric 2d test on cluster axis 0 - Re-enable this test when we have more T3K availability
+  # pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_t3000.py::test_all_to_all_combine_no_trace[silicon_arch_name=wormhole_b0-dtype=DataType.BFLOAT16-topology=None-dram-dram-num_iters=2-scheme=random-local_reduce=True-seq=2-hidden_size=7000-select_experts_k=8-experts_per_device=8-batches_per_device=8-fabric_2d_axis_0]
 
   # Record the end time
   end_time=$(date +%s)
