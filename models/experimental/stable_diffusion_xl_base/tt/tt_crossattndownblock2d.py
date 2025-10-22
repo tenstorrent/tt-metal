@@ -75,7 +75,7 @@ class TtCrossAttnDownBlock2D(LightweightModule):
             residual = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
             output_states = output_states + (residual,)
 
-        # ttnn.ReadDeviceProfiler(self.device)
+        ttnn.ReadDeviceProfiler(self.device)
 
         if self.downsamplers is not None:
             hidden_states, [C, H, W] = self.downsamplers.forward(hidden_states, [B, C, H, W])

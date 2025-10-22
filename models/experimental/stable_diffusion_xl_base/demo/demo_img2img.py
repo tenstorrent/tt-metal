@@ -7,6 +7,7 @@ import pytest
 import ttnn
 import torch
 from diffusers import StableDiffusionXLImg2ImgPipeline
+from PIL import Image
 from loguru import logger
 from transformers import CLIPTextModelWithProjection, CLIPTextModel
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
@@ -325,9 +326,7 @@ def test_demo(
     timesteps,
     sigmas,
 ):
-    from PIL import Image
-
-    image_path = "output/output1.png"
+    image_path = "models/experimental/stable_diffusion_xl_base/reference/output/sdxl_output.jpg"
     img = Image.open(image_path).convert("RGB")
 
     prepare_device(mesh_device, use_cfg_parallel)

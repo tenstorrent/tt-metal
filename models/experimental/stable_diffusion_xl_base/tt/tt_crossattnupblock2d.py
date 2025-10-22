@@ -85,7 +85,7 @@ class TtCrossAttnUpBlock2D(LightweightModule):
                 hidden_states, [B, C, H, W], encoder_hidden_states=encoder_hidden_states, attention_mask=attention_mask
             )
 
-        # ttnn.ReadDeviceProfiler(self.device)
+        ttnn.ReadDeviceProfiler(self.device)
 
         if self.upsamplers is not None:
             hidden_states = ttnn.reshape(hidden_states, [B, H, W, C])
