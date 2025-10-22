@@ -46,16 +46,21 @@ constexpr uint32_t kMomentumBufferOutAddrIdx = 1U;
 constexpr auto kParamCbIndex = tt::CBIndex::c_0;
 constexpr auto kGradCbIndex = tt::CBIndex::c_1;
 constexpr auto kMomentumInCbIndex = tt::CBIndex::c_2;
-constexpr auto kGradWdCbIndex = tt::CBIndex::c_3;
-constexpr auto kMomentumOutCbIndex = tt::CBIndex::c_4;
-constexpr auto kMomentumToDramCbIndex = tt::CBIndex::c_5;
+constexpr auto kGradDampenedCbIndex = tt::CBIndex::c_3;
+constexpr auto kGradWdCbIndex = tt::CBIndex::c_4;
+constexpr auto kMomentumOutCbIndex = tt::CBIndex::c_5;
+constexpr auto kMomentumToDramCbIndex = tt::CBIndex::c_6;
+constexpr auto kUpdateCbIndex = tt::CBIndex::c_7;
 
-constexpr auto kUpdateCbIndex = tt::CBIndex::c_6;
+constexpr auto kBcastLrCbIndex = tt::CBIndex::c_8;
+constexpr auto kBcastMomentumCbIndex = tt::CBIndex::c_9;
+constexpr auto kBcastDampeningCbIndex = tt::CBIndex::c_10;
+constexpr auto kBcastWeightDecayCbIndex = tt::CBIndex::c_11;
 
-constexpr auto kBcastLrCbIndex = tt::CBIndex::c_7;
-constexpr auto kBcastMomentumCbIndex = tt::CBIndex::c_8;
-constexpr auto kBcastDampeningCbIndex = tt::CBIndex::c_9;
-constexpr auto kBcastWeightDecayCbIndex = tt::CBIndex::c_10;
+constexpr auto kParamWdCbIndex = tt::CBIndex::c_12;
+constexpr auto kMomentumScaledCbIndex = tt::CBIndex::c_13;
+constexpr auto kNesterovMomentumScaledCbIndex = tt::CBIndex::c_14;
+constexpr auto kNesterovUpdateCbIndex = tt::CBIndex::c_15;
 
 constexpr auto kOutputCbIndex = tt::CBIndex::c_16;
 
@@ -101,8 +106,9 @@ void assign_per_core_runtime_args(
     bfloat16 bfloat_momentum = bfloat16::truncate(momentum);
     uint32_t packed_momentum = pack_two_bfloat16_into_uint32({bfloat_momentum, bfloat_momentum});
 
-    bfloat16 bfloat_dampening = bfloat16::truncate(dampening);
-    uint32_t packed_dampening = pack_two_bfloat16_into_uint32({bfloat_dampening, bfloat_dampening});
+    bfloat16 bfloat_one_minus_dampening = bfloat16::truncate(1.0f - dampening);
+    uint32_t packed_one_minus_dampening =
+        pack_two_bfloat16_into_uint32({bfloat_one_minus_dampening, bfloat_one_minus_dampening});
 
     bfloat16 bfloat_weight_decay = bfloat16::truncate(weight_decay);
     uint32_t packed_weight_decay = pack_two_bfloat16_into_uint32({bfloat_weight_decay, bfloat_weight_decay});
@@ -130,7 +136,7 @@ void assign_per_core_runtime_args(
              momentum_buffer != nullptr ? momentum_buffer->address() : 0,
              packed_lr,
              packed_momentum,
-             packed_dampening,
+             packed_one_minus_dampening,
              packed_weight_decay,
              num_tiles_per_core,
              num_tiles_written});
@@ -238,6 +244,9 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     [[maybe_unused]] auto cb_mom_in = create_circular_buffer(
         program, all_cores, kMomentumInCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
+    [[maybe_unused]] auto cb_grad_dampened = create_circular_buffer(
+        program, all_cores, kGradDampenedCbIndex, output_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+
     [[maybe_unused]] auto cb_grad_wd = create_circular_buffer(
         program, all_cores, kGradWdCbIndex, output_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
@@ -271,6 +280,33 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
 
     [[maybe_unused]] auto cb_bcast_weight_decay = create_circular_buffer(
         program, all_cores, kBcastWeightDecayCbIndex, tt::DataFormat::Float16_b, bfloat16_single_tile_size_bytes, 1U);
+
+    [[maybe_unused]] auto cb_param_wd = create_circular_buffer(
+        program, all_cores, kParamWdCbIndex, output_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+
+    [[maybe_unused]] auto cb_momentum_scaled = create_circular_buffer(
+        program,
+        all_cores,
+        kMomentumScaledCbIndex,
+        output_data_format,
+        bfloat16_single_tile_size_bytes,
+        num_input_tiles);
+
+    [[maybe_unused]] auto cb_nesterov_momentum_scaled = create_circular_buffer(
+        program,
+        all_cores,
+        kNesterovMomentumScaledCbIndex,
+        output_data_format,
+        bfloat16_single_tile_size_bytes,
+        num_input_tiles);
+
+    [[maybe_unused]] auto cb_nesterov_update = create_circular_buffer(
+        program,
+        all_cores,
+        kNesterovUpdateCbIndex,
+        output_data_format,
+        bfloat16_single_tile_size_bytes,
+        num_input_tiles);
 
     [[maybe_unused]] auto cb_output = create_circular_buffer(
         program, all_cores, kOutputCbIndex, output_data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
@@ -398,8 +434,9 @@ void SGDFusedProgramFactory::override_runtime_arguments(
     bfloat16 bfloat_momentum = bfloat16::truncate(momentum);
     uint32_t packed_momentum = pack_two_bfloat16_into_uint32({bfloat_momentum, bfloat_momentum});
 
-    bfloat16 bfloat_dampening = bfloat16::truncate(dampening);
-    uint32_t packed_dampening = pack_two_bfloat16_into_uint32({bfloat_dampening, bfloat_dampening});
+    bfloat16 bfloat_one_minus_dampening = bfloat16::truncate(1.0f - dampening);
+    uint32_t packed_one_minus_dampening =
+        pack_two_bfloat16_into_uint32({bfloat_one_minus_dampening, bfloat_one_minus_dampening});
 
     bfloat16 bfloat_weight_decay = bfloat16::truncate(weight_decay);
     uint32_t packed_weight_decay = pack_two_bfloat16_into_uint32({bfloat_weight_decay, bfloat_weight_decay});
@@ -416,7 +453,7 @@ void SGDFusedProgramFactory::override_runtime_arguments(
                 momentum_buffer_unwrapped != nullptr ? momentum_buffer_unwrapped->address() : 0;
             runtime_args[kBcastLrIdx] = packed_lr;
             runtime_args[kBcastMomentumIdx] = packed_momentum;
-            runtime_args[kBcastDampeningIdx] = packed_dampening;
+            runtime_args[kBcastDampeningIdx] = packed_one_minus_dampening;
             runtime_args[kBcastWeightDecayIdx] = packed_weight_decay;
         }
         if (core_group_1.contains(core)) {
