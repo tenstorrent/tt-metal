@@ -560,6 +560,16 @@ void syncAllDevices(chip_id_t host_connected_device) {
     setSyncInfo(host_connected_device, (std::pair<double, int64_t>){1.0, 0}, root_sync_info, deviceDeviceSyncInfo);
 }
 
+chip_id_t get_unvisited_device(std::map<chip_id_t, bool>& visited_map) {
+    for (auto [device, visited] : visited_map) {
+        if (!visited) {
+            return device;
+        }
+    }
+
+    return -1;
+}
+
 void ProfilerSync(ProfilerSyncState state) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
@@ -576,33 +586,51 @@ void ProfilerSync(ProfilerSyncState state) {
 
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
         tt::tt_metal::MetalContext::instance().profiler_state_manager();
-    static chip_id_t first_connected_device_id = -1;
+
+    // Create a mapping of all connected devices to determine how to sync
+    static std::unordered_map<chip_id_t, int> num_connected_devices;
     if (state == ProfilerSyncState::INIT) {
         profiler_state_manager->do_sync_on_close = true;
-        auto ethernet_connections = tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connections();
-        std::unordered_set<chip_id_t> visited_devices = {};
         constexpr int TOTAL_DEVICE_COUNT = 36;
-        for (int sender_device_id = 0; sender_device_id < TOTAL_DEVICE_COUNT; sender_device_id++) {
-            if (tt::DevicePool::instance().is_device_active(sender_device_id)) {
+        std::map<chip_id_t, bool> visited;
+        for (int i = 0; i < TOTAL_DEVICE_COUNT; i++) {
+            if (tt::DevicePool::instance().is_device_active(i)) {
+                visited[i] = false;
+            }
+        }
+        std::queue<chip_id_t> device_queue;
+        while (true) {
+            auto root_device = get_unvisited_device(visited);
+            if (root_device == -1) {
+                break;
+            }
+            num_connected_devices[root_device] = 1;
+
+            // do BFS starting from root_device to find all connected devices and update num_connected_devices
+            device_queue.push(root_device);
+            visited[root_device] = true;
+            while (!device_queue.empty()) {
+                chip_id_t sender_device_id = device_queue.front();
+                device_queue.pop();
+
                 auto sender_device = tt::DevicePool::instance().get_active_device(sender_device_id);
                 const auto& active_eth_cores = sender_device->get_active_ethernet_cores(false);
 
                 chip_id_t receiver_device_id;
                 tt_xy_pair receiver_eth_core;
-                bool doSync = true;
                 for (auto& sender_eth_core : active_eth_cores) {
                     if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
                             sender_device_id, sender_eth_core)) {
                         continue;
                     }
-                    doSync = false;
+
                     std::tie(receiver_device_id, receiver_eth_core) =
                         sender_device->get_connected_ethernet_core(sender_eth_core);
 
-                    if (visited_devices.find(sender_device_id) == visited_devices.end() or
-                        visited_devices.find(receiver_device_id) == visited_devices.end()) {
-                        visited_devices.insert(sender_device_id);
-                        visited_devices.insert(receiver_device_id);
+                    if (!visited[receiver_device_id]) {
+                        visited[receiver_device_id] = true;
+                        num_connected_devices[root_device]++;
+                        device_queue.push(receiver_device_id);
 
                         profiler_state_manager->device_device_time_pair.emplace(
                             sender_device_id,
@@ -611,29 +639,30 @@ void ProfilerSync(ProfilerSyncState state) {
                             .emplace(receiver_device_id, (std::vector<std::pair<uint64_t, uint64_t>>){});
                     }
                 }
-                if (doSync or first_connected_device_id == -1) {
-                    if (first_connected_device_id == -1 and !doSync) {
-                        first_connected_device_id = sender_device_id;
-                    }
-                    syncDeviceHost(sender_device, ProfilerStateManager::SYNC_CORE, true);
-                }
             }
-        }
-        // If at least one sender receiver pair has been found
-        if (first_connected_device_id != -1) {
-            syncAllDevices(first_connected_device_id);
         }
     }
 
+    // Run host-device sync on all root devices
+    // only run device-device sync if number of connected devices to root is bigger than 1 (i.e there is actually
+    // something to sync with)
+    if (state == ProfilerSyncState::INIT) {
+        for (auto [root_device_id, num_devices] : num_connected_devices) {
+            auto root_device = tt::DevicePool::instance().get_active_device(root_device_id);
+            syncDeviceHost(root_device, ProfilerStateManager::SYNC_CORE, true);
+            if (num_devices > 1) {
+                syncAllDevices(root_device->id());
+            }
+        }
+    }
     if (state == ProfilerSyncState::CLOSE_DEVICE and profiler_state_manager->do_sync_on_close) {
         profiler_state_manager->do_sync_on_close = false;
-        for (const auto& synced_with_host_device : profiler_state_manager->device_host_time_pair) {
-            auto deviceToSync = tt::DevicePool::instance().get_active_device(synced_with_host_device.first);
-            syncDeviceHost(deviceToSync, ProfilerStateManager::SYNC_CORE, false);
-        }
-        //  If at least one sender receiver pair has been found
-        if (first_connected_device_id != -1) {
-            syncAllDevices(first_connected_device_id);
+        for (auto [root_device_id, num_devices] : num_connected_devices) {
+            auto root_device = tt::DevicePool::instance().get_active_device(root_device_id);
+            syncDeviceHost(root_device, ProfilerStateManager::SYNC_CORE, false);
+            if (num_devices > 1) {
+                syncAllDevices(root_device->id());
+            }
         }
     }
 #endif
