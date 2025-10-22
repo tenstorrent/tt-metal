@@ -438,6 +438,60 @@ def mesh_device(request, silicon_arch_name, device_params):
 
 
 @pytest.fixture(scope="function")
+def system_mesh_device(request, silicon_arch_name, device_params):
+    """
+    Pytest fixture to set up a device mesh using the maximum available devices for the system.
+    The mesh is returned in the shape of the system mesh configuration.
+
+    Args:
+        request: Pytest request object.
+        silicon_arch_name: Name of the silicon architecture.
+        device_params: Additional device configuration parameters.
+
+    Yields:
+        mesh_device: Initialized device mesh object with maximum available devices.
+    """
+    import ttnn
+
+    request.node.pci_ids = ttnn.get_pcie_device_ids()
+
+    # Get the system mesh shape which represents the maximum available devices
+    # in the optimal configuration for the hardware
+    system_mesh_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()
+    system_mesh_shape = system_mesh_desc.shape()
+
+    # Extract the mesh dimensions
+    mesh_rows = system_mesh_shape[0]
+    mesh_cols = system_mesh_shape[1]
+    num_devices_requested = mesh_rows * mesh_cols
+
+    # Skip if requested more devices than available
+    if not ttnn.using_distributed_env() and num_devices_requested > ttnn.get_num_devices():
+        pytest.skip("System mesh requests more devices than available. Test not applicable for machine")
+
+    mesh_shape = ttnn.MeshShape(mesh_rows, mesh_cols)
+
+    updated_device_params = get_updated_device_params(device_params)
+    fabric_config = updated_device_params.pop("fabric_config", None)
+    fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
+    reliability_mode = updated_device_params.pop("reliability_mode", None)
+    set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
+    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
+
+    logger.debug(
+        f"System mesh device with {mesh_device.get_num_devices()} devices in shape ({mesh_rows}, {mesh_cols}) is created"
+    )
+    yield mesh_device
+
+    for submesh in mesh_device.get_submeshes():
+        ttnn.close_mesh_device(submesh)
+
+    ttnn.close_mesh_device(mesh_device)
+    reset_fabric(fabric_config)
+    del mesh_device
+
+
+@pytest.fixture(scope="function")
 def t3k_single_board_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
     import ttnn
 
@@ -664,6 +718,8 @@ def get_devices(request):
         devices = request.getfixturevalue("pcie_devices")
     elif "mesh_device" in request.fixturenames:
         devices = [request.getfixturevalue("mesh_device")]
+    elif "system_mesh_device" in request.fixturenames:
+        devices = [request.getfixturevalue("system_mesh_device")]
     elif "n300_mesh_device" in request.fixturenames:
         devices = [request.getfixturevalue("n300_mesh_device")]
     elif "t3k_mesh_device" in request.fixturenames:
