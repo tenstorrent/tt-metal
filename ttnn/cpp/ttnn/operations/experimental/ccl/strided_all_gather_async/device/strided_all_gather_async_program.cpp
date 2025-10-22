@@ -223,15 +223,6 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     log_trace(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
     uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
 
-    [[maybe_unused]] bool is_first_chip = ring_index == 0;
-    [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
-    log_trace(
-        tt::LogOp,
-        "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        input_tensor.device()->id(),
-        is_first_chip,
-        is_last_chip);
-
     /* All gather fusion */
     bool fuse_op = fused_op_signaler.has_value();
 
@@ -452,18 +443,10 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                     dir,                              // direction
                     fuse_op,                          // fused op
                     chunks_per_sync_val,
-                    false,
+                    global_worker_count,
                 };
-                if (input_is_sharded) {
-                    shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
-                } else {
-                    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
-                }
-                if (output_is_sharded) {
-                    shard_builder::extend_sharding_compile_time_args(output_tensor, sender_reader_compile_args);
-                } else {
-                    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_reader_compile_args);
-                }
+                tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
+                tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_reader_compile_args);
                 auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
                     program,
                     "ttnn/cpp/ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/"
@@ -483,19 +466,13 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                     output_tensor_C,                                          // num output channels
                     dim,                                                      // dim to gather on
                     batch_head_size,                                          // product of the first two dims
-                    input_tile_id_start,                                      //
+                    global_worker_id,                                         //
                     input_tile_id_end,                                        //
                     ring_size,                                                // ring_size
                     semaphore.at(dir).address(),                              // out_ready_semaphore_forward
                     input_tile_id_start % input_tensor_Wt,                    // start_pages_read_in_row
                     input_tile_id_start / input_tensor_Wt * output_tensor_Wt  // start_row_offset
                 };
-                if (input_is_sharded) {
-                    shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
-                }
-                if (output_is_sharded) {
-                    shard_builder::extend_sharding_run_time_args(output_tensor, reader_rt_args);
-                }
                 if (fuse_op) {
                     reader_rt_args.push_back(self_write_done_semaphore);
                     if (dir) {
@@ -532,7 +509,7 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                     static_cast<uint32_t>(topology),  // topology
                     dir,                              // direction
                     chunks_per_sync_val,
-                    false,
+                    global_worker_count,
                 };
                 strided_fabric_mux_connection_ct_args(
                     worker == 0,
@@ -556,11 +533,7 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                         barrier_mcast_forward_args.begin(),
                         barrier_mcast_forward_args.end());
                 }
-                if (output_is_sharded) {
-                    shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_compile_args);
-                } else {
-                    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_writer_compile_args);
-                }
+                tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_writer_compile_args);
                 auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
                     program,
                     "ttnn/cpp/ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/"
@@ -579,7 +552,7 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                     output_tensor_C,                                             // num output channels
                     dim,                                                         // dim to gather on
                     batch_head_size,                                             // product of the first two dims
-                    input_tile_id_start,                                         //
+                    global_worker_id,                                            //
                     input_tile_id_end,                                           //
                     virtual_core.x,                                              // out_ready_sem_noc0_x
                     virtual_core.y,                                              // out_ready_sem_noc0_y
@@ -600,9 +573,6 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                     termination_master_virtual_core,
                     num_workers_per_direction,
                     writer_rt_args);
-                if (output_is_sharded) {
-                    shard_builder::extend_sharding_run_time_args(output_tensor, writer_rt_args);
-                }
                 if (fuse_op) {
                     writer_rt_args.push_back(self_write_done_semaphore);
                     fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
