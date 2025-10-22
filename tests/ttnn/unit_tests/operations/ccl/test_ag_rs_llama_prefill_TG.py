@@ -8,14 +8,43 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
-from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import (
-    report_mismatches,
-    print_tile_corners_of_tensor,
-)
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
 NUM_BUFFERS = 16
+
+
+def report_mismatches(golden, actual, max_printable=None):
+    printed = 0
+    for w in range(golden.shape[0]):
+        for z in range(golden.shape[1]):
+            for y in range(0, golden.shape[2], 32):
+                for x in range(0, golden.shape[3], 32):
+                    print_it = (max_printable is None or printed < max_printable) and golden[w, z, y, x] != actual[
+                        w, z, y, x
+                    ]
+                    if print_it:
+                        printed += 1
+                        print(
+                            f"output mismatch for tensor at [{w}, {z}, {y}, {x}]: expected {golden[w, z, y, x]} != actual {actual[w, z, y, x]}"
+                        )
+
+
+def print_tile_corners_of_tensor(t):
+    for w in range(t.shape[0]):
+        for z in range(t.shape[1]):
+            str = ""
+            for x in range(0, t.shape[3], 32):
+                str += f"{x:<5} "[:5]
+            print(f"     {str}")
+            for y in range(0, t.shape[2], 32):
+                str_vals = f"y={y:<3} "[:5]
+                for x in range(0, t.shape[3], 32):
+                    yy = 0
+                    xx = 0
+                    val = int(t[w, z, y + yy, x + xx].item())
+                    str_vals += f"{val:<5} "[:5]
+                print(f"{str_vals}")
 
 
 def run_ag_with_trace(
