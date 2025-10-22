@@ -109,7 +109,7 @@ def test_mpwi_general(device, ttnn_dtype, input_spec):
         dilation_w,
         ttnn_dtype,
         device,
-        None,  # None means auto sharding
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode,
         None,  # no memory_config
         False,  # not in place
