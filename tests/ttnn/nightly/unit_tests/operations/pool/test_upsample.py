@@ -256,3 +256,65 @@ def test_panoptic_upsample_sliced(device, batch_size, num_channels, height, widt
     passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch_nhwc, pcc=0.99)
     logger.info(pcc_message)
     assert passed, f"PCC check failed. {pcc_message}"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 256}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, num_channels, height, width, scale_h, scale_w",
+    (
+        # (1, 1, 128, 256, 4, 4),       # needs channel padding
+        (1, 32, 128, 256, 4, 4),  # OOM
+        (1, 128, 64, 128, 2, 2),  # 64x128 -> 128x256 (2x scaling)
+        # (1, 19, 128, 256, 4, 4),      # needs channel padding
+        (1, 32, 128, 256, 4, 4),  # OOM
+        # (1, 2, 128, 256, 4, 4),       # needs channel padding
+        (1, 32, 128, 256, 4, 4),  # OOM
+        (1, 256, 1, 1, 32, 64),  # 1x1 -> 32x64 (large scaling)
+        (1, 256, 32, 64, 2, 2),  # 32x64 -> 64x128 (2x scaling)
+        (1, 256, 64, 128, 2, 2),  # OOM
+    ),
+    ids=["up1", "up2", "up3", "up4", "up5", "up6", "up7"],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("math_approx_mode", [True])
+@pytest.mark.parametrize("mode", ["bilinear", "nearest"])
+def test_panoptic_upsample_dram(
+    device, batch_size, num_channels, height, width, scale_h, scale_w, math_fidelity, math_approx_mode, mode
+):
+    # Test bilinear upsampling with panoptic model shapes on DRAM interleaved tensors
+
+    torch.manual_seed(0)
+
+    input_shape = [batch_size, num_channels, height, width]
+    # mode = "bilinear"
+
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input.permute(0, 2, 3, 1),
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+    )
+
+    scale_factor = (scale_h, scale_w)
+    torch_upsample = nn.Upsample(
+        scale_factor=scale_factor, mode=mode, align_corners=False if mode == "bilinear" else None
+    )
+    torch_result = torch_upsample(torch_input)
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=math_fidelity,
+        math_approx_mode=math_approx_mode,
+        fp32_dest_acc_en=False,
+    )
+
+    output_tensor = ttnn.upsample(tt_input, scale_factor, mode=mode, compute_kernel_config=compute_kernel_config)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    torch_result = torch_result.permute(0, 2, 3, 1)
+    pcc_passed, pcc_message = assert_with_pcc(torch_result, output_tensor, pcc=0.999)
+    logger.info(pcc_message)
+    allclose = torch.allclose(output_tensor, torch_result, atol=1e-1, rtol=1e-1)
+    assert allclose
