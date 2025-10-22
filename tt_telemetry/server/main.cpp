@@ -28,7 +28,6 @@
 #include <server/web_server.hpp>
 #include <server/collection_endpoint.hpp>
 #include <utils/hex.hpp>
-#include <server/prom_writer.hpp>
 
 /**************************************************************************************************
  Utility Functions
@@ -158,8 +157,6 @@ int main(int argc, char* argv[]) {
     // Parse command line arguments
     cxxopts::Options options("tt_telemetry_server", "TT-Metal Telemetry Server");
 
-    std::filesystem::path relative_metrics_path = std::filesystem::path("tt_telemetry") / "output" / "metrics.prom";
-
     options.add_options()(
         "mock-telemetry",
         "Use mock telemetry data instead of real hardware",
@@ -175,12 +172,6 @@ int main(int argc, char* argv[]) {
         "aggregate-from",
         "Comma-separated list of WebSocket endpoints to aggregate telemetry from (e.g., "
         "ws://server1:8081,ws://server2:8081). Enables aggregator mode, disabling the collection endpoint.",
-        cxxopts::value<std::string>())(
-        "use-prom-writer",
-        "Enable Prometheus metrics writer to periodically write metrics to a file",
-        cxxopts::value<bool>()->default_value("false"))(
-        "prom-metrics-file",
-        "Path to the Prometheus metrics file (default: <metal-src-dir>/" + relative_metrics_path.string() + ")",
         cxxopts::value<std::string>())(
         "metal-src-dir",
         "Metal source directory (optional, defaults to TT_METAL_HOME env var)",
@@ -216,17 +207,6 @@ int main(int argc, char* argv[]) {
         }
     }
     bool telemetry_enabled = !result["disable-telemetry"].as<bool>();
-
-    std::string prom_metrics_file;
-    if (result.count("prom-metrics-file")) {
-        prom_metrics_file = result["prom-metrics-file"].as<std::string>();
-    } else if (!metal_src_dir.empty()) {
-        prom_metrics_file = (std::filesystem::path(metal_src_dir) / relative_metrics_path).string();
-    } else {
-        prom_metrics_file = relative_metrics_path.filename().string();
-    }
-
-    bool use_prom_writer = result["use-prom-writer"].as<bool>();
 
     // Are we in collector (collect telemetry and export on collection endpoint) or aggregator
     // (connect to collectors and aggregate) mode?
@@ -274,17 +254,6 @@ int main(int argc, char* argv[]) {
         std::promise<bool> promise;  // create promise that immediately resolves to true
         promise.set_value(true);
         websocket_server = promise.get_future();
-    }
-
-    // Prometheus writer
-    if (use_prom_writer) {
-        log_info(tt::LogAlways, "Starting Prometheus metrics writer");
-        std::future<bool> prom_writer_future;
-        std::shared_ptr<TelemetrySubscriber> prom_writer_subscriber;
-        std::tie(prom_writer_future, prom_writer_subscriber) = run_prom_writer(prom_metrics_file);
-        subscribers.push_back(prom_writer_subscriber);
-    } else {
-        log_info(tt::LogAlways, "Omitting Prometheus metrics writer.");
     }
 
     // Telemetry collection
