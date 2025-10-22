@@ -557,33 +557,59 @@ inline void compute_dx(const uint32_t input_tile_idx, const uint32_t dx_register
 // uses 3 registers starting from dgamma_register
 // result is in dgamma_register
 // acquire in the inner loop, push after block is processed
-inline void compute_dgamma_components(const uint32_t input_tile_idx, const uint32_t dgamma_register) {
+inline void compute_dgamma_components(
+    const uint32_t input_tile_idx, const uint32_t dgamma_register, bool is_last_tile = false) {
     // Computes dgamma_components = dy * x_normalized
 
     const uint32_t x_norm_register = dgamma_register + 1;
-    const uint32_t dy_register = dgamma_register + 2;
-
-    copy_tile_init(cb_x_hat_idx);
-    copy_tile(cb_x_hat_idx, input_tile_idx, x_norm_register);
 
     // Load dy
     copy_tile_init(cb_dL_out_idx);
-    copy_tile(cb_dL_out_idx, input_tile_idx, dy_register);
+    copy_tile(cb_dL_out_idx, input_tile_idx, dgamma_register);
+
+    // Load x_normalized
+    copy_tile_init(cb_x_hat_idx);
+    copy_tile(cb_x_hat_idx, input_tile_idx, x_norm_register);
 
     // Multiply: dy * x_normalized
-    sub_binary_tile_init();
-    sub_binary_tile(dgamma_register, dgamma_register, dgamma_register);
     mul_binary_tile_init();
-    mul_binary_tile(dy_register, x_norm_register, dgamma_register);
+    mul_binary_tile(dgamma_register, x_norm_register, dgamma_register);
+
+    // Mask dgamma_register if needed
+    if constexpr (do_mask_w) {
+        if (is_last_tile) {
+            // Limitation: mask_tile only works when the mask register is immediately next to the data register.
+            const uint32_t mask_register = dgamma_register + 1U;
+
+            copy_tile_init(cb_mask_w_idx);
+            copy_tile(cb_mask_w_idx, /* tile_idx */ 0, /* register idx */ mask_register);
+
+            mask_tile_init();
+            mask_tile(dgamma_register, mask_register);
+        }
+    }
 }
 
 // Computes dbeta_components = dy (simple copy)
 // result is in dbeta_register
 // acquire in the inner loop, push after block is processed
-inline void compute_dbeta_components(const uint32_t dy_tile_idx, const uint32_t dbeta_register) {
-    tile_regs_acquire();
+inline void compute_dbeta_components(
+    const uint32_t dy_tile_idx, const uint32_t dbeta_register, bool is_last_tile = false) {
     copy_tile_init(cb_dL_out_idx);
     copy_tile(cb_dL_out_idx, dy_tile_idx, dbeta_register);
+
+    // Mask dbeta_register if needed
+    if constexpr (do_mask_w) {
+        if (is_last_tile) {
+            // Limitation: mask_tile only works when the mask register is immediately next to the data register.
+            const uint32_t mask_register = dbeta_register + 1U;
+            copy_tile_init(cb_mask_w_idx);
+            copy_tile(cb_mask_w_idx, /* tile_idx */ 0, /* register idx */ mask_register);
+
+            mask_tile_init();
+            mask_tile(dbeta_register, mask_register);
+        }
+    }
 }
 
 inline void MAIN {
@@ -694,7 +720,7 @@ inline void MAIN {
                     const uint32_t input_tile_idx = block_idx;
 #endif
                     dgamma_register = block_idx;
-                    compute_dgamma_components(input_tile_idx, dgamma_register);
+                    compute_dgamma_components(input_tile_idx, dgamma_register, (col + block_idx + 1 == Wt));
                 }
                 tile_regs_commit();
                 pack_and_push_block(cb_dgamma_components, block_size);
@@ -720,7 +746,7 @@ inline void MAIN {
                     const uint32_t dy_tile_idx = block_idx;
 #endif
                     dbeta_register = block_idx;
-                    compute_dbeta_components(dy_tile_idx, dbeta_register);
+                    compute_dbeta_components(dy_tile_idx, dbeta_register, (col + block_idx + 1 == Wt));
                 }
                 tile_regs_commit();
                 pack_and_push_block(cb_dbeta_components, block_size);
