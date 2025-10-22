@@ -114,10 +114,34 @@ verify_import_path() {
   if [ -x "./python_env/bin/python" ]; then
     PY_BIN="./python_env/bin/python"
   fi
+  
+  echo "DEBUG: Checking ttnn installation..."
+  echo "DEBUG: PYTHONPATH=$PYTHONPATH"
+  echo "DEBUG: Looking for ttnn at /work/ttnn/ttnn/__init__.py"
+  ls -la /work/ttnn/ttnn/__init__.py || echo "WARNING: ttnn __init__.py not found!"
+  echo "DEBUG: Looking for _ttnn.so"
+  find /work/ttnn/ttnn -name "_ttnn*.so" -ls || echo "WARNING: _ttnn.so not found!"
+  echo "DEBUG: Looking for built libraries in build_Release"
+  ls -la /work/build_Release/lib/_ttnn*.so || ls -la /work/build/lib/_ttnn*.so || echo "WARNING: _ttnn.so not in build libs!"
+  
   "$PY_BIN" - <<'PY'
-import ttnn, sys
-print(ttnn.get_arch_name())
-print("ttnn imported from:", ttnn.__file__)
+import sys
+print("DEBUG: Python sys.path:", sys.path)
+try:
+    import ttnn
+    print("✓ ttnn imported from:", ttnn.__file__)
+    print("DEBUG: ttnn module attributes:", dir(ttnn))
+    if hasattr(ttnn, 'get_arch_name'):
+        print("✓ Arch:", ttnn.get_arch_name())
+    else:
+        print("ERROR: get_arch_name not found in ttnn")
+        print("DEBUG: Available functions starting with 'get':", [x for x in dir(ttnn) if x.startswith('get')])
+        sys.exit(1)
+except Exception as e:
+    print(f"ERROR during ttnn import/test: {e}")
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
 PY
 }
 
