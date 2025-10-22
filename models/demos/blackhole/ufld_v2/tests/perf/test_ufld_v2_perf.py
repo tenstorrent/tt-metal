@@ -14,7 +14,7 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 @pytest.mark.parametrize(
     "batch_size, expected_perf,test",
     [
-        [1, 341, "UFLD-v2"],
+        [1, 430, "UFLD-v2"],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
