@@ -39,7 +39,7 @@ void kernel_main() {
 
     const uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
     const auto s_weight = TensorAccessor(s_weight_args, weight_addr_dram_base, weight_tile_nbytes);
-    const uint32_t bias_pagesize = get_tile_size(bias_cb_id);
+    const uint32_t bias_pagesize = fuse_bias ? get_tile_size(bias_cb_id) : 0;
     const auto s_bias = TensorAccessor(s_bias_args, bias_addr_dram_base, bias_pagesize);
     bool to_load_bias = true;
 

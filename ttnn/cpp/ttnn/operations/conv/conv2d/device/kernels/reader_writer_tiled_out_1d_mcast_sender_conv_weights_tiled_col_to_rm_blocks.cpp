@@ -126,7 +126,7 @@ void kernel_main() {
 #endif
 
     // read in bias if enabled (done only once for all batches)
-    constexpr uint32_t bias_pagesize = get_tile_size(bias_cb_id);
+    constexpr uint32_t bias_pagesize = fuse_bias ? get_tile_size(bias_cb_id) : 0;
     const auto s_bias = TensorAccessor(s_bias_args, bias_addr, bias_pagesize);
     bool load_bias = true;
 
