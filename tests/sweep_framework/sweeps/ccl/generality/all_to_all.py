@@ -67,6 +67,12 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         return True, "in_dim or out_dim is out of range for the given input_shape rank"
 
     if (
+        cluster_axis is not None
+        and test_vector["topology"] == ttnn.Topology.Ring
+        and test_vector["mesh_shape"][cluster_axis] == 2
+    ):
+        return True, "Ring config requires more than two devices"
+    if (
         test_vector["topology"] == ttnn.Topology.Ring
         and test_vector["fabric_config"] != ttnn.FabricConfig.FABRIC_1D_RING
     ):

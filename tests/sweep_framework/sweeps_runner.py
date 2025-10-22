@@ -407,39 +407,51 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
             test_vector.pop("validity")
 
             try:
-                if config.measure_perf:
-                    # Run one time before capturing result to deal with compile-time slowdown of perf measurement
-                    # Ensure a worker process is running if we're in child mode
+                need_retry = True
+                max_retries = 10
+                while need_retry == True:
+                    need_retry = False
+                    if config.measure_perf:
+                        # Run one time before capturing result to deal with compile-time slowdown of perf measurement
+                        # Ensure a worker process is running if we're in child mode
+                        if child_mode and (p is None or not p.is_alive()):
+                            p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                            p.start()
+                        input_queue.put(test_vector)
+                        if p is None:
+                            logger.info(
+                                "Executing test (first run, e2e perf is enabled) on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
+                            )
+                            run(module_name, input_queue, output_queue, config)
+                        output_queue.get(block=True, timeout=timeout)
                     if child_mode and (p is None or not p.is_alive()):
                         p = Process(target=run, args=(module_name, input_queue, output_queue, config))
                         p.start()
                     input_queue.put(test_vector)
                     if p is None:
                         logger.info(
-                            "Executing test (first run, e2e perf is enabled) on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
+                            "Executing test on parent process for debug purposes because there is only one test vector. Hang detection and handling is disabled."
                         )
                         run(module_name, input_queue, output_queue, config)
-                    output_queue.get(block=True, timeout=timeout)
-                if child_mode and (p is None or not p.is_alive()):
-                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
-                    p.start()
-                input_queue.put(test_vector)
-                if p is None:
-                    logger.info(
-                        "Executing test on parent process for debug purposes because there is only one test vector. Hang detection and handling is disabled."
+
+                    response = output_queue.get(block=True, timeout=timeout)
+                    status, message, e2e_perf, device_perf = (
+                        response[0],
+                        response[1],
+                        response[2],
+                        response[3],
                     )
-                    run(module_name, input_queue, output_queue, config)
-
-                response = output_queue.get(block=True, timeout=timeout)
-                status, message, e2e_perf, device_perf = (
-                    response[0],
-                    response[1],
-                    response[2],
-                    response[3],
-                )
-                # Set base result message
-                result["message"] = message
-
+                    # Set base result message
+                    result["message"] = message
+                    if not status:
+                        if "control_plane.cpp" in message:
+                            reset_util.reset()
+                            if max_retries > 0:
+                                need_retry = True
+                                max_retries = max_retries - 1
+                                logger.info("retrying test after control plane error")
+                            else:
+                                logger.info("giving up on retrying on control plane error")
                 # Determine test status
                 if status:
                     # Test passed - check device perf requirements

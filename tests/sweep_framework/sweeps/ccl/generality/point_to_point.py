@@ -67,6 +67,13 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if mesh_shape in [(16, 2), (2, 16)]:
         return True, "Invalid mesh shape for 6U"
 
+    if (
+        cluster_axis is not None
+        and test_vector["topology"] == ttnn.Topology.Ring
+        and test_vector["mesh_shape"][cluster_axis] == 2
+    ):
+        return True, "Ring config requires more than two devices"
+
     if test_vector["fabric_config"] != ttnn.FabricConfig.FABRIC_2D and (
         coord0[0] != coord1[0] and coord0[1] != coord1[1]
     ):

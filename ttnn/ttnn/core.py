@@ -232,7 +232,7 @@ def create_sharded_memory_config_(
     shape: Union[ttnn.Shape, Tuple[int, ...], List[int]],
     core_grid: Union[ttnn.CoreGrid, ttnn.CoreRangeSet],
     strategy: Union[ShardStrategy, TensorMemoryLayout],
-    orientation,
+    orientation=None,
     use_height_and_width_as_shard_shape: bool = False,
     tile_layout: bool = False,
 ) -> MemoryConfig:
@@ -275,10 +275,10 @@ def create_sharded_memory_config_(
     else:
         raise RuntimeError("Invalid type of sharding strategy")
 
-    if isinstance(orientation, ShardOrientation):
-        if orientation is None:
-            shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
-        elif orientation == ShardOrientation.ROW_MAJOR:
+    if orientation is None:
+        shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
+    elif isinstance(orientation, ShardOrientation):
+        if orientation == ShardOrientation.ROW_MAJOR:
             shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
         elif orientation == ShardOrientation.COL_MAJOR:
             shard_orientation = ttnn.ShardOrientation.COL_MAJOR
@@ -342,10 +342,19 @@ def create_sharded_memory_config_(
             else:
                 raise RuntimeError("Invalid shard orientation")
         elif tensor_memory_layout == TensorMemoryLayout.HEIGHT_SHARDED:
-            tensor_height_padded = roundup(tensor_height, total_num_cores) if tile_layout else tensor_height
-            shard_shape = divup(tensor_height_padded, total_num_cores), tensor_width
+            tensor_height_padded = roundup(tensor_height, total_num_cores * 32) if tile_layout else tensor_height
+            tensor_width_padded = (
+                roundup(tensor_width, 32) if tile_layout else roundup(tensor_width, 16)
+            )  # Required for 16B alignment in L1 tile width
+            shard_shape = divup(tensor_height_padded, total_num_cores), tensor_width_padded
         elif tensor_memory_layout == TensorMemoryLayout.WIDTH_SHARDED:
-            shard_shape = tensor_height, divup(tensor_width, total_num_cores)
+            tensor_height_padded = roundup(tensor_height, 32) if tile_layout else tensor_height
+            tensor_width_padded = (
+                roundup(tensor_width, total_num_cores * 32)
+                if tile_layout
+                else roundup(tensor_width, total_num_cores * 16)
+            )  # Required for 16B alignment in L1 tile width
+            shard_shape = tensor_height_padded, divup(tensor_width_padded, total_num_cores)
         else:
             raise RuntimeError("Invalid sharding scheme")
 

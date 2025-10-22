@@ -63,7 +63,7 @@ def validate_serializable_shard_spec(input_shape, serializable_shard_specs):
     )
 
 
-def _parse_serializable_shard_spec(serializable_shard_spec, output_shape):
+def _parse_serializable_shard_spec(serializable_shard_spec, output_shape, tile_layout=False):
     assert len(serializable_shard_spec) == 3
 
     shape, cores, strategy = tuple(serializable_shard_spec.values())
@@ -77,7 +77,10 @@ def _parse_serializable_shard_spec(serializable_shard_spec, output_shape):
 
     if shape is None:
         core_grid = ttnn.CoreGrid(**dict(zip(("x", "y"), cores)))
-        return ttnn.create_sharded_memory_config(output_shape, core_grid, strategy).shard_spec, layout
+        return (
+            ttnn.create_sharded_memory_config_(output_shape, core_grid, strategy, tile_layout=tile_layout).shard_spec,
+            layout,
+        )
     else:
         core_grid = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cores[0] - 1, cores[1] - 1))}
@@ -85,14 +88,18 @@ def _parse_serializable_shard_spec(serializable_shard_spec, output_shape):
         return ttnn.ShardSpec(core_grid, shape, ttnn.ShardOrientation.ROW_MAJOR), layout
 
 
-def get_mem_configs(buffer_type, serializable_shard_specs, output_shape):
+def get_mem_configs(buffer_type, serializable_shard_specs, output_shape, tile_layout=False):
     if serializable_shard_specs is None:
         return ttnn.MemoryConfig(buffer_type=buffer_type), ttnn.MemoryConfig(buffer_type=buffer_type)
     else:
-        input_spec, input_layout = _parse_serializable_shard_spec(serializable_shard_specs["input"], None)
+        input_spec, input_layout = _parse_serializable_shard_spec(
+            serializable_shard_specs["input"], None, tile_layout=tile_layout
+        )
         input_config = ttnn.MemoryConfig(input_layout, buffer_type, input_spec)
 
-        output_spec, output_layout = _parse_serializable_shard_spec(serializable_shard_specs["output"], output_shape)
+        output_spec, output_layout = _parse_serializable_shard_spec(
+            serializable_shard_specs["output"], output_shape, tile_layout=tile_layout
+        )
         output_config = ttnn.MemoryConfig(output_layout, buffer_type, output_spec)
 
         assert input_layout == output_layout

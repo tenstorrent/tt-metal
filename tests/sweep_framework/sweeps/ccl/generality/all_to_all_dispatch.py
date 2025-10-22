@@ -50,6 +50,22 @@ parameters = {
         "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
         "num_iters": [1],
     },
+    "lead_model_suite": {
+        "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
+        "fabric_config": FABRIC_CONFIGS,
+        "input_shape": [[_pd(1), 1, 32, 2880], [_pd(4), 1, 1, 7168]],  # GPT-OSS  # deepseek cluster_axis=0
+        "experts": [_pd(i) for i in [2, 4, 8]],
+        "select_experts_k": [2, 4, 8],
+        "cluster_axis": [0, 1],
+        "num_links": [1],
+        "input_dtype": [ttnn.bfloat16],
+        "mem_config": [
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        ],
+        "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
+        "num_iters": [1],
+    },
 }
 
 
@@ -57,10 +73,15 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     # hardcode for 6U
     if test_vector["mesh_shape"] in [(16, 2), (2, 16)]:
         return True, "Invalid mesh shape for 6U"
+    if test_vector["select_experts_k"] >= test_vector["experts"]:
+        return True, "Need more experts than select experts"
 
     mesh_shape, cluster_axis = test_vector["mesh_shape"], test_vector["cluster_axis"]
-    if cluster_axis and mesh_shape[cluster_axis] == 1:
+    if mesh_shape[cluster_axis] == 1:
         return True, "Unit cluster axis"
+
+    if test_vector["topology"] == ttnn.Topology.Ring and test_vector["mesh_shape"][cluster_axis] == 2:
+        return True, "Ring config requires more than two devices"
 
     if test_vector["select_experts_k"] > test_vector["experts"]:
         return True, "k greater than experts"
@@ -123,8 +144,8 @@ def run(
                 warmup_iters=0,
                 trace_mode=False,
                 num_links=num_links,
+                topology=topology,
                 dtype=input_dtype,
-                topology=None,
                 input_memory_config=mem_config,
                 output_memory_config=mem_config,
                 cluster_axis=cluster_axis,
