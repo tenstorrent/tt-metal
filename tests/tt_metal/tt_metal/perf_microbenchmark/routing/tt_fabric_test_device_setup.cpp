@@ -173,20 +173,13 @@ std::vector<uint32_t> FabricConnectionManager::generate_mux_termination_local_ar
         return {};
     }
 
-    std::vector<uint32_t> args;
+    const bool is_master = (core == global_termination_master_);
 
-    // Determine if this core is the master
-    bool is_master = (core == global_termination_master_);
-
-    // Arg 0: is_master (1 or 0)
-    args.push_back(is_master ? 1u : 0u);
-
-    // Arg 1: total mux clients
-    args.push_back(static_cast<uint32_t>(all_mux_client_cores_.size()));
-
-    // Arg 2: master NOC encoding (use proper API)
-    uint32_t master_noc_encoding = device_info_provider->get_worker_noc_encoding(global_termination_master_);
-    args.push_back(master_noc_encoding);
+    std::vector<uint32_t> args = {
+        is_master,                                                                 // is_master
+        static_cast<uint32_t>(all_mux_client_cores_.size()),                       // num_mux_clients
+        device_info_provider->get_worker_noc_encoding(global_termination_master_)  // master_noc_encoding
+    };
 
     // If master, add mux termination info
     if (is_master) {
@@ -260,7 +253,6 @@ std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core
                 key.link_idx,
                 core);
 
-            // Convert mux core (logical) to virtual coordinates for NOC addressing
             const auto mux_virtual_core = device_info_provider->get_virtual_core_from_logical_core(mux_core);
             const auto& mux_config = mux_config_it->second;
             const auto channel_type = get_required_channel_type(worker_type);
@@ -294,8 +286,6 @@ void FabricConnectionManager::assign_and_validate_channels(Connection& conn, con
     uint32_t next_full_size = 0;
     uint32_t next_header_only = 0;
 
-    // Assign channels based on worker type using get_required_channel_type()
-    // Process all cores and assign channels according to their channel type requirement
     for (const auto& [core, worker_type] : conn.core_worker_types) {
         FabricMuxChannelType channel_type = get_required_channel_type(worker_type);
 
@@ -541,9 +531,7 @@ bool TestSync::validate_results(std::vector<uint32_t>& data) const {
 // ====================================
 
 TestMux::TestMux(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
-    TestWorker(logical_core, test_device_ptr, kernel_src) {
-    // Config will be created in create_kernel()
-}
+    TestWorker(logical_core, test_device_ptr, kernel_src) {}
 
 void TestMux::set_config(FabricMuxConfig* mux_config, ConnectionKey connection_key) {
     TT_FATAL(config_ == nullptr, "Mux config already set for core {}", logical_core_);
@@ -702,17 +690,14 @@ void TestDevice::create_kernels() {
         sync_connection_manager_.process(local_alloc, this, device_info_provider_);
     }
 
-    // Create mux kernels for connections that need them
     this->create_mux_kernels();
 
-    // create sync kernels
     if (global_sync_) {
         this->create_sync_kernel();
     }
-    // create sender kernels
+
     this->create_sender_kernels();
 
-    // create receiver kernels
     this->create_receiver_kernels();
 }
 

@@ -559,21 +559,6 @@ public:
     void report_code_profiling_results();
 
 private:
-    // Credit configuration helper
-    // Calculate both initial credits and batch size based on receiver's payload buffer capacity
-    // Returns: {initial_credits, credit_return_batch_size}
-    //
-    // SAFETY MODEL:
-    // - Receiver buffer holds N packets total
-    // - Receiver accumulates B credits before returning (batch_size)
-    // - Maximum buffer occupancy: initial_credits (I) packets (sender blocks after sending I packets)
-    // - After receiver processes B packets and returns credits, sender can send B more
-    // - Buffer then has: (I - B) + B = I packets again (steady state)
-    //
-    // CONSTRAINTS: 1 ≤ B ≤ I ≤ N
-    // - B ≥ 1: Batch size must be at least 1 credit
-    // - B ≤ I: Initial credits must cover at least one batch (else deadlock)
-    // - I ≤ N: Initial credits cannot exceed buffer capacity (else overflow)
     void reset_local_variables() {
         benchmark_mode_ = false;
         global_sync_ = false;
@@ -604,16 +589,8 @@ private:
             hops = traffic_config.hops;
             dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
                 traffic_config.src_node_id, hops.value(), traffic_config.parameters.chip_send_type);
-
-            log_debug(
-                tt::LogTest,
-                "Routing: src_node_id={}, chip_send_type={}, got {} dst_node_ids",
-                traffic_config.src_node_id,
-                static_cast<int>(traffic_config.parameters.chip_send_type),
-                dst_node_ids.size());
         } else {
             dst_node_ids = traffic_config.dst_node_ids.value();
-            log_debug(tt::LogTest, "Explicit destinations: got {} dst_node_ids from config", dst_node_ids.size());
 
             // assign hops for 2d LL and 1D
             if (!(fixture_->is_dynamic_routing_enabled())) {
@@ -697,8 +674,11 @@ private:
                 const auto& dst_coord = this->fixture_->get_device_coord(dst_node_id);
                 TestTrafficReceiverConfig per_receiver_config = receiver_config;
 
-                if (traffic_config.parameters.enable_flow_control &&
-                    per_receiver_config.receiver_credit_info.has_value()) {
+                if (traffic_config.parameters.enable_flow_control) {
+                    TT_FATAL(
+                        per_receiver_config.receiver_credit_info.has_value(),
+                        "Receiver credit info not allocated for receiver with flow control enabled");
+
                     uint32_t credit_chunk_base = sender_config.sender_credit_info->credit_reception_address_base;
                     uint32_t credit_return_address =
                         SenderMemoryMap::get_receiver_credit_address(credit_chunk_base, receiver_idx);

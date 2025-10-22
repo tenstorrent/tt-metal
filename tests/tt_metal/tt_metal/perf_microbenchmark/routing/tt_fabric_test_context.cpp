@@ -23,11 +23,9 @@ void TestContext::wait_for_programs_with_progress() {
         progress_config_.hung_threshold_seconds);
 
     monitor.poll_until_complete();
-
-    log_info(tt::LogTest, "Progress monitoring complete");
+    log_info(tt::LogTest, "Progress monitoring complete, waiting for programs to finish...");
 
     // Now call wait_for_programs() to ensure proper cleanup
-    log_info(tt::LogTest, "Waiting for programs to complete...");
     fixture_->wait_for_programs();
 }
 

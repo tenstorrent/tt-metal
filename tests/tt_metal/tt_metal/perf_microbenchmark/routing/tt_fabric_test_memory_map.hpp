@@ -185,7 +185,6 @@ struct SenderMemoryMap {
     static constexpr uint32_t MAX_PAYLOAD_SIZE_PER_CONFIG = 0x2800;  // 10KB per config
 
     // Helper to compute individual receiver credit address from chunk
-    // Used by both per-device allocators and TestContext when assigning receiver addresses
     static uint32_t get_receiver_credit_address(uint32_t chunk_base, uint32_t receiver_idx) {
         return chunk_base + (receiver_idx * CREDIT_ADDRESS_STRIDE);
     }

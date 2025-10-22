@@ -2123,7 +2123,6 @@ private:
         }
 
         // Parse traffic configs from local args (local_args_idx passed from caller)
-
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
             traffic_configs_[i] = nullptr;
         }

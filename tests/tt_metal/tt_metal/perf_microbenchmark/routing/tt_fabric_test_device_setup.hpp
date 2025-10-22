@@ -73,7 +73,7 @@ struct Connection {
 // forward declarations
 struct TestDevice;
 
-// LocalDeviceCoreAllocator: Simple utility to manage pristine cores for mux allocation
+// LocalDeviceCoreAllocator: Simple utility to manage pristine cores for local allocation
 // Takes ownership of pristine cores and pops them on-demand
 class LocalDeviceCoreAllocator {
 public:
@@ -101,7 +101,6 @@ public:
     FabricConnectionManager() = default;
 
     // Helper: Determine required channel type for a worker type
-    // Mux channel type must be determined from its clients, not directly
     static FabricMuxChannelType get_required_channel_type(TestWorkerType worker_type) {
         switch (worker_type) {
             case TestWorkerType::SENDER: return FabricMuxChannelType::FULL_SIZE_CHANNEL;      // Full payload packets
@@ -112,11 +111,11 @@ public:
                     false,
                     "Invalid TestWorkerType for channel type determination: {}. "
                     "MUX channel type must be determined from its clients, not directly.",
-                    static_cast<int>(worker_type));
+                    worker_type);
         }
     }
 
-    // Registration: Call from add_sender/receiver_traffic_config if enable_flow_control
+    // Register a connection from a core in a specific direction and link
     void register_client(
         const CoreCoord& core, RoutingDirection direction, uint32_t link_idx, TestWorkerType worker_type);
 
@@ -127,11 +126,6 @@ public:
         LocalDeviceCoreAllocator& local_alloc,
         TestDevice* test_device_ptr,
         const std::shared_ptr<IDeviceInfoProvider>& device_info_provider);
-
-    // Access to all connections (for mux kernel creation)
-    const std::unordered_map<ConnectionKey, Connection, ConnectionKeyHash>& get_all_connections() const {
-        return connections_;
-    }
 
     // Get all used fabric links (for telemetry/result reading)
     // Returns map of direction -> set of link indices that have been registered
@@ -186,8 +180,8 @@ private:
     std::set<CoreCoord> all_mux_client_cores_;  // All cores that use mux connections
     CoreCoord global_termination_master_;       // First mux client (in deterministic order)
 
-    static constexpr uint32_t MAX_FULL_SIZE_CHANNELS = 8;     // Based on mux L1 limits
-    static constexpr uint32_t MAX_HEADER_ONLY_CHANNELS = 64;  // Based on mux L1 limits
+    static constexpr uint32_t MAX_FULL_SIZE_CHANNELS = 8;
+    static constexpr uint32_t MAX_HEADER_ONLY_CHANNELS = 64;
     static constexpr uint32_t BUFFERS_PER_CHANNEL = 8;
 
     // Helper method to assign and validate mux channels for a connection
@@ -229,10 +223,6 @@ public:
     // Accessors for progress monitoring
     CoreCoord get_core() const { return logical_core_; }
     uint64_t get_total_packets() const;  // Defined out-of-line
-
-    // global line sync configs - stores sync traffic configs with their fabric connection keys
-    // Managed by TestDevice::sync_connection_manager_ (separate instance from regular connections)
-    std::vector<std::pair<TestTrafficSenderConfig, ConnectionKey>> global_sync_configs_;
 
     // stores traffic config and the corresponding fabric connection key
     // Managed by TestDevice::connection_manager_

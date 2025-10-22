@@ -17,9 +17,6 @@ constexpr uint8_t NUM_CREDIT_CONNECTIONS = get_compile_time_arg_val(5);
 constexpr bool HAS_MUX_CONNECTIONS = get_compile_time_arg_val(6);
 constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(7);
 
-// Flow control is enabled if we have any credit connections
-constexpr bool FLOW_CONTROL_ENABLED = (NUM_CREDIT_CONNECTIONS > 0);
-
 using ReceiverKernelConfigType =
     ReceiverKernelConfig<NUM_TRAFFIC_CONFIGS, NUM_CREDIT_CONNECTIONS, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>;
 

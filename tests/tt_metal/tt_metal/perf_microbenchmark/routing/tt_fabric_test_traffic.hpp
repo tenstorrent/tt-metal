@@ -270,25 +270,17 @@ struct TestTrafficConfig {
     // mode - BW, latency etc
 };
 
-// Credit flow structures for bidirectional sender-receiver communication
-// (SenderCreditInfo moved to tt_fabric_test_common_types.hpp)
-
 struct ReceiverCreditInfo {
-    FabricNodeId receiver_node_id;   // Receiver's own node (credit packet source)
-    FabricNodeId sender_node_id;     // Original sender's node (credit packet destination)
-    CoreCoord sender_logical_core;   // Which core to send credits to
-    uint32_t sender_noc_encoding;    // NOC address for credit return (local encoding)
-    uint32_t credit_return_address;  // 4-byte L1 address to write credits to
+    FabricNodeId receiver_node_id;
+    FabricNodeId sender_node_id;
+    CoreCoord sender_logical_core;
+    uint32_t sender_noc_encoding;
+    uint32_t credit_return_address;
 
     // Credit return batching configuration (similar to initial credit capacity)
     // Instead of returning 1 credit per packet, batch them for efficiency
-    uint32_t credit_return_batch_size;  // How many credits to accumulate before returning
-
-    // Unicast routing info for inter-chip credit return (matches fabric type)
-    // For 1D fabric: only num_hops is used
-    // For 2D fabric: all fields are used (chip IDs, mesh_id, ew_dim derived from mesh_shape)
-    std::optional<std::unordered_map<RoutingDirection, uint32_t>>
-        hops;  // For calculating num_hops (1D) or determining route (2D)
+    uint32_t credit_return_batch_size;
+    std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
 };
 
 struct TestTrafficSenderConfig {
@@ -480,7 +472,9 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
         args.push_back(credit_management_enabled ? 1u : 0u);  // credit_management_enabled
 
         // Send sender credit info only if enabled (kernel exits early if disabled)
-        if (credit_management_enabled && sender_credit_info.has_value()) {
+        if (credit_management_enabled) {
+            TT_FATAL(
+                sender_credit_info.has_value(), "Sender credit info must be provided when flow control is enabled");
             args.push_back(sender_credit_info->expected_receiver_count);
             args.push_back(sender_credit_info->credit_reception_address_base);
             args.push_back(sender_credit_info->initial_credits);
@@ -560,10 +554,12 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
         default: TT_FATAL(false, "Unsupported noc send type");
     }
 
-    bool has_credit_info = parameters.enable_flow_control && receiver_credit_info.has_value();
+    bool has_credit_info = parameters.enable_flow_control;
     args.push_back(has_credit_info ? 1u : 0u);  // credit_info_present flag
 
     if (has_credit_info) {
+        TT_FATAL(
+            receiver_credit_info.has_value(), "Receiver credit info must be provided when flow control is enabled");
         // Add chip-level unicast routing info based on fabric type
         if (parameters.is_2D_routing_enabled) {
             const auto& receiver_node = receiver_credit_info->receiver_node_id;

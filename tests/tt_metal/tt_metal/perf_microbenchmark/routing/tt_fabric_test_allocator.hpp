@@ -479,10 +479,6 @@ inline void TestDeviceResources::reserve_core_internal(const CoreCoord& core, Co
 /**
  * Calculate credit configuration (100% initial, 20% batch)
  * Simple policy: Give sender full buffer capacity, receiver returns in 20% batches
- * @param buffer_capacity_bytes Receiver buffer size
- * @param packet_size_bytes Size of each packet
- * @param num_packets Number of packets to be sent
- * @return Pair of (initial_credits, batch_size)
  */
 inline static std::pair<uint32_t, uint32_t> calculate_credit_config(
     uint32_t buffer_capacity_bytes, uint32_t packet_size_bytes, uint32_t num_packets) {

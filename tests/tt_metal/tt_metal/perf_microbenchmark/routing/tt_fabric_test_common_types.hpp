@@ -87,7 +87,7 @@ struct TrafficPatternConfig {
     std::optional<uint16_t> atomic_inc_wrap;
     std::optional<uint32_t> mcast_start_hops;
 
-    // Credit info (allocated by GlobalAllocator in PASS 2 for ALL patterns with flow control)
+    // Credit info
     std::optional<SenderCreditInfo> sender_credit_info;  // For sender
     std::optional<uint32_t> credit_return_batch_size;    // For receivers
 };
