@@ -187,11 +187,11 @@ int main(int argc, char** argv) {
                     YamlTestConfigSerializer::dump({built_test}, output_stream);
                 }
 
-                // multi-host barrier to synchronize before starting the test (as we could be clearing out addresses)
-                fixture->barrier();
-
                 log_info(tt::LogTest, "Compiling programs");
                 test_context.compile_programs();
+
+                // multi-host barrier to synchronize before starting the test (as we could be clearing out addresses)
+                fixture->barrier();
 
                 log_info(tt::LogTest, "Launching programs");
                 test_context.launch_programs();
