@@ -292,7 +292,7 @@ jobs:
           echo "  Final version: ${{ steps.test-rc-increment.outputs.final_version }}"
 
           # Should create rc3 since rc1 and rc2 already exist for v1.1.0
-          expected_pattern="v.*-rc[0-9]+"
+          expected_pattern="v.*-rc3"
           if [[ ! "${{ steps.test-rc-increment.outputs.final_version }}" =~ $expected_pattern ]]; then
             echo "FAIL: Expected final_version to match RC pattern"
             exit 1
