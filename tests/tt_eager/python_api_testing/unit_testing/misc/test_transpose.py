@@ -1289,19 +1289,22 @@ def test_transpose_21803(device):
 
 def test_transpose_29126(device):
     # Test DRAM sharding, which uses the same code path as DRAM interleaved
-    h = 8192
+    dram_cores = device.dram_grid_size().x  # WH has 12 dram cores, P150 has 8, P100 has 7
+    dram_weight_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(dram_cores - 1, 0),
+            )
+        }
+    )
+
+    h = 1024 * dram_cores
     w = 2048
 
-    num_cores_x = 8
-    num_cores_y = 1
-    if num_cores_x > device.core_grid.x:
-        num_cores_x = device.core_grid.x
-    shard_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}
-    )
     shard_spec = ttnn.ShardSpec(
-        shard_grid,
-        (ttnn.core.roundup(ttnn.core.divup(h, num_cores_x * num_cores_y), ttnn.TILE_SIZE), w),
+        dram_weight_grid,
+        (ttnn.core.roundup(ttnn.core.divup(h, dram_cores), ttnn.TILE_SIZE), w),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, shard_spec)
