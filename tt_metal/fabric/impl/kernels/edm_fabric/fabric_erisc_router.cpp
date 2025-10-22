@@ -27,6 +27,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_channel_traits.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 
 #include "noc_overlay_parameters.h"
 #include "tt_metal/hw/inc/utils/utils.h"
@@ -2306,6 +2307,7 @@ void initialize_state_for_txq1_active_mode_sender_side() {
 }
 
 void kernel_main() {
+    RISC_POST_STATUS(FABRIC_ROUTER_INITIALIZATION_STARTED);
     set_l1_data_cache<true>();
     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
     static_assert(
@@ -2320,6 +2322,7 @@ void kernel_main() {
             initialize_state_for_txq1_active_mode_sender_side();
         }
     }
+    RISC_POST_STATUS(FABRIC_ROUTER_TXQ_INITIALIZED);
 
     //
     // COMMON CT ARGS (not specific to sender or receiver)
@@ -2366,6 +2369,8 @@ void kernel_main() {
         init_ptr_val<to_sender_packets_completed_streams[3]>(0);
         init_ptr_val<to_sender_packets_completed_streams[4]>(0);
     }
+
+    RISC_POST_STATUS(FABRIC_ROUTER_STREAM_REG_INITIALIZED);
 
     if constexpr (code_profiling_enabled_timers_bitfield != 0) {
         clear_code_profiling_buffer(code_profiling_buffer_base_addr);
@@ -2515,6 +2520,8 @@ void kernel_main() {
         }
     }
 
+    //EDM status set to started, channel counters + runtime args acquired
+    RISC_POST_STATUS(FABRIC_ROUTER_EDM_STARTED);
     *edm_status_ptr = tt::tt_fabric::EDMStatus::STARTED;
 
     //////////////////////////////
@@ -2598,6 +2605,8 @@ void kernel_main() {
     auto local_sender_channel_worker_interfaces =
         tt::tt_fabric::EdmChannelWorkerInterfaces<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY>::make(
             std::make_index_sequence<NUM_SENDER_CHANNELS>{});
+    
+    //Finished object setup, now initializing the downstream EDM noc interfaces
 
     // TODO: change to TMP.
     std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>
@@ -2669,7 +2678,7 @@ void kernel_main() {
             has_downstream_edm >>= 1;
         }
     }
-
+    //Downstream EDM noc interfaces initialized
     if constexpr (enable_deadlock_avoidance && is_receiver_channel_serviced[0]) {
         if (has_downstream_edm_vc1_buffer_connection) {
             const auto teardown_sem_address =
@@ -2718,6 +2727,7 @@ void kernel_main() {
             }
         }
     }
+    //other downstream edm interface initialized
 
     // initialize the local receiver channel buffers
     local_receiver_channels.init<channel_pools_args>(
@@ -2743,7 +2753,7 @@ void kernel_main() {
             local_sender_channel_worker_interfaces,
             local_sender_flow_control_semaphores);
     }
-
+    
     WriteTransactionIdTracker<
         RECEIVER_NUM_BUFFERS_ARRAY[0],
         NUM_TRANSACTION_IDS,
@@ -2760,7 +2770,7 @@ void kernel_main() {
         edm_to_downstream_noc>
         receiver_channel_1_trid_tracker;
     receiver_channel_1_trid_tracker.init();
-
+    // initialized channel buffers and worker interfaces and transaction id trackers
 #ifdef ARCH_BLACKHOLE
     // A Blackhole hardware bug requires all noc inline writes to be non-posted so we hardcode to false here
     // A more detailed description can be found in `noc_inline_dw_write` in the `dataflow_api` header file
@@ -2829,6 +2839,7 @@ void kernel_main() {
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
     }
+    // ethernet handshake complete
 
     // if enable the tensix extension, then before open downstream connection, need to wait for downstream tensix ready
     // for connection.
@@ -2882,6 +2893,7 @@ void kernel_main() {
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
     }
+    //end of the initialization of fabric router bringup phase
 
     if constexpr (is_receiver_channel_serviced[0] and NUM_ACTIVE_ERISCS > 1) {
         // Two erisc mode requires us to reorder the cmd buf programming/state setting
@@ -2921,6 +2933,7 @@ void kernel_main() {
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
     }
+    //end of the initialization of fabric router bringup phase
     WAYPOINT("FSCW");
     wait_for_static_connection_to_ready(
         local_sender_channel_worker_interfaces, local_sender_channel_free_slots_stream_ids_ordered);
@@ -2929,7 +2942,7 @@ void kernel_main() {
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
     }
-
+    //end of the initialization 
     //////////////////////////////
     //////////////////////////////
     //        MAIN LOOP
