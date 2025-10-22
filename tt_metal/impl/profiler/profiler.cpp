@@ -1919,6 +1919,8 @@ void DeviceProfiler::dumpClusterCoordinates() const {
     tt::tt_metal::dumpClusterCoordinatesAsJson(noc_trace_data_output_dir / "cluster_coordinates.json");
 }
 
+void DeviceProfiler::storeRoutingLookup() { routing_lookup = new FabricRoutingLookup(true); }
+
 bool isSyncInfoNewer(const SyncInfo& old_info, const SyncInfo& new_info) {
     return (
         (old_info.frequency == 0 && new_info.frequency != 0) ||
