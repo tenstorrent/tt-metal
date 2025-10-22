@@ -1,6 +1,6 @@
 name: "Model Bounty"
-description: "Create a new model bring-up or optimization bounty"
-title: "[Bounty $amount] [Issue Title]"
+description: "Create a bounty for a new model bring-up"
+title: "[Bounty $amount] Issue Title"
 labels: ["model bringup"]
 
 body:
@@ -86,8 +86,10 @@ body:
     id: result_submission
     attributes:
       label: "📊 Result Submission Guidelines"
-      description: "These guidelines will be included in the final issue."
+      description: "This section will be included in the final issue."
       value: |
+        ## 📊 Result Submission Guidelines
+
         Beyond the model implementation itself, contributors must submit the following material as proof of work.  
         However, feel free to open a PR at any time if you want us checking that you are on the right track.  
         Just understand that payout is only made after **all 3 stages** are completed.
@@ -102,7 +104,7 @@ body:
         - [Perf Header Docs](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/profiling_ttnn_operations.html#perf-report-headers)
       render: markdown
     validations:
-      required: false
+      required: true
 
   - type: textarea
     id: resources
