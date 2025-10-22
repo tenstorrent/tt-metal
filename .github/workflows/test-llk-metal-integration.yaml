@@ -21,7 +21,7 @@ on:
         description: 'Timeout for workflows in minutes'
         required: false
         type: number
-        default: 480
+        default: 720
   workflow_call:
     inputs:
       mirrored_branch:
@@ -78,7 +78,7 @@ permissions:
 jobs:
   setup-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 720
     outputs:
       branch-exists: ${{ steps.check-branch.outputs.branch-exists }}
       test-branch-name: ${{ steps.check-branch.outputs.test-branch-name }}
