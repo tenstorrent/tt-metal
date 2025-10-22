@@ -23,6 +23,8 @@
 
 // TT-Metal includes for device detection
 #include <tt-metalium/host_api.hpp>
+#include <fstream>
+#include <sstream>
 
 #define TT_ALLOC_SERVER_SOCKET "/tmp/tt_allocation_server.sock"
 #define MAX_DEVICES 8
@@ -142,27 +144,27 @@ private:
         std::cout << "🔍 Device detection (using TT-Metal APIs):" << std::endl;
 
         try {
-            // Get actual number of PCIe devices
-            size_t num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
+            // Get actual number of available devices (including remote devices)
+            size_t num_available_devices = tt::tt_metal::GetNumAvailableDevices();
 
-            if (num_pcie_devices == 0) {
-                std::cout << "   No PCIe devices detected" << std::endl;
+            if (num_available_devices == 0) {
+                std::cout << "   No devices detected" << std::endl;
                 std::cout << "   Server will track allocations anyway" << std::endl;
                 return;
             }
 
-            if (num_pcie_devices > MAX_DEVICES) {
-                std::cout << "   Warning: Found " << num_pcie_devices << " devices, limiting to " << MAX_DEVICES
+            if (num_available_devices > MAX_DEVICES) {
+                std::cout << "   Warning: Found " << num_available_devices << " devices, limiting to " << MAX_DEVICES
                           << std::endl;
-                num_pcie_devices = MAX_DEVICES;
+                num_available_devices = MAX_DEVICES;
             }
 
-            num_available_devices_ = num_pcie_devices;
+            num_available_devices_ = num_available_devices;
 
             // Query each device for detailed information
             // Note: CreateDeviceMinimal devices should not be manually closed
             // They are managed by the device pool and will clean up automatically
-            for (size_t i = 0; i < num_pcie_devices; ++i) {
+            for (size_t i = 0; i < num_available_devices; ++i) {
                 try {
                     // Create minimal device (lightweight, doesn't fully initialize)
                     // This only initializes enough to query basic device info
@@ -202,7 +204,7 @@ private:
                 }
             }
 
-            std::cout << "   Total: " << num_available_devices_ << " PCIe device(s) detected" << std::endl;
+            std::cout << "   Total: " << num_available_devices_ << " device(s) detected" << std::endl;
 
         } catch (const std::exception& e) {
             std::cerr << "   Error during device detection: " << e.what() << std::endl;

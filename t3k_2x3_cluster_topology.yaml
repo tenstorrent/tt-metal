@@ -1,0 +1,95 @@
+arch:
+  0: wormhole_b0
+  1: wormhole_b0
+  2: wormhole_b0
+  3: wormhole_b0
+  4: wormhole_b0
+  5: wormhole_b0
+chips:
+  0:
+  - 3
+  - 0
+  - 0
+  - 0
+  1:
+  - 2
+  - 0
+  - 0
+  - 0
+  2:
+  - 1
+  - 0
+  - 0
+  - 0
+  3:
+  - 3
+  - 1
+  - 0
+  - 0
+  4:
+  - 2
+  - 1
+  - 0
+  - 0
+  5:
+  - 1
+  - 1
+  - 0
+  - 0
+ethernet_connections:
+- - chip: 1
+    chan: 0
+  - chip: 2
+    chan: 0
+- - chip: 1
+    chan: 1
+  - chip: 2
+    chan: 1
+- - chip: 1
+    chan: 8
+  - chip: 0
+    chan: 0
+- - chip: 1
+    chan: 9
+  - chip: 0
+    chan: 1
+- - chip: 1
+    chan: 14
+  - chip: 4
+    chan: 14
+- - chip: 1
+    chan: 15
+  - chip: 4
+    chan: 15
+- - chip: 4
+    chan: 6
+  - chip: 5
+    chan: 6
+- - chip: 4
+    chan: 7
+  - chip: 5
+    chan: 7
+- - chip: 4
+    chan: 8
+  - chip: 3
+    chan: 0
+- - chip: 4
+    chan: 9
+  - chip: 3
+    chan: 1
+- - chip: 5
+    chan: 14
+  - chip: 2
+    chan: 14
+- - chip: 5
+    chan: 15
+  - chip: 2
+    chan: 15
+- - chip: 0
+    chan: 6
+  - chip: 3
+    chan: 6
+- - chip: 0
+    chan: 7
+  - chip: 3
+    chan: 7
