@@ -95,10 +95,10 @@ __attribute__((noinline)) void service_lite_fabric() {
 
 inline void object_init(volatile lite_fabric::FabricLiteMemoryMap* mem_map) {
     local_sender_channels =
-        tt::tt_fabric::EthChannelBuffers<lite_fabric::FabricLiteHeader, SENDER_NUM_BUFFERS_ARRAY>::make(
+        tt::tt_fabric::StaticSizedSenderEthChannelBuffers<lite_fabric::FabricLiteHeader, SENDER_NUM_BUFFERS_ARRAY>::make(
             std::make_index_sequence<NUM_SENDER_CHANNELS>{});
     remote_receiver_channels =
-        tt::tt_fabric::EthChannelBuffers<lite_fabric::FabricLiteHeader, RECEIVER_NUM_BUFFERS_ARRAY>::make(
+        tt::tt_fabric::StaticSizedEthChannelBuffers<lite_fabric::FabricLiteHeader, RECEIVER_NUM_BUFFERS_ARRAY>::make(
             std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
     outbound_to_receiver_channel_pointers_tuple = OutboundReceiverChannelPointersTuple::make();
     receiver_channel_pointers_tuple = ReceiverChannelPointersTuple::make();
