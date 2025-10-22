@@ -92,7 +92,10 @@ std::string get_default_root_path() {
 JitBuildEnv::JitBuildEnv() = default;
 
 void JitBuildEnv::init(
-    uint32_t build_key, tt::ARCH arch, const std::map<std::string, std::string>& device_kernel_defines) {
+    uint32_t build_key,
+    size_t fw_compile_hash,
+    tt::ARCH arch,
+    const std::map<std::string, std::string>& device_kernel_defines) {
     // Paths
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     this->root_ = rtoptions.get_root_dir();
@@ -117,9 +120,15 @@ void JitBuildEnv::init(
 
     this->out_root_ = this->out_root_  + git_hash + "/";
 #endif
-
-    this->out_firmware_root_ = this->out_root_ + to_string(build_key) + "/firmware/";
-    this->out_kernel_root_ = this->out_root_ + to_string(build_key) + "/kernels/";
+    // Firmware build path is a combination of build_key and fw_compile_hash
+    // If either change, the firmware build path will change and FW will be rebuilt
+    // if it's not already in MetalContext::firmware_built_keys_
+    const std::filesystem::path firmware_path = std::filesystem::path(this->out_root_) / std::to_string(build_key) /
+                                                std::to_string(fw_compile_hash) / "firmware/";
+    this->out_firmware_root_ = firmware_path.string();
+    const std::filesystem::path kernel_path =
+        std::filesystem::path(this->out_root_) / std::to_string(build_key) / "kernels/";
+    this->out_kernel_root_ = kernel_path.string();
 
     // Tools
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
@@ -139,7 +148,7 @@ void JitBuildEnv::init(
 
     bool sfpi_found = false;
     for (unsigned i = 0; i < 2; ++i) {
-        auto gxx = sfpi_roots[i] + "/compiler/bin/riscv32-tt-elf-g++";
+        auto gxx = sfpi_roots[i] + "/compiler/bin/riscv-tt-elf-g++";
         if (std::filesystem::exists(gxx)) {
             this->gpp_ += gxx + " ";
             this->gpp_include_dir_ = sfpi_roots[i] + "/include";

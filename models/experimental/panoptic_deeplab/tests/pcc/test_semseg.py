@@ -13,6 +13,7 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
 )
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
+from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.panoptic_deeplab.tt.common import (
     PDL_L1_SMALL_SIZE,
@@ -80,7 +81,13 @@ def test_ttnn_semseg(device, model_location_generator):
         fused_parameters = fuse_conv_bn_parameters(ttnn_parameters, eps=1e-5)
         logger.info("Conv+BatchNorm fusion completed successfully")
 
-        # Create TTNN model with fused parameters
+        # Create centralized configuration
+        model_configs = ModelOptimisations(
+            conv_act_dtype=ttnn.bfloat8_b,
+            conv_w_dtype=ttnn.bfloat8_b,
+        )
+
+        # Create TTNN model with fused parameters and centralized configuration
         ttnn_model = TtPanopticDeepLab(
             device=device,
             parameters=fused_parameters,
@@ -92,6 +99,7 @@ def test_ttnn_semseg(device, model_location_generator):
             ins_embed_head_channels=ins_embed_head_channels,
             norm="",
             train_size=train_size,
+            model_configs=model_configs,
         )
     except FileNotFoundError:
         pytest.fail("model_final_bd324a.pkl file not found. Please place the weights file in the weights folder.")
@@ -106,6 +114,6 @@ def test_ttnn_semseg(device, model_location_generator):
 
     ttnn_out_torch = ttnn.to_torch(ttnn_out_tt).permute(0, 3, 1, 2)
 
-    passed, msg = assert_with_pcc(torch_out, ttnn_out_torch, pcc=0.97)
+    passed, msg = assert_with_pcc(torch_out, ttnn_out_torch, pcc=0.99)
     logger.info(f"Semantic segmentation PCC: {msg}")
     assert passed, f"Semantic segmentation PCC test failed: {msg}"

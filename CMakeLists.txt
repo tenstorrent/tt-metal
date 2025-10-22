@@ -1,7 +1,5 @@
 cmake_minimum_required(VERSION 3.24...3.30)
 
-# REVERTME: force CI runs
-
 # Sanity check, forgetting to clone submodules is a common omission and results in a poor error message
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt")
     message(FATAL_ERROR "Missing submodules.  Run: git submodule update --init --recursive")
@@ -156,7 +154,6 @@ target_link_libraries(
     INTERFACE
         dl
         pthread
-        atomic
         hwloc
         numa
 )
@@ -177,7 +174,6 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-volatile>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-logical-op-parentheses>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-reorder-ctor>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-lambda-capture>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-private-field>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unknown-pragmas>"
     "$<$<CXX_COMPILER_ID:Clang>:SHELL:-Xclang -fno-pch-timestamp>" # ccache-friendly PCH flag
@@ -305,14 +301,16 @@ install(
         COMPONENT tar
 )
 
-# FIXME(17578): figure out what bits we actually need to ship and omit the rest
-install(
-    DIRECTORY
-        runtime/sfpi
-    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/runtime
-    USE_SOURCE_PERMISSIONS
-    COMPONENT jit-build
-)
+if(NOT TT_USE_SYSTEM_SFPI)
+    # FIXME(17578): figure out what bits we actually need to ship and omit the rest
+    install(
+        DIRECTORY
+            runtime/sfpi
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/runtime
+        USE_SOURCE_PERMISSIONS
+        COMPONENT jit-build
+    )
+endif()
 
 # Custom clean target for `built` folder for when new kernel changes are pulled
 add_custom_target(

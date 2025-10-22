@@ -25,10 +25,14 @@
 #include "tt_target_device.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <tt-metalium/fabric_types.hpp>
 
 namespace tt {
 
 namespace llrt {
+
+inline std::string g_root_dir;
+inline std::once_flag g_root_once;
 
 // Enumerates the debug features that can be enabled at runtime. These features allow for
 // fine-grained control over targeted cores, chips, harts, etc.
@@ -91,7 +95,7 @@ struct InspectorSettings {
 };
 
 class RunTimeOptions {
-    bool is_root_dir_env_var_set = false;
+    bool is_root_dir_set = false;
     std::string root_dir;
 
     bool is_cache_dir_env_var_set = false;
@@ -114,6 +118,11 @@ class RunTimeOptions {
 
     InspectorSettings inspector_settings;
 
+    // Fabric profiling settings
+    struct FabricProfilingSettings {
+        bool enable_rx_ch_fwd = false;
+    } fabric_profiling_settings;
+
     TargetSelection feature_targets[RunTimeDebugFeatureCount];
 
     bool test_mode_enabled = false;
@@ -123,6 +132,7 @@ class RunTimeOptions {
     bool profiler_sync_enabled = false;
     bool profiler_mid_run_dump = false;
     bool profiler_trace_profiler = false;
+    bool profiler_trace_tracking = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
     std::string profiler_noc_events_report_path;
@@ -190,6 +200,9 @@ class RunTimeOptions {
     // feature flag to enable 2-erisc mode with fabric on Blackhole, until it is enabled by default
     bool enable_2_erisc_mode_with_fabric = false;
 
+    // feature flag to enable 2-erisc mode on Blackhole (general, not fabric-specific)
+    bool enable_2_erisc_mode = false;
+
     // Log kernels compilation commands
     bool log_kernels_compilation_commands = false;
 
@@ -204,15 +217,19 @@ class RunTimeOptions {
     // Timeout duration for operations
     std::chrono::duration<float> timeout_duration_for_operations = std::chrono::duration<float>(0.0f);
 
-    // Using MGD 2.0 syntax for mesh graph descriptor in Fabric Control Plane
-    bool use_mesh_graph_descriptor_2_0 = false;
+    // Using MGD 1.0 syntax for mesh graph descriptor in Fabric Control Plane
+    bool use_mesh_graph_descriptor_1_0 = false;
+
+    // Reliability mode override parsed from environment (RELIABILITY_MODE)
+    std::optional<tt::tt_fabric::FabricReliabilityMode> reliability_mode = std::nullopt;
 
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
     RunTimeOptions& operator=(const RunTimeOptions&) = delete;
 
-    bool is_root_dir_specified() const { return this->is_root_dir_env_var_set; }
+    bool is_root_dir_specified() const { return this->is_root_dir_set; }
+    static void set_root_dir(const std::string& root_dir);
     const std::string& get_root_dir() const;
 
     bool is_cache_dir_specified() const { return this->is_cache_dir_env_var_set; }
@@ -232,6 +249,8 @@ public:
     // can override with a SW call.
     bool get_watcher_enabled() const { return watcher_settings.enabled; }
     void set_watcher_enabled(bool enabled) { watcher_settings.enabled = enabled; }
+    // Return a hash of which watcher features are enabled
+    uint32_t get_watcher_hash() const;
     int get_watcher_interval() const { return watcher_settings.interval_ms; }
     void set_watcher_interval(int interval_ms) { watcher_settings.interval_ms = interval_ms; }
     int get_watcher_dump_all() const { return watcher_settings.dump_all; }
@@ -372,8 +391,13 @@ public:
         }
     }
     std::string get_compile_hash_string() const {
-        std::string compile_hash_str =
-            fmt::format("{}_{}_{}", get_watcher_enabled(), get_kernels_early_return(), get_erisc_iram_enabled());
+        std::string compile_hash_str = fmt::format(
+            "{}_{}_{}_{}_{}",
+            get_watcher_hash(),
+            get_kernels_early_return(),
+            get_erisc_iram_enabled(),
+            get_enable_2_erisc_mode(),
+            get_is_fabric_2_erisc_mode_enabled());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -393,6 +417,7 @@ public:
     bool get_profiler_do_dispatch_cores() const { return profile_dispatch_cores; }
     bool get_profiler_sync_enabled() const { return profiler_sync_enabled; }
     bool get_profiler_trace_only() const { return profiler_trace_profiler; }
+    bool get_profiler_trace_tracking() const { return profiler_trace_tracking; }
     bool get_profiler_mid_run_dump() const { return profiler_mid_run_dump; }
     bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
@@ -470,6 +495,9 @@ public:
     // if true, then the fabric router is parallelized across two eriscs in the Ethernet core
     bool get_is_fabric_2_erisc_mode_enabled() const { return enable_2_erisc_mode_with_fabric; }
 
+    // Feature flag to enable 2-erisc mode on Blackhole
+    bool get_enable_2_erisc_mode() const { return enable_2_erisc_mode; }
+
     bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
 
@@ -483,8 +511,17 @@ public:
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
     void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
 
+    // If true, enables code profiling for receiver channel forward operations
+    bool get_enable_fabric_code_profiling_rx_ch_fwd() const { return fabric_profiling_settings.enable_rx_ch_fwd; }
+    void set_enable_fabric_code_profiling_rx_ch_fwd(bool enable) {
+        fabric_profiling_settings.enable_rx_ch_fwd = enable;
+    }
+
+    // Reliability mode override accessor
+    std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
+
     // Mock cluster accessors
-    bool get_mock_enabled() const { return runtime_target_device_ == TargetDevice::Mock; }
+    bool get_mock_enabled() const { return !mock_cluster_desc_path.empty(); }
     const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
 
     // Target device accessor
@@ -492,9 +529,9 @@ public:
 
     std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
 
-    // Using MGD 2.0 syntax for mesh graph descriptor in Fabric Control Plane
+    // Using MGD 1.0 syntax for mesh graph descriptor in Fabric Control Plane
     // TODO: This will be removed after MGD 1.0 is deprecated
-    bool get_use_mesh_graph_descriptor_2_0() const { return use_mesh_graph_descriptor_2_0; }
+    bool get_use_mesh_graph_descriptor_1_0() const { return use_mesh_graph_descriptor_1_0; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)

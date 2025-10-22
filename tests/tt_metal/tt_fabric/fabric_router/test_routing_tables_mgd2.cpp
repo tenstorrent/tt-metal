@@ -110,8 +110,8 @@ void expect_get_host_ranks_equal(
 }
 
 void expect_get_chip_ids_equal(
-    const tt::tt_fabric::MeshContainer<chip_id_t>& lhs,
-    const tt::tt_fabric::MeshContainer<chip_id_t>& rhs,
+    const tt::tt_fabric::MeshContainer<tt::ChipId>& lhs,
+    const tt::tt_fabric::MeshContainer<tt::ChipId>& rhs,
     int mesh_id) {
     // Test get_chip_ids function comparison for specified mesh ID
     EXPECT_EQ(lhs.size(), rhs.size()) << "Mesh " << mesh_id << " chip count should be equal between MGD versions";
@@ -130,8 +130,8 @@ void expect_get_chip_ids_equal(
 }
 
 void expect_get_chip_ids_submesh_equal(
-    const tt::tt_fabric::MeshContainer<chip_id_t>& lhs,
-    const tt::tt_fabric::MeshContainer<chip_id_t>& rhs,
+    const tt::tt_fabric::MeshContainer<tt::ChipId>& lhs,
+    const tt::tt_fabric::MeshContainer<tt::ChipId>& rhs,
     int mesh_id) {
     // Test get_chip_ids function comparison for specified mesh ID submesh
     EXPECT_EQ(lhs.size(), rhs.size()) << "Mesh " << mesh_id
@@ -170,28 +170,6 @@ void expect_get_host_rank_for_chip_equal(
 namespace tt::tt_fabric::fabric_router_tests {
 
 using ::testing::ElementsAre;
-
-TEST(MeshGraphValidation, TestTGMeshGraphInitMGD2) {
-    const std::filesystem::path tg_mesh_graph_desc_2_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto";
-    MeshGraph mesh_graph_desc(tg_mesh_graph_desc_2_path.string());
-    EXPECT_EQ(
-        mesh_graph_desc.get_coord_range(MeshId{0}, MeshHostRankId(0)),
-        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
-    EXPECT_EQ(
-        mesh_graph_desc.get_coord_range(MeshId{1}, MeshHostRankId(0)),
-        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
-    EXPECT_EQ(
-        mesh_graph_desc.get_coord_range(MeshId{2}, MeshHostRankId(0)),
-        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
-    EXPECT_EQ(
-        mesh_graph_desc.get_coord_range(MeshId{3}, MeshHostRankId(0)),
-        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
-    EXPECT_EQ(
-        mesh_graph_desc.get_coord_range(MeshId{4}, MeshHostRankId(0)),
-        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(3, 7)));
-}
 
 TEST(MeshGraphValidation, TestTGMeshGraphInitConsistencyCheckMGD2) {
     // Skip this test since the MGD 1.0 initialization data path does not load intermesh connections unless the Control
@@ -250,26 +228,6 @@ TEST(MeshGraphValidation, TestTGMeshGraphInitConsistencyCheckMGD2) {
 
     mesh_graph.print_connectivity();
     mesh_graph2.print_connectivity();
-}
-
-TEST_F(ControlPlaneFixture, TestTGControlPlaneInitMGD2) {
-    const std::filesystem::path tg_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto";
-    [[maybe_unused]] auto control_plane = make_control_plane(tg_mesh_graph_desc_path);
-}
-
-TEST_F(ControlPlaneFixture, TestTGFabricRoutesMGD2) {
-    const std::filesystem::path tg_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto";
-    auto control_plane = make_control_plane(tg_mesh_graph_desc_path);
-    auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 1);
-    EXPECT_GT(valid_chans.size(), 0);
-    for (auto chan : valid_chans) {
-        auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{4}, 31), chan);
-        EXPECT_FALSE(path.empty());
-    }
 }
 
 TEST(MeshGraphValidation, TestT3kMeshGraphInitMGD2) {
@@ -344,13 +302,13 @@ TEST(MeshGraphValidation, TestT3kDualHostMeshGraphMGD2) {
 
     EXPECT_EQ(
         mesh_graph.get_chip_ids(MeshId{0}),
-        MeshContainer<chip_id_t>(MeshShape(2, 4), std::vector<chip_id_t>{0, 1, 2, 3, 4, 5, 6, 7}));
+        MeshContainer<ChipId>(MeshShape(2, 4), std::vector<ChipId>{0, 1, 2, 3, 4, 5, 6, 7}));
     EXPECT_EQ(
         mesh_graph.get_chip_ids(MeshId{0}, MeshHostRankId(0)),
-        MeshContainer<chip_id_t>(MeshShape(2, 2), std::vector<chip_id_t>{0, 1, 4, 5}));
+        MeshContainer<ChipId>(MeshShape(2, 2), std::vector<ChipId>{0, 1, 4, 5}));
     EXPECT_EQ(
         mesh_graph.get_chip_ids(MeshId{0}, MeshHostRankId(1)),
-        MeshContainer<chip_id_t>(MeshShape(2, 2), std::vector<chip_id_t>{2, 3, 6, 7}));
+        MeshContainer<ChipId>(MeshShape(2, 2), std::vector<ChipId>{2, 3, 6, 7}));
 }
 
 TEST(MeshGraphValidation, TestT3k2x2MeshGraphMGD2) {
@@ -392,27 +350,31 @@ TEST(MeshGraphValidation, TestT3k2x2MeshGraphMGD2) {
 
     // Check chip IDs - each mesh has 4 chips (2x2)
     EXPECT_EQ(
-        mesh_graph.get_chip_ids(MeshId{0}),
-        MeshContainer<chip_id_t>(MeshShape(2, 2), std::vector<chip_id_t>{0, 1, 2, 3}));
+        mesh_graph.get_chip_ids(MeshId{0}), MeshContainer<ChipId>(MeshShape(2, 2), std::vector<ChipId>{0, 1, 2, 3}));
     EXPECT_EQ(
-        mesh_graph.get_chip_ids(MeshId{1}),
-        MeshContainer<chip_id_t>(MeshShape(2, 2), std::vector<chip_id_t>{0, 1, 2, 3}));
+        mesh_graph.get_chip_ids(MeshId{1}), MeshContainer<ChipId>(MeshShape(2, 2), std::vector<ChipId>{0, 1, 2, 3}));
 
     // Check chip IDs per host rank
     EXPECT_EQ(
         mesh_graph.get_chip_ids(MeshId{0}, MeshHostRankId(0)),
-        MeshContainer<chip_id_t>(MeshShape(2, 2), std::vector<chip_id_t>{0, 1, 2, 3}));
+        MeshContainer<ChipId>(MeshShape(2, 2), std::vector<ChipId>{0, 1, 2, 3}));
     EXPECT_EQ(
         mesh_graph.get_chip_ids(MeshId{1}, MeshHostRankId(0)),
-        MeshContainer<chip_id_t>(MeshShape(2, 2), std::vector<chip_id_t>{0, 1, 2, 3}));
+        MeshContainer<ChipId>(MeshShape(2, 2), std::vector<ChipId>{0, 1, 2, 3}));
 
     // Check that the number of intra-mesh connections match the number of connections in the graph
     EXPECT_EQ(mesh_graph.get_intra_mesh_connectivity()[0][0].begin()->second.connected_chip_ids.size(), 2);
     EXPECT_EQ(mesh_graph.get_intra_mesh_connectivity()[0][0].size(), 2);
 
+    // TODO: Intermesh is currently empty: this will change back once we have logical to physical mapping
     // Check that the number of intermesh connections match the number of connections in the graph
-    EXPECT_EQ(mesh_graph.get_inter_mesh_connectivity()[0][1].begin()->second.connected_chip_ids.size(), 2);
-    EXPECT_EQ(mesh_graph.get_inter_mesh_connectivity()[1][0].begin()->second.connected_chip_ids.size(), 2);
+    // EXPECT_EQ(mesh_graph.get_inter_mesh_connectivity()[0][1].begin()->second.connected_chip_ids.size(), 2);
+    // EXPECT_EQ(mesh_graph.get_inter_mesh_connectivity()[1][0].begin()->second.connected_chip_ids.size(), 2);
+
+    // TODO: Remove after logical to physical mapping is implemented
+    EXPECT_EQ(mesh_graph.get_requested_intermesh_ports().size(), 2);
+    EXPECT_EQ(mesh_graph.get_requested_intermesh_ports().at(0).at(1).size(), 2);
+    EXPECT_EQ(mesh_graph.get_requested_intermesh_ports().at(1).at(0).size(), 2);
 }
 
 TEST(MeshGraphValidation, TestGetHostRankForChipMGD2) {
@@ -450,7 +412,7 @@ TEST(MeshGraphValidation, TestGetHostRankForChipMGD2) {
     auto mesh_graph_single_host = tt_fabric::MeshGraph(t3k_mesh_graph_desc_path.string());
 
     // In single host configuration, all chips should belong to host rank 0
-    for (chip_id_t chip_id = 0; chip_id < 8; chip_id++) {
+    for (ChipId chip_id = 0; chip_id < 8; chip_id++) {
         EXPECT_EQ(mesh_graph_single_host.get_host_rank_for_chip(MeshId{0}, chip_id), MeshHostRankId(0));
     }
 
@@ -461,7 +423,7 @@ TEST(MeshGraphValidation, TestGetHostRankForChipMGD2) {
     auto mesh_graph_2x2 = tt_fabric::MeshGraph(t3k_2x2_mesh_graph_desc_path.string());
 
     // Each mesh has only one host rank (0)
-    for (chip_id_t chip_id = 0; chip_id < 4; chip_id++) {
+    for (ChipId chip_id = 0; chip_id < 4; chip_id++) {
         EXPECT_EQ(mesh_graph_2x2.get_host_rank_for_chip(MeshId{0}, chip_id), MeshHostRankId(0));
         EXPECT_EQ(mesh_graph_2x2.get_host_rank_for_chip(MeshId{1}, chip_id), MeshHostRankId(0));
     }
@@ -501,9 +463,9 @@ TEST(MeshGraphValidation, TestSingleGalaxyMeshMGD2) {
         auto row = i / mesh_row_size;
         auto col = i % mesh_row_size;
         int N_wrap = (i - mesh_row_size + mesh_size) % mesh_size;
-        int E_wrap = row * mesh_row_size + (col + 1) % mesh_row_size;
+        int E_wrap = (row * mesh_row_size) + ((col + 1) % mesh_row_size);
         int S_wrap = (i + mesh_row_size) % mesh_size;
-        int W_wrap = row * mesh_row_size + (col - 1 + mesh_row_size) % mesh_row_size;
+        int W_wrap = (row * mesh_row_size) + ((col - 1 + mesh_row_size) % mesh_row_size);
 
         // _wrap represents the wrapped neighbor indices
         // if X == X_wrap, it means that the neighbor is within the mesh and should be connected
@@ -513,7 +475,7 @@ TEST(MeshGraphValidation, TestSingleGalaxyMeshMGD2) {
             EXPECT_EQ(intra_mesh_connectivity[0][i].at(N_wrap).port_direction, RoutingDirection::N);
             EXPECT_EQ(
                 intra_mesh_connectivity[0][i].at(N_wrap).connected_chip_ids,
-                std::vector<chip_id_t>(num_ports_per_side, N_wrap));
+                std::vector<ChipId>(num_ports_per_side, N_wrap));
         } else {
             EXPECT_EQ(intra_mesh_connectivity[0][i].count(N_wrap), 0);
         }
@@ -522,7 +484,7 @@ TEST(MeshGraphValidation, TestSingleGalaxyMeshMGD2) {
             EXPECT_EQ(intra_mesh_connectivity[0][i].at(E_wrap).port_direction, RoutingDirection::E);
             EXPECT_EQ(
                 intra_mesh_connectivity[0][i].at(E_wrap).connected_chip_ids,
-                std::vector<chip_id_t>(num_ports_per_side, E_wrap));
+                std::vector<ChipId>(num_ports_per_side, E_wrap));
         } else {
             EXPECT_EQ(intra_mesh_connectivity[0][i].count(E_wrap), 0);
         }
@@ -531,7 +493,7 @@ TEST(MeshGraphValidation, TestSingleGalaxyMeshMGD2) {
             EXPECT_EQ(intra_mesh_connectivity[0][i].at(S_wrap).port_direction, RoutingDirection::S);
             EXPECT_EQ(
                 intra_mesh_connectivity[0][i].at(S_wrap).connected_chip_ids,
-                std::vector<chip_id_t>(num_ports_per_side, S_wrap));
+                std::vector<ChipId>(num_ports_per_side, S_wrap));
         } else {
             EXPECT_EQ(intra_mesh_connectivity[0][i].count(S_wrap), 0);
         }
@@ -540,7 +502,7 @@ TEST(MeshGraphValidation, TestSingleGalaxyMeshMGD2) {
             EXPECT_EQ(intra_mesh_connectivity[0][i].at(W_wrap).port_direction, RoutingDirection::W);
             EXPECT_EQ(
                 intra_mesh_connectivity[0][i].at(W_wrap).connected_chip_ids,
-                std::vector<chip_id_t>(num_ports_per_side, W_wrap));
+                std::vector<ChipId>(num_ports_per_side, W_wrap));
         } else {
             EXPECT_EQ(intra_mesh_connectivity[0][i].count(W_wrap), 0);
         }
@@ -592,9 +554,9 @@ TEST(MeshGraphValidation, TestSingleGalaxyTorusXYMGD2) {
         auto row = i / mesh_row_size;
         auto col = i % mesh_row_size;
         int N_wrap = (i - mesh_row_size + mesh_size) % mesh_size;
-        int E_wrap = row * mesh_row_size + (col + 1) % mesh_row_size;
+        int E_wrap = (row * mesh_row_size) + ((col + 1) % mesh_row_size);
         int S_wrap = (i + mesh_row_size) % mesh_size;
-        int W_wrap = row * mesh_row_size + (col - 1 + mesh_row_size) % mesh_row_size;
+        int W_wrap = (row * mesh_row_size) + ((col - 1 + mesh_row_size) % mesh_row_size);
 
         // _wrap represents the wrapped neighbor indices
         // check all neighbors including wrap-around connections are present in TORUS_XY
@@ -602,22 +564,22 @@ TEST(MeshGraphValidation, TestSingleGalaxyTorusXYMGD2) {
         EXPECT_EQ(intra_mesh_connectivity[0][i].at(N_wrap).port_direction, RoutingDirection::N);
         EXPECT_EQ(
             intra_mesh_connectivity[0][i].at(N_wrap).connected_chip_ids,
-            std::vector<chip_id_t>(num_ports_per_side, N_wrap));
+            std::vector<ChipId>(num_ports_per_side, N_wrap));
         EXPECT_EQ(intra_mesh_connectivity[0][i].count(E_wrap), 1);
         EXPECT_EQ(intra_mesh_connectivity[0][i].at(E_wrap).port_direction, RoutingDirection::E);
         EXPECT_EQ(
             intra_mesh_connectivity[0][i].at(E_wrap).connected_chip_ids,
-            std::vector<chip_id_t>(num_ports_per_side, E_wrap));
+            std::vector<ChipId>(num_ports_per_side, E_wrap));
         EXPECT_EQ(intra_mesh_connectivity[0][i].count(S_wrap), 1);
         EXPECT_EQ(intra_mesh_connectivity[0][i].at(S_wrap).port_direction, RoutingDirection::S);
         EXPECT_EQ(
             intra_mesh_connectivity[0][i].at(S_wrap).connected_chip_ids,
-            std::vector<chip_id_t>(num_ports_per_side, S_wrap));
+            std::vector<ChipId>(num_ports_per_side, S_wrap));
         EXPECT_EQ(intra_mesh_connectivity[0][i].count(W_wrap), 1);
         EXPECT_EQ(intra_mesh_connectivity[0][i].at(W_wrap).port_direction, RoutingDirection::W);
         EXPECT_EQ(
             intra_mesh_connectivity[0][i].at(W_wrap).connected_chip_ids,
-            std::vector<chip_id_t>(num_ports_per_side, W_wrap));
+            std::vector<ChipId>(num_ports_per_side, W_wrap));
     }
 }
 
@@ -668,9 +630,9 @@ TEST(MeshGraphValidation, TestSingleGalaxyTorusXMGD2) {
         auto row = i / mesh_row_size;
         auto col = i % mesh_row_size;
         int N_wrap = (i - mesh_row_size + mesh_size) % mesh_size;
-        int E_wrap = row * mesh_row_size + (col + 1) % mesh_row_size;
+        int E_wrap = (row * mesh_row_size) + ((col + 1) % mesh_row_size);
         int S_wrap = (i + mesh_row_size) % mesh_size;
-        int W_wrap = row * mesh_row_size + (col - 1 + mesh_row_size) % mesh_row_size;
+        int W_wrap = (row * mesh_row_size) + ((col - 1 + mesh_row_size) % mesh_row_size);
 
         // _wrap represents the wrapped neighbor indices
         // if X == X_wrap, it means that the neighbor is within the mesh and should be connected
@@ -680,18 +642,18 @@ TEST(MeshGraphValidation, TestSingleGalaxyTorusXMGD2) {
         EXPECT_EQ(intra_mesh_connectivity[0][i].at(E_wrap).port_direction, RoutingDirection::E);
         EXPECT_EQ(
             intra_mesh_connectivity[0][i].at(E_wrap).connected_chip_ids,
-            std::vector<chip_id_t>(num_ports_per_side, E_wrap));
+            std::vector<ChipId>(num_ports_per_side, E_wrap));
         EXPECT_EQ(intra_mesh_connectivity[0][i].count(W_wrap), 1);
         EXPECT_EQ(intra_mesh_connectivity[0][i].at(W_wrap).port_direction, RoutingDirection::W);
         EXPECT_EQ(
             intra_mesh_connectivity[0][i].at(W_wrap).connected_chip_ids,
-            std::vector<chip_id_t>(num_ports_per_side, W_wrap));
+            std::vector<ChipId>(num_ports_per_side, W_wrap));
         if (N == N_wrap) {
             EXPECT_EQ(intra_mesh_connectivity[0][i].count(N_wrap), 1);
             EXPECT_EQ(intra_mesh_connectivity[0][i].at(N_wrap).port_direction, RoutingDirection::N);
             EXPECT_EQ(
                 intra_mesh_connectivity[0][i].at(N_wrap).connected_chip_ids,
-                std::vector<chip_id_t>(num_ports_per_side, N_wrap));
+                std::vector<ChipId>(num_ports_per_side, N_wrap));
         } else {
             EXPECT_EQ(intra_mesh_connectivity[0][i].count(N_wrap), 0);
         }
@@ -700,7 +662,7 @@ TEST(MeshGraphValidation, TestSingleGalaxyTorusXMGD2) {
             EXPECT_EQ(intra_mesh_connectivity[0][i].at(S_wrap).port_direction, RoutingDirection::S);
             EXPECT_EQ(
                 intra_mesh_connectivity[0][i].at(S_wrap).connected_chip_ids,
-                std::vector<chip_id_t>(num_ports_per_side, S_wrap));
+                std::vector<ChipId>(num_ports_per_side, S_wrap));
         } else {
             EXPECT_EQ(intra_mesh_connectivity[0][i].count(S_wrap), 0);
         }
@@ -754,9 +716,9 @@ TEST(MeshGraphValidation, TestSingleGalaxyTorusYMGD2) {
         auto row = i / mesh_row_size;
         auto col = i % mesh_row_size;
         int N_wrap = (i - mesh_row_size + mesh_size) % mesh_size;
-        int E_wrap = row * mesh_row_size + (col + 1) % mesh_row_size;
+        int E_wrap = (row * mesh_row_size) + ((col + 1) % mesh_row_size);
         int S_wrap = (i + mesh_row_size) % mesh_size;
-        int W_wrap = row * mesh_row_size + (col - 1 + mesh_row_size) % mesh_row_size;
+        int W_wrap = (row * mesh_row_size) + ((col - 1 + mesh_row_size) % mesh_row_size);
 
         // _wrap represents the wrapped neighbor indices
         // if X == X_wrap, it means that the neighbor is within the mesh and should be connected
@@ -766,19 +728,19 @@ TEST(MeshGraphValidation, TestSingleGalaxyTorusYMGD2) {
         EXPECT_EQ(intra_mesh_connectivity[0][i].at(N_wrap).port_direction, RoutingDirection::N);
         EXPECT_EQ(
             intra_mesh_connectivity[0][i].at(N_wrap).connected_chip_ids,
-            std::vector<chip_id_t>(num_ports_per_side, N_wrap));
+            std::vector<ChipId>(num_ports_per_side, N_wrap));
 
         EXPECT_EQ(intra_mesh_connectivity[0][i].count(S_wrap), 1);
         EXPECT_EQ(intra_mesh_connectivity[0][i].at(S_wrap).port_direction, RoutingDirection::S);
         EXPECT_EQ(
             intra_mesh_connectivity[0][i].at(S_wrap).connected_chip_ids,
-            std::vector<chip_id_t>(num_ports_per_side, S_wrap));
+            std::vector<ChipId>(num_ports_per_side, S_wrap));
         if (E == E_wrap) {
             EXPECT_EQ(intra_mesh_connectivity[0][i].count(E_wrap), 1);
             EXPECT_EQ(intra_mesh_connectivity[0][i].at(E_wrap).port_direction, RoutingDirection::E);
             EXPECT_EQ(
                 intra_mesh_connectivity[0][i].at(E_wrap).connected_chip_ids,
-                std::vector<chip_id_t>(num_ports_per_side, E_wrap));
+                std::vector<ChipId>(num_ports_per_side, E_wrap));
         } else {
             EXPECT_EQ(intra_mesh_connectivity[0][i].count(E_wrap), 0);
         }
@@ -787,7 +749,7 @@ TEST(MeshGraphValidation, TestSingleGalaxyTorusYMGD2) {
             EXPECT_EQ(intra_mesh_connectivity[0][i].at(W_wrap).port_direction, RoutingDirection::W);
             EXPECT_EQ(
                 intra_mesh_connectivity[0][i].at(W_wrap).connected_chip_ids,
-                std::vector<chip_id_t>(num_ports_per_side, W_wrap));
+                std::vector<ChipId>(num_ports_per_side, W_wrap));
         } else {
             EXPECT_EQ(intra_mesh_connectivity[0][i].count(W_wrap), 0);
         }
@@ -849,7 +811,7 @@ TEST(MeshGraphValidation, TestP150BlackHoleMeshGraphMGD2) {
     EXPECT_EQ(mesh_graph.get_coord_range(MeshId{0}), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
 
     // Check chip IDs - single chip
-    EXPECT_EQ(mesh_graph.get_chip_ids(MeshId{0}), MeshContainer<chip_id_t>(MeshShape(1, 1), std::vector<chip_id_t>{0}));
+    EXPECT_EQ(mesh_graph.get_chip_ids(MeshId{0}), MeshContainer<ChipId>(MeshShape(1, 1), std::vector<ChipId>{0}));
 }
 
 TEST_F(ControlPlaneFixture, TestP150BlackHoleControlPlaneInitMGD2) {
@@ -870,7 +832,7 @@ TEST(MeshGraphValidation, TestP100BlackHoleMeshGraphMGD2) {
     EXPECT_EQ(mesh_graph.get_coord_range(MeshId{0}), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
 
     // Check chip IDs - single chip
-    EXPECT_EQ(mesh_graph.get_chip_ids(MeshId{0}), MeshContainer<chip_id_t>(MeshShape(1, 1), std::vector<chip_id_t>{0}));
+    EXPECT_EQ(mesh_graph.get_chip_ids(MeshId{0}), MeshContainer<ChipId>(MeshShape(1, 1), std::vector<ChipId>{0}));
 }
 
 TEST_F(ControlPlaneFixture, TestP100BlackHoleControlPlaneInitMGD2) {
@@ -893,7 +855,7 @@ TEST(MeshGraphValidation, TestP150X8BlackHoleMeshGraphMGD2) {
     // Check chip IDs - 8 chips in 2x4 configuration
     EXPECT_EQ(
         mesh_graph.get_chip_ids(MeshId{0}),
-        MeshContainer<chip_id_t>(MeshShape(2, 4), std::vector<chip_id_t>{0, 1, 2, 3, 4, 5, 6, 7}));
+        MeshContainer<ChipId>(MeshShape(2, 4), std::vector<ChipId>{0, 1, 2, 3, 4, 5, 6, 7}));
 }
 
 TEST_F(ControlPlaneFixture, TestP150X8BlackHoleControlPlaneInitMGD2) {

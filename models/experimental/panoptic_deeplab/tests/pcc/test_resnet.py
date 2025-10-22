@@ -17,6 +17,7 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
 )
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
+from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
 from models.experimental.panoptic_deeplab.tt.common import (
     PDL_L1_SMALL_SIZE,
     get_panoptic_deeplab_weights_path,
@@ -64,7 +65,13 @@ def create_panoptic_models(device, weights_path):
     fused_parameters = fuse_conv_bn_parameters(ttnn_parameters, eps=1e-5)
     logger.info("Conv+BatchNorm fusion completed successfully")
 
-    # Create TTNN model with fused parameters
+    # Create centralized configuration
+    model_configs = ModelOptimisations(
+        conv_act_dtype=ttnn.bfloat8_b,
+        conv_w_dtype=ttnn.bfloat8_b,
+    )
+
+    # Create TTNN model with fused parameters and centralized configuration
     ttnn_model = TtPanopticDeepLab(
         device=device,
         parameters=fused_parameters,
@@ -76,6 +83,7 @@ def create_panoptic_models(device, weights_path):
         ins_embed_head_channels=ins_embed_head_channels,
         norm="",
         train_size=train_size,
+        model_configs=model_configs,
     )
 
     return pytorch_model, ttnn_model
@@ -128,7 +136,7 @@ def test_resnet_stem_pcc(device, batch_size, height, width, reset_seeds, model_l
     "height,width",
     [(512, 1024)],
 )
-@pytest.mark.parametrize("layer_name, expected_pcc", [("res2", 0.99), ("res3", 0.99), ("res4", 0.95), ("res5", 0.93)])
+@pytest.mark.parametrize("layer_name, expected_pcc", [("res2", 0.99), ("res3", 0.99), ("res4", 0.99), ("res5", 0.99)])
 def test_resnet_layer_pcc(
     device, batch_size, height, width, layer_name, expected_pcc, reset_seeds, model_location_generator
 ):
@@ -241,8 +249,8 @@ def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds, model_l
     layer_pcc_thresholds = {
         "res2": 0.99,
         "res3": 0.99,
-        "res4": 0.96,
-        "res5": 0.93,
+        "res4": 0.99,
+        "res5": 0.99,
     }
 
     for layer_name in ["res2", "res3", "res4", "res5"]:

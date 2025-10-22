@@ -32,20 +32,20 @@ namespace tt::tt_fabric {
      std::uint32_t asic_id;
  };
 
- UbbId get_ubb_id(chip_id_t chip_id);
+ UbbId get_ubb_id(ChipId chip_id);
 
-class FabricContext;
+ class FabricContext;
 
-// This struct provides information for how a process binds to a particular
-// mesh and local mesh rank (MeshHostRankId rename - #24178) in the mesh graph
-// descriptor.
-struct LocalMeshBinding {
-    // Can bind multiple meshes to a single host. Most use-cases
-    // only require a 1:1 host to mesh mapping. At least one mesh_id
-    // is guaranteed to be present in this vector.
-    std::vector<MeshId> mesh_ids;
-    MeshHostRankId host_rank;
-};
+ // This struct provides information for how a process binds to a particular
+ // mesh and local mesh rank (MeshHostRankId rename - #24178) in the mesh graph
+ // descriptor.
+ struct LocalMeshBinding {
+     // Can bind multiple meshes to a single host. Most use-cases
+     // only require a 1:1 host to mesh mapping. At least one mesh_id
+     // is guaranteed to be present in this vector.
+     std::vector<MeshId> mesh_ids;
+     MeshHostRankId host_rank;
+ };
 
 // In multi-host context, APIs parameterized with MeshScope, can return
 // results for local mesh or global mesh.
@@ -68,7 +68,7 @@ public:
     explicit ControlPlane(const std::string& mesh_graph_desc_file);
     explicit ControlPlane(
         const std::string& mesh_graph_desc_file,
-        const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+        const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
 
     ~ControlPlane();
 
@@ -84,9 +84,9 @@ public:
     void write_routing_tables_to_all_chips() const;
 
     // Return mesh_id, chip_id from physical chip id
-    FabricNodeId get_fabric_node_id_from_physical_chip_id(chip_id_t physical_chip_id) const;
+    FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id) const;
     // Return physical chip id from fabric node id
-    chip_id_t get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
+    ChipId get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
     // Return fabric node id from ASIC id
     FabricNodeId get_fabric_node_id_from_asic_id(uint64_t asic_id) const;
     // Return user physical mesh ids
@@ -137,9 +137,9 @@ public:
     std::vector<chan_id_t> get_forwarding_eth_chans_to_chip(
         FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, RoutingDirection forwarding_direction) const;
 
-    stl::Span<const chip_id_t> get_intra_chip_neighbors(
+    stl::Span<const ChipId> get_intra_chip_neighbors(
         FabricNodeId src_fabric_node_id, RoutingDirection routing_direction) const;
-    std::unordered_map<MeshId, std::vector<chip_id_t>> get_chip_neighbors(
+    std::unordered_map<MeshId, std::vector<ChipId>> get_chip_neighbors(
         FabricNodeId src_fabric_node_id, RoutingDirection routing_direction) const;
 
     routing_plane_id_t get_routing_plane_id(FabricNodeId fabric_node_id, chan_id_t eth_chan_id) const;
@@ -178,15 +178,15 @@ public:
     void initialize_fabric_tensix_datamover_config();
 
     // Check if the provided chip and channel is a cross-host eth link
-    bool is_cross_host_eth_link(chip_id_t chip_id, chan_id_t chan_id) const;
+    bool is_cross_host_eth_link(ChipId chip_id, chan_id_t chan_id) const;
 
     // Returns set of logical active ethernet coordinates on chip
     // If skip_reserved_cores is true, will return cores that dispatch is not using,
     // intended for users to grab available eth cores for testing
     // `skip_reserved_cores` is ignored on BH because there are no ethernet cores used for Fast Dispatch
     // tunneling
-    std::unordered_set<CoreCoord> get_active_ethernet_cores(chip_id_t chip_id, bool skip_reserved_cores = false) const;
-    std::unordered_set<CoreCoord> get_inactive_ethernet_cores(chip_id_t chip_id) const;
+    std::unordered_set<CoreCoord> get_active_ethernet_cores(ChipId chip_id, bool skip_reserved_cores = false) const;
+    std::unordered_set<CoreCoord> get_inactive_ethernet_cores(ChipId chip_id) const;
 
     // Collect router port directions map from all hosts via MPI and merge into local map
     void collect_and_merge_router_port_directions_from_all_hosts();
@@ -204,14 +204,14 @@ private:
 
     void init_control_plane(
         const std::string& mesh_graph_desc_file,
-        std::optional<std::reference_wrapper<const std::map<FabricNodeId, chip_id_t>>>
+        std::optional<std::reference_wrapper<const std::map<FabricNodeId, ChipId>>>
             logical_mesh_chip_id_to_physical_chip_id_mapping = std::nullopt);
 
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
     // TODO: remove this from local node control plane. Can get it from the global control plane
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
 
-    std::map<FabricNodeId, chip_id_t> logical_mesh_chip_id_to_physical_chip_id_mapping_;
+    std::map<FabricNodeId, ChipId> logical_mesh_chip_id_to_physical_chip_id_mapping_;
 
     // map[mesh_fabric_id][direction] has a vector of ethernet channels in that direction
     std::map<FabricNodeId, std::unordered_map<RoutingDirection, std::vector<chan_id_t>>>
@@ -243,22 +243,22 @@ private:
     routing_plane_id_t get_routing_plane_id(
         chan_id_t eth_chan_id, const std::vector<chan_id_t>& eth_chans_in_direction) const;
 
-    std::vector<chip_id_t> get_mesh_physical_chip_ids(
-        const tt::tt_metal::distributed::MeshContainer<chip_id_t>& mesh_container,
-        std::optional<chip_id_t> nw_corner_chip_id = std::nullopt) const;
+    std::vector<ChipId> get_mesh_physical_chip_ids(
+        const tt::tt_metal::distributed::MeshContainer<ChipId>& mesh_container,
+        std::optional<ChipId> nw_corner_chip_id = std::nullopt,
+        std::optional<ChipId> ne_corner_chip_id = std::nullopt) const;
 
-    std::map<FabricNodeId, chip_id_t> get_logical_chip_to_physical_chip_mapping(
-        const std::string& mesh_graph_desc_file);
+    std::map<FabricNodeId, ChipId> get_logical_chip_to_physical_chip_mapping(const std::string& mesh_graph_desc_file);
 
     // Tries to get a valid downstream channel from the candidate_target_chans
     // First along same routing plane, but if not available, take round robin from candidates
     chan_id_t get_downstream_eth_chan_id(
         chan_id_t src_chan_id, const std::vector<chan_id_t>& candidate_target_chans) const;
 
-    chip_id_t get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const;
+    ChipId get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) const;
 
     void load_physical_chip_mapping(
-        const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+        const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
     size_t get_num_live_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
     void initialize_dynamic_routing_plane_counts(
         const IntraMeshConnectivity& intra_mesh_connectivity,
@@ -275,16 +275,16 @@ private:
     // Takes RoutingTableGenerator table and converts to routing tables for each ethernet port
     void convert_fabric_routing_table_to_chip_routing_table();
 
-    void write_routing_tables_to_eth_cores(MeshId mesh_id, chip_id_t chip_id) const;
-    void write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const;
-    void write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const;
+    void write_routing_tables_to_eth_cores(MeshId mesh_id, ChipId chip_id) const;
+    void write_routing_tables_to_tensix_cores(MeshId mesh_id, ChipId chip_id) const;
+    void write_fabric_connections_to_tensix_cores(MeshId mesh_id, ChipId chip_id) const;
 
     // Helper to populate fabric connection info for both router and mux configurations
     void populate_fabric_connection_info(
         tt::tt_fabric::fabric_connection_info_t& worker_connection_info,
         tt::tt_fabric::fabric_connection_info_t& dispatcher_connection_info,
         tt::tt_fabric::fabric_connection_info_t& tensix_connection_info,
-        chip_id_t physical_chip_id,
+        ChipId physical_chip_id,
         chan_id_t eth_channel_id,
         eth_chan_directions router_direction) const;
 

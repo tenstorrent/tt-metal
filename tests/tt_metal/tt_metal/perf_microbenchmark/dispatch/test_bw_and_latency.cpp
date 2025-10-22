@@ -229,7 +229,7 @@ int main(int argc, char** argv) {
         uint32_t mcast_noc_addr_end_x = 0;
         uint32_t mcast_noc_addr_end_y = 0;
 
-        chip_id_t mmio_device_id =
+        ChipId mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
         uint16_t channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
@@ -244,8 +244,7 @@ int main(int argc, char** argv) {
             case 0:
             default: {
                 src_mem = "FROM_PCIE";
-                vector<tt::umd::CoreCoord> pcie_cores =
-                    soc_d.get_cores(CoreType::PCIE, tt::umd::CoordSystem::TRANSLATED);
+                vector<tt::umd::CoreCoord> pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
                 TT_ASSERT(!pcie_cores.empty());
                 noc_addr_x = pcie_cores[0].x;
                 noc_addr_y = pcie_cores[0].y;
@@ -253,8 +252,7 @@ int main(int argc, char** argv) {
             } break;
             case 1: {
                 src_mem = "FROM_DRAM";
-                vector<tt::umd::CoreCoord> dram_cores =
-                    soc_d.get_cores(CoreType::DRAM, tt::umd::CoordSystem::TRANSLATED);
+                vector<tt::umd::CoreCoord> dram_cores = soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED);
                 TT_ASSERT(dram_cores.size() > dram_channel_g);
                 noc_addr_x = dram_cores[dram_channel_g].x;
                 noc_addr_y = dram_cores[dram_channel_g].y;
@@ -407,7 +405,7 @@ int main(int argc, char** argv) {
                 uint32_t addr = 0xfafafafa;
                 uint32_t offset = 0;
                 uint32_t page = 0;
-                uint32_t* pcie_base = (uint32_t*)host_pcie_base + pcie_offset / sizeof(uint32_t);
+                uint32_t* pcie_base = (uint32_t*)host_pcie_base + (pcie_offset / sizeof(uint32_t));
                 uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
                 while (!done) {
                     if (hammer_write_reg_g) {

@@ -37,7 +37,7 @@ def run_rms_trace(
     use_new_version=True,
     profiler=BenchmarkProfiler(),
 ):
-    ccl_sub_device_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))})
+    ccl_sub_device_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 7))})
     worker_sub_device = ttnn.SubDevice(
         [
             ccl_sub_device_crs,
@@ -68,7 +68,7 @@ def run_rms_trace(
     )
 
     layer_norm_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=(8, 2),
+        compute_with_storage_grid_size=(2, 8),
         subblock_w=1,
         block_h=1,
         block_w=(size_per_device // num_cores) // 32,
@@ -82,7 +82,7 @@ def run_rms_trace(
             32,
             128,
         ),
-        core_grid=input_shard_grid,
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,

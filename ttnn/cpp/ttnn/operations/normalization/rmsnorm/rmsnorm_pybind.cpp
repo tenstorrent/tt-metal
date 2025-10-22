@@ -19,6 +19,8 @@ void bind_normalization_rms_norm(py::module& module) {
         module,
         ttnn::rms_norm,
         R"doc(
+            ``ttnn.rms_norm(input_tensor: ttnn.Tensor, epsilon: float = 1e-12, weight: Optional[ttnn.Tensor] = None, bias: Optional[ttnn.Tensor] = None, residual_input_tensor: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, program_config: Optional[ttnn.ProgramConfig] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None) -> ttnn.Tensor``
+
             Computes RMS norm over :attr:`input_tensor`.
             See `Root Mean Square Layer Normalization <https://arxiv.org/pdf/1910.07467>`_ for more details.
 
@@ -79,12 +81,17 @@ void bind_normalization_rms_norm(py::module& module) {
                * - BFLOAT16, FLOAT32, BFLOAT8_B (matching input)
                  - TILE
 
+        Memory Support:
+            - Interleaved: DRAM and L1
+
         Limitations:
             - All input tensors must be on-device and have a rank >= 1.
             - Unsharded tensors must be interleaved, sharded inputs cannot be height-sharded.
             - If `residual_input_tensor` is provided, it must match the :attr:`input_tensor`'s padded shape.
             - If the `weight`/`bias` tensors are TILE layout: last padded dim must match :attr:`input_tensor`'s last padded dim.
             - If the `weight`/`bias` tensors are ROW_MAJOR layout: last padded dim must be TILE_WIDTH.
+            - If the :attr:`input_tensor` is sharded, the :attr:`output` must also be sharded. In that case, the
+              :attr:`output` memory layout and buffer type must match the :attr:`input_tensor`'s memory configuration.
 
         Example:
             .. code-block:: python

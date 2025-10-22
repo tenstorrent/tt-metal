@@ -23,6 +23,8 @@ namespace ccl {
 uint32_t get_topological_dimension(
     const Tensor& tensor, const std::optional<uint32_t>& cluster_axis);
 
+tt::tt_fabric::Topology get_usable_topology(const Tensor& tensor, tt::tt_fabric::Topology whole_device_topology, const std::optional<uint32_t>& cluster_axis = std::nullopt);
+
 uint32_t get_linearized_index_from_physical_coord(
     const Tensor& tensor,
     const MeshCoordinate& physical_coord,
@@ -60,8 +62,8 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_pro
 // Configuration structure for a device, containing its receiver and sender device ids.
 struct SenderReceiverConfig {
     uint32_t device_index = 0;
-    std::optional<chip_id_t> sender_device_id;
-    std::optional<chip_id_t> receiver_device_id;
+    std::optional<tt::ChipId> sender_device_id;
+    std::optional<tt::ChipId> receiver_device_id;
 };
 
 // Returns `SenderReceiverConfig` for a given device, given topology.

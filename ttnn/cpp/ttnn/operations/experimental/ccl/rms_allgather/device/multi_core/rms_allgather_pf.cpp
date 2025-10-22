@@ -882,7 +882,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     CoreCoord drain_sync_core;
     auto input_cores_vec = corerange_to_cores(input_tensor_cores, std::nullopt, true);
     auto stats_cores_vec = corerange_to_cores(stats_tensor_cores, std::nullopt, true);
-    auto cores_per_device = stats_cores_vec.size() + ring_size - 1 / ring_size;
+    auto cores_per_device = stats_cores_vec.size() + ring_size - (1 / ring_size);
     uint32_t start_core_index_for_device = stats_cores_vec.size() / ring_size * ring_index;
     uint32_t end_core_index_for_device = start_core_index_for_device + cores_per_device;
     auto stats_cores_this_device = std::vector<CoreCoord>(
@@ -996,8 +996,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             // Will be appended to the end of writer rt args
             uint32_t base_pages_per_worker = 1 / num_links;
             uint32_t remainder = 1 % num_links;
-            uint32_t input_tile_id_start = i * base_pages_per_worker + std::min(i, remainder);
-            uint32_t input_tile_id_end = (i + 1) * base_pages_per_worker + std::min(i + 1, remainder);
+            uint32_t input_tile_id_start = (i * base_pages_per_worker) + std::min(i, remainder);
+            uint32_t input_tile_id_end = ((i + 1) * base_pages_per_worker) + std::min(i + 1, remainder);
             uint32_t stats_first_core_tile_start_offset =
                 (ring_index + input_tile_id_start) % stats_tensor_shard_num_pages;
             std::vector<uint32_t> stats_tensor_cores_x;

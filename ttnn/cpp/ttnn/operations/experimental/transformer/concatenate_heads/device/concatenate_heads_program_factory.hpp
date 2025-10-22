@@ -13,7 +13,7 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 using namespace tt;
 
-tt::tt_metal::operation::ProgramWithCallbacks concatenate_heads_multi_core(
+inline tt::tt_metal::operation::ProgramWithCallbacks concatenate_heads_multi_core(
     const Tensor& a, Tensor& output, CoreCoord compute_with_storage_grid_size) {
     const auto& ashape = a.padded_shape();
 
@@ -103,7 +103,7 @@ tt::tt_metal::operation::ProgramWithCallbacks concatenate_heads_multi_core(
     for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
-            uint32_t in0_tensor_tile_id = core_idx_x * in0_w_tiles + core_idx_y * in0_CHtWt;
+            uint32_t in0_tensor_tile_id = (core_idx_x * in0_w_tiles) + (core_idx_y * in0_CHtWt);
 
             std::vector<uint32_t> reader_runtime_args = {
                 (std::uint32_t)in0_buffer->address(),  // in0_tensor_addr

@@ -3,12 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "conv2d_op_program_factory_common.hpp"
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <tuple>
-#include <umd/device/types/arch.hpp>
 #include <unordered_map>
 #include <vector>
 #include <tt_stl/assert.hpp>
@@ -43,7 +42,7 @@ uint32_t calculate_act_cb_size_with_reuse(
                                   (1 + image_width_tile_leftover * kernel_size[0]) * dtype_size_bytes;
     const uint32_t reuse_tiles = tt::div_up(reuse_length, input_tile_size);
 
-    return image_width_tiles * act_block_w_tiles + reuse_tiles;
+    return (image_width_tiles * act_block_w_tiles) + reuse_tiles;
 }
 
 std::vector<CBInfo> get_cb_info(
@@ -76,6 +75,7 @@ std::vector<CBInfo> get_cb_info(
                                                         ? tt::tt_metal::DataType::FLOAT32
                                                         : tt::tt_metal::DataType::BFLOAT16;
     const uint32_t input_datum_size = conv_input_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
+
     const tt::DataFormat conv_input_df = datatype_to_dataformat_converter(conv_input_dtype);
     const uint32_t input_tile_size = tt::tile_size(datatype_to_dataformat_converter(conv_input_dtype));
 
@@ -187,11 +187,13 @@ std::vector<CBInfo> get_cb_info(
             (is_1d_depthwise_conv ? block_config.act_block_h_ntiles : block_config.act_block_w_ntiles);
         if (sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
             // If activation reuse is enabled, we already have full inner dim
-            const bool enable_fully_buffered_weights = num_blocks_act_h > 1 && !conv_config.enable_activation_reuse;
-            if (enable_fully_buffered_weights) {
-                weight_block_num_tiles *= kernel_size[0];
-            } else if (conv_config.enable_weights_double_buffer) {
-                weight_block_num_tiles *= 2;
+            if (!conv_config.enable_activation_reuse) {
+                const bool enable_fully_buffered_weights = num_blocks_act_h > 1;
+                if (enable_fully_buffered_weights) {
+                    weight_block_num_tiles *= kernel_size[0];
+                } else if (conv_config.enable_weights_double_buffer) {
+                    weight_block_num_tiles *= 2;
+                }
             }
         } else if (conv_config.enable_weights_double_buffer) {
             weight_block_num_tiles *= 2;
@@ -419,7 +421,7 @@ static float get_local_l1_noc_transfer_rate(uint32_t transfer_size_bytes, tt::AR
         (params.peak_rate_gbps - params.min_rate_gbps) /
         static_cast<float>(params.linear_growth_threshold_bytes - min_transfer_size_bytes);
 
-    return params.min_rate_gbps + rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes);
+    return params.min_rate_gbps + (rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes));
 }
 /**
  * Calculates NOC transfer rate for DRAM transfers using empirical data.
@@ -456,7 +458,7 @@ static float get_all_dram_noc_transfer_rate(uint32_t transfer_size_bytes, tt::AR
         (params.peak_rate_gbps - params.min_rate_gbps) /
         static_cast<float>(params.linear_growth_threshold_bytes - min_transfer_size_bytes);
 
-    return params.min_rate_gbps + rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes);
+    return params.min_rate_gbps + (rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes));
 }
 /**
  * Calculates NOC transfer rate for multicast L1-linked transfers using empirical data.
@@ -493,7 +495,7 @@ static float get_mcast_many_l1_linked_noc_transfer_rate(uint32_t transfer_size_b
         (params.peak_rate_gbps - params.min_rate_gbps) /
         static_cast<float>(params.linear_growth_threshold_bytes - min_transfer_size_bytes);
 
-    return params.min_rate_gbps + rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes);
+    return params.min_rate_gbps + (rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes));
 }
 /**
  * Determines if split reader optimization is supported for the given configuration.

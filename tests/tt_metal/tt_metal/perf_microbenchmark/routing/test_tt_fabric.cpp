@@ -80,7 +80,7 @@ int main(int argc, char** argv) {
 
     // Initialize CSV file for bandwidth results if any of the configs have benchmark mode set
     if (benchmark_mode) {
-        test_context.initialize_csv_file();
+        test_context.initialize_bandwidth_results_csv_file();
     }
 
     cmdline_parser.apply_overrides(raw_test_configs);
@@ -158,6 +158,11 @@ int main(int argc, char** argv) {
             test_context.set_benchmark_mode(test_config.benchmark_mode);
             test_context.set_telemetry_enabled(test_config.benchmark_mode);
 
+            // Set code profiling enabled based on rtoptions
+            auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+            test_context.set_code_profiling_enabled(
+                rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd());
+
             for (auto& built_test : built_tests) {
                 log_info(tt::LogTest, "Running Test: {}", built_test.parametrized_name);
 
@@ -169,6 +174,11 @@ int main(int argc, char** argv) {
 
                 // Initialize sync memory if line sync is enabled
                 test_context.initialize_sync_memory();
+
+                // Clear code profiling buffers before test execution
+                if (test_context.get_code_profiling_enabled()) {
+                    test_context.clear_code_profiling_buffers();
+                }
 
                 if (dump_built_tests) {
                     YamlTestConfigSerializer::dump({built_test}, output_stream);
@@ -185,6 +195,12 @@ int main(int argc, char** argv) {
                 log_info(tt::LogTest, "Test {} Finished.", built_test.parametrized_name);
 
                 test_context.process_telemetry_data(built_test);
+
+                // Read and report code profiling results
+                if (test_context.get_code_profiling_enabled()) {
+                    test_context.read_code_profiling_results();
+                    test_context.report_code_profiling_results();
+                }
 
                 test_context.validate_results();
                 log_info(tt::LogTest, "Test {} Results validated.", built_test.parametrized_name);
@@ -205,6 +221,11 @@ int main(int argc, char** argv) {
     test_context.close_devices();
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_telemetry(false);
+
+    // Bandwidth summary is generated after all tests have run, to collect multi-run statistics
+    if (benchmark_mode) {
+        test_context.generate_bandwidth_summary();
+    }
 
     // Setup Bandwidth CSV files for CI to upload
     if (benchmark_mode) {

@@ -30,9 +30,8 @@
 #include <vector>
 
 #include "allocator.hpp"
-#include "allocator_types.hpp"
 #include <tt_stl/assert.hpp>
-#include "command_queue.hpp"
+#include "dispatch/command_queue.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
 #include "program/program_impl.hpp"
@@ -59,7 +58,6 @@
 #include <tt-metalium/control_plane.hpp>
 #include <umd/device/coordinates/coordinate_manager.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/tensix_soft_reset_options.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
@@ -82,7 +80,7 @@ Device::Device(Device&& other) noexcept = default;
 Device& Device::operator=(Device&& other) noexcept = default;
 
 Device::Device(
-    chip_id_t device_id,
+    ChipId device_id,
     const uint8_t num_hw_cqs,
     size_t l1_small_size,
     size_t trace_region_size,
@@ -122,12 +120,12 @@ uint32_t Device::num_virtual_eth_cores(SubDeviceId sub_device_id) {
     return this->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
 }
 
-std::tuple<chip_id_t, CoreCoord> Device::get_connected_ethernet_core(CoreCoord eth_core) const {
+std::tuple<ChipId, CoreCoord> Device::get_connected_ethernet_core(CoreCoord eth_core) const {
     return tt::tt_metal::MetalContext::instance().get_cluster().get_connected_ethernet_core(
         std::make_tuple(this->id_, eth_core));
 }
 
-std::vector<CoreCoord> Device::get_ethernet_sockets(chip_id_t connected_chip_id) const {
+std::vector<CoreCoord> Device::get_ethernet_sockets(ChipId connected_chip_id) const {
     return tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_sockets(this->id_, connected_chip_id);
 }
 
@@ -193,18 +191,16 @@ std::unique_ptr<Allocator> Device::initialize_allocator(
         this->ethernet_cores_.insert({core.x, core.y});
     }
 
-    // L1_BANKING scheme creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
+    // L1 Banking Allocator creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
     // This is the only allocator scheme supported because kernel APIs assume num L1 banks are power of 2
-    TT_ASSERT(this->allocator_scheme_ == MemoryAllocator::L1_BANKING);
     return std::make_unique<L1BankingAllocator>(config);
 }
 
 // Writes issue and completion queue pointers to device and in sysmem and loads fast dispatch program onto dispatch
 // cores
 void Device::configure_command_queue_programs() {
-    chip_id_t device_id = this->id();
-    chip_id_t mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+    ChipId device_id = this->id();
+    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
 
     std::vector<uint32_t> zero = {0x0};  // Reset state in case L1 Clear is disabled.
     std::vector<uint32_t> pointers;
@@ -216,7 +212,7 @@ void Device::configure_command_queue_programs() {
 
     // Reset host-side command queue pointers for all channels controlled by this mmio device
     if (this->is_mmio_capable()) {
-        for (chip_id_t serviced_device_id :
+        for (ChipId serviced_device_id :
              tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(device_id)) {
             uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
                 serviced_device_id);

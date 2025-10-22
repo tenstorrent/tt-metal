@@ -18,7 +18,6 @@
 namespace tt::tt_metal::distributed {
 namespace {
 
-using ::testing::IsEmpty;
 using ::testing::SizeIs;
 
 TEST(MeshDeviceViewTest, GetRingCoordinatesRingShapeEmpty) {
@@ -180,7 +179,7 @@ TEST_F(MeshDeviceView2x4Test, ViewGetDevices) {
     EXPECT_THAT(all_devices, SizeIs(8));
 
     // Verify all devices are unique
-    std::set<chip_id_t> device_ids;
+    std::set<ChipId> device_ids;
     for (auto* device : all_devices) {
         device_ids.insert(device->id());
     }

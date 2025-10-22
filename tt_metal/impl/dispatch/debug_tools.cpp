@@ -314,7 +314,7 @@ void print_progress_bar(float progress, bool init = false) {
 
 void dump_completion_queue_entries(
     std::ofstream& cq_file, SystemMemoryManager& sysmem_manager, SystemMemoryCQInterface& cq_interface) {
-    chip_id_t mmio_device_id =
+    ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(sysmem_manager.get_device_id());
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
         sysmem_manager.get_device_id());
@@ -388,7 +388,7 @@ void dump_completion_queue_entries(
                 cq_file << fmt::format(
                     "{:#010x}-{:#010x}: Data pages\n",
                     page_addr + DispatchSettings::TRANSFER_PAGE_SIZE,
-                    page_addr + (cmd_pages - 1) * DispatchSettings::TRANSFER_PAGE_SIZE);
+                    page_addr + ((cmd_pages - 1) * DispatchSettings::TRANSFER_PAGE_SIZE));
             } else if (cmd_pages == 2) {
                 cq_file << fmt::format("{:#010x}: Data page\n", page_addr + DispatchSettings::TRANSFER_PAGE_SIZE);
             }
@@ -402,7 +402,7 @@ void dump_completion_queue_entries(
             page_offset += DispatchSettings::TRANSFER_PAGE_SIZE;
         }
 
-        print_progress_bar((float)page_offset / completion_q_bytes + 0.005);
+        print_progress_bar(((float)page_offset / completion_q_bytes) + 0.005);
     }
     if (last_span_invalid) {
         cq_file << fmt::format(
@@ -413,7 +413,7 @@ void dump_completion_queue_entries(
 
 void dump_issue_queue_entries(
     std::ofstream& iq_file, SystemMemoryManager& sysmem_manager, SystemMemoryCQInterface& cq_interface) {
-    chip_id_t mmio_device_id =
+    ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(sysmem_manager.get_device_id());
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
         sysmem_manager.get_device_id());
@@ -538,7 +538,7 @@ void dump_issue_queue_entries(
             last_span_invalid = true;
             offset += hal.get_alignment(HalMemType::HOST);
         }
-        print_progress_bar((float)offset / issue_q_bytes + 0.005);
+        print_progress_bar(((float)offset / issue_q_bytes) + 0.005);
     }
     if (last_span_invalid) {
         iq_file << fmt::format(
@@ -557,7 +557,7 @@ void dump_command_queue_raw_data(
     SystemMemoryManager& sysmem_manager,
     SystemMemoryCQInterface& cq_interface,
     cq_queue_t queue_type) {
-    chip_id_t mmio_device_id =
+    ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(sysmem_manager.get_device_id());
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
         sysmem_manager.get_device_id());
@@ -609,7 +609,7 @@ void dump_command_queue_raw_data(
     print_progress_bar(0.0, true);
     for (uint32_t page_offset = 0; page_offset < bytes_to_read; page_offset += DispatchSettings::TRANSFER_PAGE_SIZE) {
         uint32_t page_addr = base_addr + page_offset;
-        print_progress_bar((float)page_offset / bytes_to_read + 0.005);
+        print_progress_bar(((float)page_offset / bytes_to_read) + 0.005);
 
         // Print in 16B per line
         tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(

@@ -206,6 +206,7 @@ class TtConv:
             return_weights_and_bias=True,
             return_output_dim=True,
             dtype=self.output_dtype,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
 
         if self.is_detect_cv2:

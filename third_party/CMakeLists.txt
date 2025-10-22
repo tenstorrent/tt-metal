@@ -63,12 +63,33 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "protobuf_BUILD_TESTS OFF"
-        "CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} -Wno-deprecated-declarations -Wno-invalid-noreturn"
         "protobuf_INSTALL OFF"
         "BUILD_TESTING OFF"
         "protobuf_BUILD_EXAMPLES OFF"
         "BUILD_SHARED_LIBS OFF"
         "CMAKE_POSITION_INDEPENDENT_CODE ON"
+    PATCHES
+        protobuf_noreturn.patch
+)
+
+# Setting visibility to hidden to avoid symbol conflicts with other protobuf libraries when tt-metal package is used
+set_target_properties(
+    libprotobuf
+    PROPERTIES
+        CXX_VISIBILITY_PRESET
+            "hidden"
+        VISIBILITY_INLINES_HIDDEN
+            TRUE
+)
+
+# Setting link and compile flags to avoid symbol conflicts with other protobuf libraries when tt-metal package is used.
+# Ensures that tt-metal package only uses its own protobuf library and not the one from the system.
+target_link_options(libprotobuf PRIVATE -Wl,-Bsymbolic)
+target_compile_options(
+    libprotobuf
+    PRIVATE
+        -fno-semantic-interposition
+        -Wno-deprecated-declarations
 )
 
 ############################################################################################################################
@@ -339,9 +360,6 @@ CPMAddPackage(
         "CAPNP_LITE OFF"
         "BUILD_SHARED_LIBS OFF"
         "CMAKE_CXX_EXTENSIONS ON"
+    PATCHES
+        capnproto_capture_this.patch
 )
-
-if(capnproto_ADDED)
-    target_compile_options(kj-async PRIVATE -Wno-deprecated-this-capture)
-    target_compile_options(kj-http PRIVATE -Wno-deprecated-this-capture)
-endif()

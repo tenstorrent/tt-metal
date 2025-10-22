@@ -45,7 +45,6 @@ using tt::tt_metal::IDevice;
 using tt::tt_metal::distributed::MeshCoordinate;
 using tt::tt_metal::distributed::MeshDevice;
 using tt::tt_metal::distributed::MeshDeviceConfig;
-using tt::tt_metal::distributed::MeshDeviceView;
 using tt::tt_metal::distributed::MeshShape;
 
 class T3000TestDevice {
@@ -61,9 +60,9 @@ public:
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() == 8 and
             tt::tt_metal::GetNumPCIeDevices() == 4) {
             // Get all chip IDs
-            std::vector<chip_id_t> chip_ids;
+            std::vector<tt::ChipId> chip_ids;
             chip_ids.reserve(num_devices_);
-for (chip_id_t id = 0; id < num_devices_; id++) {
+            for (tt::ChipId id = 0; id < num_devices_; id++) {
                 chip_ids.push_back(id);
             }
             mesh_device_ = MeshDevice::create(MeshDeviceConfig(MeshShape{2, 4}));
@@ -385,7 +384,7 @@ void build_and_run_roundtrip_latency_test(
 
 }  // namespace tt
 
-auto is_device_pcie_connected(chip_id_t device_id) { return device_id < 4; }
+auto is_device_pcie_connected(tt::ChipId device_id) { return device_id < 4; }
 
 std::vector<tt::tt_metal::hop_eth_sockets> build_eth_sockets_list(
     const std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& mesh_devices) {

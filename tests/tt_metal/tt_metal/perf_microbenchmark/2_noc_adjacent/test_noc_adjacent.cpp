@@ -140,13 +140,7 @@ int main(int argc, char** argv) {
     }
 
     if (use_device_profiler) {
-#if !defined(TRACY_ENABLE)
-        log_error(
-            LogTest,
-            "Metal library and test code should be build with "
-            "profiler option using ./build_metal.sh --enable-profiler");
-#endif
-        auto device_profiler = getenv("TT_METAL_DEVICE_PROFILER");
+        bool device_profiler = tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled();
         TT_FATAL(
             device_profiler,
             "Before running the program, do one of the following in a shell: "
@@ -186,7 +180,7 @@ int main(int argc, char** argv) {
         tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
         uint32_t cb_src1_index = 1;
-        uint32_t cb_src1_addr = cb_src0_addr + cb_tiles * single_tile_size;
+        uint32_t cb_src1_addr = cb_src0_addr + (cb_tiles * single_tile_size);
         tt_metal::CircularBufferConfig cb_src1_config =
             tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{cb_src1_index, tt::DataFormat::Float16_b}})
                 .set_page_size(cb_src1_index, single_tile_size);

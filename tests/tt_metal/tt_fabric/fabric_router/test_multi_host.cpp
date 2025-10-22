@@ -15,6 +15,7 @@
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed_context.hpp>
 
@@ -257,8 +258,9 @@ TEST(MultiHost, TestSplit2x2Fabric1DSanity) {
 }
 
 TEST(MultiHost, TestBigMesh2x4ControlPlaneInit) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
-        log_info(tt::LogTest, "This test is only for T3K");
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
+        tt::tt_metal::ClusterType::N300_2x2) {
+        log_info(tt::LogTest, "This test is only for N300 2x2");
         GTEST_SKIP();
     }
 
@@ -278,11 +280,6 @@ TEST(MultiHost, TestBigMesh2x4Fabric2DSanity) {
         log_info(tt::LogTest, "This test is only for N300 2x2");
         GTEST_SKIP();
     }
-
-    log_warning(
-        tt::LogTest,
-        "This test is currently broken due to a bug in logical to physical mapping nw chip pinning, Issue #29719");
-    GTEST_SKIP();
 
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
@@ -312,12 +309,6 @@ TEST(MultiHost, TestBigMesh2x4Fabric1DSanity) {
         log_info(tt::LogTest, "This test is only for N300 2x2");
         GTEST_SKIP();
     }
-
-    // This test is currently broken due to a bug in logical to physical mapping nw chip pinning
-    log_warning(
-        tt::LogTest,
-        "This test is currently broken due to a bug in logical to physical mapping nw chip pinning, Issue #29719");
-    GTEST_SKIP();
 
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
@@ -361,7 +352,60 @@ TEST(MultiHost, TestQuadGalaxyFabric2DSanity) {
         GTEST_SKIP();
     }
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    // Validate control plane apis
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto fabric_type = get_fabric_type(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY);
+
+    FabricNodeId src_node_id(MeshId{0}, 3);  // On host rank 0
+    MeshCoordinate src_mesh_coord(0, 3);
+    FabricNodeId dst_node_id(MeshId{0}, 12);  // On host rank 3
+    MeshCoordinate dst_mesh_coord(0, 12);
+
+    RoutingDirection expected_direction;
+    RoutingDirection expected_reverse_direction;
+    if (fabric_type == tt::tt_fabric::FabricType::TORUS_XY) {
+        expected_direction = RoutingDirection::W;
+        expected_reverse_direction = RoutingDirection::E;
+    } else {
+        expected_direction = RoutingDirection::E;
+        expected_reverse_direction = RoutingDirection::W;
+    }
+
+    auto host_local_coord_range = control_plane.get_coord_range(MeshId{0}, MeshScope::LOCAL);
+    if (host_local_coord_range.contains(src_mesh_coord)) {
+        const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
+        EXPECT_EQ(direction, expected_direction);
+
+        const auto& eth_chans_by_direction =
+            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, expected_direction);
+        EXPECT_TRUE(!eth_chans_by_direction.empty());
+        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
+        EXPECT_TRUE(!eth_chans.empty());
+    }
+
+    if (host_local_coord_range.contains(dst_mesh_coord)) {
+        const auto& reverse_direction = control_plane.get_forwarding_direction(dst_node_id, src_node_id);
+        EXPECT_EQ(reverse_direction, expected_reverse_direction);
+
+        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id);
+        EXPECT_TRUE(!eth_chans.empty());
+        const auto& eth_chans_by_direction =
+            control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id, expected_reverse_direction);
+        EXPECT_TRUE(!eth_chans_by_direction.empty());
+    }
+}
+
+TEST(MultiHost, TestQuadGalaxyFabric1DSanity) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        log_info(tt::LogTest, "This test is only for GALAXY");
+        GTEST_SKIP();
+    }
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_1D_RING,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
@@ -375,10 +419,10 @@ TEST(MultiHost, TestQuadGalaxyFabric2DSanity) {
     auto host_local_coord_range = control_plane.get_coord_range(MeshId{0}, MeshScope::LOCAL);
     if (host_local_coord_range.contains(src_mesh_coord)) {
         const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
-        EXPECT_EQ(direction, RoutingDirection::E);
+        EXPECT_EQ(direction, RoutingDirection::W);
 
         const auto& eth_chans_by_direction =
-            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, RoutingDirection::E);
+            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, RoutingDirection::W);
         EXPECT_TRUE(!eth_chans_by_direction.empty());
         const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
         EXPECT_TRUE(!eth_chans.empty());
@@ -386,52 +430,12 @@ TEST(MultiHost, TestQuadGalaxyFabric2DSanity) {
 
     if (host_local_coord_range.contains(dst_mesh_coord)) {
         const auto& reverse_direction = control_plane.get_forwarding_direction(dst_node_id, src_node_id);
-        EXPECT_EQ(reverse_direction, RoutingDirection::W);
+        EXPECT_EQ(reverse_direction, RoutingDirection::E);
 
         const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id);
         EXPECT_TRUE(!eth_chans.empty());
         const auto& eth_chans_by_direction =
-            control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id, RoutingDirection::W);
-        EXPECT_TRUE(!eth_chans_by_direction.empty());
-    }
-}
-
-TEST(MultiHost, TestQuadGalaxyFabric1DSanity) {
-    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
-        log_info(tt::LogTest, "This test is only for GALAXY");
-        GTEST_SKIP();
-    }
-    tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
-    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
-
-    // Validate control plane apis
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    FabricNodeId src_node_id(MeshId{0}, 3);  // On host rank 0
-    MeshCoordinate src_mesh_coord(0, 3);
-    FabricNodeId dst_node_id(MeshId{0}, 12);  // On host rank 3
-    MeshCoordinate dst_mesh_coord(0, 12);
-
-    auto host_local_coord_range = control_plane.get_coord_range(MeshId{0}, MeshScope::LOCAL);
-    if (host_local_coord_range.contains(src_mesh_coord)) {
-        const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
-        EXPECT_EQ(direction, RoutingDirection::E);
-
-        const auto& eth_chans_by_direction =
-            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, RoutingDirection::E);
-        EXPECT_TRUE(!eth_chans_by_direction.empty());
-        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
-        EXPECT_TRUE(!eth_chans.empty());
-    }
-
-    if (host_local_coord_range.contains(dst_mesh_coord)) {
-        const auto& reverse_direction = control_plane.get_forwarding_direction(dst_node_id, src_node_id);
-        EXPECT_EQ(reverse_direction, RoutingDirection::W);
-
-        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id);
-        EXPECT_TRUE(!eth_chans.empty());
-        const auto& eth_chans_by_direction =
-            control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id, RoutingDirection::W);
+            control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id, RoutingDirection::E);
         EXPECT_TRUE(!eth_chans_by_direction.empty());
     }
 }

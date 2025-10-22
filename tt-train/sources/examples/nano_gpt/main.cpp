@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <wandbcpp.hpp>
 
-#include "3tier/remote_optimizer.hpp"
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/clip_grad_norm.hpp"
@@ -28,6 +27,7 @@
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
 #include "optimizers/no_op.hpp"
+#include "optimizers/remote_optimizer.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
@@ -172,18 +172,21 @@ void generate(
     std::vector<float> logits_vector(original_vocab_size, 0.0F);
 
     // Create a large negative mask for out-of-vocab logits
-    auto vocab_mask = std::vector<float>(padded_vocab_size - original_vocab_size, 1e4F);
+    bool need_logits_padding = (padded_vocab_size != original_vocab_size);
+    std::optional<ttnn::Tensor> logits_padding_mask;
+    if (need_logits_padding) {
+        auto vocab_mask = std::vector<float>(padded_vocab_size - original_vocab_size, 1e4F);
 
-    auto argmax_zeros =
-        ttml::core::zeros(ttnn::Shape({1U, 1U, 1U, original_vocab_size}), device, tt::tt_metal::DataType::BFLOAT16);
+        auto argmax_zeros =
+            ttml::core::zeros(ttnn::Shape({1U, 1U, 1U, original_vocab_size}), device, tt::tt_metal::DataType::BFLOAT16);
 
-    auto argmax_nonzero = ttml::core::from_vector<float, tt::tt_metal::DataType::BFLOAT16>(
-        vocab_mask, ttnn::Shape({1U, 1U, 1U, padded_vocab_size - original_vocab_size}), device, ttnn::Layout::TILE);
+        auto argmax_nonzero = ttml::core::from_vector<float, tt::tt_metal::DataType::BFLOAT16>(
+            vocab_mask, ttnn::Shape({1U, 1U, 1U, padded_vocab_size - original_vocab_size}), device, ttnn::Layout::TILE);
 
-    auto logits_padding_mask_vector = std::vector<ttnn::Tensor>{argmax_zeros, argmax_nonzero};
+        auto logits_padding_mask_vector = std::vector<ttnn::Tensor>{argmax_zeros, argmax_nonzero};
 
-    auto logits_padding_mask = ttnn::concat(logits_padding_mask_vector, 3);
-
+        logits_padding_mask = ttnn::concat(logits_padding_mask_vector, 3);
+    }
     // Main token generation loop
     for (uint32_t token_idx = 0; token_idx < tokens_to_generate; ++token_idx) {
         // Possibly truncate the prompt if it exceeds max_sequence_length
@@ -652,7 +655,7 @@ int main(int argc, char **argv) {
         ttml::core::from_vector(mask, ttnn::Shape({1U, 1U, sequence_length, sequence_length}), device));
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [sequence_length, num_heads, device, &cached_data, &device_config](std::vector<DatasetSample> &&samples) {
+        [sequence_length, device, &cached_data, &device_config](std::vector<DatasetSample> &&samples) {
             auto start_timer = std::chrono::high_resolution_clock::now();
             const uint32_t batch_size = samples.size();
             std::vector<uint32_t> &data = cached_data.data;
@@ -816,8 +819,8 @@ int main(int argc, char **argv) {
 
     auto select_optimizer = [&model, &adamw_params, &config]() -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
         if (is_three_tier_training(config)) {
-            return std::make_unique<RemoteOptimizer>(
-                get_model_parameters(model), config.num_mh_workers, config.socket_type);
+            return std::make_unique<ttml::optimizers::RemoteOptimizer>(
+                get_model_parameters(model), config.num_mh_workers);
         } else if (config.use_no_op) {
             return std::make_unique<ttml::optimizers::NoOp>(get_model_parameters(model));
         } else if (config.use_moreh_adamw) {
@@ -831,7 +834,7 @@ int main(int argc, char **argv) {
     auto scheduler = schedule_func(optimizer.get(), config.max_steps);
 
     if (is_three_tier_training(config)) {
-        auto *optimizer_ptr = dynamic_cast<RemoteOptimizer *>(optimizer.get());
+        auto *optimizer_ptr = dynamic_cast<ttml::optimizers::RemoteOptimizer *>(optimizer.get());
         if (!optimizer_ptr) {
             throw std::runtime_error("Optimizer is not RemoteOptimizer");
         }
@@ -874,7 +877,7 @@ int main(int argc, char **argv) {
         return global_step * config.batch_size * config.gradient_accumulation_steps;
     };
 
-    auto get_loss_value = [device](const TensorPtr &loss) {
+    auto get_loss_value = [](const TensorPtr &loss) {
         auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
         // sum of loss xtensors
         float loss_float =

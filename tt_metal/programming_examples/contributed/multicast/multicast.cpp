@@ -90,7 +90,9 @@ void verify_tiles(
     fmt::print("\n=========== MULTICASTED TILE VERIFICATION ===========\n");
 
     ////////// LAMBDAS FOR ITERATING AND VERBOSE PRINTING TILES //////////
-    auto tile_elem_idx = [](int tile, int i, int j) { return tile * TILE_WIDTH * TILE_HEIGHT + i * TILE_WIDTH + j; };
+    auto tile_elem_idx = [](int tile, int i, int j) {
+        return (tile * TILE_WIDTH * TILE_HEIGHT) + (i * TILE_WIDTH) + j;
+    };
 
     auto print_tile =
         [&](const std::string& label, const std::vector<bfloat16>& data, std::optional<int> tile_num = std::nullopt) {
@@ -102,7 +104,7 @@ void verify_tiles(
 
             for (int i = 0; i < TILE_HEIGHT; i++) {
                 for (int j = 0; j < TILE_WIDTH; j++) {
-                    int idx = tile_num.has_value() ? tile_elem_idx(tile_num.value(), i, j) : i * TILE_WIDTH + j;
+                    int idx = tile_num.has_value() ? tile_elem_idx(tile_num.value(), i, j) : (i * TILE_WIDTH) + j;
                     fmt::print("{} ", static_cast<float>(data[idx]));
                 }
                 fmt::print("\n");
@@ -127,7 +129,7 @@ void verify_tiles(
             for (int j = 0; j < TILE_WIDTH; j++) {
                 int idx = tile_elem_idx(tile, i, j);
                 float received = static_cast<float>(received_tiles[idx]);
-                float golden = static_cast<float>(golden_tile[i * TILE_WIDTH + j]);
+                float golden = static_cast<float>(golden_tile[(i * TILE_WIDTH) + j]);
                 if (received != golden) {
                     tile_match = false;
                     break;

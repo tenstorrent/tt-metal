@@ -31,12 +31,14 @@ class TtStem(LightweightModule):
         self,
         parameters,
         device: ttnn.MeshDevice,
-        dtype: ttnn.DataType = ttnn.bfloat16,
+        dtype: ttnn.DataType = ttnn.bfloat8_b,
         channel_slice_factor: int = 4,
+        model_configs=None,
     ):
         super().__init__()
         self.device = device
         self.channel_slice_factor = channel_slice_factor
+        self.model_configs = model_configs
 
         logger.debug(f"Initializing TtStem - channel_slice_factor: {channel_slice_factor}")
 
@@ -45,13 +47,26 @@ class TtStem(LightweightModule):
         conv2_params = parameters["conv2"]
         conv3_params = parameters["conv3"]
 
-        # Configure width slicing for all conv layers
-        width_slice_config = SliceConfig(mode=SliceMode.WIDTH, num_slices=4)
+        # Configure width slicing for all conv layers using model_configs
+        if self.model_configs is not None:
+            stem_slice_config = self.model_configs.get_slice_config("stem.conv1")
+            width_slice_config = SliceConfig(mode=SliceMode.WIDTH, num_slices=stem_slice_config["num_slices"])
+        else:
+            logger.warning(
+                "FALLBACK STEM SLICE CONFIG: Using default width slicing with num_slices=4 instead of model_configs"
+            )
+            width_slice_config = SliceConfig(mode=SliceMode.WIDTH, num_slices=4)
 
         # Initialize conv layers
-        self.conv1 = self._create_conv_layer(conv1_params, device, dtype, width_slice_config, stride=(2, 2))
-        self.conv2 = self._create_conv_layer(conv2_params, device, dtype, width_slice_config, stride=(1, 1))
-        self.conv3 = self._create_conv_layer(conv3_params, device, dtype, width_slice_config, stride=(1, 1))
+        self.conv1 = self._create_conv_layer(
+            conv1_params, device, dtype, width_slice_config, stride=(2, 2), conv_path="stem.conv1"
+        )
+        self.conv2 = self._create_conv_layer(
+            conv2_params, device, dtype, width_slice_config, stride=(1, 1), conv_path="stem.conv2"
+        )
+        self.conv3 = self._create_conv_layer(
+            conv3_params, device, dtype, width_slice_config, stride=(1, 1), conv_path="stem.conv3"
+        )
 
         # Initialize maxpool with channel slicing
         self.maxpool = TtMaxPool2d.create_with_channel_slicing(
@@ -59,7 +74,7 @@ class TtStem(LightweightModule):
         )
         logger.debug("TtStem initialization complete")
 
-    def _create_conv_layer(self, params, device, dtype, slice_config, stride):
+    def _create_conv_layer(self, params, device, dtype, slice_config, stride, conv_path):
         """Helper method to create conv layers with consistent configuration"""
         return TtConv2d(
             TtConv2dParameters.from_preprocessed_parameters(
@@ -67,6 +82,9 @@ class TtStem(LightweightModule):
             ),
             stride=stride,
             padding=(1, 1),
+            conv_path=conv_path,
+            model_configs=self.model_configs,
+            dtype=dtype,
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
