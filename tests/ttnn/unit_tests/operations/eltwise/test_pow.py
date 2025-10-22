@@ -31,6 +31,25 @@ def test_unary_pow_ttnn(input_shapes, exponent, device):
     assert comp_pass
 
 
+def compare_tensors(input_tensor, exp, calculated_tensor, expected_tensor):
+    mismatch_indices = torch.nonzero(calculated_tensor != expected_tensor)
+
+    for idx in mismatch_indices:
+        idx_tuple = tuple(idx.tolist())
+
+        calc_val = calculated_tensor[idx_tuple]
+        exp_val = expected_tensor[idx_tuple]
+
+        if torch.isnan(calc_val) and torch.isnan(exp_val):
+            continue
+        print(f"Mismatch at index {idx_tuple}:")
+        print(f"  Input tensor value: {input_tensor[idx_tuple]}")
+        print(f"  exp tensor value: {exp[idx_tuple]}")
+        print(f"  Calculated tensor value: {calculated_tensor[idx_tuple]}")
+        print(f"  Expected tensor value: {expected_tensor[idx_tuple]}")
+        print("=" * 50)
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     ([20, 20], [2, 32, 320], [1, 1, 32, 32], [1, 3, 320, 384], [1, 2, 32, 64, 64]),
@@ -78,6 +97,7 @@ def test_binary_sfpu_pow(device, input_shapes):
 
     output = ttnn.pow(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
+    compare_tensors(input_tensor_a, input_tensor_b, output, torch_output_tensor)
 
     pcc = ttnn.pearson_correlation_coefficient(torch_output_tensor, output)
     assert pcc >= 0.99
@@ -231,6 +251,23 @@ def test_binary_sfpu_accuracy(device, dtype):
         assert_with_ulp(torch_output_tensor, output, 1)
     else:
         assert_allclose(torch_output_tensor, output, rtol=0.005, atol=1e-3)  # Ensures > 99.5% accuracy
+
+
+def test_bug(device):
+    a = torch.tensor([1.0, 0.999, 0.999, 0.0, -1.0, 1.2, -5.3, 6.7, 9.8, -10.9, 5.999], dtype=torch.float32)
+    b = torch.tensor([0.999, 1.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=torch.float32)
+
+    golden_fn = ttnn.get_golden_function(ttnn.pow)
+    torch_output_tensor = golden_fn(a, b)
+
+    input_tensor_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.pow(input_tensor_a, input_tensor_b)
+    output = ttnn.to_torch(output)
+
+    print(" TTNN output: ", output)
+    print(" Torch output: ", torch_output_tensor)
 
 
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])

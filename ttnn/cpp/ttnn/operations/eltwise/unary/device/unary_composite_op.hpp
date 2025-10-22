@@ -55,6 +55,7 @@ Tensor _logit(const Tensor& a, float eps = 0.0f, const std::optional<MemoryConfi
 Tensor _logical_not_(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _normalize_global(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _frac(const Tensor&, const std::optional<MemoryConfig>&);
+Tensor is_odd(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 // OpHandler struct template
 template <UnaryCompositeOpType OpType>
