@@ -477,6 +477,11 @@ target_sources(
             inc/utils/float32.h
             inc/utils/int32.h
             inc/utils/utils.h
+            inc/views/accessor_view.h
+            inc/views/compute_view.h
+            inc/views/tile_views.h
+            inc/views/transform_view.h
+            inc/views/type_traits.h
             inc/vptr_uint.h
             inc/tt-1xx/wormhole/c_tensix_core.h
             inc/tt-1xx/wormhole/core_config.h
