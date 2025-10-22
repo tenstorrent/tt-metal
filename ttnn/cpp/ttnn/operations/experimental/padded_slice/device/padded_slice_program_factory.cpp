@@ -71,7 +71,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
     bool is_width_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
     [[maybe_unused]] uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(output_tensor);
-    uint32_t input_page_size = input_shape[-1] * input_tensor.element_size();
+    int input_page_size = input_shape[-1] * input_tensor.element_size();
     [[maybe_unused]] uint32_t input_row_size_bytes =
         tt::div_up(input_shape[-1], num_cores_channels) * input_tensor.element_size();
 
@@ -143,7 +143,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_total);
 
-    const auto num_sticks_per_core = output_shard_spec.shape[0];
+    auto num_sticks_per_core = output_shard_spec.shape[0];
 
     log_debug(tt::LogOp, "num_stick_per_core: {}", num_sticks_per_core);
 
@@ -162,7 +162,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
         }
 
         const uint32_t num_sticks_written = core_h_index * num_sticks_per_core;
-        const uint32_t width_offset = core_w_index * output_row_size_bytes_offset;
+        const int width_offset = core_w_index * output_row_size_bytes_offset;
 
         id_per_dim[0] = num_sticks_written % num_output_sticks_per_dim[0];
         uint32_t output_written = num_sticks_written / num_output_sticks_per_dim[0];
@@ -173,7 +173,11 @@ get_padded_slice_runtime_args_rm_sharded_output(
             start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
         }
 
-        uint32_t this_input_row_size_bytes = std::min(output_row_size_bytes, input_page_size - width_offset);
+        int this_input_row_size_bytes =
+            std::max(std::min<int>(output_row_size_bytes, input_page_size - width_offset), 0);
+        if (this_input_row_size_bytes == 0) {
+            num_sticks_per_core = 0;
+        }
         std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
         reader_kernel_args[0] += width_offset;
         reader_kernel_args[2] = this_input_row_size_bytes;
@@ -399,8 +403,9 @@ get_padded_slice_runtime_args_tile_sharded_output(
     bool is_width_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
     uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(output_tensor);
-    uint32_t num_tiles_per_channel = tt::div_up(input_padded_shape[3], tt::constants::TILE_WIDTH);
-    num_tiles_per_channel = tt::div_up(num_tiles_per_channel, num_cores_channels);
+    const uint32_t input_num_tiles_per_channel = tt::div_up(input_padded_shape[3], tt::constants::TILE_WIDTH);
+
+    uint32_t num_tiles_per_channel = tt::div_up(input_num_tiles_per_channel, num_cores_channels);
     TT_FATAL(
         num_tiles_per_channel == tt::div_up(output_shard_shape[1], tt::constants::TILE_WIDTH),
         "Number of tiles per channel {} should be equal to number of output shard width in tiles {}",
@@ -519,13 +524,19 @@ get_padded_slice_runtime_args_tile_sharded_output(
         const uint32_t num_sticks_written_end = (core_h_index + 1) * num_sticks_per_core;
 
         const uint32_t width_offset_elems = core_w_index * output_row_size_elems;
+        int this_core_output_channels_end_elem = width_offset_elems + output_row_size_elems;
+
+        uint32_t output_channels_padding_elems =
+            std::max<int>(this_core_output_channels_end_elem - input_channels_num_elems, 0);
+
         const uint32_t width_offset_start_tile = width_offset_elems / TILE_WIDTH;
-        const uint32_t width_offset_end_tile =
-            tt::div_up(std::min(width_offset_elems + output_row_size_elems, input_channels_num_elems), TILE_WIDTH);
+        const uint32_t width_offset_end_tile = std::min(
+            tt::div_up(std::min(width_offset_elems + output_row_size_elems, input_channels_num_elems), TILE_WIDTH),
+            input_num_tiles_per_channel);
         const uint32_t this_core_num_tiles_per_channel = width_offset_end_tile - width_offset_start_tile;
         const uint32_t misalignment_bytes = width_offset_elems % TILE_WIDTH * output_tensor.element_size();
 
-        if (!is_non_aligned) {
+        if (!is_non_aligned && output_channels_padding_elems == 0) {
             TT_FATAL(
                 this_core_num_tiles_per_channel == max_num_tiles_per_row,
                 "If padded_slice uses aligned reads, then all cores must read the same number of tiles per row. Core "
@@ -653,10 +664,6 @@ get_padded_slice_runtime_args_tile_sharded_output(
             num_tiles_this_core / max_num_tiles_per_row,  // number of tiles to read
         };
 
-        int this_core_output_channels_end_elem = width_offset_elems + output_row_size_elems;
-        uint32_t output_channels_padding_elems =
-            std::max<int>(this_core_output_channels_end_elem - input_channels_num_elems, 0);
-
         log_trace(
             tt::LogOp,
             "Core = {}, width_offset elems = {} to {}, tiles = {} to {}, input_channels_num_elems = {}, "
@@ -734,7 +741,6 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         const uint32_t this_core_num_tiles_per_channel = width_offset_end_tile - width_offset_start_tile;
         max_num_tiles_per_row = std::max(max_num_tiles_per_row, this_core_num_tiles_per_channel);
     }
-    log_info(tt::LogOp, "Padded slice max num tiles per row  {}", max_num_tiles_per_row);
     num_tiles_per_channel = tt::div_up(num_tiles_per_channel, num_cores_channels);
 
     [[maybe_unused]] uint32_t num_tiles_height_per_core =
