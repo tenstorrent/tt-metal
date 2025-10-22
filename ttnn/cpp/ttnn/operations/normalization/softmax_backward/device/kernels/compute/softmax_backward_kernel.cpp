@@ -2,10 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-#define BROADCAST_TYPE BroadcastType::COL
-
 #include <compute_kernel_api/bcast.h>
 #include <compute_kernel_api/common.h>
 #include <compute_kernel_api/tile_move_copy.h>

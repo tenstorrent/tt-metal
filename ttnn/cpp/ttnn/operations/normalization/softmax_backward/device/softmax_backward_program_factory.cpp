@@ -139,6 +139,12 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
         width_tiles          // 7: num_tiles_per_row
     };
 
+    // Defines for compute kernel
+    std::map<std::string, std::string> compute_defines = {
+        {"REDUCE_OP", "PoolType::SUM"},
+        {"REDUCE_DIM", "ReduceDim::REDUCE_ROW"},
+        {"BROADCAST_TYPE", "BroadcastType::COL"}};
+
     // Create kernels
     auto reader_kernel_id = CreateKernel(
         program,
@@ -156,7 +162,11 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
         program,
         "ttnn/cpp/ttnn/operations/normalization/softmax_backward/device/kernels/compute/softmax_backward_kernel.cpp",
         all_cores,
-        ComputeConfig{.compile_args = compute_compile_time_args});
+        ComputeConfig{
+            .math_fidelity = MathFidelity::HiFi4,
+            .fp32_dest_acc_en = false,  // TODO: support "true"
+            .compile_args = compute_compile_time_args,
+            .defines = compute_defines});
 
     // Set runtime arguments
     for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
