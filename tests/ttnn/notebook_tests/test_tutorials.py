@@ -13,7 +13,7 @@ import pytest
 from nbconvert.preprocessors import ExecutePreprocessor
 
 # Constants
-TUTORIALS_NOTEBOOK_PATH = Path("ttnn/tutorials/2025_dx_rework")
+TUTORIALS_NOTEBOOK_PATH = Path("ttnn/tutorials")
 TUTORIALS_PYTHON_PATH = Path("ttnn/tutorials/basic_python")
 """
 The TUTORIALS_DATA_PATHS section contains paths for data needed by tutorials but stored
