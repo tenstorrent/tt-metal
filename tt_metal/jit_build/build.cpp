@@ -202,9 +202,8 @@ void JitBuildEnv::init(
         this->defines_ += "-DPROFILE_NOC_EVENTS=1 ";
     }
 
-    if (rtoptions.get_watcher_enabled()) {
-        this->defines_ += "-DWATCHER_ENABLED ";
-    }
+    // WATCHER_ENABLED needs to be aware if the kernel is an internal runtime kernel or a user kernel.
+    // This define is set in program.cpp
     if (rtoptions.get_watcher_noinline()) {
         this->defines_ += "-DWATCHER_NOINLINE ";
     }

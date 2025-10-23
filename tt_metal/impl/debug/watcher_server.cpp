@@ -4,12 +4,14 @@
 
 #include "watcher_server.hpp"
 
+#include <fmt/ranges.h>
 #include <unistd.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <condition_variable>
+#include <enchantum/entries.hpp>
 #include <filesystem>
 #include <future>
 #include <map>
@@ -517,7 +519,19 @@ void WatcherServer::Impl::poll_watcher_data() {
     } else {
         disabled_features = "None";
     }
-    log_info(LogLLRuntime, "Watcher server initialized, disabled features: {}", disabled_features);
+    const auto enabled_kernel_types = rtoptions.get_watcher_enablement_mode();
+    std::cout << "enabled_kernel_types = " << std::hex << (uint32_t)enabled_kernel_types << "\n";
+    std::vector<std::string> enabled_kernel_type_names;
+    for (const auto [val, name] : enchantum::entries_generator<tt::llrt::WatcherEnablementMode>) {
+        if (enabled_kernel_types & val) {
+            enabled_kernel_type_names.push_back(std::string{name});
+        }
+    }
+    log_info(
+        LogLLRuntime,
+        "Watcher server initialized, disabled features: {}, enabled kernel types: {}",
+        disabled_features,
+        fmt::join(enabled_kernel_type_names.begin(), enabled_kernel_type_names.end(), ", "));
 
     while (true) {
         std::unique_lock<std::mutex> lock(watch_mutex_);

@@ -163,6 +163,7 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
     // ZoneScoped;
     // const std::string tracyPrefix = "GenerateBinaries_";
     // ZoneName((tracyPrefix + build_options.name).c_str(), build_options.name.length() + tracyPrefix.length());
+
     try {
         jit_build_genfiles_descriptors(
             BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, build_options);

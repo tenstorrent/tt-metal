@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <cstdlib>
 #include <cstring>
+#include <enchantum/entries.hpp>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
@@ -354,6 +355,30 @@ void RunTimeOptions::ParseWatcherEnv() {
         watcher_settings.interval_ms = sleep_val;
     }
 
+    watcher_settings.enablement_mode = WatcherEnablementMode::ALL;
+    const char* watcher_enablement_mode_str = getenv("TT_METAL_WATCHER_KERNELS");
+    // Split by comma
+    std::vector<std::string> enablement_modes;
+    log_info(tt::LogMetal, "watcher_enablement_mode_str {}", watcher_enablement_mode_str);
+    if (watcher_enablement_mode_str != nullptr) {
+        std::stringstream ss(watcher_enablement_mode_str);
+        std::string mode;
+        while (std::getline(ss, mode, ',')) {
+            log_info(tt::LogMetal, "Enabling watcher for {}", mode);
+            enablement_modes.push_back(mode);
+        }
+    }
+    for (const auto& mode : enablement_modes) {
+        if (mode == "USER") {
+            watcher_settings.enablement_mode |= llrt::WatcherEnablementMode::USER;
+        } else if (mode == "DISPATCH") {
+            watcher_settings.enablement_mode |= llrt::WatcherEnablementMode::DISPATCH;
+        } else if (mode == "FABRIC") {
+            watcher_settings.enablement_mode |= llrt::WatcherEnablementMode::FABRIC;
+        } else {
+            TT_THROW("Invalid TT_METAL_WATCHER_KERNELS value {}", mode);
+        }
+    }
     watcher_settings.dump_all = (getenv("TT_METAL_WATCHER_DUMP_ALL") != nullptr);
     watcher_settings.append = (getenv("TT_METAL_WATCHER_APPEND") != nullptr);
     watcher_settings.noinline = (getenv("TT_METAL_WATCHER_NOINLINE") != nullptr);
@@ -620,6 +645,7 @@ uint32_t RunTimeOptions::get_watcher_hash() const {
     hash_str += std::to_string(watcher_feature_disabled(watcher_dispatch_str));
     hash_str += std::to_string(get_watcher_noc_sanitize_linked_transaction());
     hash_str += std::to_string(get_watcher_enabled());
+    hash_str += std::to_string(enchantum::to_underlying(get_watcher_enablement_mode()));
     std::hash<std::string> hash_fn;
     return hash_fn(hash_str);
 }

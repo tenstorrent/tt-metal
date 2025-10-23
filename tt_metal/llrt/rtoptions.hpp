@@ -55,6 +55,40 @@ enum RunTimeDebugClass {
     RunTimeDebugClassCount
 };
 
+enum WatcherEnablementMode : uint8_t {
+    // Enable watcher for user kernels
+    USER = 1 << 0,
+    // Enable watcher for dispatch
+    DISPATCH = 1 << 1,
+    // Enable watcher for fabric
+    FABRIC = 1 << 2,
+    // Last value for counting / iterating purposes
+    COUNT = 1 << 3,
+
+    // Common combinations (bitwise OR)
+    // Enable watcher for user and dispatch kernels
+    USER_DISPATCH = USER | DISPATCH,  // 0x03
+    // Enable watcher for user and fabric kernels
+    USER_FABRIC = USER | FABRIC,  // 0x05
+    // Enable watcher for dispatch and fabric kernels
+    DISPATCH_FABRIC = DISPATCH | FABRIC,  // 0x06
+    // Enable watcher all kernels
+    ALL = USER | DISPATCH | FABRIC,  // 0x07
+};
+
+inline WatcherEnablementMode operator|(WatcherEnablementMode lhs, WatcherEnablementMode rhs) {
+    return static_cast<WatcherEnablementMode>(static_cast<uint8_t>(lhs) | static_cast<uint8_t>(rhs));
+}
+
+inline WatcherEnablementMode operator&(WatcherEnablementMode lhs, WatcherEnablementMode rhs) {
+    return static_cast<WatcherEnablementMode>(static_cast<uint8_t>(lhs) & static_cast<uint8_t>(rhs));
+}
+
+inline WatcherEnablementMode operator|=(WatcherEnablementMode& lhs, WatcherEnablementMode rhs) {
+    lhs = lhs | rhs;
+    return lhs;
+}
+
 extern const char* RunTimeDebugFeatureNames[RunTimeDebugFeatureCount];
 extern const char* RunTimeDebugClassNames[RunTimeDebugClassCount];
 
@@ -74,6 +108,7 @@ struct TargetSelection {
 
 struct WatcherSettings {
     bool enabled = false;
+    WatcherEnablementMode enablement_mode = WatcherEnablementMode::ALL;
     bool dump_all = false;
     bool append = false;
     bool auto_unpause = false;
@@ -251,6 +286,10 @@ public:
     void set_watcher_enabled(bool enabled) { watcher_settings.enabled = enabled; }
     // Return a hash of which watcher features are enabled
     uint32_t get_watcher_hash() const;
+    WatcherEnablementMode get_watcher_enablement_mode() const { return watcher_settings.enablement_mode; }
+    void set_watcher_enablement_mode(WatcherEnablementMode enablement_mode) {
+        watcher_settings.enablement_mode = enablement_mode;
+    }
     int get_watcher_interval() const { return watcher_settings.interval_ms; }
     void set_watcher_interval(int interval_ms) { watcher_settings.interval_ms = interval_ms; }
     int get_watcher_dump_all() const { return watcher_settings.dump_all; }

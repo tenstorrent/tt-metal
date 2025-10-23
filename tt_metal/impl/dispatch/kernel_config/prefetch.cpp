@@ -482,6 +482,9 @@ void PrefetchKernel::CreateKernel() {
     }
     // Compile at Os on IERISC to fit in code region.
     auto optimization_level = (GetCoreType() == CoreType::WORKER) ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::Os;
+    const auto watcher_enablement_mode =
+        tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enablement_mode();
+    const auto enabled_for_prefetch = (watcher_enablement_mode & llrt::WatcherEnablementMode::DISPATCH);
     configure_kernel_variant(
         dispatch_kernel_file_names[PREFETCH],
         {},
@@ -490,8 +493,7 @@ void PrefetchKernel::CreateKernel() {
         true,
         // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to
         // respect code space
-        tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
-            (not tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_noinline()),
+        enabled_for_prefetch && (not tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_noinline()),
         optimization_level);
 }
 

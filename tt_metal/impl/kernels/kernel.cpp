@@ -587,6 +587,36 @@ void KernelImpl::set_binaries(uint32_t build_key, std::vector<const ll_api::memo
     }
 }
 
+void KernelImpl::set_kernel_type(KernelType kernel_type) {
+    const auto watcher_enabled = MetalContext::instance().rtoptions().get_watcher_enabled();
+    const auto enablement_mode = MetalContext::instance().rtoptions().get_watcher_enablement_mode();
+
+    const bool enable_watcher = [&]() {
+        if (!watcher_enabled) {
+            return false;
+        }
+
+        uint8_t flag_to_check = 0;
+        switch (kernel_type) {
+            case tt::tt_metal::KernelImpl::KernelType::USER:
+                flag_to_check = static_cast<uint8_t>(llrt::WatcherEnablementMode::USER);
+                break;
+            case tt::tt_metal::KernelImpl::KernelType::DISPATCH:
+                flag_to_check = static_cast<uint8_t>(llrt::WatcherEnablementMode::DISPATCH);
+                break;
+            case tt::tt_metal::KernelImpl::KernelType::FABRIC:
+                flag_to_check = static_cast<uint8_t>(llrt::WatcherEnablementMode::FABRIC);
+                break;
+        }
+
+        return (static_cast<uint8_t>(enablement_mode) & flag_to_check) != 0;
+    }();
+
+    if (enable_watcher) {
+        this->add_defines({{"WATCHER_ENABLED", "1"}});
+    }
+}
+
 void DataMovementKernel::read_binaries(IDevice* device) {
     TT_ASSERT(this->binaries_exist_on_disk(device));
     std::vector<const ll_api::memory*> binaries;

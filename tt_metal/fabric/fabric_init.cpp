@@ -20,6 +20,8 @@
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include <fmt/ranges.h>
+#include "tt_metal/impl/kernels/kernel_impl.hpp"
+#include "tt_metal/impl/program/program_impl.hpp"
 
 // hack for test_basic_fabric_apis.cpp
 // https://github.com/tenstorrent/tt-metal/issues/20000
@@ -507,6 +509,9 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
                     .compile_args = ct_args,
                     .defines = defines,
                     .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+
+            auto kernel_ptr = fabric_program_ptr->impl().get_kernel(kernel);
+            tt::tt_metal::KernelImpl::from(*kernel_ptr).set_kernel_type(tt::tt_metal::KernelImpl::KernelType::FABRIC);
 
             tt::tt_metal::SetRuntimeArgs(*fabric_program_ptr, kernel, eth_logical_core, rt_args);
         }

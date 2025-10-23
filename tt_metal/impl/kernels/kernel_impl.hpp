@@ -156,6 +156,12 @@ private:
 
 class KernelImpl : public Kernel, public JitBuildSettings {
 public:
+    enum class KernelType : uint8_t {
+        USER,
+        DISPATCH,
+        FABRIC,
+    };
+
     const std::vector<const ll_api::memory*>& binaries(uint32_t build_key) const;
     uint32_t get_binary_packed_size(IDevice* device, int index) const override;
     uint32_t get_binary_text_size(IDevice* device, int index) const;
@@ -173,6 +179,9 @@ public:
     virtual void read_binaries(IDevice* device) = 0;
 
     void register_kernel_elf_paths_with_watcher(IDevice& device) const;
+
+    // This needs to be set before compiling the kernel
+    void set_kernel_type(KernelType kernel_type);
 
     static KernelImpl& from(Kernel& kernel) {
         // KernelImpl and subclasses are the only implementations of Kernel.
