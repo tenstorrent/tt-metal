@@ -22,6 +22,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <yaml-cpp/yaml.h>
 #include <tt_stl/assert.hpp>
 
 #include "control_plane.hpp"
@@ -53,7 +54,6 @@
 #include <unistd.h>
 #include <chrono>
 #include <sstream>
-#include <set>
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 
@@ -2991,18 +2991,22 @@ bool ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
         // Generate GSD from the physical system descriptor as string (in-memory)
         std::string gsd_string = physical_system_descriptor.generate_yaml_string();
 
-        // Perform basic validation by checking that both strings are non-empty
-        // This is a simplified validation approach that avoids complex string parsing
+        // Perform validation by comparing FSD and GSD strings
         if (fsd_string.empty() || gsd_string.empty()) {
             log_warning(tt::LogFabric, "Generated descriptor strings are empty");
             return false;
         }
 
-        // For now, consider validation successful if both descriptors were generated successfully
-        // In the future, more sophisticated comparison logic could be added here
-
-        log_info(tt::LogFabric, "Torus validation passed for configuration: {}", static_cast<int>(fabric_config));
-        return true;
+        // Compare the two descriptors for torus validation
+        bool descriptors_match = compare_system_descriptors(fsd_string, gsd_string);
+        
+        if (descriptors_match) {
+            log_info(tt::LogFabric, "Torus validation passed: FSD and GSD are compatible for configuration: {}", static_cast<int>(fabric_config));
+            return true;
+        } else {
+            log_warning(tt::LogFabric, "Torus validation failed: FSD and GSD are incompatible for configuration: {}", static_cast<int>(fabric_config));
+            return false;
+        }
 
     } catch (const std::exception& e) {
         log_warning(tt::LogFabric, "Torus validation failed for configuration '{}': {}", static_cast<int>(fabric_config), e.what());
@@ -3032,6 +3036,51 @@ std::string ControlPlane::get_cabling_descriptor_path(tt::tt_fabric::FabricConfi
 
     const auto& root_dir = tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir();
     return root_dir + it->second;
+}
+
+bool ControlPlane::compare_system_descriptors(const std::string& fsd_string, const std::string& gsd_string) const {
+    try {
+        // Parse both descriptors as YAML
+        YAML::Node fsd_yaml = YAML::Load(fsd_string);
+        YAML::Node gsd_yaml = YAML::Load(gsd_string);
+
+        // Basic validation: both should be valid YAML with expected structure
+        if (!fsd_yaml["compute_node_specs"] || !gsd_yaml["compute_node_specs"]) {
+            log_debug(tt::LogFabric, "Missing compute_node_specs in one of the descriptors");
+            return false;
+        }
+
+        // For torus validation, we primarily care about:
+        // 1. Number of hosts should match
+        // 2. Number of ASICs per host should be compatible
+        // 3. Connection patterns should be feasible (but we don't need exact match)
+
+        const auto& fsd_compute_nodes = fsd_yaml["compute_node_specs"];
+        const auto& gsd_compute_nodes = gsd_yaml["compute_node_specs"];
+        
+        // Check if both have the same number of hosts
+        if (fsd_compute_nodes.size() != gsd_compute_nodes.size()) {
+            log_debug(tt::LogFabric, "FSD and GSD have different number of hosts: {} vs {}", 
+                     fsd_compute_nodes.size(), gsd_compute_nodes.size());
+            return false;
+        }
+
+        // Basic compatibility check - each host in FSD should exist in GSD
+        for (const auto& fsd_host : fsd_compute_nodes) {
+            const std::string host_name = fsd_host.first.as<std::string>();
+            if (!gsd_compute_nodes[host_name]) {
+                log_debug(tt::LogFabric, "Host {} present in FSD but missing in GSD", host_name);
+                return false;
+            }
+        }
+
+        log_debug(tt::LogFabric, "FSD and GSD basic compatibility check passed");
+        return true;
+
+    } catch (const std::exception& e) {
+        log_warning(tt::LogFabric, "Error comparing system descriptors: {}", e.what());
+        return false;
+    }
 }
 
 ControlPlane::~ControlPlane() = default;
