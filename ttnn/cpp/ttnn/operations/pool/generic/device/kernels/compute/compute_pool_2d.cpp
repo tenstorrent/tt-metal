@@ -70,7 +70,6 @@ void MAIN {
 
     constexpr bool use_split_reader = split_reader && !return_indices;
 
-    constexpr uint32_t mpwi_output_tiles = 1;
     constexpr uint32_t mpwi_cb_tile_idx = 0;
     constexpr uint32_t data_dst_idx = 0;
     constexpr uint32_t index_dst_idx = 2;

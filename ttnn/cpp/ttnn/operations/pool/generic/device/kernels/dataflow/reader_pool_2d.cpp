@@ -130,13 +130,14 @@ ALWI void initialize_return_indices_data() {
         init_index = (start_row - (uint16_t)pad_t) * (uint16_t)in_w + (start_col - (uint16_t)pad_l);
     }
 
+    constexpr uint32_t fill_c = in_c <= TILE_WIDTH ? in_c : TILE_WIDTH;
+
     // initialize the index CB - TODO for c > 1 we could optimize by storing two values per write
     volatile tt_l1_ptr uint16_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(in_idx_cb_id));
     uint16_t kernel_idx = 0;
     for (uint32_t h = 0; h < kernel_h; ++h) {
         for (uint32_t w = 0; w < kernel_w; ++w) {
             uint16_t hw = h * kernel_w + w;
-            const uint32_t fill_c = in_c <= TILE_WIDTH ? in_c : TILE_WIDTH;
             for (uint32_t c = 0; c < fill_c; ++c) {
                 uint16_t index = init_index + kernel_idx;
                 idx_ptr[hw * TILE_WIDTH + c] = index;
@@ -146,34 +147,28 @@ ALWI void initialize_return_indices_data() {
         kernel_idx += dilation_h * in_w - eff_kernel_w - (dilation_w - 1);
     }
 
-    // initialize the right inc tile
+    // initialize the increment CBs
+    auto fill_inc = [&](uint32_t cb_id, uint16_t inc) __attribute__((always_inline)) {
+        uint32_t inc_32_bit = (uint32_t)inc | ((uint32_t)inc << 16);
+        volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
+        for (uint32_t k = 0; k < kernel_h * kernel_w; ++k) {
+            constexpr uint32_t fill_c_32_bit = fill_c % 2 == 0 ? fill_c / 2 : (fill_c / 2) + 1;
+            for (uint32_t c = 0; c <= fill_c_32_bit; ++c) {
+                ptr[k * TILE_WIDTH / 2 + c] = inc_32_bit;
+            }
+        }
+    };
+
     cb_reserve_back(right_inc_cb_id, 1);
-    uint32_t right_inc_32_bit = (uint32_t)right_inc | ((uint32_t)right_inc << 16);
-    volatile tt_l1_ptr uint32_t* right_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(right_inc_cb_id));
-    for (uint32_t i = 0; i < kernel_h * kernel_w * TILE_WIDTH / 2; ++i) {
-        right_ptr[i] = right_inc_32_bit;
-    }
+    fill_inc(right_inc_cb_id, right_inc);
     cb_push_back(right_inc_cb_id, 1);
 
-    // initialize the down left wrap inc tile
     cb_reserve_back(down_left_wrap_inc_cb_id, 1);
-    uint32_t down_left_wrap_inc_32_bit = (uint32_t)down_left_wrap_inc | ((uint32_t)down_left_wrap_inc << 16);
-    volatile tt_l1_ptr uint32_t* down_left_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(down_left_wrap_inc_cb_id));
-    for (uint32_t i = 0; i < kernel_h * kernel_w * TILE_WIDTH / 2; ++i) {
-        down_left_ptr[i] = down_left_wrap_inc_32_bit;
-    }
+    fill_inc(down_left_wrap_inc_cb_id, down_left_wrap_inc);
     cb_push_back(down_left_wrap_inc_cb_id, 1);
 
-    // initialize the up left wrap inc tile
     cb_reserve_back(up_left_wrap_inc_cb_id, 1);
-    uint32_t up_left_wrap_inc_32_bit = (uint32_t)up_left_wrap_inc | ((uint32_t)up_left_wrap_inc << 16);
-    volatile tt_l1_ptr uint32_t* up_left_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(up_left_wrap_inc_cb_id));
-    for (uint32_t i = 0; i < kernel_h * kernel_w * TILE_WIDTH / 2; ++i) {
-        up_left_ptr[i] = up_left_wrap_inc_32_bit;
-    }
+    fill_inc(up_left_wrap_inc_cb_id, up_left_wrap_inc);
     cb_push_back(up_left_wrap_inc_cb_id, 1);
 }
 
