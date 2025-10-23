@@ -8,11 +8,75 @@ import math
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
 from models.common.utility_functions import skip_for_blackhole
 
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 from tracy import signpost
+
+
+def is_unsupported_case(
+    input_shape,
+    dim,
+    mem_config,
+    num_devices,
+    num_links,
+    input_dtype,
+    layout,
+    tile,
+    num_l1_banks=64,
+    mem_config_input=None,
+):
+    if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
+        return True, "Invalid combination"
+
+    if input_shape[dim] % num_devices != 0:
+        return True, "Unsupported test case"
+    if tile != (32, 32) and input_dtype != ttnn.bfloat16:
+        return True, "Tiny tile only supports bfloat16"
+
+    ## Check that we can readback results
+    fast_dispatch_page_size_limit = 55 * 1024
+    elem_size_map = {
+        ttnn.uint32: 4,
+        ttnn.bfloat16: 2,
+        ttnn.bfloat8_b: 1,
+    }
+    elem_size = elem_size_map.get(input_dtype, 4)
+    if layout == ttnn.ROW_MAJOR_LAYOUT and (input_shape[dim] * elem_size) > fast_dispatch_page_size_limit:
+        # Fast dispatch currently can't breakup readback of large pages into multiple smaller pages and is
+        # limited to ~55K pages.
+        return True, "Fast dispatch can't support reading back this page size in one shot"
+
+    # Check that we can fit in L1 (if L1 config)
+    tensor_size_bytes = elem_size
+    for i in input_shape:
+        tensor_size_bytes *= i
+    L1_util = 0
+    if mem_config.buffer_type == ttnn.BufferType.L1:
+        L1_util = L1_util + tensor_size_bytes
+    if mem_config_input is not None:
+        if mem_config_input.buffer_type == ttnn.BufferType.L1:
+            L1_util += tensor_size_bytes / num_devices
+
+    if L1_util > num_l1_banks * 1536 * 1024:
+        return True, "Test_Infrastructure_Skip L1 test requires more memory than the total available in the device"
+
+    # Check that each chip has a non-zero amount of data available
+    if input_shape[dim] < num_devices:
+        return (
+            True,
+            f"Input shape {input_shape} incompatible with {num_devices} on dim {dim} because some chips will have no tensor",
+        )
+
+    if (
+        input_shape == [8, 8, 256, 384]
+        and dim == 1
+        and layout == ttnn.TILE_LAYOUT
+        and (input_dtype == ttnn.bfloat8_b or tile != (32, 32))
+    ):
+        return True, "Known failure"
+
+    return False, ""
 
 
 def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
@@ -903,9 +967,11 @@ def test_all_gather_async_interleaved_to_sharded(
     "device_params, all_gather_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_linear"],
+    ids=["fabric_linear", "fabric2d_linear", "fabric2d_dynamic_linear"],
 )
 def test_all_gather_async_2x4(
     mesh_device,

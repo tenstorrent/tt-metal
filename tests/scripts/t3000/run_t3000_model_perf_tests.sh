@@ -224,8 +224,6 @@ main() {
   cd $TT_METAL_HOME
   export PYTHONPATH=$TT_METAL_HOME
 
-  if [[ "$pipeline_type" == "ccl_perf_t3000_device" ]]; then
-    run_t3000_ccl_tests
   elif [[ "$pipeline_type" == "model_perf_t3000" ]]; then
     run_t3000_model_perf_tests
   else
