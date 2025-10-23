@@ -58,7 +58,11 @@ RunTimeOptions::RunTimeOptions() :
     // Root directory handling from main (more robust)
     log_debug(tt::LogMetal, "initial root_dir: {}", this->root_dir);
 
-    // ENV Can Override
+    // Root directory fallback system - handles TT_METAL_RUNTIME_ROOT with robust logic:
+    // 1. Try environment variable TT_METAL_RUNTIME_ROOT first
+    // 2. Fall back to API override (g_root_dir) if env var not set
+    // 3. Auto-detect by looking for tt_metal/ directory in current working directory
+    // 4. Fail with TT_FATAL if still empty (prevents "Root Directory is not set" error)
     const char* root_dir_str = std::getenv("TT_METAL_RUNTIME_ROOT");
     if (root_dir_str != nullptr) {
         this->root_dir = std::string(root_dir_str);
@@ -276,7 +280,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Sets the root directory of the TT-Metal installation.
         // Default: No default (must be set)
         // Usage: export TT_METAL_RUNTIME_ROOT=/path/to/tt-metal
-        case EnvVarID::TT_METAL_RUNTIME_ROOT: this->root_dir = normalize_path(value); break;
+        case EnvVarID::TT_METAL_RUNTIME_ROOT:
+            // Root directory of TT-Metal installation
+            // Default: empty (must be set)
+            // Usage: export TT_METAL_RUNTIME_ROOT=/path/to/tt-metal
+            // NOTE: This is handled by constructor's robust fallback logic (lines 62-78)
+            // This case exists for documentation purposes only
+            break;
 
         // TT_METAL_CACHE
         // Directory for caching compiled kernels and other build artifacts.
