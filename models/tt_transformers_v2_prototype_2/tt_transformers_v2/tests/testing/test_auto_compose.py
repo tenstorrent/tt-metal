@@ -21,45 +21,91 @@ from tt_transformers_v2.src.testing.auto_compose import to_torch_auto_compose
 # ======================================================================================
 
 
-@pytest.fixture(scope="module")
-def mesh_shape():
-    """Get mesh shape from environment variable."""
-    return {
-        "N150": [1, 1],
-        "N300": [1, 2],
-        "N150x4": [1, 4],
-        "T3K": [1, 8],
-        "TG": [8, 4],
-        "P150": [1, 1],
-        "P300": [1, 2],
-        "P150x4": [1, 4],
-        "P150x8": [1, 8],
-    }.get(os.environ.get("MESH_DEVICE"), [1, 1])
+# Try a variety of mesh shapes; tests skip if device can't be opened
+pytestmark = pytest.mark.parametrize(
+    "mesh_device",
+    [
+        [1, 1],  # single device
+        [1, 2],  # 1D mesh, 2 devices
+        [1, 8],  # 1D mesh, 8 devices
+        [2, 4],  # 2D mesh, 8 devices
+    ],
+    indirect=True,
+)
 
 
 @pytest.fixture(scope="module")
-def mesh_device(mesh_shape):
-    """Create and yield a mesh device, cleanup on teardown."""
+def mesh_device(request):
+    """Create and yield a mesh device for a given mesh shape, cleanup on teardown."""
+    if not hasattr(request, "param"):
+        pytest.skip("mesh_device fixture called without parametrization")
+
+    mesh_shape = request.param
+    # Pre-check: if no devices at all, skip without invoking C++ open
+    try:
+        from ttnn import get_num_pcie_devices  # type: ignore
+
+        num_pcie = get_num_pcie_devices()
+        if isinstance(num_pcie, int) and num_pcie == 0:
+            pytest.skip("No TT devices detected on this system")
+    except Exception:
+        # If query fails, continue to attempt opening; downstream try/except will skip
+        pass
+
+    # Pre-check: skip shapes that cannot fit into the SystemMesh to avoid native exceptions
+    try:
+        sys_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()  # type: ignore[attr-defined]
+        sys_shape = tuple(sys_desc.shape())
+        req_shape = tuple(mesh_shape)
+        allowed = _allowed_req_shapes_for_system(sys_shape)
+        if req_shape not in allowed:
+            pytest.skip(
+                f"Requested mesh {req_shape} unsupported on system {sys_shape}. " f"Allowed for this system: {allowed}"
+            )
+    except Exception:
+        # If descriptor unavailable, fall through and try to open
+        pass
+
     try:
         device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(mesh_shape))
-    except Exception as e:  # environment without TT hardware
-        pytest.skip(f"Mesh device unavailable or no hardware detected: {e}")
-        return
+    except Exception:
+        pytest.skip("Mesh device unavailable or unsupported for this configuration")
+
     try:
         yield device
     finally:
         ttnn.close_mesh_device(device)
 
 
-@pytest.fixture(scope="module")
-def num_devices(mesh_device):
-    """Get number of devices in the mesh."""
-    return mesh_device.get_num_devices()
-
-
 # ======================================================================================
 # Helper Functions
 # ======================================================================================
+
+
+# todo)) refactor this into a separate file that is unit tested
+def _allowed_req_shapes_for_system(sys_shape: tuple[int, int]) -> set[tuple[int, int]]:
+    """Recursively derive allowed requested shapes by traversing the candidate graph.
+
+    We start from both orientations of the system shape and walk the
+    `_CANDIDATE_REQ_SHAPES` graph, collecting reachable shapes. Finally,
+    we keep only shapes that physically fit within the system shape (allowing rotation).
+    """
+
+    _CANDIDATE_REQ_SHAPES = {
+        (1, 1): ((1, 1),),
+        (1, 2): ((1, 2), (1, 1)),
+        (1, 8): ((1, 8), (2, 4), (1, 2), (1, 1)),
+        (2, 4): ((2, 4), (1, 8), (1, 2), (1, 1)),
+        # [INFO] add more system shapes here
+    }
+
+    allowed: set[tuple[int, int]] = set()
+
+    if sys_shape in _CANDIDATE_REQ_SHAPES:
+        for mesh_shape in _CANDIDATE_REQ_SHAPES[sys_shape]:
+            allowed.add(mesh_shape)
+
+    return allowed
 
 
 def _make_known_pattern(num_chunks: int) -> torch.Tensor:
@@ -105,8 +151,9 @@ def _get_hw_shard_unit() -> int:
 
 
 @pytest.mark.parametrize("min_devices", [2])
-def test_host_sharded_1d(mesh_device: ttnn.MeshDevice, num_devices: int, min_devices: int) -> None:
+def test_host_sharded_1d(mesh_device: ttnn.MeshDevice, min_devices: int) -> None:
     """Test automatic composition of host-sharded 1D tensors."""
+    num_devices = mesh_device.get_num_devices()
     if num_devices < min_devices:
         pytest.skip(f"Test requires at least {min_devices} devices, found {num_devices}")
 
@@ -129,8 +176,9 @@ def test_host_sharded_1d(mesh_device: ttnn.MeshDevice, num_devices: int, min_dev
 
 
 @pytest.mark.parametrize("min_devices", [2])
-def test_device_sharded_1d(mesh_device: ttnn.MeshDevice, num_devices: int, min_devices: int) -> None:
+def test_device_sharded_1d(mesh_device: ttnn.MeshDevice, min_devices: int) -> None:
     """Test automatic composition of device-sharded 1D tensors."""
+    num_devices = mesh_device.get_num_devices()
     if num_devices < min_devices:
         pytest.skip(f"Test requires at least {min_devices} devices, found {num_devices}")
 
@@ -164,7 +212,8 @@ def test_device_sharded_1d(mesh_device: ttnn.MeshDevice, num_devices: int, min_d
 
 @pytest.mark.parametrize("dim", [0, 1, -1])
 @pytest.mark.parametrize("min_devices", [2])
-def test_host_sharded_various_dims(mesh_device: ttnn.MeshDevice, num_devices: int, dim: int, min_devices: int) -> None:
+def test_host_sharded_various_dims(mesh_device: ttnn.MeshDevice, dim: int, min_devices: int) -> None:
+    num_devices = mesh_device.get_num_devices()
     if num_devices < min_devices:
         pytest.skip(f"Test requires at least {min_devices} devices, found {num_devices}")
 
@@ -187,9 +236,8 @@ def test_host_sharded_various_dims(mesh_device: ttnn.MeshDevice, num_devices: in
 
 @pytest.mark.parametrize("dim", [0, 1, -1])
 @pytest.mark.parametrize("min_devices", [2])
-def test_device_sharded_various_dims(
-    mesh_device: ttnn.MeshDevice, num_devices: int, dim: int, min_devices: int
-) -> None:
+def test_device_sharded_various_dims(mesh_device: ttnn.MeshDevice, dim: int, min_devices: int) -> None:
+    num_devices = mesh_device.get_num_devices()
     if num_devices < min_devices:
         pytest.skip(f"Test requires at least {min_devices} devices, found {num_devices}")
 
@@ -310,9 +358,8 @@ def test_host_sharded_2d_with_replicate(
 
 @pytest.mark.parametrize("category", ["lt", "eq", "gt"])  # per-shard length relative to threshold
 @pytest.mark.parametrize("min_devices", [2])
-def test_host_sharded_shape_thresholds(
-    mesh_device: ttnn.MeshDevice, num_devices: int, category: str, min_devices: int
-) -> None:
+def test_host_sharded_shape_thresholds(mesh_device: ttnn.MeshDevice, category: str, min_devices: int) -> None:
+    num_devices = mesh_device.get_num_devices()
     if num_devices < min_devices:
         pytest.skip(f"Test requires at least {min_devices} devices, found {num_devices}")
 
@@ -345,9 +392,8 @@ def test_host_sharded_shape_thresholds(
 
 @pytest.mark.parametrize("category", ["lt", "eq", "gt"])  # per-shard length relative to threshold
 @pytest.mark.parametrize("min_devices", [2])
-def test_device_sharded_shape_thresholds(
-    mesh_device: ttnn.MeshDevice, num_devices: int, category: str, min_devices: int
-) -> None:
+def test_device_sharded_shape_thresholds(mesh_device: ttnn.MeshDevice, category: str, min_devices: int) -> None:
+    num_devices = mesh_device.get_num_devices()
     if num_devices < min_devices:
         pytest.skip(f"Test requires at least {min_devices} devices, found {num_devices}")
 
