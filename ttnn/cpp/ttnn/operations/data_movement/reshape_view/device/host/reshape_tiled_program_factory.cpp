@@ -428,9 +428,17 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
             const std::vector<Tensor>& output_tensors) mutable {
             const auto& input_tensor = input_tensors.at(0);
             const auto& output_tensor = output_tensors.at(0);
+            printf(
+                "cache mapping tensor addr: %u == 0x%x\n",
+                mapping_tensor.buffer()->address(),
+                mapping_tensor.buffer()->address());
+            if (mapping_tensor.buffer()->address() == 295164768) {
+                printf("address match!\n");
+                mapping_tensor.cpu().print();
+            }
 
-            const auto& op = *reinterpret_cast<const ttnn::ReshapeDeviceOperation*>(operation);
-            if (op.recreate_mapping_tensor) {
+            // const auto& op = *reinterpret_cast<const ttnn::ReshapeDeviceOperation*>(operation);
+            if (false) {
                 const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
                 const auto& face_shape = input_tensor.tensor_spec().tile().get_face_shape();
                 const uint32_t num_input_pages =
@@ -454,7 +462,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
             for (const auto& core : utilized_cores) {
                 auto& reader_runtime_args_core = GetRuntimeArgs(program, reader_kernel_id, core);
                 reader_runtime_args_core.at(0) = input_buffer_addr;
-                if (op.recreate_mapping_tensor) {
+                if (false) {
                     reader_runtime_args_core.at(1) = mapping_tensor.buffer()->address();
                 }
 
