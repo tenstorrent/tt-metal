@@ -995,7 +995,7 @@ void point_to_point_barrier(const ResetPair& reset_pair) {
 void reset_local_link(ChipId src_chip, ChipId dst_chip, uint8_t src_chan, uint8_t dst_chan) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     std::vector<uint32_t> set = {1};
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
     const auto& sender_soc_desc = cluster.get_soc_desc(src_chip);
     const auto& receiver_soc_desc = cluster.get_soc_desc(dst_chip);
     auto logical_src_coord = sender_soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
@@ -1004,14 +1004,6 @@ void reset_local_link(ChipId src_chip, ChipId dst_chip, uint8_t src_chan, uint8_
         src_chip, tt_xy_pair(logical_src_coord.x, logical_src_coord.y), CoreType::ETH);
     auto dst_coord = cluster.get_virtual_coordinate_from_logical_coordinates(
         dst_chip, tt_xy_pair(logical_dst_coord.x, logical_dst_coord.y), CoreType::ETH);
-    std::vector<uint32_t> zero_vec(1, 0);
-    if (control_plane.get_active_ethernet_cores(src_chip).find(src_coord) !=
-        control_plane.get_active_ethernet_cores(src_chip).end()) {
-        cluster.write_core(src_chip, src_coord, zero_vec, 0x1104);
-        cluster.write_core(dst_chip, dst_coord, zero_vec, 0x1104);
-        cluster.l1_barrier(src_chip);
-        cluster.l1_barrier(dst_chip);
-    }
 
     cluster.write_core(src_chip, src_coord, set, 0x1EFC);
     cluster.write_core(dst_chip, dst_coord, set, 0x1EFC);
