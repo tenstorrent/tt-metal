@@ -109,7 +109,7 @@ void kernel_main() {
         tt::tt_fabric::fabric_client_connect(mux_connection_handle);
 
         packet_header->to_noc_unicast_atomic_inc(
-            NocUnicastAtomicIncCommandHeader{noc_dest_addr, static_cast<uint16_t>(return_credits_per_packet)});
+            NocUnicastAtomicIncCommandHeader{noc_dest_addr, return_credits_per_packet});
 
         tt_l1_ptr uint32_t* payload_start_ptr = base_payload_start_ptr;
         volatile tt_l1_ptr uint32_t* poll_ptr = base_poll_ptr;
@@ -151,7 +151,7 @@ void kernel_main() {
         // return any unsent credits before disconnecting
         if (num_accumulated_credits > 0) {
             packet_header->to_noc_unicast_atomic_inc(
-                NocUnicastAtomicIncCommandHeader{noc_dest_addr, static_cast<uint16_t>(num_accumulated_credits)});
+                NocUnicastAtomicIncCommandHeader{noc_dest_addr, num_accumulated_credits});
             tt::tt_fabric::fabric_atomic_inc(mux_connection_handle, packet_header);
             num_accumulated_credits = 0;
         }

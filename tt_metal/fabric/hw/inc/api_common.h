@@ -32,8 +32,8 @@ enum class UnicastInlineWriteUpdateMask : uint32_t {
 enum class UnicastAtomicIncUpdateMask : uint32_t {
     None = 0,
     DstAddr = 1u << 0,
-    Val = 1u << 2,
-    Flush = 1u << 3,
+    Val = 1u << 1,
+    Flush = 1u << 2,
 };
 
 // Scatter write dynamic mask (coarse-grained)
@@ -49,9 +49,9 @@ enum class UnicastFusedAtomicIncUpdateMask : uint32_t {
     None = 0,
     WriteDstAddr = 1u << 0,
     SemaphoreAddr = 1u << 1,
-    Val = 1u << 3,
-    Flush = 1u << 4,
-    PayloadSize = 1u << 5,
+    Val = 1u << 2,
+    Flush = 1u << 3,
+    PayloadSize = 1u << 4,
 };
 
 // Bitwise helpers for enum class flags

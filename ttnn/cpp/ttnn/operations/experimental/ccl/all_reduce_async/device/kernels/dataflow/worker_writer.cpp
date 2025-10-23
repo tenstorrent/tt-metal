@@ -132,7 +132,7 @@ void kernel_main() {
                 l1_read_addr,
                 num_tiles_to_read_this_core * tensor0_page_size,
                 sema_noc_addr,
-                static_cast<uint16_t>(1),
+                static_cast<uint32_t>(1),
                 false);
             noc_async_writes_flushed();
         } else {

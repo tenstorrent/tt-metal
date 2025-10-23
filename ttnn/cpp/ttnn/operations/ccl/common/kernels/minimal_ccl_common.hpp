@@ -39,7 +39,7 @@ FORCE_INLINE void perform_atomic_fabric_write(
     size_t& l1_read_addr,
     uint32_t payload_size_bytes,
     uint64_t semaphore_noc_addr,
-    const uint16_t val,
+    const uint32_t val,
     const bool flush,
     uint32_t offset = 0) {
     tt::tt_fabric::linear::to_noc_fused_unicast_write_atomic_inc(
@@ -230,7 +230,7 @@ FORCE_INLINE void fused_write_atomic_and_advance_local_read_address_for_fabric_w
     size_t& l1_read_addr,
     uint32_t payload_size_bytes,
     uint64_t semaphore_noc_addr,
-    const uint16_t val,
+    const uint32_t val,
     const bool flush) {
     const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
     const size_t payload_l1_address = l1_read_addr;
@@ -265,7 +265,7 @@ FORCE_INLINE void fused_write_atomic_and_advance_local_read_address_for_fabric_w
     size_t& l1_read_addr,
     uint32_t payload_size_bytes,
     uint64_t semaphore_noc_addr,
-    const uint16_t val,
+    const uint32_t val,
     const bool flush,
     uint32_t offset = 0) {
     // This assumes payload size equals page size

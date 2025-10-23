@@ -295,7 +295,7 @@ struct NocUnicastWriteFields {
 struct NocUnicastAtomicIncFields {
     template <bool IS_SOURCE>
     static NocUnicastAtomicIncFields build_from_args(size_t& arg_idx) {
-        uint16_t atomic_inc_val = get_local_arg_val<uint32_t>(arg_idx++);
+        uint32_t atomic_inc_val = get_local_arg_val<uint32_t>(arg_idx++);
         uint32_t dst_address = get_local_arg_val<uint32_t>(arg_idx++);
         uint32_t dst_noc_encoding = 0;
         if constexpr (IS_SOURCE) {
@@ -304,10 +304,10 @@ struct NocUnicastAtomicIncFields {
         return NocUnicastAtomicIncFields(atomic_inc_val, dst_address, dst_noc_encoding);
     }
 
-    NocUnicastAtomicIncFields(uint16_t atomic_inc_val, uint32_t dst_address, uint32_t dst_noc_encoding) :
+    NocUnicastAtomicIncFields(uint32_t atomic_inc_val, uint32_t dst_address, uint32_t dst_noc_encoding) :
         atomic_inc_val(atomic_inc_val), dst_address(dst_address), dst_noc_encoding(dst_noc_encoding) {}
 
-    uint16_t atomic_inc_val;
+    uint32_t atomic_inc_val;
     uint32_t dst_address;
     uint32_t dst_noc_encoding;
 };

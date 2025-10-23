@@ -87,7 +87,7 @@ void kernel_main() {
         const uint64_t sem_noc_addr =
             get_noc_addr(packet_receiver_core_x, packet_receiver_core_y, receiver_semaphore_address, 0);
         sem_inc_packet_header->to_noc_unicast_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sem_noc_addr, static_cast<uint16_t>(1)});  // increment 1
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sem_noc_addr, static_cast<uint32_t>(1)});  // increment 1
 
         const uint32_t base_receiver_l1_addr = get_read_ptr(fabric_receiver_cb_id);
 
@@ -135,8 +135,7 @@ void kernel_main() {
                 const uint64_t sem_noc_addr =
                     get_noc_addr(receiver_core_x, receiver_core_y, receiver_semaphore_address, 0);
                 unicast_packet_header->to_noc_fused_unicast_write_atomic_inc(
-                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
-                        noc0_dest_noc_addr, sem_noc_addr, 1, 32, flush),
+                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(noc0_dest_noc_addr, sem_noc_addr, 1, flush),
                     curr_packet_size_bytes);
 
                 fabric_conn.wait_for_empty_write_slot();

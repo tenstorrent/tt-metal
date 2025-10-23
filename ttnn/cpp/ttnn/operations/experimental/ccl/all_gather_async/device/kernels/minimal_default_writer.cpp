@@ -175,7 +175,7 @@ void kernel_main() {
                 static_cast<uint8_t>(barrier_multicast_route_info.range_hops),
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                     0,  // ignore
-                    static_cast<uint16_t>(1)});
+                    static_cast<uint32_t>(1)});
 
             if constexpr (topology == Topology::Linear) {
                 // multicast to both the forward and backward worker on all devices that you write to.
@@ -260,7 +260,7 @@ void kernel_main() {
             static_cast<uint8_t>(unicast_route_info.distance_in_hops),
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                 0,  // ignore
-                static_cast<uint16_t>(1)});
+                static_cast<uint32_t>(1)});
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);

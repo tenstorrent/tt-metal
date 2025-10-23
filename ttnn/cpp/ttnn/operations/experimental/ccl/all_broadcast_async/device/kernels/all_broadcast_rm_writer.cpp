@@ -122,7 +122,7 @@ void kernel_main() {
         ranges,
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
             0,                           // ignore
-            static_cast<uint16_t>(1)});  // increment 1
+            static_cast<uint32_t>(1)});  // increment 1
 
     fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
         fabric_connection,

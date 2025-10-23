@@ -198,7 +198,7 @@ void kernel_main() {
                 static_cast<uint8_t>(multicast_route_info.range_hops),
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                     0,                           // ignore
-                    static_cast<uint16_t>(1)});  // increment 1
+                    static_cast<uint32_t>(1)});  // increment 1
 
             // multicast to both the forward and backward worker on all devices in your line that your write to
             // device going in the same direction
@@ -249,7 +249,7 @@ void kernel_main() {
             static_cast<uint8_t>(unicast_route_info.distance_in_hops),
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                 0,                           // ignore
-                static_cast<uint16_t>(1)});  // increment 1
+                static_cast<uint32_t>(1)});  // increment 1
     }
 
     constexpr uint32_t intermediate_full_offset = is_forward ? 0 : input_num_pages;

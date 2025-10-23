@@ -137,7 +137,7 @@ struct NocUnicastAtomicIncFields {
     NocUnicastAtomicIncFields(uint32_t dst_address, std::optional<uint32_t> dst_noc_encoding = std::nullopt) :
         dst_address(dst_address), dst_noc_encoding(dst_noc_encoding) {}
 
-    void set_atomic_inc_val(uint16_t value) { this->atomic_inc_val = value; }
+    void set_atomic_inc_val(uint32_t value) { this->atomic_inc_val = value; }
 
     template <bool IS_SOURCE>
     std::vector<uint32_t> get_args() const {
@@ -154,7 +154,7 @@ struct NocUnicastAtomicIncFields {
         return args;
     }
 
-    std::optional<uint16_t> atomic_inc_val;
+    std::optional<uint32_t> atomic_inc_val;
     uint32_t dst_address;
     std::optional<uint32_t> dst_noc_encoding;
 };
@@ -231,7 +231,7 @@ struct TrafficParameters {
     NocSendType noc_send_type;
     size_t payload_size_bytes;
     size_t num_packets;
-    std::optional<uint16_t> atomic_inc_val;
+    std::optional<uint32_t> atomic_inc_val;
     std::optional<uint32_t> mcast_start_hops;
 
     // Global context

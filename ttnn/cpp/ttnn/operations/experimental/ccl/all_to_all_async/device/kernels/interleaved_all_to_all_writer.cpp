@@ -99,7 +99,7 @@ void kernel_main() {
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
 
     pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-        output_semaphore_noc_addr_in_pkt, static_cast<uint16_t>(1)});  // increment 1
+        output_semaphore_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
 
     volatile PACKET_HEADER_TYPE* cur_pkt_header;
 

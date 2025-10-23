@@ -181,7 +181,7 @@ void kernel_main() {
         static_cast<uint8_t>(multicast_route_info.range_hops),
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
             0,                           // ignore
-            static_cast<uint16_t>(1)});  // increment 1
+            static_cast<uint32_t>(1)});  // increment 1
     if (use_barrier_sem) {
         // multicast to entire ring of workers going in the same direction
         uint64_t barrier_sem_noc_addr_in_pkt =
@@ -214,7 +214,7 @@ void kernel_main() {
         static_cast<uint8_t>(unicast_route_info.distance_in_hops),
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
             0,                           // ignore
-            static_cast<uint16_t>(1)});  // increment 1
+            static_cast<uint32_t>(1)});  // increment 1
 
     uint32_t chunk_count = 0;
     for (uint32_t b = 0; b < input_tensor_B; b++) {

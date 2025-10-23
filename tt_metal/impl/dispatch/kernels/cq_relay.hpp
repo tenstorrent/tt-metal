@@ -211,7 +211,7 @@ public:
     }
 
     template <uint8_t noc_idx, uint32_t dest_noc_xy, uint32_t dest_sem_id>
-    FORCE_INLINE void release_pages(uint16_t n) {
+    FORCE_INLINE void release_pages(uint32_t n) {
 #if defined(FABRIC_RELAY)
         auto sem_addr = get_semaphore<fd_core_type>(dest_sem_id);
         uint64_t noc_dest_addr = get_noc_addr_helper(dest_noc_xy, sem_addr);
@@ -230,7 +230,7 @@ public:
         uint32_t downstream_sem_id,
         bool wait,
         uint8_t downstream_cmd_buf>
-    FORCE_INLINE void write_atomic_inc_any_len(uint32_t data_ptr, uint64_t dst_ptr, uint32_t length, uint16_t n) {
+    FORCE_INLINE void write_atomic_inc_any_len(uint32_t data_ptr, uint64_t dst_ptr, uint32_t length, uint32_t n) {
 #if defined(FABRIC_RELAY)
         // Writing to a HEADER only buffer is wrong. This function requires a FULL SIZE buffer
         ASSERT(mux_channel_buffer_size_bytes > sizeof(PACKET_HEADER_TYPE));
