@@ -290,6 +290,8 @@ RUN tar -xf /artifacts/ttm_any.tar -C /tt-metal
 ENV TT_METAL_HOME=/tt-metal
 #ENV TT_METAL_RUNTIME_ROOT=/tt-metal
 
+RUN mkdir -p /run/sshd
+
 #############################################################
 
 FROM base AS release
