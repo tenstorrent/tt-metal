@@ -54,8 +54,6 @@ class TtPanopticDeepLab:
         aspp_dilations: List[int] = [6, 12, 18],
         aspp_dropout: float = 0.1,
         decoder_channels: List[int] = [256, 256, 256],  # Default for semantic head
-        # Normalization and activation
-        norm: str = "SyncBN",  # Synchronized Batch Normalization
         # Training configuration
         train_size: Optional[Tuple[int, int]] = None,
         # Model configurations
@@ -79,7 +77,6 @@ class TtPanopticDeepLab:
             aspp_dilations: Dilation rates for ASPP
             aspp_dropout: Dropout rate for ASPP
             decoder_channels: Channels for decoder layers
-            norm: Normalization type
             train_size: Training image size for ASPP pooling
         """
         self.device = device
@@ -112,7 +109,6 @@ class TtPanopticDeepLab:
             input_shape=self.input_shape,
             head_channels=sem_seg_head_channels,
             num_classes=num_classes,
-            norm=norm,
             project_channels=project_channels,
             aspp_dilations=aspp_dilations,
             aspp_dropout=aspp_dropout,
@@ -135,7 +131,6 @@ class TtPanopticDeepLab:
             aspp_dropout=aspp_dropout,
             decoder_channels=[128, 128, 256],  # Instance head: [res2, res3, res5] = [128, 128, 256]
             common_stride=common_stride,
-            norm=norm,
             train_size=train_size,
             model_configs=model_configs,
         )
