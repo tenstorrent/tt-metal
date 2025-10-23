@@ -1289,10 +1289,7 @@ def test_transpose_21803(device):
 
 def test_transpose_29126(device):
     # Test DRAM sharding, which uses the same code path as DRAM interleaved
-    h = 8192
-    w = 2048
-
-    dram_cores = 8
+    dram_cores = device.dram_grid_size().x  # WH has 12 dram cores, P150 has 8, P100 has 7
     dram_weight_grid = ttnn.CoreRangeSet(
         {
             ttnn.CoreRange(
@@ -1301,6 +1298,10 @@ def test_transpose_29126(device):
             )
         }
     )
+
+    h = 1024 * dram_cores
+    w = 2048
+
     shard_spec = ttnn.ShardSpec(
         dram_weight_grid,
         (ttnn.core.roundup(ttnn.core.divup(h, dram_cores), ttnn.TILE_SIZE), w),
