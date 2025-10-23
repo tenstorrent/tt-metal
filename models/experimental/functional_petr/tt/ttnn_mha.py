@@ -18,6 +18,7 @@ class TTPETRMultiheadAttention:
         self.attn_in_proj__ias = torch_model.attn.in_proj_bias
         self.attn_out_proj_weight = torch_model.attn.out_proj.weight
         self.attn_out_proj_bias = torch_model.attn.out_proj.bias
+        self.torch_fallback = False
 
     def __call__(
         self,
@@ -132,14 +133,25 @@ class TTPETRMultiheadAttention:
         else:
             attn_output_weights = ttnn.matmul(q_scaled, key_transposed, dtype=ttnn.bfloat16)
 
-        # TTNN Softmax
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=True,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
-        attn_output_weights = ttnn.softmax(attn_output_weights, dim=-1, compute_kernel_config=compute_kernel_config)
+        if self.torch_fallback:
+            # TORCH Softmax
+            attn_weights_torch = ttnn.to_torch(attn_output_weights).to(torch.bfloat16)
+            attn_weights_torch = torch.nn.functional.softmax(attn_weights_torch, dim=-1)
+
+            # Convert back to ttnn
+            attn_output_weights = ttnn.from_torch(
+                attn_weights_torch.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
+        else:
+            # TTNN Softmax
+            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+            attn_output_weights = ttnn.softmax(attn_output_weights, dim=-1, compute_kernel_config=compute_kernel_config)
+
         attn_output = ttnn.matmul(attn_output_weights, value)
 
         attn_output = ttnn.permute(attn_output, (1, 0, 2))
