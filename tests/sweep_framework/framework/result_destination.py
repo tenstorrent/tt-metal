@@ -25,6 +25,74 @@ except ImportError:
     np = None
 
 
+# --- Metric extraction helpers (module-private) ---
+def _to_float(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _normalize_device_metric_name(key: str, suffix: Optional[str] = None) -> str:
+    base = key if key.startswith("device_") else f"device_{key}"
+    return f"{base}{suffix or ''}"
+
+
+def _add_metric(metrics: set, name: str, value: Any) -> None:
+    v = _to_float(value)
+    if v is not None:
+        metrics.add(PerfMetric(metric_name=name, metric_value=v))
+
+
+def _add_device_perf_from_dict(metrics: set, perf: dict, suffix: Optional[str] = None) -> None:
+    for k, v in perf.items():
+        _add_metric(metrics, _normalize_device_metric_name(k, suffix), v)
+
+
+def _add_e2e_metrics(metrics: set, raw: Dict[str, Any]) -> None:
+    e2e_perf = raw.get("e2e_perf")
+    if e2e_perf is not None:
+        if isinstance(e2e_perf, dict):
+            _add_metric(metrics, "e2e_perf_uncached_ms", e2e_perf.get("uncached"))
+            _add_metric(metrics, "e2e_perf_cached_ms", e2e_perf.get("cached"))
+        else:
+            _add_metric(metrics, "e2e_perf_ms", e2e_perf)
+
+    # Also capture explicit fields when present (back/forward compat)
+    _add_metric(metrics, "e2e_perf_uncached_ms", raw.get("e2e_perf_uncached"))
+    _add_metric(metrics, "e2e_perf_cached_ms", raw.get("e2e_perf_cached"))
+
+
+def _add_device_metrics(metrics: set, raw: Dict[str, Any]) -> None:
+    device_perf_raw = raw.get("device_perf")
+    if device_perf_raw is not None:
+        if isinstance(device_perf_raw, dict) and ("cached" in device_perf_raw or "uncached" in device_perf_raw):
+            uncached_perf = device_perf_raw.get("uncached")
+            if isinstance(uncached_perf, dict):
+                _add_device_perf_from_dict(metrics, uncached_perf, suffix="_uncached")
+
+            cached_perf = device_perf_raw.get("cached")
+            if isinstance(cached_perf, dict):
+                _add_device_perf_from_dict(metrics, cached_perf, suffix="_cached")
+        else:
+            # Original structure - single dict or list of dicts
+            if isinstance(device_perf_raw, list):
+                device_perf_raw = next((d for d in device_perf_raw if isinstance(d, dict)), None)
+            if isinstance(device_perf_raw, dict):
+                _add_device_perf_from_dict(metrics, device_perf_raw)
+
+    # Also accept separate fields when provided
+    device_perf_uncached = raw.get("device_perf_uncached")
+    if isinstance(device_perf_uncached, dict):
+        _add_device_perf_from_dict(metrics, device_perf_uncached, suffix="_uncached")
+
+    device_perf_cached = raw.get("device_perf_cached")
+    if isinstance(device_perf_cached, dict):
+        _add_device_perf_from_dict(metrics, device_perf_cached, suffix="_cached")
+
+
 class ResultDestination(ABC):
     """Abstract base class for test result destinations"""
 
@@ -206,98 +274,9 @@ class FileResultDestination(ResultDestination):
             """Collect both e2e performance and device performance metrics into PerfMetric set"""
             metrics: set[PerfMetric] = set()
 
-            def _to_float(v):
-                try:
-                    if v is None:
-                        return None
-                    return float(v)
-                except Exception:
-                    return None
-
-            # Collect e2e performance metrics
-            e2e_perf = raw.get("e2e_perf")
-            if e2e_perf is not None:
-                if isinstance(e2e_perf, dict):
-                    # Cache performance measurement - has both cached and uncached
-                    uncached_val = _to_float(e2e_perf.get("uncached"))
-                    cached_val = _to_float(e2e_perf.get("cached"))
-
-                    if uncached_val is not None:
-                        metrics.add(PerfMetric(metric_name="e2e_perf_uncached_ms", metric_value=uncached_val))
-                    if cached_val is not None:
-                        metrics.add(PerfMetric(metric_name="e2e_perf_cached_ms", metric_value=cached_val))
-                else:
-                    # Standard single performance measurement
-                    perf_val = _to_float(e2e_perf)
-                    if perf_val is not None:
-                        metrics.add(PerfMetric(metric_name="e2e_perf_ms", metric_value=perf_val))
-
-            # Also collect separate cached/uncached fields if available
-            e2e_perf_uncached = raw.get("e2e_perf_uncached")
-            if e2e_perf_uncached is not None:
-                uncached_val = _to_float(e2e_perf_uncached)
-                if uncached_val is not None:
-                    metrics.add(PerfMetric(metric_name="e2e_perf_uncached_ms", metric_value=uncached_val))
-
-            e2e_perf_cached = raw.get("e2e_perf_cached")
-            if e2e_perf_cached is not None:
-                cached_val = _to_float(e2e_perf_cached)
-                if cached_val is not None:
-                    metrics.add(PerfMetric(metric_name="e2e_perf_cached_ms", metric_value=cached_val))
-
-            # Collect device performance metrics
-            device_perf_raw = raw.get("device_perf")
-            if device_perf_raw is not None:
-                # Check if it's the new cached/uncached structure
-                if isinstance(device_perf_raw, dict) and ("cached" in device_perf_raw or "uncached" in device_perf_raw):
-                    # New structure with separate cached/uncached device perf
-                    uncached_perf = device_perf_raw.get("uncached")
-                    if uncached_perf and isinstance(uncached_perf, dict):
-                        for k, v in uncached_perf.items():
-                            float_val = _to_float(v)
-                            if float_val is not None:
-                                # Add uncached suffix to distinguish from cached
-                                metric_name = f"device_{k}_uncached" if not k.startswith("device_") else f"{k}_uncached"
-                                metrics.add(PerfMetric(metric_name=metric_name, metric_value=float_val))
-
-                    cached_perf = device_perf_raw.get("cached")
-                    if cached_perf and isinstance(cached_perf, dict):
-                        for k, v in cached_perf.items():
-                            float_val = _to_float(v)
-                            if float_val is not None:
-                                # Add cached suffix to distinguish from uncached
-                                metric_name = f"device_{k}_cached" if not k.startswith("device_") else f"{k}_cached"
-                                metrics.add(PerfMetric(metric_name=metric_name, metric_value=float_val))
-                else:
-                    # Original structure - single device perf dict or list
-                    # If list of dicts, merge or take first
-                    if isinstance(device_perf_raw, list):
-                        device_perf_raw = next((d for d in device_perf_raw if isinstance(d, dict)), None)
-
-                    if isinstance(device_perf_raw, dict):
-                        for k, v in device_perf_raw.items():
-                            float_val = _to_float(v)
-                            if float_val is not None:
-                                # Prefix device metrics to distinguish from e2e metrics
-                                metric_name = f"device_{k}" if not k.startswith("device_") else k
-                                metrics.add(PerfMetric(metric_name=metric_name, metric_value=float_val))
-
-            # Also check for separate device_perf_uncached and device_perf_cached fields
-            device_perf_uncached = raw.get("device_perf_uncached")
-            if device_perf_uncached and isinstance(device_perf_uncached, dict):
-                for k, v in device_perf_uncached.items():
-                    float_val = _to_float(v)
-                    if float_val is not None:
-                        metric_name = f"device_{k}_uncached" if not k.startswith("device_") else f"{k}_uncached"
-                        metrics.add(PerfMetric(metric_name=metric_name, metric_value=float_val))
-
-            device_perf_cached = raw.get("device_perf_cached")
-            if device_perf_cached and isinstance(device_perf_cached, dict):
-                for k, v in device_perf_cached.items():
-                    float_val = _to_float(v)
-                    if float_val is not None:
-                        metric_name = f"device_{k}_cached" if not k.startswith("device_") else f"{k}_cached"
-                        metrics.add(PerfMetric(metric_name=metric_name, metric_value=float_val))
+            # Collect e2e and device metrics via helpers
+            _add_e2e_metrics(metrics, raw)
+            _add_device_metrics(metrics, raw)
 
             return metrics if metrics else None
 
