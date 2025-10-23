@@ -1319,6 +1319,8 @@ async function run() {
         // Use the latest failing run for snippet-based owner detection
         const latestFail = mainRuns.find(r => r.conclusion !== 'success');
         let owners = undefined;
+        let combinedOwnerNames = [];
+        let failingJobNames = undefined;
         try {
           const errs = await fetchErrorSnippetsForRun(
             latestFail.id,
@@ -1358,7 +1360,7 @@ async function run() {
           owners = Array.from(ownerSet.values());
           // Build combined owner names list (infra + inferred + pipeline owners) without extra labeling text
           const origNames = Array.from(genericExitOrigOwners.keys());
-          const combinedOwnerNames = (() => {
+          combinedOwnerNames = (() => {
             const seen = new Map();
             for (const o of (owners || [])) {
               const nm = (o && (o.name || o.id)) || '';
@@ -1368,7 +1370,7 @@ async function run() {
             return Array.from(seen.keys());
           })();
           // Extract failing job names from error snippets
-          var failingJobNames = [];
+          failingJobNames = [];
           const jobs = new Set();
           for (const sn of (errs || [])) {
             const jobName = (sn && sn.job) ? String(sn.job) : '';
