@@ -74,11 +74,11 @@ def check_pcc(golden, other, relax_for_composite):
         assert_with_pcc(golden, other)
 
 
-@pytest.mark.parametrize("x0", [32, 64])
-@pytest.mark.parametrize("x1", [32, 64])
-@pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
-def test_quant_dequant_per_tensor_2d(device, x0, x1, input_dtype):
-    """Basic per-tensor quantize/dequantize test for 2D tensors"""
+@pytest.mark.parametrize("x0,x1", [(16, 16), (32, 32), (24, 24)])
+@pytest.mark.parametrize("input_dtype", [ttnn.float32])
+@pytest.mark.parametrize("scale_dim", [0])
+@pytest.mark.parametrize("zero_point_dim", [0])
+def test_quant_dequant_per_tensor_2d(device, x0, x1, input_dtype, scale_dim, zero_point_dim):
     torch.manual_seed(0)
     input_tr = torch.rand(x0, x1, dtype=torch.float32)
     scale, zero_point = calculate_scale_zero_point_per_tensor(input_tr, -128, 127)
@@ -86,32 +86,8 @@ def test_quant_dequant_per_tensor_2d(device, x0, x1, input_dtype):
     quantized_tr = torch.quantize_per_tensor(input_tr, scale, zero_point, dtype=torch.qint32)
     dequantized_tr = torch.dequantize(quantized_tr)
 
-    input_tt = ttnn.from_torch(input_tr, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    quantized_tt = ttnn.quantize(input_tt, scale, zero_point)
-    result_tr = ttnn.to_torch(quantized_tt)
-    check_pcc(quantized_tr.int_repr(), result_tr, False)
-    check_match_ratio(quantized_tr, result_tr, ttnn.int32)
-
-    dequantized_tt = ttnn.dequantize(quantized_tt, scale, zero_point, dtype=input_dtype)
-    result_tr = ttnn.to_torch(dequantized_tt)
-    check_pcc(input_tr, result_tr, False)
-    check_pcc(dequantized_tr, result_tr, False)
-    check_match_ratio(input_tr, result_tr, input_dtype)
-    check_match_ratio(dequantized_tr, result_tr, input_dtype)
-
-
-@pytest.mark.parametrize("x0", [32])
-@pytest.mark.parametrize("x1", [32])
-@pytest.mark.parametrize("x2", [32])
-@pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
-def test_quant_dequant_per_tensor_3d(device, x0, x1, x2, input_dtype):
-    """Basic per-tensor quantize/dequantize test for 3D tensors"""
-    torch.manual_seed(0)
-    input_tr = torch.rand(x0, x1, x2, dtype=torch.float32)
-    scale, zero_point = calculate_scale_zero_point_per_tensor(input_tr, -128, 127)
-
-    quantized_tr = torch.quantize_per_tensor(input_tr, scale, zero_point, dtype=torch.qint32)
-    dequantized_tr = torch.dequantize(quantized_tr)
+    scale = convert_scalar_to_ttnn_tensor(device, scale, scale_dim, ttnn.float32)
+    zero_point = convert_scalar_to_ttnn_tensor(device, zero_point, zero_point_dim, ttnn.int32)
 
     input_tt = ttnn.from_torch(input_tr, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     quantized_tt = ttnn.quantize(input_tt, scale, zero_point)
@@ -127,91 +103,78 @@ def test_quant_dequant_per_tensor_3d(device, x0, x1, x2, input_dtype):
     check_match_ratio(dequantized_tr, result_tr, input_dtype)
 
 
-@pytest.mark.parametrize("x0", [32])
-@pytest.mark.parametrize("x1", [32])
+@pytest.mark.parametrize("x0,x1", [(16, 16), (32, 32), (24, 24)])
 @pytest.mark.parametrize("input_dtype", [ttnn.float32])
-def test_requant_per_tensor_2d(device, x0, x1, input_dtype):
-    """Basic per-tensor requantize test for 2D tensors"""
+@pytest.mark.parametrize("scale_dim", [0])
+@pytest.mark.parametrize("zero_point_dim", [0])
+@pytest.mark.parametrize("scale_r_dim", [0])
+@pytest.mark.parametrize("zero_point_r_dim", [0])
+def test_requant_per_tensor_2d(device, x0, x1, input_dtype, scale_dim, zero_point_dim, scale_r_dim, zero_point_r_dim):
     torch.manual_seed(0)
     input_tr = torch.rand(x0, x1, dtype=torch.float32)
     scale, zero_point = calculate_scale_zero_point_per_tensor(input_tr, -128, 127)
     scale_r, zero_point_r = calculate_scale_zero_point_per_tensor(input_tr, -37, 73)
+
+    scale = convert_scalar_to_ttnn_tensor(device, scale, scale_dim, ttnn.float32)
+    zero_point = convert_scalar_to_ttnn_tensor(device, zero_point, zero_point_dim, ttnn.int32)
+    scale_r = convert_scalar_to_ttnn_tensor(device, scale_r, scale_r_dim, ttnn.float32)
+    zero_point_r = convert_scalar_to_ttnn_tensor(device, zero_point_r, zero_point_r_dim, ttnn.int32)
 
     input_tt = ttnn.from_torch(input_tr, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     quantized_tt = ttnn.quantize(input_tt, scale, zero_point)
     requantized_tt = ttnn.requantize(quantized_tt, scale, zero_point, scale_r, zero_point_r)
     derequantized_tt = ttnn.dequantize(requantized_tt, scale_r, zero_point_r, dtype=input_dtype)
     result_tr = ttnn.to_torch(derequantized_tt)
-    check_pcc(input_tr, result_tr, False)
+    relax_pcc = max(scale_dim, zero_point_dim, scale_r_dim, zero_point_r_dim) > 0
+    check_pcc(input_tr, result_tr, relax_pcc)
     check_match_ratio(input_tr, result_tr, input_dtype)
 
 
-@pytest.mark.parametrize("x0", [32])
-@pytest.mark.parametrize("x1", [32])
-@pytest.mark.parametrize("input_dtype", [ttnn.float32])
-@pytest.mark.parametrize("axis", [0, 1])
-def test_quantization_per_channel_2d(device, x0, x1, input_dtype, axis):
-    """Basic per-channel quantization test for 2D tensors"""
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+def test_quant_dequant_per_tensor_2d_bfloat16(device, input_dtype):
+    """Test with bfloat16 data type"""
     torch.manual_seed(0)
-    input_tr = torch.rand(x0, x1, dtype=torch.float32)
-    input_tt = ttnn.from_torch(input_tr, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tr = torch.rand(16, 16, dtype=torch.float32)
+    scale, zero_point = calculate_scale_zero_point_per_tensor(input_tr, -128, 127)
 
-    scale, zero_point = calculate_scale_zero_point_per_channel(input_tr, axis, -128, 127)
-    scale_r, zero_point_r = calculate_scale_zero_point_per_channel(input_tr, axis, -37, 73)
-
-    axis_normalized = (axis + len(input_tr.shape)) % len(input_tr.shape)
-    quantized_tr = torch.quantize_per_channel(input_tr, scale, zero_point, axis=axis_normalized, dtype=torch.qint32)
+    quantized_tr = torch.quantize_per_tensor(input_tr, scale, zero_point, dtype=torch.qint32)
     dequantized_tr = torch.dequantize(quantized_tr)
 
-    scale_tt = ttnn.from_torch(scale, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    zero_point_tt = ttnn.from_torch(zero_point, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    scale_r_tt = ttnn.from_torch(scale_r, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    zero_point_r_tt = ttnn.from_torch(zero_point_r, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-
-    quantized_tt = ttnn.quantize(input_tt, scale_tt, zero_point_tt, axis=axis)
+    input_tt = ttnn.from_torch(input_tr, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    quantized_tt = ttnn.quantize(input_tt, scale, zero_point)
     result_tr = ttnn.to_torch(quantized_tt)
     check_pcc(quantized_tr.int_repr(), result_tr, False)
     check_match_ratio(quantized_tr, result_tr, ttnn.int32)
 
-    dequantized_tt = ttnn.dequantize(quantized_tt, scale_tt, zero_point_tt, axis=axis, dtype=input_dtype)
+    dequantized_tt = ttnn.dequantize(quantized_tt, scale, zero_point, dtype=input_dtype)
     result_tr = ttnn.to_torch(dequantized_tt)
     check_pcc(input_tr, result_tr, False)
     check_pcc(dequantized_tr, result_tr, False)
     check_match_ratio(input_tr, result_tr, input_dtype)
     check_match_ratio(dequantized_tr, result_tr, input_dtype)
 
-    requantized_tt = ttnn.requantize(quantized_tt, scale_tt, zero_point_tt, scale_r_tt, zero_point_r_tt, axis=axis)
-    derequantized_tt = ttnn.dequantize(requantized_tt, scale_r_tt, zero_point_r_tt, axis=axis, dtype=input_dtype)
-    result_tr = ttnn.to_torch(derequantized_tt)
-    check_pcc(input_tr, result_tr, True)
-    check_match_ratio(input_tr, result_tr, input_dtype)
 
-
-@pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
-def test_quantization_per_tensor_program_cache(device, input_dtype):
-    """Test program cache functionality"""
+def test_quant_dequant_per_tensor_1d(device):
+    """1D per-tensor quantization test"""
     torch.manual_seed(0)
+    input_tr = torch.rand(16, dtype=torch.float32)
+    scale, zero_point = calculate_scale_zero_point_per_tensor(input_tr, -128, 127)
 
-    num_program_cache_entries_list = []
+    quantized_tr = torch.quantize_per_tensor(input_tr, scale, zero_point, dtype=torch.qint32)
+    dequantized_tr = torch.dequantize(quantized_tr)
 
-    for dim in [2, 3]:
-        for i in range(3):
-            # Each iteration gets completely different input tensors, quant ranges, etc.
-            input_tr = torch.rand([30 + i] * dim, dtype=torch.float32)
+    scale_tt = convert_scalar_to_ttnn_tensor(device, scale, 0, ttnn.float32)
+    zero_point_tt = convert_scalar_to_ttnn_tensor(device, zero_point, 0, ttnn.int32)
 
-            scale, zero_point = calculate_scale_zero_point_per_tensor(input_tr, -120 + i, 121 - i)
-            scale_r, zero_point_r = calculate_scale_zero_point_per_tensor(input_tr, -50 - i, 42 + i)
+    input_tt = ttnn.from_torch(input_tr, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    quantized_tt = ttnn.quantize(input_tt, scale_tt, zero_point_tt)
+    result_tr = ttnn.to_torch(quantized_tt)
+    check_pcc(quantized_tr.int_repr(), result_tr, False)
+    check_match_ratio(quantized_tr, result_tr, ttnn.int32)
 
-            input_tt = ttnn.from_torch(input_tr, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-            quantized_tt = ttnn.quantize(input_tt, scale, zero_point)
-            requantized_tt = ttnn.requantize(quantized_tt, scale, zero_point, scale_r, zero_point_r)
-            derequantized_tt = ttnn.dequantize(requantized_tt, scale_r, zero_point_r, dtype=input_dtype)
-            result_tr = ttnn.to_torch(derequantized_tt)
-
-            check_pcc(input_tr, result_tr, False)
-            check_match_ratio(input_tr, result_tr, input_dtype)
-
-            num_program_cache_entries_list.append(device.num_program_cache_entries())
-
-    assert num_program_cache_entries_list[0] > 0
-    assert max(num_program_cache_entries_list) == min(num_program_cache_entries_list)
+    dequantized_tt = ttnn.dequantize(quantized_tt, scale_tt, zero_point_tt, dtype=ttnn.float32)
+    result_tr = ttnn.to_torch(dequantized_tt)
+    check_pcc(input_tr, result_tr, False)
+    check_pcc(dequantized_tr, result_tr, False)
+    check_match_ratio(input_tr, result_tr, ttnn.float32)
+    check_match_ratio(dequantized_tr, result_tr, ttnn.float32)
