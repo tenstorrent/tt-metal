@@ -2450,7 +2450,7 @@ int main(int argc, char** argv) {
             all_workers_g,
             l1_buf_base_g,
             device->allocator()->get_base_allocator_addr(HalMemType::DRAM),
-            (uint32_t*)host_hugepage_completion_buffer_base_g,
+            static_cast<uint32_t*>(host_hugepage_completion_buffer_base_g),
             false,
             DRAM_DATA_SIZE_WORDS);
         num_dram_banks_g = device->allocator_impl()->get_num_banks(BufferType::DRAM);
