@@ -2550,15 +2550,14 @@ def test_binary_sharded_bcast_scalar_zero_dim(
 
 
 @pytest.mark.parametrize(
-    "input_shape",
-    (torch.Size([1, 1, 12 * 32, 32]),),
-)
-@pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_shardspec_mixed_buffer_type(input_shape, dtype_pt, dtype_tt, device):
+def test_binary_sharded_shardspec_mixed_buffer_type(dtype_pt, dtype_tt, device):
     torch.manual_seed(0)
+    dram_grid_size = device.dram_grid_size()
+    input_shape = (1, 1, dram_grid_size.x * dram_grid_size.y * 32, 32)
+
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=dtype_pt), dtype_tt)(input_shape)
     b_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=dtype_pt), dtype_tt)(input_shape)
 
@@ -2568,7 +2567,6 @@ def test_binary_sharded_shardspec_mixed_buffer_type(input_shape, dtype_pt, dtype
     shard_spec = ttnn.ShardSpec(shard_grid, [(N * C * H) // n_cores, W], ttnn.ShardOrientation.ROW_MAJOR)
     a_config = ttnn.MemoryConfig(ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
-    dram_grid_size = device.dram_grid_size()
     print("dram_grid_size:", dram_grid_size.x * dram_grid_size.y)
     dram_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet(
