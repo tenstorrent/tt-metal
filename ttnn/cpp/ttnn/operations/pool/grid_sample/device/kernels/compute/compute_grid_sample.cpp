@@ -25,8 +25,9 @@ template <bool init_tilize = true, bool uninit_tilize = true>
 void tilize_in(uint32_t in_cb_id, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
     if constexpr (init_tilize) {
         tensix_sync();
-        unary_op_init_common(in_cb_id, out_cb_id);
+        UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, false>(in_cb_id)));
         tensix_sync();
+        pack_reconfig_data_format(out_cb_id);
         tilize_init(in_cb_id, in_block_w, out_cb_id);
         // DPRINT << "Tilize init done\n";
     }
@@ -40,28 +41,6 @@ void tilize_in(uint32_t in_cb_id, uint32_t in_block_w, uint32_t in_num_subblocks
     if constexpr (uninit_tilize) {
         tilize_uninit(in_cb_id, out_cb_id);
     }
-}
-
-void print_tile(uint32_t cb_idx, uint32_t tile_idx, bool untilize = false) {
-    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
-    DPRINT << "======" << ENDL();
-    for (uint16_t r = 0; r < 32; ++r) {
-        DPRINT << (uint)r << " : "
-               << TileSlice(
-                      cb_idx,
-                      tile_idx,
-                      SliceRange{
-                          .h0 = (uint8_t)r,
-                          .h1 = (uint8_t)(r + 1),
-                          .hs = (uint8_t)1,
-                          .w0 = (uint8_t)0,
-                          .w1 = (uint8_t)32,
-                          .ws = (uint8_t)1},
-                      true,
-                      untilize)
-               << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
 }
 
 namespace NAMESPACE {
@@ -118,7 +97,7 @@ void MAIN {
     // Initialize for separate tilization and reduction steps
     // Initialize reduction from tilized data to output (SUM reduction for bilinear interpolation)
     // reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL>(tilized_input_cb_id, in_scalar_cb_id_0, out_cb_id);
-    // pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
+    pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
 
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
@@ -138,8 +117,6 @@ void MAIN {
         if constexpr (!one_scalar_per_core) {
             cb_wait_front(curr_scalar_cb_id, 1);
         }
-        // cb_wait_front(tilized_input_cb_id, 1);
-
         // Process channel blocks
         for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
             const bool last_c_block = c_i == in_nblocks_c - 1;
@@ -157,18 +134,10 @@ void MAIN {
 
             tilize_in(curr_in_cb_id, tiles_to_reduce, 1, tilized_input_cb_id);
 
-            // UNPACK(print_tile(tilized_input_cb_id, 0, true);)
-
             tile_regs_acquire();
 
-            // reduce_init(tilized_input_cb_id, curr_scalar_cb_id, out_cb_id);
             UNPACK((llk_unpack_AB_reduce_init<REDUCE_DIM>(tilized_input_cb_id, curr_scalar_cb_id)));
             MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY, false>()));
-            // MATH((llk_math_hw_configure_disaggregated(tilized_input_cb_id, curr_scalar_cb_id)));
-            // PACK((llk_pack_reduce_mask_config<false /*untilize*/, REDUCE_DIM>()));
-            // tensix_sync();
-            // pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
-            // tensix_sync();
 
 #ifdef ARCH_BLACKHOLE
             // need this on BH to set swizzle bit before pack untilize dest
@@ -177,70 +146,25 @@ void MAIN {
             PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(
                 out_cb_id, num_out_sticks, num_faces_in_output_tile)));
 
-            UNPACK(DPRINT << "Tilized input:" << ENDL());
-            UNPACK(tt::compute::common::print_full_tile(tilized_input_cb_id, 0));
-            UNPACK(DPRINT << "Scalar:" << ENDL());
-            UNPACK(tt::compute::common::print_full_tile(curr_scalar_cb_id, 0));
-
             for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
-                // Perform reduction on already tilized data (sum for bilinear interpolation)
-                // UNPACK((llk_unpack_AB(tilized_input_cb_id, curr_scalar_cb_id, math_tile_idx, 0)));
-                // REDUCE_OP is expected to come from add_define
-                // reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
-
                 reduce_tile(tilized_input_cb_id, curr_scalar_cb_id, math_tile_idx, 0, math_tile_idx);
             }
 
-            if (n == 0) {
-                tensix_sync();
-                MATH(DPRINT << "After reduce math\n";)
-                dprint_tensix_dest_reg<true>(0);
-                tensix_sync();
-                // dprint_tensix_dest_reg(1);
-            }
-
-            // DPRINT << "Reduce math completed\n";
-
-            // reduce_uninit();
-
             tile_regs_commit();
             tile_regs_wait();
-
-            // tensix_sync();
-            // unary_op_init_common(tilized_input_cb_id, out_cb_id);
-            // tensix_sync();
-
-            // Pack output directly to row-major format (no tiling needed for grid sample)
-
-            // DPRINT << "Pack untilize dest init started \n";
-
-            // pack_reconfig_data_format(out_cb_id);
-
-            // #ifdef ARCH_BLACKHOLE
-            //     // Needed for setting swizzle_32b:
-            //     MATH((llk_math_hw_configure_disaggregated<true, true>(0, 0)));
-            // #endif
-            //     // A workaround for tt-metal#17132. Should be addressed more systematically.
-            //     PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(
-            //         out_cb_id, num_out_sticks, num_faces_in_output_tile)));
 
             pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
 
             cb_push_back(out_cb_id, output_faces);
             cb_pop_front(tilized_input_cb_id, tiles_to_reduce);
 
-            // DPRINT << "Pack untilize completed, releasing tile regs\n";
             tile_regs_release();
-            // DPRINT << "Stick " << n << " channel block " << c_i << " done\n";
         }
 
         if constexpr (!one_scalar_per_core) {
             cb_pop_front(curr_scalar_cb_id, 1);
         }
     }
-    // Clean up reduce operation
-    // reduce_uninit();
-    // DPRINT << "Kernel done\n";
 }
 
 }  // namespace NAMESPACE

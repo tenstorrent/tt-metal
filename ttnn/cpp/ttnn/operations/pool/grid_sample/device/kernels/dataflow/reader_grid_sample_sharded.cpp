@@ -68,6 +68,7 @@ void kernel_main() {
 
     // Zero out input CB to handle invalid coordinates properly
     zero_out_tiles<input_cb_index>();
+    zero_out_tiles<scalar_cb_index>();
 
     // Get local grid data base address (already in L1)
     const uint32_t l1_grid_base_addr = get_read_ptr(grid_cb_index);
