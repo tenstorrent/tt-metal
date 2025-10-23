@@ -12,7 +12,7 @@ import ttnn
 from ...blocks.attention import Attention
 from ...blocks.transformer_block import TransformerBlock
 from ...layers.embeddings import CombinedTimestepGuidanceTextProjEmbeddings
-from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
+from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear, prepare_chunked_linear_output
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm
 from ...utils.substate import rename_substate
@@ -100,7 +100,7 @@ class Flux1SingleTransformerBlock(Module):
 
         embedding_dim = state["time_embed.weight"].shape[1]
 
-        _shuffle_linear_output(
+        prepare_chunked_linear_output(
             state,
             prefix="time_embed",
             device_count=self.parallel_config.tensor_parallel.factor,
@@ -427,20 +427,3 @@ class Flux1Transformer(Module):
 def _chunk_time3d(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
     size = t.shape[-1] // count
     return [t[:, :, i * size : (i + 1) * size] for i in range(count)]
-
-
-def _shuffle_linear_output(state: dict[str, torch.Tensor], *, prefix: str, device_count: int, chunks: int) -> None:
-    weight_key = f"{prefix}.weight"
-    bias_key = f"{prefix}.bias"
-
-    weight = state.get(weight_key)
-    bias = state.get(bias_key)
-
-    if weight is not None:
-        _, in_dim = weight.shape
-        weight = weight.reshape([chunks, device_count, -1, in_dim]).transpose(0, 1).reshape([-1, in_dim])
-        state[weight_key] = weight
-
-    if bias is not None:
-        bias = state[bias_key].reshape([chunks, device_count, -1]).transpose(0, 1).reshape([-1])
-        state[bias_key] = bias
