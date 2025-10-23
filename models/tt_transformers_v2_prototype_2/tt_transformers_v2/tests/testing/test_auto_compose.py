@@ -21,17 +21,25 @@ from tt_transformers_v2.src.testing.auto_compose import to_torch_auto_compose
 # ======================================================================================
 
 
-# Try a variety of mesh shapes; tests skip if device can't be opened
-pytestmark = pytest.mark.parametrize(
-    "mesh_device",
-    [
-        [1, 1],  # single device
-        [1, 2],  # 1D mesh, 2 devices
-        [1, 8],  # 1D mesh, 8 devices
-        [2, 4],  # 2D mesh, 8 devices
-    ],
-    indirect=True,
-)
+# Try a variety of mesh shapes and tensor layouts; tests skip if device can't be opened
+pytestmark = [
+    pytest.mark.parametrize(
+        "mesh_device",
+        [
+            # [1, 1],  # single device # [INFO] apply auto_compose on single device would incur error in c++ code
+            [1, 2],  # 1D mesh, 2 devices
+            [1, 8],  # 1D mesh, 8 devices
+            [2, 4],  # 2D mesh, 8 devices
+        ],
+        ids=["1x2", "1x8", "2x4"],
+        indirect=True,
+    ),
+    pytest.mark.parametrize(
+        "layout",
+        [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+        ids=["row_major", "tile"],
+    ),
+]
 
 
 @pytest.fixture(scope="module")
@@ -150,7 +158,7 @@ def _get_hw_shard_unit() -> int:
 # ======================================================================================
 
 
-def test_host_sharded_1d(mesh_device: ttnn.MeshDevice) -> None:
+def test_host_sharded_1d(mesh_device: ttnn.MeshDevice, layout) -> None:
     """Test automatic composition of host-sharded 1D tensors."""
     num_devices = mesh_device.get_num_devices()
     if num_devices < 2:
@@ -161,7 +169,11 @@ def test_host_sharded_1d(mesh_device: ttnn.MeshDevice) -> None:
 
     # Create a host-sharded tensor along dim=0
     tt_host_sharded = ttnn.from_torch(
-        torch_in, device=None, dtype=ttnn.bfloat16, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)
+        torch_in,
+        device=None,
+        dtype=ttnn.bfloat16,
+        layout=layout,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
 
     # Validate that auto-composition returns original torch input
@@ -174,7 +186,7 @@ def test_host_sharded_1d(mesh_device: ttnn.MeshDevice) -> None:
     assert torch.equal(torch_auto, torch_in), "Auto-composer mismatch on host-sharded tensor"
 
 
-def test_device_sharded_1d(mesh_device: ttnn.MeshDevice) -> None:
+def test_device_sharded_1d(mesh_device: ttnn.MeshDevice, layout) -> None:
     """Test automatic composition of device-sharded 1D tensors."""
     num_devices = mesh_device.get_num_devices()
     if num_devices < 2:
@@ -185,7 +197,11 @@ def test_device_sharded_1d(mesh_device: ttnn.MeshDevice) -> None:
 
     # Distribute to mesh device directly (device storage)
     tt_dev_sharded = ttnn.from_torch(
-        torch_in, device=mesh_device, dtype=ttnn.bfloat16, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)
+        torch_in,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=layout,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
     # [INFO]{ equivalent to:
     # mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
@@ -209,7 +225,7 @@ def test_device_sharded_1d(mesh_device: ttnn.MeshDevice) -> None:
 
 
 @pytest.mark.parametrize("dim", [0, 1, -1])
-def test_host_sharded_various_dims(mesh_device: ttnn.MeshDevice, dim: int) -> None:
+def test_host_sharded_various_dims(mesh_device: ttnn.MeshDevice, layout, dim: int) -> None:
     num_devices = mesh_device.get_num_devices()
     if num_devices < 2:
         pytest.skip(f"Test requires at least 2 devices, found {num_devices}")
@@ -221,7 +237,11 @@ def test_host_sharded_various_dims(mesh_device: ttnn.MeshDevice, dim: int) -> No
     torch_in = _make_arange_bf16(tuple(shape))
 
     tt_host_sharded = ttnn.from_torch(
-        torch_in, device=None, dtype=ttnn.bfloat16, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim)
+        torch_in,
+        device=None,
+        dtype=ttnn.bfloat16,
+        layout=layout,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim),
     )
 
     torch_auto = to_torch_auto_compose(tt_host_sharded, device=mesh_device)
@@ -232,7 +252,7 @@ def test_host_sharded_various_dims(mesh_device: ttnn.MeshDevice, dim: int) -> No
 
 
 @pytest.mark.parametrize("dim", [0, 1, -1])
-def test_device_sharded_various_dims(mesh_device: ttnn.MeshDevice, dim: int) -> None:
+def test_device_sharded_various_dims(mesh_device: ttnn.MeshDevice, layout, dim: int) -> None:
     num_devices = mesh_device.get_num_devices()
     if num_devices < 2:
         pytest.skip(f"Test requires at least 2 devices, found {num_devices}")
@@ -244,7 +264,11 @@ def test_device_sharded_various_dims(mesh_device: ttnn.MeshDevice, dim: int) -> 
     torch_in = _make_arange_bf16(tuple(shape))
 
     tt_dev_sharded = ttnn.from_torch(
-        torch_in, device=mesh_device, dtype=ttnn.bfloat16, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim)
+        torch_in,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=layout,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim),
     )
 
     torch_auto = to_torch_auto_compose(tt_dev_sharded, device=mesh_device)
@@ -260,7 +284,7 @@ def test_device_sharded_various_dims(mesh_device: ttnn.MeshDevice, dim: int) -> 
 
 
 @pytest.mark.parametrize("dims_pair", [(0, 1), (0, -1), (1, -1)])
-def test_host_sharded_2d_shard_shard(mesh_device: ttnn.MeshDevice, dims_pair: tuple[int, int]) -> None:
+def test_host_sharded_2d_shard_shard(mesh_device: ttnn.MeshDevice, layout, dims_pair: tuple[int, int]) -> None:
     mesh_shape = tuple(mesh_device.shape)
     if len(mesh_shape) != 2 or mesh_shape[0] <= 1 or mesh_shape[1] <= 1:
         pytest.skip("Requires a 2D mesh with both dims > 1")
@@ -276,7 +300,7 @@ def test_host_sharded_2d_shard_shard(mesh_device: ttnn.MeshDevice, dims_pair: tu
     torch_in = _make_arange_bf16(tuple(shape))
 
     mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(dims_pair[0], dims_pair[1]))
-    tt_host_sharded = ttnn.from_torch(torch_in, device=None, dtype=ttnn.bfloat16, mesh_mapper=mapper)
+    tt_host_sharded = ttnn.from_torch(torch_in, device=None, dtype=ttnn.bfloat16, layout=layout, mesh_mapper=mapper)
 
     torch_auto = to_torch_auto_compose(tt_host_sharded, device=mesh_device)
     composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(dims_pair[0], dims_pair[1]))
@@ -287,7 +311,7 @@ def test_host_sharded_2d_shard_shard(mesh_device: ttnn.MeshDevice, dims_pair: tu
 
 
 @pytest.mark.parametrize("dims_pair", [(0, 1), (0, -1), (1, -1)])
-def test_device_sharded_2d_shard_shard(mesh_device: ttnn.MeshDevice, dims_pair: tuple[int, int]) -> None:
+def test_device_sharded_2d_shard_shard(mesh_device: ttnn.MeshDevice, layout, dims_pair: tuple[int, int]) -> None:
     mesh_shape = tuple(mesh_device.shape)
     if len(mesh_shape) != 2 or mesh_shape[0] <= 1 or mesh_shape[1] <= 1:
         pytest.skip("Requires a 2D mesh with both dims > 1")
@@ -303,7 +327,9 @@ def test_device_sharded_2d_shard_shard(mesh_device: ttnn.MeshDevice, dims_pair: 
     torch_in = _make_arange_bf16(tuple(shape))
 
     mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(dims_pair[0], dims_pair[1]))
-    tt_dev_sharded = ttnn.from_torch(torch_in, device=mesh_device, dtype=ttnn.bfloat16, mesh_mapper=mapper)
+    tt_dev_sharded = ttnn.from_torch(
+        torch_in, device=mesh_device, dtype=ttnn.bfloat16, layout=layout, mesh_mapper=mapper
+    )
 
     torch_auto = to_torch_auto_compose(tt_dev_sharded, device=mesh_device)
     composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(dims_pair[0], dims_pair[1]))
@@ -321,7 +347,7 @@ def test_device_sharded_2d_shard_shard(mesh_device: ttnn.MeshDevice, dims_pair: 
     ],
 )
 def test_host_sharded_2d_with_replicate(
-    mesh_device: ttnn.MeshDevice, dims_pair: tuple[object, object], replicate_axis: int
+    mesh_device: ttnn.MeshDevice, layout, dims_pair: tuple[object, object], replicate_axis: int
 ) -> None:
     mesh_shape = tuple(mesh_device.shape)
     if len(mesh_shape) != 2 or mesh_shape[replicate_axis] <= 1 or mesh_shape[1 - replicate_axis] <= 1:
@@ -337,7 +363,7 @@ def test_host_sharded_2d_with_replicate(
     torch_in = _make_arange_bf16(tuple(shape))
 
     mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims_pair)  # type: ignore[arg-type]
-    tt_host = ttnn.from_torch(torch_in, device=None, dtype=ttnn.bfloat16, mesh_mapper=mapper)
+    tt_host = ttnn.from_torch(torch_in, device=None, dtype=ttnn.bfloat16, layout=layout, mesh_mapper=mapper)
 
     torch_auto = to_torch_auto_compose(tt_host, device=mesh_device)
 
@@ -353,7 +379,7 @@ def test_host_sharded_2d_with_replicate(
 
 
 @pytest.mark.parametrize("category", ["lt", "eq", "gt"])  # per-shard length relative to threshold
-def test_host_sharded_shape_thresholds(mesh_device: ttnn.MeshDevice, category: str) -> None:
+def test_host_sharded_shape_thresholds(mesh_device: ttnn.MeshDevice, layout, category: str) -> None:
     num_devices = mesh_device.get_num_devices()
     if num_devices < 2:
         pytest.skip(f"Test requires at least 2 devices, found {num_devices}")
@@ -375,7 +401,11 @@ def test_host_sharded_shape_thresholds(mesh_device: ttnn.MeshDevice, category: s
     torch_in = _make_arange_bf16(tuple(shape))
 
     tt_host_sharded = ttnn.from_torch(
-        torch_in, device=None, dtype=ttnn.bfloat16, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim)
+        torch_in,
+        device=None,
+        dtype=ttnn.bfloat16,
+        layout=layout,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim),
     )
 
     torch_auto = to_torch_auto_compose(tt_host_sharded, device=mesh_device)
@@ -386,7 +416,7 @@ def test_host_sharded_shape_thresholds(mesh_device: ttnn.MeshDevice, category: s
 
 
 @pytest.mark.parametrize("category", ["lt", "eq", "gt"])  # per-shard length relative to threshold
-def test_device_sharded_shape_thresholds(mesh_device: ttnn.MeshDevice, category: str) -> None:
+def test_device_sharded_shape_thresholds(mesh_device: ttnn.MeshDevice, layout, category: str) -> None:
     num_devices = mesh_device.get_num_devices()
     if num_devices < 2:
         pytest.skip(f"Test requires at least 2 devices, found {num_devices}")
@@ -410,6 +440,7 @@ def test_device_sharded_shape_thresholds(mesh_device: ttnn.MeshDevice, category:
         torch_in,
         device=mesh_device,
         dtype=ttnn.bfloat16,
+        layout=layout,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim),
     )
 
