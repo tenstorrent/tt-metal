@@ -29,15 +29,18 @@ void MAIN {
     //-------------------------------------------------------------------------
     // Main loop - compute ema for each batch
     ema_init();
+    ema_load_alpha_beta(alpha_bits, beta_bits);
     transpose_wh_init(src_cb, dst_cb);
 
     for (uint32_t batch_id = 0; batch_id < total_batches_per_core; ++batch_id) {
+        // For each batch, clear the previous output
+        ema_clear_prev_output();
         for (uint32_t tile_id = 0; tile_id < tiles_per_channel; ++tile_id) {
             // Read input, transpose and compute ema
             cb_wait_front(src_cb, 1);
             tile_regs_acquire();
             transpose_wh_tile(src_cb, 0, inp_dst_index);
-            ema_tile<inp_dst_index>((tile_id == 0));
+            ema_tile(inp_dst_index);
             tile_regs_commit();
             cb_pop_front(src_cb, 1);
 
