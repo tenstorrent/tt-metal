@@ -6,7 +6,8 @@
 import pytest
 import ttnn
 import torch
-from diffusers import DiffusionPipeline
+from diffusers import StableDiffusionXLImg2ImgPipeline
+from PIL import Image
 from loguru import logger
 from transformers import CLIPTextModelWithProjection, CLIPTextModel
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
@@ -18,7 +19,10 @@ import os
 from models.common.utility_functions import profiler
 from conftest import is_galaxy
 
-from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtSDXLPipeline, TtSDXLPipelineConfig
+from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_img2img_pipeline import (
+    TtSDXLImg2ImgPipeline,
+    TtSDXLImg2ImgPipelineConfig,
+)
 
 MAX_SEQUENCE_LENGTH = 77
 TEXT_ENCODER_2_PROJECTION_DIM = 1280
@@ -30,6 +34,7 @@ def run_demo_inference(
     ttnn_device,
     is_ci_env,
     prompts,
+    images,
     negative_prompts,
     num_inference_steps,
     vae_on_device,
@@ -39,6 +44,7 @@ def run_demo_inference(
     guidance_scale,
     use_cfg_parallel,
     fixed_seed_for_batch,
+    strength,
     prompt_2=None,
     negative_prompt_2=None,
     crop_coords_top_left=(0, 0),
@@ -72,12 +78,12 @@ def run_demo_inference(
 
     # 1. Load components
     profiler.start("diffusion_pipeline_from_pretrained")
-    pipeline = DiffusionPipeline.from_pretrained(
+    pipeline = StableDiffusionXLImg2ImgPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
         local_files_only=is_ci_env,
-    )
+    ).to("cpu")
     profiler.end("diffusion_pipeline_from_pretrained")
 
     assert isinstance(pipeline.text_encoder, CLIPTextModel), "pipeline.text_encoder is not a CLIPTextModel"
@@ -85,15 +91,16 @@ def run_demo_inference(
         pipeline.text_encoder_2, CLIPTextModelWithProjection
     ), "pipeline.text_encoder_2 is not a CLIPTextModelWithProjection"
 
-    tt_sdxl = TtSDXLPipeline(
+    tt_sdxl = TtSDXLImg2ImgPipeline(
         ttnn_device=ttnn_device,
         torch_pipeline=pipeline,
-        pipeline_config=TtSDXLPipelineConfig(
+        pipeline_config=TtSDXLImg2ImgPipelineConfig(
             capture_trace=capture_trace,
             vae_on_device=vae_on_device,
             encoders_on_device=encoders_on_device,
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
+            strength=strength,
             is_galaxy=is_galaxy(),
             use_cfg_parallel=use_cfg_parallel,
             crop_coords_top_left=crop_coords_top_left,
@@ -104,7 +111,18 @@ def run_demo_inference(
     if encoders_on_device:
         tt_sdxl.compile_text_encoding()
 
+    images = images + [images[0]] * needed_padding
+    images = [
+        tt_sdxl.torch_pipeline.image_processor.preprocess(
+            image, height=1024, width=1024, crops_coords=None, resize_mode="default"
+        ).to(dtype=torch.float32)
+        for image in images
+    ]
+
+    images = torch.cat(images, dim=0)  # [batch_size, 3, 1024, 1024]
+
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
+        torch_image=torch.randn(batch_size, 3, 1024, 1024),
         all_prompt_embeds_torch=torch.randn(batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),
         torch_add_text_embeds=torch.randn(batch_size, 2, TEXT_ENCODER_2_PROJECTION_DIM),
         timesteps=timesteps,
@@ -123,7 +141,7 @@ def run_demo_inference(
     if not is_ci_env and not os.path.exists("output"):
         os.mkdir("output")
 
-    images = []
+    out_images = []
     logger.info("Starting ttnn inference...")
     for iter in range(len(prompts) // batch_size):
         profiler.start("end_to_end_generation")
@@ -153,8 +171,9 @@ def run_demo_inference(
         ) = tt_sdxl.encode_prompts(prompts_batch, negative_prompts_batch, prompts_2_batch, negative_prompts_2_batch)
 
         tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
-            all_prompt_embeds_torch,
-            torch_add_text_embeds,
+            torch_image=images[iter * batch_size : (iter + 1) * batch_size],
+            all_prompt_embeds_torch=all_prompt_embeds_torch,
+            torch_add_text_embeds=torch_add_text_embeds,
             start_latent_seed=0,
             fixed_seed_for_batch=fixed_seed_for_batch,
             timesteps=timesteps,
@@ -176,7 +195,7 @@ def run_demo_inference(
         )
         logger.info(f"Image gen for {batch_size} prompts completed in {profiler.times['image_gen'][-1]:.2f} seconds")
         logger.info(
-            f"Denoising loop for {batch_size} promts completed in {profiler.times['denoising_loop'][-1]:.2f} seconds"
+            f"Denoising loop for {batch_size} prompts completed in {profiler.times['denoising_loop'][-1]:.2f} seconds"
         )
         logger.info(
             f"{'On device VAE' if vae_on_device else 'Host VAE'} decoding completed in {profiler.times['vae_decode'][-1]:.2f} seconds"
@@ -190,14 +209,14 @@ def run_demo_inference(
                 break
             img = img.unsqueeze(0)
             img = pipeline.image_processor.postprocess(img, output_type="pil")[0]
-            images.append(img)
+            out_images.append(img)
             if is_ci_env:
-                logger.info(f"Image {len(images)}/{len(prompts) // batch_size} generated successfully")
+                logger.info(f"Image {len(out_images)}/{len(prompts) // batch_size} generated successfully")
             else:
-                img.save(f"output/output{len(images) + start_from}.png")
-                logger.info(f"Image saved to output/output{len(images) + start_from}.png")
+                img.save(f"output/output{len(out_images) + start_from}_tt_img2img.png")
+                logger.info(f"Image saved to output/output{len(out_images) + start_from}_tt_img2img.png")
 
-    return images
+    return out_images
 
 
 def prepare_device(mesh_device, use_cfg_parallel):
@@ -236,7 +255,7 @@ def prepare_device(mesh_device, use_cfg_parallel):
 )
 @pytest.mark.parametrize(
     "prompt",
-    (("An astronaut riding a green horse"),),
+    (("An astronaut riding a red dragon in space, cinematic lighting"),),
 )
 @pytest.mark.parametrize(
     "negative_prompt",
@@ -244,11 +263,11 @@ def prepare_device(mesh_device, use_cfg_parallel):
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
-    ((50),),
+    ((30),),
 )
 @pytest.mark.parametrize(
     "guidance_scale",
-    ((5.0),),
+    ((7.5),),
 )
 @pytest.mark.parametrize(
     "vae_on_device",
@@ -275,6 +294,10 @@ def prepare_device(mesh_device, use_cfg_parallel):
     ids=("with_trace", "no_trace"),
 )
 @pytest.mark.parametrize(
+    "strength",
+    ((0.6),),
+)
+@pytest.mark.parametrize(
     "prompt_2, negative_prompt_2, crop_coords_top_left, guidance_rescale, timesteps, sigmas",
     [
         (None, None, (0, 0), 0.0, None, None),
@@ -295,6 +318,7 @@ def test_demo(
     guidance_scale,
     use_cfg_parallel,
     fixed_seed_for_batch,
+    strength,
     prompt_2,
     negative_prompt_2,
     crop_coords_top_left,
@@ -302,11 +326,15 @@ def test_demo(
     timesteps,
     sigmas,
 ):
+    image_path = "models/experimental/stable_diffusion_xl_base/reference/output/sdxl_output.jpg"
+    img = Image.open(image_path).convert("RGB")
+
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
         mesh_device,
         is_ci_env,
         prompt,
+        [img],
         negative_prompt,
         num_inference_steps,
         vae_on_device,
@@ -316,6 +344,7 @@ def test_demo(
         guidance_scale,
         use_cfg_parallel,
         fixed_seed_for_batch,
+        strength,
         prompt_2,
         negative_prompt_2,
         crop_coords_top_left,

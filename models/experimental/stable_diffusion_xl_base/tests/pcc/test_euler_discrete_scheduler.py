@@ -103,3 +103,69 @@ def test_euler_discrete_scheduler(device, input_shape, num_inference_steps, is_c
             torch_prev_sample = ttnn.from_device(tt_prev_sample).to_torch()
             passed, msg = assert_with_pcc(ref_prev_sample, torch_prev_sample, 0.999)
             logger.debug(f"{i}: prev_sample pcc passed: {msg}")
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        (1, 4, 128, 128),
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize("num_inference_steps", [20])
+def test_euler_discrete_scheduler_add_noise(device, input_shape, num_inference_steps, is_ci_env, reset_seeds):
+    pipe = DiffusionPipeline.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+        local_files_only=is_ci_env,
+    )
+
+    scheduler = pipe.scheduler
+    tt_scheduler = TtEulerDiscreteScheduler(
+        device,
+        scheduler.config.num_train_timesteps,
+        scheduler.config.beta_start,
+        scheduler.config.beta_end,
+        scheduler.config.beta_schedule,
+        scheduler.config.trained_betas,
+        scheduler.config.prediction_type,
+        scheduler.config.interpolation_type,
+        scheduler.config.use_karras_sigmas,
+        scheduler.config.use_exponential_sigmas,
+        scheduler.config.use_beta_sigmas,
+        scheduler.config.sigma_min,
+        scheduler.config.sigma_max,
+        scheduler.config.timestep_spacing,
+        scheduler.config.timestep_type,
+        scheduler.config.steps_offset,
+        scheduler.config.rescale_betas_zero_snr,
+        scheduler.config.final_sigmas_type,
+    )
+
+    scheduler.set_timesteps(num_inference_steps=num_inference_steps)
+    tt_scheduler.set_timesteps(num_inference_steps=num_inference_steps)
+
+    # Set begin index to 1 in both cases, to mimic the case in pipeline_stable_diffusion_xl_inpaint.py
+    begin_index = 1
+    scheduler.set_begin_index(begin_index)
+    tt_scheduler.set_begin_index(begin_index)
+
+    torch_original_samples = torch.randn(input_shape, dtype=torch.float32)
+    tt_original_samples = ttnn.from_torch(torch_original_samples, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT).to(
+        device=device
+    )
+
+    torch_noise = torch.randn(input_shape, dtype=torch.float32)
+    tt_noise = ttnn.from_torch(torch_noise, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT).to(device=device)
+
+    torch_timesteps = scheduler.timesteps
+    ttnn_timesteps = tt_scheduler.timesteps
+
+    latent_timestep = torch_timesteps[:1]
+    torch_noisy_sample = scheduler.add_noise(torch_original_samples, torch_noise, latent_timestep)
+
+    tt_noisy_sample = tt_scheduler.add_noise(tt_original_samples, tt_noise)
+
+    tt_noisy_sample = ttnn.to_torch(tt_noisy_sample)
+    assert_with_pcc(tt_noisy_sample, torch_noisy_sample, 0.999)
