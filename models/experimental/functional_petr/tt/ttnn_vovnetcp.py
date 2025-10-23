@@ -4,6 +4,7 @@
 import ttnn
 from models.experimental.functional_petr.tt.common import Conv, Conv_with_split
 import torch
+from torch.nn import functional as F
 
 
 class ttnn_hsigmoid:
@@ -19,7 +20,6 @@ class ttnn_hsigmoid:
 
 class ttnn_esemodule:
     def __init__(self, parameters, is_split=False):
-        # self.avg_pool = ttnn.global_avg_pool2d
         if is_split:
             self.fc = Conv_with_split([1, 1, 0, 0], parameters["fc"])
         else:
@@ -28,23 +28,10 @@ class ttnn_esemodule:
 
     def __call__(self, device, x):
         input = x
-        # x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        # x = self.avg_pool(x)
-        # y = x
-        # print(f"y.shape: {y.shape}")
-        # y = ttnn.global_avg_pool2d(y)
-        # print(f"y.shape: {y.shape}")
-        # x_torch = ttnn.to_torch(x).to(torch.bfloat16)  # Convert to float32
-        # x_torch = x_torch.mean(dim=(1, 2), keepdim=True)  # Global avg pool
-        # x = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, device=device)
-        # x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         B, H, W, C = x.shape
-        # print(f"B: {B}, H: {H}, W: {W}, C: {C}")
         x = ttnn.reshape(x, (B, H * W, C))
-        # print(f"x.shape: {x.shape}")
         x = ttnn.mean(x, dim=1, keepdim=True)  # [B, 1, C]
         x = ttnn.reshape(x, (B, 1, 1, C))
-        # print(f"x.shape: {x.shape}")
         x = self.fc(device, x)
         x = self.hsigmoid(x)
         if input.get_layout() != ttnn.TILE_LAYOUT:
@@ -254,6 +241,7 @@ class ttnn_osa_stage:
         SE=False,
         depthwise=False,
     ):
+        self.torch_fallback = True
         self.blocks = []
         if not stage_num == 2:
             self.pooling = True
@@ -302,18 +290,28 @@ class ttnn_osa_stage:
 
     def __call__(self, device, x):
         if self.pooling is True:
-            x = ttnn.max_pool2d(
-                input_tensor=x,
-                batch_size=x.shape[0],
-                input_h=x.shape[1],
-                input_w=x.shape[2],
-                channels=x.shape[3],
-                kernel_size=[3, 3],
-                stride=[2, 2],
-                padding=[0, 0],
-                dilation=[1, 1],
-                ceil_mode=True,
-            )
+            if self.torch_fallback:
+                # Maxpool in torch
+                x_torch = ttnn.to_torch(x).to(torch.bfloat16)
+                x_torch = x_torch.permute(0, 3, 1, 2)
+                x_torch = F.max_pool2d(x_torch, kernel_size=3, stride=2, padding=0, ceil_mode=True)
+                x_torch = x_torch.permute(0, 2, 3, 1)
+                x = ttnn.from_torch(x_torch.to(torch.float32), dtype=ttnn.bfloat16, device=device)
+                x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+            else:
+                # Maxpool in ttnn
+                x = ttnn.max_pool2d(
+                    input_tensor=x,
+                    batch_size=x.shape[0],
+                    input_h=x.shape[1],
+                    input_w=x.shape[2],
+                    channels=x.shape[3],
+                    kernel_size=[3, 3],
+                    stride=[2, 2],
+                    padding=[0, 0],
+                    dilation=[1, 1],
+                    ceil_mode=True,
+                )
 
         for module_name in self.blocks:
             module = getattr(self, module_name)  # Retrieve the block by name
