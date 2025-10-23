@@ -88,7 +88,7 @@ def test_accuracy_model(
         logger.info(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f}GB")
 
     # Initialize Diffusers pipeline
-    model_id = f"black-forest-labs/FLUX.1-{model_name}"
+    model_id = "./flux_schnell"
     logger.info(f"Loading model: {model_id}")
 
     pipeline = FluxPipeline.from_pretrained(
@@ -134,7 +134,6 @@ def test_accuracy_model(
 
     for i, prompt in enumerate(prompts):
         logger.info(f"Generating image {i+1}/{len(prompts)}: {prompt[:50]}...")
-        negative_prompt = ""
 
         start_total = time.time()
         profiler.start("denoising_loop")
@@ -143,11 +142,10 @@ def test_accuracy_model(
         with torch.no_grad():
             generated_images = pipeline(
                 prompt=prompt,
-                negative_prompt=negative_prompt,
                 height=image_h,
                 width=image_w,
                 num_inference_steps=num_inference_steps,
-                guidance_scale=guidance_scale,
+                max_sequence_length=256,
                 generator=generator,
                 output_type="pil",
             ).images
