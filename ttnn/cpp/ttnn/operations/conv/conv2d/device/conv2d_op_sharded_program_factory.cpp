@@ -786,7 +786,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         get_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).index,
-        get_cb_info_by_name(cb_info, Conv2dCb::L1_ARRAY).index};
+        get_cb_info_by_name(cb_info, Conv2dCb::L1_ARRAY).index,
+        (uint32_t)enable_split_reader,
+        (uint32_t)enable_activation_reuse};
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
@@ -820,6 +822,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
 
         reader_compile_time_args.insert(
             reader_compile_time_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
+    } else {
+        // Add dummy activation reuse arguments when not enabled
+        std::vector<uint32_t> activation_reuse_dummy_args(8, 0);
+        reader_compile_time_args.insert(
+            reader_compile_time_args.end(), activation_reuse_dummy_args.begin(), activation_reuse_dummy_args.end());
     }
 
     if (skip_activation_mcast) {
@@ -876,37 +883,40 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         num_blocks_act_h_per_core,
         num_blocks_weight_w_per_core,
         out_conv_c_blocks,
-        (uint32_t)has_bias};
+        (uint32_t)has_bias,
+        (uint32_t)enable_split_reader,
+        (uint32_t)(enable_activation_reuse && height_sharded)};
 
-    if (enable_split_reader) {
-        std::vector<uint32_t> split_reader_args = {
-            (uint32_t)act_block_num_tiles_split_last,
-            (uint32_t)conv_act_c_read_bytes,
-            (uint32_t)filter_w,                       // weight_size_w
-            (uint32_t)(conv_act_size_w + pad_w),      // conv_act_size_w_padded
-            (uint32_t)act_block_w_extra_align_bytes,  // only used for 1d systolic variant
-            (uint32_t)needs_act_block_zero_out,
-            (uint32_t)dilation_h,
-            (uint32_t)dilation_w,
-            (uint32_t)stride_w,
-            (uint32_t)filter_h};
+    std::vector<uint32_t> split_reader_args = {
+        (uint32_t)act_block_num_tiles_split_last,
+        (uint32_t)conv_act_c_read_bytes,
+        (uint32_t)filter_w,                       // weight_size_w
+        (uint32_t)(conv_act_size_w + pad_w),      // conv_act_size_w_padded
+        (uint32_t)act_block_w_extra_align_bytes,  // only used for 1d systolic variant
+        (uint32_t)needs_act_block_zero_out,
+        (uint32_t)dilation_h,
+        (uint32_t)dilation_w,
+        (uint32_t)stride_w,
+        (uint32_t)filter_h};
 
-        if (enable_activation_reuse && height_sharded) {
-            std::vector<uint32_t> activation_reuse_args = {
-                activation_reuse_config.act_cb_num_tiles_split_last,
-                act_block_w_ntiles,
-                static_cast<uint32_t>(activation_reuse_config.readers_process_full_image_widths),
-                activation_reuse_config.image_width_tiles,
-                output_image_width,
-                activation_reuse_config.reuse_window_offset,
-                static_cast<uint32_t>(activation_reuse_config.num_cores_with_non_meaningful_work > 0),
-                static_cast<uint32_t>(activation_reuse_config.single_core_processes_multiple_batches)};
-            split_reader_args.insert(
-                split_reader_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
-        }
-        writer_compile_time_args.insert(
-            writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
+    if (enable_activation_reuse && height_sharded) {
+        std::vector<uint32_t> activation_reuse_args = {
+            activation_reuse_config.act_cb_num_tiles_split_last,
+            act_block_w_ntiles,
+            static_cast<uint32_t>(activation_reuse_config.readers_process_full_image_widths),
+            activation_reuse_config.image_width_tiles,
+            output_image_width,
+            activation_reuse_config.reuse_window_offset,
+            static_cast<uint32_t>(activation_reuse_config.num_cores_with_non_meaningful_work > 0),
+            static_cast<uint32_t>(activation_reuse_config.single_core_processes_multiple_batches)};
+        split_reader_args.insert(split_reader_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
+    } else {
+        // Add dummy activation reuse arguments when not enabled
+        std::vector<uint32_t> activation_reuse_dummy_args(8, 0);
+        split_reader_args.insert(
+            split_reader_args.end(), activation_reuse_dummy_args.begin(), activation_reuse_dummy_args.end());
     }
+    writer_compile_time_args.insert(writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(writer_compile_time_args);
 
