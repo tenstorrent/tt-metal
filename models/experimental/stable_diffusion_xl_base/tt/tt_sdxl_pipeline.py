@@ -37,6 +37,11 @@ class TtSDXLPipelineConfig:
     use_cfg_parallel: bool = False
     crop_coords_top_left: tuple = (0, 0)
     guidance_rescale: float = 0.0
+    _torch_pipeline_type = StableDiffusionXLPipeline
+
+    @property
+    def pipeline_type(self):
+        return self._torch_pipeline_type
 
 
 class TtSDXLPipeline(LightweightModule):
@@ -50,8 +55,8 @@ class TtSDXLPipeline(LightweightModule):
         super().__init__()
 
         assert isinstance(
-            torch_pipeline, StableDiffusionXLPipeline
-        ), "torch_pipeline must be an instance of StableDiffusionXLPipeline"
+            torch_pipeline, pipeline_config.pipeline_type
+        ), f"torch_pipeline must be an instance of {pipeline_config.pipeline_type.__name__}, but got {type(torch_pipeline).__name__}"
         assert isinstance(torch_pipeline.text_encoder, CLIPTextModel), "pipeline.text_encoder is not a CLIPTextModel"
         assert isinstance(
             torch_pipeline.text_encoder_2, CLIPTextModelWithProjection
@@ -64,6 +69,7 @@ class TtSDXLPipeline(LightweightModule):
         )
         self.torch_pipeline = torch_pipeline
         self.pipeline_config = pipeline_config
+        self._reset_num_inference_steps()
 
         # Validate config parameters once at initialization
         self.__validate_config()
@@ -126,16 +132,20 @@ class TtSDXLPipeline(LightweightModule):
             dtype=ttnn.bfloat16,
         )
 
+        self.num_in_channels_unet = 4
         # Hardcoded input tensor parameters
 
         # Tensor shapes
-        B, C, H, W = 1, 4, 128, 128
+        B, C, H, W = 1, self.num_in_channels_unet, 128, 128
         self.tt_latents_shape = [B, C, H, W]
 
     def set_num_inference_steps(self, num_inference_steps: int):
         # When changing num_inference_steps, the timesteps and latents need to be recreated.
         self.pipeline_config.num_inference_steps = num_inference_steps
         self.generated_input_tensors = False
+
+    def _reset_num_inference_steps(self):
+        self.num_inference_steps = self.pipeline_config.num_inference_steps
 
     def set_guidance_scale(self, guidance_scale: float):
         self.pipeline_config.guidance_scale = guidance_scale
@@ -194,7 +204,7 @@ class TtSDXLPipeline(LightweightModule):
             y <= 2048 and x <= 2048
         ), f"`crop_coords_top_left` = ({y}, {x}) is unreasonably large. Coordinates should typically be within [0, 1024] for SDXL."
 
-    def __validate_timesteps_sigmas(self, timesteps=None, sigmas=None):
+    def _validate_timesteps_sigmas(self, timesteps=None, sigmas=None):
         """
         Validates timesteps and sigmas parameters.
         """
@@ -303,7 +313,7 @@ class TtSDXLPipeline(LightweightModule):
                 self.tt_prompt_embeds_device,
                 self.tt_time_ids_device,
                 self.tt_text_embeds_device,
-                [self.ttnn_timesteps[0]],
+                1,
                 self.extra_step_kwargs,
                 self.guidance_scale,
                 self.scaling_factor,
@@ -322,6 +332,7 @@ class TtSDXLPipeline(LightweightModule):
             if self.pipeline_config.capture_trace:
                 self.__trace_image_processing()
 
+            self._reset_num_inference_steps()
             self.image_processing_compiled = True
 
     def encode_prompts(self, prompts, negative_prompts, prompt_2=None, negative_prompt_2=None):
@@ -459,15 +470,18 @@ class TtSDXLPipeline(LightweightModule):
 
         # Validate timesteps/sigmas at the beginning if custom values are provided
         if timesteps is not None or sigmas is not None:
-            self.__validate_timesteps_sigmas(timesteps, sigmas)
+            self._validate_timesteps_sigmas(timesteps, sigmas)
 
         logger.info("Generating input tensors...")
         profiler.start("prepare_latents")
-        self.__prepare_timesteps(timesteps, sigmas)
+
+        self._prepare_timesteps(timesteps, sigmas)
 
         num_channels_latents = self.torch_pipeline.unet.config.in_channels
         height = width = 1024
-        assert num_channels_latents == 4, f"num_channels_latents is {num_channels_latents}, but it should be 4"
+        assert (
+            num_channels_latents == self.num_in_channels_unet
+        ), f"num_channels_latents is {num_channels_latents}, but it should be 4"
         assert start_latent_seed is None or isinstance(
             start_latent_seed, int
         ), "start_latent_seed must be an integer or None"
@@ -559,7 +573,7 @@ class TtSDXLPipeline(LightweightModule):
             self.tt_prompt_embeds_device,
             self.tt_time_ids_device,
             self.tt_text_embeds_device,
-            self.ttnn_timesteps,
+            self.num_inference_steps,
             self.extra_step_kwargs,
             self.guidance_scale,
             self.scaling_factor,
@@ -575,7 +589,15 @@ class TtSDXLPipeline(LightweightModule):
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
             guidance_rescale=self.pipeline_config.guidance_rescale,
         )
+        self._reset_num_inference_steps()
         return imgs
+
+    def _prepare_timesteps(self, timesteps=None, sigmas=None):
+        # Helper method for timestep preparation.
+
+        self.ttnn_timesteps, self.num_inference_steps = retrieve_timesteps(
+            self.torch_pipeline.scheduler, self.pipeline_config.num_inference_steps, self.cpu_device, timesteps, sigmas
+        )
 
     def __load_tt_components(self, pipeline_config):
         # Method for instantiating TT components based on the torch pipeline.
@@ -715,13 +737,6 @@ class TtSDXLPipeline(LightweightModule):
         profiler.end("create_user_tensors")
         return tt_latents, tt_prompt_embeds, tt_add_text_embeds
 
-    def __prepare_timesteps(self, timesteps=None, sigmas=None):
-        # Helper method for timestep preparation.
-
-        self.ttnn_timesteps, self.pipeline_config.num_inference_steps = retrieve_timesteps(
-            self.torch_pipeline.scheduler, self.pipeline_config.num_inference_steps, self.cpu_device, timesteps, sigmas
-        )
-
     def __trace_image_processing(self):
         # Helper method for image processing trace capture.
 
@@ -738,7 +753,7 @@ class TtSDXLPipeline(LightweightModule):
             self.tt_prompt_embeds_device,
             self.tt_time_ids_device,
             self.tt_text_embeds_device,
-            [self.ttnn_timesteps[0]],
+            1,
             self.extra_step_kwargs,
             self.guidance_scale,
             self.scaling_factor,
