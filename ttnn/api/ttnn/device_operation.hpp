@@ -343,6 +343,16 @@ void launch_operation_with_adapter(
     }
 }
 
+// Returns true if the tensor is fully replicated, false otherwise.
+inline bool is_fully_replicated(const Tensor& tensor) {
+    for (const auto& placement : tensor.tensor_topology().placements()) {
+        if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placement)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Default TensorTopology for output tensors is determined only by the input tensors with the highest distribution rank
 // (highest number of dimensions). The output tensor will have the same distribution rank as these input tensors, taking
 // the max strides of all input tensors. The placement for each distribution dimension will be Shard if at least one
@@ -355,11 +365,29 @@ std::pair<
     tt::tt_metal::distributed::MeshShape>
 get_output_placements_and_shape(
     const typename device_operation_t::tensor_args_t& tensor_args, const Tensor& first_tensor) {
+    bool has_sharded_tensors = false;
+    tt::stl::reflection::visit_object_of_type<Tensor>(
+        [&](const Tensor& tensor) {
+            if (!is_fully_replicated(tensor)) {
+                has_sharded_tensors = true;
+            }
+        },
+        tensor_args);
+
+    // Compute max distribution rank: use only sharded tensors if they exist, otherwise use all tensors (fully
+    // replicated)
     size_t max_distribution_rank = 0;
     tt::stl::reflection::visit_object_of_type<Tensor>(
         [&](const Tensor& tensor) {
-            max_distribution_rank =
-                std::max(max_distribution_rank, tensor.tensor_topology().distribution_shape().dims());
+            if (has_sharded_tensors) {
+                if (!is_fully_replicated(tensor)) {
+                    max_distribution_rank =
+                        std::max(max_distribution_rank, tensor.tensor_topology().distribution_shape().dims());
+                }
+            } else {
+                max_distribution_rank =
+                    std::max(max_distribution_rank, tensor.tensor_topology().distribution_shape().dims());
+            }
         },
         tensor_args);
 
@@ -423,7 +451,7 @@ get_output_placements_and_shape(
                     }
                     result_placements[i] = output_placement;
                 }
-            } else {
+            } else if (!is_fully_replicated(tensor)) {
                 dim_mismatch = true;
             }
         },
