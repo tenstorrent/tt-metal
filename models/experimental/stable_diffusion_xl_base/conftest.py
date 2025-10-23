@@ -40,10 +40,9 @@ def pytest_addoption(parser):
     )
     parser.addoption(
         "--debug-mode",
-        action="store",
+        action="store_true",
         default=False,
-        type=bool,
-        help="Whether to run SDXL in debug mode (default: False)",
+        help="Run SDXL in debug mode (default: False)",
     )
 
 
@@ -100,7 +99,7 @@ def loop_iter_num(request):
 
 @pytest.fixture
 def debug_mode(request):
-    return int(request.config.getoption("--debug-mode"))
+    return request.config.getoption("--debug-mode")
 
 
 @pytest.fixture(scope="function")

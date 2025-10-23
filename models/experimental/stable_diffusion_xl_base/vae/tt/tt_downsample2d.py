@@ -20,6 +20,7 @@ class TtDownsample2D(LightweightModule):
         self.padding = padding
         self.dilation = dilation
         self.groups = groups
+        self.debug_mode = debug_mode
 
         weights = state_dict[f"{module_path}.conv.weight"]
         bias = state_dict[f"{module_path}.conv.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
