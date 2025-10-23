@@ -214,9 +214,9 @@ public:
 
     // System memory buffer allocation methods
     std::unique_ptr<tt::umd::SysmemBuffer> allocate_sysmem_buffer(
-        chip_id_t device_id, size_t sysmem_buffer_size, bool map_to_noc = false) const;
+        ChipId device_id, size_t sysmem_buffer_size, bool map_to_noc = false) const;
     std::unique_ptr<tt::umd::SysmemBuffer> map_sysmem_buffer(
-        chip_id_t device_id, void* buffer, size_t sysmem_buffer_size, bool map_to_noc = false) const;
+        ChipId device_id, void* buffer, size_t sysmem_buffer_size, bool map_to_noc = false) const;
 
     int get_device_aiclk(const ChipId& chip_id) const;
 

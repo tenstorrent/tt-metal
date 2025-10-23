@@ -21,7 +21,7 @@ class SysmemBuffer;
 namespace tt::tt_metal {
 
 class IDevice;
-using chip_id_t = int;
+using ChipId = int;
 
 /**
  * @brief Implementation class for PinnedMemory using pimpl pattern
@@ -52,24 +52,24 @@ public:
     PinnedMemoryImpl& operator=(const PinnedMemoryImpl&) = delete;
 
     // Buffer access methods
-    tt::umd::SysmemBuffer& get_buffer(chip_id_t device_id);
-    const tt::umd::SysmemBuffer& get_buffer(chip_id_t device_id) const;
+    tt::umd::SysmemBuffer& get_buffer(ChipId device_id);
+    const tt::umd::SysmemBuffer& get_buffer(ChipId device_id) const;
 
     // Host pointer access methods
     void* get_host_ptr();
     const void* get_host_ptr() const;
 
     // Device address access method
-    uint64_t get_device_addr(chip_id_t device_id) const;
+    uint64_t get_device_addr(ChipId device_id) const;
 
     // NOC address access method
-    std::optional<PinnedMemory::NocAddr> get_noc_addr(chip_id_t device_id) const;
+    std::optional<PinnedMemory::NocAddr> get_noc_addr(ChipId device_id) const;
 
     // Utility methods
     size_t get_buffer_size() const { return buffer_size_; }
-    std::vector<chip_id_t> get_device_ids() const;
-    bool has_device(chip_id_t device_id) const;
-    bool usable_from_noc(chip_id_t device_id) const;
+    std::vector<ChipId> get_device_ids() const;
+    bool has_device(ChipId device_id) const;
+    bool usable_from_noc(ChipId device_id) const;
 
     void add_barrier_event(const distributed::MeshEvent& event);
 
@@ -87,10 +87,10 @@ private:
     size_t host_offset_ = 0;
 
     // Map from device ID to SysmemBuffer (keyed by MMIO device ID)
-    std::unordered_map<chip_id_t, std::unique_ptr<tt::umd::SysmemBuffer>> device_buffers_;
+    std::unordered_map<ChipId, std::unique_ptr<tt::umd::SysmemBuffer>> device_buffers_;
 
     // Map from logical device ID to its associated MMIO device ID
-    std::unordered_map<chip_id_t, chip_id_t> device_to_mmio_map_;
+    std::unordered_map<ChipId, ChipId> device_to_mmio_map_;
 
     std::deque<distributed::MeshEvent> barrier_events_;
 };
