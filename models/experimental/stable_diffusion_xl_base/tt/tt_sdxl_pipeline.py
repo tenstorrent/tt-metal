@@ -724,8 +724,7 @@ class TtSDXLPipeline(LightweightModule):
             )
             tt_time_ids_host = ttnn.squeeze(tt_time_ids_host, dim=0)
 
-            for host_tensor, device_tensor in zip(tt_time_ids_host, self.tt_time_ids_device):
-                ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
+            ttnn.copy_host_to_device_tensor(tt_time_ids_host, self.tt_time_ids_device)
 
     def __create_user_tensors(self, latents, all_prompt_embeds_torch, torch_add_text_embeds):
         # Instantiation of user host input tensors for the TT model.
