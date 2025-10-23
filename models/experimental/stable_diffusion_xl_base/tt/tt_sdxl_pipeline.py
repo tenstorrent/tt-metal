@@ -37,6 +37,7 @@ class TtSDXLPipelineConfig:
     use_cfg_parallel: bool = False
     crop_coords_top_left: tuple = (0, 0)
     guidance_rescale: float = 0.0
+    _debug_mode: bool = False
     _torch_pipeline_type = StableDiffusionXLPipeline
 
     @property
@@ -61,6 +62,10 @@ class TtSDXLPipeline(LightweightModule):
         assert isinstance(
             torch_pipeline.text_encoder_2, CLIPTextModelWithProjection
         ), "pipeline.text_encoder_2 is not a CLIPTextModelWithProjection"
+        assert not (pipeline_config._debug_mode and pipeline_config.capture_trace), (
+            "`_debug_mode` and `capture_trace` cannot both be enabled at the same time. "
+            "Please set only one of them to True."
+        )
 
         self.ttnn_device = ttnn_device
         self.cpu_device = "cpu"
@@ -613,12 +618,14 @@ class TtSDXLPipeline(LightweightModule):
                 self.torch_pipeline.unet.state_dict(),
                 "unet",
                 model_config=self.tt_model_config,
+                debug_mode=pipeline_config._debug_mode,
             )
             self.tt_vae = (
                 TtAutoencoderKL(
                     self.ttnn_device,
                     self.torch_pipeline.vae.state_dict(),
                     self.tt_model_config,
+                    debug_mode=pipeline_config._debug_mode,
                 )
                 if pipeline_config.vae_on_device
                 else None

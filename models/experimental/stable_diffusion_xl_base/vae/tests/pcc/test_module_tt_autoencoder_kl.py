@@ -25,7 +25,9 @@ from loguru import logger
     ids=("test_decode", "test_encode"),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_vae(device, input_shape, vae_block, pcc, is_ci_env, reset_seeds, is_ci_v2_env, model_location_generator):
+def test_vae(
+    device, input_shape, vae_block, pcc, debug_mode, is_ci_env, reset_seeds, is_ci_v2_env, model_location_generator
+):
     model_location = model_location_generator(
         "stable-diffusion-xl-base-1.0/vae", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
     )
@@ -41,7 +43,7 @@ def test_vae(device, input_shape, vae_block, pcc, is_ci_env, reset_seeds, is_ci_
 
     logger.info("Loading weights to device")
     model_config = ModelOptimisations()
-    tt_vae = TtAutoencoderKL(device, state_dict, model_config)
+    tt_vae = TtAutoencoderKL(device, state_dict, model_config, debug_mode=debug_mode)
     logger.info("Loaded weights")
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
 
