@@ -12,6 +12,8 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import run_prefetcher_mm
 
 LLAMA_INPUT_SHAPES = [(2304, 1536), (1536, 2304), (2304, 3840), (2304, 3840), (3840, 2304)]
 LLAMA_INPUT_DTYPES = [ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat4_b, ttnn.bfloat8_b]
+QWEN_INPUT_SHAPES = [(1536, 1536), (1536, 1536), (1536, 3840), (1536, 3840), (3840, 1536)]
+QWEN_INPUT_DTYPES = [tttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16]
 
 
 @pytest.mark.skipif(is_grayskull(), reason="GS not supported")
@@ -165,6 +167,39 @@ def test_run_prefetcher_llama_perf(
     num_tensors = len(LLAMA_INPUT_SHAPES)
     input_shapes = LLAMA_INPUT_SHAPES
     dtypes = LLAMA_INPUT_DTYPES
+    num_layers = 1
+
+    run_prefetcher_mm(
+        mesh_device,
+        num_tensors,
+        input_shapes,
+        num_layers,
+        num_reader_cores,
+        dtypes,
+        enable_performance_mode=True,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 2), id="2x2_grid")], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}],
+    indirect=True,
+)
+def test_run_prefetcher_qwen_perf(
+    mesh_device,
+    function_level_defaults,
+):
+    device = mesh_device
+    # Only run these tests on unharvested TG
+    device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
+    if device_grid != (7, 10):
+        pytest.skip("Skipping test_run_prefetcher because it only works with a 7x10 grid")
+
+    num_reader_cores = 12
+    num_tensors = len(QWEN_INPUT_SHAPES)
+    input_shapes = QWEN_INPUT_SHAPES
+    dtypes = QWEN_INPUT_DTYPES
     num_layers = 1
 
     run_prefetcher_mm(
