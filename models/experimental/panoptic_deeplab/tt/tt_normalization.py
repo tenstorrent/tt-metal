@@ -34,10 +34,12 @@ class TtImageNetNormalization:
         # Pre-create mean and std tensors on device with target size
         # Shape: [1, H, W, 3] for NHWC format
         mean_values = torch.tensor([0.485, 0.456, 0.406]).view(1, 1, 1, 3).expand(1, self.height, self.width, 3)
-        self.mean_tensor = ttnn.from_torch(mean_values, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        self.mean_tensor = ttnn.from_torch(
+            mean_values, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
+        )
 
         std_values = torch.tensor([0.229, 0.224, 0.225]).view(1, 1, 1, 3).expand(1, self.height, self.width, 3)
-        self.std_tensor = ttnn.from_torch(std_values, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        self.std_tensor = ttnn.from_torch(std_values, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
 
         logger.debug(f"TtImageNetNormalization initialized for size {target_size}")
 
