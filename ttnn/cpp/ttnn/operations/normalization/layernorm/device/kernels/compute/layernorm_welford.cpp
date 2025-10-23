@@ -190,7 +190,6 @@ void MAIN {
         }
 
         // Var(x) + eps
-        binary_op_init_common(cb_ex2, cb_eps, cb_ex2pe);
         if constexpr (FLOAT32_DTYPE) {
             reconfig_data_format(cb_ex2, cb_eps);
         }
