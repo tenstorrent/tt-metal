@@ -274,6 +274,19 @@ if __name__ == "__main__":
 
     logger.info(f"Running current generation with tag: {SWEEPS_TAG}.")
 
+    # Seed RNG for reproducible shuffling when needed
+    try:
+        if args.shuffle_seed is not None:
+            shuffle_seed = int(args.shuffle_seed)
+            logger.info(f"Shuffle seed (provided): {shuffle_seed}")
+        else:
+            # Millisecond-resolution timestamp, masked to 32-bit for portability
+            shuffle_seed = int(datetime.datetime.now().timestamp() * 1000) & 0xFFFFFFFF
+            logger.info(f"Shuffle seed (auto): {shuffle_seed}")
+        random.seed(shuffle_seed)
+    except Exception as e:
+        logger.warning(f"Failed to set shuffle seed: {e}")
+
     if args.clean and not args.module_name:
         logger.error("The clean flag must be set in conjunction with a module name.")
         exit(1)
