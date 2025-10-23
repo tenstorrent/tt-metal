@@ -20,10 +20,8 @@ from elfs_cache import ParsedElfFile, run as get_elfs_cache, ElfsCache
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
-from ttexalens.device import Device
-from ttexalens.tt_exalens_lib import parse_elf, read_word_from_device
+from ttexalens.tt_exalens_lib import read_word_from_device
 from ttexalens.firmware import ELF
-from ttexalens.parse_elf import mem_access
 
 
 script_config = ScriptConfig(
@@ -52,7 +50,7 @@ def _read_symbol_value(elf_obj: ParsedElfFile, symbol: str, mem_reader) -> int |
     Returns None if the symbol cannot be read.
     """
     try:
-        return int(mem_access(elf_obj, symbol, mem_reader)[0][0])
+        return int(elf_obj.get_global(symbol, mem_reader).value())
     except Exception:
         return None
 
@@ -92,7 +90,7 @@ def read_wait_globals(
 
     def get_const_value(name: str):
         try:
-            return mem_access(kernel_elf, name, mem_reader)[3]
+            return kernel_elf.get_constant(name)
         except Exception:
             return None
 
