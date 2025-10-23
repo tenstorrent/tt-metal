@@ -953,6 +953,174 @@ def test_matmul_1d_ring_llama_perf(
 
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
+    "B, M, K, N, in0_dtype, in1_dtype, output_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid, in1_is_dram_interleaved, untilize_out",
+    [
+        (
+            1,
+            32,
+            1280,
+            1280,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.bfloat16,
+            ttnn.MathFidelity.HiFi2,
+            True,
+            True,
+            PREFETCHER_NOC1_GRID,
+            False,
+            True,
+        ),
+        (
+            1,
+            32,
+            1280,
+            1280,
+            ttnn.bfloat16,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.MathFidelity.HiFi2,
+            True,
+            True,
+            PREFETCHER_NOC1_GRID,
+            False,
+            False,
+        ),
+        (
+            1,
+            32,
+            1024,
+            1280,
+            ttnn.bfloat16,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.MathFidelity.HiFi2,
+            True,
+            True,
+            PREFETCHER_NOC1_GRID,
+            False,
+            False,
+        ),
+        (
+            1,
+            32,
+            1280,
+            3200,
+            ttnn.bfloat16,
+            ttnn.bfloat4_b,
+            ttnn.bfloat8_b,
+            ttnn.MathFidelity.LoFi,
+            True,
+            False,
+            PREFETCHER_NOC1_GRID,
+            False,
+            False,
+        ),
+        (
+            1,
+            32,
+            3200,
+            1280,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.MathFidelity.HiFi2,
+            True,
+            True,
+            PREFETCHER_NOC1_GRID,
+            False,
+            False,
+        ),
+        (
+            1,
+            32,
+            2048,
+            19456,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.MathFidelity.HiFi2,
+            True,
+            True,
+            LM_HEAD_32_GRID,
+            True,
+            False,
+        ),
+    ],
+    ids=[
+        "qkv_rm",
+        "qkv",
+        "do",
+        "ff13",
+        "ff2",
+        "lm_head",
+    ],
+)
+@pytest.mark.parametrize(
+    "num_iters",
+    [50],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
+def test_matmul_1d_ring_qwen_perf(
+    device,
+    in0_dtype,
+    in1_dtype,
+    output_dtype,
+    fidelity,
+    has_bias,
+    fp32_acc_mode,
+    packer_l1_acc,
+    B,
+    M,
+    K,
+    N,
+    grid,
+    in1_is_dram_interleaved,
+    untilize_out,
+    num_iters,
+    function_level_defaults,
+):
+    # Only run these tests on unharvested TG
+    device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
+    if device_grid != (7, 10):
+        pytest.skip("Skipping test_run_prefetcher because it only works with a 7x10 grid")
+
+    if in1_is_dram_interleaved:
+        hop_grid = None
+    else:
+        hop_grid = [
+            (3, 6),
+        ]
+
+    run_multi_core_matmul_1d(
+        device,
+        in0_dtype,
+        in1_dtype,
+        fidelity,
+        has_bias,
+        fp32_acc_mode,
+        packer_l1_acc,
+        B,
+        M,
+        K,
+        N,
+        None,  # activation,
+        grid,
+        True,
+        num_iters,
+        output_dtype=output_dtype,
+        use_physical_to_logical_mapping=False,
+        hop_grid=hop_grid,
+        in1_is_dram_interleaved=in1_is_dram_interleaved,
+        untilize_out=untilize_out,
+    )
+
+
+@pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
+@pytest.mark.parametrize(
     "B, M, K, N, in0_dtype, in1_dtype, output_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid, in1_is_dram_interleaved, in1_is_in_dram",
     [
         (
