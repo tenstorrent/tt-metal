@@ -220,6 +220,7 @@ def run_demo(
 
         return {"generations": results}
     finally:
+        gen.cleanup_all()
         # Clean up mesh device(s)
         for submesh in mesh_device.get_submeshes():
             ttnn.close_mesh_device(submesh)
