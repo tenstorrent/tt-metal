@@ -221,7 +221,7 @@ jobs:
           exit 1
       - name: Enable Performance mode
         if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !matrix.test-group.civ2-compatible }}
-        uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@dpopov-support-ubuntu-24
+        uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
           governor: performance
       - name: Check Weka mount
@@ -266,6 +266,6 @@ jobs:
           prefix: "test_reports_"
       - name: Disable Performance mode
         if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !matrix.test-group.civ2-compatible && always() }}
-        uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@dpopov-support-ubuntu-24
+        uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
           governor: ondemand
