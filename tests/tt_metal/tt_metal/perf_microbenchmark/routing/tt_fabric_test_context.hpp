@@ -285,7 +285,7 @@ public:
         }
     }
 
-    void open_devices(const TestFabricSetup& fabric_setup) { fixture_->open_devices(fabric_setup); }
+    bool open_devices(const TestFabricSetup& fabric_setup) { return fixture_->open_devices(fabric_setup); }
 
     void initialize_sync_memory() {
         if (!global_sync_) {
