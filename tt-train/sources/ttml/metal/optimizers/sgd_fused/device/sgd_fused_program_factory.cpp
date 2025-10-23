@@ -206,7 +206,7 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     TT_FATAL(output_data_format == tt::DataFormat::Float16_b, "Output data format must be Float16_b");
 
     uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
-    // uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
+    uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
 
     auto padded_tensor_shape = param.padded_shape();
     auto padded_tensor_volume = param.physical_volume();
@@ -270,7 +270,7 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
         num_input_tiles);
 
     [[maybe_unused]] auto cb_bcast_lr = create_circular_buffer(
-        program, all_cores, kBcastLrCbIndex, tt::DataFormat::Float16_b, bfloat16_single_tile_size_bytes, 1U);
+        program, all_cores, kBcastLrCbIndex, tt::DataFormat::Float32, float32_single_tile_size_bytes, 1U);
 
     [[maybe_unused]] auto cb_bcast_momentum = create_circular_buffer(
         program, all_cores, kBcastMomentumCbIndex, tt::DataFormat::Float16_b, bfloat16_single_tile_size_bytes, 1U);

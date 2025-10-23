@@ -63,7 +63,7 @@ void kernel_main() {
 #if USE_MOMENTUM
     const auto momentum_in_addr_gen = TensorAccessor(momentum_in_args, momentum_in_addr, tile_size_bytes);
 #endif
-    generate_bcast_scalar_bfloat16(cb_bcast_lr_idx, packed_lr);
+    generate_bcast_scalar_float32(cb_bcast_lr_idx, packed_lr);
     generate_bcast_scalar_bfloat16(cb_bcast_momentum_idx, packed_momentum);
     generate_bcast_scalar_bfloat16(cb_bcast_dampening_idx, packed_dampening);
     generate_bcast_scalar_bfloat16(cb_bcast_weight_decay_idx, packed_weight_decay);
