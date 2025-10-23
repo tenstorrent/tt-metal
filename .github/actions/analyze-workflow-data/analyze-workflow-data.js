@@ -1258,7 +1258,17 @@ async function run() {
           // Build optional note for original owners (names only)
           const origNames = Array.from(genericExitOrigOwners.keys());
           var originalOwnersNote = origNames.length ? ` (error owner unclear. pipeline owners: ${origNames.join(', ')})` : '';
+          // Extract failing job names from error snippets
+          var failingJobNames = [];
+          const jobs = new Set();
+          for (const sn of (errs || [])) {
+            const jobName = (sn && sn.job) ? String(sn.job) : '';
+            if (jobName) jobs.add(jobName);
+          }
+          failingJobNames = Array.from(jobs);
         } catch (_) { /* ignore */ }
+        // Ensure failingJobNames exists even if try block fails
+        if (!failingJobNames) failingJobNames = [];
         // Fallback: try to resolve owners from the workflow name
         if (!owners || owners.length === 0) {
           owners = findOwnerForLabel(name) || [DEFAULT_INFRA_OWNER];
@@ -1271,8 +1281,9 @@ async function run() {
         })();
         const fallbackMention = `<!subteam^${DEFAULT_INFRA_OWNER.id}|${DEFAULT_INFRA_OWNER.name}>`;
         const ownerMentions = alertAll ? ((mention(owners) || fallbackMention) + (typeof originalOwnersNote === 'string' ? originalOwnersNote : '')) : ownerNamesText; // conditionally ping owners only if alertAll is true
+        const jobsNote = failingJobNames.length > 0 ? ` (failed ${failingJobNames.join(', ')})` : '';
         const wfUrl = getWorkflowLink(github.context, runs[0]?.path); // get the workflow url link for the pipeline run (can use any run to get the workflow link)
-        failingItems.push(`• ${name} ${wfUrl ? `<${wfUrl}|open>` : ''} ${ownerMentions}`.trim()); // the run is failing because if it wasn't the for loop would have continued earlier
+        failingItems.push(`• ${name} ${wfUrl ? `<${wfUrl}|open>` : ''} ${ownerMentions}${jobsNote}`.trim()); // the run is failing because if it wasn't the for loop would have continued earlier
       }
       if (failingItems.length) {
         alertAllMessage = [
@@ -1415,6 +1426,16 @@ async function run() {
             }
             item.owners = owners;
             item.original_owner_names_for_generic_exit = Array.from(genericExitOrigOwners.keys());
+            // Extract failing job names for display
+            const failingJobNames = (() => {
+              const jobs = new Set();
+              for (const sn of (item.error_snippets || [])) {
+                const jobName = (sn && sn.job) ? String(sn.job) : '';
+                if (jobName) jobs.add(jobName);
+              }
+              return Array.from(jobs);
+            })();
+            item.failing_jobs = failingJobNames;
           } catch (_) { /* ignore */ }
           // Omit repeated errors logic (simplified)
           item.repeated_errors = [];
@@ -1434,6 +1455,9 @@ async function run() {
               commits_between: item.commits_between || [],
               error_snippets: item.error_snippets || [],
               repeated_errors: item.repeated_errors || [],
+              failing_jobs: item.failing_jobs || [],
+              owners: item.owners || [],
+              original_owner_names_for_generic_exit: item.original_owner_names_for_generic_exit || [],
             });
           }
         }
