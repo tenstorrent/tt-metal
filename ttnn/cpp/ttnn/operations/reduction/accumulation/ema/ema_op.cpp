@@ -16,7 +16,7 @@ void Ema::validate(const std::vector<Tensor>& input_tensors) const {}
 
 std::vector<TensorSpec> Ema::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.tensor_spec()};
+    return {input_tensor.tensor_spec().with_memory_config(this->output_mem_config)};
 }
 
 std::vector<Tensor> Ema::create_output_tensors(

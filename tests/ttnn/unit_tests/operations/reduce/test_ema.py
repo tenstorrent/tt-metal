@@ -33,7 +33,7 @@ def test_ema(device, T, B, C, cores_y, cores_x):
     )
 
     alpha = 0.25
-    num_itr = 1  # second iteration to help catch potential runtime args issue.
+    num_itr = 2  # second iteration to help catch potential runtime args issue.
     for _ in range(num_itr):
         tt_output_tensor = ttnn.ema(ttnn_input_tensor, alpha=alpha, core_grid=grid_size)
         ttnn.synchronize_device(device)
@@ -46,10 +46,10 @@ def test_ema(device, T, B, C, cores_y, cores_x):
     # Calculate golden EMA output
     golden_output_tensor = torch.empty_like(torch_input_tensor)
 
-    # Compare with golden output
     prev_value = 0 * torch_input_tensor[0, :, :, 0]
     for t in range(T):
-        golden_output_tensor[0, :, :, t] = prev_value * alpha + (1 - alpha) * torch_input_tensor[0, :, :, t]
+        golden_output_tensor[0, :, :, t] = (prev_value * alpha) + ((1 - alpha) * torch_input_tensor[0, :, :, t])
         prev_value = golden_output_tensor[0, :, :, t]
 
+    # Compare with golden output
     assert torch.allclose(golden_output_tensor, torch_output_tensor, atol=1e-3)

@@ -12,7 +12,7 @@ inline void llk_math_ema_sfpu_init() { _llk_math_eltwise_ternary_sfpu_init_<Sfpu
 
 inline void llk_math_ema_sfpu_load_alpha_beta(uint32_t alpha, uint32_t beta) { sfpu::_load_alpha_beta_(alpha, beta); }
 
-inline void llk_math_ema_sfpu_clear_prev_output() { sfpu::_clear_prev_output_(); }
+inline void llk_math_ema_sfpu_clear_prev_output() { sfpu::_clear_previous_output_(); }
 
 inline void llk_math_ema_sfpu_tile(uint32_t input_dst_index) {
     _llk_math_eltwise_ternary_sfpu_start_<DST_SYNC_MODE>(input_dst_index);
