@@ -46,7 +46,7 @@ on:
         type: boolean
         default: false
       additional_test_categories:
-        description: 'Additional test categories to run (comma-separated, e.g., eltwise,matmul,experimental)'
+        description: 'Additional test categories to run (comma-separated, e.g., eltwise,lazy,matmul,experimental)'
         required: false
         type: string
         default: ''
@@ -101,6 +101,7 @@ jobs:
       run_moreh_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',moreh,') }}
       run_data_movement_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',data_movement,') }}
       run_fused_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',fused,') }}
+      run_ttnn-lazy_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',lazy,') }}
   didt-tests:
     if: ${{ github.event_name == 'schedule' || inputs.run_didt_tests }}
     needs: build-artifact
