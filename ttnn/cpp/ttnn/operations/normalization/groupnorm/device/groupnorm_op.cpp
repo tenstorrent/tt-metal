@@ -194,7 +194,12 @@ std::vector<TensorSpec> GroupNorm::compute_output_specs(const std::vector<Tensor
             auto mem_config = this->output_mem_config;
             return {TensorSpec(
                 input_tensor.logical_shape(),
-                TensorLayout(program_config.out_data_format, PageConfig(program_config.output_layout), mem_config))};
+                TensorLayout::fromPaddedShape(
+                    program_config.out_data_format,
+                    PageConfig(program_config.output_layout),
+                    mem_config,
+                    input_tensor.logical_shape(),
+                    input_tensor.padded_shape()))};
         },
         this->program_config);
 }
