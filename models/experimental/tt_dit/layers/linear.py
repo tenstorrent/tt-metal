@@ -120,13 +120,15 @@ class ColParallelLinear(Module):
             else None
         )
 
+        self._mesh_axis_size = self.mesh_device.shape[self.mesh_axis] if self.mesh_axis is not None else 1
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         weight = state.pop("weight", None)
         bias = state.pop("bias", None)
 
         def permute_for_swiglu(tensor):
             assert self.activation_fn == "swiglu"
-            ndev = self.mesh_device.shape[self.mesh_axis]
+            ndev = self._mesh_axis_size
             tensor = tensor.reshape(-1, 2, ndev, tensor.shape[-1] // 2 // ndev)
             tensor = tensor.permute(0, 2, 1, 3)
             tensor = tensor.reshape(-1, self.out_features)
@@ -207,7 +209,7 @@ class RowParallelLinear(Module):
             packer_l1_acc=True,
         )
 
-        ndev = tuple(self.mesh_device.shape)[self.mesh_axis]
+        ndev = self.mesh_device.shape[self.mesh_axis] if self.mesh_axis is not None else 1
 
         self.weight = Parameter(
             total_shape=[self.in_features, self.out_features], mesh_axes=[mesh_axis, fsdp_mesh_axis], device=mesh_device
@@ -218,6 +220,8 @@ class RowParallelLinear(Module):
             else None
         )
 
+        self._mesh_axis_size = ndev
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
             state["weight"] = state["weight"].transpose(0, 1)
@@ -225,8 +229,8 @@ class RowParallelLinear(Module):
         bias = state.pop("bias", None)
         if bias is not None:
             bias = bias.reshape(1, -1)
-            if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
-                zero_bias = torch.zeros(1, bias.shape[1] * (tuple(self.mesh_device.shape)[self.mesh_axis] - 1))
+            if self._mesh_axis_size > 1:
+                zero_bias = torch.zeros(1, bias.shape[1] * (self._mesh_axis_size - 1))
                 bias = torch.cat([bias, zero_bias], dim=-1)
             state["bias"] = bias
 
@@ -253,7 +257,7 @@ class RowParallelLinear(Module):
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
 
-        if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
+        if self._mesh_axis_size > 1:
             needs_reshape = len(output.shape) <= 3
             if needs_reshape:
                 output = ttnn.unsqueeze(output, 0)
