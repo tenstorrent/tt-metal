@@ -564,7 +564,7 @@ void syncAllDevices(ChipId host_connected_device) {
     setSyncInfo(host_connected_device, (std::pair<double, int64_t>){1.0, 0}, root_sync_info, deviceDeviceSyncInfo);
 }
 
-chip_id_t get_unvisited_device(std::map<chip_id_t, bool>& visited_map) {
+ChipId get_unvisited_device(std::map<ChipId, bool>& visited_map) {
     for (auto [device, visited] : visited_map) {
         if (!visited) {
             return device;
@@ -591,17 +591,17 @@ void ProfilerSync(ProfilerSyncState state) {
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
         tt::tt_metal::MetalContext::instance().profiler_state_manager();
     // Create a mapping of all connected devices to determine how to sync
-    static std::unordered_map<chip_id_t, int> num_connected_devices;
+    static std::unordered_map<ChipId, int> num_connected_devices;
     if (state == ProfilerSyncState::INIT) {
         profiler_state_manager->do_sync_on_close = true;
         constexpr int TOTAL_DEVICE_COUNT = 36;
-        std::map<chip_id_t, bool> visited;
+        std::map<ChipId, bool> visited;
         for (int i = 0; i < TOTAL_DEVICE_COUNT; i++) {
             if (tt::DevicePool::instance().is_device_active(i)) {
                 visited[i] = false;
             }
         }
-        std::queue<chip_id_t> device_queue;
+        std::queue<ChipId> device_queue;
         while (true) {
             auto root_device = get_unvisited_device(visited);
             if (root_device == -1) {
@@ -613,7 +613,7 @@ void ProfilerSync(ProfilerSyncState state) {
             device_queue.push(root_device);
             visited[root_device] = true;
             while (!device_queue.empty()) {
-                chip_id_t sender_device_id = device_queue.front();
+                ChipId sender_device_id = device_queue.front();
                 device_queue.pop();
 
                 auto sender_device = tt::DevicePool::instance().get_active_device(sender_device_id);
