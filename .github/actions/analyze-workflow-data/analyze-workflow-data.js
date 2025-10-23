@@ -1342,18 +1342,31 @@ async function run() {
                 ownerSet.set(k, o);
               }
             }
-            // Capture original pipeline owners for infra override case (names only, never mentions)
+            // Capture original pipeline owners (names + ids if available) when infra override occurred
             if (sn.owner_source && String(sn.owner_source).startsWith('infra_due_to_missing_test') && Array.isArray(sn.original_owners)) {
               for (const oo of sn.original_owners) {
                 const nm = (oo && (oo.name || oo.id)) || '';
                 if (nm) genericExitOrigOwners.set(nm, true);
+                // Also include in owners for downstream mention support if ids exist
+                if (oo) {
+                  const k2 = `${oo.id || ''}|${oo.name || ''}`;
+                  ownerSet.set(k2, { id: oo.id, name: oo.name });
+                }
               }
             }
           }
           owners = Array.from(ownerSet.values());
-          // Build optional note for original owners (names only)
+          // Build combined owner names list (infra + inferred + pipeline owners) without extra labeling text
           const origNames = Array.from(genericExitOrigOwners.keys());
-          var originalOwnersNote = origNames.length ? ` (error owner unclear. pipeline owners: ${origNames.join(', ')})` : '';
+          const combinedOwnerNames = (() => {
+            const seen = new Map();
+            for (const o of (owners || [])) {
+              const nm = (o && (o.name || o.id)) || '';
+              if (nm) seen.set(nm, true);
+            }
+            for (const nm of origNames) { if (nm) seen.set(nm, true); }
+            return Array.from(seen.keys());
+          })();
           // Extract failing job names from error snippets
           var failingJobNames = [];
           const jobs = new Set();
@@ -1369,14 +1382,13 @@ async function run() {
         if (!owners || owners.length === 0) {
           owners = findOwnerForLabel(name) || [DEFAULT_INFRA_OWNER];
         }
-        // When alertAll is false, avoid pinging by listing owner names instead of Slack mention IDs
+        // When alertAll is false, list owner names (no pings); include pipeline owners if known
         const ownerNamesText = (() => {
-          const arr = Array.isArray(owners) ? owners : (owners ? [owners] : []);
-          const names = arr.map(o => (o && (o.name || o.id)) ? (o.name || o.id) : '').filter(Boolean);
-          return (names.length ? names.join(', ') : (DEFAULT_INFRA_OWNER.name)) + (typeof originalOwnersNote === 'string' ? originalOwnersNote : '');
+          const names = Array.isArray(combinedOwnerNames) ? combinedOwnerNames : [];
+          return (names.length ? names.join(', ') : DEFAULT_INFRA_OWNER.name);
         })();
         const fallbackMention = `<!subteam^${DEFAULT_INFRA_OWNER.id}|${DEFAULT_INFRA_OWNER.name}>`;
-        const ownerMentions = alertAll ? ((mention(owners) || fallbackMention) + (typeof originalOwnersNote === 'string' ? originalOwnersNote : '')) : ownerNamesText; // conditionally ping owners only if alertAll is true
+        const ownerMentions = alertAll ? (mention(owners) || fallbackMention) : ownerNamesText; // do not ping in non-regression summary
         const jobsNote = failingJobNames.length > 0 ? ` (failed ${failingJobNames.join(', ')})` : '';
         const wfUrl = getWorkflowLink(github.context, runs[0]?.path); // get the workflow url link for the pipeline run (can use any run to get the workflow link)
         failingItems.push(`• ${name} ${wfUrl ? `<${wfUrl}|open>` : ''} ${ownerMentions}${jobsNote}`.trim()); // the run is failing because if it wasn't the for loop would have continued earlier
