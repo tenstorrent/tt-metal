@@ -616,6 +616,9 @@ void ProfilerSync(ProfilerSyncState state) {
                 ChipId sender_device_id = device_queue.front();
                 device_queue.pop();
 
+                if (!tt::DevicePool::instance().is_device_active(sender_device_id)) {
+                    continue;
+                }
                 auto sender_device = tt::DevicePool::instance().get_active_device(sender_device_id);
                 const auto& active_eth_cores = sender_device->get_active_ethernet_cores(false);
 
