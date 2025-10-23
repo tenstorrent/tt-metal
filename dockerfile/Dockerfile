@@ -269,6 +269,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
+## Evaluation image - everything installed & ready to go
 FROM dev as evaluation
 CMD ["tail", "-f", "/dev/null"]
 COPY --from=artifacts /artifacts /artifacts
@@ -284,6 +285,10 @@ ENV LD_LIBRARY_PATH="/opt/openmpi-v5.0.7-ulfm/lib:$LD_LIBRARY_PATH"
 RUN pip3 install /artifacts/ttnn-0.0.0.dev0-cp312-cp312-linux_x86_64.whl
 
 COPY . ./tt-metal
+
+RUN tar -xf /artifacts/ttm_any.tar -C /tt-metal
+ENV TT_METAL_HOME=/tt-metal
+#ENV TT_METAL_RUNTIME_ROOT=/tt-metal
 
 #############################################################
 
