@@ -60,8 +60,7 @@ def test_fill_int32(device, fill_value):
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     output = ttnn.fill(input_tensor, fill_value)
     output_tensor = ttnn.to_torch(output)
-    # print("torch_output_tensor", torch_output_tensor)
-    # print("output_tensor", output_tensor)
+
     equal_passed, equal_message = assert_equal(torch_output_tensor, output_tensor)
     assert equal_passed
 
@@ -75,7 +74,6 @@ def test_fill_uint32(device, fill_value):
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
     output = ttnn.fill(input_tensor, fill_value)
     torch_output = ttnn.from_torch(torch_output_tensor, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
-    # print("torch_output", torch_output)
-    # print("output", output)
+
     result = ttnn.eq(output, torch_output)
     assert torch.all(ttnn.to_torch(result))
