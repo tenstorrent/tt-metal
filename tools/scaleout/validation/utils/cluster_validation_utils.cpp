@@ -63,6 +63,8 @@ void log_output_rank0(const std::string& message) {
     }
 }
 
+void log_output_all_ranks(const std::string& message) { log_info(tt::LogDistributed, "{}", message); }
+
 std::vector<TrafficConfig> generate_sweep_traffic_configs() {
     std::vector<TrafficConfig> configs;
 
@@ -1138,7 +1140,7 @@ void reset_local_ethernet_links(
                 reset_cores[*dst_asic_id].insert(dst_chan);
                 const auto& asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(asic_id);
                 const auto& dst_asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(dst_asic_id);
-                log_output_rank0(
+                log_output_all_ranks(
                     "Host: " + asic_descriptor.host_name + " Resetting Link " + std::to_string(src_chan) + " on " +
                     " Tray: " + std::to_string(*asic_descriptor.tray_id) + " Location: " +
                     std::to_string(*asic_descriptor.asic_location) + " and Link: " + std::to_string(dst_chan) + " on " +
@@ -1233,7 +1235,7 @@ void reset_cross_node_ethernet_links(
         auto src_coord = cluster.get_virtual_coordinate_from_logical_coordinates(
             src_chip_id, src_soc_desc.get_eth_core_for_channel(link.channel, CoordSystem::LOGICAL), CoreType::ETH);
         const auto& asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(link.asic_id);
-        log_output_rank0(
+        log_output_all_ranks(
             "Resetting Cross-Node Link " + std::to_string(link.channel) + " on " + std::to_string(*link.asic_id) +
             " Host: " + asic_descriptor.host_name + " Tray: " + std::to_string(*asic_descriptor.tray_id) +
             " Location: " + std::to_string(*asic_descriptor.asic_location));
