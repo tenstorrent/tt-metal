@@ -53,6 +53,11 @@ run_qwen25_vl_func() {
   fi
 }
 
+run_ds_r1_qwen_func() {
+  ds_r1_qwen=deepseek-ai/DeepSeek-R1-Distill-Qwen-14B
+  HF_MODEL=$ds_r1_qwen MESH_DEVICE=N300 pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1
+}
+
 run_gemma3_func() {
   HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it pytest models/demos/gemma3/demo/text_demo.py -k "ci-token-matching"
   echo "LOG_METAL: Gemma3 4B accuracy tests completed (text only)"
@@ -63,6 +68,10 @@ run_gemma3_perf() {
   echo "LOG_METAL: Gemma3 4B perf tests completed (text only)"
   HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it pytest models/demos/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
   echo "LOG_METAL: Gemma3 4B perf tests completed (text and vision)"
+}
+
+run_phi4_func() {
+  HF_MODEL=microsoft/phi-4 pytest models/tt_transformers/demo/simple_text_demo.py -k "accuracy and ci-token-matching"
 }
 
 run_segformer_func() {
@@ -172,6 +181,8 @@ run_resnet_func() {
 
 run_sdxl_func() {
   TT_MM_THROTTLE_PERF=5 pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py --start-from=0 --num-prompts=2 -k "device_encoders and device_vae and no_cfg_parallel"
+  TT_MM_THROTTLE_PERF=5 pytest  models/experimental/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+  TT_MM_THROTTLE_PERF=5 pytest  models/experimental/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
 }
 
 run_distilbert_func() {
@@ -203,11 +214,6 @@ run_squeezebert_func() {
 run_efficientnet_b0_func(){
 
   pytest models/experimental/efficientnetb0/demo/demo.py
-
-}
-run_roberta_func() {
-
-  pytest models/demos/roberta/demo/demo.py
 
 }
 

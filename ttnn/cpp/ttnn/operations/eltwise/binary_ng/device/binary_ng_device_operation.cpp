@@ -148,8 +148,6 @@ void validate_sharding(
     TensorMemoryLayout memory_layout_y,
     const ShardSpec& shard_spec_y,
     SubtileBroadcastType subtile_broadcast_type) {
-    TT_FATAL(memory_layout_x == memory_layout_y, "Operands to eltwise binary need to have the same memory layout");
-
     switch (subtile_broadcast_type) {
         case SubtileBroadcastType::NONE:
             TT_FATAL(shard_spec_x == shard_spec_y, "Operands to eltwise binary need to have the same shard spec");

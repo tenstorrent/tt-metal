@@ -10,6 +10,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/memory_config/memory_config.hpp"
@@ -29,6 +30,21 @@ using UnitMeshUtils2x4Test = ::tt::tt_metal::MeshDevice2x4Fixture;
 TEST_F(UnitMeshUtils2x4Test, AggregateAndDisaggregate) {
     auto unit_meshes = mesh_device_->create_submeshes(MeshShape(1, 1));
     ASSERT_THAT(unit_meshes, SizeIs(mesh_device_->shape().mesh_size()));
+
+    // Allocates and deallocates a buffer, returning the allocation address.
+    // Used to probe where new buffers are being allocated on the parent mesh, as a proxy for the parent mesh allocator
+    // state.
+    auto get_parent_allocation_address = [&]() {
+        auto buffer = tt::tt_metal::distributed::MeshBuffer::create(
+            tt::tt_metal::distributed::ReplicatedBufferConfig{.size = 16 << 10},
+            tt::tt_metal::distributed::DeviceLocalBufferConfig{
+                .page_size = 1024, .buffer_type = tt::tt_metal::BufferType::DRAM},
+            mesh_device_.get());
+        EXPECT_TRUE(buffer->is_allocated());
+        return buffer->address();
+    };
+    const auto initial_parent_address = get_parent_allocation_address();
+    EXPECT_EQ(get_parent_allocation_address(), initial_parent_address);
 
     // Create a tensor spec for testing
     auto shape = ttnn::Shape(std::array<uint32_t, 2>{32, 32});
@@ -56,6 +72,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateAndDisaggregate) {
 
     // Test aggregate
     auto aggregated_tensor = aggregate(unit_tensors);
+    EXPECT_NE(get_parent_allocation_address(), initial_parent_address);
 
     EXPECT_EQ(aggregated_tensor.device(), mesh_device_.get());
     EXPECT_EQ(aggregated_tensor.logical_shape(), shape);

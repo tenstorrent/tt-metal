@@ -22,9 +22,8 @@
 
 using namespace tt::tt_metal;
 
-chip_id_t FDKernel::GetUpstreamDeviceId(chip_id_t device_id) {
-    chip_id_t mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+ChipId FDKernel::GetUpstreamDeviceId(ChipId device_id) {
+    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
     for (auto tunnel :
          tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
         for (int idx = 0; idx < tunnel.size(); idx++) {
@@ -38,9 +37,8 @@ chip_id_t FDKernel::GetUpstreamDeviceId(chip_id_t device_id) {
     return device_id;
 }
 
-chip_id_t FDKernel::GetDownstreamDeviceId(chip_id_t device_id, int tunnel) {
-    chip_id_t mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+ChipId FDKernel::GetDownstreamDeviceId(ChipId device_id, int tunnel) {
+    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
     auto tunnels = tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
     if (tunnel < -1 || tunnel >= static_cast<int>(tunnels.size())) {
         TT_THROW("Tunnel {} is out of range. {} tunnels exist", tunnel, tunnels.size());
@@ -64,9 +62,8 @@ chip_id_t FDKernel::GetDownstreamDeviceId(chip_id_t device_id, int tunnel) {
     return device_id;
 }
 
-uint32_t FDKernel::GetTunnelStop(chip_id_t device_id) {
-    chip_id_t mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+uint32_t FDKernel::GetTunnelStop(ChipId device_id) {
+    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
     for (auto tunnel :
          tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
         for (uint32_t idx = 0; idx < tunnel.size(); idx++) {
@@ -81,8 +78,8 @@ uint32_t FDKernel::GetTunnelStop(chip_id_t device_id) {
 
 FDKernel* FDKernel::Generate(
     int node_id,
-    chip_id_t device_id,
-    chip_id_t servicing_device_id,
+    ChipId device_id,
+    ChipId servicing_device_id,
     uint8_t cq_id,
     noc_selection_t noc_selection,
     DispatchWorkerType type,

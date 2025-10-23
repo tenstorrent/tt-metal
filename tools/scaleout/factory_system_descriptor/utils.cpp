@@ -342,8 +342,8 @@ void validate_fsd_against_gsd(
 
         for (const auto& conn : connections) {
             // Get board types from FSD for both connections independently
-            tt::umd::BoardType board_type_a = tt::umd::BoardType::UNKNOWN;
-            tt::umd::BoardType board_type_b = tt::umd::BoardType::UNKNOWN;
+            BoardType board_type_a = BoardType::UNKNOWN;
+            BoardType board_type_b = BoardType::UNKNOWN;
 
             // Find host_id for each connection by matching hostname
             uint32_t host_id_a = 0;

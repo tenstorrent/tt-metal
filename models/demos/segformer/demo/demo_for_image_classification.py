@@ -4,7 +4,6 @@
 
 
 import pytest
-import torch
 from loguru import logger
 from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
@@ -32,30 +31,30 @@ def run_segformer_classification_demo(
     data_loader = get_data_loader(input_loc, batch_size, iterations)
     inputs_mapper, wts_mapper, output_composer = get_mesh_mappers(device)
 
+    config = load_config("configs/segformer_img_classification_config.json")
+    reference_model = SegformerForImageClassificationReference(config)
+    reference_model = load_torch_model(
+        reference_model, f"", module="image_classification", model_location_generator=model_location_generator
+    )
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: reference_model,
+        custom_preprocessor=create_custom_mesh_preprocessor(wts_mapper),
+        device=None,
+    )
+    parameters = move_to_device(parameters, device)
+    ttnn_model = TtSegformerForImageClassification(config, parameters)
+
     for iter in range(iterations):
         torch_input_tensor, labels = get_batch(data_loader, resolution)
-        torch_input_tensor_permuted = torch.permute(torch_input_tensor, (0, 2, 3, 1))
         ttnn_input_tensor = ttnn.from_torch(
-            torch_input_tensor_permuted,
+            torch_input_tensor,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             device=device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=inputs_mapper,
         )
-        config = load_config("configs/segformer_img_classification_config.json")
-        reference_model = SegformerForImageClassificationReference(config)
-        reference_model = load_torch_model(
-            reference_model, f"", module="image_classification", model_location_generator=model_location_generator
-        )
         torch_output = reference_model(torch_input_tensor)
-        parameters = preprocess_model_parameters(
-            initialize_model=lambda: reference_model,
-            custom_preprocessor=create_custom_mesh_preprocessor(wts_mapper),
-            device=None,
-        )
-        parameters = move_to_device(parameters, device)
-        ttnn_model = TtSegformerForImageClassification(config, parameters)
         ttnn_output = ttnn_model(
             ttnn_input_tensor,
             output_attentions=None,

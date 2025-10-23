@@ -2,11 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from .linear import Linear, ColParallelLinear, RowParallelLinear
-from ..utils.substate import substate
+import ttnn
+
+from .linear import ColParallelLinear, Linear, RowParallelLinear
+from .module import Module
 
 
-class FeedForward:
+class FeedForward(Module):
     """
     Linear layer with replicated weights
     """
@@ -21,6 +23,8 @@ class FeedForward:
         bias: bool = True,
         mesh_device=None,
     ):
+        super().__init__()
+
         if inner_dim is None:
             inner_dim = int(dim * mult)
         dim_out = dim_out if dim_out is not None else dim
@@ -34,32 +38,12 @@ class FeedForward:
         self.ff1 = Linear(dim, inner_dim, bias=bias, mesh_device=mesh_device, activation_fn=activation_fn)
         self.ff2 = Linear(inner_dim, dim_out, bias=bias, mesh_device=mesh_device)
 
-    def to_cached_state_dict(self, path_prefix):
-        ff1_cache = self.ff1.to_cached_state_dict(path_prefix + "ff1.")
-        ff2_cache = self.ff2.to_cached_state_dict(path_prefix + "ff2.")
-        cache_dict = {}
-        # Add ff1. prefix to all keys from ff1_cache
-        for key, value in ff1_cache.items():
-            cache_dict[f"ff1.{key}"] = value
-        # Add ff2. prefix to all keys from ff2_cache
-        for key, value in ff2_cache.items():
-            cache_dict[f"ff2.{key}"] = value
-        return cache_dict
-
-    def from_cached_state_dict(self, cache_dict):
-        self.ff1.from_cached_state_dict(substate(cache_dict, "ff1"))
-        self.ff2.from_cached_state_dict(substate(cache_dict, "ff2"))
-
-    def load_state_dict(self, state_dict):
-        self.ff1.load_state_dict(substate(state_dict, "ff1"))
-        self.ff2.load_state_dict(substate(state_dict, "ff2"))
-
-    def __call__(self, x, core_grid=None, compute_kernel_config=None):
+    def forward(self, x: ttnn.Tensor, core_grid=None, compute_kernel_config=None) -> ttnn.Tensor:
         ff1_out = self.ff1(x, core_grid=core_grid, compute_kernel_config=compute_kernel_config)
         return self.ff2(ff1_out, core_grid=core_grid, compute_kernel_config=compute_kernel_config)
 
 
-class ParallelFeedForward:
+class ParallelFeedForward(Module):
     """
     Linear layer implementing megatron-style parallelism.
     """
@@ -77,6 +61,8 @@ class ParallelFeedForward:
         fsdp_mesh_axis=None,
         ccl_manager=None,
     ):
+        super().__init__()
+
         if inner_dim is None:
             inner_dim = int(dim * mult)
         dim_out = dim_out if dim_out is not None else dim
@@ -112,27 +98,7 @@ class ParallelFeedForward:
             ccl_manager=ccl_manager,
         )
 
-    def to_cached_state_dict(self, path_prefix):
-        ff1_cache = self.ff1.to_cached_state_dict(path_prefix + "ff1.")
-        ff2_cache = self.ff2.to_cached_state_dict(path_prefix + "ff2.")
-        cache_dict = {}
-        # Add ff1. prefix to all keys from ff1_cache
-        for key, value in ff1_cache.items():
-            cache_dict[f"ff1.{key}"] = value
-        # Add ff2. prefix to all keys from ff2_cache
-        for key, value in ff2_cache.items():
-            cache_dict[f"ff2.{key}"] = value
-        return cache_dict
-
-    def from_cached_state_dict(self, cache_dict):
-        self.ff1.from_cached_state_dict(substate(cache_dict, "ff1"))
-        self.ff2.from_cached_state_dict(substate(cache_dict, "ff2"))
-
-    def load_state_dict(self, state_dict):
-        self.ff1.load_state_dict(substate(state_dict, "ff1"))
-        self.ff2.load_state_dict(substate(state_dict, "ff2"))
-
-    def __call__(self, x, core_grid=None, compute_kernel_config=None):
+    def forward(self, x: ttnn.Tensor, core_grid=None, compute_kernel_config=None) -> ttnn.Tensor:
         """
         Expects x to be replicated.
         Return output fractured on columns.

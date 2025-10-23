@@ -7,7 +7,7 @@
 #include <set>
 
 #include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/core_descriptor.hpp>
+#include "llrt/core_descriptor.hpp"
 #include "hostdevcommon/dprint_common.h"
 #include "impl/context/metal_context.hpp"
 #include "llrt.hpp"
@@ -16,7 +16,7 @@ namespace tt::tt_metal {
 
 // Helper function for comparing CoreDescriptors for using in sets.
 struct CoreDescriptorComparator {
-    bool operator()(const CoreDescriptor& x, const CoreDescriptor& y) const {
+    bool operator()(const umd::CoreDescriptor& x, const umd::CoreDescriptor& y) const {
         if (x.coord == y.coord) {
             return x.type < y.type;
         } else {
@@ -24,10 +24,10 @@ struct CoreDescriptorComparator {
         }
     }
 };
-using CoreDescriptorSet = std::set<CoreDescriptor, CoreDescriptorComparator>;
+using CoreDescriptorSet = std::set<umd::CoreDescriptor, CoreDescriptorComparator>;
 
 // Helper function to get CoreDescriptors for all debug-relevant cores on device.
-inline static CoreDescriptorSet GetAllCores(chip_id_t device_id) {
+inline static CoreDescriptorSet GetAllCores(ChipId device_id) {
     CoreDescriptorSet all_cores;
     // The set of all printable cores is Tensix + Eth cores
     CoreCoord logical_grid_size =
@@ -51,7 +51,7 @@ inline static CoreDescriptorSet GetAllCores(chip_id_t device_id) {
 
 // Helper function to get CoreDescriptors for all cores that are used for dispatch. Should be a subset of
 // GetAllCores().
-[[maybe_unused]] static CoreDescriptorSet GetDispatchCores(chip_id_t device_id) {
+[[maybe_unused]] static CoreDescriptorSet GetDispatchCores(ChipId device_id) {
     CoreDescriptorSet dispatch_cores;
     unsigned num_cqs = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_num_hw_cqs();
     const auto& dispatch_core_config =
@@ -64,7 +64,7 @@ inline static CoreDescriptorSet GetAllCores(chip_id_t device_id) {
     return dispatch_cores;
 }
 
-inline uint64_t GetDprintBufAddr(chip_id_t device_id, const CoreCoord& virtual_core, int risc_id) {
+inline uint64_t GetDprintBufAddr(ChipId device_id, const CoreCoord& virtual_core, int risc_id) {
     uint64_t addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         llrt::get_core_type(device_id, virtual_core), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
     return addr + (sizeof(DebugPrintMemLayout) * risc_id);

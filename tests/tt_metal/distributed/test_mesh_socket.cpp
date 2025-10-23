@@ -945,8 +945,8 @@ std::shared_ptr<Program> create_sender_program(
     std::size_t page_size,
     std::size_t data_size,
     const CoreCoord& sender_logical_coord,
-    chip_id_t sender_physical_device_id,
-    chip_id_t recv_physical_device_id,
+    ChipId sender_physical_device_id,
+    ChipId recv_physical_device_id,
     uint32_t sender_link_idx) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
@@ -993,9 +993,9 @@ std::shared_ptr<Program> create_split_reduce_program(
     const CoreCoord& recv_logical_coord_0,
     const CoreCoord& recv_logical_coord_1,
     const CoreCoord& reduce_logical_coord,
-    chip_id_t sender0_physical_device_id,
-    chip_id_t sender1_physical_device_id,
-    chip_id_t recv_physical_device_id,
+    ChipId sender0_physical_device_id,
+    ChipId sender1_physical_device_id,
+    ChipId recv_physical_device_id,
     uint32_t sender0_link_idx,
     uint32_t sender1_link_idx) {
     auto config0_cb_index = tt::CBIndex::c_1;
@@ -1138,10 +1138,10 @@ std::shared_ptr<Program> create_reduce_program(
     std::size_t page_size,
     std::size_t data_size,
     const CoreCoord& reduce_logical_coord,
-    chip_id_t sender0_physical_device_id,
-    chip_id_t sender1_physical_device_id,
-    chip_id_t reducer_physical_device_id,
-    chip_id_t recv_physical_device_id,
+    ChipId sender0_physical_device_id,
+    ChipId sender1_physical_device_id,
+    ChipId reducer_physical_device_id,
+    ChipId recv_physical_device_id,
     uint32_t sender0_link_idx,
     uint32_t sender1_link_idx,
     uint32_t recv_link_idx) {
@@ -1227,8 +1227,8 @@ std::shared_ptr<Program> create_recv_program(
     std::size_t data_size,
     const CoreCoord& recv_logical_coord,
     const CoreCoord& output_logical_coord,
-    chip_id_t sender_physical_device_id,
-    chip_id_t recv_physical_device_id,
+    ChipId sender_physical_device_id,
+    ChipId recv_physical_device_id,
     uint32_t recv_link_idx) {
     // Used to setup fabric connections
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -1895,8 +1895,8 @@ TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(0, 0));
     auto md1 = mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(1, 0));
-    std::unordered_map<MeshCoordinate, chip_id_t> sender_device_coord_to_id;
-    std::unordered_map<MeshCoordinate, chip_id_t> receiver_device_coord_to_id;
+    std::unordered_map<MeshCoordinate, ChipId> sender_device_coord_to_id;
+    std::unordered_map<MeshCoordinate, ChipId> receiver_device_coord_to_id;
 
     for (const auto& coord : MeshCoordinateRange(md0->shape())) {
         sender_device_coord_to_id[coord] = md0->get_device(coord)->id();

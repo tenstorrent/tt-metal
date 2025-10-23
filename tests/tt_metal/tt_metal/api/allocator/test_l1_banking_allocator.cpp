@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/core_descriptor.hpp>
+#include "llrt/core_descriptor.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <memory>
 #include <optional>

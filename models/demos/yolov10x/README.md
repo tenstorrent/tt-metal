@@ -1,7 +1,7 @@
 # YOLOV10x
 
 ## Platforms:
-Wormhole (n150, n300)
+    Wormhole (n150, n300)
 
 ## Introduction:
 Demo showcasing Yolov10x running on Wormhole - n150, n300 using ttnn.
@@ -11,7 +11,6 @@ YOLOv10x introduces a new approach to real-time object detection, addressing bot
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-  - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
 
 ## How to Run
 Use the following command to run the Yolov10x model:
@@ -28,7 +27,7 @@ pytest --disable-warnings models/demos/yolov10x/tests/pcc/test_ttnn_yolov10x.py:
   ```
 
 #### Multi Device (DP=2, n300):
-- For `640x640`, end-2-end perf is `83` FPS.
+- For `640x640`, end-2-end perf is `91` FPS.
 
   ```bash
   pytest --disable-warnings models/demos/yolov10x/tests/perf/test_e2e_performant.py::test_e2e_performant_dp

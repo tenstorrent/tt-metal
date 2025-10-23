@@ -39,7 +39,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     const uint32_t k_chunk_size,
     std::optional<bool> share_cache,
     bool use_mla,
-    uint32_t head_dim_v) {
+    uint32_t head_dim_v,
+    std::optional<uint32_t> sliding_window_size) {
     /*
     Q: 1 x B x PNH x DH
     K: B x NKV x S x DH
@@ -532,6 +533,14 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
                              .set_tile_dims(CBIndex::c_12, scalar_tile);
     CreateCircularBuffer(program, core_grid, c_zero_config);
 
+    // sliding window mask input (conditionally created based on sliding_window_size)
+    if (sliding_window_size.has_value() && sliding_window_size.value() > 0) {
+        auto c_sliding_window_mask_config = CircularBufferConfig(qk_tiles * mask_tile_size, {{CBIndex::c_13, mask_df}})
+                                                .set_page_size(CBIndex::c_13, mask_tile_size)
+                                                .set_tile_dims(CBIndex::c_13, mask_tile);
+        CreateCircularBuffer(program, core_grid, c_sliding_window_mask_config);
+    }
+
     // cb_qk_im
     auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{CBIndex::c_24, im_df}})
                                   .set_page_size(CBIndex::c_24, im_tile_size)
@@ -741,6 +750,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         is_cur_pos_tensor_sharded,
         is_page_table_sharded,
         full_tile.get_tile_size(q_df),
+        sliding_window_size.value_or(0),
     };
     tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);
     tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
@@ -783,6 +793,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         is_causal,
         max_dynamic_chunk_size,
         q_heads_parallel_factor,
+        sliding_window_size.value_or(0),
     };
     tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args_common);
 
@@ -816,6 +827,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         q_heads_parallel_factor,
         use_half_tile,
         scale_union.u,
+        sliding_window_size.value_or(0),
     };
 
     // Determine granularity for compute loops

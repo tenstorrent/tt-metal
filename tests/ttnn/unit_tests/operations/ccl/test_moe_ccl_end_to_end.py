@@ -187,11 +187,11 @@ def test_integration(mesh_device, mesh_shape):
     # [k, batch (/devices), seq hidden]
     tt_out_tensor = ttnn.all_to_all_combine(
         repeated_sparse_output_tensor,
-        tt_expert_mapping,
         tt_metadata_tensor,
+        tt_expert_mapping,
         num_links=num_links,
         memory_config=output_memory_config,
-        axis=axis,
+        cluster_axis=axis,
         subdevice_id=worker_sub_device_id,
     )
 

@@ -68,24 +68,102 @@ struct AllShardSpecs {
 
 ShardSpec adjust_to_shape(const ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
     auto ret = shard_spec;
-    // TODO: redesign to handle shard spec mismatch
-    ret.shape[0] = std::max((ret.shape[0] * to_shape[-2]) / from_shape[-2], 32u);
-    ret.shape[1] = std::max((ret.shape[1] * to_shape[-1]) / from_shape[-1], 32u);
 
+    // Calculate volume of all dimensions EXCEPT the last (width)
+    // This is the "collapsed height" for sharding purposes
+    uint32_t from_volume_except_width = 1;
+    uint32_t to_volume_except_width = 1;
+
+    const int rank = std::max(from_shape.rank(), to_shape.rank());
+
+    // Accumulate all dimensions except the last
+    for (int i = 0; i < rank - 1; ++i) {
+        uint32_t from_dim = (i < from_shape.rank()) ? from_shape[i] : 1;
+        uint32_t to_dim = (i < to_shape.rank()) ? to_shape[i] : 1;
+        from_volume_except_width *= from_dim;
+        to_volume_except_width *= to_dim;
+    }
+
+    // Get width dimensions
+    uint32_t from_width = from_shape[-1];
+    uint32_t to_width = to_shape[-1];
+
+    // Adjust shard shape based on full volume ratios
+    ret.shape[0] = std::max((ret.shape[0] * to_volume_except_width) / from_volume_except_width, 32u);
+    ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, 32u);
     return ret;
 }
 
 TensorMemoryLayout get_memory_layout(const Tensor& a, const std::optional<Tensor>& b, const Tensor& c) {
+    if (!b.has_value()) {
+        return TensorMemoryLayout::INTERLEAVED;
+    }
+    // c is first preferred
+    if (c.memory_config().is_sharded()) {
+        return c.memory_config().memory_layout();
+    }
+
     if (a.memory_config().is_sharded()) {
         return a.memory_config().memory_layout();
     }
     if (b.has_value() && b->memory_config().is_sharded()) {
         return b->memory_config().memory_layout();
     }
-    if (c.memory_config().is_sharded()) {
-        return c.memory_config().memory_layout();
-    }
+
     return TensorMemoryLayout::INTERLEAVED;
+}
+
+inline auto is_uneven(const Tensor& t) {
+    if (not t.is_sharded()) {
+        return false;
+    }
+
+    const auto& shape = t.padded_shape();
+    const auto& shard = t.shard_spec()->shape;
+    const auto rank = shape.rank();
+
+    // Compute product of all dimensions except the last
+    uint64_t volume_except_last = 1;
+    for (int i = 0; i < static_cast<int>(rank) - 1; ++i) {
+        volume_except_last *= shape[i];
+    }
+
+    return (volume_except_last % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
+}
+
+bool is_native_L1_sharding(const Tensor& a, const std::optional<Tensor>& b, const Tensor& c) {
+    // scalar value treated as interleaved
+    if (!b.has_value()) {
+        return false;
+    }
+
+    // does not work for width and block sharding, pcc error,
+    // maybe support later to improve performance
+    // if (!b.has_value() && a.memory_config().is_sharded()) {
+    //     return !is_uneven(a);
+    // }
+
+    if (!c.memory_config().is_sharded()) {
+        return false;
+    }
+
+    // a and b identical shape, no broadcast on any dimension
+    if (b.has_value() && (a.logical_shape() == b->logical_shape())) {
+        if (is_uneven(a) || is_uneven(*b) || is_uneven(c)) {
+            return false;
+        }
+        if ((a.memory_config().is_sharded() && a.memory_config().buffer_type() == BufferType::L1)) {
+            return true;
+        }
+        if (b->memory_config().is_sharded() && b->memory_config().buffer_type() == BufferType::L1) {
+            return true;
+        }
+        if (c.memory_config().is_sharded() && c.memory_config().buffer_type() == BufferType::L1) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 std::optional<AllShardSpecs> get_shard_specs(const Tensor& a, const std::optional<Tensor>& b, const Tensor& c) {
@@ -93,7 +171,12 @@ std::optional<AllShardSpecs> get_shard_specs(const Tensor& a, const std::optiona
     bool b_sharded = b.has_value() && b->memory_config().is_sharded();
     bool c_sharded = c.memory_config().is_sharded();
 
-    if (!a_sharded && !b_sharded && !c_sharded) {
+    if ((!a_sharded && !b_sharded) && !c_sharded) {
+        return std::nullopt;
+    }
+
+    if (!is_native_L1_sharding(a, b, c)) {
+        // treate as interleaved
         return std::nullopt;
     }
 
@@ -105,9 +188,9 @@ std::optional<AllShardSpecs> get_shard_specs(const Tensor& a, const std::optiona
                              : a_sharded ? adjust_to_shape(*a.shard_spec(), a_shape, c_shape)
                                          : adjust_to_shape(*b->shard_spec(), b_shape, c_shape);
     if (!c_sharded && !a_sharded && b_sharded) {
-        // If only B is sharded, then output shape must match input B shape
-        // This is to avoid ambiguity when both A and C are not sharded
-        TT_FATAL(c_shape == b_shape, "If input B is sharded and input A is not, output shape must match input B shape");
+        // TODO: later when fully support row_col_mixed broadcast
+        // TT_FATAL(c_shape == b_shape, "If input B is sharded and input A is not, output shape must match input B
+        // shape");
     }
     return AllShardSpecs{
         a_sharded ? *a.shard_spec() : adjust_to_shape(c_shard_spec, c_shape, a_shape),
@@ -169,54 +252,33 @@ public:
     std::array<uint32_t, 2> operator()(CoreCoord core) const {
         const unsigned majorDim = row_major ? 1 : 0;
         const unsigned minorDim = row_major ? 0 : 1;
-
         auto current_shape = shard_shape;
-        // for uneven shard, HEIGHT, WIDTH, and BLOCK handling order should be all different in kernel
-        // only HEIGHT sharding works naturally
-        if (core == end_core) {
-            if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+            if (core == end_core) {
                 current_shape[majorDim] = last_shard_shape[majorDim];
                 current_shape[minorDim] = last_shard_shape[minorDim];
-            } else if (memory_layout != TensorMemoryLayout::INTERLEAVED) {
-                // TODO: think more about uneven shard size support later
-                TT_FATAL(
-                    current_shape[majorDim] == last_shard_shape[majorDim] and
-                        current_shape[minorDim] == last_shard_shape[minorDim],
-                    "no un-even shard size support memory layout {}",
-                    memory_layout);
+            }
+        } else if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            // For BLOCK_SHARDED, edges can have uneven shards
+            if (row_major) {
+                if (core.x == end_core.x) {
+                    current_shape[1] = last_shard_shape[1];  // width
+                }
+                if (core.y == end_core.y) {
+                    current_shape[0] = last_shard_shape[0];  // height
+                }
+            } else {  // col_major
+                if (core.y == end_core.y) {
+                    current_shape[1] = last_shard_shape[1];  // width
+                }
+                if (core.x == end_core.x) {
+                    current_shape[0] = last_shard_shape[0];  // height
+                }
             }
         }
         return current_shape;
     }
 };
-
-bool is_native_L1_sharding(
-    const BinaryNgDeviceOperation::tensor_args_t& tensor_args,
-    const BinaryNgDeviceOperation::tensor_return_value_t& c,
-    const BinaryNgDeviceOperation::operation_attributes_t& operation_attributes) {
-    const auto& a = tensor_args.input_tensor_a;
-    const auto& b = tensor_args.input_tensor_b;
-
-    // tensor scalar
-    if (!b.has_value() && a.memory_config().is_sharded()) {
-        return true;
-    }
-
-    // a and b identical shape, no broadcast on any dimension
-    if (b.has_value() && a.logical_shape() == b->logical_shape()) {
-        if ((a.memory_config().is_sharded() && a.memory_config().buffer_type() == BufferType::L1)) {
-            return true;
-        }
-        if (b->memory_config().is_sharded() && b->memory_config().buffer_type() == BufferType::L1) {
-            return true;
-        }
-        if (c.memory_config().is_sharded() && c.memory_config().buffer_type() == BufferType::L1) {
-            return true;
-        }
-    }
-
-    return false;
-}
 
 template <typename F>
 void set_or_update_runtime_arguments(
@@ -334,7 +396,7 @@ void set_or_update_runtime_arguments(
             c_num_tiles = num_tiles_per_core_group_2;
         } else {
             handle_args(program, reader_kernel_id, core, std::array<uint32_t, 21>{0});
-            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 10>{0});
+            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 11>{0});
             handle_args(program, compute_kernel_id, core, std::array<uint32_t, 4>{0});
             continue;
         }
@@ -343,11 +405,11 @@ void set_or_update_runtime_arguments(
         uint32_t c_current_shard_width = 0;
         if (has_sharding) {
             auto c_shard_shape = c_shard_shape_generator(core);
-            c_num_tiles = c_shard_shape[0] * c_shard_shape[1];
-            c_current_shard_width = c_shard_shape[1];
+            c_num_tiles = c_shard_shape[0] * c_shard_shape[1];  // actual
+            c_current_shard_width = c_shard_shape[1];           // actual
             auto a_shard_shape = a_shard_shape_generator(core);
-            a_num_tiles = a_shard_shape[0] * a_shard_shape[1];
-            if (is_native_L1_sharding(tensor_args, c, operation_attributes)) {
+            a_num_tiles = a_shard_shape[0] * a_shard_shape[1];  // actual
+            if (is_native_L1_sharding(tensor_args.input_tensor_a, tensor_args.input_tensor_b, c)) {
                 c_start_id =
                     (i / num_shards_per_width) * (c_shard_height * cWt) + (i % num_shards_per_width) * c_shard_width;
             } else {
@@ -371,10 +433,10 @@ void set_or_update_runtime_arguments(
         if (b.has_value()) {
             if (has_sharding) {
                 auto b_shard_shape = b_shard_shape_generator(core);
-                b_num_tiles = b_shard_shape[0] * b_shard_shape[1];
+                b_num_tiles = b_shard_shape[0] * b_shard_shape[1];  // actual
             }
             std::array writer_runtime_args = {
-                c.buffer()->address(), c_start_id, c_num_tiles, c_current_shard_width, cD, cN, cC, cHt, cWt, cND};
+                c.buffer()->address(), c_start_id, c_num_tiles, c_current_shard_width, cD, cN, cC, cHt, cWt, cND, 0u};
             handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
             auto [freq, counter] =
@@ -398,20 +460,13 @@ void set_or_update_runtime_arguments(
                 cC,
                 cHt,
                 cWt,
-                cND,
-                0u,
-                0u,
-                0u,
-                0u,
-                0u};
+                cND};
             handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
             std::array compute_runtime_args = {c_num_tiles, 0u, 0u, quantization_zero_point};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         }
 
-        // for the specific case of subtile no_bcast type, reader also needs b's information
-        // number of parameters are still small so negligible dispatch cost
         std::array reader_runtime_args = {
             a.buffer()->address(),
             c_start_id,
@@ -439,7 +494,7 @@ void set_or_update_runtime_arguments(
 
         start_tile_id += c_num_tiles;
     }
-    if (has_sharding && is_native_L1_sharding(tensor_args, c, operation_attributes)) {
+    if (has_sharding && is_native_L1_sharding(tensor_args.input_tensor_a, tensor_args.input_tensor_b, c)) {
         if (a.is_sharded()) {
             UpdateDynamicCircularBufferAddress(program, cb_src_a, *a.buffer());
         }
@@ -642,12 +697,15 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         program,
         all_device_cores,
         a_single_tile_size,
-        (a_sharded && CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(tensor_args, c, operation_attributes))
+        (a_sharded &&
+         CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(tensor_args.input_tensor_a, tensor_args.input_tensor_b, c))
             ? a_num_tiles_per_shard
             : 2,
         a_data_format,
-        (a_sharded && CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(tensor_args, c, operation_attributes)) ? a_buffer
-                                                                                                           : nullptr);
+        (a_sharded &&
+         CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(tensor_args.input_tensor_a, tensor_args.input_tensor_b, c))
+            ? a_buffer
+            : nullptr);
 
     if (not compute_kernel_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty()) {
         auto a_intermediate_format = is_sfpu_op   ? a_data_format
@@ -664,14 +722,16 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         program,
         all_device_cores,
         b_single_tile_size,
-        b_buffer == nullptr
-            ? 1
-            : ((b_sharded && CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(tensor_args, c, operation_attributes))
-                   ? b_num_tiles_per_shard
-                   : 2),
+        b_buffer == nullptr ? 1
+                            : ((b_sharded && CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(
+                                                 tensor_args.input_tensor_a, tensor_args.input_tensor_b, c))
+                                   ? b_num_tiles_per_shard
+                                   : 2),
         b_data_format,
-        (b_sharded && CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(tensor_args, c, operation_attributes)) ? b_buffer
-                                                                                                           : nullptr);
+        (b_sharded &&
+         CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(tensor_args.input_tensor_a, tensor_args.input_tensor_b, c))
+            ? b_buffer
+            : nullptr);
 
     if (not compute_kernel_defines["PROCESS_RHS_ACTIVATIONS(i)"].empty()) {
         auto b_intermediate_format = is_sfpu_op   ? b_data_format
@@ -696,10 +756,15 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         program,
         all_device_cores,
         c_single_tile_size,
-        c_sharded ? c_num_tiles_per_shard : 2,
+        (c_sharded &&
+         CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(tensor_args.input_tensor_a, tensor_args.input_tensor_b, c))
+            ? c_num_tiles_per_shard
+            : 2,
         c_data_format,
-        (c_sharded && CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(tensor_args, c, operation_attributes)) ? c_buffer
-                                                                                                           : nullptr);
+        (c_sharded &&
+         CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(tensor_args.input_tensor_a, tensor_args.input_tensor_b, c))
+            ? c_buffer
+            : nullptr);
 
     auto kernel_config = CMAKE_UNIQUE_NAMESPACE::BinaryNgKernelConfig(operation_attributes.subtile_broadcast_type);
     // WRITER KERNEL
@@ -713,19 +778,23 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     // to maintain backward compatibility, old writer kernel only needs b_dtype
     auto writer_defines = make_dataflow_defines(b_dtype, a_dtype);
     writer_defines["SRC_SHARDED"] = b_sharded ? "1" : "0";
-    writer_defines["DST_SHARDED"] =
-        (c_sharded && CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(tensor_args, c, operation_attributes)) ? "1" : "0";
+    writer_defines["DST_SHARDED"] = (c_sharded && CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(
+                                                      tensor_args.input_tensor_a, tensor_args.input_tensor_b, c))
+                                        ? "1"
+                                        : "0";
 
     auto reader_defines = make_dataflow_defines(a_dtype, b_dtype);
-    reader_defines["SRC_SHARDED"] =
-        (a_sharded && CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(tensor_args, c, operation_attributes)) ? "1" : "0";
-    reader_defines["SRC_SHARDED_B"] =
-        (b_sharded && CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(tensor_args, c, operation_attributes)) ? "1" : "0";
+    reader_defines["SRC_SHARDED"] = (a_sharded && CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(
+                                                      tensor_args.input_tensor_a, tensor_args.input_tensor_b, c))
+                                        ? "1"
+                                        : "0";
+    reader_defines["SRC_SHARDED_B"] = (b_sharded && CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(
+                                                        tensor_args.input_tensor_a, tensor_args.input_tensor_b, c))
+                                          ? "1"
+                                          : "0";
 
     // overwrite reader and write kernel names so that reader reads both and b and
-    // writer does not read b. For the transition, it can choose the original kernels
-    // or overwrite with new kernel here. If going back to old kernels, we can just
-    // skip the if clause.
+    // writer does not read b.
     if (b.has_value()) {
         kernel_config.reader_kernel = CMAKE_UNIQUE_NAMESPACE::get_reader_kernel_name_and_defines(
             operation_attributes.subtile_broadcast_type, reader_defines);
@@ -734,7 +803,8 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     std::vector<uint32_t> writer_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(*c_buffer).append_to(writer_compile_time_args);
     writer_compile_time_args.push_back(static_cast<uint32_t>(
-        has_sharding && CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(tensor_args, c, operation_attributes)));
+        has_sharding &&
+        CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(tensor_args.input_tensor_a, tensor_args.input_tensor_b, c)));
     tt::tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(writer_kernel, is_sfpu_op),
@@ -795,7 +865,8 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     tt::tt_metal::TensorAccessorArgs(*a_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(b_buffer != nullptr ? *b_buffer : *a_buffer).append_to(reader_compile_time_args);
     reader_compile_time_args.push_back(static_cast<uint32_t>(
-        has_sharding && CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(tensor_args, c, operation_attributes)));
+        has_sharding &&
+        CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(tensor_args.input_tensor_a, tensor_args.input_tensor_b, c)));
     tt::tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op),

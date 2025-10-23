@@ -144,14 +144,15 @@ def test_layer_norm_with_tile_layout(device, h, w):
 @pytest.mark.parametrize("h", [1024, 2080])
 @pytest.mark.parametrize("w", [3200, 4128])
 @pytest.mark.parametrize("use_welford", [True, False])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 @skip_welford_blackhole("'use_welford'")
-def test_large_layer_norm(device, h, w, use_welford):
+def test_large_layer_norm(device, h, w, use_welford, dtype):
     if h == 2080:
         pytest.skip("Bug, see https://github.com/tenstorrent/tt-metal/issues/27126")
 
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand((h, w), dtype=torch.float32)
+    torch_input_tensor = torch.rand((h, w), dtype=dtype)
     torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
@@ -310,3 +311,51 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9997)
+
+
+@pytest.mark.parametrize("use_welford", [True, False])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@skip_welford_blackhole("'use_welford'")
+def test_l1_interleaved(device, use_welford, dtype):
+    torch.manual_seed(0)
+
+    h, w = 32, 64
+    torch_input_tensor = torch.rand((h, w), dtype=dtype)
+    torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
+
+    # Create L1 interleaved memory config
+    l1_interleaved_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.BufferType.L1,
+    )
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=l1_interleaved_mem_config
+    )
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
+    output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
+
+
+@pytest.mark.parametrize("dim_a", [2048, 3072, 4096])
+@pytest.mark.parametrize("dim_b", [2048, 3072, 4096])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+def test_layer_norm_across_dtypes(*, device: ttnn.Device, dim_a: int, dim_b: int, dtype: ttnn.DataType) -> None:
+    torch.manual_seed(0)
+
+    epsilon = 1e-5
+    input_shape = [1, 1, dim_a, dim_b]
+
+    torch_input = torch.randn(input_shape)
+    torch_output = torch.nn.functional.layer_norm(torch_input, (input_shape[-1],), eps=epsilon)
+
+    tt_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    tt_output = ttnn.layer_norm(tt_input, epsilon=epsilon)
+
+    tt_output_torch = ttnn.to_torch(tt_output)
+
+    assert_with_pcc(torch_output, tt_output_torch, pcc=0.987)

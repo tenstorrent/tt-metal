@@ -215,13 +215,10 @@ class WanAttention:
         k_1BNF = self.norm_k(k_1BNF, compute_kernel_config=self.rmsnorm_compute_kernel_config)
 
         def create_heads(inp):
-            # Unfortunate hack - we don't have a split_heads operation that takes unfused qkv
-            # Can pass None kv input and 0 KV heads to create_qkv_heads to create just Q heads, but it's suspicious
             out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
                 inp,
-                ttnn.concat([inp, inp], dim=-1),
                 num_heads=self.n_local_heads,
-                num_kv_heads=self.n_local_heads,
+                num_kv_heads=0,
                 transpose_k_heads=False,
             )
             return out
@@ -271,7 +268,7 @@ class WanAttention:
                     num_links=self.ccl_manager.num_links,
                     cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
                     mesh_device=self.mesh_device,
-                    topology=self.ccl_manager.topology,
+                    topology=ttnn.Topology.Linear,  # RJA always uses Linear topology
                     subdevice_id=self.ccl_manager.ccl_sub_device_id,
                     ccl_core_grid_offset=(0, self.sdpa_worker_grid[1]),
                 )

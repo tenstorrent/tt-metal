@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/hlk_desc.hpp>
+#include "hlk_desc.hpp"
 #include <hostdevcommon/kernel_structs.h>
 
 enum class MathFidelity : uint8_t;

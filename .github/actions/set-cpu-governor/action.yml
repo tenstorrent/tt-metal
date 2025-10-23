@@ -1,0 +1,35 @@
+name: Set CPU Governor
+description: Install cpufrequtils if needed and set CPU governor for all cores
+inputs:
+  governor:
+    required: true
+    description: 'CPU governor to set (performance, ondemand, conservative, powersave, userspace, schedutil)'
+    default: 'performance'
+runs:
+  using: "composite"
+  steps:
+    - name: Set CPU governor to ${{ inputs.governor }}
+      run: |
+        set -euo pipefail
+
+        governor="${{ inputs.governor }}"
+        echo "🔧 Setting CPU governor to: $governor for all cores"
+
+        # Set governor for all CPU cores by writing directly to sysfs
+        if echo "$governor" | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor > /dev/null; then
+          echo "✅ Successfully set $governor governor for all CPU cores"
+        else
+          echo "❌ Failed to set $governor governor"
+          exit 1
+        fi
+
+        # Verify the setting on a few cores for confirmation
+        echo "🔍 Verifying governor settings:"
+        for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+          if [ -f "$cpu" ]; then
+            cpu_num=$(echo "$cpu" | grep -o 'cpu[0-9]*' | grep -o '[0-9]*')
+            current_governor=$(cat "$cpu" 2>/dev/null || echo "unknown")
+            echo "CPU $cpu_num: $current_governor"
+          fi
+        done
+      shell: bash

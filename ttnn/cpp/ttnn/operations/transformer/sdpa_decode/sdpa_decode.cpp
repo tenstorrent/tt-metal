@@ -41,6 +41,7 @@ ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
     const std::optional<const Tensor>& cur_pos_tensor,
     const std::optional<const Tensor>& attention_sink,
     std::optional<float> scale,
+    std::optional<uint32_t> sliding_window_size,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
@@ -74,6 +75,7 @@ ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
                    .is_causal = is_causal,
                    .cur_pos = cur_pos,
                    .scale = scale,
+                   .sliding_window_size = sliding_window_size,
                    .output_mem_config = memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
                    .program_config = program_config,
                    .compute_kernel_config = kernel_config_val,
@@ -95,6 +97,7 @@ ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
     const std::optional<const Tensor>& cur_pos_tensor,
     const std::optional<const Tensor>& attention_sink,
     std::optional<float> scale,
+    std::optional<uint32_t> sliding_window_size,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
@@ -125,6 +128,7 @@ ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
                    .is_causal = is_causal,
                    .cur_pos = std::vector<uint32_t>(),
                    .scale = scale,
+                   .sliding_window_size = sliding_window_size,
                    .output_mem_config = memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
                    .program_config = program_config,
                    .compute_kernel_config = kernel_config_val,
@@ -146,6 +150,7 @@ ttnn::Tensor ExecuteFlashMultiLatentAttentionDecode::invoke(
     const std::optional<const Tensor>& cur_pos_tensor,
     const std::optional<const Tensor>& attention_sink,
     std::optional<float> scale,
+    std::optional<uint32_t> sliding_window_size,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
@@ -179,6 +184,7 @@ ttnn::Tensor ExecuteFlashMultiLatentAttentionDecode::invoke(
                    .is_causal = is_causal,
                    .cur_pos = cur_pos,
                    .scale = scale,
+                   .sliding_window_size = sliding_window_size,
                    .output_mem_config = memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
                    .program_config = program_config,
                    .compute_kernel_config = kernel_config_val,
@@ -202,6 +208,7 @@ ttnn::Tensor ExecutePagedFlashMultiLatentAttentionDecode::invoke(
     const std::optional<const Tensor>& cur_pos_tensor,
     const std::optional<const Tensor>& attention_sink,
     std::optional<float> scale,
+    std::optional<uint32_t> sliding_window_size,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
@@ -232,6 +239,7 @@ ttnn::Tensor ExecutePagedFlashMultiLatentAttentionDecode::invoke(
                    .is_causal = is_causal,
                    .cur_pos = std::vector<uint32_t>(),
                    .scale = scale,
+                   .sliding_window_size = sliding_window_size,
                    .output_mem_config = memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
                    .program_config = program_config,
                    .compute_kernel_config = kernel_config_val,

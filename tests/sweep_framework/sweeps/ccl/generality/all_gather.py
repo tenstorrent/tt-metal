@@ -19,7 +19,6 @@ from tests.sweep_framework.sweep_utils.ccl_common import (
     validate_serializable_shard_spec,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 45
@@ -82,10 +81,15 @@ parameters = {
         "num_links": [1],
         "input_shape": [
             [1, 1, 32, 1440],  # GPT-OSS 20B. Dim: 3, cluster_axis 1
-            [1, 1, 32, 32],  # Qwen3 dim:3 cluster_axis: 1
-            [1, 8, 8, 128],  # Qwen3 dim:3 cluster_axis: 1
+            [1, 1, 32, 32],  # Qwen3, Llama on Glx, DeepSeek dim:3 cluster_axis: 1
+            [1, 8, 8, 128],  # Qwen3, Llama on Glx dim:3 cluster_axis: 1
             [3, 1, 4096, 192],  # Gemma3 Dim: 3
             [3, 1, 4096, 144],  # Gemma3 Dim: 3
+            [1, 1, 32, 896],  # DeepSeek dim:3 cluster_axis 1
+            [1, 1, 32, 192],  # DeepSeek dim:3 cluster_axis 1
+            [1, 1, 32, 576],  # DeepSeek dim: 1 cluster_axis 1
+            [1, 1, 32, 224],  # DeepSeek dim:3 cluster_axis 0
+            [1, 4, 128, 512],  # DeepSeek dim: 1 cluster_axis 1
         ],
         "dim": [1, 3],
         "cluster_axis": [0, 1],
@@ -104,19 +108,23 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["shard_specs"] is not None and test_vector["buffer_type"] == ttnn.BufferType.DRAM:
         return True, "L1 Sharding only"
 
+    cluster_axis = test_vector["cluster_axis"]
+    mesh_shape = test_vector["mesh_shape"]
     input_shape = test_vector["input_shape"]
-    if not validate_serializable_shard_spec(input_shape, test_vector["shard_specs"]):
+    dim = test_vector["dim"]
+    cluster_size = mesh_shape[cluster_axis] if cluster_axis is not None else prod(mesh_shape)
+
+    if not validate_serializable_shard_spec(input_shape, test_vector["shard_specs"], dim, cluster_size, "gather"):
         return True, "Invalid shard spec"
 
     # hardcode for 6U
-    if test_vector["mesh_shape"] in [(16, 2), (2, 16)]:
+    if mesh_shape in [(16, 2), (2, 16)]:
         return True, "Invalid mesh shape for 6U"
 
-    cluster_axis = test_vector["cluster_axis"]
     if cluster_axis is not None and test_vector["mesh_shape"][cluster_axis] == 1:
         return True, "Only one device along axis"
 
-    if test_vector["dim"] >= len(input_shape):
+    if dim >= len(input_shape):
         return True, "Dim greater than rank"
     if (
         test_vector["topology"] == ttnn.Topology.Ring
@@ -138,7 +146,7 @@ def _get_tensors(input_shape, mesh_shape, dim, cluster_axis, dtype, buffer_type,
     replicate_dim = mesh_shape[cluster_axis] if cluster_axis is not None else prod(mesh_shape)
     torch_reference = torch_input.repeat(tuple((1 if i != dim else replicate_dim) for i in range(len(input_shape))))
 
-    input_memory_config, output_memory_config = get_mem_configs(buffer_type, shard_specs, torch_reference.shape)
+    input_memory_config, output_memory_config = get_mem_configs(buffer_type, shard_specs, layout, torch_reference.shape)
 
     assert input_memory_config.memory_layout == output_memory_config.memory_layout
 

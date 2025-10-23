@@ -58,8 +58,9 @@ class DeepseekGenerator:
 
     def __init__(
         self,
-        mesh_device: ttnn.MeshDevice,
-        model_path: str | Path,
+        hf_config: AutoConfig | None = None,
+        mesh_device: ttnn.MeshDevice | None = None,
+        model_path: str | Path | None = None,
         cache_dir: str | Path | None = None,
         batch_size: int = USERS_PER_ROW,
         tokenizer=None,
@@ -71,9 +72,12 @@ class DeepseekGenerator:
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
         self.batch_size = min(USERS_PER_ROW, batch_size)
+        self.cache_dir = cache_dir
 
         # Load HF config + tokenizer
-        self.hf_config = AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
+        self.hf_config = (
+            hf_config if hf_config is not None else AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
+        )
         # self._ensure_max_seq_len(self.hf_config)
         self.hf_config.max_seq_len = 4096  # TODO: Change this when needed?
         # Optional overrides for layer counts before building states
@@ -232,15 +236,15 @@ class DeepseekGenerator:
 
     def _cleanup_run_configs(self, mode: str) -> None:
         if mode == "prefill":
-            assert (
-                hasattr(self, "model_run_config_prefill") and self.model_run_config_prefill is not None
-            ), "No prefill run config to cleanup"
-            del self.model_run_config_prefill
+            if hasattr(self, "model_run_config_prefill") and self.model_run_config_prefill is not None:
+                del self.model_run_config_prefill
+            else:
+                logger.info("No prefill run config to cleanup")
         elif mode == "decode":
-            assert (
-                hasattr(self, "model_run_config_decode") and self.model_run_config_decode is not None
-            ), "No decode run config to cleanup"
-            del self.model_run_config_decode
+            if hasattr(self, "model_run_config_decode") and self.model_run_config_decode is not None:
+                del self.model_run_config_decode
+            else:
+                logger.info("No decode run config to cleanup")
         else:
             raise ValueError(f"Unknown run config mode: {mode}")
 
@@ -312,7 +316,7 @@ class DeepseekGenerator:
             user_id: user id for the prefill
 
         Returns:
-            logits: [S, V] logits for the last token position
+            logits: [1, 1, seq_len, V] logits for the full sequence
         """
 
         tokens = tokens.view(1, 1, -1)
@@ -353,11 +357,9 @@ class DeepseekGenerator:
         # Free device tensors for this step
         ttnn.deallocate(tt_tokens)
         ttnn.deallocate(logits_tt)
-        last_logits = logits[0, 0, -1:, :]
-        return last_logits.squeeze(0)
+        return logits  # [1, 1, seq_len, V]
 
     def _sample_greedy(self, logits: torch.Tensor) -> torch.Tensor:
-        # logits: [1, 1, B, V]
         return torch.argmax(logits, dim=-1)  # [B]
 
     def _pad_batch(self, tokens_list: List[List[int]]) -> Tuple[torch.Tensor, List[int]]:
@@ -415,6 +417,7 @@ class DeepseekGenerator:
                 f"Input to the prefill: {self.tokenizer.decode(tokens_batched[user_id].tolist(), skip_special_tokens=True)}"
             )
             user_out = self._prefill(tokens_batched[user_id], user_id)
+            user_out = user_out[0, 0, -1:, :].squeeze(0)  # [ 1, 1, seq_len, V] -> [V]
             last_logits.append(user_out)
         last_logits = torch.stack(last_logits)
 

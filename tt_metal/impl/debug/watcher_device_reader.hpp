@@ -23,7 +23,7 @@ constexpr uint8_t DEBUG_SANITIZE_NOC_SENTINEL_OK_8 = 0xda;
 
 class WatcherDeviceReader {
 public:
-    WatcherDeviceReader(FILE* f, chip_id_t device_id, const std::vector<std::string>& kernel_names);
+    WatcherDeviceReader(FILE* f, ChipId device_id, const std::vector<std::string>& kernel_names);
     ~WatcherDeviceReader();
     void Dump(FILE* file = nullptr);
 
@@ -31,7 +31,7 @@ private:
     class Core;
     struct DumpData;
     FILE* f;
-    chip_id_t device_id;
+    ChipId device_id;
     const std::vector<std::string>& kernel_names;
     std::map<CoreCoord, uint32_t> logical_core_to_eth_link_retraining_count;
 };

@@ -12,21 +12,29 @@ from models.common.lightweightmodule import LightweightModule
 
 class TtResNet(LightweightModule):
     """
-    TTNN implementation of ResNet backbone for Panoptic DeepLab.
+    TTNN implementation of ResNet backbone for Panoptic DeepLab using TT CNN Builder API.
 
     Architecture:
-    - stem: DeepLabStem (3 conv layers)
-    - res2: 3 blocks, stride=1
-    - res3: 4 blocks, first has stride=2
-    - res4: 6 blocks, first has stride=2
-    - res5: 3 blocks, dilated convolutions (2, 4, 8)
+    - stem: DeepLabStem (3 conv layers + maxpool)
+    - res2: 3 BottleneckBlocks, stride=1
+    - res3: 4 BottleneckBlocks, first has stride=2
+    - res4: 6 BottleneckBlocks, first has stride=2
+    - res5: 3 BottleneckBlocks, dilated convolutions (dilation=2,4,8)
+
+    This implementation uses the TT CNN Builder API for all convolutional and pooling
+    layers. Layer configurations (Conv2dConfiguration, MaxPool2dConfiguration) are
+    extracted from the PyTorch model during preprocessing and can be customized via
+    the model_configs parameter.
 
     Args:
-        parameters: Model parameters
+        parameters: Preprocessed model parameters containing Conv2dConfiguration and
+                   MaxPool2dConfiguration objects for each layer
         device: TTNN device
         dtype: Either a single DataType to apply to all layers, or a dict mapping
                layer names ("stem", "res2", "res3", "res4", "res5") to DataTypes
-               for per-layer precision control.
+               for per-layer precision control
+        model_configs: ModelOptimisations instance for applying layer-specific config
+                      overrides (slicing strategies, sharding strategies, etc.)
     """
 
     def __init__(
@@ -119,11 +127,33 @@ class TtResNet(LightweightModule):
         x = self.stem(x)
         logger.debug(f"Stem complete - output: {x.shape}")
 
+        # Spatial dimensions for each stage (derived from model architecture)
+        # res2: H/4 x W/4, res3: H/8 x W/8, res4: H/16 x W/16, res5: H/16 x W/16
+        spatial_dims = {
+            "res2": (128, 256),  # For 512x1024 input
+            "res3": (64, 128),
+            "res4": (32, 64),
+            "res5": (32, 64),
+        }
+
         # Process residual layers and collect outputs
         outputs = {}
         for layer_name, layer in [("res2", self.res2), ("res3", self.res3), ("res4", self.res4), ("res5", self.res5)]:
             x = self._forward_res_layer(x, layer)
-            outputs[layer_name] = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            if x.is_sharded():
+                x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            else:
+                x = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+            # Reshape if flattened [1, 1, H*W, C] -> [1, H, W, C]
+            expected_h, expected_w = spatial_dims[layer_name]
+            if x.shape[1] == 1 and x.shape[2] == expected_h * expected_w:
+                logger.debug(f"{layer_name}: Reshaping from {x.shape} to [1, {expected_h}, {expected_w}, {x.shape[3]}]")
+                x = ttnn.reshape(x, (1, expected_h, expected_w, x.shape[3]))
+
+            # Clone the output to store independently (backbone outputs are shared between heads)
+            # This prevents deallocation in subsequent stages from affecting stored outputs
+            outputs[layer_name] = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             logger.debug(f"{layer_name} complete - output: {outputs[layer_name].shape}")
 
         return outputs

@@ -4,13 +4,13 @@
 
 import pytest
 import torch
-from diffusers import StableDiffusionPipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import torch_random
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_stable_diffusion_pipeline
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import (
     CROSS_UP_BLOCKS_HIDDEN_STATES_INFO,
     DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO,
@@ -39,13 +39,21 @@ def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
-def test_upsample2d_512x512(device, input_shape, shard_layout, shard_end_core, shard_shape, index):
+def test_upsample2d_512x512(
+    device,
+    input_shape,
+    shard_layout,
+    shard_end_core,
+    shard_shape,
+    index,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+):
+    torch.manual_seed(0)
     # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
-
-    unet = pipe.unet
-    unet.eval()
-    unet_upblock = pipe.unet.up_blocks[index]
+    unet = get_reference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
+    unet_upblock = unet.up_blocks[index]
     resnet_upsampler = unet_upblock.upsamplers[0]
 
     parameters = preprocess_model_parameters(

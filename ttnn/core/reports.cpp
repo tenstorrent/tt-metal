@@ -11,7 +11,6 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/core_descriptor.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
@@ -19,22 +18,19 @@ namespace ttnn::reports {
 
 DeviceInfo get_device_info(tt::tt_metal::distributed::MeshDevice* device) {
     DeviceInfo info{};
-    const auto& dispatch_core_config = tt::tt_metal::get_dispatch_core_config();
-    const auto descriptor =
-        tt::get_core_descriptor_config(device->get_device_ids().at(0), device->num_hw_cqs(), dispatch_core_config);
     const auto& device_allocator = device->allocator();
     info.num_y_cores = device->logical_grid_size().y;
     info.num_x_cores = device->logical_grid_size().x;
-    info.num_y_compute_cores = descriptor.compute_grid_size.y;
-    info.num_x_compute_cores = descriptor.compute_grid_size.x;
+    info.num_y_compute_cores = device->compute_with_storage_grid_size().y;
+    info.num_x_compute_cores = device->compute_with_storage_grid_size().x;
     info.worker_l1_size = device_allocator->get_worker_l1_size();
     info.l1_num_banks = device_allocator->get_num_banks(tt::tt_metal::BufferType::L1);
     info.l1_bank_size = device_allocator->get_bank_size(tt::tt_metal::BufferType::L1);
     info.address_at_first_l1_bank = device_allocator->get_bank_offset(tt::tt_metal::BufferType::L1, 0);
     info.address_at_first_l1_cb_buffer = device_allocator->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     info.num_banks_per_storage_core = device_allocator->get_worker_l1_size() / info.l1_bank_size;
-    info.num_storage_cores = descriptor.relative_storage_cores.size();
-    info.num_compute_cores = descriptor.relative_compute_cores.size();
+    info.num_storage_cores = device->storage_only_cores().size();
+    info.num_compute_cores = info.num_x_compute_cores * info.num_y_compute_cores;
     info.total_l1_memory = (info.num_storage_cores + info.num_compute_cores) * device_allocator->get_worker_l1_size();
     info.total_l1_for_interleaved_buffers =
         (info.num_storage_cores + info.num_compute_cores + (info.num_banks_per_storage_core * info.num_storage_cores)) *

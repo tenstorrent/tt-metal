@@ -77,7 +77,7 @@ public:
     auto end() const { return devices_.values().end(); }
 
     // Throws if no device corresponds to `device_id`.
-    [[nodiscard]] MeshCoordinate find_device(chip_id_t device_id) const;
+    [[nodiscard]] MeshCoordinate find_device(ChipId device_id) const;
 
     // TODO: #17477 - Remove the methods that assume 2D mesh.
     [[nodiscard]] bool is_mesh_2d() const;
@@ -118,7 +118,7 @@ private:
     MeshContainer<tt::tt_fabric::FabricNodeId> fabric_node_ids_;
     tt::tt_fabric::MeshId mesh_id_;
 
-    std::unordered_map<chip_id_t, MeshCoordinate> device_coordinates_;
+    std::unordered_map<ChipId, MeshCoordinate> device_coordinates_;
 
     // Set if the view is 2D to enable row/col APIs, otherwise nullopt.
     // TODO: #17477 - Remove this?

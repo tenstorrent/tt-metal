@@ -142,7 +142,7 @@ static void run_multi_txq_rxq_test(
 
     // Find an ethernet core on device_0 that connects to device_1
     for (const auto& eth_core : active_eth_cores) {
-        chip_id_t connected_device_id;
+        ChipId connected_device_id;
         CoreCoord connected_eth_core;
         std::tie(connected_device_id, connected_eth_core) = device_0->get_connected_ethernet_core(eth_core);
 

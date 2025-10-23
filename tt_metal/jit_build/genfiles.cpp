@@ -5,7 +5,7 @@
 #include "jit_build/genfiles.hpp"
 
 #include <circular_buffer_constants.h>
-#include <data_format.hpp>
+#include "data_format.hpp"
 #include <stdint.h>
 #include <tt_backend_api_types.hpp>
 #include <cstddef>

@@ -323,11 +323,8 @@ void test_bert() {
             .to_device(device, dram_memory_config));
     parameters.emplace(
         "qa_head_bias",
-        ttnn::reshape(
-            ttnn::random::uniform(
-                bfloat16(-1.0f), bfloat16(1.0f), ttnn::Shape({1, 1, TILE_HEIGHT, TILE_WIDTH}), Layout::TILE)
-                .to_device(device, dram_memory_config),
-            ttnn::Shape({1, 1, 1, TILE_WIDTH})));
+        ttnn::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), ttnn::Shape({1, 1, 1, TILE_WIDTH}), Layout::TILE)
+            .to_device(device, dram_memory_config));
 
     auto run_bert = [&]() {
         log_debug(tt::LogTest, "run_bert started");

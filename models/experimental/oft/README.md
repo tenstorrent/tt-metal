@@ -27,8 +27,9 @@ models/experimental/oft/
 ├── demo/              # Demo scripts and visualization
 ├── reference/         # PyTorch reference implementation
 ├── resources/         # Test images and calibration files
-├── tests/            # Unit tests for individual components
-└── tt/               # TenstorrentNN (TTNN) optimized implementation
+├── tests/             # All tests together
+    └── pcc/           # Unit tests for individual components
+└── tt/                # TenstorrentNN (TTNN) optimized implementation
 ```
 
 ## Section 1: Demo Scripts
@@ -76,7 +77,11 @@ pytest models/experimental/oft/demo/host_demo.py
 
 The test suite validates individual components of the OFT model, ensuring correctness of both reference and TTNN implementations.
 
-### test_basicblock.py
+### PCC (Pearson Correlation Coefficient) Tests
+
+Located in `models/experimental/oft/tests/pcc/`, these tests validate the accuracy of TTNN implementations against PyTorch reference models using PCC metrics.
+
+#### test_basicblock.py
 Tests the fundamental building block of the ResNet backbone and topdown network.
 
 **What it tests:**
@@ -92,10 +97,10 @@ Tests the fundamental building block of the ResNet backbone and topdown network.
 
 **Usage:**
 ```bash
-TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_basicblock.py
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/pcc/test_basicblock.py
 ```
 
-### test_encoder.py
+#### test_encoder.py
 Tests the object detection decoder/encoder that converts model outputs to final object detections.
 
 **What it tests:**
@@ -113,10 +118,10 @@ Tests the object detection decoder/encoder that converts model outputs to final 
 
 **Usage:**
 ```bash
-TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_encoder.py
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/pcc/test_encoder.py
 ```
 
-### test_oft.py
+#### test_oft.py
 Tests the core Orthographic Feature Transform modules at different scales.
 
 **What it tests:**
@@ -134,10 +139,10 @@ Tests the core Orthographic Feature Transform modules at different scales.
 
 **Usage:**
 ```bash
-TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_oft.py
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/pcc/test_oft.py
 ```
 
-### test_oftnet.py
+#### test_oftnet.py
 Tests the OFTNet model (without decoder).
 
 **What it tests:**
@@ -156,10 +161,10 @@ Tests the OFTNet model (without decoder).
 
 **Usage:**
 ```bash
-TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_oftnet.py
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/pcc/test_oftnet.py
 ```
 
-### test_resnet.py
+#### test_resnet.py
 Tests the ResNet backbone feature extractor.
 
 **What it tests:**
@@ -176,19 +181,19 @@ Tests the ResNet backbone feature extractor.
 
 **Usage:**
 ```bash
-TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_resnet.py
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/pcc/test_resnet.py
 ```
 
 ## Running All Tests
-
 To run the complete test suite:
 
+**Usage**
 ```bash
-TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests
+# Run all PCC tests
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/pcc/
 ```
 
 ## Environment Setup
-
 The tests require:
 - Pre-trained model checkpoint
 - Test images and calibration files
@@ -198,3 +203,33 @@ The tests require:
 All tests generate:
 - **Console logs**: Detailed PCC comparisons and validation results
 - **Visualizations**: Debug plots and comparison images (saved to `outputs/` directories)
+
+## Section 3: Device Performance Tests
+
+The device performance test suite benchmarks the OFT model components on TT hardware, measuring execution time and ensuring performance regression detection.
+
+### test_device_perf_oft.py
+Comprehensive performance benchmarking for OFT model components on TT device hardware.
+
+**What it tests:**
+- **OFTNet Model Performance**: Full model inference excluding decoder (test_device_perf_oft_oftnet)
+- **Decoder Performance**: Object detection decoder performance in isolation (test_device_perf_oft_decoder)
+- **Full Pipeline Performance**: End-to-end inference including complete demo pipeline (test_device_perf_oft_full)
+
+**Usage:**
+```bash
+# Run OFTNet performance test
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_device_perf_oft.py::test_device_perf_oft -k device_perf_oft_oftnet
+```
+```bash
+# Run decoder performance test
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_device_perf_oft.py::test_device_perf_oft -k device_perf_oft_decoder
+```
+```bash
+# Run full oft performance test
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_device_perf_oft.py::test_device_perf_oft -k device_perf_oft_full
+```
+```bash
+# Run all performance tests
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_device_perf_oft.py::test_device_perf_oft
+```

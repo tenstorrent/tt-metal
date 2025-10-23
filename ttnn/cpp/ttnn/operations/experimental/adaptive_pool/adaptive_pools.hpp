@@ -8,6 +8,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 #include "ttnn/operations/pool/generic/device/pool_op.hpp"
 
@@ -23,6 +24,7 @@ struct AdaptiveAvgPool2DOp {
         std::array<uint32_t, 2> output_size,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
+        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
         bool in_place_halo = false,
         bool deallocate_input = false,
         bool reallocate_output = true);

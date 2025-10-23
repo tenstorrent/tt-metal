@@ -67,27 +67,24 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
     // If do_eltwise_max == true, prev_cb has `rows` produced.
     // Postcondition: out_cb has `rows` produced.
 
-    reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
-
     const uint32_t num_tiles = rows * cols;
     cb_wait_front(scale_cb, 1);
     cb_wait_front(in0_cb, num_tiles);
     cb_reserve_back(out_cb, rows);
 
-    if (do_eltwise_max) {
-        copy_tile_to_dst_init_short(prev_cb);
-        max_tile_init();
-    }
-
+    max_tile_init();
     constexpr uint32_t reduce_dst_idx = 0;
     constexpr uint32_t prev_max_dst_idx = 1;
 
     for (uint32_t r = 0; r < rows; ++r) {
         acquire_dst();
+        reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
         for (uint32_t c = 0; c < cols; ++c) {
             reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, r * cols + c, 0, reduce_dst_idx);
         }
+        reduce_uninit();
         if (do_eltwise_max) {
+            copy_tile_to_dst_init_short(prev_cb);
             copy_tile(prev_cb, r, prev_max_dst_idx);
             max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(vector_mode));
         }
@@ -95,7 +92,6 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
         release_dst();
     }
     cb_push_back(out_cb, rows);
-    reduce_uninit();
 }
 
 /**

@@ -114,7 +114,7 @@ WorkerMemoryMap create_worker_memory_map(const uint32_t base_l1_address) {
 }
 
 // first generates the physical chip id matrix and then returns the sequence of connected chip ids
-std::vector<chip_id_t> get_physical_chip_sequence(uint32_t num_seq_chips) {
+std::vector<ChipId> get_physical_chip_sequence(uint32_t num_seq_chips) {
     auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     tt::tt_fabric::MeshId mesh_id = control_plane.get_user_physical_mesh_ids()[0];
 
@@ -123,11 +123,11 @@ std::vector<chip_id_t> get_physical_chip_sequence(uint32_t num_seq_chips) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
         chip_id_offset = 4;
     }
-    std::vector<chip_id_t> physical_chip_ids(num_devices);
+    std::vector<ChipId> physical_chip_ids(num_devices);
     std::iota(physical_chip_ids.begin(), physical_chip_ids.end(), chip_id_offset);
 
     // find all neighbors of chip 0 (logical chip ids)
-    std::unordered_map<tt_fabric::RoutingDirection, chip_id_t> chip_0_neigbors;
+    std::unordered_map<tt_fabric::RoutingDirection, ChipId> chip_0_neigbors;
     std::optional<tt_fabric::RoutingDirection> chip_1_direction = std::nullopt;
     for (const auto& direction : routing_directions) {
         auto neighbors = control_plane.get_intra_chip_neighbors(FabricNodeId(mesh_id, 0), direction);
@@ -165,7 +165,7 @@ std::vector<chip_id_t> get_physical_chip_sequence(uint32_t num_seq_chips) {
     if (chip_0_neigbors.size() == 2) {
         // find the other neighbor chip and direction
         tt_fabric::RoutingDirection other_chip_dir{};
-        chip_id_t other_chip{};
+        ChipId other_chip{};
         for (const auto& [dir, chip] : chip_0_neigbors) {
             if (chip != 0) {
                 other_chip_dir = dir;
@@ -201,18 +201,18 @@ std::vector<chip_id_t> get_physical_chip_sequence(uint32_t num_seq_chips) {
     }
 
     // determine the chip for the NW corner of the matrix
-    chip_id_t start_logical_chip_id = ((num_rows - 1) * (col_offset < 0 ? std::abs(col_offset) : 0)) +
-                                      ((num_cols - 1) * (row_offset < 0 ? std::abs(row_offset) : 0));
+    ChipId start_logical_chip_id = ((num_rows - 1) * (col_offset < 0 ? std::abs(col_offset) : 0)) +
+                                   ((num_cols - 1) * (row_offset < 0 ? std::abs(row_offset) : 0));
 
     // populate the physical chip matrix
-    std::vector<std::vector<chip_id_t>> physical_chip_matrix(num_rows, std::vector<chip_id_t>(num_cols));
+    std::vector<std::vector<ChipId>> physical_chip_matrix(num_rows, std::vector<ChipId>(num_cols));
     for (uint32_t i = 0; i < num_rows; i++) {
-        chip_id_t logical_chip_id = start_logical_chip_id;
+        ChipId logical_chip_id = start_logical_chip_id;
         for (uint32_t j = 0; j < num_cols; j++) {
             if (logical_chip_id > physical_chip_ids.size()) {
                 throw std::runtime_error("Failed to setup neighbor map, logical chip id exceeding bounds");
             }
-            chip_id_t phys_chip_id =
+            ChipId phys_chip_id =
                 control_plane.get_physical_chip_id_from_fabric_node_id(FabricNodeId(mesh_id, logical_chip_id));
             physical_chip_matrix[i][j] = phys_chip_id;
             logical_chip_id += row_offset;
@@ -221,7 +221,7 @@ std::vector<chip_id_t> get_physical_chip_sequence(uint32_t num_seq_chips) {
     }
 
     // try to get the chips from the rows first
-    std::vector<chip_id_t> chip_seq;
+    std::vector<ChipId> chip_seq;
     if (num_seq_chips <= num_cols) {
         for (auto i = 0; i < num_seq_chips; i++) {
             chip_seq.push_back(physical_chip_matrix[0][i]);

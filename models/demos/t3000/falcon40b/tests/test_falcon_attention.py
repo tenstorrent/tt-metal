@@ -2,6 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+from pathlib import Path
+
 import pytest
 import torch
 from loguru import logger
@@ -12,6 +15,7 @@ from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForC
 from models.demos.t3000.falcon40b.tt.falcon_attention import TtFalconAttention
 from models.demos.t3000.falcon40b.tt.falcon_ccl import TT_CCL
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
+from models.tt_transformers.tt.common import get_hf_tt_cache_path
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh, ShardTensorToMesh
 
@@ -47,12 +51,9 @@ def run_test_FalconAttention_inference(
     token_pcc,
     model_config,
     tt_cache_path,
-    model_location_generator,
 ):
-    model_name = model_location_generator(model_version, model_subdir="Falcon")
-
     hugging_face_reference_model = FalconForCausalLM.from_pretrained(
-        model_name, low_cpu_mem_usage=True, num_hidden_layers=1
+        model_version, local_files_only=os.getenv("CI") == "true", low_cpu_mem_usage=True, num_hidden_layers=1
     )
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
@@ -342,8 +343,6 @@ def test_FalconAttention_inference(
     cache_pcc,
     token_pcc,
     model_config_str,
-    model_location_generator,
-    get_tt_cache_path,
     t3k_mesh_device,
 ):
     if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
@@ -357,9 +356,7 @@ def test_FalconAttention_inference(
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
-    tt_cache_path = get_tt_cache_path(
-        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
-    )
+    tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
     run_test_FalconAttention_inference(
         t3k_mesh_device,
@@ -373,5 +370,4 @@ def test_FalconAttention_inference(
         token_pcc,
         model_config,
         tt_cache_path,
-        model_location_generator,
     )

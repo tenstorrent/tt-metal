@@ -10,7 +10,7 @@
 #include <ttnn/operations/functions.hpp>
 #include "tools/profiler/op_profiler.hpp"
 
-#include <umd/device/cluster_descriptor.hpp>  // tt_ClusterDescriptor
+#include <umd/device/cluster_descriptor.hpp>  // ClusterDescriptor
 
 namespace tt {
 using namespace constants;

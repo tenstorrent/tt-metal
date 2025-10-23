@@ -15,6 +15,6 @@ namespace ttnn::operations::data_movement::scatter {
 using namespace tt;
 
 // supported reduction methods for scatter to be applied for source values coming from recurring indices
-enum class ScatterReductionType : uint8_t { ADD, MULTIPLY, AMIN, AMAX };
+enum class ScatterReductionType : uint8_t { INVALID, ADD, MULTIPLY, AMIN, AMAX };
 
 }  // namespace ttnn::operations::data_movement::scatter
