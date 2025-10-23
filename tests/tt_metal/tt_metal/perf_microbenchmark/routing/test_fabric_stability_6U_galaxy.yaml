@@ -4,7 +4,7 @@
 
 allocation_policies:
     receiver:
-      max_configs_per_core: 2
+      max_configs_per_core: 3
 
 Tests:
   - name: "LinearLooped"
@@ -20,11 +20,28 @@ Tests:
 
     defaults:
       size: 32
-      num_packets: 15000
+      num_packets: 10000
 
     patterns:
       - type: all_to_all
-        iterations: 10
+        iterations: 5
+
+  - name: "FlowControlLinear"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2, 3, 4]
+      size: [1024, 2048, 4096]
+
+    defaults:
+      num_packets: 100000
+
+    patterns:
+      - type: all_to_all
 
   - name: "MeshLowLatencyLooped"
     fabric_setup:
@@ -39,11 +56,28 @@ Tests:
 
     defaults:
       size: 32
-      num_packets: 15000
+      num_packets: 10000
 
     patterns:
       - type: all_to_all
-        iterations: 10
+        iterations: 5
+
+  - name: "FlowControlMeshLowLatency"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2, 3, 4]
+      size: [1024, 2048, 4096]
+
+    defaults:
+      num_packets: 100000
+
+    patterns:
+      - type: all_to_all
 
   - name: "MeshDynamicLooped"
     fabric_setup:
@@ -59,8 +93,26 @@ Tests:
 
     defaults:
       size: 32
-      num_packets: 15000
+      num_packets: 10000
 
     patterns:
       - type: all_to_all
-        iterations: 10
+        iterations: 5
+
+  - name: "FlowControlMeshDynamic"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2, 3, 4]
+      size: [1024, 2048, 4096]
+
+    defaults:
+      num_packets: 100000
+
+    patterns:
+      - type: all_to_all

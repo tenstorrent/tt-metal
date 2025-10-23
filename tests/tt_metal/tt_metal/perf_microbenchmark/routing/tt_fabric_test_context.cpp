@@ -6,6 +6,29 @@
 
 #include "impl/context/metal_context.hpp"
 
+void TestContext::wait_for_programs_with_progress() {
+    if (!progress_config_.enabled) {
+        fixture_->wait_for_programs();
+        return;
+    }
+
+    // Create progress monitor (but don't start polling thread yet)
+    TestProgressMonitor monitor(this, progress_config_);
+
+    // Poll and check for completion in this thread
+    log_info(
+        tt::LogTest,
+        "Progress monitoring started (poll interval: {}s, hung threshold: {}s)",
+        progress_config_.poll_interval_seconds,
+        progress_config_.hung_threshold_seconds);
+
+    monitor.poll_until_complete();
+    log_info(tt::LogTest, "Progress monitoring complete, waiting for programs to finish...");
+
+    // Now call wait_for_programs() to ensure proper cleanup
+    fixture_->wait_for_programs();
+}
+
 static double calc_bw_bytes_per_cycle(uint32_t total_words, uint64_t cycles) {
     constexpr uint32_t bytes_per_eth_word = 16;
     return (total_words * bytes_per_eth_word) / static_cast<double>(cycles);
@@ -19,7 +42,7 @@ static uint32_t get_code_profiling_buffer_addr() {
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     if (rtoptions.get_enable_fabric_telemetry() ||
         tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
-        addr += 32; // telemetry buffer size
+        addr += 32;  // telemetry buffer size
     }
     return addr;
 }
@@ -104,12 +127,13 @@ void TestContext::clear_code_profiling_buffers() {
     // Check if any code profiling is enabled
     auto& rtoptions = ctx.rtoptions();
     if (!rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
-        return; // No profiling enabled, nothing to clear
+        return;  // No profiling enabled, nothing to clear
     }
 
     // Get code profiling buffer address and size
     uint32_t code_profiling_addr = get_code_profiling_buffer_addr();
-    constexpr size_t code_profiling_buffer_size = get_max_code_profiling_timer_types() * sizeof(CodeProfilingTimerResult);
+    constexpr size_t code_profiling_buffer_size =
+        get_max_code_profiling_timer_types() * sizeof(CodeProfilingTimerResult);
 
     get_eth_readback().clear_buffer(code_profiling_addr, code_profiling_buffer_size);
 }
@@ -121,12 +145,13 @@ void TestContext::read_code_profiling_results() {
     // Check if any code profiling is enabled
     auto& rtoptions = ctx.rtoptions();
     if (!rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
-        return; // No profiling enabled, nothing to read
+        return;  // No profiling enabled, nothing to read
     }
 
     // Get code profiling buffer address and size
     uint32_t code_profiling_addr = get_code_profiling_buffer_addr();
-    constexpr size_t code_profiling_buffer_size = get_max_code_profiling_timer_types() * sizeof(CodeProfilingTimerResult);
+    constexpr size_t code_profiling_buffer_size =
+        get_max_code_profiling_timer_types() * sizeof(CodeProfilingTimerResult);
 
     // Read buffer data from all active ethernet cores
     auto results = get_eth_readback().read_buffer(code_profiling_addr, code_profiling_buffer_size);
@@ -188,10 +213,8 @@ void TestContext::report_code_profiling_results() {
     // Helper function to get timer type name
     auto get_timer_type_name = [](CodeProfilingTimerType timer_type) -> std::string {
         switch (timer_type) {
-            case CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD:
-                return "RECEIVER_CHANNEL_FORWARD";
-            default:
-                return "UNKNOWN";
+            case CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD: return "RECEIVER_CHANNEL_FORWARD";
+            default: return "UNKNOWN";
         }
     };
 
@@ -337,7 +360,11 @@ ComparisonResult TestContext::create_comparison_result(const BandwidthResultSumm
 }
 
 // Creates common CSV format string for any failure case
-std::string TestContext::generate_failed_test_format_string(const BandwidthResultSummary& test_result, double test_result_avg_bandwidth, double difference_percent, double acceptable_tolerance) {
+std::string TestContext::generate_failed_test_format_string(
+    const BandwidthResultSummary& test_result,
+    double test_result_avg_bandwidth,
+    double difference_percent,
+    double acceptable_tolerance) {
     std::ostringstream tolerance_stream;
     tolerance_stream << std::fixed << std::setprecision(1) << acceptable_tolerance;
     // Because statistics order may change, we need to find the index of average cycles and packets per second
@@ -360,19 +387,12 @@ std::string TestContext::generate_failed_test_format_string(const BandwidthResul
     }
     std::string num_devices_str = convert_num_devices_to_string(test_result.num_devices);
     std::string csv_format_string =
-        test_result.test_name + ","
-        + test_result.ftype + ","
-        + test_result.ntype + ","
-        + test_result.topology
-        + ",\"" + num_devices_str + "\","
-        + std::to_string(test_result.num_links) + ","
-        + std::to_string(test_result.packet_size) + ","
-        + std::to_string(test_result.num_iterations) + ","
-        + std::to_string(test_result_avg_cycles) + ","
-        + std::to_string(test_result_avg_bandwidth) + ","
-        + std::to_string(test_result_avg_packets_per_second) + ","
-        + std::to_string(difference_percent) + ","
-        + tolerance_stream.str();
+        test_result.test_name + "," + test_result.ftype + "," + test_result.ntype + "," + test_result.topology + ",\"" +
+        num_devices_str + "\"," + std::to_string(test_result.num_links) + "," +
+        std::to_string(test_result.packet_size) + "," + std::to_string(test_result.num_iterations) + "," +
+        std::to_string(test_result_avg_cycles) + "," + std::to_string(test_result_avg_bandwidth) + "," +
+        std::to_string(test_result_avg_packets_per_second) + "," + std::to_string(difference_percent) + "," +
+        tolerance_stream.str();
     return csv_format_string;
 }
 
