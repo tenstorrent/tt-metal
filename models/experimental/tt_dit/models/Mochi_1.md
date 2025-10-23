@@ -10,9 +10,9 @@ This model is implemented in the TT-DiT library to enable inference on Wormhole 
 ## Details
 
 Mochi-1 consists of:
- -a 10B parameter diffusion model with an Asymmetric Diffusion Transformer (AsymmDiT) architecture
- -a 362M parameter video VAE model with an asymmetric encoder-decoder structure that causally compresses videos by 128x, with an 8x8 spatial and 6x temporal compression to a 12-channel latent space
- -a T5-XXL language model to encode text prompts
+ - a 10B parameter diffusion model with an Asymmetric Diffusion Transformer (AsymmDiT) architecture
+ - a 362M parameter video VAE model with an asymmetric encoder-decoder structure that causally compresses videos by 128x, with an 8x8 spatial and 6x temporal compression to a 12-channel latent space
+ - a T5-XXL language model to encode text prompts
 
 
 ## Performance
