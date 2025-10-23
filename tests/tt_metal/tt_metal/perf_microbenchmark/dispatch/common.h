@@ -20,6 +20,7 @@
 
 #include "llrt/hal.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"
 #include <variant>
 
 using namespace tt::tt_metal;  // test only

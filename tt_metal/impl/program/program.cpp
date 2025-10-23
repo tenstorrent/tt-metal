@@ -76,6 +76,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
 #include "kernels/kernel_impl.hpp"
+#include "impl/allocator/allocator.hpp"
 
 namespace tt {
 class tt_hlk_desc;

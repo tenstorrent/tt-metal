@@ -13,6 +13,7 @@
 #include <tt-metalium/device.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/allocator/allocator.hpp"
 #include "tt_metal.hpp"
 
 namespace tt::tt_metal {

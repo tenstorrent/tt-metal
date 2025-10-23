@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include "impl/allocator/allocator_types.hpp"
+#include "impl/allocator/allocator.hpp"
 
 namespace tt {
 
