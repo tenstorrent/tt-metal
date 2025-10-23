@@ -1,0 +1,57 @@
+diff --git a/device/chip/local_chip.cpp b/device/chip/local_chip.cpp
+index 7f97071a..c0aef7e0 100644
+--- a/device/chip/local_chip.cpp
++++ b/device/chip/local_chip.cpp
+@@ -186,22 +186,43 @@ TLBManager* LocalChip::get_tlb_manager() { return tlb_manager_.get(); }
+
+ bool LocalChip::is_mmio_capable() const { return true; }
+
++// void LocalChip::start_device() {
++//     if (tt_device_->get_communication_device_type() == IODeviceType::JTAG) {
++//         return;
++//     }
++
++//     // TODO: acquire mutex should live in Chip class. Currently we don't have unique id for all chips.
++//     // The lock here should suffice since we have to open Local chip to have Remote chips initialized.
++//     chip_started_lock_.emplace(acquire_mutex(MutexType::CHIP_IN_USE, tt_device_->get_pci_device()->get_device_num()));
++
++//     check_pcie_device_initialized();
++//     sysmem_manager_->pin_or_map_sysmem_to_device();
++//     if (!tt_device_->get_pci_device()->is_mapping_buffer_to_noc_supported()) {
++//         // If this is supported by the newer KMD, UMD doesn't have to program the iatu.
++//         init_pcie_iatus();
++//     }
++//     initialize_membars();
++// }
++
+ void LocalChip::start_device() {
+     if (tt_device_->get_communication_device_type() == IODeviceType::JTAG) {
+         return;
+     }
+
+-    // TODO: acquire mutex should live in Chip class. Currently we don't have unique id for all chips.
+-    // The lock here should suffice since we have to open Local chip to have Remote chips initialized.
+-    chip_started_lock_.emplace(acquire_mutex(MutexType::CHIP_IN_USE, tt_device_->get_pci_device()->get_device_num()));
++    // Acquire CHIP_IN_USE lock to prevent concurrent initialization, but release it after initialization completes.
++    // This allows multiple processes to query device info and use the chip after initialization.
++    {
++        auto chip_init_lock = acquire_mutex(MutexType::CHIP_IN_USE, tt_device_->get_pci_device()->get_device_num());
+
+-    check_pcie_device_initialized();
+-    sysmem_manager_->pin_or_map_sysmem_to_device();
+-    if (!tt_device_->get_pci_device()->is_mapping_buffer_to_noc_supported()) {
+-        // If this is supported by the newer KMD, UMD doesn't have to program the iatu.
+-        init_pcie_iatus();
++        check_pcie_device_initialized();
++        sysmem_manager_->pin_or_map_sysmem_to_device();
++        if (!tt_device_->get_pci_device()->is_mapping_buffer_to_noc_supported()) {
++            // If this is supported by the newer KMD, UMD doesn't have to program the iatu.
++            init_pcie_iatus();
++        }
++        initialize_membars();
++        // Lock is automatically released when chip_init_lock goes out of scope here
+     }
+-    initialize_membars();
+ }
+
+ void LocalChip::close_device() {

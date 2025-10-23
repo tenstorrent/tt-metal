@@ -129,7 +129,7 @@ public:
     void read_device_profiling_results(IDevice* device, const std::string& tag = "") {
         if (profiling_enabled_) {
             // Create empty runtime map for ProfilerOptionalMetadata
-            std::map<std::pair<chip_id_t, uint32_t>, std::string> runtime_map;
+            std::map<std::pair<ChipId, uint32_t>, std::string> runtime_map;
             if (!tag.empty()) {
                 // Add tag to runtime map if provided
                 runtime_map[{0, 0}] = tag;
@@ -143,7 +143,7 @@ public:
     void read_mesh_profiling_results(MeshDevice& mesh_device, const std::string& tag = "") {
         if (profiling_enabled_) {
             // Create empty runtime map for ProfilerOptionalMetadata
-            std::map<std::pair<chip_id_t, uint32_t>, std::string> runtime_map;
+            std::map<std::pair<ChipId, uint32_t>, std::string> runtime_map;
             if (!tag.empty()) {
                 // Add tag to runtime map if provided
                 runtime_map[{0, 0}] = tag;
