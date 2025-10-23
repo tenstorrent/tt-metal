@@ -116,13 +116,24 @@ void py_module(nb::module_& m) {
 
     {
         auto py_layernorm = static_cast<nb::module_>(m.attr("layernorm"));
-        py_layernorm.def("layernorm", &ttml::ops::layernorm, nb::arg("tensor"), nb::arg("gamma"), nb::arg("beta"));
+        py_layernorm.def(
+            "layernorm",
+            &ttml::ops::layernorm,
+            nb::arg("tensor"),
+            nb::arg("gamma"),
+            nb::arg("beta"),
+            nb::arg("eps") = 1e-5F,
+            nb::arg("enable_hardware_clamp") = true,
+            nb::arg("min_safe_eps") = 1e-4F);
         py_layernorm.def(
             "composite_layernorm",
             &ttml::ops::composite_layernorm,
             nb::arg("tensor"),
             nb::arg("gamma"),
-            nb::arg("beta"));
+            nb::arg("beta"),
+            nb::arg("eps") = 1e-5F,
+            nb::arg("enable_hardware_clamp") = true,
+            nb::arg("min_safe_eps") = 1e-4F);
     }
 
     {

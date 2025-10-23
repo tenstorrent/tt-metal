@@ -1,5 +1,6 @@
-# BERT Model Configuration
-# Based on BERT-base architecture
+# BERT Model Configuration - FLOAT32 Standard
+# Based on BERT-base architecture with FP32 precision settings
+# For BFLOAT16 hardware-optimized config, see bert_config_bfloat16.yaml
 
 # Model architecture
 vocab_size: 30522
@@ -11,6 +12,10 @@ num_blocks: 12
 
 # Training parameters
 dropout_prob: 0.1
+# LayerNorm epsilon for numerical stability
+# - 1e-12: BERT standard for FP32 precision (prevents division issues in low-variance cases)
+# - 1e-5: Safer for BFLOAT16 (values below 1e-4 are clamped internally due to hardware precision)
+# - Note: TTML automatically applies dtype-dependent clamping (max(eps, 1e-4) for bfloat16)
 layer_norm_eps: 1e-12
 
 # BERT-specific features
