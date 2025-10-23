@@ -268,7 +268,7 @@ class WanAttention:
                     num_links=self.ccl_manager.num_links,
                     cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
                     mesh_device=self.mesh_device,
-                    topology=ttnn.Topology.Linear,  # RJA always uses Linear topology
+                    topology=self.ccl_manager.topology,
                     subdevice_id=self.ccl_manager.ccl_sub_device_id,
                     ccl_core_grid_offset=(0, self.sdpa_worker_grid[1]),
                 )

@@ -336,6 +336,17 @@ class GroupNorm(Module):
     ):
         super().__init__()
 
+        """
+        Args:
+            num_channels: Number of channels in the input tensor.
+            num_groups: Number of groups.
+            eps: Epsilon value for numerical stability.
+            mesh_device: The device to use.
+            mesh_axis: The axis to shard the on.
+            core_grid: The core grid to use.
+            num_out_blocks: The number of output blocks to use.
+            torch_ref: The torch reference layer.
+        """
         self.eps = eps or torch_ref.eps
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
@@ -421,7 +432,7 @@ class GroupNorm(Module):
             epsilon=self.eps,
             core_grid=self.core_grid,
             inplace=False,
-            num_out_blocks=self.num_out_blocks,
+            num_out_blocks=num_out_blocks,
             output_layout=ttnn.TILE_LAYOUT,
         )
         x = x.reshape([batch_size, height, width, channels])
