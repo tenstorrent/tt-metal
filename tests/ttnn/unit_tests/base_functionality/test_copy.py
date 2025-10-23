@@ -19,6 +19,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 def test_copy(shape, layout, dtype, device):
     torch.manual_seed(2005)
     torch_dtype = torch.int32
+    print("INFINITE LOOP")
+    while True:
+        continue
 
     input = torch.randint(1, 100, shape, dtype=torch_dtype)
     input = ttnn.from_torch(input, dtype, layout=layout, device=device)
