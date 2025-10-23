@@ -145,13 +145,13 @@ FabricNodeId TopologyMapper::get_fabric_node_id_from_asic_id(tt::tt_metal::AsicI
     return asic_id_to_fabric_node_id_.at(asic_id);
 }
 
-FabricNodeId TopologyMapper::get_fabric_node_id_from_physical_chip_id(chip_id_t physical_chip_id) const {
+FabricNodeId TopologyMapper::get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id) const {
     auto it = physical_chip_id_to_asic_id_.find(physical_chip_id);
     TT_FATAL(it != physical_chip_id_to_asic_id_.end(), "Physical chip id {} not found in mapping", physical_chip_id);
     return asic_id_to_fabric_node_id_.at(it->second);
 }
 
-chip_id_t TopologyMapper::get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
+ChipId TopologyMapper::get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
     auto asic_id = fabric_node_id_to_asic_id_.at(fabric_node_id);
     auto it = asic_id_to_physical_chip_id_.find(asic_id);
     TT_FATAL(
@@ -177,7 +177,7 @@ TopologyMapper::TopologyMapper(
     build_mapping();
 }
 
-chip_id_t TopologyMapper::get_physical_chip_id_from_asic_id(tt::tt_metal::AsicID asic_id) const {
+ChipId TopologyMapper::get_physical_chip_id_from_asic_id(tt::tt_metal::AsicID asic_id) const {
     return asic_id_to_physical_chip_id_.at(asic_id);
 }
 
@@ -752,8 +752,8 @@ void TopologyMapper::receive_mapping_from_host(int rank) {
         "Topology mapping size mismatch after streaming receive");
 }
 
-std::map<FabricNodeId, chip_id_t> TopologyMapper::get_local_logical_mesh_chip_id_to_physical_chip_id_mapping() const {
-    std::map<FabricNodeId, chip_id_t> mapping;
+std::map<FabricNodeId, ChipId> TopologyMapper::get_local_logical_mesh_chip_id_to_physical_chip_id_mapping() const {
+    std::map<FabricNodeId, ChipId> mapping;
     const auto& my_host = physical_system_descriptor_.my_host_name();
     // Only include ASICs that are part of the current fabric mapping and reside on this host
     for (const auto& [asic_id, fabric_node_id] : asic_id_to_fabric_node_id_) {
@@ -796,7 +796,7 @@ MeshCoordinateRange TopologyMapper::get_coord_range(MeshId mesh_id, std::optiona
     return mesh_graph_.get_coord_range(mesh_id);
 }
 
-std::optional<MeshHostRankId> TopologyMapper::get_host_rank_for_chip(MeshId mesh_id, chip_id_t chip_id) const {
+std::optional<MeshHostRankId> TopologyMapper::get_host_rank_for_chip(MeshId mesh_id, ChipId chip_id) const {
     // Compute coord and check which host range contains it
     MeshCoordinate coord = mesh_graph_.chip_to_coordinate(mesh_id, chip_id);
     for (const auto& [key, range] : mesh_host_rank_coord_ranges_) {
@@ -807,26 +807,26 @@ std::optional<MeshHostRankId> TopologyMapper::get_host_rank_for_chip(MeshId mesh
     return std::nullopt;
 }
 
-MeshContainer<chip_id_t> TopologyMapper::get_chip_ids(MeshId mesh_id, std::optional<MeshHostRankId> host_rank) const {
+MeshContainer<ChipId> TopologyMapper::get_chip_ids(MeshId mesh_id, std::optional<MeshHostRankId> host_rank) const {
     // Return global or submesh chip ids using the same indexing convention as MeshGraph.
     if (!host_rank.has_value()) {
         auto shape = mesh_graph_.get_mesh_shape(mesh_id);
-        std::vector<chip_id_t> chip_ids(shape.mesh_size());
+        std::vector<ChipId> chip_ids(shape.mesh_size());
         std::iota(chip_ids.begin(), chip_ids.end(), 0);
-        return MeshContainer<chip_id_t>(shape, chip_ids);
+        return MeshContainer<ChipId>(shape, chip_ids);
     }
 
     // Submesh: iterate over coord range and collect logical chip ids
     MeshCoordinateRange coord_range = get_coord_range(mesh_id, host_rank);
     MeshShape sub_shape = coord_range.shape();
-    std::vector<chip_id_t> sub_chip_ids;
+    std::vector<ChipId> sub_chip_ids;
     sub_chip_ids.reserve(sub_shape.mesh_size());
     for (const auto& coord : coord_range) {
         // Convert coordinate to logical chip id using global mesh shape
         auto chip = mesh_graph_.coordinate_to_chip(mesh_id, coord);
         sub_chip_ids.push_back(chip);
     }
-    return MeshContainer<chip_id_t>(sub_shape, sub_chip_ids);
+    return MeshContainer<ChipId>(sub_shape, sub_chip_ids);
 }
 
 void TopologyMapper::rebuild_host_rank_structs_from_mapping() {
@@ -837,7 +837,7 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping() {
     std::unordered_map<MeshId, std::unordered_map<HostName, std::vector<MeshCoordinate>>> mesh_host_to_coords;
 
     // Precompute coordinate per chip from MeshGraph
-    std::unordered_map<MeshId, std::unordered_map<chip_id_t, MeshCoordinate>> per_mesh_chip_to_coord;
+    std::unordered_map<MeshId, std::unordered_map<ChipId, MeshCoordinate>> per_mesh_chip_to_coord;
     for (const auto& [fabric_node_id, _] : fabric_node_id_to_asic_id_) {
         auto& m = per_mesh_chip_to_coord[fabric_node_id.mesh_id];
         if (m.find(fabric_node_id.chip_id) == m.end()) {

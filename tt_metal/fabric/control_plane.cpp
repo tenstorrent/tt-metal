@@ -829,7 +829,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
         const auto& local_mesh_coord_range = this->get_coord_range(mesh_id, MeshScope::LOCAL);
 
         // TODO: Remove this once Topology mapper works for multi-mesh systems
-        MeshContainer<chip_id_t> local_mesh_chip_id_container =
+        MeshContainer<ChipId> local_mesh_chip_id_container =
             (this->topology_mapper_ == nullptr)
                 ? this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id)
                 : this->topology_mapper_->get_chip_ids(mesh_id, host_rank_id);

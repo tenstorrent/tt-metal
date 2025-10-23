@@ -90,7 +90,7 @@ public:
      * @param physical_chip_id
      * @return FabricNodeId
      */
-    FabricNodeId get_fabric_node_id_from_physical_chip_id(chip_id_t physical_chip_id) const;
+    FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id) const;
 
     /**
      * @brief Get physical chip ID from fabric node ID mapped by the topology mapper
@@ -98,7 +98,7 @@ public:
      * @param fabric_node_id
      * @return chip_id_t
      */
-    chip_id_t get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
+    ChipId get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
 
     /**
      * @brief Get ASIC ID from fabric node ID mapped by the topology mapper
@@ -114,14 +114,14 @@ public:
      * @param asic_id
      * @return chip_id_t
      */
-    chip_id_t get_physical_chip_id_from_asic_id(tt::tt_metal::AsicID asic_id) const;
+    ChipId get_physical_chip_id_from_asic_id(tt::tt_metal::AsicID asic_id) const;
 
     /**
      * @brief Get local logical mesh chip ID to physical chip ID mapping
      *
      * @return std::map<FabricNodeId, chip_id_t>
      */
-    std::map<FabricNodeId, chip_id_t> get_local_logical_mesh_chip_id_to_physical_chip_id_mapping() const;
+    std::map<FabricNodeId, ChipId> get_local_logical_mesh_chip_id_to_physical_chip_id_mapping() const;
 
     /**
      * @brief Return the host-rank layout for a mesh (independent of MeshGraph storage)
@@ -156,7 +156,7 @@ public:
      * The chip_id parameter is the Fabric Node (logical) chip id for mesh_id.
      * The returned rank is derived from TopologyMapper's host-rank coordinate ranges.
      */
-    std::optional<MeshHostRankId> get_host_rank_for_chip(MeshId mesh_id, chip_id_t chip_id) const;
+    std::optional<MeshHostRankId> get_host_rank_for_chip(MeshId mesh_id, ChipId chip_id) const;
 
     /**
      * @brief Get the logical chip ids for a mesh or a host submesh
@@ -167,7 +167,7 @@ public:
      * preserving row-major order within the subrange. Logical chip ids are
      * derived from the global mesh shape via (i * width + j).
      */
-    MeshContainer<chip_id_t> get_chip_ids(MeshId mesh_id, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
+    MeshContainer<ChipId> get_chip_ids(MeshId mesh_id, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
 
 private:
     /**
@@ -265,8 +265,8 @@ private:
     std::unordered_map<tt::tt_metal::AsicID, FabricNodeId> asic_id_to_fabric_node_id_;
 
     // Bidirectional mapping between AsicID and physical chip id for fast lookups
-    std::unordered_map<tt::tt_metal::AsicID, chip_id_t> asic_id_to_physical_chip_id_;
-    std::unordered_map<chip_id_t, tt::tt_metal::AsicID> physical_chip_id_to_asic_id_;
+    std::unordered_map<tt::tt_metal::AsicID, ChipId> asic_id_to_physical_chip_id_;
+    std::unordered_map<ChipId, tt::tt_metal::AsicID> physical_chip_id_to_asic_id_;
 
     // Host-rank metadata for fabric-node-based queries (independent of MeshGraph's storage)
     std::vector<MeshContainer<MeshHostRankId>> mesh_host_ranks_;
