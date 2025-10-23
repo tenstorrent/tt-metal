@@ -43,16 +43,16 @@ struct BankedConfig {
     static constexpr tt::DataFormat l1_data_format = tt::DataFormat::Float16_b;
 
     size_t num_tiles = 1;
-    size_t size_bytes = num_tiles * tt::datum_size(tt::DataFormat::Float16_b) * tile_size;
-    size_t page_size_bytes = tt::datum_size(tt::DataFormat::Float16_b) * tile_size;
+    size_t size_bytes = num_tiles * tt::datum_size(l1_data_format) * tile_size;
+    size_t page_size_bytes = tt::datum_size(l1_data_format) * tile_size;
     BufferType input_buffer_type = BufferType::L1;
     BufferType output_buffer_type = BufferType::L1;
     CoreCoord logical_core = CoreCoord(0, 0);
 
     void update_num_tiles(size_t tiles) {
         this->num_tiles = tiles;
-        this->size_bytes = num_tiles * tt::datum_size(tt::DataFormat::Float16_b) * tile_size;
-        this->page_size_bytes = tt::datum_size(tt::DataFormat::Float16_b) * tile_size;
+        this->size_bytes = num_tiles * tt::datum_size(l1_data_format) * tile_size;
+        this->page_size_bytes = tt::datum_size(l1_data_format) * tile_size;
     }
 };
 
