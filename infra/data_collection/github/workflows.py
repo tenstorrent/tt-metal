@@ -268,7 +268,12 @@ def get_pydantic_test_from_testcase_(testcase, default_timestamp=datetime.now(),
             # Check if properties is none to see if pytest recorded the timestamps
             if properties is not None:
                 test_start_ts = datetime.fromisoformat(properties["start_timestamp"])
-                test_end_ts = datetime.fromisoformat(properties["end_timestamp"])
+                if "end_timestamp" in properties:
+                    test_end_ts = datetime.fromisoformat(properties["end_timestamp"])
+                else:
+                    # When a setup error occurs in a pytest, the end timestamp may sometimes not be recorded
+                    # Set the end timestamp equal to the start timestamp since no test was executed
+                    test_end_ts = test_start_ts
             else:
                 # Check if there's a time attribute in the testcase
                 if "time" in testcase.attrib:
