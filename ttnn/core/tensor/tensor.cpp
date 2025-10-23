@@ -39,7 +39,7 @@
 
 // Forward declare redzone functions
 namespace tt::tt_metal::tensor_impl::redzone {
-    void unregister_allocation(void* buffer_addr);
+void unregister_allocation(void* buffer_addr);
 }
 
 namespace tt::tt_metal {
