@@ -788,6 +788,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             input_cores,
             batch);
     }
+    const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    const tt::tt_metal::NOC reader_noc =
+        writer_mcast_noc == tt::tt_metal::NOC::NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
 
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)dilation_h,
@@ -857,11 +860,15 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         reader_compile_time_args.push_back(split_mcast_enabled);
     }
     if (split_mcast_enabled) {
-        reader_compile_time_args.push_back(act_first_reader_tilize_done_semaphore_id);
-        reader_compile_time_args.push_back(act_second_reader_mcast_done_semaphore_id);
+        reader_compile_time_args.push_back(act_mcast_receiver_semaphore_id_second);
+        reader_compile_time_args.push_back(act_block_num_tiles_split_last * tilized_act_tile_size);
+        reader_compile_time_args.push_back(static_cast<uint32_t>(reader_noc));
+        reader_compile_time_args.push_back(static_cast<uint32_t>(writer_mcast_noc));
     } else if (block_sharded) {
         reader_compile_time_args.push_back(0);
         reader_compile_time_args.push_back(0);
+        reader_compile_time_args.push_back(static_cast<uint32_t>(reader_noc));
+        reader_compile_time_args.push_back(static_cast<uint32_t>(writer_mcast_noc));
     }
     if (split_reader_cb_shared) {
         reader_compile_time_args.push_back(act_split_reader_reserve_done_semaphore_id);
@@ -965,7 +972,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             // Add split mcast args (always present when split reader is enabled)
             split_reader_args.push_back(act_first_reader_tilize_done_semaphore_id);
             split_reader_args.push_back(act_second_reader_mcast_done_semaphore_id);
-            split_reader_args.push_back(act_mcast_sender_semaphore_id_second);
+            split_reader_args.push_back(act_mcast_sender_semaphore_id);
             split_reader_args.push_back(act_mcast_receiver_semaphore_id_second);
             split_reader_args.push_back((uint32_t)(act_block_num_tiles_split_last *
                                                    tilized_act_tile_size));  // act_mcast_sender_size_bytes_second
@@ -1076,11 +1083,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
                 activation_reuse_config.tilized_cb_second_reader_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
         }
     }
-
-    const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
-    const tt::tt_metal::NOC reader_noc =
-        writer_mcast_noc == tt::tt_metal::NOC::NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
-
+    const tt::tt_metal::NOC_MODE noc_mode =
+        (block_sharded && enable_split_reader ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC
+                                              : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC);
     tt::tt_metal::KernelHandle writer_mcast_sender_id = CreateKernel(
         program,
         writer_mcast_sender_kernel,
@@ -1088,6 +1093,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = writer_mcast_noc,
+            .noc_mode = noc_mode,
             .compile_args = writer_compile_time_args,
             .defines = writer_mcast_sender_defines});
 
@@ -1100,6 +1106,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = writer_mcast_noc,
+                .noc_mode = noc_mode,
                 .compile_args = writer_compile_time_args,
                 .defines = writer_defines});
     }
@@ -1111,6 +1118,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = reader_noc,
+            .noc_mode = noc_mode,
             .compile_args = reader_compile_time_args,
             .defines = reader_defines});
 
@@ -1167,6 +1175,16 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
                         bottom_core_physical.x,
                         bottom_core_physical.y);
 
+                    if (split_mcast_enabled) {
+                        std::vector<uint32_t> second_reader_mcast_coords = setup_mcast_args(
+                            !reader_is_noc_0,
+                            bottom_core_physical.x,
+                            top_left_core_physical.y,
+                            bottom_core_physical.x,
+                            bottom_core_physical.y);
+                        reader_rt_args.insert(
+                            reader_rt_args.end(), second_reader_mcast_coords.begin(), second_reader_mcast_coords.end());
+                    }
                     reader_rt_args.push_back(core.y);                  // act_mcast_sender_id
                     reader_rt_args.push_back(bottom_core_physical.x);  // act_mcast_sender_noc_x
                 } else {
@@ -1178,6 +1196,16 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
                         core_physical.y,
                         out_bottom_right_core_physical.x,
                         core_physical.y);
+                    if (split_mcast_enabled) {
+                        std::vector<uint32_t> second_reader_mcast_coords = setup_mcast_args(
+                            !reader_is_noc_0,
+                            top_left_core_physical.x,
+                            core_physical.y,
+                            out_bottom_right_core_physical.x,
+                            core_physical.y);
+                        reader_rt_args.insert(
+                            reader_rt_args.end(), second_reader_mcast_coords.begin(), second_reader_mcast_coords.end());
+                    }
                     reader_rt_args.push_back(core.x);           // act_mcast_sender_id
                     reader_rt_args.push_back(core_physical.y);  // act_mcast_sender_noc_x
                 }

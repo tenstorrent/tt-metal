@@ -287,69 +287,7 @@ void kernel_main() {
                 for (uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer;
                      weight_tile_h_outer_i++) {
 #if defined(SPLIT_READER) && !defined(SKIP_ACT_MCAST)
-                    if (weight_tile_h_outer_i == act_mcast_sender_id) {
-                        uint64_t act_multicast_data_addr =
-                            act_multicast_noc_addr | (get_write_ptr(cb_id_act) + act_mcast_offset);
-                        uint32_t self_write_start_address = get_write_ptr(cb_id_act) + act_mcast_offset;
-                        noc_semaphore_wait(
-                            act_mcast_sender_semaphore_addr_ptr_second,
-                            act_mcast_num_dests + (is_receiver_core_act ? 0 : 1));
-                        noc_semaphore_set(act_mcast_sender_semaphore_addr_ptr_second, 0);
-
-                        noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr_second, INVALID);
-                        // Wait for first reader to signal that tilized data is ready
-                        noc_semaphore_wait(act_first_reader_tilize_done_semaphore_addr_ptr, VALID);
-                        noc_semaphore_set(act_first_reader_tilize_done_semaphore_addr_ptr, INVALID);
-
-                        // Multicast the second half of activation data
-                        if (is_receiver_core_act) {
-                            if constexpr (act_mcast_num_cores) {
-                                noc_async_write_multicast_loopback_src(
-                                    tilized_act_start_address,
-                                    act_multicast_data_addr,
-                                    act_mcast_sender_size_bytes_second,
-                                    act_mcast_num_cores + 1,
-                                    true);
-                            } else {
-                                noc_async_write(
-                                    get_noc_addr(tilized_act_start_address),
-                                    get_noc_addr(self_write_start_address),
-                                    act_mcast_sender_size_bytes_second);
-                                noc_async_write_barrier();
-                            }
-                        } else {
-                            noc_async_write_multicast(
-                                tilized_act_start_address,
-                                act_multicast_data_addr,
-                                act_mcast_sender_size_bytes_second,
-                                act_mcast_num_cores + 1,
-                                true);
-                        }
-
-#ifdef ARCH_BLACKHOLE
-                        noc_async_writes_flushed();
-#endif
-
-                        // Multicast VALID flag to receivers
-                        if (is_receiver_core_act) {
-                            if constexpr (act_mcast_num_cores) {
-                                noc_semaphore_set_multicast_loopback_src(
-                                    act_mcast_sender_semaphore_valid_addr,
-                                    act_mcast_receiver_semaphore_noc_addr_second,
-                                    act_mcast_num_cores + 1);
-                                noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr_second, VALID);
-                            }
-                        } else {
-                            noc_semaphore_set_multicast(
-                                act_mcast_sender_semaphore_valid_addr,
-                                act_mcast_receiver_semaphore_noc_addr_second,
-                                act_mcast_num_cores + 1);
-                        }
-
-                        // Signal to first reader that multicasting is done
-                        noc_semaphore_set(act_second_reader_mcast_done_semaphore_addr_ptr, VALID);
-
-                    } else if (is_receiver_core_act) {
+                    if (is_receiver_core_act && weight_tile_h_outer_i != act_mcast_sender_id) {
                         // Receiver logic
                         noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr_second, INVALID);
 
@@ -367,11 +305,12 @@ void kernel_main() {
                                 act_mcast_sender_semaphore_addr_second);
                         }
                         noc_semaphore_inc(act_mcast_sender_semaphore_noc_addr_second, 1);
-
+                        DPRINT << "START receiving data and semaphore" << ENDL();
                         // Wait for VALID from sender
                         noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr_second, VALID);
+
+                        DPRINT << "END receiving data and semaphore" << ENDL();
                     }
-                    act_mcast_offset = act_mcast_offset_sum - act_mcast_offset;
 #endif  // SKIP_ACT_MCAST
                     if (skip_work) {
                         continue;
