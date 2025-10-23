@@ -2,19 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+import ttnn
 import torch
+import numpy as np
+
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.detr3d.reference.model_utils import (
     FurthestPointSampling,
     BoxProcessor,
 )
-import math
-import numpy as np
-from models.common.lightweightmodule import LightweightModule
-
-import torch
-
-import ttnn
-from models.experimental.detr3d.ttnn.pointnet_samodule_votes import TtnnPointnetSAModuleVotes
 from models.experimental.detr3d.ttnn.masked_transformer_encoder import (
     TtnnTransformerEncoderLayer,
     TtnnMaskedTransformerEncoder,
@@ -26,10 +23,14 @@ from models.experimental.detr3d.ttnn.transformer_decoder import (
     DecoderLayerArgs,
 )
 from models.experimental.detr3d.ttnn.generic_mlp import TtnnGenericMLP
+from models.experimental.detr3d.ttnn.pointnet_samodule_votes import TtnnPointnetSAModuleVotes
 
 
 class TtnnModel3DETR(LightweightModule):
     """
+    NOTE: The Encoder and Decoder layers use batch first as compared to batch second in reference model,
+          this helps remove lot of unnecessary permute operations within the network
+
     Main 3DETR model. Consists of the following learnable sub-models
     - pre_encoder: takes raw point cloud, subsamples it and projects into "D" dimensions
                 Input is a Nx3 matrix of N point coordinates
@@ -59,6 +60,7 @@ class TtnnModel3DETR(LightweightModule):
         parameters=None,
         device=None,
     ):
+        # NOTE: Layers and tensors with "torch_" in their names are on host
         super().__init__()
         self.pre_encoder = pre_encoder
         self.encoder = encoder
@@ -74,7 +76,7 @@ class TtnnModel3DETR(LightweightModule):
         # self.pos_embedding = TtnnPositionEmbeddingCoordsSine(
         #     d_pos=decoder_dim, pos_type=position_embedding, normalize=True, device=self.device, gauss_B=torch_module.pos_embedding.gauss_B
         # )
-        self.pos_embedding = torch_module.pos_embedding
+        self.torch_pos_embedding = torch_module.pos_embedding
         self.query_projection = TtnnGenericMLP(
             torch_module.query_projection,
             parameters.query_projection,
@@ -84,9 +86,9 @@ class TtnnModel3DETR(LightweightModule):
         self.build_mlp_heads()
 
         self.num_queries = num_queries
-        self.box_processor = BoxProcessor(dataset_config)
+        self.torch_box_processor = BoxProcessor(dataset_config)
         # self.box_processor = TtnnBoxProcessor(dataset_config, device=self.device)
-        self.furthest_point_sample = FurthestPointSampling()
+        self.torch_furthest_point_sample = FurthestPointSampling()
 
     def build_mlp_heads(self):
         self.mlp_heads = {
@@ -117,65 +119,60 @@ class TtnnModel3DETR(LightweightModule):
             ),
         }
 
-    def get_query_embeddings(self, encoder_xyz, point_cloud_dims):
-        query_inds = self.furthest_point_sample(encoder_xyz, self.num_queries)
-        query_inds = query_inds.long()
-        query_xyz = [torch.gather(encoder_xyz[..., x], 1, query_inds) for x in range(3)]
-        query_xyz = torch.stack(query_xyz)
-        query_xyz = query_xyz.permute(1, 2, 0)
-
-        # Gater op above can be replaced by the three lines below from the pointnet2 codebase
-        # xyz_flipped = encoder_xyz.transpose(1, 2).contiguous()
-        # query_xyz = gather_operation(xyz_flipped, query_inds.int())
-        # query_xyz = query_xyz.transpose(1, 2)
+    def get_query_embeddings(self, torch_encoder_xyz, torch_point_cloud_dims):
+        torch_query_inds = self.torch_furthest_point_sample(torch_encoder_xyz, self.num_queries)
+        torch_query_inds = torch_query_inds.long()
+        torch_query_xyz = [torch.gather(torch_encoder_xyz[..., x], 1, torch_query_inds) for x in range(3)]
+        torch_query_xyz = torch.stack(torch_query_xyz)
+        torch_query_xyz = torch_query_xyz.permute(1, 2, 0)
 
         # TODO: Either remove this completely or only use ttnn embedding
-        # query_xyz_ttnn = ttnn.from_torch(query_xyz, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
-        # pos_embed = self.pos_embedding(query_xyz_ttnn, input_range=point_cloud_dims)
-        pos_embed = self.pos_embedding(query_xyz, input_range=point_cloud_dims)
+        # query_xyz = ttnn.from_torch(torch_query_xyz, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
+        # pos_embed = self.pos_embedding(query_xyz, input_range=point_cloud_dims)
+        torch_pos_embed = self.torch_pos_embedding(torch_query_xyz, input_range=torch_point_cloud_dims)
         pos_embed = ttnn.from_torch(
-            pos_embed.permute(0, 2, 1), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
+            torch_pos_embed.permute(0, 2, 1), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
         )
         query_embed = self.query_projection(pos_embed)
-        return query_xyz, query_embed
+        return torch_query_xyz, query_embed
 
-    def _break_up_pc(self, pc):
+    def _break_up_pc(self, torch_pc):
         # pc may contain color/normals.
 
-        xyz = pc[..., 0:3].contiguous()
-        features = pc[..., 3:].transpose(1, 2).contiguous() if pc.size(-1) > 3 else None
-        return xyz, features
+        torch_xyz = torch_pc[..., 0:3].contiguous()
+        torch_features = torch_pc[..., 3:].transpose(1, 2).contiguous() if torch_pc.size(-1) > 3 else None
+        return torch_xyz, torch_features
 
-    def run_encoder(self, point_clouds):
-        xyz, features = self._break_up_pc(point_clouds)
-        pre_enc_xyz, pre_enc_features, _ = self.pre_encoder(xyz, features)
+    def run_encoder(self, torch_point_clouds):
+        torch_xyz, torch_features = self._break_up_pc(torch_point_clouds)
+        torch_pre_enc_xyz, pre_enc_features, _ = self.pre_encoder(torch_xyz, torch_features)
         # xyz: batch x npoints x 3
         # features: batch x channel x npoints
         # inds: batch x npoints
 
-        # MultiHeadAttention in encoder expects npoints x batch x channel features
-        pre_enc_features = ttnn.permute(pre_enc_features, (2, 0, 1))
+        # MultiHeadAttention in encoder expects batch x npoints x channel features
+        pre_enc_features = ttnn.permute(pre_enc_features, (0, 2, 1))
 
-        # xyz points are in batch x npointx channel order
-        enc_xyz, enc_features, _ = self.encoder(pre_enc_features, xyz=pre_enc_xyz)
+        # xyz points are batch x npoint x channel order torch tensor
+        torch_enc_xyz, enc_features, _ = self.encoder(pre_enc_features, xyz=torch_pre_enc_xyz)
 
-        return enc_xyz, enc_features, _
+        return torch_enc_xyz, enc_features, _
 
-    def get_box_predictions(self, query_xyz, point_cloud_dims, box_features):
+    def get_box_predictions(self, torch_query_xyz, torch_point_cloud_dims, box_features):
         """
         Parameters:
-            query_xyz: batch x nqueries x 3 tensor of query XYZ coords
-            point_cloud_dims: List of [min, max] dims of point cloud
+            torch_query_xyz: batch x nqueries x 3 tensor of query XYZ coords
+            torch_point_cloud_dims: List of [min, max] dims of point cloud
                               min: batch x 3 tensor of min XYZ coords
                               max: batch x 3 tensor of max XYZ coords
             box_features: num_layers x num_queries x batch x channel
         """
-        # box_features change to (num_layers x batch) x channel x num_queries
+        # box_features change to (num_layers x batch) x num_queries x channel
         num_layers, batch, num_queries, channel = box_features.shape
         box_features = ttnn.reshape(box_features, (num_layers * batch, num_queries, channel))
         box_features = ttnn.to_memory_config(box_features, ttnn.DRAM_MEMORY_CONFIG)
 
-        # mlp head outputs are (num_layers x batch) x noutput x nqueries, so transpose last two dims
+        # mlp head outputs are (num_layers x batch) x nqueries x noutput
         cls_logits = self.mlp_heads["sem_cls_head"](box_features)
         center_offset = self.mlp_heads["center_head"](box_features)
         size_normalized = self.mlp_heads["size_head"](box_features)
@@ -185,6 +182,7 @@ class TtnnModel3DETR(LightweightModule):
         center_offset = ttnn.sigmoid(center_offset) - 0.5
         size_normalized = ttnn.sigmoid(size_normalized)
 
+        # reshape outputs to num_layers x batch x nqueries x noutput
         cls_logits = ttnn.reshape(cls_logits, (num_layers, batch, num_queries, cls_logits.shape[-1]))
         center_offset = ttnn.reshape(center_offset, (num_layers, batch, num_queries, center_offset.shape[-1]))
         size_normalized = ttnn.reshape(size_normalized, (num_layers, batch, num_queries, size_normalized.shape[-1]))
@@ -194,65 +192,72 @@ class TtnnModel3DETR(LightweightModule):
         )
         angle_residual = angle_residual_normalized * (np.pi / angle_residual_normalized.shape[-1])
 
-        cls_logits = ttnn.to_torch(cls_logits)
-        center_offset = ttnn.to_torch(center_offset)
-        size_normalized = ttnn.to_torch(size_normalized)
-        angle_logits = ttnn.to_torch(angle_logits)
-        angle_residual_normalized = ttnn.to_torch(angle_residual_normalized)
-        angle_residual = ttnn.to_torch(angle_residual)
+        # TODO: Deallocate ttnn tensors here or add function for it
+        # send outputs to torch for box processing
+        torch_cls_logits = ttnn.to_torch(cls_logits)
+        torch_center_offset = ttnn.to_torch(center_offset)
+        torch_size_normalized = ttnn.to_torch(size_normalized)
+        torch_angle_logits = ttnn.to_torch(angle_logits)
+        torch_angle_residual_normalized = ttnn.to_torch(angle_residual_normalized)
+        torch_angle_residual = ttnn.to_torch(angle_residual)
 
-        outputs = []
+        torch_outputs = []
         for l in range(num_layers):
             # box processor converts outputs so we can get a 3D bounding box
             (
-                center_normalized,
-                center_unnormalized,
-            ) = self.box_processor.compute_predicted_center(center_offset[l], query_xyz, point_cloud_dims)
-            angle_continuous = self.box_processor.compute_predicted_angle(angle_logits[l], angle_residual[l])
-            size_unnormalized = self.box_processor.compute_predicted_size(size_normalized[l], point_cloud_dims)
-            box_corners = self.box_processor.box_parametrization_to_corners(
-                center_unnormalized, size_unnormalized, angle_continuous
+                torch_center_normalized,
+                torch_center_unnormalized,
+            ) = self.torch_box_processor.compute_predicted_center(
+                torch_center_offset[l], torch_query_xyz, torch_point_cloud_dims
+            )
+            torch_angle_continuous = self.torch_box_processor.compute_predicted_angle(
+                torch_angle_logits[l], torch_angle_residual[l]
+            )
+            torch_size_unnormalized = self.torch_box_processor.compute_predicted_size(
+                torch_size_normalized[l], torch_point_cloud_dims
+            )
+            torch_box_corners = self.torch_box_processor.box_parametrization_to_corners(
+                torch_center_unnormalized, torch_size_unnormalized, torch_angle_continuous
             )
 
-            # below are not used in computing loss (only for matching/mAP eval)
-            # we compute them with no_grad() so that distributed training does not complain about unused variables
+            # below are used for matching/mAP eval
             (
-                semcls_prob,
-                objectness_prob,
-            ) = self.box_processor.compute_objectness_and_cls_prob(cls_logits[l])
+                torch_semcls_prob,
+                torch_objectness_prob,
+            ) = self.torch_box_processor.compute_objectness_and_cls_prob(torch_cls_logits[l])
 
-            box_prediction = {
-                "sem_cls_logits": cls_logits[l],
-                "center_normalized": center_normalized.contiguous(),
-                "center_unnormalized": center_unnormalized,
-                "size_normalized": size_normalized[l],
-                "size_unnormalized": size_unnormalized,
-                "angle_logits": angle_logits[l],
-                "angle_residual": angle_residual[l],
-                "angle_residual_normalized": angle_residual_normalized[l],
-                "angle_continuous": angle_continuous,
-                "objectness_prob": objectness_prob,
-                "sem_cls_prob": semcls_prob,
-                "box_corners": box_corners,
+            torch_box_prediction = {
+                "sem_cls_logits": torch_cls_logits[l],
+                "center_normalized": torch_center_normalized,
+                "center_unnormalized": torch_center_unnormalized,
+                "size_normalized": torch_size_normalized[l],
+                "size_unnormalized": torch_size_unnormalized,
+                "angle_logits": torch_angle_logits[l],
+                "angle_residual": torch_angle_residual[l],
+                "angle_residual_normalized": torch_angle_residual_normalized[l],
+                "angle_continuous": torch_angle_continuous,
+                "objectness_prob": torch_objectness_prob,
+                "sem_cls_prob": torch_semcls_prob,
+                "box_corners": torch_box_corners,
             }
-            outputs.append(box_prediction)
+            torch_outputs.append(torch_box_prediction)
 
         # intermediate decoder layer outputs are only used during training
-        aux_outputs = outputs[:-1]
-        outputs = outputs[-1]
+        # we use them to check for any instability in PCC
+        torch_aux_outputs = torch_outputs[:-1]
+        torch_outputs = torch_outputs[-1]
 
         return {
-            "outputs": outputs,  # output from last layer of decoder
-            "aux_outputs": aux_outputs,  # output from intermediate layers of decoder
+            "outputs": torch_outputs,  # output from last layer of decoder
+            "aux_outputs": torch_aux_outputs,  # output from intermediate layers of decoder
         }
 
     def forward(self, inputs, encoder_only=False):
-        point_clouds = inputs["point_clouds"]
+        torch_point_clouds = inputs["point_clouds"]
 
-        torch_enc_xyz, enc_features, _ = self.run_encoder(point_clouds)
-        enc_features = ttnn.permute(enc_features, (1, 0, 2))
+        torch_enc_xyz, enc_features, _ = self.run_encoder(torch_point_clouds)
         enc_features = self.encoder_to_decoder_projection(enc_features)
-        # encoder features: npoints x batch x channel
+        # encoder features: batch x npoints x channel
         # encoder xyz: npoints x batch x 3
 
         if encoder_only:
@@ -263,26 +268,27 @@ class TtnnModel3DETR(LightweightModule):
             inputs["point_cloud_dims_min"],
             inputs["point_cloud_dims_max"],
         ]
-        ttnn_point_cloud_dims = [
+        point_cloud_dims = [
             ttnn.from_torch(t, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
             for t in torch_point_cloud_dims
         ]
 
         torch_query_xyz, query_embed = self.get_query_embeddings(torch_enc_xyz, torch_point_cloud_dims)
-        # query_embed: batch x channel x npoint
+        # query_embed: batch x npoint x channel
         # TODO: Either remove this completely or only use ttnn embedding
         # enc_xyz_ttnn = ttnn.from_torch(torch_enc_xyz, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
         # enc_pos = self.pos_embedding(enc_xyz_ttnn, input_range=ttnn_point_cloud_dims)
-        enc_pos = self.pos_embedding(torch_enc_xyz, input_range=torch_point_cloud_dims)
+        torch_enc_pos = self.torch_pos_embedding(torch_enc_xyz, input_range=torch_point_cloud_dims)
         enc_pos = ttnn.from_torch(
-            enc_pos.permute(0, 2, 1), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
+            torch_enc_pos.permute(0, 2, 1), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
         )
 
-        # decoder expects: npoints x batch x channel
+        # decoder expects: batch x npoints x channel
         tgt = ttnn.zeros_like(query_embed, dtype=ttnn.bfloat16)
         box_features = self.decoder(tgt, enc_features, query_pos=query_embed, pos=enc_pos)[0]
-        box_predictions = self.get_box_predictions(torch_query_xyz, torch_point_cloud_dims, box_features)
-        return box_predictions
+
+        torch_box_predictions = self.get_box_predictions(torch_query_xyz, torch_point_cloud_dims, box_features)
+        return torch_box_predictions
 
 
 def build_ttnn_preencoder(args):
@@ -366,6 +372,6 @@ def build_ttnn_3detr(args, dataset_config):
         parameters=args.parameters,
         device=args.device,
     )
-    output_processor = BoxProcessor(dataset_config)
+    torch_output_processor = BoxProcessor(dataset_config)
     # output_processor = TtnnBoxProcessor(dataset_config, device=args.device)
-    return model, output_processor
+    return model, torch_output_processor
