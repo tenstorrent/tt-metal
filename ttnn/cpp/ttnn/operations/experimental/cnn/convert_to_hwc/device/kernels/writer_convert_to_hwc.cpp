@@ -9,7 +9,7 @@ constexpr uint32_t TILE_SIZE = 32;
 
 template <uint32_t StickSize, uint32_t PaddedStickSize, uint32_t NumSticks>
 FORCE_INLINE void copy_padded_sticks(uint32_t l1_read_addr, uint32_t& l1_write_addr) {
-    noc_async_read_one_packet_set_state(get_noc_addr(l1_read_addr), StickSize);
+    noc_async_read_one_packet_set_state(l1_read_addr, StickSize);
     for (uint32_t row = 0; row < NumSticks; row++) {
         noc_async_read_one_packet_with_state<true>(l1_read_addr, l1_write_addr);
         l1_read_addr += PaddedStickSize;
