@@ -18,7 +18,7 @@
 #include "compute_kernel_api/eltwise_unary/rsqrt.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/transpose_wh_dest.h"
-
+#include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 namespace NAMESPACE {
 
 class cb_ping_pong {
@@ -37,6 +37,8 @@ private:
 };
 
 void MAIN {
+    namespace kutil = norm::kernel_util;
+
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t blk = get_compile_time_arg_val(1);
@@ -63,6 +65,7 @@ void MAIN {
     constexpr auto cb_interm_pre_add = tt::CBIndex::c_23;  // intermediate for fused pre-add
     auto cb_welford_ping = tt::CBIndex::c_4;               // Ping-pong buffer for storing Welford's mean/var
     auto cb_welford_pong = tt::CBIndex::c_7;               // Ping-pong buffer for storing Welford's mean/var
+    constexpr auto cb_reciprocals = tt::CBIndex::c_25;     // Pre-computed reciprocals for Welford's algorithm
     constexpr auto cb_result_or_input = fuse_pre_add ? cb_interm_pre_add : cb_in;
 
     constexpr auto scaler0 = 0;
@@ -86,6 +89,10 @@ void MAIN {
     constexpr uint32_t dst0 = 0;  // Input tile for Welford's
     constexpr uint32_t dst1 = 1;  // Mean tile for Welford's
     constexpr uint32_t dst2 = 2;  // Variance tile for Welford's
+
+    // Get pointer to the reciprocal LUT
+    using recip_LUT_t = std::array<uint32_t, W>;
+    auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<recip_LUT_t>(cb_reciprocals, 0);
 
     auto cb_welford = cb_ping_pong(cb_welford_ping, cb_welford_pong);
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
@@ -143,7 +150,7 @@ void MAIN {
             for (uint32_t j = 0; j < blk; j++) {
                 cb_wait_front(cb_result_or_input, j + 1);
                 transpose_wh_tile(cb_result_or_input, j, dst0);
-                welford_tile<dst0, dst1, dst2, true, 0>((wt + j) * tile_width, W, 0, {});
+                welford_tile<dst0, dst1, dst2, true, W>((wt + j) * tile_width, W, 0, *p_reciprocals);
             }
             tile_regs_commit();
 
