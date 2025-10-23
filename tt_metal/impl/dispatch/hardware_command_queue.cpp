@@ -148,7 +148,7 @@ HWCommandQueue::HWCommandQueue(
         this->config_buffer_mgr_,
         this->expected_num_workers_completed_,
         DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
-        device_->allocator()->get_config().l1_unreserved_base);
+        device_->allocator_impl()->get_config().l1_unreserved_base);
 }
 
 uint32_t HWCommandQueue::id() const { return this->id_; }
@@ -186,7 +186,7 @@ void HWCommandQueue::reset_worker_state(
         this->config_buffer_mgr_,
         this->expected_num_workers_completed_,
         device_->num_sub_devices(),
-        device_->allocator()->get_config().l1_unreserved_base);
+        device_->allocator_impl()->get_config().l1_unreserved_base);
     if (reset_launch_msg_state) {
         std::for_each(
             this->cq_shared_state_->worker_launch_message_buffer_state.begin(),

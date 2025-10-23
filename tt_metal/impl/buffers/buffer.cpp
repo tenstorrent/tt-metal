@@ -268,9 +268,9 @@ Buffer::Buffer(
     if (this->sub_device_id_.has_value()) {
         validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_spec_);
         this->sub_device_manager_id_ = this->device_->get_active_sub_device_manager_id();
-        this->allocator_ = device->allocator(*this->sub_device_id_).get();
+        this->allocator_ = device->allocator_impl(*this->sub_device_id_).get();
     } else {
-        this->allocator_ = device->allocator().get();
+        this->allocator_ = device->allocator_impl().get();
     }
     validate_buffer_parameters(size, page_size, buffer_type, buffer_layout_, shard_spec_, buffer_distribution_spec_);
     unique_id_ = next_unique_id.fetch_add(1);
@@ -381,6 +381,8 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
 
     return buffer;
 }
+
+Allocator* Buffer::allocator() const { return allocator_->view().get(); }
 
 void Buffer::allocate_impl() {
     if (GraphTracker::instance().hook_allocate(this)) {

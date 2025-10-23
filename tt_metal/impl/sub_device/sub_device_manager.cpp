@@ -61,7 +61,7 @@ SubDeviceManager::SubDeviceManager(
 }
 
 SubDeviceManager::SubDeviceManager(
-    IDevice* device, std::unique_ptr<Allocator>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
+    IDevice* device, std::unique_ptr<AllocatorImpl>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
     id_(next_sub_device_manager_id_++),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
     device_(device),
@@ -121,13 +121,13 @@ const std::vector<std::pair<CoreRangeSet, uint32_t>>& SubDeviceManager::get_core
     return core_go_message_mapping_;
 }
 
-const std::unique_ptr<Allocator>& SubDeviceManager::allocator(SubDeviceId sub_device_id) const {
+const std::unique_ptr<AllocatorImpl>& SubDeviceManager::allocator(SubDeviceId sub_device_id) const {
     auto sub_device_index = this->get_sub_device_index(sub_device_id);
     TT_FATAL(sub_device_allocators_[sub_device_index], "SubDevice allocator not initialized");
     return sub_device_allocators_[sub_device_index];
 }
 
-std::unique_ptr<Allocator>& SubDeviceManager::sub_device_allocator(SubDeviceId sub_device_id) {
+std::unique_ptr<AllocatorImpl>& SubDeviceManager::sub_device_allocator(SubDeviceId sub_device_id) {
     auto sub_device_index = this->get_sub_device_index(sub_device_id);
     return sub_device_allocators_[sub_device_index];
 }
@@ -257,7 +257,7 @@ void SubDeviceManager::populate_sub_allocators() {
     if (local_l1_size_ == 0) {
         return;
     }
-    const auto& global_allocator_config = device_->allocator()->get_config();
+    const auto& global_allocator_config = device_->allocator_impl()->get_config();
     // Construct allocator config from soc_desc
     // Take max alignment to satisfy NoC rd/wr constraints
     // Tensix/Eth -> PCIe/DRAM src and dst addrs must be L1_ALIGNMENT aligned
@@ -274,7 +274,7 @@ void SubDeviceManager::populate_sub_allocators() {
         l1_bank_remap.reserve(compute_cores_vec.size());
         for (const auto& core : compute_cores_vec) {
             // These are compute cores, so they should have a single bank
-            l1_bank_remap.push_back(device_->allocator()->get_bank_ids_from_logical_core(BufferType::L1, core)[0]);
+            l1_bank_remap.push_back(device_->allocator_impl()->get_bank_ids_from_logical_core(BufferType::L1, core)[0]);
         }
         AllocatorConfig config(
             {.num_dram_channels = global_allocator_config.num_dram_channels,
