@@ -15,6 +15,10 @@
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/reflection.hpp>
 
+namespace YAML {
+class Node;
+}
+
 namespace tt::umd {
 class Cluster;
 }
@@ -206,11 +210,12 @@ public:
 
     static const std::unique_ptr<tt::umd::Cluster> null_cluster;
 
-    // Utility APIs to Print Physical System Descriptor
-    void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt);
+    // Utility APIs for output/serialization
+    void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt) const;
+    std::string generate_yaml_string() const;
     void emit_to_text_proto(const std::optional<std::string>& path_to_text_proto = std::nullopt);
 
-    // API to generate Ethernet Metrics
+    // Ethernet metrics API
     void generate_local_ethernet_metrics();
 
 private:
@@ -224,6 +229,9 @@ private:
     void remove_unresolved_nodes();
     void resolve_hostname_uniqueness();
     void validate_graphs();
+    
+    // Helper method to build YAML node structure shared by dump_to_yaml and generate_yaml_string
+    YAML::Node build_yaml_node() const;
 
     const std::unique_ptr<tt::umd::Cluster>& cluster_;
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;

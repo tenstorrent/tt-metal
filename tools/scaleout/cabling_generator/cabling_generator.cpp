@@ -405,13 +405,16 @@ const std::vector<LogicalChannelConnection>& CablingGenerator::get_chip_connecti
     return chip_connections_;
 }
 
-// Method to emit textproto factory system descriptor
-void CablingGenerator::emit_factory_system_descriptor(const std::string& output_path) const {
+// Helper function to build factory system descriptor protobuf (shared between emit and generate_string methods)
+static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor build_factory_system_descriptor(
+    const std::vector<Host>& deployment_hosts,
+    const std::map<HostId, Node*>& host_id_to_node,
+    const std::vector<LogicalChannelConnection>& chip_connections) {
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd;
 
     // Add host information from deployment hosts (indexed by host_id)
-    for (size_t i = 0; i < deployment_hosts_.size(); ++i) {
-        const auto& deployment_host = deployment_hosts_[i];
+    for (size_t i = 0; i < deployment_hosts.size(); ++i) {
+        const auto& deployment_host = deployment_hosts[i];
         auto* host = fsd.add_hosts();
         host->set_hostname(deployment_host.hostname);
         host->set_hall(deployment_host.hall);
@@ -422,7 +425,7 @@ void CablingGenerator::emit_factory_system_descriptor(const std::string& output_
     }
 
     // Add board types
-    for (const auto& [host_id, node] : host_id_to_node_) {
+    for (const auto& [host_id, node] : host_id_to_node) {
         for (const auto& [tray_id, board] : node->boards) {
             auto* board_location = fsd.mutable_board_types()->add_board_locations();
             board_location->set_host_id(*host_id);
@@ -431,8 +434,8 @@ void CablingGenerator::emit_factory_system_descriptor(const std::string& output_
         }
     }
 
-    // Add ASIC connections from chip_connections_
-    for (const auto& [start, end] : chip_connections_) {
+    // Add ASIC connections from chip_connections
+    for (const auto& [start, end] : chip_connections) {
         auto* connection = fsd.mutable_eth_connections()->add_connection();
 
         auto* endpoint_a = connection->mutable_endpoint_a();
@@ -447,6 +450,13 @@ void CablingGenerator::emit_factory_system_descriptor(const std::string& output_
         endpoint_b->set_asic_location(end.asic_channel.asic_location);
         endpoint_b->set_chan_id(*end.asic_channel.channel_id);
     }
+
+    return fsd;
+}
+
+// Method to emit textproto factory system descriptor
+void CablingGenerator::emit_factory_system_descriptor(const std::string& output_path) const {
+    auto fsd = build_factory_system_descriptor(deployment_hosts_, host_id_to_node_, chip_connections_);
 
     // Create parent directory if it doesn't exist
     std::filesystem::path output_file_path(output_path);
@@ -472,6 +482,24 @@ void CablingGenerator::emit_factory_system_descriptor(const std::string& output_
 
     output_file << output_string;
     output_file.close();
+}
+
+// Method to generate factory system descriptor as string (uses shared helper)
+std::string CablingGenerator::generate_factory_system_descriptor_string() const {
+    auto fsd = build_factory_system_descriptor(deployment_hosts_, host_id_to_node_, chip_connections_);
+
+    std::string output_string;
+    google::protobuf::TextFormat::Printer printer;
+    printer.SetUseShortRepeatedPrimitives(true);
+    printer.SetUseUtf8StringEscaping(true);
+    printer.SetSingleLineMode(false);
+    printer.SetPrintMessageFieldsInIndexOrder(true);
+
+    if (!printer.PrintToString(fsd, &output_string)) {
+        throw std::runtime_error("Failed to generate textproto string");
+    }
+
+    return output_string;
 }
 
 void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bool loc_info) const {
