@@ -6,55 +6,13 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
-def convert_scalar_to_ttnn_tensor(device, scalar, dim, out_dtype):
-    if dim == 0:
-        return scalar
-    scalar_tensor = torch.tensor([scalar])
-    for i in range(1, dim):
-        scalar_tensor = torch.unsqueeze(scalar_tensor, 0)
-    return ttnn.from_torch(scalar_tensor, dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-
-
-# Quantize to the [q_min, q_max] range (scale-then-shift)
-#   Quant:   q = t / s + z
-#   Dequant: t = (q - z) * s
-def calculate_scale_zero_point_per_tensor(torch_input_tensor, q_min, q_max):
-    i_min = torch.min(torch_input_tensor).item()
-    i_max = torch.max(torch_input_tensor).item()
-
-    scale = (i_max - i_min) / (q_max - q_min)
-    zero_point = q_min - int(i_min / scale)
-
-    return (scale, zero_point)
-
-
-# PCC can't catch the case that the output tensor is all zeros (or any other constant)
-# Torch.allclose is sensitive to outliers (e.g. quant-dequant of 3e-5 when most other values are around 1e-1)
-# Instead, we assert that over 98% of the elements in the tensors are close enough
-def check_match_ratio(golden, other, check_dtype):
-    min_match_ratio = 0.98
-
-    if check_dtype == ttnn.float32:
-        golden = golden.to(torch.float32)
-    elif check_dtype == ttnn.bfloat16:
-        golden = golden.to(torch.bfloat16)
-    else:
-        golden = golden.int_repr()
-
-    deduced_atol = 0.02 * torch.max(torch.abs(golden)).item()
-    ratio = torch.count_nonzero(torch.isclose(golden, other, rtol=0.02, atol=deduced_atol)) / torch.numel(golden)
-    assert ratio > min_match_ratio
-
-
-# TODO: remove this once the accuracy issue of the composite op fallback is fixed (per-tensor & per-channel)
-def check_pcc(golden, other, relax_for_composite):
-    if relax_for_composite:
-        assert_with_pcc(golden, other, 0.9998)
-    else:
-        assert_with_pcc(golden, other)
+from tests.ttnn.unit_tests.operations.eltwise.test_quantization import (
+    convert_scalar_to_ttnn_tensor,
+    calculate_scale_zero_point_per_tensor,
+    calculate_scale_zero_point_per_channel,
+    check_match_ratio,
+    check_pcc,
+)
 
 
 @pytest.mark.parametrize("x0", [16, 31, 63, 128, 65536])
@@ -296,23 +254,6 @@ def test_requant_per_tensor_4d(
     relax_pcc = max(scale_dim, zero_point_dim, scale_r_dim, zero_point_r_dim) > 0
     check_pcc(input_tr, result_tr, relax_pcc)
     check_match_ratio(input_tr, result_tr, input_dtype)
-
-
-def calculate_scale_zero_point_per_channel(input_tensor, axis, q_min, q_max):
-    axis_size = input_tensor.shape[axis]
-    i_min = [0.0] * axis_size
-    i_max = [0.0] * axis_size
-    # Slice the input along the axis, get min & max of the slice
-    for i in range(axis_size):
-        i_min[i] = torch.min(torch.select(input_tensor, axis, i)).item()
-        i_max[i] = torch.max(torch.select(input_tensor, axis, i)).item()
-    i_min = torch.tensor(i_min, dtype=torch.float32)
-    i_max = torch.tensor(i_max, dtype=torch.float32)
-
-    scale = torch.div(torch.sub(i_max, i_min), q_max - q_min)
-    zero_point = torch.sub(q_min, torch.div(i_min, scale)).int()
-
-    return (scale, zero_point)
 
 
 @pytest.mark.parametrize("x0", [16, 31, 63, 128, 65536])
