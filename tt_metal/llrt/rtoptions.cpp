@@ -55,7 +55,6 @@ RunTimeOptions::RunTimeOptions() :
     profiler_mid_run_dump(false),
     profiler_buffer_usage_enabled(false),
     profiler_trace_profiler(false) {
-    
     // Root directory handling from main (more robust)
     log_debug(tt::LogMetal, "initial root_dir: {}", this->root_dir);
 
@@ -128,7 +127,7 @@ RunTimeOptions::RunTimeOptions() :
     profiler_mid_run_dump = false;
     profiler_buffer_usage_enabled = false;
     profiler_trace_profiler = false;
-    
+
     const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
 #if defined(TRACY_ENABLE)
     if (profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1') {
@@ -155,18 +154,18 @@ RunTimeOptions::RunTimeOptions() :
         }
     }
 
-    const char *profiler_noc_events_str = std::getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS");
+    const char* profiler_noc_events_str = std::getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS");
     if (profiler_noc_events_str != nullptr && profiler_noc_events_str[0] == '1') {
         profiler_enabled = true;
         profiler_noc_events_enabled = true;
     }
 
-    const char *profiler_noc_events_report_path_str = std::getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH");
+    const char* profiler_noc_events_report_path_str = std::getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH");
     if (profiler_noc_events_report_path_str != nullptr) {
         profiler_noc_events_report_path = profiler_noc_events_report_path_str;
     }
 
-    const char *profile_buffer_usage_str = std::getenv("TT_METAL_MEM_PROFILER");
+    const char* profile_buffer_usage_str = std::getenv("TT_METAL_MEM_PROFILER");
     if (profile_buffer_usage_str != nullptr && profile_buffer_usage_str[0] == '1') {
         profiler_buffer_usage_enabled = true;
     }
