@@ -985,8 +985,8 @@ def enable_watcher():
 
 def disable_watcher():
     logger.info("Disabling Watcher")
-    os.environ.pop("TT_METAL_WATCHER")
-    os.environ.pop("TT_METAL_WATCHER_APPEND")
+    os.environ.pop("TT_METAL_WATCHER", None)
+    os.environ.pop("TT_METAL_WATCHER_APPEND", None)
 
 
 def enable_profiler():
@@ -999,10 +999,10 @@ def enable_profiler():
 
 def disable_profiler():
     logger.info("Disabling Device Profiler")
-    os.environ.pop("TT_METAL_DEVICE_PROFILER")
-    os.environ.pop("ENABLE_TRACY")
-    os.environ.pop("TT_METAL_PROFILER_MID_RUN_DUMP")
-    os.environ.pop("TT_METAL_PROFILER_SYNC")
+    os.environ.pop("TT_METAL_DEVICE_PROFILER", None)
+    os.environ.pop("ENABLE_TRACY", None)
+    os.environ.pop("TT_METAL_PROFILER_MID_RUN_DUMP", None)
+    os.environ.pop("TT_METAL_PROFILER_SYNC", None)
 
 
 if __name__ == "__main__":
