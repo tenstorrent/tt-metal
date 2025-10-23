@@ -388,10 +388,13 @@ class ttnn_VoVNetCP:
         x = self.stem_conv2(device, x)
 
         # Stem conv 3 (stride=2, padding=1)
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x = self.stem_conv3(device, x)
 
         # Now x is ready for stages
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         stage2 = self.stage2(device, x)
+        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
         stage3 = self.stage3(device, stage2)
         stage4 = self.stage4(device, stage3)
         stage5 = self.stage5(device, stage4)
