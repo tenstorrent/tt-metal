@@ -263,7 +263,18 @@ bool KernelImpl::binaries_exist_on_disk(const IDevice* device) const {
     // Note: this->get_full_kernel_name() already has a '/' at the end.
     const std::string build_success_marker_path =
         fmt::format("{}{}{}", output_path.value(), this->get_full_kernel_name(), SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
-    return std::filesystem::exists(build_success_marker_path);
+
+    if (!std::filesystem::exists(build_success_marker_path)) {
+        // Log helpful information for debugging when binary doesn't exist
+        log_warning(
+            LogBuildKernels,
+            "Kernel binary not found on disk for '{}'. Expected at: {}\n"
+            "This usually means kernel compilation failed. Check build logs in the parent directory.",
+            this->name(),
+            build_success_marker_path);
+        return false;
+    }
+    return true;
 }
 
 std::vector<std::string> KernelImpl::file_paths(IDevice& device) const {
@@ -290,7 +301,40 @@ uint8_t ComputeKernel::expected_num_binaries() const {
 
 const std::vector<const ll_api::memory*>& KernelImpl::binaries(uint32_t build_key) const {
     auto iter = binaries_.find(build_key);
-    TT_FATAL(iter != binaries_.end(), "binary not found");
+    if (iter == binaries_.end()) {
+        // Provide comprehensive error information for debugging
+        // Add information about available binaries if any
+        std::vector<uint32_t> available_keys;
+        for (const auto& [key, _] : binaries_) {
+            available_keys.push_back(key);
+        }
+
+        TT_THROW(
+            "Kernel binary not found for '{}' (build_key: {}). This typically indicates:\n"
+            "  1. Kernel compilation failed - check build logs in TT_METAL_CACHE_DIR\n"
+            "  2. Build cache corruption - try clearing TT_METAL_CACHE_DIR\n"
+            "  3. Incompatible device/architecture - verify device compatibility\n"
+            "  4. Missing dependencies - ensure all required tools are installed\n"
+            "\n"
+            "Troubleshooting steps:\n"
+            "  - Set TT_METAL_LOG_KERNELS_COMPILATION_COMMANDS=1 to see compilation commands\n"
+            "  - Check TT_METAL_CACHE_DIR for build artifacts and logs\n"
+            "  - Verify device is properly initialized and accessible\n"
+            "  - Try running with a simpler kernel to isolate the issue\n"
+            "\n"
+            "Available build keys for this kernel: {}\n"
+            "Kernel details:\n"
+            "  - Processor class: {}\n"
+            "  - Programmable core type: {}\n"
+            "  - Expected binaries: {}\n",
+            this->name(),
+            build_key,
+            !available_keys.empty() ? fmt::format("{}", fmt::join(available_keys, ", ")) : std::string("None"),
+            this->get_kernel_processor_class(),
+            this->get_kernel_programmable_core_type(),
+            this->expected_num_binaries());
+    }
+
     if (iter->second.size() != expected_num_binaries()) {
         TT_THROW(
             "Expected {} binaries but have {} for kernel {}",
@@ -521,13 +565,31 @@ detail::KernelMeta Kernel::meta(IDevice* device) const {
 uint32_t KernelImpl::get_binary_packed_size(IDevice* device, int index) const {
     // In testing situations we can query the size w/o a binary
     auto iter = binaries_.find(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
-    return iter != this->binaries_.end() ? iter->second[index]->get_packed_size() : 0;
+    if (iter == this->binaries_.end()) {
+        log_debug(
+            LogBuildKernels,
+            "Binary not found for kernel '{}' when querying packed size (index {}). "
+            "This may indicate compilation failure or missing binary.",
+            this->name(),
+            index);
+        return 0;
+    }
+    return iter->second[index]->get_packed_size();
 }
 
 uint32_t KernelImpl::get_binary_text_size(IDevice* device, int index) const {
     // In testing situations we can query the size w/o a binary
     auto iter = binaries_.find(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
-    return iter != this->binaries_.end() ? iter->second[index]->get_text_size() : 0;
+    if (iter == this->binaries_.end()) {
+        log_debug(
+            LogBuildKernels,
+            "Binary not found for kernel '{}' when querying text size (index {}). "
+            "This may indicate compilation failure or missing binary.",
+            this->name(),
+            index);
+        return 0;
+    }
+    return iter->second[index]->get_text_size();
 }
 
 void ComputeKernel::set_build_options(JitBuildOptions& build_options) const {

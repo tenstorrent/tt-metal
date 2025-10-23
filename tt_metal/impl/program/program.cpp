@@ -168,7 +168,19 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
             BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, build_options);
         KernelImpl::from(*kernel).generate_binaries(device, build_options);
     } catch (std::runtime_error& ex) {
-        TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
+        TT_THROW(
+            "Failed to generate binaries for kernel '{}' (device: {}, arch: {}).\n"
+            "Error: {}\n\n"
+            "Troubleshooting steps:\n"
+            "  - Check if device is properly initialized and accessible\n"
+            "  - Verify kernel source files are valid and accessible\n"
+            "  - Check TT_METAL_CACHE_DIR permissions and disk space\n"
+            "  - Enable verbose logging: export TT_METAL_LOG_KERNELS_COMPILATION_COMMANDS=1\n"
+            "  - Clear build cache: unset TT_METAL_CACHE_DIR or rm -rf $TT_METAL_CACHE_DIR\n",
+            kernel->name(),
+            device->id(),
+            device->arch(),
+            ex.what());
     }
 }
 

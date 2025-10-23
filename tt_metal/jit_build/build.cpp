@@ -12,8 +12,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <sstream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <fmt/base.h>
 #include <fmt/format.h>
@@ -56,12 +58,87 @@ namespace {
 
 void build_failure(const string& target_name, const string& op, const string& cmd, const string& log_file) {
     log_error(tt::LogBuildKernels, "{} {} failure -- cmd: {}", target_name, op, cmd);
+
+    std::string error_msg = fmt::format(
+        "Kernel {} failed during {} step.\n"
+        "Command: {}\n"
+        "Log file: {}\n\n",
+        target_name,
+        op,
+        cmd,
+        log_file);
+
     std::ifstream file{log_file};
     if (file.is_open()) {
         std::string log_contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-        TT_THROW("{} build failed. Log: {}", target_name, log_contents);
+
+        // Extract the most relevant error lines (last 20 lines or error lines)
+        std::istringstream log_stream(log_contents);
+        std::string line;
+        std::vector<std::string> error_lines;
+        std::string filtered_errors;
+
+        while (std::getline(log_stream, line)) {
+            // Look for common error patterns
+            if (line.find("error:") != std::string::npos || line.find("Error") != std::string::npos ||
+                line.find("undefined reference") != std::string::npos ||
+                line.find("fatal error") != std::string::npos || line.find("cannot find") != std::string::npos ||
+                line.find("No such file") != std::string::npos || line.find("permission denied") != std::string::npos) {
+                error_lines.push_back(line);
+            }
+        }
+
+        if (!error_lines.empty()) {
+            error_msg += "Most relevant error lines:\n";
+            // Show up to 10 most recent error lines
+            for (size_t i = std::max(size_t(0), error_lines.size() - 10); i < error_lines.size(); ++i) {
+                error_msg += "  " + error_lines[i] + "\n";
+            }
+            error_msg += "\n";
+        }
+
+        // Add common troubleshooting suggestions
+        error_msg += "Common troubleshooting steps:\n";
+        if (op == "compile") {
+            error_msg += "  - Check if all required header files are available\n";
+            error_msg += "  - Verify compiler toolchain installation\n";
+            error_msg += "  - Check for syntax errors in kernel source code\n";
+        } else if (op == "link") {
+            error_msg += "  - Check for missing library dependencies\n";
+            error_msg += "  - Verify all object files were compiled successfully\n";
+            error_msg += "  - Check linker script compatibility\n";
+        }
+        error_msg += "  - Clear build cache: rm -rf TT_METAL_CACHE_DIR\n";
+        error_msg += "  - Enable verbose logging: export TT_METAL_LOG_KERNELS_COMPILATION_COMMANDS=1\n";
+        error_msg += "  - Check disk space and file permissions\n";
+
+        error_msg += "\nFull build log available at: " + log_file + "\n";
+
+        TT_THROW(
+            "Kernel {} failed during {} step.\n"
+            "Command: {}\n"
+            "Log file: {}\n\n"
+            "Most relevant error lines:\n"
+            "{}\n"
+            "\n"
+            "Common troubleshooting steps:\n"
+            "{}\n"
+            "Full build log available at: {}\n",
+            target_name,
+            op,
+            cmd,
+            log_file,
+            !error_lines.empty() ? fmt::format("{}", fmt::join(error_lines, "\n"))
+                                 : std::string("No specific error lines found"),
+            op == "compile" ? "  - Check if all required header files are available\n"
+                              "  - Verify compiler toolchain installation\n"
+                              "  - Check for syntax errors in kernel source code\n"
+                            : "  - Check for missing library dependencies\n"
+                              "  - Verify all object files were compiled successfully\n"
+                              "  - Check linker script compatibility\n",
+            log_file);
     } else {
-        TT_THROW("Failed to open {} failure log file {}", op, log_file);
+        TT_THROW("Failed to open {} failure log file {}. Check file permissions and disk space.", op, log_file);
     }
 }
 
