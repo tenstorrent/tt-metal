@@ -79,6 +79,7 @@ CPMAddPackage(
 
 CPMAddPackage(NAME nlohmann_json GITHUB_REPOSITORY nlohmann/json GIT_TAG v3.11.3 OPTIONS "JSON_BuildTests OFF")
 
+# gersemi: off
 CPMAddPackage(
     NAME xtl
     GITHUB_REPOSITORY xtensor-stack/xtl
@@ -111,7 +112,6 @@ CPMAddPackage(
 
 include(${PROJECT_SOURCE_DIR}/cmake/fetch_cli11.cmake)
 
-# gersemi: off
 CPMAddPackage(
     NAME msgpack
     GIT_REPOSITORY https://github.com/msgpack/msgpack-c.git
