@@ -272,8 +272,18 @@ jobs:
           echo "=== Test IS_CI_ENV value ==="
           python3 -c "from models.perf.benchmarking_utils import IS_CI_ENV; print('IS_CI_ENV:', IS_CI_ENV)" || echo "Failed to import IS_CI_ENV"
 
+          echo "=== Test pydantic imports ==="
+          python3 -c "from infra.data_collection.pydantic_models import BenchmarkMeasurement, PartialBenchmarkRun; print('Pydantic models imported successfully')" || echo "Failed to import pydantic models"
+
           echo "=== Check if perf_utils calls save_partial_run_json ==="
           python3 -c "import inspect; from models.perf.perf_utils import prep_perf_report; source = inspect.getsource(prep_perf_report); print('prep_perf_report calls save_partial_run_json:', 'save_partial_run_json' in source)" || echo "Failed to check prep_perf_report"
+
+          echo "=== Test BenchmarkData creation and save_partial_run_json directly ==="
+          python3 -c "from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler; bd = BenchmarkData(); print('BenchmarkData created, output_folder:', getattr(bd, 'output_folder', 'not set')); p = BenchmarkProfiler(); p.start('run'); p.end('run'); p.start('test'); p.end('test'); bd.add_measurement(p, 0, 'test', 'dummy_metric', 1.0); print('Added measurement'); bd.save_partial_run_json(p, 'test_run', 'test_model'); print('save_partial_run_json completed')" || echo "Failed to test BenchmarkData"
+
+          echo "=== Check files after BenchmarkData test ==="
+          find . -name "generated" -type d 2>/dev/null || echo "Still no generated directory after test"
+          find . -name "partial_run_*.pkl" 2>/dev/null || echo "Still no .pkl files after test"
 
           echo "=== Current directory contents ==="
           ls -la
