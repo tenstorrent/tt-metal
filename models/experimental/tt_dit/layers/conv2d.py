@@ -63,7 +63,7 @@ class Conv2d(Module):
             (1024, 1024, 128, 3): 8,
         },
     }
-    slice_defaut = {
+    slice_defalt = {
         (512, 512, 512, 64): 16,
         (128, 128, 16, 512): 8,
         (128, 128, 512, 512): 4,
@@ -175,7 +175,7 @@ class Conv2d(Module):
 
         b, h, w, c = x.shape
         slice_config = ttnn.Conv2dSliceConfig(
-            num_slices=self.slice_params.get(tuple(self.mesh_device.shape), self.slice_defaut)[
+            num_slices=self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)[
                 (h, w, self.in_channels, self.out_channels)
             ],
             slice_type=ttnn.Conv2dDRAMSliceWidth,
