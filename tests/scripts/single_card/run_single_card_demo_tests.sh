@@ -181,6 +181,8 @@ run_resnet_func() {
 
 run_sdxl_func() {
   TT_MM_THROTTLE_PERF=5 pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py --start-from=0 --num-prompts=2 -k "device_encoders and device_vae and no_cfg_parallel"
+  TT_MM_THROTTLE_PERF=5 pytest  models/experimental/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+  TT_MM_THROTTLE_PERF=5 pytest  models/experimental/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
 }
 
 run_distilbert_func() {
@@ -212,11 +214,6 @@ run_squeezebert_func() {
 run_efficientnet_b0_func(){
 
   pytest models/experimental/efficientnetb0/demo/demo.py
-
-}
-run_roberta_func() {
-
-  pytest models/demos/roberta/demo/demo.py
 
 }
 

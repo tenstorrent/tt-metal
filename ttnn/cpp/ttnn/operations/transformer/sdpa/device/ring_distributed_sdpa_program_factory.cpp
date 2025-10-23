@@ -239,6 +239,7 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
         false,  //(std::uint32_t)use_provided_mask,
         false,  //(std::uint32_t)use_padded_mask,
         true,   //(uint32_t)is_chunked,
+        0,      //(uint32_t)sliding_window_size,
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
@@ -272,6 +273,7 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
         false,  //(std::uint32_t)use_padded_mask,
         true,   //(uint32_t)is_chunked,
         scale_union.u,
+        0,  //(uint32_t)sliding_window_size,
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 
