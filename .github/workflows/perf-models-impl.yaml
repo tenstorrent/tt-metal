@@ -265,6 +265,16 @@ jobs:
           echo "CI: ${CI:-not set}"
           echo "TT_GH_CI_INFRA: ${TT_GH_CI_INFRA:-not set}"
           echo "Current working directory: $(pwd)"
+
+          echo "=== Test if benchmarking_utils would detect CI ==="
+          python3 -c "import os; print('CI env var:', repr(os.getenv('CI'))); print('CI == \"true\":', os.getenv('CI') == 'true')"
+
+          echo "=== Test IS_CI_ENV value ==="
+          python3 -c "from models.perf.benchmarking_utils import IS_CI_ENV; print('IS_CI_ENV:', IS_CI_ENV)" || echo "Failed to import IS_CI_ENV"
+
+          echo "=== Check if perf_utils calls save_partial_run_json ==="
+          python3 -c "import inspect; from models.perf.perf_utils import prep_perf_report; source = inspect.getsource(prep_perf_report); print('prep_perf_report calls save_partial_run_json:', 'save_partial_run_json' in source)" || echo "Failed to check prep_perf_report"
+
           echo "=== Current directory contents ==="
           ls -la
           echo "=== Looking for generated directory ==="
