@@ -71,7 +71,7 @@ num_banks_t compute_total_and_storage_only_num_l1_banks(const AllocatorConfig& a
     };
 }
 
-void Allocator::init_compute_and_storage_l1_bank_manager() {
+void AllocatorImpl::init_compute_and_storage_l1_bank_manager() {
     TT_FATAL(config_->worker_grid.contains(config_->compute_grid), "Compute grid must be a subset of worker grid");
     num_banks_t num_banks = compute_total_and_storage_only_num_l1_banks(*config_);
     auto logical_to_noc_coord = [this](CoreCoord logical_core) {
@@ -236,7 +236,7 @@ void Allocator::init_compute_and_storage_l1_bank_manager() {
         config_->disable_interleaved);
 }
 
-L1BankingAllocator::L1BankingAllocator(const AllocatorConfig& alloc_config) : Allocator(alloc_config) {
+L1BankingAllocator::L1BankingAllocator(const AllocatorConfig& alloc_config) : AllocatorImpl(alloc_config) {
     this->init_one_bank_per_channel();
     this->init_compute_and_storage_l1_bank_manager();
     this->validate_bank_assignments();

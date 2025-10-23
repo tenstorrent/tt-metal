@@ -1131,7 +1131,7 @@ public:
                         uint32_t base_address, page_offset;
                         if (kg_transfer_info.page_offsets[kernel_idx] > CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK) {
                             const uint32_t num_banks =
-                                device->allocator()->get_num_banks(kernels_buffer->buffer_type());
+                                device->allocator_impl()->get_num_banks(kernels_buffer->buffer_type());
                             page_offset = kg_transfer_info.page_offsets[kernel_idx] % num_banks;
                             uint32_t num_full_pages_written_per_bank =
                                 kg_transfer_info.page_offsets[kernel_idx] / num_banks;

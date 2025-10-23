@@ -255,9 +255,9 @@ namespace detail {
 bool WriteToDeviceDRAMChannel(
     IDevice* device, int dram_channel, uint32_t address, std::span<const std::uint8_t> host_buffer) {
     TT_FATAL(
-        address >= device->allocator()->get_base_allocator_addr(HalMemType::DRAM),
+        address >= device->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM),
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
-        device->allocator()->get_base_allocator_addr(HalMemType::DRAM));
+        device->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM));
     tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
         host_buffer.data(), host_buffer.size(), device->id(), dram_channel, address);
     return true;
@@ -442,7 +442,7 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
     TT_ASSERT(page_size == 0 ? buffer.size() == 0 : buffer.size() % page_size == 0);
 
     auto device = buffer.device();
-    const auto& allocator = device->allocator();
+    const auto& allocator = device->allocator_impl();
 
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
     for (auto mapped_page : buffer_page_mapping) {
@@ -495,7 +495,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
     size_t num_pages = buffer.num_pages();
 
     auto device = buffer.device();
-    size_t num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
+    size_t num_banks = device->allocator_impl()->get_num_banks(buffer.buffer_type());
     size_t bank_index = 0;
     size_t data_index = 0;
     for (size_t page_index = 0; page_index < num_pages; page_index++) {
@@ -546,7 +546,7 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
     size_t num_pages = buffer.num_pages();
 
     auto device = buffer.device();
-    size_t num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
+    size_t num_banks = device->allocator_impl()->get_num_banks(buffer.buffer_type());
 
     size_t host_idx = 0;
     size_t bank_index = 0;
@@ -588,7 +588,7 @@ void read_pages_to_host_helper(
     if (dev_buffer.is_l1()) {
         auto core_coordinates =
             device->worker_core_from_logical_core(dev_buffer.allocator()->get_logical_core_from_bank_id(bank_id));
-        auto bank_offset = device->allocator()->get_bank_offset(dev_buffer.buffer_type(), bank_id);
+        auto bank_offset = device->allocator_impl()->get_bank_offset(dev_buffer.buffer_type(), bank_id);
         auto absolute_address = dev_buffer.address() + bank_offset + (core_page_id * dev_buffer.aligned_page_size());
         tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             host_buffer + host_buffer_start, page_size, tt_cxy_pair(device->id(), core_coordinates), absolute_address);
@@ -609,7 +609,7 @@ void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer) {
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
     for (auto mapped_page : buffer_page_mapping) {
         auto core = buffer_page_mapping.all_cores[mapped_page.core_id];
-        auto bank_id = device->allocator()->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
+        auto bank_id = device->allocator_impl()->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
         read_pages_to_host_helper(
             device, buffer, host_buffer, page_size, mapped_page.host_page, mapped_page.device_page, bank_id);
     }
@@ -658,7 +658,7 @@ void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id) {
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
     auto core = buffer_page_mapping.all_cores[core_id];
     auto core_page_mappings = buffer_page_mapping.core_page_mappings[core_id];
-    auto bank_id = device->allocator()->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
+    auto bank_id = device->allocator_impl()->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
 
     if (core_page_mappings.empty()) {
         return;

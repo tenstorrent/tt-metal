@@ -77,7 +77,7 @@ public:
         uint32_t cq_id,
         tt::stl::Span<const uint32_t> expected_num_workers_completed) :
         dst_page_index(dst_page_index) {
-        this->num_banks = buffer.device()->allocator()->get_num_banks(buffer.buffer_type());
+        this->num_banks = buffer.device()->allocator_impl()->get_num_banks(buffer.buffer_type());
         this->address = buffer.address();
 
         this->page_size_to_write = buffer.aligned_page_size();
@@ -294,7 +294,7 @@ public:
         this->address =
             this->buffer->address() + core_page_mapping.device_start_page * this->buffer->aligned_page_size();
         if (this->buffer->is_dram()) {
-            this->address += this->buffer->device()->allocator()->get_bank_offset(
+            this->address += this->buffer->device()->allocator_impl()->get_bank_offset(
                 BufferType::DRAM, this->buffer->device()->dram_channel_from_logical_core(core));
         }
         if (this->are_pages_large) {
@@ -800,7 +800,7 @@ BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
     dispatch_params.address = root_buffer->address();
     dispatch_params.unpadded_dst_offset = 0;
     dispatch_params.expected_num_workers_completed = expected_num_workers_completed;
-    dispatch_params.num_banks = device->allocator()->get_num_banks(root_buffer->buffer_type());
+    dispatch_params.num_banks = device->allocator_impl()->get_num_banks(root_buffer->buffer_type());
     dispatch_params.padded_page_size = root_buffer->aligned_page_size();
     dispatch_params.pages_per_txn = 0;
 
@@ -884,7 +884,7 @@ void copy_sharded_buffer_from_core_to_completion_queue(
     auto address = buffer.address();
 
     if (buffer.is_dram()) {
-        address += buffer.device()->allocator()->get_bank_offset(
+        address += buffer.device()->allocator_impl()->get_bank_offset(
             BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(core));
     }
     address += core_page_mapping.device_start_page * buffer.aligned_page_size();
