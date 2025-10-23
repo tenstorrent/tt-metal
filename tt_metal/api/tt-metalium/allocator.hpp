@@ -36,7 +36,7 @@ class AllocatorImpl;
 class Allocator {
 public:
     // AllocatorImpl is internal to Runtime, this effectively means there's no way
-    // to construct Allocator publicy.
+    // to construct Allocator publicly.
     explicit Allocator(AllocatorImpl* _impl);
 
     void deallocate_buffers();
