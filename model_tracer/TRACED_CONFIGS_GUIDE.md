@@ -168,59 +168,6 @@ python3 tests/sweep_framework/sweeps_runner.py \
 
 ---
 
-## Troubleshooting
-
-### "No configurations found for operation"
-
-**Solution:**
-```bash
-# Check available operations
-python model_tracer/analyze_operations.py | grep "Operation:"
-
-# Trace a model that uses this operation
-python model_tracer/generic_ops_tracer.py <model_test_path>
-```
-
-### "Shard Size must be multiple of tile size"
-
-**Cause:** Non-tile-aligned shard shape with TILE_LAYOUT.
-
-**Solution:** The loader uses exact traced `shard_shape` values from the original model. Verify:
-```bash
-python model_tracer/analyze_operations.py <operation> | grep "shard_shape"
-# Dimensions should be multiples of 32 for TILE_LAYOUT
-```
-
-### "Memory layout mismatch"
-
-**Cause:** For unary operations, input and output memory layouts must match.
-
-**Solution:**
-```python
-# Ensure output_memory_config matches input
-output_mem_config = input_memory_config  # Same as input for unary ops
-```
-
-### Sweep test fails but unit test passes
-
-**Check:** Verify `master_config_loader.py` manually creates `ShardSpec` with exact traced `shard_shape`:
-```python
-# Should use: ShardSpec(core_range_set, shard_shape, orientation)
-# NOT: ttnn.create_sharded_memory_config_()
-```
-
-### Too many/few test cases
-
-```python
-# Default: N exact tests (30 configs = 30 tests)
-loader.get_suite_parameters("op_name", all_cases=False)
-
-# Cartesian product: N shapes × M dtypes × K layouts (thousands of tests)
-loader.get_suite_parameters("op_name", all_cases=True)
-```
-
----
-
 ## File Structure
 
 ```
