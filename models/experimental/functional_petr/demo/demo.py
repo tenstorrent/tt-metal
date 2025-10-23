@@ -14,22 +14,12 @@ import matplotlib.patches as patches
 from pathlib import Path
 
 # Import the TT-specific modules
-from ttnn.model_preprocessing import (
-    preprocess_model_parameters,
-    infer_ttnn_module_args,
-)
-
+import os
 from models.experimental.functional_petr.reference.utils import LiDARInstance3DBoxes
 from models.experimental.functional_petr.reference.petr import PETR
-from models.experimental.functional_petr.reference.petr_head import pos2posemb3d
 from models.experimental.functional_petr.tt.ttnn_petr import ttnn_PETR
-from models.experimental.functional_petr.tt.common import (
-    move_to_device,
-    create_custom_preprocessor_petr_head,
-    create_custom_preprocessor_cpfpn,
-    create_custom_preprocessor_vovnetcp,
-)
-from models.experimental.functional_petr.tt.common import stem_parameters_preprocess
+
+from models.experimental.functional_petr.tt.common import get_parameters
 
 
 class MockDet3DDataPreprocessor:
@@ -549,7 +539,20 @@ def test_demo(device, reset_seeds):
 
     # Load model
     print("\n5. Loading PETR model...")
-    weights_path = "models/experimental/functional_petr/resources/petr_vovnet_gridmask_p4_800x320-e2191752.pth"
+    weights_url = (
+        "https://download.openmmlab.com/mmdetection3d/v1.1.0_models/petr/petr_vovnet_gridmask_p4_800x320-e2191752.pth"
+    )
+    resources_dir = os.path.join(os.path.dirname(__file__), "..", "..", "resources")
+    weights_path = os.path.abspath(os.path.join(resources_dir, "petr_vovnet_gridmask_p4_800x320-e2191752.pth"))
+
+    if not os.path.exists(resources_dir):
+        os.makedirs(resources_dir)
+    if not os.path.exists(weights_path):
+        import urllib.request
+
+        print(f"Downloading PETR weights from {weights_url} ...")
+        urllib.request.urlretrieve(weights_url, weights_path)
+        print(f"Weights downloaded to {weights_path}")
     weights_state_dict = torch.load(weights_path, weights_only=False)["state_dict"]
 
     torch_model = PETR(use_grid_mask=True)
@@ -575,56 +578,9 @@ def test_demo(device, reset_seeds):
         imgs_tensor = imgs_tensor.unsqueeze(0)
     ttnn_inputs["imgs"] = ttnn.from_torch(imgs_tensor, device=device)
 
-    # [... rest of TTNN setup - same as before ...]
-
-    # Preprocess parameters (keeping your existing code)
+    # Preprocess parameters
     print("\n8. Preprocessing model parameters...")
-    parameters_petr_head = preprocess_model_parameters(
-        initialize_model=lambda: torch_model.pts_bbox_head,
-        custom_preprocessor=create_custom_preprocessor_petr_head(None),
-        device=None,
-    )
-    parameters_petr_head = move_to_device(parameters_petr_head, device)
-
-    child = torch_model.pts_bbox_head.transformer
-    x = infer_ttnn_module_args(
-        model=child,
-        run_model=lambda model: model(
-            torch.randn(1, 6, 256, 20, 50),
-            torch.zeros((1, 6, 20, 50), dtype=torch.bool),
-            torch.rand(900, 256),
-            torch.rand(1, 6, 256, 20, 50),
-        ),
-        device=None,
-    )
-    if x is not None:
-        for key in x.keys():
-            x[key].module = getattr(child, key)
-        parameters_petr_head["transformer"] = x
-
-    parameters_petr_cpfpn = preprocess_model_parameters(
-        initialize_model=lambda: torch_model.img_neck,
-        custom_preprocessor=create_custom_preprocessor_cpfpn(None),
-        device=None,
-    )
-
-    parameters_petr_vovnetcp = preprocess_model_parameters(
-        initialize_model=lambda: torch_model.img_backbone,
-        custom_preprocessor=create_custom_preprocessor_vovnetcp(None),
-        device=None,
-    )
-
-    parameters = {
-        "pts_bbox_head": parameters_petr_head,
-        "img_neck": parameters_petr_cpfpn,
-        "img_backbone": parameters_petr_vovnetcp,
-        "stem_parameters": stem_parameters_preprocess(torch_model.img_backbone),
-    }
-
-    print("\n9. Preprocessing query embeddings...")
-    query_embedding_input = torch_model.pts_bbox_head.reference_points.weight
-    query_embedding_input = pos2posemb3d(query_embedding_input)
-    query_embedding_input = ttnn.from_torch(query_embedding_input, layout=ttnn.TILE_LAYOUT, device=device)
+    parameters, query_embedding_input = get_parameters(torch_model, device)
 
     print("\n10. Initializing TTNN model...")
     ttnn_model = ttnn_PETR(
