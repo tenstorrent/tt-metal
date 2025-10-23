@@ -461,7 +461,7 @@ class ModelArgs:
             os.makedirs(self.CACHE_PATH, exist_ok=True)
 
         logger.info(f"Checkpoint directory: {self.CKPT_DIR}")
-        logger.info(f"Tokenizer file: {self.TOKENIZER_PATH + '/tokenizer.model'}")
+        logger.info(f"Tokenizer file: {os.path.join(self.TOKENIZER_PATH, 'tokenizer.model')}")
         logger.info(f"Cache directory: {self.CACHE_PATH}")
         logger.info(f"Model name: {self.model_name}")
 
@@ -470,8 +470,8 @@ class ModelArgs:
         self.model_cache_path = Path(self.CACHE_PATH)
 
         # Load weights and tokenizer
-        self.consolidated_weights_path = self.CKPT_DIR + "/consolidated.00.pth"
-        self.tokenizer_path = self.TOKENIZER_PATH + "/tokenizer.model"
+        self.consolidated_weights_path = os.path.join(self.CKPT_DIR, "consolidated.00.pth")
+        self.tokenizer_path = os.path.join(self.TOKENIZER_PATH, "tokenizer.model")
 
         self.instruct = instruct
         # If the weights file contain the keyword `instruct` also set self.instruct to true

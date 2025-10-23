@@ -35,7 +35,7 @@ extern bool perf_test_g;
 extern uint32_t hugepage_issue_buffer_size_g;
 
 struct one_core_data_t {
-    CoreType core_type{CoreType::COUNT};
+    tt::CoreType core_type{tt::CoreType::COUNT};
     CoreCoord logical_core;
     CoreCoord phys_core;
     int bank_id{};
@@ -49,8 +49,8 @@ private:
     bool banked;  // TODO banked and unbanked tests still don't play nicely together
     int amt_written;
     // 10 is a hack...bigger than any core_type
-    uint64_t base_data_addr[static_cast<size_t>(CoreType::COUNT)]{};
-    uint64_t base_result_data_addr[static_cast<size_t>(CoreType::COUNT)]{};
+    uint64_t base_data_addr[static_cast<size_t>(tt::CoreType::COUNT)]{};
+    uint64_t base_result_data_addr[static_cast<size_t>(tt::CoreType::COUNT)]{};
     std::unordered_map<CoreCoord, std::unordered_map<uint32_t, one_core_data_t>> all_data;
     CoreCoord host_core;
 
@@ -85,12 +85,12 @@ public:
 
     // Some tests write to the same address across multiple cores
     // This takes those core types and pads any that are "behind" with invalid data
-    void relevel(CoreType core_type);
+    void relevel(tt::CoreType core_type);
     void relevel(CoreRange range);
 
     // Clear data between tests
     void reset();
-    uint32_t get_base_result_addr(CoreType core_type);
+    uint32_t get_base_result_addr(tt::CoreType core_type);
     uint32_t get_result_data_addr(CoreCoord core, int bank_id = 0);
 
     bool validate(IDevice* device);
@@ -101,7 +101,7 @@ public:
 
     std::unordered_map<CoreCoord, std::unordered_map<uint32_t, one_core_data_t>>& get_data() { return this->all_data; }
 
-    CoreType get_core_type(CoreCoord core) { return this->all_data[core][0].core_type; }
+    tt::CoreType get_core_type(CoreCoord core) { return this->all_data[core][0].core_type; }
     uint32_t size_at(CoreCoord core, int bank_id);
     uint32_t at(CoreCoord core, int bank_id, uint32_t addr);
     CoreCoord get_host_core() { return this->host_core; }
@@ -117,12 +117,12 @@ inline DeviceData::DeviceData(
     bool is_banked,
     uint32_t dram_data_size_words) :
     banked(is_banked), amt_written(0) {
-    this->base_data_addr[static_cast<int>(CoreType::WORKER)] = l1_data_addr;
-    this->base_data_addr[static_cast<int>(CoreType::PCIE)] = (uint64_t)pcie_data_addr;
-    this->base_data_addr[static_cast<int>(CoreType::DRAM)] = dram_data_addr;
-    this->base_result_data_addr[static_cast<int>(CoreType::WORKER)] = l1_data_addr;
-    this->base_result_data_addr[static_cast<int>(CoreType::PCIE)] = (uint64_t)pcie_data_addr;
-    this->base_result_data_addr[static_cast<int>(CoreType::DRAM)] = dram_data_addr;
+    this->base_data_addr[static_cast<int>(tt::CoreType::WORKER)] = l1_data_addr;
+    this->base_data_addr[static_cast<int>(tt::CoreType::PCIE)] = (uint64_t)pcie_data_addr;
+    this->base_data_addr[static_cast<int>(tt::CoreType::DRAM)] = dram_data_addr;
+    this->base_result_data_addr[static_cast<int>(tt::CoreType::WORKER)] = l1_data_addr;
+    this->base_result_data_addr[static_cast<int>(tt::CoreType::PCIE)] = (uint64_t)pcie_data_addr;
+    this->base_result_data_addr[static_cast<int>(tt::CoreType::DRAM)] = dram_data_addr;
 
     // TODO: make this all work w/ phys coords
     // this is really annoying
@@ -133,7 +133,7 @@ inline DeviceData::DeviceData(
     this->all_data[core][0] = one_core_data_t();
     this->all_data[core][0].logical_core = core;
     this->all_data[core][0].phys_core = core;
-    this->all_data[core][0].core_type = CoreType::PCIE;
+    this->all_data[core][0].core_type = tt::CoreType::PCIE;
     this->all_data[core][0].bank_id = 20;
     this->all_data[core][0].bank_offset = 0;
     this->host_core = core;
@@ -147,7 +147,7 @@ inline DeviceData::DeviceData(
         this->all_data[phys_core][bank_id] = one_core_data_t();
         this->all_data[phys_core][bank_id].logical_core = phys_core;
         this->all_data[phys_core][bank_id].phys_core = phys_core;
-        this->all_data[phys_core][bank_id].core_type = CoreType::DRAM;
+        this->all_data[phys_core][bank_id].core_type = tt::CoreType::DRAM;
         this->all_data[phys_core][bank_id].bank_id = bank_id;
         this->all_data[phys_core][bank_id].bank_offset = bank_offset;
     }
@@ -162,7 +162,7 @@ inline DeviceData::DeviceData(
             this->all_data[core][bank_id] = one_core_data_t();
             this->all_data[core][bank_id].logical_core = core;
             this->all_data[core][bank_id].phys_core = phys_core;
-            this->all_data[core][bank_id].core_type = CoreType::WORKER;
+            this->all_data[core][bank_id].core_type = tt::CoreType::WORKER;
             this->all_data[core][bank_id].bank_id = bank_id;
             this->all_data[core][bank_id].bank_offset = bank_offset;
         }
@@ -174,7 +174,7 @@ inline DeviceData::DeviceData(
                 this->all_data[core][0] = one_core_data_t();
                 this->all_data[core][0].logical_core = core;
                 this->all_data[core][0].phys_core = phys_core;
-                this->all_data[core][0].core_type = CoreType::WORKER;
+                this->all_data[core][0].core_type = tt::CoreType::WORKER;
                 this->all_data[core][0].bank_id = 0;
                 this->all_data[core][0].bank_offset = 0;
             }
@@ -216,10 +216,11 @@ inline void DeviceData::prepopulate_dram(IDevice* device, uint32_t size_words) {
         }
 
         // Write to device once per bank (appropriate core and offset)
-        tt::tt_metal::detail::WriteToDeviceDRAMChannel(device, bank_id, this->base_data_addr[static_cast<int>(CoreType::DRAM)], data.data);
+        tt::tt_metal::detail::WriteToDeviceDRAMChannel(
+            device, bank_id, this->base_data_addr[static_cast<int>(tt::CoreType::DRAM)], data.data);
 
-        this->base_result_data_addr[static_cast<int>(CoreType::DRAM)] =
-            this->base_data_addr[static_cast<int>(CoreType::DRAM)] + data.data.size() * sizeof(uint32_t);
+        this->base_result_data_addr[static_cast<int>(tt::CoreType::DRAM)] =
+            this->base_data_addr[static_cast<int>(tt::CoreType::DRAM)] + data.data.size() * sizeof(uint32_t);
     }
 }
 
@@ -282,7 +283,7 @@ inline void DeviceData::pad(CoreCoord core, int bank, uint32_t alignment) {
 
 // Some tests write to the same address across multiple cores
 // This takes cores that match core_type and pads any that are "behind" with invalid data
-inline void DeviceData::relevel(CoreType core_type) {
+inline void DeviceData::relevel(tt::CoreType core_type) {
     size_t max = 0;
     for (auto& [coord, bank_device_data] : this->all_data) {
         for (auto& [bank, one_core_data] : bank_device_data) {
@@ -326,7 +327,7 @@ inline void DeviceData::reset() {
     this->amt_written = 0;
     for (auto& [coord, bank_device_data] : this->all_data) {
         for (auto& [bank, one_core_data] : bank_device_data) {
-            CoreType core_type = one_core_data.core_type;
+            tt::CoreType core_type = one_core_data.core_type;
             uint32_t default_size_bytes = this->base_result_data_addr[static_cast<int>(core_type)] -
                                           this->base_data_addr[static_cast<int>(core_type)];
             one_core_data.valid.resize(default_size_bytes / sizeof(uint32_t));
@@ -335,7 +336,7 @@ inline void DeviceData::reset() {
     }
 }
 
-inline uint32_t DeviceData::get_base_result_addr(CoreType core_type) {
+inline uint32_t DeviceData::get_base_result_addr(tt::CoreType core_type) {
     return this->base_result_data_addr[static_cast<int>(core_type)];
 }
 
@@ -361,7 +362,7 @@ inline bool DeviceData::validate_one_core(
     const std::vector<bool>& dev_valid = one_core_data.valid;
     const CoreCoord logical_core = one_core_data.logical_core;
     const CoreCoord phys_core = one_core_data.phys_core;
-    const CoreType core_type = one_core_data.core_type;
+    const tt::CoreType core_type = one_core_data.core_type;
     const int bank_id = one_core_data.bank_id;
     const int bank_offset = one_core_data.bank_offset;
     uint32_t size_bytes = (dev_data.size() - start_index) * sizeof(uint32_t);
@@ -371,11 +372,11 @@ inline bool DeviceData::validate_one_core(
     }
 
     std::string core_string;
-    if (core_type == CoreType::WORKER) {
+    if (core_type == tt::CoreType::WORKER) {
         core_string = "L1";
-    } else if (core_type == CoreType::DRAM) {
+    } else if (core_type == tt::CoreType::DRAM) {
         core_string = "DRAM";
-    } else if (core_type == CoreType::PCIE) {
+    } else if (core_type == tt::CoreType::PCIE) {
         core_string = "PCIE";
     } else {
         log_fatal(tt::LogTest, "Logical core: {} physical core {} core type {}", logical_core, phys_core, core_type);
@@ -384,7 +385,7 @@ inline bool DeviceData::validate_one_core(
 
     // Read results from device and compare to expected for this core.
     std::vector<uint32_t> results;
-    if (core_type == CoreType::DRAM) {
+    if (core_type == tt::CoreType::DRAM) {
         tt::tt_metal::detail::ReadFromDeviceDRAMChannel(device, bank_id, result_addr, size_bytes, results);
     } else {
         result_addr += bank_offset;
@@ -447,7 +448,7 @@ inline bool DeviceData::validate_host(
     bool failed = false;
 
     static int host_data_index = 0;
-    uint32_t* results = (uint32_t*)this->base_data_addr[static_cast<int>(CoreType::PCIE)];
+    uint32_t* results = (uint32_t*)this->base_data_addr[static_cast<int>(tt::CoreType::PCIE)];
 
     int fail_count = 0;
     for (int data_index = 0; data_index < host_data.data.size(); data_index++) {
@@ -508,16 +509,17 @@ inline bool DeviceData::validate(IDevice* device) {
 inline void DeviceData::overflow_check(IDevice* device) {
     for (const auto& [core, bank_device_data] : this->all_data) {
         for (auto& [bank, one_core_data] : bank_device_data) {
-            if (one_core_data.core_type == CoreType::WORKER) {
+            if (one_core_data.core_type == tt::CoreType::WORKER) {
                 TT_FATAL(
-                    one_core_data.data.size() * sizeof(uint32_t) + base_data_addr[static_cast<int>(CoreType::WORKER)] <=
+                    one_core_data.data.size() * sizeof(uint32_t) +
+                            base_data_addr[static_cast<int>(tt::CoreType::WORKER)] <=
                         device->l1_size_per_core(),
                     "Test overflowed L1 memory");
-            } else if (one_core_data.core_type == CoreType::PCIE) {
+            } else if (one_core_data.core_type == tt::CoreType::PCIE) {
                 TT_FATAL(
                     one_core_data.data.size() * sizeof(uint32_t) <= hugepage_issue_buffer_size_g,
                     "Test overflowed PCIE memory");
-            } else if (one_core_data.core_type == CoreType::DRAM) {
+            } else if (one_core_data.core_type == tt::CoreType::DRAM) {
                 // TODO
             }
         }
@@ -933,7 +935,7 @@ inline void gen_dispatcher_multicast_write_cmd(
     uint32_t length) {
     // Pad w/ blank data until all workers are at the same address
     // TODO Hmm, ideally only need to relevel the core range
-    device_data.relevel(CoreType::WORKER);
+    device_data.relevel(tt::CoreType::WORKER);
 
     CQDispatchCmdLarge cmd{};
     memset(&cmd, 0, sizeof(CQDispatchCmdLarge));
@@ -962,7 +964,7 @@ inline void gen_dispatcher_paged_write_cmd(
     BufferType buffer_type = is_dram ? BufferType::DRAM : BufferType::L1;
     uint32_t page_size_alignment_bytes = device->allocator()->get_alignment(buffer_type);
     uint32_t num_banks = device->allocator()->get_num_banks(buffer_type);
-    CoreType core_type = is_dram ? CoreType::DRAM : CoreType::WORKER;
+    tt::CoreType core_type = is_dram ? tt::CoreType::DRAM : tt::CoreType::WORKER;
 
     // Not safe to mix paged L1 and paged DRAM writes currently in this test since same book-keeping.
     static uint32_t prev_is_dram = -1;
@@ -1018,7 +1020,7 @@ inline void gen_dispatcher_packed_write_cmd(
     uint32_t size_words,
     bool repeat = false) {
     // Pad w/ blank data until all workers are at the same address
-    device_data.relevel(CoreType::WORKER);
+    device_data.relevel(tt::CoreType::WORKER);
 
     CQDispatchCmd cmd{};
     memset(&cmd, 0, sizeof(CQDispatchCmd));
@@ -1055,7 +1057,7 @@ inline void gen_rnd_dispatcher_packed_write_cmd(IDevice* device, std::vector<uin
     std::vector<CoreCoord> gets_data;
     while (gets_data.empty()) {
         for (auto& [core, one_worker] : device_data.get_data()) {
-            if (device_data.core_and_bank_present(core, 0) && one_worker[0].core_type == CoreType::WORKER) {
+            if (device_data.core_and_bank_present(core, 0) && one_worker[0].core_type == tt::CoreType::WORKER) {
                 if (send_to_all_g || std::rand() % 2) {
                     gets_data.push_back(core);
                 }

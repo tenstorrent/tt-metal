@@ -197,7 +197,7 @@ public:
     // ======================================================================================
     // IDeviceInfoProvider methods
     // ======================================================================================
-    FabricNodeId get_fabric_node_id(const chip_id_t physical_chip_id) const override {
+    FabricNodeId get_fabric_node_id(const ChipId physical_chip_id) const override {
         return tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
             physical_chip_id);
     }
@@ -500,7 +500,7 @@ public:
         }
 
         const MeshCoordinate& src_coord = get_device_coord(src_node);
-        return compute_destination_nodes_from_hops(src_coord, hops, chip_send_type);
+        return compute_destination_nodes_from_hops(src_node, src_coord, hops, chip_send_type);
     }
 
     bool are_devices_linear(const std::vector<FabricNodeId>& node_ids) const override {
@@ -699,7 +699,7 @@ public:
 
         // Calculate ring neighbors based on position on perimeter
         // forward always try to go right/up first, backward always try to go left/down first
-        chip_id_t forward_chip_id, backward_chip_id;
+        ChipId forward_chip_id, backward_chip_id;
 
         if (row == 0 && col == 0) {
             // Top-left corner (0): forward=1, backward=4 (4x4 mesh)
@@ -1381,7 +1381,7 @@ private:
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
         // ethernet coordinate chip mapping, which should be migrated away from
-        std::map<FabricNodeId, chip_id_t> chip_to_eth_coord_mapping;
+        std::map<FabricNodeId, ChipId> chip_to_eth_coord_mapping;
         for (std::uint32_t mesh_id = 0; mesh_id < eth_coord_mapping.size(); mesh_id++) {
             if (mesh_id == *local_mesh_id) {
                 for (std::uint32_t chip_id = 0; chip_id < eth_coord_mapping[mesh_id].size(); chip_id++) {
@@ -1508,14 +1508,18 @@ private:
         return hops;
     }
 
+    // In a multi-host setup, we currently dont store info about how the meshes are connected across hosts
+    // So we only compute destinations within the local mesh from hops
     std::vector<FabricNodeId> compute_destination_nodes_from_hops(
+        const FabricNodeId& src_node,
         const MeshCoordinate& src_coord,
         const std::unordered_map<RoutingDirection, uint32_t>& hops,
         ChipSendType send_type) const {
+        // for now src_node is only passed for multicast, since we dont allow unicast hop expansion across hosts
         if (send_type == ChipSendType::CHIP_UNICAST) {
             return compute_unicast_destinations(src_coord, hops);
         } else if (send_type == ChipSendType::CHIP_MULTICAST) {
-            return compute_multicast_destinations(src_coord, hops);
+            return compute_multicast_destinations(src_node, src_coord, hops);
         } else {
             TT_THROW("Unsupported send type: {}", send_type);
             return {};
@@ -1599,14 +1603,17 @@ private:
     }
 
     std::vector<FabricNodeId> compute_multicast_destinations(
-        const MeshCoordinate& src_coord, const std::unordered_map<RoutingDirection, uint32_t>& hops) const {
+        const FabricNodeId& src_node,
+        const MeshCoordinate& src_coord,
+        const std::unordered_map<RoutingDirection, uint32_t>& hops) const {
+        // src_node is needed to grab the right mesh id to convert from coord to node id
         // Assume hops is pre-split single map from builder - simulate directly
         auto visited = simulate_multicast_split(src_coord, hops);
 
         std::unordered_set<FabricNodeId> unique_nodes;
         for (const auto& coord : visited) {
             if (coord != src_coord) {
-                unique_nodes.insert(get_fabric_node_id(coord));
+                unique_nodes.insert(get_fabric_node_id(src_node.mesh_id, coord));
             }
         }
 
