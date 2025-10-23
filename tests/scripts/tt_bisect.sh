@@ -45,6 +45,9 @@ while getopts ":f:s:g:b:t:pr:na" opt; do
   esac
 done
 
+export CXX=clang++-17
+export CC=clang-17
+
 # Either test or script_path must be specified, but not both
 if [ -n "$script_path" ] && [ -n "$test" ]; then
   die "Cannot specify both -f TEST and -s SCRIPT. Use one or the other."
@@ -75,7 +78,7 @@ fi
 # Set up environment (skip if already in CI container with pre-configured venv)
 if [ ! -d "$PYTHON_ENV_DIR" ]; then
   echo "Creating virtual environment and installing dependencies..."
-  CXX=clang++-17 CC=clang-17 ./create_venv.sh
+  ./create_venv.sh
   pip install -r models/tt_transformers/requirements.txt
 else
   echo "Using existing virtual environment: $PYTHON_ENV_DIR"
