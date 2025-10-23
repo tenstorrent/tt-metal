@@ -45,6 +45,7 @@ target_link_libraries(
         yaml-cpp::yaml-cpp
         Boost::asio
         tt-logger::tt-logger
+        numa
 )
 
 # Ensure generated headers (e.g., tt_metal/llrt/hal/generated/dev_msgs.hpp) exist before compiling this target

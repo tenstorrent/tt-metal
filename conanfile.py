@@ -5,9 +5,11 @@
 from pathlib import Path
 import subprocess
 import re
+import os
 
 from conan import ConanFile
 from conan.tools.cmake import CMake, CMakeToolchain, cmake_layout, CMakeDeps
+from conan.tools.env import VirtualRunEnv, VirtualBuildEnv
 
 
 class TTNNConan(ConanFile):
@@ -94,7 +96,7 @@ class TTNNConan(ConanFile):
 
         #########################################################
         tc.variables["TT_INSTALL"] = True
-        tc.variables["WITH_PYTHON_BINDINGS"] = False
+        tc.variables["WITH_PYTHON_BINDINGS"] = True
         tc.variables["ENABLE_DISTRIBUTED"] = bool(self.options.enable_distributed)
         tc.variables["ENABLE_FAKE_KERNELS_TARGET"] = False
 
@@ -113,10 +115,43 @@ class TTNNConan(ConanFile):
 
         tc.generate()
 
+        # Set environment variable for local builds
+        run_env = VirtualRunEnv(self)
+        run_env.environment().define("TT_METAL_HOME", self.source_folder)
+        run_env.generate()
+
+        build_env = VirtualBuildEnv(self)
+        for dep in ["openmpi", "hwloc", "libnuma"]:
+            lib_path = os.path.join(self.dependencies[dep].package_folder, "lib")
+            build_env.environment().prepend_path("LD_LIBRARY_PATH", lib_path)
+
+        build_env.generate()
+
     def build(self):
         cmake = CMake(self)
-        cmake.configure(variables={"VERSION_NUMERIC": self.version})
+        cmake.configure(
+            variables={
+                "VERSION_NUMERIC": self.version,
+                "CPM_USE_LOCAL_PACKAGES": True,
+                "VERSION_HASH": "mockvalue",
+            }
+        )
         cmake.build()
+
+    def configure(self):
+        self.options["libnuma"].shared = True
+        self.options["hwloc"].shared = True
+        self.options["openmpi"].shared = True
+
+    def requirements(self):
+        self.requires("openmpi/4.1.6")
+        self.requires("openssl/3.5.4")
+        self.requires("capstone/5.0.6")
+        self.requires("libnuma/2.0.19")
+        self.requires("hwloc/2.10.0")
+        self.requires("zlib/1.3.1")
+        self.requires("libevent/2.1.12")
+        self.requires("boost/1.86.0")
 
     def package(self):
         cmake = CMake(self)

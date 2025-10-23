@@ -1,0 +1,43 @@
+
+include(default)
+
+{% set clang_candidates = ["clang", "clang-19", "clang-18", "clang-17", "clang-16", "clang-15"] %}
+{% set vars = {'clang_info': None, 'clang_binary': None} %}
+{% for clang_bin in clang_candidates %}
+  {% set candidate_info = detect_api.detect_clang_compiler(clang_bin) %}
+  {% if candidate_info[0] and not vars.clang_info %}
+    {% if vars.update({'clang_info': candidate_info, 'clang_binary': clang_bin}) %} {% endif %}
+  {% endif %}
+{% endfor %}
+{% set gcc_info = detect_api.detect_gcc_compiler("gcc") %}
+
+[settings]
+{% if vars.clang_info %}
+*/*:compiler=clang
+*/*:compiler.version={{ vars.clang_info[1].major }}
+*/*:compiler.libcxx=libstdc++11
+*/*:compiler.cppstd=20
+{% else %}
+*/*:compiler=gcc
+*/*:compiler.version={{ gcc_info[1].major }}
+*/*:compiler.libcxx=libstdc++11
+*/*:compiler.cppstd=gnu20
+{% endif %}
+
+
+[buildenv]
+{% if vars.clang_info %}
+CC={{ vars.clang_binary }}
+CXX={{ vars.clang_binary.replace("clang", "clang++") }}
+{% else %}
+CC=gcc
+CXX=g++
+{% endif %}
+
+[tool_requires]
+bzip2/*: cmake/[>=3.25]
+capstone/*: cmake/[>=3.25]
+expat/*: cmake/[>=3.25]
+sqlite3/*: cmake/[>=3.25]
+zlib/*: cmake/[>=3.25]
+libevent/*: cmake/[>=3.25]

@@ -32,43 +32,57 @@ endif()
 
 set(ULFM_PREFIX /opt/openmpi-v5.0.7-ulfm)
 
-# Check if distributed is enabled and ULFM MPI exists, otherwise use system MPI, or fall back to single host
-if(ENABLE_DISTRIBUTED AND EXISTS ${ULFM_PREFIX}/lib/libmpi.so.40)
-    message(STATUS "Using ULFM MPI from ${ULFM_PREFIX}")
-    list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/mpi_distributed_context.cpp)
-    set(ULFM_LIB ${ULFM_PREFIX}/lib/libmpi.so.40)
-    set(USE_MPI TRUE)
+# MPI search list priorities:
+# - conan-provided one
+# - If not found, try ULFM MPI
+# - Otherwise, use system-provided one
 
-    add_library(OpenMPI::MPI SHARED IMPORTED GLOBAL)
-
-    set_target_properties(
-        OpenMPI::MPI
-        PROPERTIES
-            EXCLUDE_FROM_ALL
-                TRUE
-    )
-
-    set_target_properties(
-        OpenMPI::MPI
-        PROPERTIES
-            IMPORTED_LOCATION
-                ${ULFM_LIB}
-            INTERFACE_INCLUDE_DIRECTORIES
-                ${ULFM_PREFIX}/include
-    )
-elseif(ENABLE_DISTRIBUTED)
-    # Try to find system MPI if distributed is enabled
+if(ENABLE_DISTRIBUTED)
+    # Try to find system or conan-provided MPI if distributed is enabled
     find_package(MPI QUIET COMPONENTS C)
-    if(MPI_FOUND)
+    # conan MPI package provides different target name compared to the apt-provided one,
+    # so checking for `openmpi::openmpi` target here allows to prioritize conan-provided
+    # package.
+
+    if(TARGET openmpi::openmpi)
+        add_library(OpenMPI::MPI ALIAS openmpi::openmpi)
+        message(STATUS "Conan-provided MPI is found, using it.")
+        set(USE_MPI TRUE)
+    elseif(EXISTS ${ULFM_PREFIX}/lib/libmpi.so.40)
+        message(STATUS "Using ULFM MPI from ${ULFM_PREFIX}")
+        set(ULFM_LIB ${ULFM_PREFIX}/lib/libmpi.so.40)
+        set(USE_MPI TRUE)
+
+        add_library(OpenMPI::MPI SHARED IMPORTED GLOBAL)
+
+        set_target_properties(
+            OpenMPI::MPI
+            PROPERTIES
+                EXCLUDE_FROM_ALL
+                    TRUE
+        )
+
+        set_target_properties(
+            OpenMPI::MPI
+            PROPERTIES
+                IMPORTED_LOCATION
+                    ${ULFM_LIB}
+                INTERFACE_INCLUDE_DIRECTORIES
+                    ${ULFM_PREFIX}/include
+        )
+    elseif(MPI_FOUND)
         message(STATUS "ULFM MPI not found, using system MPI")
         add_library(OpenMPI::MPI ALIAS MPI::MPI_C)
         set(USE_MPI TRUE)
-        list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/mpi_distributed_context.cpp)
     else()
         message(
             FATAL_ERROR
             "ENABLE_DISTRIBUTED is ON but no MPI implementation found. Please install MPI or disable distributed support."
         )
+    endif()
+
+    if(USE_MPI)
+        list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/mpi_distributed_context.cpp)
     endif()
 else()
     message(STATUS "Multihost compute with MPI disabled, using single host context.")

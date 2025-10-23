@@ -158,6 +158,7 @@ target_link_libraries(
         common
         Tracy::TracyClient
     PRIVATE
+        numa
         FlatBuffers::FlatBuffers
         range-v3::range-v3
         TT::Metalium::Common
