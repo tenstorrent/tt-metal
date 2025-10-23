@@ -256,6 +256,21 @@ jobs:
           env python3 models/perf/merge_perf_results.py
         if: ${{ !cancelled() }}
 
+      - name: Debug - Check generated files
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          echo "=== Current directory contents ==="
+          ls -la
+          echo "=== Looking for generated directory ==="
+          find . -name "generated" -type d 2>/dev/null || echo "No generated directory found"
+          echo "=== Looking for benchmark_data directory ==="
+          find . -name "benchmark_data" -type d 2>/dev/null || echo "No benchmark_data directory found"
+          echo "=== Looking for partial_run_*.pkl files ==="
+          find . -name "partial_run_*.pkl" 2>/dev/null || echo "No partial_run_*.pkl files found"
+          echo "=== Looking for *.json files ==="
+          find . -name "*.json" 2>/dev/null | head -10 || echo "No JSON files found"
+
       - name: Save environment data
         if: ${{ !cancelled() }}
         shell: bash
