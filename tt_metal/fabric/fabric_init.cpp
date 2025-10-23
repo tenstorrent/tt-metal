@@ -168,8 +168,15 @@ void build_tt_fabric_program(
 
     if (is_TG && device->is_mmio_capable()) {
         const auto& edm_config = fabric_context.get_fabric_router_config();
+
         auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
         for (const auto& [eth_chan, eth_direction] : router_chans_and_direction) {
+            log_debug(
+                tt::LogOp,
+                "FabricEriscDatamoverConfig for device {}: eth_chan={}, direction={}",
+                device->id(),
+                eth_chan,
+                eth_direction);
             // remote_fabric_node_id is only used to determine the handshake master, no functional impact
             // for now treat the mmio chips as the handshake master
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);

@@ -480,6 +480,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     // All channels map to pool 0 (the single static pool)
     auto recipe = tt::tt_fabric::FabricRouterRecipe::create_default_single_static_pool_recipe(
         this->num_used_sender_channels, this->num_used_receiver_channels);
+    auto remote_channels_recipe = tt::tt_fabric::FabricRouterRecipe::create_default_single_static_pool_recipe(
+        0, this->num_used_receiver_channels);
 
     // Create the single static pool allocator
     auto static_allocator = std::make_shared<tt::tt_fabric::FabricStaticSizedChannelsAllocator>(
@@ -509,6 +511,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     // Create the channel-to-pool mapping
     this->channel_to_pool_mapping = std::make_shared<tt::tt_fabric::ChannelToPoolMapping>(recipe);
+    this->remote_channel_to_pool_mapping =
+        std::make_shared<tt::tt_fabric::ChannelToPoolMapping>(remote_channels_recipe);
 
     // set default noc and cmd bufs (current setup in TG 4U)
     for (uint32_t i = 0; i < builder_config::num_receiver_channels; i++) {
@@ -734,6 +738,19 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         "error.");
     this->receiver_channel_to_downstream_adapter =
         std::make_shared<tt::tt_fabric::StaticSizedChannelConnectionWriterAdapter>(*static_allocator, config.topology);
+
+    // Add this log right at the beginning of the constructor body
+    log_debug(
+        tt::LogOp,
+        "FabricEriscDatamoverBuilder config for device (local chip_id: {}, peer chip_id: {}): "
+        "buffer_size={}, topology={}, num_sender_ch={}, num_receiver_ch={}, direction={}",
+        local_fabric_node_id.chip_id,
+        peer_fabric_node_id.chip_id,
+        config.channel_buffer_size_bytes,
+        static_cast<int>(config.topology),
+        config.num_used_sender_channels,
+        config.num_used_receiver_channels,
+        static_cast<int>(direction));
 }
 
 void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(std::vector<uint32_t>& ct_args) const {
@@ -991,6 +1008,9 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         ct_args.push_back(remote_worker_sender_channel);
     }
 
+    // special tag
+    ct_args.push_back(0xabcd9876);
+
     // Emit pool data via multi-pool coordinator (steps 1-4 of schema: special tag, num_pools, pool_types, individual
     // pool CT args)
     config.multi_pool_allocator->emit_ct_args(
@@ -1001,8 +1021,18 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     config.channel_to_pool_mapping->emit_ct_args(ct_args);
 
     // Emit remote channel pool data (for remote_receiver_channels initialization)
+    // Create a multi-pool for remote channels, following the same pattern as local channels
     ct_args.push_back(0xabaddad6);
-    config.remote_channels_allocator->emit_ct_args(ct_args, config.num_fwd_paths, num_sender_channels, num_receiver_channels);
+
+    // Create remote multi-pool allocator with the remote channels allocator
+    TT_FATAL(config.remote_channels_allocator != nullptr, "Remote channels allocator must be non-null");
+    MultiPoolChannelAllocator remote_multi_pool_allocator(
+        {config.remote_channels_allocator}, {FabricChannelPoolType::STATIC});
+
+    // Emit remote channel pool data via multi-pool coordinator
+    remote_multi_pool_allocator.emit_ct_args(ct_args, config.num_fwd_paths, 0, num_receiver_channels);
+
+    config.remote_channel_to_pool_mapping->emit_ct_args(ct_args);
 
     ct_args.push_back(0xabaddad7);
     receiver_channel_to_downstream_adapter->emit_ct_args(ct_args, config.num_fwd_paths);
@@ -1120,6 +1150,15 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     eth_chan_directions direction,
     bool has_tensix_extension) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    log_debug(
+        tt::LogOp,
+        "Building FabricEriscDatamover for device {}:  "
+        "channel_buffer_size={}, topology={}, num_sender_channels={}, num_receiver_channels={}",
+        device->id(),
+        config.channel_buffer_size_bytes,
+        (int)config.topology,
+        config.num_used_sender_channels,
+        config.num_used_receiver_channels);
     return FabricEriscDatamoverBuilder::build(
         device,
         program,
@@ -1151,6 +1190,21 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         receiver_channels_downstream_flow_control_semaphore_id;
     std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
         receiver_channels_downstream_teardown_semaphore_id;
+
+    log_debug(
+        tt::LogOp,
+        "FABRIC NODE ID: M={},D={} eth=(x={},y={})\n"
+        "\tnum_sender_channels={}, num_receiver_channels={}\n"
+        "\tchannel_allocator={}\n",
+
+        local_fabric_node_id.mesh_id,
+        local_fabric_node_id.chip_id,
+        ethernet_core.x,
+        ethernet_core.y,
+        config.num_used_sender_channels,
+        config.num_used_receiver_channels,
+        *config.channel_allocator);
+
     if (build_in_worker_connection_mode) {
         for (uint32_t i = 0; i < builder_config::num_receiver_channels; i++) {
             receiver_channels_downstream_flow_control_semaphore_id[i] = 0;

@@ -79,14 +79,14 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
 
     log_trace(
         tt::LogOp,
-        "is_dateline {} is_dateline_upstream {} is_dateline_upstream_adj_dev {}",
+        "\tis_dateline {} is_dateline_upstream {} is_dateline_upstream_adj_dev {}",
         is_dateline,
         is_dateline_upstream,
         is_dateline_upstream_adj_dev);
-    log_trace(tt::LogOp, "num_sender_buffer_slots: {}", num_sender_buffer_slots);
-    log_trace(tt::LogOp, "num_remote_sender_buffer_slots: {}", num_remote_sender_buffer_slots);
-    log_trace(tt::LogOp, "num_receiver_buffer_slots: {}", num_receiver_buffer_slots);
-    log_trace(tt::LogOp, "num_remote_receiver_buffer_slots: {}", num_remote_receiver_buffer_slots);
+    log_trace(tt::LogOp, "\tnum_sender_buffer_slots: {}", num_sender_buffer_slots);
+    log_trace(tt::LogOp, "\tnum_remote_sender_buffer_slots: {}", num_remote_sender_buffer_slots);
+    log_trace(tt::LogOp, "\tnum_receiver_buffer_slots: {}", num_receiver_buffer_slots);
+    log_trace(tt::LogOp, "\tnum_remote_receiver_buffer_slots: {}", num_remote_receiver_buffer_slots);
 
     size_t total_sender_slots = std::accumulate(
         num_sender_buffer_slots.begin(), num_sender_buffer_slots.begin() + num_used_sender_channels, size_t{0});
@@ -99,7 +99,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
         total_slot_count * channel_buffer_size_bytes,
         available_channel_buffering_space);
 
-    log_trace(tt::LogOp, "Available channel buffering space: {}", this->available_channel_buffering_space);
+    log_trace(tt::LogOp, "\tAvailable channel buffering space: {}", this->available_channel_buffering_space);
 
     // set the sender channel sizes and num buffers
     for (uint32_t i = 0; i < num_used_sender_channels; i++) {
@@ -127,13 +127,13 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     for (uint32_t i = 0; i < num_used_sender_channels; i++) {
         this->sender_channels_base_address[i] = sender_buffer_addr;
         sender_buffer_addr += this->sender_channels_size_bytes[i];
-        log_trace(tt::LogOp, "Sender {} channel_start: {}", i, this->sender_channels_base_address[i]);
+        log_trace(tt::LogOp, "\tSender {} channel_start: {}", i, this->sender_channels_base_address[i]);
     }
     uint32_t receiver_buffer_addr = sender_buffer_addr;
     for (uint32_t i = 0; i < num_used_receiver_channels; i++) {
         this->receiver_channels_base_address[i] = receiver_buffer_addr;
         receiver_buffer_addr += this->receiver_channels_size_bytes[i];
-        log_trace(tt::LogOp, "Receiver {} channel_start: {}", i, this->receiver_channels_base_address[i]);
+        log_trace(tt::LogOp, "\tReceiver {} channel_start: {}", i, this->receiver_channels_base_address[i]);
     }
     uint32_t buffer_addr_end = receiver_buffer_addr;
     // set the base addresses for the remote channels
@@ -141,16 +141,17 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     for (uint32_t i = 0; i < num_used_sender_channels; i++) {
         this->remote_sender_channels_base_address[i] = remote_sender_buffer_addr;
         remote_sender_buffer_addr += this->remote_sender_channels_size_bytes[i];
-        log_trace(tt::LogOp, "Remote Sender {} channel_start: {}", i, this->remote_sender_channels_base_address[i]);
+        log_trace(tt::LogOp, "\tRemote Sender {} channel_start: {}", i, this->remote_sender_channels_base_address[i]);
     }
     uint32_t remote_receiver_buffer_addr = remote_sender_buffer_addr;
     for (uint32_t i = 0; i < num_used_receiver_channels; i++) {
         this->remote_receiver_channels_base_address[i] = remote_receiver_buffer_addr;
         remote_receiver_buffer_addr += this->remote_receiver_channels_size_bytes[i];
-        log_trace(tt::LogOp, "Remote Receiver {} channel_start: {}", i, this->remote_receiver_channels_base_address[i]);
+        log_trace(
+            tt::LogOp, "\tRemote Receiver {} channel_start: {}", i, this->remote_receiver_channels_base_address[i]);
     }
 
-    log_trace(tt::LogOp, "Available channel buffering space: {}", this->available_channel_buffering_space);
+    log_trace(tt::LogOp, "\tAvailable channel buffering space: {}", this->available_channel_buffering_space);
 
     auto skip_current_sender_channel = [&](uint32_t idx) -> bool {
         // for dateline connection, skip the last sender channel check (2 for 1d, 4 for 2d)

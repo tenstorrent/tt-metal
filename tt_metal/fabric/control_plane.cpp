@@ -2037,7 +2037,8 @@ void ControlPlane::print_ethernet_channels() const {
     std::stringstream ss;
     ss << "Control Plane: Physical eth channels in each direction" << std::endl;
     for (const auto& [fabric_node_id, fabric_eth_channels] : this->router_port_directions_to_physical_eth_chan_map_) {
-        ss << fabric_node_id << ": " << std::endl;
+        ss << fabric_node_id << ", phys=" << this->get_physical_chip_id_from_fabric_node_id(fabric_node_id) << ": "
+           << std::endl;
         for (const auto& [direction, eth_chans] : fabric_eth_channels) {
             ss << "   " << enchantum::to_string(direction) << ":";
             for (const auto& eth_chan : eth_chans) {

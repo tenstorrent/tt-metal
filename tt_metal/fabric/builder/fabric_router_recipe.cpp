@@ -65,8 +65,9 @@ FabricRouterRecipe FabricRouterRecipe::create_default_single_static_pool_recipe(
 
 void FabricRouterRecipe::validate() const {
     TT_FATAL(!pool_definitions_.empty(), "Recipe must have at least one pool");
-    TT_FATAL(!sender_channel_to_pool_index_.empty(), "Recipe must have at least one sender channel mapping");
     TT_FATAL(!receiver_channel_to_pool_index_.empty(), "Recipe must have at least one receiver channel mapping");
+    // We don't validate sender channels right now because we could be doing a channel mapping for remote
+    // channels (over eth) and in those cases we don't necessarily have (or care about) the sender channels.
 
     // Validate that all pool indices in mappings are valid
     for (size_t ch = 0; ch < sender_channel_to_pool_index_.size(); ++ch) {

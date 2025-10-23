@@ -805,6 +805,10 @@ FORCE_INLINE void receiver_forward_packet(
                 WATCHER_RING_BUFFER_PUSH((uint32_t)packet_start);
                 WATCHER_RING_BUFFER_PUSH(reinterpret_cast<volatile uint32_t*>(packet_start)[0]);
                 WATCHER_RING_BUFFER_PUSH(reinterpret_cast<volatile uint32_t*>(packet_start)[1]);
+                for (size_t i = 0; i < 100000; i++) {
+                    run_routing_without_noc_sync();
+                    // asm volatile("nop");
+                }
                 ASSERT(false);
             }
         }
@@ -2592,13 +2596,11 @@ void kernel_main() {
                 my_sem_for_teardown_from_edm_4});
 
     // create the remote receiver channel buffers using multi-pool system
-    auto remote_receiver_channels =
-        tt::tt_fabric::MultiPoolEthChannelBuffers<
-            PACKET_HEADER_TYPE,
-            eth_remote_channel_pools_args,
-            RECEIVER_TO_POOL_TYPE,
-            RECEIVER_TO_POOL_IDX
-        >::make();
+    auto remote_receiver_channels = tt::tt_fabric::MultiPoolEthChannelBuffers<
+        PACKET_HEADER_TYPE,
+        eth_remote_channel_pools_args,
+        REMOTE_RECEIVER_TO_POOL_TYPE,
+        REMOTE_RECEIVER_TO_POOL_IDX>::make();
 
     auto local_receiver_channels =
         tt::tt_fabric::MultiPoolEthChannelBuffers<
@@ -2608,13 +2610,11 @@ void kernel_main() {
             RECEIVER_TO_POOL_IDX
         >::make();
 
-    auto local_sender_channels =
-        tt::tt_fabric::MultiPoolSenderEthChannelBuffers<
-            PACKET_HEADER_TYPE, 
-            channel_pools_args, 
-            SENDER_TO_POOL_TYPE,
-            SENDER_TO_POOL_IDX
-        >::make();
+    auto local_sender_channels = tt::tt_fabric::MultiPoolSenderEthChannelBuffers<
+        PACKET_HEADER_TYPE,
+        channel_pools_args,
+        SENDER_TO_POOL_TYPE,
+        SENDER_TO_POOL_IDX>::make();
 
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_flow_control_semaphores =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
@@ -2777,7 +2777,7 @@ void kernel_main() {
         channel_buffer_size,
         sizeof(PACKET_HEADER_TYPE));
 
-    // initialize the remote receiver channel buffers  
+    // initialize the remote receiver channel buffers
     // NEW WAY (multi-pool support): addresses come directly from remote channel pools
     remote_receiver_channels.init<eth_remote_channel_pools_args>(
         channel_buffer_size,

@@ -151,7 +151,7 @@ constexpr uint32_t remote_vc1_sender_channel =
 constexpr size_t remote_worker_sender_channel =
     conditional_get_compile_time_arg<skip_src_ch_id_update, REMOTE_CHANNEL_INFO_START_IDX + 1>();
 
-constexpr size_t ANOTHER_SPECIAL_TAG = 0xabcd1234;
+constexpr size_t ANOTHER_SPECIAL_TAG = 0xabcd9876;
 constexpr size_t ANOTHER_SPECIAL_TAG_IDX = REMOTE_CHANNEL_INFO_START_IDX + (skip_src_ch_id_update ? 2 : 0);
 static_assert(
     get_compile_time_arg_val(ANOTHER_SPECIAL_TAG_IDX) == ANOTHER_SPECIAL_TAG,
@@ -202,17 +202,31 @@ static_assert(
     get_compile_time_arg_val(REMOTE_CHANNEL_POOL_START_MARKER_IDX) == 0xabaddad6,
     "Remote channel pool start marker not found. This implies some arguments were misaligned between host and device. Double check the CT args.");
 
-// Use standard ChannelPoolCollection for remote receiver channels
-// The remote channels allocator emits a proper pool structure:
-// - num_pools = 1
-// - pool_type = STATIC
-// - pool data in StaticChannelPool format (base_address, num_slots, remote_address=0, remote_num_slots=0)
+// Parse remote channel pool collection (follows same structure as local channels)
+// The remote multi-pool allocator emits pool data in the same format as local channels
 constexpr size_t REMOTE_CHANNEL_POOL_IDX = REMOTE_CHANNEL_POOL_START_MARKER_IDX + 1;
 using eth_remote_channel_pools_args = ChannelPoolCollection<REMOTE_CHANNEL_POOL_IDX, 0, NUM_RECEIVER_CHANNELS>;
 
+static constexpr size_t REMOTE_CHANNEL_MAPPINGS_START_IDX =
+    REMOTE_CHANNEL_POOL_IDX + eth_remote_channel_pools_args::GET_NUM_ARGS_CONSUMED();
+constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_TO_POOL_IDX =
+    eth_remote_channel_pools_args::receiver_channel_to_pool_index;
+static_assert(
+    all_elements_satisfy(REMOTE_RECEIVER_TO_POOL_IDX, [](size_t pool_idx) { return pool_idx < NUM_POOLS; }),
+    "REMOTE_RECEIVER_TO_POOL_IDX must be less than NUM_POOLS");
+constexpr std::array<FabricChannelPoolType, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_TO_POOL_TYPE =
+    fill_array_with_next_n_args<
+        FabricChannelPoolType,
+        // We accidentally double emit the *_TO_POOL_TYPE arrays so we skip past some unused args
+        REMOTE_CHANNEL_MAPPINGS_START_IDX + NUM_RECEIVER_CHANNELS,
+        NUM_RECEIVER_CHANNELS>();
+static_assert(all_elements_satisfy(REMOTE_RECEIVER_TO_POOL_TYPE, [](FabricChannelPoolType pool_type) {
+    return pool_type <= FabricChannelPoolType::ELASTIC;
+}));
+
 // Calculate how many args the remote channel pool consumes
-constexpr size_t REMOTE_CHANNEL_POOL_ARGS_SIZE = eth_remote_channel_pools_args::GET_NUM_ARGS_CONSUMED();
-constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX = REMOTE_CHANNEL_POOL_IDX + REMOTE_CHANNEL_POOL_ARGS_SIZE;
+constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX =
+    REMOTE_CHANNEL_MAPPINGS_START_IDX + 2 * NUM_RECEIVER_CHANNELS;
 static_assert(
     get_compile_time_arg_val(DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX) == 0xabaddad7,
     "DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX not found. This implies some arguments were misaligned between host and device. Double check the CT args.");
@@ -551,7 +565,7 @@ constexpr size_t get_channel_num_slots() {
     constexpr size_t pool_idx = ChannelToPoolIndex[ChannelIdx];
     constexpr auto pool_type = static_cast<FabricChannelPoolType>(
         ChannelPoolCollection::channel_pool_types[pool_idx]);
-    
+
     // If static pool, extract num_slots; otherwise default to 0
     if constexpr (pool_type == FabricChannelPoolType::STATIC) {
         using PoolType = std::tuple_element_t<pool_idx, typename ChannelPoolCollection::PoolsTuple>;
@@ -567,7 +581,7 @@ constexpr size_t get_channel_remote_num_slots() {
     constexpr size_t pool_idx = ChannelToPoolIndex[ChannelIdx];
     constexpr auto pool_type = static_cast<FabricChannelPoolType>(
         ChannelPoolCollection::channel_pool_types[pool_idx]);
-    
+
     // If static pool, extract remote_num_slots; otherwise default to 0
     if constexpr (pool_type == FabricChannelPoolType::STATIC) {
         using PoolType = std::tuple_element_t<pool_idx, typename ChannelPoolCollection::PoolsTuple>;
@@ -604,13 +618,19 @@ constexpr std::array<size_t, NumChannels> build_remote_num_slots_array() {
 // Backward compatibility arrays - no longer used by multi-pool implementation
 // These are kept for backward compatibility with code that hasn't migrated yet
 // The actual buffer counts are now extracted directly from pool data
-constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_NUM_BUFFERS_ARRAY = 
-    build_num_slots_array<channel_pools_args, SENDER_TO_POOL_IDX/*channel_pools_args::sender_channel_to_pool_index*/, NUM_SENDER_CHANNELS>();
+constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_NUM_BUFFERS_ARRAY = build_num_slots_array<
+    channel_pools_args,
+    SENDER_TO_POOL_IDX /*channel_pools_args::sender_channel_to_pool_index*/,
+    NUM_SENDER_CHANNELS>();
 
-constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> RECEIVER_NUM_BUFFERS_ARRAY = 
-    build_num_slots_array<channel_pools_args, channel_pools_args::receiver_channel_to_pool_index, NUM_RECEIVER_CHANNELS>();
+constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> RECEIVER_NUM_BUFFERS_ARRAY = build_num_slots_array<
+    channel_pools_args,
+    channel_pools_args::receiver_channel_to_pool_index,
+    NUM_RECEIVER_CHANNELS>();
 
-constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_ARRAY = 
-    build_remote_num_slots_array<channel_pools_args, channel_pools_args::receiver_channel_to_pool_index, NUM_RECEIVER_CHANNELS>();
+constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_ARRAY = build_remote_num_slots_array<
+    channel_pools_args,
+    eth_remote_channel_pools_args::receiver_channel_to_pool_index,
+    NUM_RECEIVER_CHANNELS>();
 
 }  // namespace tt::tt_fabric

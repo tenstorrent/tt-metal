@@ -362,6 +362,8 @@ struct FabricEriscDatamoverConfig {
 
     // Channel-to-pool mapping for multi-pool support
     std::shared_ptr<ChannelToPoolMapping> channel_to_pool_mapping;
+    // Channel-to-pool mapping for remote (over eth) channels multi-pool support
+    std::shared_ptr<ChannelToPoolMapping> remote_channel_to_pool_mapping;
 
     // Remote channels allocator - tracks remote receiver channel info for the remote ethernet core
     std::shared_ptr<FabricRemoteChannelsAllocator> remote_channels_allocator;

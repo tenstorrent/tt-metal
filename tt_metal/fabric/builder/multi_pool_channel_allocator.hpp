@@ -7,8 +7,11 @@
 #include "fabric_channel_allocator.hpp"
 #include "fabric_router_recipe.hpp"
 #include "fabric_static_sized_channels_allocator.hpp"
+#include "fabric_remote_channels_allocator.hpp"
 #include <memory>
 #include <vector>
+#include <ostream>
+#include <sstream>
 
 namespace tt::tt_fabric {
 
@@ -100,9 +103,58 @@ public:
         return dynamic_cast<AllocatorType*>(pool.get());
     }
 
+    // Stream output operator for logging
+    friend std::ostream& operator<<(std::ostream& os, const MultiPoolChannelAllocator& allocator);
+
 private:
     std::vector<std::shared_ptr<FabricChannelAllocator>> pool_allocators_;
     std::vector<FabricChannelPoolType> pool_types_;
 };
+
+// Stream output operator implementation
+inline std::ostream& operator<<(std::ostream& os, const MultiPoolChannelAllocator& allocator) {
+    os << "MultiPoolChannelAllocator {\n";
+    os << "  num_pools: " << allocator.get_num_pools() << "\n";
+
+    for (size_t i = 0; i < allocator.get_num_pools(); ++i) {
+        os << "  Pool " << i << ":\n";
+
+        // Print pool type
+        FabricChannelPoolType pool_type = allocator.get_pool_type(i);
+        os << "    type: ";
+        switch (pool_type) {
+            case FabricChannelPoolType::STATIC: os << "STATIC\n"; break;
+            case FabricChannelPoolType::ELASTIC: os << "ELASTIC\n"; break;
+            default: os << "UNKNOWN (" << static_cast<uint32_t>(pool_type) << ")\n"; break;
+        }
+
+        // Print allocator details based on type
+        auto pool = allocator.get_pool(i);
+        if (auto* static_allocator = dynamic_cast<FabricStaticSizedChannelsAllocator*>(pool.get())) {
+            // Indent the static allocator output
+            std::ostringstream temp_stream;
+            temp_stream << *static_allocator;
+            std::string allocator_str = temp_stream.str();
+
+            // Add indentation to each line
+            size_t pos = 0;
+            while ((pos = allocator_str.find('\n', pos)) != std::string::npos) {
+                if (pos + 1 < allocator_str.size() && allocator_str[pos + 1] != '\0') {
+                    allocator_str.insert(pos + 1, "    ");
+                }
+                pos += 5;  // Move past '\n' and the inserted spaces
+            }
+            os << "    " << allocator_str << "\n";
+        } else if (auto* remote_allocator = dynamic_cast<FabricRemoteChannelsAllocator*>(pool.get())) {
+            // For remote allocator, we'll just print basic info since we haven't implemented its operator<<
+            os << "    FabricRemoteChannelsAllocator (operator<< not yet implemented)\n";
+        } else {
+            os << "    Unknown allocator type\n";
+        }
+    }
+
+    os << "}";
+    return os;
+}
 
 }  // namespace tt::tt_fabric
