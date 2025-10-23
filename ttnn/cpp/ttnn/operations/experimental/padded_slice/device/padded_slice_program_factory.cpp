@@ -79,7 +79,11 @@ get_padded_slice_runtime_args_rm_sharded_output(
     uint32_t output_row_size_elems = output_shard_shape[1];
 
     log_debug(
-        tt::LogOp, "input_row_size_bytes: {}, output_row_size_bytes: {}", input_row_size_bytes, output_row_size_bytes);
+        tt::LogOp,
+        "input_row_size_bytes: {}, input_page_size: {}, output_row_size_bytes: {}",
+        input_row_size_bytes,
+        input_page_size,
+        output_row_size_bytes);
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
     std::vector<uint32_t> num_output_sticks_per_dim(num_dims);
     std::vector<uint32_t> num_input_sticks_per_dim(num_dims);
@@ -143,7 +147,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_total);
 
-    auto num_sticks_per_core = output_shard_spec.shape[0];
+    const uint32_t num_sticks_per_core = output_shard_spec.shape[0];
 
     log_debug(tt::LogOp, "num_stick_per_core: {}", num_sticks_per_core);
 
@@ -175,32 +179,33 @@ get_padded_slice_runtime_args_rm_sharded_output(
 
         int this_input_row_size_bytes =
             std::max(std::min<int>(output_row_size_bytes, input_page_size - width_offset), 0);
+        uint32_t this_core_num_sticks = num_sticks_per_core;
         if (this_input_row_size_bytes == 0) {
-            num_sticks_per_core = 0;
+            this_core_num_sticks = 0;
         }
         std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
         reader_kernel_args[0] += width_offset;
         reader_kernel_args[2] = this_input_row_size_bytes;
         uint32_t addr_offset = 5;
         reader_kernel_args[addr_offset++] = start_id;
-        reader_kernel_args[addr_offset++] = num_sticks_per_core;
-        reader_kernel_args[addr_offset++] = num_sticks_per_core;
-        reader_kernel_args[addr_offset] = num_sticks_per_core;
+        reader_kernel_args[addr_offset++] = this_core_num_sticks;
+        reader_kernel_args[addr_offset++] = this_core_num_sticks;
+        reader_kernel_args[addr_offset] = this_core_num_sticks;
         reader_kernel_args.insert(reader_kernel_args.end(), id_per_dim.begin(), id_per_dim.end());
 
         log_trace(
             tt::LogOp,
-            "For Core {}, start_id : {}, start_addr : {}, width_offset : {}, num_sticks_per_core : {}, "
+            "For Core {}, start_id : {}, start_addr : {}, width_offset : {}, this_core_num_sticks : {}, "
             "this_input_row_size_bytes : {}",
             core,
             start_id,
             reader_kernel_args[0],
             width_offset,
-            num_sticks_per_core,
+            this_core_num_sticks,
             this_input_row_size_bytes);
 
         std::vector<uint32_t> writer_kernel_args = {
-            num_sticks_per_core, output_row_size_elems, this_input_row_size_bytes, output_row_size_bytes};
+            this_core_num_sticks, output_row_size_elems, this_input_row_size_bytes, output_row_size_bytes};
         ret_val[core_index] = {reader_kernel_args, writer_kernel_args};
         core_index++;
     }

@@ -319,7 +319,7 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
         [[2, 128, 128, 528], 96, 8, 6],
         [[2, 128, 128, 96], 96, 8, 3],
         [[2, 1024, 1024, 256], 33, 10, 11],
-        [[1, 128, 256, 256], 127, 4, 5],
+        [[1, 64, 128, 256], 65, 4, 5],
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
