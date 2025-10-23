@@ -55,6 +55,88 @@ constexpr auto BOOL = "Unsupported type: Bool";
 
 }  // namespace UnsupportedMessages
 
+// Helper: Check if a DataType is supported for conversion
+constexpr bool is_supported_datatype(tt::tt_metal::DataType dt) {
+    return dt == tt::tt_metal::DataType::INT32 || dt == tt::tt_metal::DataType::UINT32 ||
+           dt == tt::tt_metal::DataType::FLOAT32 || dt == tt::tt_metal::DataType::BFLOAT16;
+}
+
+// Helper: Throw appropriate error for unsupported types
+[[noreturn]] void throw_unsupported_datatype(tt::tt_metal::DataType dt) {
+    switch (dt) {
+        case tt::tt_metal::DataType::BFLOAT8_B:
+            NB_THROW(nb::exception_type::type_error, UnsupportedMessages::BFLOAT8_B);
+        case tt::tt_metal::DataType::BFLOAT4_B:
+            NB_THROW(nb::exception_type::type_error, UnsupportedMessages::BFLOAT4_B);
+        case tt::tt_metal::DataType::UINT8: NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT8);
+        case tt::tt_metal::DataType::UINT16: NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT16);
+        case tt::tt_metal::DataType::INVALID: NB_THROW(nb::exception_type::type_error, UnsupportedMessages::INVALID);
+        default: NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UNKNOWN);
+    }
+}
+
+// Helper: Dispatch single type (for device tensor creation)
+template <typename Impl>
+auto dispatch_single_type(tt::tt_metal::DataType data_type, const Impl& impl) {
+    if (!is_supported_datatype(data_type)) {
+        throw_unsupported_datatype(data_type);
+    }
+
+    switch (data_type) {
+        case tt::tt_metal::DataType::INT32: return impl.template operator()<int32_t>();
+        case tt::tt_metal::DataType::UINT32: return impl.template operator()<uint32_t>();
+        case tt::tt_metal::DataType::FLOAT32: return impl.template operator()<float>();
+        case tt::tt_metal::DataType::BFLOAT16: return impl.template operator()<bfloat16>();
+        default: throw_unsupported_datatype(data_type);
+    }
+}
+
+// Helper: Dispatch type conversion using template magic
+template <typename Impl>
+auto dispatch_conversion(
+    tt::tt_metal::DataType from_type, tt::tt_metal::DataType to_type, const Impl& impl, const auto& tensor) {
+    if (!is_supported_datatype(to_type)) {
+        throw_unsupported_datatype(to_type);
+    }
+
+    // Dispatch on from_type, then to_type
+    switch (from_type) {
+        case tt::tt_metal::DataType::INT32:
+            switch (to_type) {
+                case tt::tt_metal::DataType::INT32: return impl.template operator()<int32_t, int32_t>(tensor);
+                case tt::tt_metal::DataType::UINT32: return impl.template operator()<int32_t, uint32_t>(tensor);
+                case tt::tt_metal::DataType::FLOAT32: return impl.template operator()<int32_t, float>(tensor);
+                case tt::tt_metal::DataType::BFLOAT16: return impl.template operator()<int32_t, bfloat16>(tensor);
+                default: throw_unsupported_datatype(to_type);
+            }
+        case tt::tt_metal::DataType::UINT32:
+            switch (to_type) {
+                case tt::tt_metal::DataType::INT32: return impl.template operator()<uint32_t, int32_t>(tensor);
+                case tt::tt_metal::DataType::UINT32: return impl.template operator()<uint32_t, uint32_t>(tensor);
+                case tt::tt_metal::DataType::FLOAT32: return impl.template operator()<uint32_t, float>(tensor);
+                case tt::tt_metal::DataType::BFLOAT16: return impl.template operator()<uint32_t, bfloat16>(tensor);
+                default: throw_unsupported_datatype(to_type);
+            }
+        case tt::tt_metal::DataType::FLOAT32:
+            switch (to_type) {
+                case tt::tt_metal::DataType::INT32: return impl.template operator()<float, int32_t>(tensor);
+                case tt::tt_metal::DataType::UINT32: return impl.template operator()<float, uint32_t>(tensor);
+                case tt::tt_metal::DataType::FLOAT32: return impl.template operator()<float, float>(tensor);
+                case tt::tt_metal::DataType::BFLOAT16: return impl.template operator()<float, bfloat16>(tensor);
+                default: throw_unsupported_datatype(to_type);
+            }
+        case tt::tt_metal::DataType::BFLOAT16:
+            switch (to_type) {
+                case tt::tt_metal::DataType::INT32: return impl.template operator()<bfloat16, int32_t>(tensor);
+                case tt::tt_metal::DataType::UINT32: return impl.template operator()<bfloat16, uint32_t>(tensor);
+                case tt::tt_metal::DataType::FLOAT32: return impl.template operator()<bfloat16, float>(tensor);
+                case tt::tt_metal::DataType::BFLOAT16: return impl.template operator()<bfloat16, bfloat16>(tensor);
+                default: throw_unsupported_datatype(to_type);
+            }
+        default: throw_unsupported_datatype(from_type);
+    }
+}
+
 [[noreturn]] void throw_exception(
     std::source_location source_location,
     nb::exception_type exception_type,
@@ -129,8 +211,11 @@ nb::object make_numpy_tensor(
             }
         }
 
-        auto* numpy_data = new NumpyType[tensor_data.size()];
-        std::copy(tensor_data.begin(), tensor_data.end(), numpy_data);
+        const size_t num_elements = tensor_data.size();
+        auto* numpy_data = new NumpyType[num_elements];
+
+        // Use memcpy for potentially better performance (NumpyType is trivially copyable)
+        std::memcpy(numpy_data, tensor_data.data(), num_elements * sizeof(NumpyType));
 
         const nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<NumpyType*>(p); });
 
@@ -197,136 +282,10 @@ nb::object make_numpy_tensor(
 
     const auto& tensor_spec = t.tensor_spec();
     const auto tensor_type = tensor_spec.data_type();
-    if (!new_type.has_value()) {
-        switch (tensor_type) {
-            case tt::tt_metal::DataType::INT32: return impl.template operator()<int32_t, int32_t>(t);
-            case tt::tt_metal::DataType::UINT32: return impl.template operator()<uint32_t, uint32_t>(t);
-            case tt::tt_metal::DataType::FLOAT32: return impl.template operator()<float, float>(t);
-            case tt::tt_metal::DataType::BFLOAT16: return impl.template operator()<bfloat16, bfloat16>(t);
-            case tt::tt_metal::DataType::BFLOAT8_B:
-                NB_THROW(nb::exception_type::type_error, UnsupportedMessages::BFLOAT8_B);
-                break;
-            case tt::tt_metal::DataType::BFLOAT4_B:
-                NB_THROW(nb::exception_type::type_error, UnsupportedMessages::BFLOAT4_B);
-                break;
-            case tt::tt_metal::DataType::UINT8:
-                NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT8);
-                break;
-            case tt::tt_metal::DataType::UINT16:
-                NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT16);
-                break;
-            case tt::tt_metal::DataType::INVALID:
-                NB_THROW(nb::exception_type::type_error, UnsupportedMessages::INVALID);
-                break;
-        }
+    const auto target_type = new_type.value_or(tensor_type);
 
-        NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UNKNOWN);
-    }
-    switch (tensor_type) {
-        case tt::tt_metal::DataType::INT32:
-            switch (new_type.value()) {
-                case tt::tt_metal::DataType::INT32: return impl.template operator()<int32_t, int32_t>(t);
-                case tt::tt_metal::DataType::UINT32: return impl.template operator()<int32_t, uint32_t>(t);
-                case tt::tt_metal::DataType::FLOAT32: return impl.template operator()<int32_t, float>(t);
-                case tt::tt_metal::DataType::BFLOAT16: return impl.template operator()<int32_t, bfloat16>(t);
-                case tt::tt_metal::DataType::BFLOAT8_B:
-                    NB_THROW(nb::exception_type::type_error, UnsupportedMessages::BFLOAT8_B);
-                    break;
-                case tt::tt_metal::DataType::BFLOAT4_B:
-                    NB_THROW(nb::exception_type::type_error, UnsupportedMessages::BFLOAT4_B);
-                    break;
-                case tt::tt_metal::DataType::UINT8:
-                    NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT8);
-                    break;
-                case tt::tt_metal::DataType::UINT16:
-                    NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT16);
-                    break;
-                case tt::tt_metal::DataType::INVALID:
-                    NB_THROW(nb::exception_type::type_error, UnsupportedMessages::INVALID);
-                    break;
-            }
-        case tt::tt_metal::DataType::UINT32:
-            switch (new_type.value()) {
-                case tt::tt_metal::DataType::INT32: return impl.template operator()<uint32_t, int32_t>(t);
-                case tt::tt_metal::DataType::UINT32: return impl.template operator()<uint32_t, uint32_t>(t);
-                case tt::tt_metal::DataType::FLOAT32: return impl.template operator()<uint32_t, float>(t);
-                case tt::tt_metal::DataType::BFLOAT16: return impl.template operator()<uint32_t, bfloat16>(t);
-                case tt::tt_metal::DataType::BFLOAT8_B:
-                    NB_THROW(nb::exception_type::type_error, UnsupportedMessages::BFLOAT8_B);
-                    break;
-                case tt::tt_metal::DataType::BFLOAT4_B:
-                    NB_THROW(nb::exception_type::type_error, UnsupportedMessages::BFLOAT4_B);
-                    break;
-                case tt::tt_metal::DataType::UINT8:
-                    NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT8);
-                    break;
-                case tt::tt_metal::DataType::UINT16:
-                    NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT16);
-                    break;
-                case tt::tt_metal::DataType::INVALID:
-                    NB_THROW(nb::exception_type::type_error, UnsupportedMessages::INVALID);
-                    break;
-            }
-        case tt::tt_metal::DataType::FLOAT32:
-            switch (new_type.value()) {
-                case tt::tt_metal::DataType::INT32: return impl.template operator()<float, int32_t>(t);
-                case tt::tt_metal::DataType::UINT32: return impl.template operator()<float, uint32_t>(t);
-                case tt::tt_metal::DataType::FLOAT32: return impl.template operator()<float, float>(t);
-                case tt::tt_metal::DataType::BFLOAT16: return impl.template operator()<float, bfloat16>(t);
-                case tt::tt_metal::DataType::BFLOAT8_B:
-                    NB_THROW(nb::exception_type::type_error, UnsupportedMessages::BFLOAT8_B);
-                    break;
-                case tt::tt_metal::DataType::BFLOAT4_B:
-                    NB_THROW(nb::exception_type::type_error, UnsupportedMessages::BFLOAT4_B);
-                    break;
-                case tt::tt_metal::DataType::UINT8:
-                    NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT8);
-                    break;
-                case tt::tt_metal::DataType::UINT16:
-                    NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT16);
-                    break;
-                case tt::tt_metal::DataType::INVALID:
-                    NB_THROW(nb::exception_type::type_error, UnsupportedMessages::INVALID);
-                    break;
-            }
-        case tt::tt_metal::DataType::BFLOAT16:
-            switch (new_type.value()) {
-                case tt::tt_metal::DataType::INT32: return impl.template operator()<bfloat16, int32_t>(t);
-                case tt::tt_metal::DataType::UINT32: return impl.template operator()<bfloat16, uint32_t>(t);
-                case tt::tt_metal::DataType::FLOAT32: return impl.template operator()<bfloat16, float>(t);
-                case tt::tt_metal::DataType::BFLOAT16: return impl.template operator()<bfloat16, bfloat16>(t);
-                case tt::tt_metal::DataType::BFLOAT8_B:
-                    NB_THROW(nb::exception_type::type_error, UnsupportedMessages::BFLOAT8_B);
-                    break;
-                case tt::tt_metal::DataType::BFLOAT4_B:
-                    NB_THROW(nb::exception_type::type_error, UnsupportedMessages::BFLOAT4_B);
-                    break;
-                case tt::tt_metal::DataType::UINT8:
-                    NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT8);
-                    break;
-                case tt::tt_metal::DataType::UINT16:
-                    NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT16);
-                    break;
-                case tt::tt_metal::DataType::INVALID:
-                    NB_THROW(nb::exception_type::type_error, UnsupportedMessages::INVALID);
-                    break;
-            }
-        case tt::tt_metal::DataType::BFLOAT8_B:
-            NB_THROW(nb::exception_type::type_error, UnsupportedMessages::BFLOAT8_B);
-            break;
-        case tt::tt_metal::DataType::BFLOAT4_B:
-            NB_THROW(nb::exception_type::type_error, UnsupportedMessages::BFLOAT4_B);
-            break;
-        case tt::tt_metal::DataType::UINT8: NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT8); break;
-        case tt::tt_metal::DataType::UINT16:
-            NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT16);
-            break;
-        case tt::tt_metal::DataType::INVALID:
-            NB_THROW(nb::exception_type::type_error, UnsupportedMessages::INVALID);
-            break;
-    }
-
-    NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UNKNOWN);
+    // Use helper function to dispatch - eliminates 100+ lines of duplication
+    return dispatch_conversion(tensor_type, target_type, impl, t);
 }
 
 // Fast path: standard NumPy dtypes validated by nanobind
@@ -361,15 +320,9 @@ tt::tt_metal::Tensor make_metal_tensor(
         for (size_t dimension = 0; dimension < rank; ++dimension) {
             const auto dimension_size = numpy_data.shape(dimension);
             NB_COND_THROW(
-                (dimension_size >= std::numeric_limits<uint32_t>::min()),
-                nb::exception_type::type_error,
-                "Invalid shape parameter for dimension {}: {} is too small",
-                dimension,
-                dimension_size);
-            NB_COND_THROW(
                 (dimension_size <= std::numeric_limits<uint32_t>::max()),
                 nb::exception_type::type_error,
-                "Invalid shape parameter for dimension {}: {} is too large",
+                "Invalid shape parameter for dimension {}: {} exceeds uint32_t maximum",
                 dimension,
                 dimension_size);
             shape_container[dimension] = dimension_size;
@@ -381,7 +334,7 @@ tt::tt_metal::Tensor make_metal_tensor(
                                          &shape_container,
                                          mapper]<typename MetalType>() -> tt::tt_metal::Tensor {
             const tt::tt_metal::Shape tensor_shape(shape_container);
-            const tt::tt_metal::MemoryConfig tensor_memory_config{};
+            static const tt::tt_metal::MemoryConfig tensor_memory_config{};
             const tt::tt_metal::PageConfig tensor_page_config(tt::tt_metal::Layout::ROW_MAJOR);
             tt::tt_metal::TensorLayout tensor_layout(tensor_data_type, tensor_page_config, tensor_memory_config);
             tt::tt_metal::TensorSpec tensor_spec(tensor_shape, tensor_layout);
@@ -396,6 +349,7 @@ tt::tt_metal::Tensor make_metal_tensor(
 
             if constexpr (!std::is_same_v<MetalType, NumpyType>) {
                 std::vector<MetalType> converted_data;
+                converted_data.reserve(numpy_data_span.size());  // Pre-allocate to avoid reallocations
                 converted_data.assign(numpy_data_span.begin(), numpy_data_span.end());
 
                 auto row_major_tensor =
@@ -430,29 +384,8 @@ tt::tt_metal::Tensor make_metal_tensor(
             }
         };
 
-        switch (tensor_data_type) {
-            case tt::tt_metal::DataType::INT32: return make_device_tensor.template operator()<int32_t>();
-            case tt::tt_metal::DataType::UINT32: return make_device_tensor.template operator()<uint32_t>();
-            case tt::tt_metal::DataType::FLOAT32: return make_device_tensor.template operator()<float>();
-            case tt::tt_metal::DataType::BFLOAT16: return make_device_tensor.template operator()<bfloat16>();
-            case tt::tt_metal::DataType::BFLOAT8_B:
-                NB_THROW(nb::exception_type::type_error, UnsupportedMessages::BFLOAT8_B);
-                break;
-            case tt::tt_metal::DataType::BFLOAT4_B:
-                NB_THROW(nb::exception_type::type_error, UnsupportedMessages::BFLOAT4_B);
-                break;
-            case tt::tt_metal::DataType::UINT8:
-                NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT8);
-                break;
-            case tt::tt_metal::DataType::UINT16:
-                NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT16);
-                break;
-            case tt::tt_metal::DataType::INVALID:
-                NB_THROW(nb::exception_type::type_error, UnsupportedMessages::INVALID);
-                break;
-        }
-
-        NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UNKNOWN);
+        // Use helper to dispatch - eliminates duplication
+        return dispatch_single_type(tensor_data_type, make_device_tensor);
     };
 
     // Map dtype codes to appropriate handlers
@@ -580,15 +513,9 @@ tt::tt_metal::Tensor make_metal_tensor(
             // Always use shape from Python (nanobind doesn't populate shape reliably)
             const auto dimension_size = shape_from_python[dimension];
             NB_COND_THROW(
-                (dimension_size >= std::numeric_limits<uint32_t>::min()),
-                nb::exception_type::type_error,
-                "Invalid shape parameter for dimension {}: {} is too small",
-                dimension,
-                dimension_size);
-            NB_COND_THROW(
                 (dimension_size <= std::numeric_limits<uint32_t>::max()),
                 nb::exception_type::type_error,
-                "Invalid shape parameter for dimension {}: {} is too large",
+                "Invalid shape parameter for dimension {}: {} exceeds uint32_t maximum",
                 dimension,
                 dimension_size);
             shape_container[dimension] = dimension_size;
@@ -600,7 +527,7 @@ tt::tt_metal::Tensor make_metal_tensor(
                                          &shape_container,
                                          mapper]<typename MetalType>() -> tt::tt_metal::Tensor {
             const tt::tt_metal::Shape tensor_shape(shape_container);
-            const tt::tt_metal::MemoryConfig tensor_memory_config{};
+            static const tt::tt_metal::MemoryConfig tensor_memory_config{};
             // Our tensor will initially be created from row-major numpy data, regardless of target layout
             const tt::tt_metal::PageConfig tensor_page_config(tt::tt_metal::Layout::ROW_MAJOR);
             tt::tt_metal::TensorLayout tensor_layout(tensor_data_type, tensor_page_config, tensor_memory_config);
@@ -622,6 +549,7 @@ tt::tt_metal::Tensor make_metal_tensor(
 
             if constexpr (!std::is_same_v<MetalType, NumpyType>) {
                 std::vector<MetalType> converted_data;
+                converted_data.reserve(numpy_data_span.size());  // Pre-allocate to avoid reallocations
                 converted_data.assign(numpy_data_span.begin(), numpy_data_span.end());
 
                 auto row_major_tensor =
@@ -658,29 +586,8 @@ tt::tt_metal::Tensor make_metal_tensor(
             }
         };
 
-        switch (tensor_data_type) {
-            case tt::tt_metal::DataType::INT32: return make_device_tensor.template operator()<int32_t>();
-            case tt::tt_metal::DataType::UINT32: return make_device_tensor.template operator()<uint32_t>();
-            case tt::tt_metal::DataType::FLOAT32: return make_device_tensor.template operator()<float>();
-            case tt::tt_metal::DataType::BFLOAT16: return make_device_tensor.template operator()<bfloat16>();
-            case tt::tt_metal::DataType::BFLOAT8_B:
-                NB_THROW(nb::exception_type::type_error, UnsupportedMessages::BFLOAT8_B);
-                break;
-            case tt::tt_metal::DataType::BFLOAT4_B:
-                NB_THROW(nb::exception_type::type_error, UnsupportedMessages::BFLOAT4_B);
-                break;
-            case tt::tt_metal::DataType::UINT8:
-                NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT8);
-                break;
-            case tt::tt_metal::DataType::UINT16:
-                NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT16);
-                break;
-            case tt::tt_metal::DataType::INVALID:
-                NB_THROW(nb::exception_type::type_error, UnsupportedMessages::INVALID);
-                break;
-        }
-
-        NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UNKNOWN);
+        // Use helper to dispatch - eliminates duplication
+        return dispatch_single_type(tensor_data_type, make_device_tensor);
     };
 
     switch (static_cast<nb::dlpack::dtype_code>(numpy_data_type.code)) {
