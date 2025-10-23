@@ -99,7 +99,7 @@ bool has_flag(FabricType flags, FabricType test) { return (flags & test) == test
 MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path) {
     if (mesh_graph_desc_file_path.ends_with(".textproto")) {
         auto filepath = std::filesystem::path(mesh_graph_desc_file_path);
-        MeshGraphDescriptor mgd(filepath, true);
+        MeshGraphDescriptor mgd(filepath, false);
         this->initialize_from_mgd(mgd);
     } else if (mesh_graph_desc_file_path.ends_with(".yaml")) {
         this->initialize_from_yaml(mesh_graph_desc_file_path);

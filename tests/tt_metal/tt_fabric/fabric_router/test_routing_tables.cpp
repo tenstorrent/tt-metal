@@ -815,4 +815,13 @@ TEST_F(ControlPlaneFixture, TestP150X8BlackHoleFabricRoutes) {
     }
 }
 
+TEST(MeshGraphValidation, TestWHClosetBoxMeshGraph) {
+    const std::filesystem::path wh_closetbox_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_mgd.textproto";
+    MeshGraph mesh_graph(wh_closetbox_mesh_graph_desc_path.string());
+
+    // Check Intra-mesh connectivity
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests

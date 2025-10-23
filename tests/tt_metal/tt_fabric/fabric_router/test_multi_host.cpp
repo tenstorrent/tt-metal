@@ -441,25 +441,14 @@ TEST(MultiHost, TestQuadGalaxyFabric1DSanity) {
 }
 
 TEST(MultiHost, TestClosetBoxTTSwitchControlPlaneInit) {
-    char hostname[HOST_NAME_MAX + 1];
-    gethostname(hostname, sizeof(hostname));
-    auto host_name = std::string(hostname);
-
-    log_info(tt::LogTest, "Host name: {}", host_name);
-
-    auto& instance = tt::tt_metal::MetalContext::instance();
-
-    // Save the cluster descriptor in the WH closet box directory
-    const std::filesystem::path output_dir =
+    const std::filesystem::path wh_closetbox_mgd_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/wh_closetbox_cluster_desc";
-    std::filesystem::create_directories(output_dir);
-    const auto filename = "closet_box_cluster_desc_" + host_name + ".yaml";
-    const auto output_path = (output_dir / filename).string();
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_mgd.textproto";
+    auto control_plane = std::make_unique<ControlPlane>(wh_closetbox_mgd_mesh_graph_desc_path.string());
 
-    auto cluster_descriptor = instance.get_cluster().get_cluster_desc()->serialize_to_file(output_path);
-
-    log_info(tt::LogTest, "Cluster descriptor saved to: {}", cluster_descriptor);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 }
 
 }  // namespace multi_host_tests
