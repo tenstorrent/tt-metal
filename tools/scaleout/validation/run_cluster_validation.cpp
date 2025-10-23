@@ -200,9 +200,14 @@ void set_config_vars() {
     // it writes custom kernels to ethernet cores, which shouldn't
     // be running fabric routers
     setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", 1);
-    // Set env vars required by Control Plane when running on a multi-node cluster
-    setenv("TT_MESH_HOST_RANK", "0", 1);
-    setenv("TT_MESH_ID", "0", 1);
+
+    // Only set these if they are not already set
+    if (getenv("TT_MESH_HOST_RANK") == nullptr) {
+        setenv("TT_MESH_HOST_RANK", "0", 1);
+    }
+    if (getenv("TT_MESH_ID") == nullptr) {
+        setenv("TT_MESH_ID", "0", 1);
+    }
 }
 
 }  // namespace tt::scaleout_tools
