@@ -166,10 +166,7 @@ class TTPETRTransformer:
         memory = ttnn.permute(memory, (1, 3, 4, 0, 2))
         # memory = ttnn.from_torch(memory, dtype=ttnn.bfloat16, device=device)
         memory = ttnn.reshape(memory, (-1, bs, c))
-        print(pos_embed.shape)
-        # pos_embed = ttnn.to_torch(pos_embed)
         pos_embed = ttnn.permute(pos_embed, (1, 3, 4, 0, 2))
-        # pos_embed = ttnn.from_torch(pos_embed, dtype=ttnn.bfloat16, device=device)
         pos_embed = ttnn.reshape(pos_embed, (-1, bs, c))
 
         query_embed = ttnn.reshape(query_embed, (query_embed.shape[0], 1, query_embed.shape[1]))
@@ -193,7 +190,6 @@ class TTPETRTransformer:
 
         out_dec = ttnn.permute(out_dec, (0, 2, 1, 3))
         memory = ttnn.reshape(memory, (n, h, w, bs, c))
-        # memory = ttnn.to_torch(memory)
         memory = ttnn.permute(memory, (3, 0, 4, 1, 2))
 
         return out_dec, memory

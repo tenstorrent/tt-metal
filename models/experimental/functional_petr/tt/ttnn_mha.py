@@ -139,16 +139,7 @@ class TTPETRMultiheadAttention:
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
-
-        # TORCH Softmax as with TTNN Softmax gives better pcc
-        attn_weights_torch = ttnn.to_torch(attn_output_weights).to(torch.bfloat16)
-        attn_weights_torch = torch.nn.functional.softmax(attn_weights_torch, dim=-1)
-
-        # Convert back to ttnn
-        attn_output_weights = ttnn.from_torch(
-            attn_weights_torch.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-        )
-
+        attn_output_weights = ttnn.softmax(attn_output_weights, dim=-1, compute_kernel_config=compute_kernel_config)
         attn_output = ttnn.matmul(attn_output_weights, value)
 
         attn_output = ttnn.permute(attn_output, (1, 0, 2))
