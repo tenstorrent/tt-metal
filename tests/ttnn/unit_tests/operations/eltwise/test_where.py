@@ -778,8 +778,8 @@ def test_ttnn_where_preallocated(a_shape, b_shape, c_shape, scalar, variant, con
     assert torch_equal_nan(result, golden)
 
 
-@pytest.mark.parametrize("h", [32])
-@pytest.mark.parametrize("w", [32])
+@pytest.mark.parametrize("h", [1024])
+@pytest.mark.parametrize("w", [1024])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_ttnn_where_sharded_ttt(h, w, dtype, device):
     """Test where operation with sharded tensors for TTT variant"""
@@ -795,25 +795,31 @@ def test_ttnn_where_sharded_ttt(h, w, dtype, device):
     golden = torch.where(condition.bool(), true_values, false_values)
 
     # Create sharded memory configs for TTT variant
+    # For HEIGHT sharding: 1024x1024 tensor = 32x32 tiles, shard [32, 1024] = [1, 32] tiles
+    # Need 32 shards total, with ROW_MAJOR on 8-column grid = 4 rows
     height_sharded_config = ttnn.create_sharded_memory_config(
-        [32, 32],  # shard shape
-        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 3))}),
+        [32, 1024],  # shard shape
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (7, 3))}),  # 8x4 = 32 cores
         strategy=ttnn.ShardStrategy.HEIGHT,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
 
+    # For WIDTH sharding: shard [1024, 32] = [32, 1] tiles
+    # Need 32 shards total, with COL_MAJOR on 4-row grid = 8 columns
     width_sharded_config = ttnn.create_sharded_memory_config(
-        [32, 32],  # shard shape
-        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 3))}),
+        [1024, 32],  # shard shape
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (7, 3))}),  # 8x4 = 32 cores
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.COL_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
 
+    # For BLOCK sharding: shard [128, 128] = [4, 4] tiles
+    # Need 8x8 = 64 shards total
     block_sharded_config = ttnn.create_sharded_memory_config(
-        [32, 32],  # shard shape
-        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 3))}),
+        [128, 128],  # shard shape
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (7, 7))}),  # 8x8 = 64 cores
         strategy=ttnn.ShardStrategy.BLOCK,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
@@ -829,7 +835,7 @@ def test_ttnn_where_sharded_ttt(h, w, dtype, device):
     # Test different sharding configurations for TTT variant
     sharded_configs = [
         height_sharded_config,
-        # width_sharded_config,
+        # width_sharded_config,  # TODO: Fix WIDTH sharding validation issue
         # block_sharded_config,
     ]
 

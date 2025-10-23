@@ -317,6 +317,47 @@ std::optional<AllShardSpecs> get_shard_specs(
         output_shard_spec};
 }
 
+uint32_t get_shards_per_width(
+    const tt::tt_metal::ShardSpec& shard_spec, tt::tt_metal::TensorMemoryLayout memory_layout) {
+    auto num_cores = shard_spec.grid.num_cores();
+    if (memory_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
+        return 1;
+    }
+
+    if (memory_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
+        return num_cores;
+    }
+
+    const auto& bbox = shard_spec.grid.bounding_box();
+    const auto& start = bbox.start_coord;
+    const auto& end = bbox.end_coord;
+    return (shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR ? end.x - start.x : end.y - start.y) +
+           1;
+}
+
+tt::tt_metal::TensorMemoryLayout get_memory_layout(
+    const ttnn::Tensor& predicate,
+    const std::optional<ttnn::Tensor>& value_true,
+    const std::optional<ttnn::Tensor>& value_false,
+    const ttnn::Tensor& output) {
+    // Output is preferred
+    if (output.memory_config().is_sharded()) {
+        return output.memory_config().memory_layout();
+    }
+
+    if (predicate.memory_config().is_sharded()) {
+        return predicate.memory_config().memory_layout();
+    }
+    if (value_true.has_value() && value_true->memory_config().is_sharded()) {
+        return value_true->memory_config().memory_layout();
+    }
+    if (value_false.has_value() && value_false->memory_config().is_sharded()) {
+        return value_false->memory_config().memory_layout();
+    }
+
+    return tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
+}
+
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::ternary;
@@ -381,12 +422,11 @@ void setup_ts_reader_args_and_dims(
     uint32_t& tensor_num_tiles,  // number of tiles for the tensor operand
     uint32_t& c_current_shard_width,
     ttnn::operations::ternary::WhereBroadcastType broadcast_type,
-    bool& has_sharding,
+    bool has_sharding,  // Changed from bool& to bool (passed by value)
     int out_rank,
     uint32_t tile_h,
     uint32_t tile_w) {
-    has_sharding = predicate_tensor.memory_config().is_sharded() || tensor_operand.memory_config().is_sharded() ||
-                   output.memory_config().is_sharded();
+    // has_sharding is already calculated by caller, no need to recalculate
     auto output_dims = extract_tensor_dimensions(output, out_rank, tile_h, tile_w);
     auto pred_dims = extract_tensor_dimensions(predicate_tensor, out_rank, tile_h, tile_w);
     auto tensor_dims = extract_tensor_dimensions(tensor_operand, out_rank, tile_h, tile_w);
@@ -457,19 +497,67 @@ void set_or_update_runtime_arguments(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;
     auto all_device_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles, row_major);
 
-    auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
+    // Get shard specs to determine if we're using sharded tensors
+    const auto shard_specs = get_shard_specs(predicate_tensor, value_true_tensor, value_false_tensor, output);
+    const bool has_sharding = shard_specs.has_value();
+
+    uint32_t num_cores, num_tiles_per_core_group_1, num_tiles_per_core_group_2;
+    CoreRangeSet all_cores, core_group_1, core_group_2;
+    std::vector<CoreCoord> cores;
+
+    if (has_sharding) {
+        // For sharded tensors, use the shard grid
+        core_group_1 = shard_specs->output_shard_spec.grid;
+        // Use grid_to_cores_with_noop to fill all compute cores, marking inactive ones
+        cores = grid_to_cores_with_noop(core_group_1, all_device_cores, row_major);
+        num_cores = core_group_1.num_cores();  // Number of active cores with shards
+        num_tiles_per_core_group_1 = 0;        // Will be calculated per-core from shard shape
+        num_tiles_per_core_group_2 = 0;
+    } else {
+        // For interleaved tensors, use standard work distribution
+        std::tie(
+            num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2) =
+            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles, row_major);
+        cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
+    }
     constexpr size_t num_reader_args = 27;
     constexpr size_t num_writer_args = 3;
     constexpr size_t num_kernel_args = 4;
+
+    const auto& tile = output.tensor_spec().tile();
+    const uint32_t tile_h = tile.get_height();
+    const uint32_t tile_w = tile.get_width();
+
+    // Calculate memory layout and shards per width for proper start_tile_id calculation
+    uint32_t num_shards_per_width = 0;
+    uint32_t shard_height_tiles = 0;
+    uint32_t shard_width_tiles = 0;
+    uint32_t output_width_tiles = 0;
+
+    if (has_sharding) {
+        auto memory_layout = get_memory_layout(predicate_tensor, value_true_tensor, value_false_tensor, output);
+        num_shards_per_width = get_shards_per_width(shard_specs->output_shard_spec, memory_layout);
+        shard_height_tiles = shard_specs->output_shard_spec.shape[0] / tile_h;
+        shard_width_tiles = shard_specs->output_shard_spec.shape[1] / tile_w;
+
+        auto output_shape = output.padded_shape();
+        output_width_tiles = output_shape[-1] / tile_w;
+    }
 
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
         const auto& core = cores[i];
 
         uint32_t num_tiles_per_core;
-        if (core_group_1.contains(core)) {
+        if (has_sharding && core_group_1.contains(core)) {
+            // For sharded tensors, calculate tiles from actual shard shape for this core
+            num_tiles_per_core = shard_height_tiles * shard_width_tiles;
+
+            // Calculate start_tile_id based on 2D grid position (same as binary_ng)
+            // Use loop index i directly when grid starts at (0,0)
+            start_tile_id = (i / num_shards_per_width) * (shard_height_tiles * output_width_tiles) +
+                            (i % num_shards_per_width) * shard_width_tiles;
+        } else if (!has_sharding && core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
         } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
@@ -484,20 +572,7 @@ void set_or_update_runtime_arguments(
         uint32_t a_num_tiles = 0, b_num_tiles = 0, f_num_tiles = 0,
                  c_current_shard_width = 0;  // Initialize to 0 like binary_ng
         const auto out_rank = output.logical_shape().rank();
-        const auto& tile = output.tensor_spec().tile();
-        const uint32_t tile_h = tile.get_height();
-        const uint32_t tile_w = tile.get_width();
         auto output_dims = extract_tensor_dimensions(output, out_rank, tile_h, tile_w);
-        // Check if any tensor is sharded
-        bool has_sharding = predicate_tensor.memory_config().is_sharded() || output.memory_config().is_sharded();
-        if (variant == WhereVariant::TTS || variant == WhereVariant::TTT) {
-            has_sharding =
-                has_sharding || (value_true_tensor.has_value() && value_true_tensor->memory_config().is_sharded());
-        }
-        if (variant == WhereVariant::TST || variant == WhereVariant::TTT) {
-            has_sharding =
-                has_sharding || (value_false_tensor.has_value() && value_false_tensor->memory_config().is_sharded());
-        }
 
         // Set reader runtime arguments based on variant
         if (variant == ttnn::operations::ternary::WhereVariant::TTS ||
@@ -533,16 +608,25 @@ void set_or_update_runtime_arguments(
             auto pred_strides = calculate_strides(pred_dims);
             auto true_strides = calculate_strides(true_dims);
             auto false_strides = calculate_strides(false_dims);
-            // Match binary_ng logic: only set tile counts if sharding is enabled
-            // For non-sharded (interleaved) mode, these remain 0 like binary_ng
+            // Match binary_ng logic: calculate tile counts from shard specs when sharding is enabled
             if (has_sharding) {
-                a_num_tiles = pred_dims.Ht * pred_dims.Wt;    // predicate tiles per core
-                b_num_tiles = true_dims.Ht * true_dims.Wt;    // value_true tiles per core
-                f_num_tiles = false_dims.Ht * false_dims.Wt;  // value_false tiles per core
-                c_current_shard_width = output_dims.Wt;
-                /* If not sharded, a_num_tiles, b_num_tiles, f_num_tiles, c_current_shard_width remain 0 (like
-                   binary_ng) Match binary_ng sharding logic for c_start_id calculation NOTE: This requires shard shape
-                   info thats need to be implemented */
+                // Calculate tiles per core from shard shapes (not global dimensions)
+                const auto& pred_shard_spec = shard_specs->predicate_shard_spec;
+                const auto& true_shard_spec = shard_specs->value_true_shard_spec;
+                const auto& false_shard_spec = shard_specs->value_false_shard_spec;
+                const auto& output_shard_spec = shard_specs->output_shard_spec;
+
+                uint32_t pred_shard_h_tiles = pred_shard_spec.shape[0] / tile_h;
+                uint32_t pred_shard_w_tiles = pred_shard_spec.shape[1] / tile_w;
+                uint32_t true_shard_h_tiles = true_shard_spec.shape[0] / tile_h;
+                uint32_t true_shard_w_tiles = true_shard_spec.shape[1] / tile_w;
+                uint32_t false_shard_h_tiles = false_shard_spec.shape[0] / tile_h;
+                uint32_t false_shard_w_tiles = false_shard_spec.shape[1] / tile_w;
+
+                a_num_tiles = pred_shard_h_tiles * pred_shard_w_tiles;    // predicate tiles in shard
+                b_num_tiles = true_shard_h_tiles * true_shard_w_tiles;    // value_true tiles in shard
+                f_num_tiles = false_shard_h_tiles * false_shard_w_tiles;  // value_false tiles in shard
+                c_current_shard_width = output_shard_spec.shape[1] / tile_w;
             }
             std::array<uint32_t, num_reader_args> reader_runtime_args{};  // zero-initialized
             // Standard first 5 arguments
@@ -623,7 +707,11 @@ void set_or_update_runtime_arguments(
         std::array<uint32_t, num_kernel_args> compute_runtime_args = {num_tiles_per_core, freq, counter, scalar_arg};
         handle_args(program, compute_kernel_id, core, compute_runtime_args);
 
-        start_tile_id += num_tiles_per_core;
+        // Only increment start_tile_id for interleaved tensors
+        // For sharded tensors, it's calculated per-core based on shard position
+        if (!has_sharding) {
+            start_tile_id += num_tiles_per_core;
+        }
     }
 }
 
