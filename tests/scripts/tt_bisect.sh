@@ -114,7 +114,7 @@ verify_import_path() {
   if [ -x "./python_env/bin/python" ]; then
     PY_BIN="./python_env/bin/python"
   fi
-  
+
   echo "DEBUG: Checking ttnn installation..."
   echo "DEBUG: PYTHONPATH=$PYTHONPATH"
   echo "DEBUG: Looking for ttnn at /work/ttnn/ttnn/__init__.py"
@@ -123,7 +123,7 @@ verify_import_path() {
   find /work/ttnn/ttnn -name "_ttnn*.so" -ls || echo "WARNING: _ttnn.so not found!"
   echo "DEBUG: Looking for built libraries in build_Release"
   ls -la /work/build_Release/lib/_ttnn*.so || ls -la /work/build/lib/_ttnn*.so || echo "WARNING: _ttnn.so not in build libs!"
-  
+
   "$PY_BIN" - <<'PY'
 import sys
 print("DEBUG: Python sys.path:", sys.path)
@@ -162,7 +162,7 @@ try_download_artifacts() {
     "$download_script" "$commit_sha"
   fi
 }
-
+# START GIT BISECT
 echo "Starting git bisect…"
 git bisect start "$bad_commit" "$good_commit"
 
