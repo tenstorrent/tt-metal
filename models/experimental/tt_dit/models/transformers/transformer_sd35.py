@@ -196,7 +196,7 @@ class SD35TransformerBlock:
             self.norm2_context.from_cached_state_dict(substate(cache_dict, "norm2_context"))
             self.ff_context.from_cached_state_dict(substate(cache_dict, "ff_context"))
 
-    def load_state_dict(self, state_dict):
+    def load_torch_state_dict(self, state_dict):
         def _shuffle_ada_norm_linear(linear_state):
             # Rearrange QKV projections such column-fracturing shards the heads
             def _shuffle(x, in_dim):
@@ -536,7 +536,7 @@ class SD35Transformer2DModel:
         self.context_embedder.load_state_dict(substate(state_dict, "context_embedder"))
 
         for i, block in enumerate(self.transformer_blocks):
-            block.load_state_dict(substate(state_dict, f"transformer_blocks.{i}"))
+            block.load_torch_state_dict(substate(state_dict, f"transformer_blocks.{i}"))
 
         self.norm_out_linear.load_state_dict(substate(state_dict, "norm_out.linear"))
         self.norm_out_norm.load_state_dict(substate(state_dict, "norm_out.norm"))

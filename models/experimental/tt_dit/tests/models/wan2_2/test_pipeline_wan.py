@@ -9,22 +9,22 @@ from models.experimental.tt_dit.parallel.config import DiTParallelConfig, VaeHWP
 from diffusers.utils import export_to_video
 import pytest
 import ttnn
-from ....utils.test import line_params, ring_params
 
 
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load",
     [
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear],
-        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring],
+        [(2, 4), (2, 4), 0, 1, 1, True],
+        [(4, 8), (4, 8), 1, 0, 4, False],
     ],
     ids=[
         "2x4sp0tp1",
         "4x8sp1tp0",
     ],
-    indirect=["mesh_device", "device_params"],
+    indirect=["mesh_device"],
 )
-def test_pipeline_inference(mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology):
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_pipeline_inference(mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load):
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
@@ -60,7 +60,6 @@ def test_pipeline_inference(mesh_device, mesh_shape, sp_axis, tp_axis, num_links
         use_cache=True,
         boundary_ratio=0.875,
         dynamic_load=dynamic_load,
-        topology=topology,
     )
 
     # Run inference
