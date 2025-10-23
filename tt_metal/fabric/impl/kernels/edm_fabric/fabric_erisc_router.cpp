@@ -416,6 +416,10 @@ FORCE_INLINE void send_next_data(
     volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
     size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
     auto dest_addr = receiver_buffer_channel.get_cached_next_buffer_slot_addr();
+    WATCHER_RING_BUFFER_PUSH(0x50000000 | dest_addr);
+    WATCHER_RING_BUFFER_PUSH(reinterpret_cast<uint32_t>(&receiver_buffer_channel));
+    WATCHER_RING_BUFFER_PUSH(0x60000000 | sender_channel_index);
+    ASSERT(dest_addr != 0);
     if constexpr (!skip_src_ch_id_update) {
         pkt_header->src_ch_id = sender_channel_index;
     }
@@ -797,6 +801,10 @@ FORCE_INLINE void receiver_forward_packet(
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
                 break;
             default: {
+                WATCHER_RING_BUFFER_PUSH(0xDEADBEEF);
+                WATCHER_RING_BUFFER_PUSH((uint32_t)packet_start);
+                WATCHER_RING_BUFFER_PUSH(reinterpret_cast<volatile uint32_t*>(packet_start)[0]);
+                WATCHER_RING_BUFFER_PUSH(reinterpret_cast<volatile uint32_t*>(packet_start)[1]);
                 ASSERT(false);
             }
         }
@@ -1761,6 +1769,9 @@ void run_receiver_channel_step_impl(
                     hop_cmd);
 #endif
             } else {
+                // WATCHER_RING_BUFFER_PUSH(to_receiver_pkts_sent_id);
+                // WATCHER_RING_BUFFER_PUSH(get_ptr_val(to_receiver_pkts_sent_id));
+                // WATCHER_RING_BUFFER_PUSH(receiver_channel);
                 if constexpr (receiver_channel == 0) {
                     receiver_forward_packet<receiver_channel>(
                         packet_header, cached_routing_fields, downstream_edm_interfaces_vc0[0], trid);
@@ -2400,6 +2411,9 @@ void kernel_main() {
         clear_code_profiling_buffer(code_profiling_buffer_base_addr);
     }
 
+    ASSERT(get_ptr_val<to_receiver_packets_sent_streams[0]>() == 0);
+    ASSERT(get_ptr_val<to_receiver_packets_sent_streams[1]>() == 0);
+
     // TODO: CONVERT TO SEMAPHORE
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_addr);
@@ -2581,7 +2595,7 @@ void kernel_main() {
     auto remote_receiver_channels =
         tt::tt_fabric::MultiPoolEthChannelBuffers<
             PACKET_HEADER_TYPE,
-            channel_pools_args,
+            eth_remote_channel_pools_args,
             RECEIVER_TO_POOL_TYPE,
             RECEIVER_TO_POOL_IDX
         >::make();
@@ -2764,8 +2778,8 @@ void kernel_main() {
         sizeof(PACKET_HEADER_TYPE));
 
     // initialize the remote receiver channel buffers  
-    // NEW WAY (multi-pool support): addresses come directly from pools
-    remote_receiver_channels.init<channel_pools_args>(
+    // NEW WAY (multi-pool support): addresses come directly from remote channel pools
+    remote_receiver_channels.init<eth_remote_channel_pools_args>(
         channel_buffer_size,
         sizeof(PACKET_HEADER_TYPE));
 

@@ -67,7 +67,6 @@ public:
 
     /**
      * Create a default recipe with a single static pool that all channels map to.
-     * This maintains backward compatibility with existing behavior.
      *
      * @param num_sender_channels Total number of sender channels
      * @param num_receiver_channels Total number of receiver channels

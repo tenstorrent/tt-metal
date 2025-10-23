@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
+#include "tt_metal/fabric/builder/fabric_remote_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/fabric_router_recipe.hpp"
 #include "tt_metal/fabric/builder/channel_to_pool_mapping.hpp"
@@ -492,6 +493,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     // Assign static allocator directly to channel_allocator (composition, not wrapped)
     this->channel_allocator = static_allocator;
+
+    // Create remote channels allocator from the static allocator
+    this->remote_channels_allocator = std::make_shared<tt::tt_fabric::FabricRemoteChannelsAllocator>(*static_allocator);
 
     // Create multi-pool coordinator that manages the pool allocators
     std::vector<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>> pool_allocators;
@@ -995,6 +999,10 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     // Emit channel-to-pool mappings (steps 5-8 of schema)
     ct_args.push_back(0xabaddad8);
     config.channel_to_pool_mapping->emit_ct_args(ct_args);
+
+    // Emit remote channel pool data (for remote_receiver_channels initialization)
+    ct_args.push_back(0xabaddad6);
+    config.remote_channels_allocator->emit_ct_args(ct_args, config.num_fwd_paths, num_sender_channels, num_receiver_channels);
 
     ct_args.push_back(0xabaddad7);
     receiver_channel_to_downstream_adapter->emit_ct_args(ct_args, config.num_fwd_paths);

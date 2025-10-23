@@ -34,6 +34,7 @@ class FabricEriscDatamoverBuilder;
 class FabricTensixDatamoverBuilder;
 class MultiPoolChannelAllocator;
 class ChannelToPoolMapping;
+class FabricRemoteChannelsAllocator;
 
 // Type alias for any fabric datamover builder
 using FabricDatamoverBuilder = std::
@@ -361,6 +362,9 @@ struct FabricEriscDatamoverConfig {
 
     // Channel-to-pool mapping for multi-pool support
     std::shared_ptr<ChannelToPoolMapping> channel_to_pool_mapping;
+
+    // Remote channels allocator - tracks remote receiver channel info for the remote ethernet core
+    std::shared_ptr<FabricRemoteChannelsAllocator> remote_channels_allocator;
 
 private:
     void configure_skip_connection_flags(Topology topology, FabricEriscDatamoverOptions const& options);

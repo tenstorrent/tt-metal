@@ -68,6 +68,7 @@ public:
     size_t get_num_receiver_channels() const { return num_used_receiver_channels; }
 
 private:
+    friend class FabricRemoteChannelsAllocator;
     /*
      * Helper function that decides the number of buffer slots for each channel.
     */

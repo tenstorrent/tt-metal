@@ -174,7 +174,7 @@ constexpr size_t NUM_POOLS = channel_pools_args::num_channel_pools;
 static_assert(NUM_SENDER_CHANNELS <=5, "NUM_SENDER_CHANNELS must be less than or equal to 5");
 static_assert(NUM_RECEIVER_CHANNELS <= 2, "NUM_RECEIVER_CHANNELS must be less than or equal to 2");
 // Parse channel-to-pool mappings (after all pool data)
-constexpr size_t CHANNEL_MAPPINGS_START_SPECIAL_TAG_IDX = CHANNEL_POOL_COLLECTION_IDX + channel_pools_args::GET_NUM_ARGS_CONSUMED();
+constexpr size_t CHANNEL_MAPPINGS_START_SPECIAL_TAG_IDX  = CHANNEL_POOL_COLLECTION_IDX + channel_pools_args::GET_NUM_ARGS_CONSUMED();
 static_assert(
     get_compile_time_arg_val(CHANNEL_MAPPINGS_START_SPECIAL_TAG_IDX) == 0xabaddad8,
     "CHANNEL_MAPPINGS_START_SPECIAL_TAG_IDX not found. This implies some arguments were misaligned between host and device. Double check the CT args.");
@@ -196,8 +196,23 @@ constexpr std::array<FabricChannelPoolType, NUM_RECEIVER_CHANNELS> RECEIVER_TO_P
     NUM_RECEIVER_CHANNELS>();
 static_assert(all_elements_satisfy(RECEIVER_TO_POOL_TYPE, [](FabricChannelPoolType pool_type) { return pool_type <= FabricChannelPoolType::ELASTIC; }));
 
+// Parse remote channel pool data (after channel-to-pool mappings)
+constexpr size_t REMOTE_CHANNEL_POOL_START_MARKER_IDX = CHANNEL_MAPPINGS_START_IDX + 2 * (NUM_SENDER_CHANNELS + NUM_RECEIVER_CHANNELS);
+static_assert(
+    get_compile_time_arg_val(REMOTE_CHANNEL_POOL_START_MARKER_IDX) == 0xabaddad6,
+    "Remote channel pool start marker not found. This implies some arguments were misaligned between host and device. Double check the CT args.");
 
-constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX = CHANNEL_MAPPINGS_START_IDX + 2 * (NUM_SENDER_CHANNELS + NUM_RECEIVER_CHANNELS);
+// Use standard ChannelPoolCollection for remote receiver channels
+// The remote channels allocator emits a proper pool structure:
+// - num_pools = 1
+// - pool_type = STATIC
+// - pool data in StaticChannelPool format (base_address, num_slots, remote_address=0, remote_num_slots=0)
+constexpr size_t REMOTE_CHANNEL_POOL_IDX = REMOTE_CHANNEL_POOL_START_MARKER_IDX + 1;
+using eth_remote_channel_pools_args = ChannelPoolCollection<REMOTE_CHANNEL_POOL_IDX, 0, NUM_RECEIVER_CHANNELS>;
+
+// Calculate how many args the remote channel pool consumes
+constexpr size_t REMOTE_CHANNEL_POOL_ARGS_SIZE = eth_remote_channel_pools_args::GET_NUM_ARGS_CONSUMED();
+constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX = REMOTE_CHANNEL_POOL_IDX + REMOTE_CHANNEL_POOL_ARGS_SIZE;
 static_assert(
     get_compile_time_arg_val(DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX) == 0xabaddad7,
     "DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX not found. This implies some arguments were misaligned between host and device. Double check the CT args.");
