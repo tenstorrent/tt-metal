@@ -8,7 +8,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/fabric.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/operations/experimental/ccl/all_broadcast_async/device/all_broadcast_async_op.hpp"
+#include "ttnn/operations/ccl/broadcast/device/broadcast_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -37,12 +37,13 @@ namespace ttnn {
 
 using namespace ccl;
 
-tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
+tt::tt_metal::operation::ProgramWithCallbacks broadcast_multicore(
     const Tensor& input_tensor,
-    const MeshCoordinate& sender_device_coord,
+    const MeshCoordinate& sender_coord,
+    const MeshCoordinate& self_coord,
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
-    std::vector<Tensor>& output_tensors,
+    Tensor& output_tensor,
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
@@ -58,7 +59,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     log_trace(
         tt::LogOp,
         "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}",
-        sender_device_coord,
+        self_coord,
         is_first_chip,
         is_last_chip);
 
@@ -126,6 +127,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
 
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    bool is_sender = self_coord == sender_coord;
 
     // KERNEL CREATION
     // Reader
@@ -133,8 +135,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         src0_cb_index,                               // cb0_id
         num_pages_per_packet,                        // packet_size_in_pages
         input_tensor.buffer()->aligned_page_size(),  // tensor0_page_size
-        true,                                        // is_sender
-    };
+        is_sender};
 
     if (!tilized) {
         reader_compile_args = {
@@ -144,8 +145,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             (max_packet_size / buffer_page_size >= 2) ? 2 : 1,  // num_rows_per_packet
             num_packets_per_page,                               // num_packets_per_page
             max_packet_size,
-            true,  // is_sender
-        };
+            is_sender};
     }
 
     std::vector<uint32_t> writer_compile_args = {
@@ -154,7 +154,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         input_tensor.buffer()->aligned_page_size(),  // tensor0_page_size
         num_targets_forward,                         // num_targets_forward_direction
         num_targets_backward,                        // num_targets_backward_direction
-        true,                                        // is_sender
+        is_sender,
     };
 
     if (!tilized) {
@@ -167,8 +167,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             num_packets_per_page,                               // num_packets_per_row
             num_targets_forward,                                // num_targets_forward_direction
             num_targets_backward,                               // num_targets_backward_direction
-            true,                                               // is_sender
-        };
+            is_sender};
     }
     std::vector<uint32_t> mcast_forward_args(2, 0);
     std::vector<uint32_t> mcast_backward_args(2, 0);
@@ -193,16 +192,20 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     }
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        tilized ? "ttnn/cpp/ttnn/operations/ccl/broadcast/device/kernels/broadcast_tile_reader.cpp"
-                : "ttnn/cpp/ttnn/operations/ccl/broadcast/device/kernels/broadcast_rm_reader.cpp",
+        tilized ? "ttnn/cpp/ttnn/operations/ccl/broadcast/device/kernels/"
+                  "broadcast_tile_reader.cpp"
+                : "ttnn/cpp/ttnn/operations/ccl/broadcast/device/kernels/"
+                  "broadcast_rm_reader.cpp",
         sender_worker_core_range,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args, kernel_defines));
 
     // Writer
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        tilized ? "ttnn/cpp/ttnn/operations/ccl/broadcast/device/kernels/broadcast_tile_writer.cpp"
-                : "ttnn/cpp/ttnn/operations/ccl/broadcast/device/kernels/broadcast_rm_writer.cpp",
+        tilized ? "ttnn/cpp/ttnn/operations/ccl/broadcast/device/kernels/"
+                  "broadcast_tile_writer.cpp"
+                : "ttnn/cpp/ttnn/operations/ccl/broadcast/device/kernels/"
+                  "broadcast_rm_writer.cpp",
         sender_worker_core_range,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_args, kernel_defines));
 
@@ -239,24 +242,24 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
 
         // Set writer runtime args
-        bool wait_output_semaphore = (link == 0);
-        bool reset_global_semaphore = (link == 0);
-        uint32_t out_ready_sem_wait_value = ring_size * num_links;
+        bool wait_output_semaphore = (link == 0) && !is_sender;
+        bool reset_global_semaphore = (link == 0) && !is_sender;
+        uint32_t out_ready_sem_wait_value = 1 * num_links;
         uint32_t output_tile_id_start = input_tile_id_start;
         uint32_t output_tile_id_end = input_tile_id_end;
         std::vector<uint32_t> writer_rt_args = {
-            output_tensors[ring_index].buffer()->address(),  // tensor_address0  //HERE
-            semaphore.address(),                             // out_ready_sem_bank_addr (absolute address)
-            output_tile_id_start * num_width_shards,         // tile_id_start
-            output_tile_id_end * num_width_shards,           // tile_id_end
-            wait_output_semaphore,                           // wait_output_semaphore
-            reset_global_semaphore,                          // reset_global_semaphore
-            drain_sync_core.x,                               // out_ready_sem_noc0_x
-            drain_sync_core.y,                               // out_ready_sem_noc0_y
-            out_ready_sem_wait_value,                        // out_ready_sem_wait_value
-            barrier_semaphore.address(),                     // barrier_sem
-            barrier_core.x,                                  // barrier_sem_noc0_x
-            barrier_core.y                                   // barrier_sem_noc0_y
+            output_tensor.buffer()->address(),        // tensor_address0  //HERE
+            semaphore.address(),                      // out_ready_sem_bank_addr (absolute address)
+            output_tile_id_start * num_width_shards,  // tile_id_start
+            output_tile_id_end * num_width_shards,    // tile_id_end
+            wait_output_semaphore,                    // wait_output_semaphore
+            reset_global_semaphore,                   // reset_global_semaphore
+            drain_sync_core.x,                        // out_ready_sem_noc0_x
+            drain_sync_core.y,                        // out_ready_sem_noc0_y
+            out_ready_sem_wait_value,                 // out_ready_sem_wait_value
+            barrier_semaphore.address(),              // barrier_sem
+            barrier_core.x,                           // barrier_sem_noc0_x
+            barrier_core.y                            // barrier_sem_noc0_y
         };
         auto num_connections = (int)forward_coord.has_value() + (int)backward_coord.has_value();
         writer_rt_args.push_back(num_connections);
@@ -264,7 +267,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             shard_builder::extend_sharding_run_time_args(input_tensor, writer_rt_args);
         }
 
-        const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+        const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(self_coord);
         std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
         dst_nodes.reserve(num_connections);
         if (forward_coord.has_value()) {
@@ -294,6 +297,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors[0];
+            auto& output = output_tensors[0];
 
             log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore.address());
             log_trace(tt::LogOp, "DEBUG: barrier_semaphore: {}", barrier_semaphore.address());
@@ -307,7 +311,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
                 worker_reader_sender_runtime_args[0] = input.buffer()->address();
                 // writer
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
-                worker_writer_sender_runtime_args[0] = output_tensors[ring_index].buffer()->address();
+                worker_writer_sender_runtime_args[0] = output.buffer()->address();
                 worker_writer_sender_runtime_args[1] = semaphore.address();
                 worker_writer_sender_runtime_args[9] = barrier_semaphore.address();
             }
