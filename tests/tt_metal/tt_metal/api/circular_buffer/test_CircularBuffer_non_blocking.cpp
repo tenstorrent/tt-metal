@@ -27,12 +27,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
-namespace tt {
-namespace tt_metal {
-class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
-
 using namespace tt::tt_metal;
 
 constexpr CoreCoord worker_core = {0, 0};
@@ -91,8 +85,8 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferNonBlockingAPIs) {
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
-        const auto master_semaphore = CreateSemaphore(program_, worker_core, 0, CoreType::WORKER);
-        const auto subordinate_semaphore = CreateSemaphore(program_, worker_core, 0, CoreType::WORKER);
+        const auto master_semaphore = CreateSemaphore(program_, worker_core, 0, tt::CoreType::WORKER);
+        const auto subordinate_semaphore = CreateSemaphore(program_, worker_core, 0, tt::CoreType::WORKER);
 
         std::vector<CBHandle> cbs;
         cbs.reserve(n_cbs);

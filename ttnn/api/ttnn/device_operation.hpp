@@ -7,6 +7,7 @@
 #include <concepts>
 #include <optional>
 #include <random>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/indestructible.hpp>
 #include "ttnn/tensor/tensor.hpp"
@@ -197,10 +198,7 @@ void enqueue_mesh_workload(
     if (mesh_device_operation_utils::track_workload(workload, mesh_device)) {
         return;
     }
-    {
-        ZoneScopedN("EnqueueMeshWorkload");
-        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-    }
+    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     TracyOpMeshWorkload(
         mesh_device, workload, mesh_device_operation_t{}, operation_attributes, tensor_args, tensor_return_value);
@@ -231,7 +229,6 @@ void handle_mesh_adapter_cache_hit(
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     tt::stl::hash::hash_t program_hash) {
-    ZoneScopedN("Handle Mesh Adapter Cache Hit");
     mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
 
     auto& cached_program_factory = program_cache.get(program_hash);
@@ -261,7 +258,6 @@ void create_and_cache_mesh_workload(
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     tt::stl::hash::hash_t program_hash) {
-    ZoneScopedN("Handle Mesh Adapter Cache Miss");
     mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
 
     auto program_factory = mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args);
@@ -310,8 +306,6 @@ void launch_operation_with_adapter(
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     ttnn::MeshDevice* mesh_device) {
-    ZoneScopedN("Launch With MeshDeviceAdapter");
-
     // Skip if operation should be skipped
     if constexpr (HasSkipLaunch<mesh_device_operation_t>) {
         if (mesh_device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)) {
@@ -349,12 +343,104 @@ void launch_operation_with_adapter(
     }
 }
 
+// Default TensorTopology for output tensors is determined only by the input tensors with the highest distribution rank
+// (highest number of dimensions). The output tensor will have the same distribution rank as these input tensors, taking
+// the max strides of all input tensors. The placement for each distribution dimension will be Shard if at least one
+// input tensor has a Shard placement for that dimension, otherwise it will be Replicate. Duplicate Shard placements are
+// disallowed, Replicate is used instead. If two input tensors shard different tensor dimensions across the same
+// distribution dimension, the earlier-seen shard dimension is kept.
+template <DeviceOperationConcept device_operation_t>
+std::pair<
+    tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
+    tt::tt_metal::distributed::MeshShape>
+get_output_placements_and_shape(
+    const typename device_operation_t::tensor_args_t& tensor_args, const Tensor& first_tensor) {
+    size_t max_distribution_rank = 0;
+    tt::stl::reflection::visit_object_of_type<Tensor>(
+        [&](const Tensor& tensor) {
+            max_distribution_rank =
+                std::max(max_distribution_rank, tensor.tensor_topology().distribution_shape().dims());
+        },
+        tensor_args);
+
+    auto result_strides = tt::stl::SmallVector<uint32_t>(max_distribution_rank, 1);
+    auto result_placements = tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>(
+        max_distribution_rank, tt::tt_metal::distributed::MeshMapperConfig::Replicate{});
+    std::unordered_set<int> shard_dims;
+    bool dim_mismatch = false;
+
+    // TODO: #25340 - Add back logging / validation. Currently, this results in a lot of log spam.
+    constexpr bool kEnableLogging = false;
+    tt::stl::reflection::visit_object_of_type<Tensor>(
+        [&](const Tensor& tensor) {
+            // Augment output tensor distribution shape with the max strides of all input tensors with the max
+            // distribution rank
+            const auto& tensor_distribution_shape = tensor.tensor_topology().distribution_shape();
+            if (tensor_distribution_shape.dims() == max_distribution_rank) {
+                for (int i = 0; i < std::min(result_strides.size(), tensor_distribution_shape.dims()); i++) {
+                    result_strides[i] = std::max(result_strides[i], tensor_distribution_shape[i]);
+                }
+
+                const auto& tensor_placements = tensor.tensor_topology().placements();
+                for (int i = 0; i < tensor_placements.size(); i++) {
+                    tt::tt_metal::distributed::MeshMapperConfig::Placement output_placement = result_placements[i];
+                    if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(
+                            tensor_placements[i])) {
+                        auto new_shard_placement =
+                            std::get<tt::tt_metal::distributed::MeshMapperConfig::Shard>(tensor_placements[i]);
+
+                        // Only shard if the tensor dimension is not already sharded
+                        if (!shard_dims.contains(new_shard_placement.dim)) {
+                            shard_dims.insert(new_shard_placement.dim);
+                            if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(
+                                    output_placement)) {
+                                auto existing_shard_placement =
+                                    std::get<tt::tt_metal::distributed::MeshMapperConfig::Shard>(output_placement);
+
+                                // If a different tensor dim is sharded across this distribution dim, keep the
+                                // earliest-seen shard dimension.
+                                if (new_shard_placement.dim != existing_shard_placement.dim && kEnableLogging) {
+                                    log_warning(
+                                        tt::LogOp,
+                                        "Output tensor cannot shard different tensor dimensions across the same "
+                                        "distribution "
+                                        "dimension: tensor dims {} (kept) and {} (ignored) across distribution dim {}",
+                                        existing_shard_placement.dim,
+                                        new_shard_placement.dim,
+                                        i);
+                                }
+                                continue;
+                            }
+                            output_placement = new_shard_placement;
+                        } else if (kEnableLogging) {
+                            log_warning(
+                                tt::LogOp,
+                                "Duplicate tensor shard dimension {} across distribution dim {} replaced with "
+                                "Replicate",
+                                new_shard_placement.dim,
+                                i);
+                        }
+                    }
+                    result_placements[i] = output_placement;
+                }
+            } else {
+                dim_mismatch = true;
+            }
+        },
+        tensor_args);
+    if (dim_mismatch && kEnableLogging) {
+        log_warning(
+            tt::LogOp,
+            "Input tensors have different distribution ranks, only imputing output tensor topology with tensors that "
+            "have the max distribution rank");
+    }
+    return {result_placements, tt::tt_metal::distributed::MeshShape(result_strides)};
+}
+
 template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t launch_on_device(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
-    ZoneScopedN("Launch Device Operation");
-
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
     if (!mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
         mesh_device_operation_utils::filter_tensor_shards(
@@ -363,6 +449,17 @@ typename device_operation_t::tensor_return_value_t launch_on_device(
 
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
     auto mesh_device = first_tensor.device();
+    auto [output_topology_placements, output_topology_shape] =
+        detail::get_output_placements_and_shape<device_operation_t>(tensor_args, first_tensor);
+
+    tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(
+        [&output_topology_placements, &output_topology_shape](const Tensor& output_tensor) {
+            auto topology = tt::tt_metal::TensorTopology(
+                output_topology_shape, output_topology_placements, output_tensor.tensor_topology().mesh_coords());
+            return output_tensor.with_tensor_topology(topology);
+        },
+        tensor_return_value);
+
     launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
         operation_attributes, tensor_args, tensor_return_value, mesh_device);
     return tensor_return_value;
@@ -372,8 +469,6 @@ template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t invoke(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
-    ZoneScopedN("Run Device Operation");
-
     // TODO: Add GraphTracker::instance().track_device_operation to track device operations specifically?
     tt::tt_metal::GraphTracker::instance().track_function_start(
         get_operation_name<device_operation_t>(operation_attributes), operation_attributes, tensor_args);

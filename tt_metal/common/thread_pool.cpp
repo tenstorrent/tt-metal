@@ -47,14 +47,15 @@ bool balanced_physical_device_numa() {
 uint32_t get_cpu_core_for_physical_device(uint32_t physical_device_id) {
     static std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node = get_cpu_cores_per_numa_node();
     static std::unordered_map<int, int> logical_cpu_id_per_numa_node = {};
-    static bool devices_balanced_across_numa_nodes = balanced_physical_device_numa();
     // Initialize to an invalid value. Determine the NUMA Node based on the physical device id.
     // If a NUMA Node is not found, use a round robin policy.
     int numa_node = -1;
-    if (physical_device_id < MetalContext::instance().get_cluster().number_of_devices()) {
+    if (physical_device_id < MetalContext::instance().get_cluster().number_of_devices() &&
+        !tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
         // If the cluster uses all NUMA nodes, assign worker threads to CPU cores based
         // on the NUMA layout. If not, balance the worker threads across all NUMA Nodes/
         // CPU cores to minimize resource contention.
+        static bool devices_balanced_across_numa_nodes = balanced_physical_device_numa();
         numa_node = devices_balanced_across_numa_nodes
                         ? MetalContext::instance().get_cluster().get_numa_node_for_device(physical_device_id)
                         : physical_device_id % 2;
@@ -217,6 +218,12 @@ public:
         auto cpu_core_for_worker = thread_binding::get_cpu_core_for_physical_device(physical_device_id);
         thread_binding::set_worker_affinity(worker, cpu_core_for_worker);
     }
+
+    // Delete copy and move operations as this class manages a thread and should not be copied or moved
+    NumaAwareExecutor(const NumaAwareExecutor&) = delete;
+    NumaAwareExecutor& operator=(const NumaAwareExecutor&) = delete;
+    NumaAwareExecutor(NumaAwareExecutor&&) = delete;
+    NumaAwareExecutor& operator=(NumaAwareExecutor&&) = delete;
 
     ~NumaAwareExecutor() {
         // Destructor called in main thread.

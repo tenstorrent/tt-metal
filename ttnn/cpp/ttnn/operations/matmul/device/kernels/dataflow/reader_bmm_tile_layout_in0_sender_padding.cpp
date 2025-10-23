@@ -93,6 +93,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
     constexpr uint32_t in0_block_size_bytes = in0_block_num_tiles * in0_single_tile_size_bytes;
+    constexpr uint32_t one_tile = 1;
 
 #ifdef IN0_SHARDED
     // In case we need to send multiple blocks per shard, in0 sharded cb is cb2 and we extract the sub-blocks to cb0
@@ -110,7 +111,7 @@ void kernel_main() {
 
 #else
     const auto s0 = TensorAccessor(in0_args, in0_tensor_addr, in0_single_tile_size_bytes);
-#endif
+#endif  // IN0_SHARDED
 
     // sparsity accessor
     constexpr uint32_t cb_id_sparsity = tt::CBIndex::c_6;
@@ -138,8 +139,8 @@ void kernel_main() {
 
 #ifdef IN0_SHARDED
     uint32_t in0_start_address = get_write_ptr(cb_id_in0);
-#endif
-#endif
+#endif  // IN0_SHARDED
+#endif  // SKIP_MCAST
 
     uint32_t l1_write_addr_sparsity = 0;
     if constexpr (batchB > 0) {
@@ -170,8 +171,8 @@ void kernel_main() {
                     noc_async_writes_flushed();
                     // Reset the semaphore value to VALID
                     noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, VALID);
-#endif
-                    // We need to pass the value to compute UNPACK regardless of the value of is_batch_valid
+#endif  // SKIP_MCAST
+        // We need to pass the value to compute UNPACK regardless of the value of is_batch_valid
                     cb_reserve_back(nnz_cb_id, 1);
                     auto nnz_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(nnz_cb_id));
                     nnz_ptr[0] = is_batch_valid;
@@ -188,13 +189,13 @@ void kernel_main() {
 
 #ifdef IN0_SHARDED
             uint32_t in0_tensor_current_h_dim_block_start_addr = noc_shard_read_start_addr;
-#endif
+#endif  // IN0_SHARDED
             uint32_t in0_tensor_current_h_dim_block_tile_id = in0_tensor_start_tile_id;
             for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
                 for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
 #ifdef IN0_SHARDED
                     uint32_t in0_tensor_current_inner_dim_block_start_addr = in0_tensor_current_h_dim_block_start_addr;
-#endif
+#endif  // IN0_SHARDED
                     uint32_t in0_tensor_current_inner_dim_block_start_tile_id = in0_tensor_current_h_dim_block_tile_id;
                     for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
                         if constexpr (fuse_op) {
@@ -206,12 +207,19 @@ void kernel_main() {
                         // Common for sharded and interleaved paths
                         cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 #ifndef IN0_SHARDED
+
+#ifdef INTERMEDIATE_CB_READ
+                        constexpr uint32_t in0_intermediate_cb_index = tt::CBIndex::c_8;
+                        cb_reserve_back(in0_intermediate_cb_index, one_tile);
+                        uint32_t l1_write_addr_helper = get_write_ptr(in0_intermediate_cb_index);
+#endif  // INTERMEDIATE_CB_READ
+
                         uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
 
 #ifndef SKIP_MCAST
                         uint32_t in0_start_address =
                             l1_write_addr_in0;  // copy start address of block, to be used for mcasting
-#endif
+#endif                                          // SKIP_MCAST
 
                         // Copy in0 block into CB, as the default kernel
                         uint32_t in0_tensor_row_start_tile_id = in0_tensor_current_inner_dim_block_start_tile_id;
@@ -219,7 +227,16 @@ void kernel_main() {
                             uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
                             for (uint32_t w = 0; w < in0_block_w; ++w) {
                                 if (bh < num_blocks_h_dim - 1 || h < last_block_h) {
+#ifndef INTERMEDIATE_CB_READ
                                     noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
+#else
+                                    noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_helper);
+                                    noc_async_read_barrier();
+                                    memcpy(
+                                        /*dst=*/reinterpret_cast<void*>(l1_write_addr_in0),
+                                        /*src=*/reinterpret_cast<const void*>(l1_write_addr_helper),
+                                        /*size=*/in0_single_tile_size_bytes);
+#endif  // INTERMEDIATE_CB_READ
                                 }
 
                                 // Zero out padded regions for the very last tile
@@ -247,7 +264,7 @@ void kernel_main() {
 #ifndef SKIP_MCAST
                             in0_start_address =
                                 l1_write_addr_in0;  // copy start address of block, to be used for mcasting
-#endif
+#endif  // SKIP_MCAST
 
                             uint64_t noc_shard_read_addr = get_noc_addr(in0_tensor_current_inner_dim_block_start_addr);
 
@@ -261,7 +278,7 @@ void kernel_main() {
                             in0_tensor_current_inner_dim_block_start_addr += shard_read_width;
                             noc_async_read_barrier();
                         }
-#endif
+#endif  // IN0_SHARDED
 
 #ifndef SKIP_MCAST
                         // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr
@@ -288,7 +305,7 @@ void kernel_main() {
                         // On Blackhole the flush is needed because NoC latency is higherthan L1 <-> RISCV
                         // latency which means data could be changed before write is issued.
                         noc_async_writes_flushed();
-#endif
+#endif  // ARCH_BLACKHOLE
 
                         // We should also multicast the flag to destinations
                         // num_dests must not include source, since we are NOT really doing a local copy!
@@ -296,15 +313,21 @@ void kernel_main() {
                             in0_mcast_receiver_semaphore_addr,
                             in0_mcast_receiver_semaphore_noc_addr,
                             in0_mcast_num_cores);
-#endif
+#endif  // SKIP_MCAST
 
                         // Common for sharded and interleaved paths
                         cb_push_back(cb_id_in0, in0_block_num_tiles);
+#ifdef INTERMEDIATE_CB_READ
+                        // Clean up helper CB
+                        cb_push_back(in0_intermediate_cb_index, one_tile);
+                        cb_wait_front(in0_intermediate_cb_index, one_tile);
+                        cb_pop_front(in0_intermediate_cb_index, one_tile);
+#endif  // INTERMEDIATE_CB_READ
                     }
                 }
 #ifdef IN0_SHARDED
                 in0_tensor_current_h_dim_block_start_addr += in0_tensor_next_h_dim_block_stride_bytes;
-#endif
+#endif  // IN0_SHARDED
                 in0_tensor_current_h_dim_block_tile_id += in0_tensor_next_h_dim_block_stride;
             }
 
@@ -318,4 +341,10 @@ void kernel_main() {
         }
     }
     noc_async_write_barrier();
+    // For completeness, we empty the sparsity CB if it was reserved earlier
+    if constexpr (batchB > 0) {
+        cb_push_back(cb_id_sparsity, 1);
+        cb_wait_front(cb_id_sparsity, 1);
+        cb_pop_front(cb_id_sparsity, 1);
+    }
 }

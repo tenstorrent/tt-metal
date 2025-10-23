@@ -10,6 +10,7 @@ on:
         default: "ALL SWEEPS (Nightly)"
         options:
           - ALL SWEEPS (Nightly)
+          - ALL SWEEPS (Comprehensive)
           - add
           - ccl.generality.all_broadcast
           - ccl.generality.all_gather
@@ -21,9 +22,6 @@ on:
           - ccl.generality.reduce_scatter
           - composite.binary.gcd.gcd
           - composite.binary.lcm.lcm
-          - conv2d.full.conv2d_misc
-          - conv2d.full.conv2d_sharding
-          - conv2d.full.conv2d_sliding_window
           - conv2d.short.conv2d_short_sweep
           - conv2d.short.conv2d_ttforge_sweep
           - conv_transpose2d.short.conv_transpose2d_short_sweep
@@ -514,6 +512,7 @@ on:
           - matmul.short.matmul_user_program_config_mcast_1d
           - matmul.short.matmul_user_program_config_mcast_2d
           - matmul.sparse.sparse_matmul
+          - matmul.sparse.batched_sparse_matmul
           - max_pool2d.full.max_pool2d_large_dims
           - max_pool2d.full.max_pool2d_params
           - max_pool2d.short.max_pool2d_short_sweep
@@ -556,16 +555,44 @@ on:
       suite_name:
         description: "Which sweep suite to run?"
         type: string
+      skip_on_timeout:
+        description: "Skip remaining tests in running suite after first timeout?"
+        type: boolean
+        default: true
       upload_results:
         description: "Upload sweep results to Superset?"
         type: boolean
         default: true
+      arch:
+        required: true
+        type: choice
+        options:
+          - wormhole_b0
+          - blackhole
+        default: "wormhole_b0"
+      runner-label:
+        description: "Single sweep only"
+        required: true
+        type: choice
+        options:
+          - N150
+          - N300
+          - P100a
+          - P150b
+          - n300-llmbox
+          - topology-6u
+          - BH-LLMBox
+          - BH-DeskBox
+          - BH-LoudBox
+        default: "N150"
+
   schedule:
-    - cron: "0 4 * * 4" # This cron schedule runs the workflow at 4:00 AM UTC on Thursdays (Wednesday 11 PM EST)
-    - cron: "0 5 * * 6" # This cron schedule runs the workflow at 5:00 AM UTC on Saturdays (Friday 9 PM PST)
+    - cron: "0 4 * * 1,2,4,5" # This cron schedule runs the workflow at 4:00 AM UTC on Mon, Tue, Thu, Fri (nightly runs)
+    - cron: "0 4 * * 3" # This cron schedule runs the workflow at 4:00 AM UTC on Wednesdays (comprehensive run)
+    - cron: "0 5 * * 6" # This cron schedule runs the workflow at 5:00 AM UTC on Saturdays (comprehensive run)
 
 concurrency:
-  group: ttnn-sweeps-${{ github.ref }}
+  group: ttnn-sweeps-${{ github.ref }}-${{ github.event.inputs.arch }}-${{ github.event.inputs.runner-label }}
   cancel-in-progress: true
 
 jobs:
@@ -578,12 +605,12 @@ jobs:
       build-wheel: true
       version: "22.04"
   ttnn-generate-sweeps:
-    name: Generate sweeps vectors
+    name: Generate Sweep Vectors ${{ inputs.arch }} ${{ inputs.runner-label }}
     needs: build-artifact
     strategy:
       matrix:
         arch:
-          - wormhole_b0
+          - ${{ inputs.arch }}
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -604,19 +631,23 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     timeout-minutes: 30
-    runs-on: tt-ubuntu-2204-n150-stable
+    runs-on: >-
+      ${{
+        (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LLMBox' || inputs.runner-label == 'BH-DeskBox' || inputs.runner-label== 'BH-LoudBox' ) && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
+      }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Run ttnn sweeps generation (single sweep)
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' }}
         run: python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ github.event.inputs.sweep_name }} --dump-file --tag ci-main --explicit
       - name: Run ttnn sweeps generation (all sweeps)
-        if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' }}
         run: python3 tests/sweep_framework/sweeps_parameter_generator.py --dump-file --tag ci-main --explicit
       - name: Upload sweep vectors
         uses: actions/upload-artifact@v4
@@ -627,7 +658,7 @@ jobs:
   ttnn-compute-module-matrix:
     name: Compute module matrix
     needs: ttnn-generate-sweeps
-    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' }}
     runs-on: ubuntu-22.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -648,13 +679,39 @@ jobs:
           import os, json, math
           d = '/tmp/vectors'
           modules = sorted([f[:-5] for f in os.listdir(d) if f.endswith('.json')])
-          # Use smaller batch size for Friday night runs (more comprehensive tests)
-          # Use larger batch size for Thursday runs (nightly suite only)
-          if "${{ github.event.schedule }}" == "0 5 * * 6":
-              BATCH_SIZE = 4  # Smaller batches for Friday night comprehensive runs
+
+          # Modules that need to be split by suite due to long execution times
+          suite_split_modules = {
+              'conv2d.full.conv2d_sliding_window': [
+                  'sliding_window_suite_0',
+                  'sliding_window_suite_1',
+                  'sliding_window_suite_2',
+                  'sliding_window_suite_3',
+                  'sliding_window_suite_4',
+                  'sliding_window_suite_5',
+                  'sliding_window_suite_6'
+              ]
+          }
+
+          # Remove suite-split modules from regular processing
+          regular_modules = [m for m in modules if m not in suite_split_modules.keys()]
+
+          # Use smaller batch size for comprehensive runs (Wed/Sat schedule or manual comprehensive dispatch)
+          # Use larger batch size for nightly runs (Mon/Tue/Thu/Fri schedule or manual nightly dispatch)
+          if "${{ github.event.schedule }}" == "0 4 * * 3" or "${{ github.event.schedule }}" == "0 5 * * 6" or "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)":
+              BATCH_SIZE = 3  # Smaller batches for comprehensive runs (must stay under 256 total batches due to GitHub Actions limit)
           else:
-              BATCH_SIZE = 10  # Larger batches for Thursday nightly runs
-          batches = [",".join(modules[i:i+BATCH_SIZE]) for i in range(0, len(modules), BATCH_SIZE)]
+              BATCH_SIZE = 10  # Larger batches for nightly runs
+
+          # Create batches for regular modules
+          batches = [",".join(regular_modules[i:i+BATCH_SIZE]) for i in range(0, len(regular_modules), BATCH_SIZE)]
+
+          # Add suite-split modules as individual suite batches
+          for module_name, suites in suite_split_modules.items():
+              if module_name in modules:  # Only add if the module exists
+                  for suite in suites:
+                      batches.append(f"{module_name}:{suite}")
+
           print(json.dumps({"module": modules, "batches": batches}))
           PY
           echo "matrix=$(cat /tmp/matrix.json)" >> "$GITHUB_OUTPUT"
@@ -663,27 +720,21 @@ jobs:
     needs:
       - ttnn-generate-sweeps
       - build-artifact
-    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
         test-group:
-          [
-            {
-              name: "wormhole-n150-sweeps",
-              arch: wormhole_b0,
-              runs-on: tt-ubuntu-2204-n150-stable,
-              tt-smi-cmd: "tt-smi -r"
-            },
-            # {
-            #   name: "Wormhole N300 Sweeps",
-            #   arch: wormhole_b0,
-            #   runs-on: tt-ubuntu-2204-n300-stable,
-            #   tt-smi-cmd: "tt-smi-metal -r 0"
-            # }
-          ]
+          - name: ttnn sweep tests ${{ inputs.arch }} ${{ inputs.runner-label }}
+            arch: ${{ inputs.arch }}
+            tt-smi-cmd: ${{ (inputs.runner-label == 'topology-6u' ) && 'tt-smi -glx_reset_auto' || 'tt-smi -r'}}
+            runs-on: >-
+              ${{
+                (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LLMBox' || inputs.runner-label == 'BH-DeskBox' || inputs.runner-label == 'BH-LoudBox' ) && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
+                || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
+              }}
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -700,7 +751,10 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
-      options: "--device /dev/tenstorrent"
+      options: >-
+        --device /dev/tenstorrent
+        --device /dev/ipmi0
+        --privileged
     defaults:
       run:
         shell: bash
@@ -709,7 +763,7 @@ jobs:
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -720,7 +774,12 @@ jobs:
           name: sweeps-vectors
           path: /work/tests/sweep_framework/vectors_export/
       - name: Run ttnn sweeps (single sweep)
-        run: python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ github.event.inputs.sweep_name }} --vector-source vectors_export --result-dest results_export --tag ci-main --summary
+        run: |
+          SKIP_ON_TIMEOUT_FLAG=""
+          if [[ "${{ github.event.inputs.skip_on_timeout }}" == "true" ]]; then
+            SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
+          fi
+          python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ github.event.inputs.sweep_name }} --vector-source vectors_export --result-dest results_export --tag ci-main --summary $SKIP_ON_TIMEOUT_FLAG
       - name: Upload sweep results
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -734,7 +793,7 @@ jobs:
       - ttnn-generate-sweeps
       - build-artifact
       - ttnn-compute-module-matrix
-    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -782,7 +841,7 @@ jobs:
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -794,10 +853,31 @@ jobs:
           path: /work/tests/sweep_framework/vectors_export/
       - name: Run ttnn sweeps (batch)
         run: |
-          if [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]]; then
-            python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ matrix.batch }} --vector-source vectors_export --result-dest results_export --tag ci-main --summary --skip-on-timeout
+          BATCH="${{ matrix.batch }}"
+
+          # Set skip-on-timeout flag based on input (default to true for all scheduled runs)
+          SKIP_ON_TIMEOUT_FLAG=""
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            # For scheduled runs: skip on timeout for both nightly and comprehensive runs
+            SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
+          elif [[ "${{ github.event.inputs.skip_on_timeout }}" == "true" ]]; then
+            # For manual dispatch: use the input parameter
+            SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
+          fi
+
+          # Check if batch contains colon (suite-specific execution)
+          if [[ "$BATCH" == *":"* ]]; then
+            MODULE_NAME="${BATCH%:*}"
+            SUITE_NAME="${BATCH#*:}"
+            # Suite-specific execution doesn't need nightly restriction
+            python3 tests/sweep_framework/sweeps_runner.py --module-name "$MODULE_NAME" --suite-name "$SUITE_NAME" --vector-source vectors_export --result-dest results_export --tag ci-main --summary $SKIP_ON_TIMEOUT_FLAG
           else
-            python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ matrix.batch }} --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary --skip-on-timeout
+            # Regular batch execution
+            if [[ "${{ github.event.schedule }}" == "0 4 * * 3" ]] || [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
+              python3 tests/sweep_framework/sweeps_runner.py --module-name "$BATCH" --vector-source vectors_export --result-dest results_export --tag ci-main --summary $SKIP_ON_TIMEOUT_FLAG
+            else
+              python3 tests/sweep_framework/sweeps_runner.py --module-name "$BATCH" --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary $SKIP_ON_TIMEOUT_FLAG
+            fi
           fi
       - name: Compute artifact suffix
         shell: bash
@@ -833,7 +913,7 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -846,7 +926,12 @@ jobs:
           merge-multiple: true
       - name: Homogenize sweep results
         run: |
-          python3 tests/sweep_framework/run_collective_update.py
+          # Determine run type based on schedule or input
+          RUN_TYPE="nightly"
+          if [[ "${{ github.event.schedule }}" == "0 4 * * 3" ]] || [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
+            RUN_TYPE="comprehensive"
+          fi
+          python3 tests/sweep_framework/run_collective_update.py --run-type "$RUN_TYPE"
       - name: Upload runs
         uses: actions/upload-artifact@v4
         with:

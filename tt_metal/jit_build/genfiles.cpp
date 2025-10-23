@@ -5,7 +5,7 @@
 #include "jit_build/genfiles.hpp"
 
 #include <circular_buffer_constants.h>
-#include <data_format.hpp>
+#include "data_format.hpp"
 #include <stdint.h>
 #include <tt_backend_api_types.hpp>
 #include <cstddef>
@@ -20,6 +20,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/unreachable.hpp>
 #include "build.hpp"
 #include "hlk_desc.hpp"
 #include "jit_build_options.hpp"
@@ -51,12 +52,12 @@ void gen_kernel_cpp(const string& src, const string& dst_name) {
 
 string get_kernel_source_to_include(const KernelSource& kernel_src) {
     switch (kernel_src.source_type_) {
-        case KernelSource::FILE_PATH: return "#include \"" + fs::absolute(kernel_src.path_).string() + "\"\n";
-        case KernelSource::SOURCE_CODE: return kernel_src.source_;
-        default: {
-            TT_THROW("Unsupported kernel source type!");
+        case KernelSource::FILE_PATH: {
+            return "#include \"" + kernel_src.path_.string() + "\"\n";
         }
+        case KernelSource::SOURCE_CODE: return kernel_src.source_;
     }
+    ttsl::unreachable();
 }
 
 }  // namespace

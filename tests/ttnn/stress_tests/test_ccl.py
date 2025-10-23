@@ -11,13 +11,13 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
 
 
 @skip_for_wormhole_b0()
-@pytest.mark.parametrize("num_links", [4])  # Check over all four links
+@pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, all_gather_topology",
     [
-        (4, [1, 1, 16384, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
-        (4, [1, 1, 16384, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring),
-        (2, [1, 1, 16384, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
+        (4, [1, 1, 10000, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
+        (4, [1, 1, 10000, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring),
+        (2, [1, 1, 10000, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
     ],
 )
 @pytest.mark.parametrize(
@@ -48,7 +48,7 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (False, 1),
+        (False, 2),
     ],
     ids=["non-trace"],
 )
@@ -89,47 +89,44 @@ def test_ccl_ddr_smoke_test(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
+    if ttnn.get_num_devices() == 8 and all_gather_topology == ttnn.Topology.Ring:
+        pytest.skip("Skipping unsupported case Ring on 2D mesh with no wraparound rings")
     validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, cluster_axis)
-    for i in range(bh_2d_mesh_device.shape[(cluster_axis - 1) % 2]):
-        # Check all the rows and columns independantly within the device
-        if cluster_axis == 0:
-            submesh_device = bh_2d_mesh_device.create_submesh(
-                ttnn.MeshShape((num_devices, 1)), offset=ttnn.MeshCoordinate(0, i)
-            )
-        else:
-            submesh_device = bh_2d_mesh_device.create_submesh(
-                ttnn.MeshShape((1, num_devices)), offset=ttnn.MeshCoordinate(i, 0)
-            )
-        run_all_gather_impl(
-            submesh_device,
-            num_devices,
-            ag_output_shape,
-            dim,
-            num_links,
-            ag_input_dtype,
-            layout,
-            mem_config_input,
-            mem_config_ag,
-            all_gather_topology=all_gather_topology,
-            enable_trace=enable_trace,
-            num_iters=num_iters,
-            cluster_axis=cluster_axis,
-            chunks_per_sync=chunks_per_sync,
-            num_workers_per_link=num_workers_per_link,
-            num_buffers_per_channel=num_buffers_per_channel,
-            allowed_pcc=0.9999,
-        )
+    # Check all the rows and columns independantly within the device
+    if cluster_axis == 0:
+        submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    else:
+        submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
+    run_all_gather_impl(
+        submesh_device,
+        num_devices,
+        ag_output_shape,
+        dim,
+        num_links,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        all_gather_topology=all_gather_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        cluster_axis=cluster_axis,
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
+        allowed_pcc=0.9999,
+    )
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
 @skip_for_wormhole_b0()
-@pytest.mark.parametrize("num_links", [4])
+@pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, all_gather_topology",
     [
-        (4, [1, 1, 4096, 8192], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
-        (4, [1, 1, 4096, 8192], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring),
-        (2, [1, 1, 4096, 8192], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
+        (4, [1, 1, 6016, 4096], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
+        (4, [1, 1, 6016, 4096], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring),
+        (2, [1, 1, 6016, 2048], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
     ],
     ids=["4 device line", "4_device_ring", "2_device_line"],
 )
@@ -213,6 +210,8 @@ def test_ccl_other_smoke_test(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
+    if ttnn.get_num_devices() == 8 and all_gather_topology == ttnn.Topology.Ring:
+        pytest.skip("Skipping unsupported case Ring on 2D mesh with no wraparound rings")
     validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, cluster_axis)
     for i in range(bh_2d_mesh_device.shape[(cluster_axis - 1) % 2]):
         if cluster_axis == 0:

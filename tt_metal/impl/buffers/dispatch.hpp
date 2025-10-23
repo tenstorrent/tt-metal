@@ -4,8 +4,7 @@
 
 #pragma once
 
-#include <command_queue.hpp>
-#include <command_queue_interface.hpp>
+#include "dispatch/command_queue.hpp"
 #include <stdint.h>
 #include <sub_device_types.hpp>
 #include <atomic>
@@ -135,7 +134,7 @@ void copy_interleaved_buffer_to_completion_queue(
 
 void copy_completion_queue_data_into_user_space(
     const ReadBufferDescriptor& read_buffer_descriptor,
-    chip_id_t mmio_device_id,
+    ChipId mmio_device_id,
     uint16_t channel,
     uint32_t cq_id,
     SystemMemoryManager& sysmem_manager,

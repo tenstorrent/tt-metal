@@ -6,7 +6,7 @@
 
 // #include <fmt/base.h>
 // #include <stddef.h>
-// #include <tt-metalium/command_queue.hpp>
+// #include "impl/dispatch/command_queue.hpp"
 // #include <tt-metalium/host_api.hpp>
 // #include <tt-logger/tt-logger.hpp>
 // #include <tt-metalium/program.hpp>
@@ -446,14 +446,14 @@
 //     // Now enable Metal Trace and run program again for capture.
 //     // uint32_t tid = BeginTraceCapture(device_, command_queue.id());
 //     EnqueueProgram(command_queue, simple_program, false);
-//     // EndTraceCapture(device_, command_queue.id(), tid);
+//     // device_->end_mesh_trace(command_queue.id(), tid);
 
 //     // Verify trace output during replay matches expected output from original capture.
 //     // LightMetalCompareToGolden(command_queue, *output, eager_output_data.data());
 
 //     // Done
 //     Finish(command_queue);
-//     // ReleaseTrace(device_, tid);
+//     // device_->release_mesh_trace(tid);
 // }
 
 // // Test simple compute test with metal trace, but no explicit trace replay (added automatically by light metal trace).
@@ -494,14 +494,14 @@
 //     // uint32_t tid = BeginTraceCapture(device_, command_queue.id());
 //     EnqueueProgram(command_queue, op0, false);
 //     EnqueueProgram(command_queue, op1, false);
-//     // EndTraceCapture(device_, command_queue.id(), tid);
+//     // device_->end_mesh_trace(command_queue.id(), tid);
 
 //     // Verify trace output during replay matches expected output from original capture.
 //     // LightMetalCompareToGolden(command_queue, *output, eager_output_data.data());
 
 //     // Done
 //     Finish(command_queue);
-//     // ReleaseTrace(device_, tid);
+//     // device_->release_mesh_trace(tid);
 // }
 
 // }  // namespace

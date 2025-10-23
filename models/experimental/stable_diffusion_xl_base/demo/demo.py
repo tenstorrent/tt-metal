@@ -20,6 +20,10 @@ from conftest import is_galaxy
 
 from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtSDXLPipeline, TtSDXLPipelineConfig
 
+MAX_SEQUENCE_LENGTH = 77
+TEXT_ENCODER_2_PROJECTION_DIM = 1280
+CONCATENATED_TEXT_EMBEDINGS_SIZE = 2048  # text_encoder_1_hidden_size + text_encoder_2_hidden_size (768 + 1280)
+
 
 @torch.no_grad()
 def run_demo_inference(
@@ -34,20 +38,35 @@ def run_demo_inference(
     capture_trace,
     guidance_scale,
     use_cfg_parallel,
+    fixed_seed_for_batch,
+    prompt_2=None,
+    negative_prompt_2=None,
+    crop_coords_top_left=(0, 0),
+    guidance_rescale=0.0,
+    timesteps=None,
+    sigmas=None,
 ):
     batch_size = list(ttnn_device.shape)[1] if use_cfg_parallel else ttnn_device.get_num_devices()
 
     start_from, _ = evaluation_range
-    torch.manual_seed(0)
+
+    assert 0.0 <= guidance_rescale <= 1.0, f"guidance_rescale must be in [0.0, 1.0], got {guidance_rescale}"
+
+    assert not (timesteps is not None and sigmas is not None), "Cannot pass both timesteps and sigmas. Choose one."
 
     if isinstance(prompts, str):
         prompts = [prompts]
+
+    if prompt_2 is not None and isinstance(prompt_2, str):
+        prompt_2 = [prompt_2]
 
     needed_padding = (batch_size - len(prompts) % batch_size) % batch_size
     if isinstance(negative_prompts, list):
         assert len(negative_prompts) == len(prompts), "prompts and negative_prompt lists must be the same length"
 
     prompts = prompts + [""] * needed_padding
+    if prompt_2 is not None:
+        prompt_2 = prompt_2 + [""] * needed_padding
     if isinstance(negative_prompts, list):
         negative_prompts = negative_prompts + [""] * needed_padding
 
@@ -57,6 +76,7 @@ def run_demo_inference(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
+        local_files_only=is_ci_env,
     )
     profiler.end("diffusion_pipeline_from_pretrained")
 
@@ -76,28 +96,21 @@ def run_demo_inference(
             guidance_scale=guidance_scale,
             is_galaxy=is_galaxy(),
             use_cfg_parallel=use_cfg_parallel,
+            crop_coords_top_left=crop_coords_top_left,
+            guidance_rescale=guidance_rescale,
         ),
     )
 
     if encoders_on_device:
         tt_sdxl.compile_text_encoding()
-    (
-        all_prompt_embeds_torch,
-        torch_add_text_embeds,
-    ) = tt_sdxl.encode_prompts(prompts, negative_prompts)
 
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
-        all_prompt_embeds_torch,
-        torch_add_text_embeds,
+        all_prompt_embeds_torch=torch.randn(batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),
+        torch_add_text_embeds=torch.randn(batch_size, 2, TEXT_ENCODER_2_PROJECTION_DIM),
+        timesteps=timesteps,
+        sigmas=sigmas,
     )
 
-    tt_sdxl.prepare_input_tensors(
-        [
-            tt_latents,
-            tt_prompt_embeds[0],
-            tt_add_text_embeds[0],
-        ]
-    )
     tt_sdxl.compile_image_processing()
 
     logger.info("=" * 80)
@@ -113,17 +126,49 @@ def run_demo_inference(
     images = []
     logger.info("Starting ttnn inference...")
     for iter in range(len(prompts) // batch_size):
+        profiler.start("end_to_end_generation")
         logger.info(
             f"Running inference for prompts {iter * batch_size + 1}-{iter * batch_size + batch_size}/{len(prompts)}"
+        )
+
+        prompts_batch = prompts[iter * batch_size : (iter + 1) * batch_size]
+        negative_prompts_batch = (
+            negative_prompts[iter * batch_size : (iter + 1) * batch_size]
+            if isinstance(negative_prompts, list)
+            else negative_prompts
+        )
+
+        prompts_2_batch = (
+            prompt_2[iter * batch_size : (iter + 1) * batch_size] if isinstance(prompt_2, list) else prompt_2
+        )
+        negative_prompts_2_batch = (
+            negative_prompt_2[iter * batch_size : (iter + 1) * batch_size]
+            if isinstance(negative_prompt_2, list)
+            else negative_prompt_2
+        )
+
+        (
+            all_prompt_embeds_torch,
+            torch_add_text_embeds,
+        ) = tt_sdxl.encode_prompts(prompts_batch, negative_prompts_batch, prompts_2_batch, negative_prompts_2_batch)
+
+        tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
+            all_prompt_embeds_torch,
+            torch_add_text_embeds,
+            start_latent_seed=0,
+            fixed_seed_for_batch=fixed_seed_for_batch,
+            timesteps=timesteps,
+            sigmas=sigmas,
         )
 
         tt_sdxl.prepare_input_tensors(
             [
                 tt_latents,
-                tt_prompt_embeds[iter],
-                tt_add_text_embeds[iter],
+                tt_prompt_embeds[0],
+                tt_add_text_embeds[0],
             ]
         )
+
         imgs = tt_sdxl.generate_images()
 
         logger.info(
@@ -137,6 +182,8 @@ def run_demo_inference(
             f"{'On device VAE' if vae_on_device else 'Host VAE'} decoding completed in {profiler.times['vae_decode'][-1]:.2f} seconds"
         )
         logger.info(f"Output tensor read completed in {profiler.times['read_output_tensor'][-1]:.2f} seconds")
+
+        profiler.end("end_to_end_generation")
 
         for idx, img in enumerate(imgs):
             if iter == len(prompts) // batch_size - 1 and idx >= batch_size - needed_padding:
@@ -184,6 +231,10 @@ def prepare_device(mesh_device, use_cfg_parallel):
     ids=["use_cfg_parallel", "no_cfg_parallel"],
 )
 @pytest.mark.parametrize(
+    "fixed_seed_for_batch",
+    (False,),
+)
+@pytest.mark.parametrize(
     "prompt",
     (("An astronaut riding a green horse"),),
 )
@@ -223,6 +274,13 @@ def prepare_device(mesh_device, use_cfg_parallel):
     ],
     ids=("with_trace", "no_trace"),
 )
+@pytest.mark.parametrize(
+    "prompt_2, negative_prompt_2, crop_coords_top_left, guidance_rescale, timesteps, sigmas",
+    [
+        (None, None, (0, 0), 0.0, None, None),
+    ],
+    ids=["default_additional_parameters"],
+)
 def test_demo(
     validate_fabric_compatibility,
     mesh_device,
@@ -236,6 +294,13 @@ def test_demo(
     evaluation_range,
     guidance_scale,
     use_cfg_parallel,
+    fixed_seed_for_batch,
+    prompt_2,
+    negative_prompt_2,
+    crop_coords_top_left,
+    guidance_rescale,
+    timesteps,
+    sigmas,
 ):
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
@@ -250,4 +315,11 @@ def test_demo(
         capture_trace,
         guidance_scale,
         use_cfg_parallel,
+        fixed_seed_for_batch,
+        prompt_2,
+        negative_prompt_2,
+        crop_coords_top_left,
+        guidance_rescale,
+        timesteps,
+        sigmas,
     )

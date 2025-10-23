@@ -15,7 +15,12 @@ namespace tt::scaleout_tools {
 //   - gsd_filename: Path to the GSD YAML file
 //   - strict_validation: If true, checks that all connections match bidirectionally
 //                        If false, only checks that GSD connections exist in FSD
+//   - assert_on_connection_mismatch: If true, throws an error if there are connection mismatches
+//                                    If false, missing connections are logged without an error being thrown
 void validate_fsd_against_gsd(
-    const std::string& fsd_filename, const std::string& gsd_filename, bool strict_validation = true);
+    const std::string& fsd_filename,
+    const std::string& gsd_filename,
+    bool strict_validation = true,
+    bool assert_on_connection_mismatch = true);
 
 }  // namespace tt::scaleout_tools

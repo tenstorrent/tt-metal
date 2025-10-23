@@ -22,12 +22,10 @@ test_suite_bh_single_pcie_metal_unit_tests() {
 
 # Function test run BH UMD tests, should be any topology
 test_suite_bh_umd_unit_tests() {
-    # Can't find test SOC descs... we don't actually run this test in metal CI
-    # so makes sense we broke it
-    # ./build/test/umd/api/api_tests
     ./build/test/umd/blackhole/unit_tests
     # Filter out the test that is failing due to local YAML files, see: https://github.com/tenstorrent/tt-metal/issues/24359
-    ./build/test/umd/api/api_tests --gtest_filter=-ApiClusterTest.DifferentConstructors
+    gtest_filter="-ApiClusterTest.DifferentConstructors"
+    ./build/test/umd/api/api_tests --gtest_filter="$gtest_filter"
 }
 
 # Function to run BH single PCIe small ML model tests
@@ -106,13 +104,15 @@ test_suite_bh_multi_pcie_metal_unit_tests() {
         echo "Health checks failed, retrying..."
         sleep 5
     done
-    TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
-    TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     ./build/test/tt_metal/unit_tests_eth
     if [[ "$hw_topology" == "blackhole_llmbox" ]]; then
         pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_qb.py
     elif [[ "$hw_topology" == "blackhole_loudbox" ]]; then
         pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_lb.py
+    elif [[ "$hw_topology" == "blackhole_p300" ]]; then
+        pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_p300.py
     fi
 }
 
@@ -120,7 +120,7 @@ test_suite_bh_multi_pcie_llama_demo_tests() {
     echo "[upstream-tests] Running BH LLMBox upstream Llama demo model tests"
     verify_llama_dir_
 
-    if [[ "$hw_topology" == "blackhole_deskbox" ]]; then
+    if [[ "$hw_topology" == "blackhole_deskbox" ]] || [[ "$hw_topology" == "blackhole_p300" ]]; then
         local data_parallel_devices="2"
     elif [[ "$hw_topology" == "blackhole_llmbox" ]]; then
         local data_parallel_devices="4"
@@ -140,7 +140,7 @@ test_suite_bh_multi_pcie_llama_stress_tests() {
     echo "[upstream-tests] Running BH LLMBox upstream Llama stress model tests"
     verify_llama_dir_
 
-    if [[ "$hw_topology" == "blackhole_deskbox" ]]; then
+    if [[ "$hw_topology" == "blackhole_deskbox" ]] || [[ "$hw_topology" == "blackhole_p300" ]]; then
         local data_parallel_devices="2"
     elif [[ "$hw_topology" == "blackhole_llmbox" ]]; then
         local data_parallel_devices="4"
@@ -161,7 +161,7 @@ test_suite_wh_6u_metal_unit_tests() {
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardFixture.*"
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardProgramFixture.*"
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardBufferFixture.ShardedBufferLarge*ReadWrites"
-    TT_METAL_USE_MGD_2_0=1 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
 }
 
 test_suite_wh_6u_metal_torus_xy_health_check_tests() {
@@ -169,13 +169,16 @@ test_suite_wh_6u_metal_torus_xy_health_check_tests() {
     ./build/test/tt_metal/tt_fabric/test_system_health --system-topology TORUS_XY
 }
 
+test_suite_wh_6u_metal_qsfp_links_health_check_tests() {
+    echo "[upstream-tests] Checking QSFP links on WH 6U (Only works on XY (2D) Torus systems. Check https://github.com/tenstorrent/tt-metal/issues/30415 for updates)"
+    ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_deadlock_stability_6U_galaxy.yaml
+}
+
 test_suite_wh_6u_model_unit_tests() {
     echo "[upstream-tests] running WH 6U upstream model unit tests"
     pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py
-    pytest tests/ttnn/unit_tests/operations/test_prefetcher_TG.py
+    pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_TG.py
     pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_matmul_1d_gather_in0.py::test_matmul_1d_ring_llama_perf
-    pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py
-    # pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py hang???
 }
 
 test_suite_wh_6u_llama_demo_tests() {
@@ -232,13 +235,22 @@ test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["blackhole_loudbox"]="
 test_suite_bh_multi_pcie_metal_unit_tests
+test_suite_bh_pcie_didt_tests
+test_suite_bh_multi_pcie_llama_demo_tests"
+
+hw_topology_test_suites["blackhole_p300"]="
+test_suite_bh_umd_unit_tests
+test_suite_bh_single_pcie_metal_unit_tests
+test_suite_bh_multi_pcie_metal_unit_tests
+test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
 
 hw_topology_test_suites["wh_6u"]="test_suite_wh_6u_model_unit_tests
 test_suite_wh_6u_llama_demo_tests
 test_suite_wh_6u_metal_unit_tests
-test_suite_wh_6u_metal_torus_xy_health_check_tests"
+test_suite_wh_6u_metal_torus_xy_health_check_tests
+test_suite_wh_6u_metal_qsfp_links_health_check_tests"
 
 # Function to display help
 show_help() {

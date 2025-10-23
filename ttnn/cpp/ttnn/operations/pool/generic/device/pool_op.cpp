@@ -63,7 +63,13 @@ void validate_pool2d(
             std::numeric_limits<uint16_t>::max());
         auto kernel_h = sliding_window_config.window_hw.first;
         auto kernel_w = sliding_window_config.window_hw.second;
-        TT_FATAL(kernel_h * kernel_w == 9, "only kernel sizes equal to 9 are supported, got {}x{}", kernel_h, kernel_w);
+        TT_FATAL(
+            kernel_h * kernel_w <= 9,
+            "only kernel sizes less than or equal to 9 are supported, got {}x{}",
+            kernel_h,
+            kernel_w);
+
+        TT_FATAL(output_layout == Layout::ROW_MAJOR, "Only ROW_MAJOR supported when return_indices is true");
     }
 
     TT_FATAL(out_mem_config.is_sharded(), "Output memory config needs to be sharded");
@@ -79,18 +85,6 @@ void validate_pool2d(
             "For width and block sharding, input channels ({}) should be divisible by num_shards ({})",
             input_shape[3],
             num_shards_c);
-    }
-
-    // check that the input shape isn't too large for indices in uint16
-    if (return_indices) {
-        auto in_h = sliding_window_config.input_hw.first;
-        auto in_w = sliding_window_config.input_hw.second;
-        TT_FATAL(
-            in_h * in_w <= std::numeric_limits<uint16_t>::max(),
-            "input HW shape ({} * {}) is too large for indices stored in uint16 with a limit of {}",
-            in_h,
-            in_w,
-            std::numeric_limits<uint16_t>::max());
     }
 }
 
@@ -241,6 +235,7 @@ std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke
     DataType output_dtype,
     Layout output_layout,
     MemoryConfig memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
     bool return_indices,
@@ -252,6 +247,7 @@ std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke
             .output_dtype_ = output_dtype,
             .output_layout_ = output_layout,
             .memory_config_ = std::move(memory_config),
+            .compute_kernel_config_ = compute_kernel_config,
             .count_include_pad_ = count_include_pad,
             .divisor_override_ = divisor_override,
             .return_indices_ = return_indices,

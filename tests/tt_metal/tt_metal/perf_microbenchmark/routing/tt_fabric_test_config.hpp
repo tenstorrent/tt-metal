@@ -29,6 +29,7 @@
 
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
+#include <tt-metalium/hal.hpp>
 
 namespace tt::tt_fabric {
 namespace fabric_tests {
@@ -173,9 +174,9 @@ inline FabricNodeId resolve_device_identifier(const DeviceIdentifier& device_id,
             using T = std::decay_t<decltype(id)>;
             if constexpr (std::is_same_v<T, FabricNodeId>) {
                 return id;  // Already resolved
-            } else if constexpr (std::is_same_v<T, chip_id_t>) {
+            } else if constexpr (std::is_same_v<T, ChipId>) {
                 return provider.get_fabric_node_id(id);
-            } else if constexpr (std::is_same_v<T, std::pair<MeshId, chip_id_t>>) {
+            } else if constexpr (std::is_same_v<T, std::pair<MeshId, ChipId>>) {
                 return FabricNodeId{id.first, id.second};
             } else if constexpr (std::is_same_v<T, std::pair<MeshId, MeshCoordinate>>) {
                 return provider.get_fabric_node_id(id.first, id.second);
@@ -350,9 +351,9 @@ inline std::vector<std::vector<T>> YamlConfigParser::parse_2d_array(const YAML::
         row_vector.reserve(row.size());
         for (const auto& entry : row) {
             // only deals with ethernet core case
-            if constexpr (std::is_same_v<T, eth_coord_t>) {
+            if constexpr (std::is_same_v<T, EthCoord>) {
                 TT_FATAL(entry.size() == 5, "Expected ethernet core coordinates to be a sequence of 5 elements");
-                row_vector.push_back(eth_coord_t{
+                row_vector.push_back(EthCoord{
                     parse_scalar<uint32_t>(entry[0]),
                     parse_scalar<uint32_t>(entry[1]),
                     parse_scalar<uint32_t>(entry[2]),
@@ -385,10 +386,6 @@ public:
         std::vector<TestConfig> built_tests;
 
         for (const auto& raw_config : raw_configs) {
-            // Skip tests based on topology and device requirements
-            if (should_skip_test(raw_config)) {
-                continue;
-            }
             std::vector<ParsedTestConfig> parametrized_configs = this->expand_parametrizations(raw_config);
 
             // For each newly generated parametrized config, expand its high-level patterns
@@ -407,12 +404,23 @@ public:
 
         return built_tests;
     }
-
-private:
-    static constexpr uint32_t MIN_RING_TOPOLOGY_DEVICES = 4;
-
-    // Helper function to check if a test should be skipped based on topology and device count
+    // Helper function to check if a test should be skipped based on:
+    // 1. topology and device count
+    // 2. architecture or cluster type
     bool should_skip_test(const ParsedTestConfig& test_config) const {
+        // Skip if the test declares platforms to skip and this platform matches
+        if (test_config.skip.has_value()) {
+            // Determine current platform identifiers
+            auto arch_name = tt::tt_metal::hal::get_arch_name();
+            auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+            std::string cluster_name = std::string(enchantum::to_string(cluster_type));
+            for (const auto& token : test_config.skip.value()) {
+                if (token == arch_name || token == cluster_name) {
+                    log_info(LogTest, "Skipping test '{}' on architecture or platform '{}'", test_config.name, token);
+                    return true;
+                }
+            }
+        }
         if (test_config.fabric_setup.topology == Topology::Ring) {
             uint32_t num_devices = device_info_provider_.get_local_node_ids().size();
             if (num_devices < MIN_RING_TOPOLOGY_DEVICES) {
@@ -427,6 +435,9 @@ private:
         }
         return false;
     }
+
+private:
+    static constexpr uint32_t MIN_RING_TOPOLOGY_DEVICES = 4;
 
     // Convert ParsedTestConfig to TestConfig by resolving device identifiers
     TestConfig resolve_test_config(const ParsedTestConfig& parsed_test, uint32_t iteration_number) {
@@ -923,7 +934,7 @@ private:
 
     void expand_all_devices_uniform_pattern(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
         log_debug(LogTest, "Expanding all_devices_uniform_pattern for test: {}", test.name);
-        std::vector<FabricNodeId> devices = device_info_provider_.get_local_node_ids();
+        std::vector<FabricNodeId> devices = device_info_provider_.get_global_node_ids();
         TT_FATAL(!devices.empty(), "Cannot expand all_devices_uniform_pattern because no devices were found.");
 
         for (const auto& src_node : devices) {
@@ -936,7 +947,7 @@ private:
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
         const char* pattern_name = (pattern_type == HighLevelTrafficPattern::OneToAll) ? "one_to_all" : "all_to_all";
         log_debug(LogTest, "Expanding {}_multicast pattern for test: {}", pattern_name, test.name);
-        std::vector<FabricNodeId> devices = device_info_provider_.get_local_node_ids();
+        std::vector<FabricNodeId> devices = device_info_provider_.get_global_node_ids();
         TT_FATAL(!devices.empty(), "Cannot expand {}_multicast because no devices were found.", pattern_name);
 
         // Determine which devices should be senders
@@ -1068,7 +1079,7 @@ private:
             test.name,
             static_cast<int>(test.fabric_setup.topology));
 
-        std::vector<FabricNodeId> all_devices = device_info_provider_.get_local_node_ids();
+        std::vector<FabricNodeId> all_devices = device_info_provider_.get_global_node_ids();
         TT_FATAL(!all_devices.empty(), "Cannot expand line sync patterns because no devices were found.");
 
         // Create sync patterns based on topology - returns multiple patterns per device for mcast
@@ -1569,7 +1580,7 @@ private:
         out << YAML::EndMap;
     }
 
-    static void to_yaml(YAML::Emitter& out, const std::vector<std::vector<eth_coord_t>>& mapping) {
+    static void to_yaml(YAML::Emitter& out, const std::vector<std::vector<EthCoord>>& mapping) {
         out << YAML::BeginSeq;
         for (const auto& row : mapping) {
             out << YAML::BeginSeq;
