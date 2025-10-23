@@ -177,10 +177,11 @@ void PagedUpdateCacheDeviceOperation::validate(
         if (input_tensor.is_sharded()) {
             TT_FATAL(
                 input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
-                "Expect input_tensor to have memory layout WIDTH SHARDED");
+                "Expect input_tensor to NOT have memory layout WIDTH SHARDED");
             TT_FATAL(
                 input_tensor.shard_spec().value().shape[1] == input_tensor.padded_shape()[-1],
-                "Expect input_tensor to have ");
+                "Expect input_tensor to have shard height equal to the last dimension of the input tensor padded "
+                "shape");
             TT_FATAL(
                 (input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) %
                         input_tensor.shard_spec().value().shape[0] ==
