@@ -67,6 +67,12 @@ enum DstTileFaceLayout
     ColMajor,
 };
 
+enum class DataLayout
+{
+    TILE      = 0,
+    ROW_MAJOR = 1
+};
+
 enum DstTileShape
 {
     Tile32x32 = 0,
