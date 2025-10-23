@@ -319,6 +319,7 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
         [[2, 128, 128, 528], 96, 8, 6],
         [[2, 128, 128, 96], 96, 8, 3],
         [[2, 1024, 1024, 256], 33, 10, 11],
+        [[1, 128, 256, 256], 127, 4, 5],
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
@@ -345,6 +346,7 @@ def test_slice_block_sharded_for_conv2d(
     torch.manual_seed(2005)
     torch_dtype = torch.float32 if input_dtype == ttnn.float32 else torch.bfloat16
     torch_input = torch.randint(-10, 10, dims).to(dtype=torch_dtype)
+    torch_input = torch.tensor(range(dims[-1]), dtype=torch_dtype).reshape(1, 1, 1, dims[-1]).broadcast_to(dims)
     num_slices = dims[slice_dim] // slice_size
     ttnn_input = ttnn.from_torch(
         torch_input, device=device, layout=layout, dtype=input_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG

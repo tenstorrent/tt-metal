@@ -53,10 +53,18 @@ void kernel_main() {
     while (tiles_read < num_tiles_per_core) {
         cb_reserve_back(cb_id_in0, num_tiles_per_barrier);
         uint32_t src_buffer_l1_addr = get_write_ptr(cb_id_in0);
-
+#ifdef DEBUG
+        DPRINT << "Src Buffer L1 Addr: " << src_buffer_l1_addr << ENDL();
+        DPRINT << "Tiles read " << tiles_read << ", Num tiles pushed: " << num_tiles_pushed << ENDL();
+#endif
         for (uint32_t i = 0; i < num_tiles_per_barrier and tiles_read < num_tiles_per_core; ++i) {
             tiles_read++;
             if (id_per_dim[0] >= (num_unpadded_sticks[0] - extra_tiles_per_row)) {
+#ifdef DEBUG
+                DPRINT << "Skipping read for src_stick_id: " << src_stick_id << ", id_per_dim: " << id_per_dim[0] << ","
+                       << id_per_dim[1] << "," << id_per_dim[2] << "," << id_per_dim[3]
+                       << ", tiles_read: " << tiles_read << ENDL();
+#endif
                 src_buffer_l1_addr += tile_size;
                 src_stick_id++;
 

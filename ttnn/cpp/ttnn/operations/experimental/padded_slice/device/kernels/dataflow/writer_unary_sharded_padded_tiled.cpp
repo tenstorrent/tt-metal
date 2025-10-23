@@ -126,6 +126,16 @@ void kernel_main() {
         }
         uint32_t pad_write_addr = write_addr + output_row_size_bytes - padded_channels_bytes;
         if (padded_channels_elems > 0) {
+#ifdef DEBUG
+            volatile tt_l1_ptr uint16_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                pad_addr + output_row_size_bytes - padded_channels_bytes);
+            DPRINT << "Pad Data = ";
+            for (uint32_t i = 0; i < padded_channels_elems; ++i) {
+                DPRINT << pad_ptr[i] << " ";
+            }
+            DPRINT << ENDL();
+            DPRINT << "Pad Write Addr : " << pad_write_addr << ENDL();
+#endif
             for (uint32_t row_index = 0; row_index < read_rows_size; row_index++) {
                 noc_async_read(pad_noc_addr, pad_write_addr, padded_channels_elems * output_elem_size);
                 pad_write_addr += output_row_size_bytes;

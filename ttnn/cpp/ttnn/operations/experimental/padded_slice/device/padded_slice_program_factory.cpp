@@ -782,7 +782,7 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         program,
         total_cores,
         input_single_tile_size,
-        cb_buffer_size * num_tiles_per_channel,
+        cb_buffer_size * max_num_tiles_per_row,
         input_cb_data_format);
 
     tt::tt_metal::create_cb(
@@ -790,7 +790,7 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         program,
         total_cores,
         output_single_tile_size,
-        cb_buffer_size * num_tiles_per_channel,
+        cb_buffer_size * max_num_tiles_per_row,
         output_cb_data_format);
 
     log_debug(
@@ -815,13 +815,12 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         output_row_size_bytes,
         1,  // We need only a single row to hold the padding, and reuse it.
         output_cb_data_format);
-
     log_debug(
         tt::LogOp,
-        "num_tiles_height_per_core: {}, max_num_tiles_per_row: {}",
+        "num_tiles_height_per_core: {}, num_tiles_per_channel: {}, max_num_tiles_per_row: {}",
         num_tiles_height_per_core,
+        num_tiles_per_channel,
         max_num_tiles_per_row);
-
     std::vector<uint32_t> compute_args = {
         cb_input_index,         // src0_cb_index
         cb_untilized_index,     // untilized_cb_index
