@@ -7,7 +7,7 @@ on:
         description: 'Timeout for workflows in minutes'
         required: false
         type: number
-        default: 480
+        default: 720
       draft:
         description: 'Create PR as draft'
         required: false
@@ -24,7 +24,7 @@ on:
         description: 'Timeout for workflows in minutes'
         required: false
         type: number
-        default: 480
+        default: 720
       draft:
         description: 'Create PR as draft'
         required: false
@@ -41,7 +41,7 @@ on:
 env:
   BRANCH_NAME: llk-submodule-uplift
   SUBMODULE_PATH: tt_metal/third_party/tt_llk
-  WORKFLOW_TIMEOUT: 480
+  WORKFLOW_TIMEOUT: 720
   MAX_RETRIES: 3
 
 permissions:

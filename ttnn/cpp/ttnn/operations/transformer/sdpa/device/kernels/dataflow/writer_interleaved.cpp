@@ -27,8 +27,9 @@ void kernel_main() {
     constexpr uint32_t use_provided_mask = get_compile_time_arg_val(16) == 1;
     constexpr uint32_t use_padded_mask = get_compile_time_arg_val(17) == 1;
     constexpr uint32_t is_chunked = get_compile_time_arg_val(18) == 1;
+    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(19);
 
-    constexpr auto out_args = TensorAccessorArgs<19>();
+    constexpr auto out_args = TensorAccessorArgs<20>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_id = get_arg_val<uint32_t>(1);
@@ -98,7 +99,7 @@ void kernel_main() {
                 q_chunk = local_q_start + q_iter;
 #endif
 
-                if constexpr (is_causal) {
+                if constexpr (is_causal || sliding_window_size > 0) {
                     uint32_t offset_q_chunk = q_chunk;
                     if constexpr (is_chunked) {
                         // Bump it up to the chunk start
@@ -117,8 +118,11 @@ void kernel_main() {
                         // does_overlap = not (q_low >= k_high or k_low >= q_high)
                         // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional check
                         // Read mask chunk
-                        if (!(q_low_idx >= k_high_idx)) {
-                            generate_causal_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, offset_q_chunk, k_chunk);
+                        if (!(q_low_idx >= k_high_idx) || sliding_window_size > 0) {
+                            // If no sliding window, only generate mask along diagonal
+                            // Otherwise, generate mask for all chunks
+                            generate_mask<cb_mask_in>(
+                                Sq_chunk_t, Sk_chunk_t, offset_q_chunk, k_chunk, is_causal, sliding_window_size);
                         }
                     }
                 } else if constexpr (use_padded_mask) {

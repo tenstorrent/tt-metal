@@ -76,6 +76,7 @@ def run_demo_inference(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
+        local_files_only=is_ci_env,
     )
     profiler.end("diffusion_pipeline_from_pretrained")
 
