@@ -149,7 +149,7 @@ run_t3000_ttnn_multiprocess_tests() {
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_new_all_broadcast.py::test_all_broadcast_sharded_2x4
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace_submesh
   # Re-enable this test when we have more T3K availability
-  # tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv "tests/ttnn/unit_tests/operations/point_to_point/test_point_to_point.py::test_point_to_point[silicon_arch_name=wormhole_b0-dtype=torch.bfloat16-shape_coords=((1, 1, 1, 16), ((0, 0), (0, 1)))-tile-mesh_device=(2, 4)-device_params={'fabric_config': <FabricConfig.FABRIC_1D: 1>}]"
+  # tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv "tests/nightly/t3000/ccl/test_point_to_point.py::test_point_to_point[silicon_arch_name=wormhole_b0-dtype=torch.bfloat16-shape_coords=((1, 1, 1, 16), ((0, 0), (0, 1)))-tile-mesh_device=(2, 4)-device_params={'fabric_config': <FabricConfig.FABRIC_1D: 1>}]"
 }
 
 run_t3000_falcon7b_tests() {
@@ -551,7 +551,7 @@ run_t3000_ccl_tests() {
 
   # p2p: 1 test should be enough
   # trace test with device delay
-  pytest -n auto tests/ttnn/unit_tests/operations/point_to_point/test_point_to_point.py::test_point_to_point_with_device_delay -k tile
+  pytest -n auto tests/nightly/t3000/ccl/test_point_to_point.py::test_point_to_point_with_device_delay -k tile
 
   # all broadcast: row major + tile test
   # both rm and tile test are called here
