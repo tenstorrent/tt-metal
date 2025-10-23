@@ -107,7 +107,6 @@ struct NocUnicastAtomicIncCommandHeader {
     uint64_t noc_address;
     uint32_t val;
     bool flush;
-    uint8_t reserved[3];
 };
 struct NocUnicastAtomicIncFusedCommandHeader {
     NocUnicastAtomicIncFusedCommandHeader(
@@ -118,7 +117,6 @@ struct NocUnicastAtomicIncFusedCommandHeader {
     uint64_t semaphore_noc_address;
     uint32_t val;
     bool flush;
-    uint8_t reserved[3];
 };
 struct NocMulticastCommandHeader {
     uint32_t address;
