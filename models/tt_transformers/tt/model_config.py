@@ -431,12 +431,14 @@ class ModelArgs:
         "LLAMA3_2_1B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-1B-Instruct",
         "LLAMA3_2_3B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-3B-Instruct",
         "LLAMA3_1_8B_PARAMS": "models/tt_transformers/model_params/Llama-3.1-8B-Instruct",
+        "ALLAM_7B_PARAMS": "models/tt_transformers/model_params/ALLaM-7B-Instruct-preview",
         "LLAMA3_2_11B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-11B-Vision-Instruct",
         "LLAMA3_1_70B_PARAMS": "models/tt_transformers/model_params/Llama-3.1-70B-Instruct",
         "LLAMA3_2_90B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
     }
 
     LOCAL_HF_PARAMS = {
+        "ALLaM-7B-Instruct-preview": "models/tt_transformers/model_params/ALLaM-7B-Instruct-preview",
         "Llama-3.1-8B-Instruct": "models/tt_transformers/model_params/Llama-3.1-8B-Instruct",
         "Llama-3.1-70B-Instruct": "models/tt_transformers/model_params/Llama-3.1-70B-Instruct",
         "Llama-3.2-1B-Instruct": "models/tt_transformers/model_params/Llama-3.2-1B-Instruct",
@@ -1353,6 +1355,8 @@ class ModelArgs:
             local_params = "LLAMA3_2_3B_PARAMS"
         elif "3.1-8B" in model_name:
             local_params = "LLAMA3_1_8B_PARAMS"
+        elif "ALLaM-7B" in model_name:
+            local_params = "ALLAM_7B_PARAMS"
         elif "3.2-11B" in model_name:
             local_params = "LLAMA3_2_11B_PARAMS"
         elif "3.1-70B" in model_name:
@@ -2362,6 +2366,7 @@ class ModelArgs:
                 "Llama-3.2-3B": "meta-llama/Llama-3.2-3B-Instruct",
                 "Llama-3.2-11B": "meta-llama/Llama-3.2-11B-Vision-Instruct",
                 "Llama-3.2-90B": "meta-llama/Llama-3.2-90B-Vision-Instruct",
+                "ALLaM-7B": "humain-ai/ALLaM-7B-Instruct-preview",
                 "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
                 "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
             }
