@@ -609,7 +609,7 @@ void bind_unary_operation_with_scalar_parameter(
                  - Ranks
                * - {5}
                  - TILE
-                 - 2, 3, 4
+                 - 1, 2, 3, 4, 5, 6
 
             {6}
 
@@ -2260,8 +2260,8 @@ void py_module(py::module& module) {
         "fill_value",
         "The value to be filled in the output tensor",
         "This will create a tensor of same shape and dtype as input reference tensor with fill_value.",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32)doc",
-        R"doc(Support provided for float32 dtypes in Wormhole_B0. System memory is not supported.)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32)doc",
+        R"doc(Host memory is not supported.)doc");
 
     // Unary ops with dim parameter
     bind_unary_operation_with_dim_parameter(

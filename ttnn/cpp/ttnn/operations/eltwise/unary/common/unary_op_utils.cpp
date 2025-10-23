@@ -396,10 +396,6 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     "unary_ge_tile_init();",
                     fmt::format("unary_ge_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             }
-            // std::cout << "param0_raw" << param0_raw << std::endl;
-            // std::cout << "param0" << param0 << std::endl;
-            // std::cout << "op_init_and_name" << op_init_and_name.first << std::endl;
-            // std::cout << "op_init_and_name" << op_init_and_name.second << std::endl;
             break;
         case UnaryOpType::UNARY_LE:
             TT_FATAL(
