@@ -916,9 +916,11 @@ def test_demo_text(
             profiler.end(f"inference_prefill", iteration=batch_idx)
             logger.info(f"Prefill finished")
         else:
+            logger.info(f"Skipping prefill forward pass when decode mode is enabled")
             prefilled_token = torch.zeros(global_batch_size, 1, 1)
 
         if mode == "prefill":
+            logger.info(f"Skipping decode forward pass when prefill mode is enabled")
             return True
 
         # Keep track of generated outputs to print out every iteration
@@ -1064,10 +1066,10 @@ def test_demo_text(
     profiler.end("run")
 
     # Prepare profile benchmark metrics for the first repeat batch only
-    compile_prefill_time = profiler.get_duration("compile_prefill")
+    compile_prefill_time = profiler.get_duration("compile_prefill") if model != 'decode' else 0
     compile_decode_time = profiler.get_duration("compile_decode")
 
-    total_inference_prefill_time = profiler.get_duration("inference_prefill")
+    total_inference_prefill_time = profiler.get_duration("inference_prefill") if model != 'decode' else 0
     total_inference_decode_time = 0
     for i in range(1, iteration):  # Iteration 0 is the compile time
         total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}")
@@ -1078,7 +1080,7 @@ def test_demo_text(
     # Average decode time per batch iteration
     avg_decode_iteration_time = total_inference_decode_time / (iteration - 1) if iteration > 1 else 0
 
-    prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * global_batch_size
+    prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * global_batch_size if model != 'decode' else 0
     decode_tok_s_user = (num_tokens_generated_decode[0] - 1) / total_inference_decode_time  # Remove the compile time
     decode_tok_s = (
         (num_tokens_generated_decode[0] - 1) / total_inference_decode_time * global_batch_size

@@ -88,3 +88,10 @@ def pytest_addoption(parser):
         type=int,
         help="Number of layers to use",
     )
+    parser.addoption(
+        "--mode",
+        action="store",
+        default='full',
+        type=str,
+        help="Mode to use for full model demo tests (values can be 'prefill','decode','full')",
+    )

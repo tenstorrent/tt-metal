@@ -46,7 +46,7 @@ from tools.tracy.process_model_log import get_latest_ops_log_filename
         (3, 3, 14, None, 1, 1, 1024, 2, "decode"),
         (3, 3, 14, None, 1, 2, 1024, 2, "decode"),
     ],
-    ids=["llama3.1-8b-TP2-prefill", "llama3.1-8b-DP2-prefill", "llama3.1-8b-TP2-decode", "llama3.1-8b-DP2-decode"],
+    ids=["llama3.1-8b-TP-prefill", "llama3.1-8b-DP2-prefill", "llama3.1-8b-TP-decode", "llama3.1-8b-DP2-decode"],
 )
 def test_device_perf_one_iter(
     mesh_device,
@@ -60,7 +60,7 @@ def test_device_perf_one_iter(
     max_generated_tokens,
     mode,
 ):
-    cmd = f"pytest models/tt_transformers/demo/simple_text_demo.py -k device-perf --num_layers {num_layers} --data_parallel {data_parallel} --max_seq_len {max_seq_len} --max_generated_tokens {max_generated_tokens} --paged_attention 1  --batch_size {batch_size}"
+    cmd = f"pytest models/tt_transformers/demo/simple_text_demo.py -k device-perf --num_layers {num_layers} --data_parallel {data_parallel} --max_seq_len {max_seq_len} --max_generated_tokens {max_generated_tokens} --paged_attention 1  --batch_size {batch_size} --mode {mode}"
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     device_analysis_types = ["device_kernel_duration", "device_kernel_first_to_last_start"]
