@@ -420,7 +420,6 @@ class GroupNorm(Module):
         return torch.cat(torch_sharded_lst, dim=0)
 
     def forward(self, x: ttnn.Tensor, num_out_blocks=-1) -> ttnn.Tensor:
-        self.num_out_blocks = num_out_blocks
         batch_size, height, width, channels = x.shape
         x = x.reshape([batch_size, 1, width * height, channels])
         x = ttnn.group_norm(
