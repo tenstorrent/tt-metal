@@ -2,16 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import os
-
 import ttnn
 
 
 def main():
     device_id = 0
     device = ttnn.open_device(device_id=device_id)
-
-    device.enable_program_cache()
 
     m = 1024
     k = 1024
