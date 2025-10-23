@@ -129,6 +129,9 @@ int main(int argc, char** argv) {
         if (!cmdline_parser.check_filter(test_config, true)) {
             log_info(tt::LogTest, "Skipping Test Group: {} due to filter policy", test_config.name);
             continue;
+        } else if (builder.should_skip_test(test_config)) {
+            log_info(tt::LogTest, "Skipping Test Group: {} due to skip policy", test_config.name);
+            continue;
         }
         log_info(tt::LogTest, "Running Test Group: {}", test_config.name);
 
