@@ -37,15 +37,15 @@ jobs:
         test-group:
           - name: "llama3.1-8b ${{ inputs.runner-label }} performance"
             arch: blackhole
-            cmd: HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 1
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 1
             owner_id: U08GELBB1AP # Ambrose Ling
           - name: "llama3.1-8b ${{ inputs.runner-label }} data-parallel=${{ inputs.num_devices }} performance"
             arch: blackhole
-            cmd: HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel ${{ inputs.num_devices }}
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel ${{ inputs.num_devices }}
             owner_id: U03PUAKE719 # Miguel Tairum
           - name: "llama3.1-8b ${{ inputs.runner-label }} data-parallel=${{ inputs.num_devices }} stress"
             arch: blackhole
-            cmd: HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel ${{ inputs.num_devices }} --max_generated_tokens 22000
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel ${{ inputs.num_devices }} --max_generated_tokens 22000
             owner_id: U03PUAKE719 # Miguel Tairum
     name: ${{ matrix.test-group.name }}
     runs-on:
@@ -62,7 +62,6 @@ jobs:
         PYTHONPATH: /work
         TT_METAL_HOME: /work
         HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
-        HF_HUB_CACHE: /localdev/blackhole_demos/huggingface_data
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - ${{ (!contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
@@ -140,7 +139,7 @@ jobs:
         test-group:
           - name: "llama3.3-70b ${{ inputs.runner-label }} batch-32 performance"
             arch: blackhole
-            cmd: HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32"
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32"
             owner_id: U03PUAKE719 # Miguel Tairum
     name: ${{ matrix.test-group.name }}
     runs-on:
@@ -157,11 +156,9 @@ jobs:
         PYTHONPATH: /work
         TT_METAL_HOME: /work
         HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
-        HF_HUB_CACHE: /localdev/blackhole_demos/huggingface_data
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - ${{ (!contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
-        # TODO: review mounted, probably change path and/or env variable
         - "${{ inputs.extra-tag != 'pipeline-yyz2-lfc' && format('{0}:/localdev/blackhole_demos/huggingface_data{1}', inputs.extra-tag == 'pipeline-functional' && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data', inputs.regenerate-ttnn-cache == true && ':rw' || ':ro') || '/no_hf_cache' }}"
       options: "--device /dev/tenstorrent"
     defaults:
