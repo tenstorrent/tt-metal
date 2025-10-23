@@ -15,6 +15,7 @@
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
+#include "tt_metal/tools/profiler/fabric_event_profiler.hpp"
 
 using address_t = uint32_t;
 using namespace tt::tt_fabric::linear::experimental;
