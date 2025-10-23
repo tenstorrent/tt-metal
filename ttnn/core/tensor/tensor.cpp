@@ -37,6 +37,11 @@
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/distributed/api.hpp"
 
+// Forward declare redzone functions
+namespace tt::tt_metal::tensor_impl::redzone {
+    void unregister_allocation(void* buffer_addr);
+}
+
 namespace tt::tt_metal {
 namespace {
 
@@ -131,6 +136,8 @@ void Tensor::deallocate_impl(bool force) {
                 [](HostStorage&) {},
                 [this, force, &can_deallocate](DeviceStorage& storage) {
                     if (can_deallocate(storage.mesh_buffer, force)) {
+                        // RED ZONE CLEANUP: Unregister allocation before deallocation
+                        tensor_impl::redzone::unregister_allocation(storage.mesh_buffer.get());
                         storage.mesh_buffer->deallocate();
                     }
                     storage.mesh_buffer.reset();

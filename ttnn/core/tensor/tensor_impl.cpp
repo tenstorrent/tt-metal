@@ -29,6 +29,11 @@
 #include "ttnn/distributed/api.hpp"
 
 #include <tracy/Tracy.hpp>
+#include <cstdlib>
+#include <string>
+#include <unordered_map>
+#include <mutex>
+#include <chrono>
 
 using namespace tt::tt_metal;
 
@@ -37,6 +42,137 @@ namespace tt {
 namespace tt_metal {
 
 namespace tensor_impl {
+
+// Red Zone Detection Support
+namespace redzone {
+    bool is_redzone_enabled() {
+        static bool enabled = []() {
+            const char* env = std::getenv("TTNN_ENABLE_REDZONE_DETECTION");
+            return env && (std::string(env) == "1" || std::string(env) == "true");
+        }();
+        return enabled;
+    }
+
+    size_t get_redzone_size() {
+        static size_t size = []() {
+            const char* env = std::getenv("TTNN_REDZONE_SIZE");
+            return env ? std::stoul(env) : 64; // Default 64 bytes
+        }();
+        return size;
+    }
+
+    struct AllocationInfo {
+        void* buffer_addr;
+        size_t user_size;
+        size_t redzone_size;
+        std::chrono::time_point<std::chrono::steady_clock> allocation_time;
+    };
+
+    static std::unordered_map<void*, AllocationInfo> active_allocations;
+    static std::mutex allocations_mutex;
+    static constexpr uint32_t REDZONE_PATTERN = 0xDEADBEEF;
+
+    void register_allocation(void* buffer_addr, size_t user_size, size_t redzone_size) {
+        if (!is_redzone_enabled()) return;
+
+        std::lock_guard<std::mutex> lock(allocations_mutex);
+        active_allocations[buffer_addr] = {
+            buffer_addr,
+            user_size,
+            redzone_size,
+            std::chrono::steady_clock::now()
+        };
+
+        if (std::getenv("TTNN_REDZONE_VERBOSE")) {
+            fmt::print("REDZONE: Registered allocation at {} (size: {} + {} + {} = {} bytes)\n",
+                      buffer_addr, redzone_size, user_size, redzone_size,
+                      redzone_size + user_size + redzone_size);
+        }
+    }
+
+    void unregister_allocation(void* buffer_addr) {
+        if (!is_redzone_enabled()) return;
+
+        std::lock_guard<std::mutex> lock(allocations_mutex);
+        auto it = active_allocations.find(buffer_addr);
+        if (it != active_allocations.end()) {
+            if (std::getenv("TTNN_REDZONE_VERBOSE")) {
+                auto duration = std::chrono::steady_clock::now() - it->second.allocation_time;
+                auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+                fmt::print("REDZONE: Unregistered allocation at {} (lived for {}ms)\n",
+                          buffer_addr, duration_ms);
+            }
+            active_allocations.erase(it);
+        }
+    }
+
+    void verify_allocation(void* buffer_addr) {
+        if (!is_redzone_enabled()) return;
+
+        std::lock_guard<std::mutex> lock(allocations_mutex);
+        auto it = active_allocations.find(buffer_addr);
+        if (it == active_allocations.end()) {
+            if (std::getenv("TTNN_REDZONE_VERBOSE")) {
+                fmt::print("REDZONE: Warning - verifying unknown allocation at {}\n", buffer_addr);
+            }
+            return;
+        }
+
+        const auto& info = it->second;
+
+        if (std::getenv("TTNN_REDZONE_VERBOSE")) {
+            fmt::print("REDZONE: Verifying allocation at {} (user_size: {}, redzone_size: {})\n",
+                      info.buffer_addr, info.user_size, info.redzone_size);
+        }
+
+        // Cast to MeshBuffer to access device memory
+        auto mesh_buffer = static_cast<distributed::MeshBuffer*>(buffer_addr);
+
+        try {
+            // Verify pre-redzone (at offset 0)
+            if (!verify_redzone_pattern(mesh_buffer, 0, info.redzone_size, "pre")) {
+                throw std::runtime_error(
+                    fmt::format("REDZONE VIOLATION: Pre-redzone corruption detected at buffer {} (user_size: {}, redzone_size: {})",
+                               info.buffer_addr, info.user_size, info.redzone_size));
+            }
+
+            // Verify post-redzone (at offset redzone_size + user_size)
+            size_t post_offset = info.redzone_size + info.user_size;
+            if (!verify_redzone_pattern(mesh_buffer, post_offset, info.redzone_size, "post")) {
+                throw std::runtime_error(
+                    fmt::format("REDZONE VIOLATION: Post-redzone corruption detected at buffer {} (user_size: {}, redzone_size: {})",
+                               info.buffer_addr, info.user_size, info.redzone_size));
+            }
+
+            if (std::getenv("TTNN_REDZONE_VERBOSE")) {
+                fmt::print("REDZONE: Verification passed for allocation at {}\n", info.buffer_addr);
+            }
+
+        } catch (const std::exception& e) {
+            fmt::print("REDZONE ERROR: {}\n", e.what());
+            if (std::getenv("TTNN_REDZONE_VERBOSE")) {
+                fmt::print("REDZONE: Verification failed for allocation at {} - {}\n", info.buffer_addr, e.what());
+            }
+            throw;
+        }
+    }
+
+    void verify_all_allocations() {
+        if (!is_redzone_enabled()) return;
+
+        std::lock_guard<std::mutex> lock(allocations_mutex);
+        if (std::getenv("TTNN_REDZONE_VERBOSE")) {
+            fmt::print("REDZONE: Verifying {} active allocations\n", active_allocations.size());
+        }
+
+        for (const auto& [addr, info] : active_allocations) {
+            // Unlock mutex temporarily for individual verification
+            allocations_mutex.unlock();
+            verify_allocation(addr);
+            allocations_mutex.lock();
+        }
+    }
+}
 
 PrintOptions TTNN_PRINT_OPTIONS;
 
@@ -81,9 +217,42 @@ std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
 
     // Use replicated buffer, which supports both working with individual shards and replicating data across all shards.
     // This is required for the time being, as TTNN has rich multi-device sharding implementation.
-    const distributed::ReplicatedBufferConfig replicated_buffer_config{
-        .size = tensor_spec.compute_packed_buffer_size_bytes(),
+    size_t user_size = tensor_spec.compute_packed_buffer_size_bytes();
+
+    distributed::ReplicatedBufferConfig replicated_buffer_config{
+        .size = user_size,
     };
+
+    // RED ZONE SUPPORT: Add red zones if enabled
+    if (redzone::is_redzone_enabled()) {
+        size_t redzone_size = redzone::get_redzone_size();
+
+        // Ensure total size maintains page alignment (required by TT-Metal hardware)
+        constexpr size_t PAGE_SIZE = 4096;
+        size_t total_size = redzone_size + user_size + redzone_size;
+
+        // Round total size up to next page boundary to maintain alignment
+        total_size = ((total_size + PAGE_SIZE - 1) / PAGE_SIZE) * PAGE_SIZE;
+
+        // Modify config to allocate extra space for red zones
+        replicated_buffer_config.size = total_size;
+
+        if (std::getenv("TTNN_REDZONE_VERBOSE")) {
+            fmt::print("REDZONE: Allocating buffer with red zones: user_size={}, redzone_size={}, total_size={}\n",
+                      user_size, redzone_size, total_size);
+        }
+
+        auto buffer = distributed::MeshBuffer::create(replicated_buffer_config, device_local_buffer_config, mesh_device);
+
+        // Register this allocation for tracking
+        redzone::register_allocation(buffer.get(), user_size, redzone_size);
+
+        // TODO: Initialize red zone patterns on device memory
+        // This would require device-specific operations to write REDZONE_PATTERN
+        // to the pre and post red zone areas
+
+        return buffer;
+    }
 
     return distributed::MeshBuffer::create(replicated_buffer_config, device_local_buffer_config, mesh_device);
 }
