@@ -79,11 +79,46 @@ template <typename operation_t>
 concept HasSupportedLazyReturnType = std::same_as<typename operation_t::tensor_return_value_t, Tensor> ||
                                      std::same_as<typename operation_t::tensor_return_value_t, std::vector<Tensor>>;
 
+// Check if a single field type is supported for lazy execution
+template <typename FieldType>
+struct is_supported_lazy_field_type {
+    using BareType = std::remove_cv_t<std::remove_reference_t<FieldType>>;
+
+    static constexpr bool value =
+        // Tensor by reference (const Tensor& or Tensor&)
+        (std::is_reference_v<FieldType> && std::is_same_v<BareType, Tensor>) ||
+        // Tensor by value
+        (!std::is_reference_v<FieldType> && std::is_same_v<BareType, Tensor>) ||
+        // std::optional<Tensor>
+        std::is_same_v<BareType, std::optional<Tensor>> ||
+        // std::optional<std::reference_wrapper<Tensor>>
+        std::is_same_v<BareType, std::optional<std::reference_wrapper<Tensor>>> ||
+        // std::optional<std::reference_wrapper<const Tensor>>
+        std::is_same_v<BareType, std::optional<std::reference_wrapper<const Tensor>>>;
+};
+
+// Helper to check all fields in a struct using index sequence
+template <typename S, std::size_t... Indices>
+constexpr bool all_fields_supported_impl(std::index_sequence<Indices...>) {
+    // For each field index, get its type and check if it's supported
+    return (... && is_supported_lazy_field_type<decltype(boost::pfr::get<Indices>(std::declval<S&>()))>::value);
+}
+
+// Check if all fields in tensor_args_t are supported types
+template <typename tensor_args_t>
+concept AllFieldsSupported = requires {
+    requires all_fields_supported_impl<tensor_args_t>(
+        std::make_index_sequence<boost::pfr::tuple_size_v<tensor_args_t>>{});
+};
+
 // Main concept: can this operation be made lazy?
-// Since we store tensor_args directly (Tensor is shallow-copyable), we don't need reconstruction checks
-// We also don't need to check for specific program factories since we use the eager execution path
+// Requirements:
+// 1. Must be a primitive operation
+// 2. Must have supported return type (Tensor or vector<Tensor>)
+// 3. All fields in tensor_args_t must be supported types
 template <typename operation_t>
-concept CanBeMadeLazy = PrimitiveOperationConcept<operation_t> && HasSupportedLazyReturnType<operation_t>;
+concept CanBeMadeLazy = PrimitiveOperationConcept<operation_t> && HasSupportedLazyReturnType<operation_t> &&
+                        AllFieldsSupported<typename operation_t::tensor_args_t>;
 
 }  // namespace detail
 

@@ -148,9 +148,10 @@ TEST_F(LazyModeFixture, BinaryOperationsLazy) {
     // Now execute the lazy graph
     log_info(tt::LogTest, "Executing lazy graph...");
     context.execute_node(mul_output.producer_node());
+    auto mul_output_materialized = context.get_materialized_tensor(mul_output);
 
     // Get lazy result to host for comparison
-    const auto lazy_result = ttnn::from_device(mul_output);
+    const auto lazy_result = ttnn::from_device(mul_output_materialized);
 
     // Clear the lazy graph and disable lazy mode
     context.clear();
@@ -212,9 +213,10 @@ TEST_F(LazyModeFixture, MixedOperationsLazy) {
     // Now execute the lazy graph
     log_info(tt::LogTest, "Executing lazy graph with {} operations...", context.size());
     context.execute_node(sub_result.producer_node());
+    auto sub_result_materialized = context.get_materialized_tensor(sub_result);
 
     // Get lazy result to host for comparison
-    const auto lazy_result = ttnn::from_device(sub_result);
+    const auto lazy_result = ttnn::from_device(sub_result_materialized);
 
     // Clear the lazy graph and disable lazy mode
     context.clear();
@@ -272,9 +274,10 @@ TEST_F(LazyModeFixture, ExecutionOrderCorrect) {
     // Now execute the lazy graph - should execute in topological order
     log_info(tt::LogTest, "Executing lazy graph (watch for execution order in logs)...");
     context.execute_node(final_result.producer_node());
+    auto final_result_materialized = context.get_materialized_tensor(final_result);
 
     // Get lazy result to host for comparison
-    const auto lazy_result = ttnn::from_device(final_result);
+    const auto lazy_result = ttnn::from_device(final_result_materialized);
 
     // Clear the lazy graph and disable lazy mode
     context.clear();

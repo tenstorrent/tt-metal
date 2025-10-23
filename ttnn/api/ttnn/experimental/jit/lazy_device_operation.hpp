@@ -5,10 +5,14 @@
 #pragma once
 
 #include "ttnn/experimental/jit/IDeviceOperation.hpp"
+#include "ttnn/experimental/jit/lazy_utils.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt_stl/reflection.hpp>
 #include <vector>
 #include <memory>
+#include <tuple>
+#include <utility>
+#include <boost/pfr.hpp>
 
 namespace ttnn::experimental::jit {
 
@@ -40,10 +44,11 @@ public:
 
     // TODO: Can we cache validation result?
     void validate(const std::vector<Tensor>& input_tensors) const override {
-        // TODO: remove unnecessary copy of tensor_args
-        // Create a temporary copy of tensor_args and update it with input tensors for validation
-        auto temp_tensor_args = tensor_args_;
-        update_tensor_args_helper(temp_tensor_args, input_tensors);
+        // Need to make a mutable copy to get non-const iterators for reference binding
+        std::vector<Tensor> mutable_tensors = input_tensors;
+
+        // Construct tensor_args from input_tensors with proper reference binding
+        auto temp_tensor_args = from_range_pfr<tensor_args_t>(mutable_tensors.begin(), mutable_tensors.end());
 
         // Call the operation's validation method if it exists
         // Use validate_on_program_cache_miss for comprehensive validation
@@ -58,11 +63,11 @@ public:
     }
 
     std::vector<Tensor> invoke(std::vector<Tensor> input_tensors) override {
-        // Update our stored tensor_args with the new materialized tensors
-        update_tensor_args_with_input_tensors(input_tensors);
+        // Construct tensor_args from input_tensors with proper reference binding
+        auto tensor_args = from_range_pfr<tensor_args_t>(input_tensors.begin(), input_tensors.end());
 
         // Use the standard device operation eager execution path
-        auto result = ttnn::device_operation::detail::invoke<operation_t>(attributes_, tensor_args_);
+        auto result = ttnn::device_operation::detail::invoke<operation_t>(attributes_, tensor_args);
 
         // Convert result to vector
         return convert_result_to_vector(result);
@@ -121,26 +126,6 @@ private:
         } else {
             TT_THROW("Unsupported spec type");
         }
-    }
-
-    // Helper to update tensor_args with input tensors (used by both validate and invoke)
-    static void update_tensor_args_helper(tensor_args_t& tensor_args, const std::vector<Tensor>& input_tensors) {
-        // Use reflection to update all Tensor fields in tensor_args
-        size_t tensor_index = 0;
-        tt::stl::reflection::visit_object_of_type<Tensor>(
-            [&](const Tensor& tensor) {
-                if (tensor_index < input_tensors.size()) {
-                    // Cast away const since we're modifying our own mutable tensor_args
-                    const_cast<Tensor&>(tensor) = input_tensors[tensor_index];
-                    tensor_index++;
-                }
-            },
-            tensor_args);
-    }
-
-    // Update stored tensor_args with new input tensors from lazy execution
-    void update_tensor_args_with_input_tensors(const std::vector<Tensor>& input_tensors) {
-        update_tensor_args_helper(tensor_args_, input_tensors);
     }
 
     // Convert result from device operation to vector of tensors
