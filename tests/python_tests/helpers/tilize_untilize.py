@@ -143,7 +143,9 @@ def untilize_block(
     # Reshape input to have one block per 1024 elements
     input_reshaped = input_tensor.reshape(total_blocks, 1024)
 
-    untilized_blocks = torch.stack([untilize(block) for block in input_reshaped])
+    untilized_blocks = torch.stack(
+        [untilize(block, stimuli_format=stimuli_format) for block in input_reshaped]
+    )
 
     output = untilized_blocks.reshape(row_blocks, col_blocks, 32, 32)
 
