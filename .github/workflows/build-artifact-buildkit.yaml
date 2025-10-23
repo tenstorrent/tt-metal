@@ -173,15 +173,17 @@ jobs:
 #            --build-arg SKIP_TT_TRAIN=${{ inputs.skip-tt-train }}
 #          ls outputs
 
-      - name: Authenticate to harbor
+      - name: Authenticate to harbor & ghcr
         run: |
-          docker login harbor.ci.tenstorrent.net -u $reg_user -p $reg_token
+          docker login harbor.ci.tenstorrent.net -u $harbor_reg_user -p $harbor_reg_token
+          docker login ghcr.io -u $ghcr_reg_user -p $ghcr_reg_token
+
 
       - name: Build evaluation image
         run: |
           mkdir outputs
           /home/runner/build.sh --target evaluation \
-            --image harbor.ci.tenstorrent.net/event-scanner/tt-metal-ev:${{ github.sha }} \
+            --image ghcr.io/jlakistt/metal-ev:${{ github.sha }} \
             --dockerfile-dir dockerfile \
             --dockerfile Dockerfile \
             --build-arg BUILD_TYPE=${{ inputs.build-type }} \
