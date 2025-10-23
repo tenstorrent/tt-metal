@@ -30,7 +30,6 @@ script_config = ScriptConfig(
 @dataclass
 class DumpRingBufferData:
     proc: str = triage_field("Proc")
-    location: OnChipCoordinate = triage_field("Loc")
     debug_ring_buffer: list[str] | None = triage_field("debug_ring_buffer")
 
 
@@ -40,20 +39,6 @@ def _get_mem_reader(location: OnChipCoordinate, risc_name: str):
         return ELF.get_mem_reader(location, risc_name)
     except Exception:
         return ELF.get_mem_reader(location)
-
-
-def _read_scalar(elf_obj, expr: str, mem_reader):
-    try:
-        return int(mem_access(elf_obj, expr, mem_reader)[0][0])
-    except Exception:
-        return None
-
-
-def _get_ring_elements(elf_obj, mem_reader) -> int:
-    try:
-        return int(mem_access(elf_obj, "DEBUG_RING_BUFFER_ELEMENTS", mem_reader)[3])
-    except Exception:
-        return 32
 
 
 def read_ring_buffer(
@@ -71,27 +56,21 @@ def read_ring_buffer(
 
     fw_elf = elf_cache[fw_path]
     mem_reader = _get_mem_reader(location, risc_name)
+    mailboxes = fw_elf.read_global("mailboxes", mem_reader)
 
-    current_ptr = _read_scalar(fw_elf, "mailboxes->watcher.debug_ring_buf.current_ptr", mem_reader)
-    if current_ptr is None or current_ptr == -1:
+    current_ptr = mailboxes.watcher.debug_ring_buf.current_ptr.value()
+    if current_ptr == 65535:
+        # Nothing pushed
         return None
 
-    wrapped = _read_scalar(fw_elf, "mailboxes->watcher.debug_ring_buf.wrapped", mem_reader)
-    if wrapped is None:
-        wrapped = 0
+    wrapped = mailboxes.watcher.debug_ring_buf.wrapped.value()
 
-    ring_elements = _get_ring_elements(fw_elf, mem_reader)
+    ring_elements = fw_elf.get_constant("DEBUG_RING_BUFFER_ELEMENTS")
 
     values: list[str] = []
     idx = int(current_ptr)
     for _ in range(ring_elements):
-        val = _read_scalar(
-            fw_elf,
-            f"mailboxes->watcher.debug_ring_buf.data[{idx}]",
-            mem_reader,
-        )
-        if val is None:
-            break
+        val = mailboxes.watcher.debug_ring_buf.data[idx].value()
         values.append(f"0x{val:08X}")
         if idx == 0:
             if wrapped == 0:
@@ -105,7 +84,6 @@ def read_ring_buffer(
 
     return DumpRingBufferData(
         proc=block_type,
-        location=location,
         debug_ring_buffer=values,
     )
 
@@ -121,13 +99,7 @@ def read_ring_buffer_for_block(
     except Exception:
         return None
 
-    # Map block type to the RISC to read from
-    if block_type == "functional_workers":
-        risc_name = "brisc"
-    elif block_type == "idle_eth" or block_type == "active_eth":
-        risc_name = "erisc"
-    else:
-        return None
+    risc_name = location.noc_block.risc_names[0]
 
     return read_ring_buffer(location, block_type, risc_name, dispatcher_data, elf_cache)
 
