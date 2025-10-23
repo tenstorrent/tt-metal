@@ -316,9 +316,14 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     ////////////////////////////////////////////////////////////////////////////
     Program program = CreateProgram();
 
+    const auto use_welford_and_not_rms_norm = use_welford && !rms_norm;
+
     const auto fuse_pre_add = b.has_value();
 
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_size};
+    if (!large_tensor_needed) {
+        reader_compile_time_args.push_back((std::uint32_t)use_welford);
+    }
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(b ? b->buffer() : nullptr).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(reader_compile_time_args);
@@ -357,8 +362,6 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     if (rms_norm) {
         compute_defines["RMSNORM"] = "1";
     }
-
-    const auto use_welford_and_not_rms_norm = use_welford && !rms_norm;
 
     auto reader_kernel_path = use_row_major_kernel
                                   ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
@@ -431,10 +434,12 @@ operation::ProgramWithCallbacks layernorm_multi_core(
                 .set_page_size(tt::CBIndex::c_18, single_tile_size);
         CreateCircularBuffer(program, all_cores, cb_intermed1_config);
     }
-    CircularBufferConfig cb_in2_config =
-        CircularBufferConfig(in2_t * bfloat16_tile_size, {{tt::CBIndex::c_2, tt::DataFormat::Float16_b}})
-            .set_page_size(tt::CBIndex::c_2, bfloat16_tile_size);
-    CreateCircularBuffer(program, all_cores, cb_in2_config);
+    if (!use_welford) {
+        CircularBufferConfig cb_in2_config =
+            CircularBufferConfig(in2_t * bfloat16_tile_size, {{tt::CBIndex::c_2, tt::DataFormat::Float16_b}})
+                .set_page_size(tt::CBIndex::c_2, bfloat16_tile_size);
+        CreateCircularBuffer(program, all_cores, cb_in2_config);
+    }
     CircularBufferConfig cb_in3_config =
         CircularBufferConfig(in3_t * bfloat16_tile_size, {{tt::CBIndex::c_3, tt::DataFormat::Float16_b}})
             .set_page_size(tt::CBIndex::c_3, bfloat16_tile_size);
