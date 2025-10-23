@@ -1149,5 +1149,9 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
 
     GraphTracker::instance().track_function_end(output);
 
+    if (device) {
+        output = output.to_device(device, tensor_layout.get_memory_config(), cq_id);
+    }
+
     return output;
 }
