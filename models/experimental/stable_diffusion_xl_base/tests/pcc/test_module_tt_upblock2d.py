@@ -32,6 +32,7 @@ def test_upblock(
     temb_shape,
     residuals,
     block_id,
+    debug_mode,
     is_ci_env,
     reset_seeds,
 ):
@@ -48,7 +49,9 @@ def test_upblock(
     torch_crosattn = unet.up_blocks[block_id]
 
     model_config = ModelOptimisations()
-    tt_crosattn = TtUpBlock2D(device, state_dict, f"up_blocks.{block_id}", model_config=model_config)
+    tt_crosattn = TtUpBlock2D(
+        device, state_dict, f"up_blocks.{block_id}", model_config=model_config, debug_mode=debug_mode
+    )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_temb_tensor = torch_random(temb_shape, -0.1, 0.1, dtype=torch.float32)
 

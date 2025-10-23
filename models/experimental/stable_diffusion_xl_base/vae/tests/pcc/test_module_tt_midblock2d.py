@@ -27,7 +27,7 @@ from models.common.utility_functions import torch_random
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_vae_midblock(device, input_shape, block_name, is_ci_env, reset_seeds):
+def test_vae_midblock(device, input_shape, block_name, debug_mode, is_ci_env, reset_seeds):
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
@@ -44,7 +44,9 @@ def test_vae_midblock(device, input_shape, block_name, is_ci_env, reset_seeds):
         torch_midblock = vae.decoder.mid_block
 
     model_config = ModelOptimisations()
-    tt_midblock = TtUNetMidBlock2D(device, state_dict, f"{block_name}.mid_block", model_config=model_config)
+    tt_midblock = TtUNetMidBlock2D(
+        device, state_dict, f"{block_name}.mid_block", model_config=model_config, debug_mode=debug_mode
+    )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
 
     torch_output_tensor = torch_midblock(torch_input_tensor, temb=None)

@@ -8,7 +8,9 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.tt_downsample2d import 
 
 
 class TtDownEncoderBlock2D(LightweightModule):
-    def __init__(self, device, state_dict, module_path, model_config, has_downsample=False, has_shortcut=False):
+    def __init__(
+        self, device, state_dict, module_path, model_config, has_downsample=False, has_shortcut=False, debug_mode=False
+    ):
         super().__init__()
 
         num_layers = 2
@@ -22,6 +24,7 @@ class TtDownEncoderBlock2D(LightweightModule):
                     f"{module_path}.resnets.{i}",
                     model_config=model_config,
                     conv_shortcut=(i == 0) and has_shortcut,
+                    debug_mode=debug_mode,
                 )
             )
 
@@ -35,6 +38,7 @@ class TtDownEncoderBlock2D(LightweightModule):
                 (1, 1),
                 1,
                 model_config=model_config,
+                debug_mode=debug_mode,
             )
             if has_downsample
             else None
