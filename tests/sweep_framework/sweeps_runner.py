@@ -18,7 +18,6 @@ from queue import Empty
 from typing import Optional
 
 # third party
-from elasticsearch import Elasticsearch, NotFoundError
 import enlighten
 from faster_fifo import Queue
 
@@ -76,8 +75,8 @@ def create_config_from_args(args) -> SweepsConfig:
         result_destination=args.result_dest,
         watcher=args.watcher,
         # E2E perf measurement disabled until kernel cache clearing is available
-        measure_perf=False,  # was: args.perf
-        measure_perf_with_cache=False,  # was: getattr(args, "perf_with_cache", False)
+        measure_perf=args.perf,
+        measure_perf_with_cache=args.perf_with_cache,
         measure_device_perf=args.device_perf,
         dry_run=args.dry_run,
         sweeps_tag=args.tag,
@@ -158,11 +157,11 @@ def validate_arguments(args, parser):
 
     # Validate performance measurement flags
     # Disabled while e2e perf measurement is disabled
-    # if getattr(args, "perf_with_cache", False) and args.perf:
-    #     logger.error(
-    #         "Cannot use both --perf and --perf-with-cache flags simultaneously. Use --perf-with-cache to get both cached and uncached performance measurements."
-    #     )
-    #     exit(1)
+    if getattr(args, "perf_with_cache", False) and args.perf:
+        logger.error(
+            "Cannot use both --perf and --perf-with-cache flags simultaneously. Use --perf-with-cache to get both cached and uncached performance measurements."
+        )
+        exit(1)
 
     logger.info("All argument validations passed successfully.")
 
@@ -1043,23 +1042,23 @@ if __name__ == "__main__":
     parser.add_argument(
         "--watcher", action="store_true", required=False, help="Add this flag to run sweeps with watcher enabled."
     )
-    # E2E performance measurement is temporarily disabled due to kernel cache issues
+    # E2E performance measurement is inaccurate due to default kernel caching
     # The kernel compilation cache cannot be cleared from Python, leading to misleading results
     # where initial tests show ~900ms compilation time but subsequent tests show ~4ms due to
-    # kernel cache hits. This will be re-enabled once ttnn.ClearKernelCache() is available.
-    # parser.add_argument(
-    #     "--perf",
-    #     action="store_true",
-    #     required=False,
-    #     help="Add this flag to measure e2e perf, for op tests with performance markers.",
-    # )
+    # kernel cache hits. This will be re-enabled once something like ttnn.ClearKernelCache() is available.
+    parser.add_argument(
+        "--perf",
+        action="store_true",
+        required=False,
+        help="Add this flag to measure e2e perf, for op tests with performance markers.",
+    )
 
-    # parser.add_argument(
-    #     "--perf-with-cache",
-    #     action="store_true",
-    #     required=False,
-    #     help="Add this flag to measure e2e perf with and without program cache. Runs each test twice to capture both cached and uncached performance.",
-    # )
+    parser.add_argument(
+        "--perf-with-cache",
+        action="store_true",
+        required=False,
+        help="Add this flag to measure e2e perf with and without program cache. Runs each test twice to capture both cached and uncached performance.",
+    )
 
     parser.add_argument(
         "--device-perf",
