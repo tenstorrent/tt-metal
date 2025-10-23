@@ -33,6 +33,7 @@
 #include "trace/trace_buffer.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
+#include "impl/allocator/allocator.hpp"
 
 namespace tt::tt_metal::distributed {
 

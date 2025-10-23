@@ -77,6 +77,7 @@
 #include "tt_stl/reflection.hpp"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
+#include "impl/allocator/allocator.hpp"
 
 namespace tt {
 class tt_hlk_desc;

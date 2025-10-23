@@ -35,6 +35,7 @@
 #include "trace/trace_node.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include "data_collection.hpp"
 #include "ringbuffer_cache.hpp"

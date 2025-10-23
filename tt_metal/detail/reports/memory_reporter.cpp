@@ -14,6 +14,7 @@
 
 #include "buffer_types.hpp"
 #include "tt_metal/detail/reports/report_utils.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"
 
 namespace fs = std::filesystem;
 

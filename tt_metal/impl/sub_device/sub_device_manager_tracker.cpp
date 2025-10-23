@@ -31,6 +31,7 @@
 #include <tt_stl/strong_type.hpp>
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"
 
 namespace tt::tt_metal {
 

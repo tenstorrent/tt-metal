@@ -17,6 +17,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"
 
 using namespace tt::test_utils;
 using namespace tt::test::buffer::detail;
