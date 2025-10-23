@@ -1439,20 +1439,6 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             cb_add_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, add_out_cb_config);
         }
     }
-    // in2 scaler
-    uint32_t in2_cb_index = tt::CBIndex::c_2;
-    tt::tt_metal::CircularBufferConfig in2_cb_config =
-        tt::tt_metal::CircularBufferConfig(in2_CB_size, {{in2_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(in2_cb_index, bfloat16_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, in2_cb_config);
-    // in4 scaler-c
-    if (!use_welford) {
-        uint32_t in4_cb_index = tt::CBIndex::c_4;
-        tt::tt_metal::CircularBufferConfig in4_cb_config =
-            tt::tt_metal::CircularBufferConfig(in2_CB_size, {{in4_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(in4_cb_index, bfloat16_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, in4_cb_config);
-    }
     // gamma
     if (gamma.has_value()) {
         uint32_t in5_cb_index = tt::CBIndex::c_5;
@@ -1504,12 +1490,24 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external_config);
     }
     if (!use_welford) {
+        // in2 scaler
+        uint32_t in2_cb_index = tt::CBIndex::c_2;
+        tt::tt_metal::CircularBufferConfig in2_cb_config =
+            tt::tt_metal::CircularBufferConfig(in2_CB_size, {{in2_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(in2_cb_index, bfloat16_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, in2_cb_config);
         // in3 eps
         uint32_t in3_cb_index = tt::CBIndex::c_3;
         tt::tt_metal::CircularBufferConfig in3_cb_config =
             tt::tt_metal::CircularBufferConfig(in3_CB_size, {{in3_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(in3_cb_index, bfloat16_tile_size);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, in3_cb_config);
+        // in4 scaler-c
+        uint32_t in4_cb_index = tt::CBIndex::c_4;
+        tt::tt_metal::CircularBufferConfig in4_cb_config =
+            tt::tt_metal::CircularBufferConfig(in2_CB_size, {{in4_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(in4_cb_index, bfloat16_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, in4_cb_config);
         // ex_partial2
         uint32_t ex_cb_partial2_index = tt::CBIndex::c_11;
         tt::tt_metal::CircularBufferConfig ex_cb_partial2_config =
