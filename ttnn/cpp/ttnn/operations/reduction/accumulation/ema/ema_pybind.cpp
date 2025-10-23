@@ -30,7 +30,7 @@ void bind_reduction_ema_operation(py::module& module) {
         with \mathrm{{output}}_0 = \mathrm{{input}}_0
 
         Args:
-            input (ttnn.Tensor): input tensor. Must be on the device.
+            input (ttnn.Tensor): input tensor of shape [1, B, C, T]. Must be on the device.
             alpha (float): the smoothing factor, typically between 0 and 1.
 
         Keyword Args:
@@ -66,13 +66,13 @@ void bind_reduction_ema_operation(py::module& module) {
             .. code-block:: python
 
                 # Create tensor
-                tensor_input = ttnn.rand((2,3,4), device=device)
+                tensor_input = ttnn.rand((1, 2, 3, 4), device=device)
 
                 # Apply ttnn.ema() with alpha=0.99
                 tensor_output = ttnn.ema(tensor_input, 0.99)
 
                 # With preallocated output
-                preallocated_output = ttnn.rand([2, 3, 4], dtype=ttnn.bfloat16, device=device)
+                preallocated_output = ttnn.rand([1, 2, 3, 4], dtype=ttnn.bfloat16, device=device)
 
                 tensor_output = ttnn.ema(tensor_input, 0.99, out=preallocated_output)
 
