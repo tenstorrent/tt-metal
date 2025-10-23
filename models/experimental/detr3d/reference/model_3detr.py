@@ -2,17 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import torch
 import torch.nn as nn
-from models.experimental.detr3d.reference.model_utils import (
-    FurthestPointSampling,
-    BoxProcessor,
-)
-import math
 import numpy as np
 from functools import partial
 
-import torch
 from models.experimental.detr3d.reference.transformer import (
     TransformerDecoderLayer,
     TransformerDecoder,
@@ -20,9 +15,15 @@ from models.experimental.detr3d.reference.transformer import (
     TransformerEncoder,
     MaskedTransformerEncoder,
 )
+from models.experimental.detr3d.reference.model_utils import BoxProcessor
 from models.experimental.detr3d.reference.position_embedding import PositionEmbeddingCoordsSine
 from models.experimental.detr3d.reference.helpers import GenericMLP
 from models.experimental.detr3d.reference.pointnet2_modules import PointnetSAModuleVotes
+from models.experimental.detr3d.reference.torch_pointnet2_ops import FurthestPointSampling
+
+"""
+Copy-paste from https://github.com/facebookresearch/3detr
+"""
 
 
 class Model3DETR(nn.Module):

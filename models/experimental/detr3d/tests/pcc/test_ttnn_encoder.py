@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import ttnn
+import torch
 import pytest
 
 from loguru import logger
@@ -15,14 +15,17 @@ from models.experimental.detr3d.reference.model_3detr import (
     TransformerEncoderLayer,
     build_encoder,
 )
-from models.experimental.detr3d.ttnn.masked_transformer_encoder import (
-    TtnnTransformerEncoderLayer,
-    TtnnMaskedTransformerEncoder,
-    EncoderLayerArgs,
-)
-from models.experimental.detr3d.ttnn.pointnet_samodule_votes import TtnnPointnetSAModuleVotes
-from models.experimental.detr3d.common import load_torch_model_state
+from models.experimental.detr3d.ttnn.masked_transformer_encoder import TtnnTransformerEncoderLayer
+from models.experimental.detr3d.common import load_torch_model_state, DotAccessibleDict
 from models.experimental.detr3d.reference.model_config import Detr3dArgs
+from models.experimental.detr3d.ttnn.model_3detr import build_ttnn_encoder
+
+
+class Tt3DetrArgs(Detr3dArgs):
+    def __init__(self):
+        self.modules = None
+        self.parameters = None
+        self.device = None
 
 
 def compute_mask(device, xyz, radius, dist=None):
@@ -140,120 +143,37 @@ def test_transformer_encoder_layer_inference(
     ttnn.close_device(mesh_device)
 
 
-@torch.no_grad()
 @pytest.mark.parametrize(
-    "d_model, nhead, dim_feedforward, normalize_before, use_ffn",
+    "src_shape, xyz_shape",
     [
-        (
-            256,  # d_model
-            4,  # nhead
-            128,  # dim_feedforward
-            True,  # normalize_before
-            True,  # use_ffn
-        )
-    ],
-)
-@pytest.mark.parametrize(
-    "mlp, npoint, radius, nsample, use_xyz, pooling, normalize_xyz, sample_uniformly, ret_unique_cnt",
-    [
-        (
-            [256, 256, 256, 256],  # mlp
-            1024,  # npoint
-            0.4,  # radius
-            32,  # nsample
-            True,  # use_xyz
-            "max",  # pooling
-            True,  # normalize_xyz
-            False,  # sample_uniformly
-            False,  # ret_unique_cnt
-        )
-    ],
-)
-@pytest.mark.parametrize(
-    "num_layers, masking_radius, src_shape, mask, pos, xyz_shape, transpose_swap",
-    [
-        (
-            3,
-            [0.16000000000000003, 0.6400000000000001, 1.44],
-            (2048, 1, 256),
-            None,
-            None,
-            (1, 2048, 3),
-            False,
-        ),
+        ((2048, 1, 256), (1, 2048, 3)),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_masked_transformer_encoder_inference(
-    num_layers,
-    masking_radius,
     src_shape,
-    mask,
-    pos,
     xyz_shape,
-    transpose_swap,
-    d_model,
-    nhead,
-    dim_feedforward,
-    normalize_before,
-    use_ffn,
-    mlp,
-    npoint,
-    radius,
-    nsample,
-    use_xyz,
-    pooling,
-    normalize_xyz,
-    sample_uniformly,
-    ret_unique_cnt,
     device,
 ):
-    torch.manual_seed(0)
-    args = Detr3dArgs()
-    ref_module = build_encoder(args)
-    load_torch_model_state(ref_module, "encoder")
+    torch_args = Detr3dArgs()
+    reference_model = build_encoder(torch_args)
+    load_torch_model_state(reference_model, "encoder")
 
     src = torch.randn(src_shape)
     xyz = torch.randn(xyz_shape)
-    ref_out = ref_module(src, mask, None, pos, xyz, transpose_swap)
+    ref_out = reference_model(src=src, xyz=xyz)
 
-    ref_module_parameters = preprocess_model_parameters(
-        initialize_model=lambda: ref_module,
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: reference_model,
         custom_preprocessor=create_custom_mesh_preprocessor(None),
         device=device,
     )
 
-    tt_encoder_layer = TtnnTransformerEncoderLayer
-    tt_interim_downsampling = TtnnPointnetSAModuleVotes(
-        mlp=mlp[:],
-        npoint=npoint,
-        radius=radius,
-        nsample=nsample,
-        use_xyz=use_xyz,
-        pooling=pooling,
-        normalize_xyz=normalize_xyz,
-        sample_uniformly=sample_uniformly,
-        ret_unique_cnt=ret_unique_cnt,
-        module=ref_module.interim_downsampling,
-        parameters=ref_module_parameters.interim_downsampling.mlp_module,
-        device=device,
-    )
-    tt_module = TtnnMaskedTransformerEncoder(
-        tt_encoder_layer,
-        num_layers,
-        masking_radius,
-        tt_interim_downsampling,
-        encoder_args=EncoderLayerArgs(
-            d_model=d_model,
-            nhead=nhead,
-            dim_feedforward=dim_feedforward,
-            normalize_before=normalize_before,
-            use_ffn=use_ffn,
-        ),
-        norm=None,
-        parameters=ref_module_parameters,
-        device=device,
-    )
+    tt_args = Tt3DetrArgs()
+    tt_args.modules = DotAccessibleDict({"encoder": reference_model})
+    tt_args.device = device
+    tt_args.parameters = DotAccessibleDict({"encoder": parameters})
+    tt_encoder = build_ttnn_encoder(tt_args)
 
     tt_src = ttnn.from_torch(
         src.permute(1, 0, 2),
@@ -263,7 +183,7 @@ def test_masked_transformer_encoder_inference(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    tt_output = tt_module(tt_src, mask, pos, xyz, transpose_swap)
+    tt_output = tt_encoder(src=tt_src, xyz=xyz)
 
     all_passing = True
     for idx, (tt_out, torch_out) in enumerate(zip(tt_output, ref_out)):

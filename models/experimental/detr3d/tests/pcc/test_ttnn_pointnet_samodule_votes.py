@@ -7,29 +7,23 @@ import pytest
 import ttnn
 
 from loguru import logger
+from ttnn.model_preprocessing import preprocess_model_parameters
 from models.common.utility_functions import comp_pcc, comp_allclose
+from models.experimental.detr3d.common import load_torch_model_state
 from models.experimental.detr3d.reference.model_3detr import PointnetSAModuleVotes
 from models.experimental.detr3d.ttnn.pointnet_samodule_votes import TtnnPointnetSAModuleVotes
-from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
-from models.experimental.detr3d.common import load_torch_model_state
 
 
 @pytest.mark.parametrize(
-    "mlp, npoint, radius, nsample, bn, use_xyz, pooling, sigma, normalize_xyz, sample_uniformly, ret_unique_cnt,xyz_shape,features_shape, weight_key_prefix",
+    "mlp, npoint, radius, nsample, normalize_xyz, xyz_shape,features_shape, weight_key_prefix",
     [
         (
             [0, 64, 128, 256],  # mlp
             2048,  # npoint
             0.2,  # radius
             64,  # nsample
-            True,  # bn
-            True,  # use_xyz
-            "max",  # pooling
-            None,  # sigma
             True,  # normalize_xyz
-            False,  # sample_uniformly
-            False,  # ret_unique_cnt
             (1, 20000, 3),  # xyz
             None,  # features
             "pre_encoder",
@@ -39,13 +33,7 @@ from models.experimental.detr3d.common import load_torch_model_state
             1024,  # npoint
             0.4,  # radius
             32,  # nsample
-            True,  # bn
-            True,  # use_xyz
-            "max",  # pooling
-            None,  # sigma
             True,  # normalize_xyz
-            False,  # sample_uniformly
-            False,  # ret_unique_cnt
             (1, 2048, 3),  # xyz
             (1, 256, 2048),  # features
             "encoder.interim_downsampling",
@@ -58,30 +46,18 @@ def test_pointnet_samodule_votes(
     npoint,
     radius,
     nsample,
-    bn,
-    use_xyz,
-    pooling,
-    sigma,
     normalize_xyz,
-    sample_uniformly,
-    ret_unique_cnt,
     xyz_shape,
     features_shape,
     weight_key_prefix,
     device,
 ):
     torch_model = PointnetSAModuleVotes(
-        mlp=mlp[:],
-        npoint=npoint,
         radius=radius,
         nsample=nsample,
-        bn=bn,
-        use_xyz=use_xyz,
-        pooling=pooling,
-        sigma=sigma,
+        npoint=npoint,
+        mlp=mlp[:],
         normalize_xyz=normalize_xyz,
-        sample_uniformly=sample_uniformly,
-        ret_unique_cnt=ret_unique_cnt,
     )
     load_torch_model_state(torch_model, weight_key_prefix)
 
@@ -99,18 +75,14 @@ def test_pointnet_samodule_votes(
     )
 
     ttnn_model = TtnnPointnetSAModuleVotes(
-        mlp[:],
-        npoint,
-        radius,
-        nsample,
-        use_xyz,
-        pooling,
-        normalize_xyz,
-        sample_uniformly,
-        ret_unique_cnt,
-        torch_model,
-        parameters,
-        device,
+        radius=radius,
+        nsample=nsample,
+        npoint=npoint,
+        mlp=mlp[:],
+        normalize_xyz=normalize_xyz,
+        module=torch_model,
+        parameters=parameters,
+        device=device,
     )
 
     ttnn_features = None

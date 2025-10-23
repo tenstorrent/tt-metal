@@ -2,20 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import ttnn
+import torch
 import pytest
 
 from loguru import logger
-from models.common.utility_functions import comp_pcc, comp_allclose
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
+from models.common.utility_functions import comp_pcc, comp_allclose
 
-from models.experimental.detr3d.ttnn.model_3detr import build_ttnn_3detr
 from models.experimental.detr3d.reference.model_3detr import build_3detr
-from models.experimental.detr3d.reference.model_utils import SunrgbdDatasetConfig
 from models.experimental.detr3d.reference.model_config import Detr3dArgs
+from models.experimental.detr3d.reference.model_utils import SunrgbdDatasetConfig
 from models.experimental.detr3d.common import load_torch_model_state
+from models.experimental.detr3d.ttnn.model_3detr import build_ttnn_3detr
+from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
 
 
 class Tt3DetrArgs(Detr3dArgs):

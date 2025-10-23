@@ -1,7 +1,14 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import copy
 import torch.nn as nn
 from functools import partial
-import copy
+
+"""
+Copy-paste from https://github.com/facebookresearch/3detr
+"""
 
 
 class BatchNormDim1Swap(nn.BatchNorm1d):

@@ -1,34 +1,28 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
 # SPDX-License-Identifier: Apache-2.0
-
-"""
-PyTorch implementations of PointNet2 operations.
-
-This module provides pure PyTorch implementations of the CUDA operations
-from the third_party/pointnet2 extension. These implementations are equivalent
-to the CUDA code but can run on CPU or GPU without requiring compilation.
-
-The implementations closely follow the CUDA code in:
-- sampling_gpu.cu
-- ball_query_gpu.cu
-- group_points_gpu.cu
-- interpolate_gpu.cu
-"""
 
 import torch
 import torch.nn as nn
 from typing import Optional
 
+"""
+PyTorch implementations of PointNet2 operations.
 
-# ============================================================================
+This module provides pure PyTorch implementations of the CUDA operations
+from the https://github.com/facebookresearch/3detr/third_party/pointnet2 library.
+
+The implementations closely follow the CUDA code in:
+- sampling_gpu.cu
+- ball_query_gpu.cu
+- group_points_gpu.cu
+"""
+
+
 # Sampling Operations (from sampling_gpu.cu)
-# ============================================================================
-
-
 def furthest_point_sampling(xyz: torch.Tensor, npoint: int) -> torch.Tensor:
     """
     Furthest Point Sampling (FPS) algorithm.
-
     Iteratively selects the point that is farthest from all previously selected points.
     This is the PyTorch equivalent of furthest_point_sampling_kernel in sampling_gpu.cu.
 
@@ -38,14 +32,6 @@ def furthest_point_sampling(xyz: torch.Tensor, npoint: int) -> torch.Tensor:
 
     Returns:
         idx: (B, npoint) tensor of sampled point indices
-
-    Algorithm (from CUDA code):
-        1. Initialize with first point (index 0)
-        2. For each iteration j from 1 to npoint:
-           - Compute distance from last selected point to all points
-           - Update minimum distance to any sampled point: temp[k] = min(d, temp[k])
-           - Select point with maximum minimum distance
-           - Filter out points with magnitude <= 1e-3
     """
     device = xyz.device
     B, N, _ = xyz.shape
@@ -53,22 +39,22 @@ def furthest_point_sampling(xyz: torch.Tensor, npoint: int) -> torch.Tensor:
     # Initialize output indices
     idx = torch.zeros(B, npoint, dtype=torch.long, device=device)
 
-    # Initialize distance array (temp in CUDA code)
-    # Start with large values (infinity)
+    # Initialize distance array
+    # Start with large values
     temp = torch.ones(B, N, device=device) * 1e10
 
-    # Start with first point (index 0)
+    # Start with first point
     farthest = torch.zeros(B, dtype=torch.long, device=device)
     batch_indices = torch.arange(B, dtype=torch.long, device=device)
 
-    # Compute magnitude to filter out points (mag <= 1e-3 in CUDA code)
+    # Compute magnitude to filter out points
     mag = torch.sum(xyz**2, dim=-1)  # (B, N)
 
     for i in range(npoint):
         idx[:, i] = farthest
 
         if i < npoint - 1:
-            # Get coordinates of current centroid (old in CUDA code)
+            # Get coordinates of current centroid
             centroid = xyz[batch_indices, farthest, :]  # (B, 3)
 
             # Compute squared distance from centroid to all points
@@ -83,7 +69,7 @@ def furthest_point_sampling(xyz: torch.Tensor, npoint: int) -> torch.Tensor:
             # Update minimum distances: temp[k] = min(d, temp[k])
             temp = torch.minimum(temp, dist)
 
-            # Select the farthest point (maximum of minimum distances)
+            # Select the farthest point
             farthest = torch.argmax(temp, dim=-1)
 
     return idx
@@ -92,7 +78,6 @@ def furthest_point_sampling(xyz: torch.Tensor, npoint: int) -> torch.Tensor:
 def gather_points(points: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
     """
     Gather points/features based on indices.
-
     This is the PyTorch equivalent of gather_points_kernel in sampling_gpu.cu.
 
     Args:
@@ -101,10 +86,6 @@ def gather_points(points: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
 
     Returns:
         out: (B, C, M) tensor of gathered features
-
-    CUDA code logic:
-        out[(i * c + l) * m + j] = points[(i * c + l) * n + idx[i * m + j]]
-        where i is batch, l is channel, j is point index
     """
     B, C, N = points.shape
     M = idx.shape[1]
@@ -121,77 +102,11 @@ def gather_points(points: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
     return out
 
 
-# ============================================================================
 # Ball Query Operations (from ball_query_gpu.cu)
-# ============================================================================
-
-
 def query_ball_point(new_xyz: torch.Tensor, xyz: torch.Tensor, radius: float, nsample: int) -> torch.Tensor:
     """
     Find all points within a ball of given radius.
-
     This is the PyTorch equivalent of query_ball_point_kernel in ball_query_gpu.cu.
-
-    Args:
-        new_xyz: (B, M, 3) query positions (centroids)
-        xyz: (B, N, 3) input point cloud
-        radius: float, radius of ball query
-        nsample: int, maximum number of points to sample in each ball
-
-    Returns:
-        idx: (B, M, nsample) tensor of indices
-
-    CUDA code logic:
-        - For each query point in new_xyz:
-            - Find all points in xyz within radius
-            - Store up to nsample indices
-            - If fewer points found, fill remaining with first found point
-    """
-    device = new_xyz.device
-    B, M, _ = new_xyz.shape
-    _, N, _ = xyz.shape
-
-    # Compute pairwise squared distances
-    # diff: (B, M, N, 3)
-    diff = new_xyz.unsqueeze(2) - xyz.unsqueeze(1)
-    dist2 = torch.sum(diff**2, dim=-1)  # (B, M, N)
-
-    # Square the radius for comparison
-    radius2 = radius * radius
-
-    # Create mask for points within radius
-    mask = dist2 < radius2  # (B, M, N)
-
-    # Initialize output with zeros
-    idx = torch.zeros(B, M, nsample, dtype=torch.long, device=device)
-
-    # For each batch and query point, collect indices
-    for b in range(B):
-        for m in range(M):
-            # Find indices of points within radius
-            within_radius = torch.where(mask[b, m])[0]
-
-            if len(within_radius) > 0:
-                # Take first nsample points (or all if fewer)
-                sampled = within_radius[:nsample]
-
-                # Fill idx, repeating first point if needed
-                first_idx = sampled[0]
-                for k in range(nsample):
-                    if k < len(sampled):
-                        idx[b, m, k] = sampled[k]
-                    else:
-                        idx[b, m, k] = first_idx
-            else:
-                # If no points within radius, fill with 0
-                idx[b, m, :] = 0
-
-    return idx
-
-
-def query_ball_point_vectorized(new_xyz: torch.Tensor, xyz: torch.Tensor, radius: float, nsample: int) -> torch.Tensor:
-    """
-    Vectorized version of query_ball_point for better performance.
 
     Args:
         new_xyz: (B, M, 3) query positions
@@ -237,15 +152,10 @@ def query_ball_point_vectorized(new_xyz: torch.Tensor, xyz: torch.Tensor, radius
     return first_nsample
 
 
-# ============================================================================
 # Group Points Operations (from group_points_gpu.cu)
-# ============================================================================
-
-
 def group_points(points: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
     """
     Group features based on indices.
-
     This is the PyTorch equivalent of group_points_kernel in group_points_gpu.cu.
 
     Args:
@@ -254,10 +164,6 @@ def group_points(points: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
 
     Returns:
         out: (B, C, npoint, nsample) tensor of grouped features
-
-    CUDA code logic:
-        out[(l * npoints + j) * nsample + k] = points[l * n + idx[j * nsample + k]]
-        where l is channel, j is grouped point, k is sample within group
     """
     B, C, N = points.shape
     _, npoint, nsample = idx.shape
@@ -276,54 +182,9 @@ def group_points(points: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
     return out
 
 
-def group_points_efficient(points: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
-    """
-    More efficient implementation of group_points using direct indexing.
-
-    Args:
-        points: (B, C, N) tensor of features
-        idx: (B, npoint, nsample) tensor of indices
-
-    Returns:
-        out: (B, C, npoint, nsample) tensor of grouped features
-    """
-    B, C, N = points.shape
-    _, npoint, nsample = idx.shape
-
-    idx = idx.long()
-
-    # Create batch indices
-    batch_indices = torch.arange(B, device=points.device).view(B, 1, 1, 1)
-    batch_indices = batch_indices.expand(B, C, npoint, nsample)
-
-    # Create channel indices
-    channel_indices = torch.arange(C, device=points.device).view(1, C, 1, 1)
-    channel_indices = channel_indices.expand(B, C, npoint, nsample)
-
-    # Expand idx for all channels
-    idx_expanded = idx.unsqueeze(1).expand(B, C, npoint, nsample)
-
-    # Use advanced indexing (more memory efficient)
-    # Flatten points: (B, C, N)
-    # Create indices to gather
-    out = torch.zeros(B, C, npoint, nsample, dtype=points.dtype, device=points.device)
-
-    for b in range(B):
-        for c in range(C):
-            out[b, c] = points[b, c, idx[b]]
-
-    return out
-
-
-# ============================================================================
-# PyTorch Module Wrappers (Compatible with model_utils.py structure)
-# ============================================================================
-
-
 class FurthestPointSampling(nn.Module):
     """
     Module wrapper for Furthest Point Sampling.
-    Compatible with the reference implementation in model_utils.py.
     """
 
     def __init__(self):
@@ -344,7 +205,6 @@ class FurthestPointSampling(nn.Module):
 class GatherOperation(nn.Module):
     """
     Module wrapper for gathering points/features.
-    Compatible with the reference implementation in model_utils.py.
     """
 
     def __init__(self):
@@ -359,19 +219,12 @@ class GatherOperation(nn.Module):
         Returns:
             gathered: (B, C, M) or (B, C, M, K) tensor
         """
-        if idx.ndim == 2:
-            return gather_points(features, idx)
-        elif idx.ndim == 3:
-            # For 3D idx (B, M, K), need to use group_points
-            return group_points(features, idx)
-        else:
-            raise ValueError(f"Unsupported idx dimension: {idx.ndim}")
+        return gather_points(features, idx)
 
 
 class BallQuery(nn.Module):
     """
     Module wrapper for ball query operation.
-    Compatible with the reference implementation in model_utils.py.
     """
 
     def __init__(self, radius: float, nsample: int):
@@ -388,13 +241,12 @@ class BallQuery(nn.Module):
         Returns:
             idx: (B, M, nsample) tensor of indices
         """
-        return query_ball_point_vectorized(new_xyz, xyz, self.radius, self.nsample)
+        return query_ball_point(new_xyz, xyz, self.radius, self.nsample)
 
 
 class GroupingOperation(nn.Module):
     """
     Module wrapper for grouping operation.
-    Compatible with the reference implementation in model_utils.py.
     """
 
     def __init__(self):
@@ -412,15 +264,9 @@ class GroupingOperation(nn.Module):
         return group_points(features, idx)
 
 
-# ============================================================================
-# PyTorch Module Wrappers (Compatible with model_utils.py structure)
-# ============================================================================
-
-
 class QueryAndGroup(nn.Module):
     """
     Complete QueryAndGroup module combining ball query and grouping.
-    This matches the interface in model_utils.py.
     """
 
     def __init__(
