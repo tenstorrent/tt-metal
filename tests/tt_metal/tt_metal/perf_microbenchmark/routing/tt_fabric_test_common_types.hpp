@@ -72,9 +72,9 @@ struct DestinationConfig {
 
 // Credit flow structures for bidirectional sender-receiver communication
 struct SenderCreditInfo {
-    uint32_t expected_receiver_count;        // How many receivers to wait for
-    uint32_t credit_reception_address_base;  // Base L1 address for credit chunk (mcast support)
-    uint32_t initial_credits;                // Initial credit capacity (based on receiver buffer size)
+    uint32_t expected_receiver_count{};        // How many receivers to wait for
+    uint32_t credit_reception_address_base{};  // Base L1 address for credit chunk (mcast support)
+    uint32_t initial_credits{};                // Initial credit capacity (based on receiver buffer size)
 };
 
 struct TrafficPatternConfig {
@@ -96,7 +96,7 @@ struct SenderConfig {
     FabricNodeId device = FabricNodeId(MeshId{0}, 0);
     std::optional<CoreCoord> core;
     std::vector<TrafficPatternConfig> patterns;
-    uint32_t link_id;  // Link ID for multi-link tests
+    uint32_t link_id = 0;  // Link ID for multi-link tests
 };
 
 enum class RoutingType {

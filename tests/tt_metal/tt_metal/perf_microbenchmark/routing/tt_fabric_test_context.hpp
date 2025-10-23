@@ -661,12 +661,6 @@ private:
             receiver_config.receiver_credit_info = std::nullopt;
         }
 
-        if (fixture_->is_local_fabric_node_id(src_node_id)) {
-            const auto& src_coord = this->fixture_->get_device_coord(src_node_id);
-            auto& src_test_device = this->test_devices_.at(src_coord);
-            src_test_device.add_sender_traffic_config(src_logical_core, std::move(sender_config));
-        }
-
         // CRITICAL: receiver_idx must be global across ALL receivers (local + remote)
         uint32_t receiver_idx = 0;
         for (const auto& dst_node_id : dst_node_ids) {
@@ -698,6 +692,12 @@ private:
 
             // CRITICAL: Increment for EVERY receiver (local + remote)
             receiver_idx++;
+        }
+
+        if (fixture_->is_local_fabric_node_id(src_node_id)) {
+            const auto& src_coord = this->fixture_->get_device_coord(src_node_id);
+            auto& src_test_device = this->test_devices_.at(src_coord);
+            src_test_device.add_sender_traffic_config(src_logical_core, std::move(sender_config));
         }
     }
 
