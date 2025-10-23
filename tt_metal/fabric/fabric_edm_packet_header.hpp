@@ -32,20 +32,53 @@ enum TerminationSignal : uint32_t {
 };
 
 enum EDMStatus : uint32_t {
+    // Initialization started
+    INITIALIZATION_STARTED = 0xA0B0C0D0,
+
+    // TXQ initialized
+    TXQ_INITIALIZED = 0xA1B1C1D1,
+
+    // Stream registers initialized
+    STREAM_REG_INITIALIZED = 0xA2B2C2D2,
+
     // EDM kernel has started running
-    STARTED = 0xA0B0C0D0,
+    STARTED = 0xA3B3C3D3,
+
+    // Object setup in progress
+    OBJECT_SETUP_IN_PROGRESS = 0xA4B4C4D4,
+
+    // EDM VC0 setup complete
+    EDM_VC0_SETUP_COMPLETE = 0xA5B5C5D5,
+
+    // EDM VC1 setup complete
+    EDM_VC1_SETUP_COMPLETE = 0xA6B6C6D6,
+
+    // Worker interfaces initialized
+    WORKER_INTERFACES_INITIALIZED = 0xA7B7C7D7,
 
     // Handshake complete with remote
-    REMOTE_HANDSHAKE_COMPLETE = 0xA1B1C1D1,
+    REMOTE_HANDSHAKE_COMPLETE = 0xA8B8C8D8,
 
     // Ready to start listening for packets
-    LOCAL_HANDSHAKE_COMPLETE = 0xA2B2C2D2,
+    LOCAL_HANDSHAKE_COMPLETE = 0xA9B9C9D9,
+
+    // Ethernet handshake complete
+    ETHERNET_HANDSHAKE_COMPLETE = 0xAABACADA,
+
+    // VCs opened
+    VCS_OPENED = 0xABBBCBDB,
+
+    // Routing table initialized
+    ROUTING_TABLE_INITIALIZED = 0xACBCCCDC,
+
+    // Initialization complete
+    INITIALIZATION_COMPLETE = 0xADBDCDDD,
 
     // Ready for traffic
-    READY_FOR_TRAFFIC = 0xA3B3C3D3,
+    READY_FOR_TRAFFIC = 0xAEBECEDE,
 
     // EDM exiting
-    TERMINATED = 0xA4B4C4D4
+    TERMINATED = 0xAFBFCFDF
 };
 
 // 3 bits
