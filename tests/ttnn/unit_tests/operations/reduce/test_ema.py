@@ -44,7 +44,7 @@ def test_ema(device, T, B, C, cores_y, cores_x):
     logger.info("Finished OP, comparing outputs")
 
     # Calculate golden EMA output
-    golden_output_tensor = torch.zeros_like(torch_input_tensor)
+    golden_output_tensor = torch.empty_like(torch_input_tensor)
 
     # Compare with golden output
     prev_value = 0 * torch_input_tensor[0, :, :, 0]
