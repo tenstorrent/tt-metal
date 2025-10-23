@@ -7,6 +7,7 @@
 #include <nanobind/nanobind.h>
 
 #include <climits>
+#include <cstring>
 #include <numeric>
 
 #include "autograd/auto_context.hpp"
@@ -104,28 +105,25 @@ nb::object make_numpy_tensor(
         // For bfloat16, use ml_dtypes.bfloat16 dtype if available
         if constexpr (std::is_same_v<NumpyType, bfloat16>) {
             if (!ml_dtypes_bfloat16_dtype.is_none()) {
-                // Copy data to temporary buffer
-                std::vector<bfloat16> temp_data(tensor_data.begin(), tensor_data.end());
+                const size_t num_elements = tensor_data.size();
 
-                // Create array using NumPy with ml_dtypes.bfloat16 dtype
-                nb::object np = nb::module_::import_("numpy");
+                // Allocate buffer directly (single allocation, no temporary)
+                auto* numpy_data = new bfloat16[num_elements];
 
-                // Create buffer - treat bfloat16 data as uint16 view
-                nb::object bytes_obj =
-                    nb::bytes(reinterpret_cast<const char*>(temp_data.data()), temp_data.size() * sizeof(bfloat16));
+                // Use memcpy for potentially better performance than std::copy
+                // bfloat16 is trivially copyable (just 16-bit data)
+                std::memcpy(numpy_data, tensor_data.data(), num_elements * sizeof(bfloat16));
 
-                nb::object np_frombuffer = np.attr("frombuffer");
-                nb::object uint16_array = np_frombuffer(bytes_obj, nb::arg("dtype") = np.attr("uint16"));
+                // Create capsule to manage memory
+                const nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<bfloat16*>(p); });
 
-                // Convert shape to tuple for reshape
-                nb::list shape_list;
-                for (size_t i = 0; i < tensor_shape_rank; ++i) {
-                    shape_list.append(numpy_shape[i]);
-                }
+                // Create ndarray from buffer with uint16 dtype (bfloat16 is 16-bit)
+                // This is zero-copy from C++ buffer to NumPy
+                nb::object array = nb::cast(nb::ndarray<nb::numpy, uint16_t>(
+                    reinterpret_cast<uint16_t*>(numpy_data), tensor_shape_rank, numpy_shape.data(), owner));
 
-                // Reshape and view as bfloat16 - return as object
-                nb::object reshaped = uint16_array.attr("reshape")(nb::tuple(shape_list));
-                return reshaped.attr("view")(ml_dtypes_bfloat16_dtype);
+                // View as bfloat16 - just changes dtype metadata, no copy
+                return array.attr("view")(ml_dtypes_bfloat16_dtype);
             } else {
                 NB_THROW(nb::exception_type::type_error, "ml_dtypes package required for bfloat16 NumPy arrays");
             }
