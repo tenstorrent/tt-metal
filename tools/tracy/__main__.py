@@ -2,9 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import threading
 from pathlib import Path
+from shutil import copyfile
+
 
 from tracy import *
+from tracy.serve_wasm import launch_server_subprocess
 
 
 def main():
@@ -109,6 +113,9 @@ def main():
     parser.add_option(
         "--tracy-tools-folder", dest="binary_folder", action="store", help="Tracy tools folder", type="string"
     )
+    parser.add_option(
+        "--no-capture-tool", dest="noCapture", action="store_true", help="Do not run Tracy capture tool", default=False
+    )
 
     if not sys.argv[1:]:
         parser.print_usage()
@@ -178,18 +185,11 @@ def main():
         )
 
     if len(args) > 0:
-        doReport = False
-        if options.report:
-            if not port:
-                logger.error("No available port found")
-                sys.exit(1)
-            logger.info(f"Using port {port}")
-            os.environ["TTNN_OP_PROFILER"] = "1"
-            os.environ["TT_METAL_PROFILER_TRACE_TRACKING"] = "1"
-            doReport, captureProcess = run_report_setup(options.verbose, outputFolder, binaryFolder, port)
-
-        if not doReport:
+        if options.noCapture:
             code = None
+            if options.report:
+                os.environ["TTNN_OP_PROFILER"] = "1"
+                os.environ["TT_METAL_PROFILER_TRACE_TRACKING"] = "1"
             if options.module:
                 import runpy
 
@@ -232,8 +232,14 @@ def main():
                 sys.stdout = None
                 sys.exit(exc.errno)
         else:
-            originalArgs.remove("-r")
-            osCmd = " ".join(originalArgs[1:])
+            if not port:
+                logger.error("No available port found")
+                sys.exit(1)
+            logger.info(f"Using port {port}")
+            captureProcess = run_report_setup(options.verbose, outputFolder, binaryFolder, port)
+
+            originalArgs = ["--no-capture-tool"] + originalArgs[1:]
+            osCmd = " ".join(originalArgs)
 
             testCommand = f"python3 -m tracy {osCmd}"
 
@@ -266,14 +272,58 @@ def main():
 
             try:
                 captureProcess.communicate(timeout=15)
-                generate_report(
-                    outputFolder,
-                    binaryFolder,
-                    options.name_append,
-                    options.child_functions,
-                    options.collect_noc_traces,
-                    options.device_analysis_types,
-                )
+                # Copy the generated .tracy file to the server's traces folder with a unique name
+                import datetime
+
+                tracy_src = PROFILER_LOGS_DIR / TRACY_FILE_NAME
+                traces_dir = PROFILER_WASM_TRACES_DIR
+                # Use timestamp, optional name_append, and a short form of the tested command for uniqueness
+                timestamp = datetime.datetime.now().strftime("_%Y_%m_%d_%H_%M_%S")
+                name_part = f"_{options.name_append}" if options.name_append else ""
+                # Short form of the command being tested (first arg, basename, no extension)
+                cmd_short = ""
+                if len(args) > 0:
+                    if os.path.basename(args[0]) == "pytest" and len(args) > 1:
+                        # Use the next argument after pytest for the name
+                        cmd_base = os.path.basename(args[-1])
+                    else:
+                        cmd_base = os.path.basename(args[0])
+                    cmd_short = os.path.splitext(cmd_base)[0]
+                    # Sanitize for filename
+                    cmd_short = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in cmd_short)
+                    cmd_short = f"{cmd_short}"
+                tracy_dst = traces_dir / f"{cmd_short}{name_part}{timestamp}.tracy"
+                logger.info(f"Copying {tracy_src} to {tracy_dst}")
+                try:
+                    copyfile(tracy_src, tracy_dst)
+                    logger.info(f"Copied {tracy_src} to {tracy_dst}")
+                except Exception as e:
+                    logger.warning(f"Could not copy {tracy_src} to {tracy_dst}: {e}")
+                # Also update embed.tracy symlink or copy for default loading (in PROFILER_WASM_DIR)
+                embed_path = PROFILER_WASM_DIR / PROFILER_WASM_TRACE_FILE_NAME
+                try:
+                    if embed_path.exists() or embed_path.is_symlink():
+                        embed_path.unlink()
+                    # Try to symlink, fallback to copy
+                    try:
+                        embed_path.symlink_to(("traces/" + tracy_dst.name.split("/")[-1]))
+                        logger.info(f"Symlinked {embed_path} -> traces/{tracy_dst.name.split('/')[-1]}")
+                    except Exception:
+                        copyfile(tracy_dst, embed_path)
+                        logger.info(f"Copied {tracy_dst} to {embed_path}")
+                except Exception as e:
+                    logger.warning(f"Could not update embed.tracy: {e}")
+                launch_server_subprocess()
+                # Start the WASM server as a daemon with defaults
+                if options.report:
+                    generate_report(
+                        outputFolder,
+                        binaryFolder,
+                        options.name_append,
+                        options.child_functions,
+                        options.collect_noc_traces,
+                        options.device_analysis_types,
+                    )
             except subprocess.TimeoutExpired as e:
                 captureProcess.terminate()
                 captureProcess.communicate()

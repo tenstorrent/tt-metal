@@ -178,7 +178,7 @@ inline void start_tracy_zone(
     const std::string& source, const std::string& functName, uint32_t lineNum, uint32_t color = 0) {
 #if defined(TRACY_ENABLE)
     auto tracySrcLoc =
-        ___tracy_alloc_srcloc(lineNum, source.c_str(), source.length(), functName.c_str(), functName.length());
+        ___tracy_alloc_srcloc(lineNum, source.c_str(), source.length(), functName.c_str(), functName.length(), color);
     TracyCZoneCtx ctx = ___tracy_emit_zone_begin_alloc(tracySrcLoc, 1);
     if (color != 0) {
         TracyCZoneColor(ctx, color);

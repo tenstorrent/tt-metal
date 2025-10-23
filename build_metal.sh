@@ -278,6 +278,26 @@ echo "INFO: Enable Distributed: $enable_distributed"
 echo "INFO: With python bindings: $with_python_bindings"
 echo "INFO: Enable Tracy: $tracy_enabled"
 
+# --- Emscripten SDK setup ---
+EMSDK_DIR="$build_dir/emsdk"
+EMSDK_ENV_SH="$EMSDK_DIR/emsdk_env.sh"
+if [ ! -f "$EMSDK_ENV_SH" ]; then
+    echo "INFO: Emscripten SDK not found in $EMSDK_DIR, installing..."
+    git clone https://github.com/emscripten-core/emsdk.git "$EMSDK_DIR"
+    cd "$EMSDK_DIR"
+    ./emsdk install latest
+    ./emsdk activate latest
+    cd -
+fi
+if [ -f "$EMSDK_ENV_SH" ]; then
+    echo "INFO: Sourcing $EMSDK_ENV_SH"
+    source "$EMSDK_ENV_SH"
+else
+    echo "ERROR: Could not find or install emsdk!"
+    exit 1
+fi
+# --- End Emscripten SDK setup ---
+
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
 cmake_args+=("-G" "Ninja")
