@@ -16,8 +16,8 @@ void kernel_main() {
     const uint32_t num_unpadded_sticks_addr = get_arg_addr(5);
 
     tt_l1_ptr uint32_t* num_unpadded_sticks = (tt_l1_ptr uint32_t*)(num_unpadded_sticks_addr);
-    volatile tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
-    volatile tt_l1_ptr uint32_t* id_per_dim = num_padded_sticks + num_dims;
+    tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
+    tt_l1_ptr uint32_t* id_per_dim = num_padded_sticks + num_dims;
 
     constexpr uint32_t cb_id_in0 = 0;
 

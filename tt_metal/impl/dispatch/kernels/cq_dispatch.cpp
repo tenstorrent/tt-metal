@@ -1023,7 +1023,7 @@ static void process_wait() {
 static void process_delay_cmd() {
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
     uint32_t count = cmd->delay.delay;
-    for (volatile uint32_t i = 0; i < count; i++);
+    for (uint32_t i = 0; i < count; ++i);
     cmd_ptr += sizeof(CQDispatchCmd);
 }
 

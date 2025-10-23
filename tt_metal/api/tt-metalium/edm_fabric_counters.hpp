@@ -48,18 +48,18 @@ struct EdmFabricSenderChannelCounters {
     uint32_t n_connection_fabric_unicast_noc_write_pkts = 0;
 
     void add_connection() volatile {
-        this->n_lifetime_connections++;
+        this->n_lifetime_connections += 1;
         this->reset_connection_counters();
     }
 
     void add_pkt_received() volatile {
-        this->n_lifetime_pkts_received++;
-        this->n_connection_pkts_received++;
+        this->n_lifetime_pkts_received += 1;
+        this->n_connection_pkts_received += 1;
     }
 
     void add_pkt_sent() volatile {
-        this->n_lifetime_pkts_fwded++;
-        this->n_connection_pkts_fwded++;
+        this->n_lifetime_pkts_fwded += 1;
+        this->n_connection_pkts_fwded += 1;
     }
 
     void reset_connection_counters() volatile {

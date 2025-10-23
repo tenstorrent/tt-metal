@@ -26,7 +26,8 @@ void push_to_ring_buffer(uint32_t val) {
         *curr_ptr = DEBUG_RING_BUFFER_STARTING_INDEX;
         *wrapped = 1;
     }
-    data[++(*curr_ptr)] = val;
+    *curr_ptr += 1;
+    data[*curr_ptr] = val;
 }
 
 #define WATCHER_RING_BUFFER_PUSH(x) push_to_ring_buffer(x)
