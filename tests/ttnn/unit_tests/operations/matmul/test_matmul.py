@@ -67,7 +67,6 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
     assert_with_pcc(torch_input_tensor, output_tensor, expected_pcc)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
 @pytest.mark.parametrize("n", [1])
 @pytest.mark.parametrize("c", [1])
 @pytest.mark.parametrize("m", [1024])
@@ -247,7 +246,6 @@ def test_matmul_reuse_config_sharded_fd_column(
     assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
 @pytest.mark.parametrize("b", [2])
 @pytest.mark.parametrize("h", [3])
 @pytest.mark.parametrize("m", [256])
@@ -793,7 +791,6 @@ def run_matmul_2d_tiny_tile(
     assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
 @pytest.mark.parametrize("m", [512])
 @pytest.mark.parametrize("k", [512])
 @pytest.mark.parametrize("n", [768])
@@ -951,7 +948,6 @@ def run_matmul_1d_tiny_tile(
     assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
 @pytest.mark.parametrize("m", [128])
 @pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [1024])
