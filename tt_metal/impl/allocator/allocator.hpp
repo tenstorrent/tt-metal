@@ -115,7 +115,7 @@ private:
     std::unordered_map<BufferType, std::unordered_map<CoreCoord, std::vector<std::uint32_t>>> logical_core_to_bank_ids_;
     std::unordered_set<Buffer*> allocated_buffers_;
 
-    // config_ is stored in a unique_ptr because AllocatorConfig is current an incomplete type in API directory.
+    // config_ is stored in a unique_ptr because AllocatorConfig is currently an incomplete type in API directory.
     //
     // TODO(river): revert this to inplace storage if we can shove Allocator into impl.
     std::unique_ptr<AllocatorConfig> config_;

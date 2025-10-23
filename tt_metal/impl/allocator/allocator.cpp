@@ -271,7 +271,7 @@ DeviceAddr AllocatorImpl::get_base_allocator_addr(const HalMemType& mem_type) co
         case HalMemType::DRAM: return config_->dram_unreserved_base;
         case HalMemType::L1: return config_->l1_unreserved_base;
         default: {
-            TT_THROW("AllocatorImpl does not support allocating in {}", enchantum::to_string(mem_type));
+            TT_THROW("Allocator does not support allocating in {}", enchantum::to_string(mem_type));
         }
     }
     return 0;
