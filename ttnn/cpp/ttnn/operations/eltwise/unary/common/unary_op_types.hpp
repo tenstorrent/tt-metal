@@ -103,6 +103,7 @@ enum class UnaryOpType {
     ALT_COMPLEX_ROTATE90,
     MISH,
     HARDMISH,
+    HARDGELU,
     MAXIMUM,
     MINIMUM,
     TANHSHRINK,
