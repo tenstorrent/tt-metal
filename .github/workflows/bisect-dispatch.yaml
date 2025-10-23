@@ -69,7 +69,7 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         ARCH_NAME: ${{ (inputs.runner-label == 'N150' || inputs.runner-label == 'N300' || inputs.runner-label == 'P150' || inputs.runner-label == 'config-t3000' || contains(inputs.runner-label, 'wormhole_b0')) && 'wormhole_b0' || 'blackhole' }}
         LOGURU_LEVEL: DEBUG
-        PYTHONPATH: /work:/work/ttnn
+        PYTHONPATH: /work:/work/ttnn:/work/tools
         LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         TT_METAL_HOME: /work
