@@ -1342,8 +1342,8 @@ async function run() {
                 ownerSet.set(k, o);
               }
             }
-            // Capture original pipeline owners for generic-exit + infra override case (names only, never mentions)
-            if (sn.owner_source && String(sn.owner_source).startsWith('infra_due_to_missing_test') && isGenericExit(sn.snippet) && Array.isArray(sn.original_owners)) {
+            // Capture original pipeline owners for infra override case (names only, never mentions)
+            if (sn.owner_source && String(sn.owner_source).startsWith('infra_due_to_missing_test') && Array.isArray(sn.original_owners)) {
               for (const oo of sn.original_owners) {
                 const nm = (oo && (oo.name || oo.id)) || '';
                 if (nm) genericExitOrigOwners.set(nm, true);
