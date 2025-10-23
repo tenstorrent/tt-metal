@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import csv
 import os
-import urllib
 from loguru import logger
 import statistics
 import json
@@ -14,11 +12,9 @@ from models.experimental.tt_dit.tests.dataset_eval.utils.fid_score import calcul
 from models.experimental.tt_dit.pipelines.flux1.pipeline_flux1 import Flux1Pipeline
 import ttnn
 from models.common.utility_functions import profiler
-from loguru import logger
+import models.experimental.tt_dit.tests.dataset_eval.utils.data_helper as data_helper
 
 
-# currently same as sdxl
-COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/coco2014/captions/captions_source.tsv"
 OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "flux_test_results.json"
 
 
@@ -63,7 +59,7 @@ def test_accuracy_flux(
     model_location_generator,
 ):
     start_from, num_prompts = evaluation_range
-    prompts = flux_get_prompts(captions_path, start_from, num_prompts)
+    prompts = data_helper.get_prompts(captions_path, start_from, num_prompts)
     logger.info(f"start inference from prompt index: {start_from} to {start_from + num_prompts}")
 
     sp_factor, sp_axis = sp
@@ -172,27 +168,3 @@ def test_accuracy_flux(
 
     # Synchronize devices
     ttnn.synchronize_device(mesh_device)
-
-
-def flux_get_prompts(captions_path, start_from, num_prompts):
-    assert (
-        0 <= start_from < 5000 and start_from + num_prompts <= 5000
-    ), "start_from must be between 0 and 4999, and start_from + num_prompts must not exceed 5000."
-
-    prompts = []
-    if not os.path.isfile(captions_path):
-        logger.info(f"file {captions_path} not found. downloading...")
-        os.makedirs(os.path.dirname(captions_path), exist_ok=True)
-        urllib.request.urlretrieve(COCO_CAPTIONS_DOWNLOAD_PATH, captions_path)
-        logger.info("download complete.")
-
-    with open(captions_path, "r") as tsv_file:
-        reader = csv.reader(tsv_file, delimiter="\t")
-        next(reader)  # skip header
-        for index, row in enumerate(reader):
-            if index < start_from:
-                continue
-            if index >= start_from + num_prompts:
-                break
-            prompts.append(row[2])
-    return prompts
