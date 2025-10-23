@@ -34,28 +34,13 @@ public:
     // Default constructor for cases where lookup is not built (e.g., non-1D fabric)
     FabricRoutingLookup() = default;
 
-    FabricRoutingLookup(const IDevice* device) {
-        using namespace tt::tt_fabric;
-
-        Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-
-        // get sorted list of all physical chip ids
-        auto physical_chip_id_set = cluster.user_exposed_chip_ids();
-        std::vector<ChipId> physical_chip_ids(physical_chip_id_set.begin(), physical_chip_id_set.end());
-        std::sort(physical_chip_ids.begin(), physical_chip_ids.end());
-
-        for (ChipId chip_id_src : physical_chip_ids) {
-            if (device->is_mmio_capable() && (cluster.get_cluster_type() == tt::tt_metal::ClusterType::TG)) {
-                // skip lauching on gateways for TG
-                continue;
-            }
-
-            // NOTE: soc desc is for chip_id_src, not device->id()
-            const auto& soc_desc = cluster.get_soc_desc(chip_id_src);
-            // Build a mapping of (eth_core --> eth_chan)
-            for (auto eth_chan = 0; eth_chan < soc_desc.get_num_eth_channels(); eth_chan++) {
-                auto eth_physical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::NOC0);
-                eth_core_to_channel_lookup_.emplace(std::make_tuple(chip_id_src, eth_physical_core), eth_chan);
+    FabricRoutingLookup(bool create) {
+        const Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        for (auto physical_chip_id : cluster.get_cluster_desc()->get_all_chips()) {
+            for (int j = 0; j < cluster.get_soc_desc(physical_chip_id).get_num_eth_channels(); j++) {
+                tt::umd::CoreCoord edm_eth_core =
+                    cluster.get_soc_desc(physical_chip_id).get_eth_core_for_channel(j, CoordSystem::NOC0);
+                eth_core_to_channel_lookup_.emplace(std::make_tuple(physical_chip_id, edm_eth_core), j);
             }
         }
     }
