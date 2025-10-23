@@ -50,14 +50,16 @@ BertBlock::BertBlock(const BertBlockConfig& config) {
 
     m_attention_norm = std::make_shared<LayerNormLayer>(
         config.embedding_dim,
-        false  // use_composite_op = false
+        config.layer_norm_eps,  // Pass BERT's epsilon (typically 1e-12)
+        false                   // use_composite_op = false
     );
 
     m_mlp = std::make_shared<BertMLP>(config.embedding_dim, config.intermediate_size, config.dropout_prob);
 
     m_mlp_norm = std::make_shared<LayerNormLayer>(
         config.embedding_dim,
-        false  // use_composite_op = false
+        config.layer_norm_eps,  // Pass BERT's epsilon (typically 1e-12)
+        false                   // use_composite_op = false
     );
 
     create_name("bert_block");

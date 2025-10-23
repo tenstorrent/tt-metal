@@ -92,7 +92,11 @@ Bert::Bert(const BertConfig& config) : m_config(config), m_runner_type(config.ru
     }
 
     // Embedding layer norm and dropout
-    m_embedding_norm = std::make_shared<modules::LayerNormLayer>(embedding_dim, false);
+    // Pass layer_norm_eps for consistent normalization across all layers
+    m_embedding_norm = std::make_shared<modules::LayerNormLayer>(
+        embedding_dim,
+        layer_norm_eps,  // Use BERT's epsilon (typically 1e-12)
+        false);
     m_embedding_dropout = std::make_shared<modules::DropoutLayer>(dropout_prob);
 
     // Create transformer blocks
