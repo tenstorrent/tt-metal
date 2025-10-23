@@ -13,8 +13,8 @@
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tools/scaleout/validation/utils/ethernet_link_metrics.hpp"
-#include "board/board.hpp"
-#include <factory_system_descriptor/utils.hpp>
+#include "tools/scaleout/board/board.hpp"
+#include "tools/scaleout/factory_system_descriptor/utils.hpp"
 
 namespace tt::scaleout_tools {
 
@@ -64,5 +64,14 @@ void reset_ethernet_links(
 tt_metal::AsicTopology generate_asic_topology_from_connections(
     const std::set<PhysicalChannelConnection>& physical_connections,
     PhysicalSystemDescriptor& physical_system_descriptor);
+
+tt_metal::AsicTopology validate_connectivity(
+    bool validate_connectivity,
+    bool fail_on_warning,
+    const std::filesystem::path& output_path,
+    PhysicalSystemDescriptor& physical_system_descriptor,
+    std::optional<std::string> cabling_descriptor_path,
+    std::optional<std::string> deployment_descriptor_path,
+    std::optional<std::string> fsd_path);
 
 }  // namespace tt::scaleout_tools

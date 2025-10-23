@@ -112,23 +112,6 @@ InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
     return input_args;
 }
 
-std::string get_factory_system_descriptor_path(const InputArgs& input_args) {
-    std::string fsd_path;
-    if (input_args.cabling_descriptor_path.has_value()) {
-        const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-        log_output_rank0("Creating Factory System Descriptor (Golden Representation)");
-        tt::scaleout_tools::CablingGenerator cabling_generator(
-            input_args.cabling_descriptor_path.value(), input_args.deployment_descriptor_path.value());
-        std::string filename =
-            "generated_factory_system_descriptor_" + std::to_string(*distributed_context.rank()) + ".textproto";
-        fsd_path = input_args.output_path / filename;
-        cabling_generator.emit_factory_system_descriptor(fsd_path);
-    } else {
-        fsd_path = input_args.fsd_path.value();
-    }
-    return fsd_path;
-}
-
 PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& input_args) {
     auto log_hostnames = [&](const std::vector<std::string>& hostnames) {
         std::stringstream ss;
@@ -157,23 +140,6 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
         log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
         return physical_system_descriptor;
     }
-}
-
-AsicTopology validate_connectivity(const InputArgs& input_args, PhysicalSystemDescriptor& physical_system_descriptor) {
-    if (!input_args.validate_connectivity) {
-        return {};
-    }
-    // Set output path for the YAML file
-    std::string gsd_yaml_path = input_args.output_path / "global_system_descriptor.yaml";
-    // Dump the discovered system to YAML
-    physical_system_descriptor.dump_to_yaml(gsd_yaml_path);
-    log_output_rank0("Validating Factory System Descriptor (Golden Representation) against Global System Descriptor");
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    bool log_output = *distributed_context.rank() == 0;
-    auto missing_physical_connections = tt::scaleout_tools::validate_fsd_against_gsd(
-        get_factory_system_descriptor_path(input_args), gsd_yaml_path, true, input_args.fail_on_warning, log_output);
-    log_output_rank0("Factory System Descriptor (Golden Representation) Validation Complete");
-    return generate_asic_topology_from_connections(missing_physical_connections, physical_system_descriptor);
 }
 
 void print_usage_info() {
@@ -229,7 +195,14 @@ int main(int argc, char* argv[]) {
     // Create physical system descriptor and discover the system
     auto physical_system_descriptor = generate_physical_system_descriptor(input_args);
 
-    AsicTopology missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
+    AsicTopology missing_asic_topology = validate_connectivity(
+        input_args.validate_connectivity,
+        input_args.fail_on_warning,
+        input_args.output_path,
+        physical_system_descriptor,
+        input_args.cabling_descriptor_path,
+        input_args.deployment_descriptor_path,
+        input_args.fsd_path);
     bool links_reset = false;
     // Ethernet Link Retraining through SW is currently only supported for Wormhole
     bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
@@ -237,11 +210,20 @@ int main(int argc, char* argv[]) {
         5;  // If links don't come up after 5 retrains, the system is in an unrecoverable state.
     uint32_t num_retrains = 0;
     while (!missing_asic_topology.empty() && link_retrain_supported && num_retrains < MAX_RETRAINS_BEFORE_FAILURE) {
-        reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
+        reset_ethernet_links(
+            physical_system_descriptor,
+            physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name()));
         links_reset = true;
         num_retrains++;
         physical_system_descriptor.run_discovery(true);
-        missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
+        missing_asic_topology = validate_connectivity(
+            input_args.validate_connectivity,
+            input_args.fail_on_warning,
+            input_args.output_path,
+            physical_system_descriptor,
+            input_args.cabling_descriptor_path,
+            input_args.deployment_descriptor_path,
+            input_args.fsd_path);
     }
 
     if (num_retrains == MAX_RETRAINS_BEFORE_FAILURE && !missing_asic_topology.empty()) {

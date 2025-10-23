@@ -20,6 +20,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <enchantum/enchantum.hpp>
+#include <tt-metalium/control_plane.hpp>
 
 namespace tt::scaleout_tools {
 
@@ -994,7 +995,7 @@ void point_to_point_barrier(const ResetPair& reset_pair) {
 void reset_local_link(ChipId src_chip, ChipId dst_chip, uint8_t src_chan, uint8_t dst_chan) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     std::vector<uint32_t> set = {1};
-
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& sender_soc_desc = cluster.get_soc_desc(src_chip);
     const auto& receiver_soc_desc = cluster.get_soc_desc(dst_chip);
     auto logical_src_coord = sender_soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
@@ -1003,6 +1004,14 @@ void reset_local_link(ChipId src_chip, ChipId dst_chip, uint8_t src_chan, uint8_
         src_chip, tt_xy_pair(logical_src_coord.x, logical_src_coord.y), CoreType::ETH);
     auto dst_coord = cluster.get_virtual_coordinate_from_logical_coordinates(
         dst_chip, tt_xy_pair(logical_dst_coord.x, logical_dst_coord.y), CoreType::ETH);
+    std::vector<uint32_t> zero_vec(1, 0);
+    if (control_plane.get_active_ethernet_cores(src_chip).find(src_coord) !=
+        control_plane.get_active_ethernet_cores(src_chip).end()) {
+        cluster.write_core(src_chip, src_coord, zero_vec, 0x1104);
+        cluster.write_core(dst_chip, dst_coord, zero_vec, 0x1104);
+        cluster.l1_barrier(src_chip);
+        cluster.l1_barrier(dst_chip);
+    }
 
     cluster.write_core(src_chip, src_coord, set, 0x1EFC);
     cluster.write_core(dst_chip, dst_coord, set, 0x1EFC);
@@ -1343,6 +1352,55 @@ AsicTopology generate_asic_topology_from_connections(
         }
     }
     return asic_topology;
+}
+
+std::string get_factory_system_descriptor_path(
+    const std::filesystem::path& output_path,
+    std::optional<std::string> cabling_descriptor_path,
+    std::optional<std::string> deployment_descriptor_path,
+    std::optional<std::string> fsd_path) {
+    if (cabling_descriptor_path.has_value()) {
+        const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+        TT_FATAL(
+            deployment_descriptor_path.has_value(),
+            "Deployment Descriptor Path is required when Cabling Descriptor Path is provided.");
+        tt::scaleout_tools::CablingGenerator cabling_generator(
+            cabling_descriptor_path.value(), deployment_descriptor_path.value());
+        std::string filename =
+            "generated_factory_system_descriptor_" + std::to_string(*distributed_context.rank()) + ".textproto";
+        std::string generated_fsd_path = output_path / filename;
+        cabling_generator.emit_factory_system_descriptor(generated_fsd_path);
+        return generated_fsd_path;
+    } else {
+        TT_FATAL(
+            fsd_path.has_value(),
+            "Factory System Descriptor Path is required when Cabling Descriptor Path is not provided.");
+        return fsd_path.value();
+    }
+}
+
+AsicTopology validate_connectivity(
+    bool validate_connectivity,
+    bool fail_on_warning,
+    const std::filesystem::path& output_path,
+    PhysicalSystemDescriptor& physical_system_descriptor,
+    std::optional<std::string> cabling_descriptor_path,
+    std::optional<std::string> deployment_descriptor_path,
+    std::optional<std::string> fsd_path) {
+    if (!validate_connectivity) {
+        return {};
+    }
+    auto generated_fsd_path =
+        get_factory_system_descriptor_path(output_path, cabling_descriptor_path, deployment_descriptor_path, fsd_path);
+    std::string gsd_yaml_path = output_path / "global_system_descriptor.yaml";
+    physical_system_descriptor.dump_to_yaml(gsd_yaml_path);
+    log_output_rank0("Validating Factory System Descriptor (Golden Representation) against Global System Descriptor");
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    bool log_output = *distributed_context.rank() == 0;
+    auto missing_physical_connections = tt::scaleout_tools::validate_fsd_against_gsd(
+        generated_fsd_path, gsd_yaml_path, true, fail_on_warning, log_output);
+    log_output_rank0("Factory System Descriptor (Golden Representation) Validation Complete");
+    return generate_asic_topology_from_connections(missing_physical_connections, physical_system_descriptor);
 }
 
 }  // namespace tt::scaleout_tools
