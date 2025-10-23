@@ -35,8 +35,8 @@ def test_petr_transformer(device, reset_seeds):
 
     ttnn_model = ttnn_petr_transformer.TTPETRTransformer(device, parameters)
     ttnn_output, ttnn_memory = ttnn_model(device, ttnn_x, ttnn_mask, ttnn_query_embed, ttnn_pos_embed)
-
     ttnn_memory = ttnn_memory.reshape(torch_memory.shape)
+    ttnn_memory = ttnn.to_torch(ttnn_memory)
     passed, msg = check_with_pcc(torch_memory, ttnn_memory, pcc=0.99)
     print(f"Memory PCC: {msg}")
     assert_with_pcc(torch_memory, ttnn_memory, 0.99)

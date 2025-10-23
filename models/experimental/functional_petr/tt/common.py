@@ -20,6 +20,13 @@ from models.experimental.functional_petr.reference.vovnetcp import VoVNetCP, eSE
 from torch.nn import Conv2d, Linear
 
 from torch import nn
+from ttnn.model_preprocessing import (
+    preprocess_model_parameters,
+    infer_ttnn_module_args,
+)
+from models.experimental.functional_petr.reference.petr_head import pos2posemb3d
+from models.experimental.functional_petr.reference.cp_fpn import CPFPN
+from models.experimental.functional_petr.reference.vovnetcp import VoVNetCP, eSEModule, _OSA_module, _OSA_stage
 
 
 class Conv:
@@ -493,3 +500,58 @@ def create_custom_preprocessor_petr_head(device):
         return parameters
 
     return custom_preprocessor
+
+
+def get_parameters(torch_model, device):
+    parameters_petr_head = preprocess_model_parameters(
+        initialize_model=lambda: torch_model.pts_bbox_head,
+        custom_preprocessor=create_custom_preprocessor_petr_head(None),
+        device=None,
+    )
+    parameters_petr_head = move_to_device(parameters_petr_head, device)
+
+    # transformer module preprocess
+    child = torch_model.pts_bbox_head.transformer
+    x = infer_ttnn_module_args(
+        model=child,
+        run_model=lambda model: model(
+            torch.randn(1, 6, 256, 20, 50),
+            torch.zeros((1, 6, 20, 50), dtype=torch.bool),
+            torch.rand(900, 256),
+            torch.rand(1, 6, 256, 20, 50),
+        ),
+        device=None,
+    )
+    assert x is not None
+    for key in x.keys():
+        x[key].module = getattr(child, key)
+    parameters_petr_head["transformer"] = x
+
+    parameters_petr_cpfpn = preprocess_model_parameters(
+        initialize_model=lambda: torch_model.img_neck,
+        custom_preprocessor=create_custom_preprocessor_cpfpn(None),
+        device=None,
+    )
+
+    parameters_petr_vovnetcp = preprocess_model_parameters(
+        initialize_model=lambda: torch_model.img_backbone,
+        custom_preprocessor=create_custom_preprocessor_vovnetcp(None),
+        device=None,
+    )
+
+    parameters = {}
+    parameters["pts_bbox_head"] = parameters_petr_head
+    parameters["img_neck"] = parameters_petr_cpfpn
+    parameters["img_backbone"] = parameters_petr_vovnetcp
+
+    stem_parameters = stem_parameters_preprocess(torch_model.img_backbone)
+    parameters["stem_parameters"] = stem_parameters
+
+    query_embedding_input = torch_model.pts_bbox_head.reference_points.weight
+    query_embedding_input = pos2posemb3d(query_embedding_input)
+
+    query_embedding_input = ttnn.from_torch(
+        query_embedding_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    return parameters, query_embedding_input
