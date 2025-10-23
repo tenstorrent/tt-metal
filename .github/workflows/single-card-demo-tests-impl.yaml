@@ -193,7 +193,7 @@ jobs:
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
       options: >-
-        --device /dev/tenstorrent -e TT_GH_CI_INFRA=1 --cap-add=ALL --security-opt seccomp=unconfined --ulimit nproc=65536:65536 --ulimit nofile=65536:65536 --privileged -v /sys:/sys
+        --device /dev/tenstorrent ${{ matrix.test-group.civ2-compatible == true && '-e TT_GH_CI_INFRA=1' || '' }} --cap-add=ALL --security-opt seccomp=unconfined --ulimit nproc=65536:65536 --ulimit nofile=65536:65536 --privileged -v /sys:/sys
     defaults:
       run:
         shell: bash
