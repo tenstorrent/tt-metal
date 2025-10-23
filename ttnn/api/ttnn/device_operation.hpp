@@ -368,6 +368,9 @@ get_output_placements_and_shape(
     bool has_sharded_tensors = false;
     tt::stl::reflection::visit_object_of_type<Tensor>(
         [&](const Tensor& tensor) {
+            if (has_sharded_tensors) {
+                return;
+            }
             if (!is_fully_replicated(tensor)) {
                 has_sharded_tensors = true;
             }
