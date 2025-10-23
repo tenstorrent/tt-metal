@@ -36,7 +36,7 @@ class TtGemmaImageFeedForward(LightweightModule):
         )
         torch_bias = lambda name, suffix: self.state_dict[f"{state_dict_prefix}{name}.{suffix}"]
 
-        if args.dummy_weights:
+        if args.dummy_weights or weight_cache_path is None:
             cache_name = lambda *_: None
         else:
             cache_name = lambda name, suffix: weight_cache_path / (state_dict_prefix + f"{name}.{suffix}")
@@ -112,6 +112,7 @@ class TtGemmaImageFeedForward(LightweightModule):
         DO_ALL_REDUCE = False
         # All reduce
         if self.args.num_devices > 1 and DO_ALL_REDUCE:  # replace with reduce_scatter and all_gather
+            assert False
             w2_out_gathered = ttnn.experimental.all_gather_async(
                 c_proj_out,
                 persistent_output_buffer=None,

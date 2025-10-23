@@ -34,9 +34,11 @@ class TtGemmaImageTransformerBlock(LightweightModule):
         self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
-        self.num_devices = configuration.num_devices
+        self.num_devices = 1
         self.hidden_size = configuration.vision_dim
         self.gated = gated
+
+        weight_cache_path = None
 
         self.ln_1 = TtLayerNorm(
             device=mesh_device,
