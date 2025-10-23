@@ -51,6 +51,7 @@
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/fabric/serialization/port_descriptor_serialization.hpp"
 #include <unistd.h>
+#include <chrono>
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 
@@ -2984,20 +2985,28 @@ bool ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
         // Generate FSD from the cabling descriptor
         tt::scaleout_tools::CablingGenerator cabling_generator(cabling_descriptor_path, all_hostnames);
 
-        // Create a temporary file for the generated FSD
-        std::string temp_fsd_path = "/tmp/temp_fsd_" + std::to_string(getpid()) + ".textproto";
+        // Create secure temporary files using filesystem temp directory and unique names
+        auto temp_dir = std::filesystem::temp_directory_path();
+        std::string temp_fsd_path = (temp_dir / ("temp_fsd_" + std::to_string(getpid()) + "_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".textproto")).string();
+        std::string temp_gsd_path = (temp_dir / ("temp_gsd_" + std::to_string(getpid()) + "_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".yaml")).string();
+
+        // RAII guard to ensure temporary files are cleaned up even if exceptions are thrown
+        struct TempFileGuard {
+            std::string path1, path2;
+            ~TempFileGuard() {
+                std::error_code ec;
+                if (!path1.empty()) std::filesystem::remove(path1, ec);
+                if (!path2.empty()) std::filesystem::remove(path2, ec);
+            }
+        } temp_file_guard{temp_fsd_path, temp_gsd_path};
+
         cabling_generator.emit_factory_system_descriptor(temp_fsd_path);
 
         // Dump the physical system descriptor to YAML
-        std::string temp_gsd_path = "/tmp/temp_gsd_" + std::to_string(getpid()) + ".yaml";
         physical_system_descriptor.dump_to_yaml(temp_gsd_path);
 
         // Actually validate the FSD against the GSD
         tt::scaleout_tools::validate_fsd_against_gsd(temp_fsd_path, temp_gsd_path, false, false);
-
-        // Clean up temporary files
-        std::filesystem::remove(temp_fsd_path);
-        std::filesystem::remove(temp_gsd_path);
 
         log_info(tt::LogFabric, "Torus validation passed for configuration: {}", static_cast<int>(fabric_config));
         return true;
