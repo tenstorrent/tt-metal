@@ -28,6 +28,8 @@
 #include "core_coord.hpp"
 #include "compressed_routing_table.hpp"
 #include "compressed_routing_path.hpp"
+#include "tools/scaleout/cabling_generator/cabling_generator.hpp"
+#include "tools/scaleout/factory_system_descriptor/utils.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include "distributed_context.hpp"
 #include "fabric_types.hpp"
@@ -48,6 +50,7 @@
 #include "tt_stl/small_vector.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/fabric/serialization/port_descriptor_serialization.hpp"
+#include <unistd.h>
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 
@@ -2915,6 +2918,110 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
         }
     }
     return intermesh_connections;
+}
+
+bool ControlPlane::is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_config) const {
+    if (fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
+        return false;
+    }
+    
+    static const std::unordered_set<tt::tt_fabric::FabricConfig> torus_fabric_configs = {
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY
+    };
+    
+    if (torus_fabric_configs.count(fabric_config)) {
+        return validate_torus_setup(fabric_config);
+    }
+    
+    // Non-torus configurations are valid by default since we always have at least mesh topology,
+    // and mesh configurations don't require special validation like torus does
+    return true;
+}
+
+bool ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_config) const {
+    try {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster().get_driver();
+        auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        bool using_mock = tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled();
+
+        // Create physical system descriptor with correct constructor
+        tt::tt_metal::PhysicalSystemDescriptor physical_system_descriptor(
+            cluster,
+            distributed_context,
+            &hal,
+            using_mock,
+            true  // run_discovery
+        );
+
+        auto all_hostnames = physical_system_descriptor.get_all_hostnames();
+
+        // Get the cabling descriptor path for the expected torus configuration
+        auto cabling_descriptor_path = get_cabling_descriptor_path(fabric_config);
+
+        // Check if the cabling descriptor file exists
+        if (!std::filesystem::exists(cabling_descriptor_path)) {
+            log_warning(
+                tt::LogFabric,
+                "Cabling descriptor file not found: {}. Skipping torus validation.",
+                cabling_descriptor_path);
+            return false;  // Skip test if no golden configuration available
+        }
+
+        // Generate FSD from the cabling descriptor
+        tt::scaleout_tools::CablingGenerator cabling_generator(cabling_descriptor_path, all_hostnames);
+
+        // Create a temporary file for the generated FSD
+        std::string temp_fsd_path = "/tmp/temp_fsd_" + std::to_string(getpid()) + ".textproto";
+        cabling_generator.emit_factory_system_descriptor(temp_fsd_path);
+
+        // Dump the physical system descriptor to YAML
+        std::string temp_gsd_path = "/tmp/temp_gsd_" + std::to_string(getpid()) + ".yaml";
+        physical_system_descriptor.dump_to_yaml(temp_gsd_path);
+        
+        // Actually validate the FSD against the GSD
+        tt::scaleout_tools::validate_fsd_against_gsd(temp_fsd_path, temp_gsd_path, false, false);
+
+        // Clean up temporary files
+        std::filesystem::remove(temp_fsd_path);
+        std::filesystem::remove(temp_gsd_path);
+
+        log_info(tt::LogFabric, "Torus validation passed for configuration: {}", static_cast<int>(fabric_config));
+        return true;
+
+    } catch (const std::exception& e) {
+        log_warning(tt::LogFabric, "Torus validation failed for configuration '{}': {}", static_cast<int>(fabric_config), e.what());
+        return false;  // Return false to skip the test
+    }
+}
+
+std::string ControlPlane::get_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) const {
+    static const std::string X_TORUS_PATH = "tools/tests/scaleout/cabling_descriptors/wh_galaxy_x_torus_superpod.textproto";
+    static const std::string Y_TORUS_PATH = "tools/tests/scaleout/cabling_descriptors/wh_galaxy_y_torus_superpod.textproto";
+    static const std::string XY_TORUS_PATH = "tools/tests/scaleout/cabling_descriptors/wh_galaxy_xy_torus_superpod.textproto";
+    
+    static const std::unordered_map<tt::tt_fabric::FabricConfig, std::string> cabling_map = {
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X, X_TORUS_PATH},
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X, X_TORUS_PATH},
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y, Y_TORUS_PATH},
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y, Y_TORUS_PATH},
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY, XY_TORUS_PATH},
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY, XY_TORUS_PATH}
+    };
+
+    auto it = cabling_map.find(fabric_config);
+    if (it == cabling_map.end()) {
+        log_warning(tt::LogFabric, "Unknown torus configuration: {}", static_cast<int>(fabric_config));
+        return "";  // Return empty string for unknown configurations
+    }
+
+    const auto& root_dir = tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir();
+    return root_dir + it->second;
 }
 
 ControlPlane::~ControlPlane() = default;

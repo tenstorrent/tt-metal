@@ -93,8 +93,11 @@ CableLength calc_cable_length(const Host& host1, const Host& host2);
 
 class CablingGenerator {
 public:
-    // Constructor
+    // Constructor with full deployment descriptor (includes physical location info)
     CablingGenerator(const std::string& cluster_descriptor_path, const std::string& deployment_descriptor_path);
+
+    // Constructor with just hostnames (no physical location info)
+    CablingGenerator(const std::string& cluster_descriptor_path, const std::vector<std::string>& hostnames);
 
     // Getters for all data
     const std::vector<Host>& get_deployment_hosts() const;
