@@ -44,15 +44,6 @@ def generate_reference_io(
     if use_real_weights:
         torch.use_deterministic_algorithms(False)
 
-        # logger.info(f"Loading state dict from {model_path}")
-        # state_dict = load_state_dict(model_path, "")
-        # logger.info(f"State dict loaded")
-        # state_dict = {
-        #     k: v
-        #     for k, v in state_dict.items()
-        #     for layer_idx_str in ["".join(itertools.takewhile(str.isdigit, k.removeprefix("model.layers.")))]
-        #     if not layer_idx_str or int(layer_idx_str) < hf_config.num_hidden_layers
-        # }  # Trim the loaded state dict to not run out of memory
         state_dict = sub_state_dict(state_dict, "", hf_config.num_hidden_layers)
 
         logger.info(f"Creating reference model")

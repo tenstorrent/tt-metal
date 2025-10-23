@@ -83,7 +83,6 @@ def test_forward_pass(
         cache_path = tmp_path
         force_recalculate_weight_config = True
     else:
-        # state_dict = load_state_dict(model_path, reference_layernorm_path)
         state_dict = sub_state_dict(state_dict, reference_layernorm_path + ".")
         torch_input, reference_output = load_reference_io_tensors_for_module(
             mode, reference_layernorm_path, seq_len, num_module_layers

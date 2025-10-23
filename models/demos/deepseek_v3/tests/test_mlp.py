@@ -44,7 +44,6 @@ def test_convert_weights_for_non_dequantized_mlp(hf_config, tmp_path, mesh_devic
     [(NonExpert, "model.layers.0.mlp"), (SharedExpert, "model.layers.3.mlp.shared_experts")],
 )
 def test_convert_weights_for_dequantized_mlps(MLPClass, module_path, hf_config, tmp_path, mesh_device, state_dict):
-    # state_dict = load_state_dict(model_path, module_path)
     state_dict = sub_state_dict(state_dict, module_path + ".")
     run_weight_conversion_test(
         MLPClass=MLPClass,
@@ -149,7 +148,6 @@ def test_forward_pass(
         reference_model = reference_model.to(torch.float32)
         reference_output = reference_model(torch_input)
     else:
-        # state_dict = load_state_dict(model_path, module_path)
         state_dict = sub_state_dict(state_dict, module_path + ".")
         torch_input, reference_output = load_reference_io_tensors_for_module(
             mode, module_path, seq_len, num_module_layers

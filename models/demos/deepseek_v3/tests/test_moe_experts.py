@@ -63,7 +63,6 @@ def create_combined_state_dict(module_path: str, model_path: Path, state_dict: d
     out_state_dict = {}
     for i in range(s, e + 1):
         module_path_i = f"{base_path}.{i}"
-        # state_dict_i = load_state_dict(model_path, module_path_i)
         state_dict_i = sub_state_dict(state_dict, module_path_i + ".")
         for k, v in state_dict_i.items():
             k_ = f"{base_path.split('.')[-1]}.{i}.{k}"

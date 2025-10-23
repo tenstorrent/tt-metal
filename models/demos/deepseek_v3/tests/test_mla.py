@@ -64,7 +64,6 @@ def generate_reference_io(
         )
     else:
         reference_model = DeepseekV3Attention(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
-        # state_dict = load_state_dict(model_path, module_path)
         state_dict = sub_state_dict(state_dict, module_path + ".")
         dequantized_state_dict = dequantize_state_dict(state_dict, hf_config)
         reference_model.load_state_dict(dequantized_state_dict)

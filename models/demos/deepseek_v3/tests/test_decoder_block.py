@@ -46,7 +46,6 @@ def generate_reference_io(
 ):
     reference_model = DeepseekV3DecoderLayer(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
     if module_path is not None:
-        # state_dict = load_state_dict(model_path, module_path)
         state_dict = sub_state_dict(state_dict, module_path + ".")
         reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
     else:
