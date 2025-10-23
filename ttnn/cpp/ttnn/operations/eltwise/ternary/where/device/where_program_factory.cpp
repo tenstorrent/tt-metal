@@ -182,6 +182,141 @@ void setup_reader_defines(
     }
 }
 
+// Sharding helper structures and functions (adapted from binary_ng)
+struct AllShardSpecs {
+    tt::tt_metal::ShardSpec predicate_shard_spec;
+    tt::tt_metal::ShardSpec value_true_shard_spec;
+    tt::tt_metal::ShardSpec value_false_shard_spec;
+    tt::tt_metal::ShardSpec output_shard_spec;
+};
+
+tt::tt_metal::ShardSpec adjust_to_shape(
+    const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
+    auto ret = shard_spec;
+
+    // Calculate volume of all dimensions EXCEPT the last (width)
+    uint32_t from_volume_except_width = 1;
+    uint32_t to_volume_except_width = 1;
+
+    const int rank = std::max(from_shape.rank(), to_shape.rank());
+
+    // Accumulate all dimensions except the last
+    for (int i = 0; i < rank - 1; ++i) {
+        uint32_t from_dim = (i < from_shape.rank()) ? from_shape[i] : 1;
+        uint32_t to_dim = (i < to_shape.rank()) ? to_shape[i] : 1;
+        from_volume_except_width *= from_dim;
+        to_volume_except_width *= to_dim;
+    }
+
+    // Get width dimensions
+    uint32_t from_width = from_shape[-1];
+    uint32_t to_width = to_shape[-1];
+
+    // Adjust shard shape based on full volume ratios
+    ret.shape[0] = std::max((ret.shape[0] * to_volume_except_width) / from_volume_except_width, 32u);
+    ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, 32u);
+    return ret;
+}
+
+inline bool is_uneven(const ttnn::Tensor& t) {
+    if (!t.is_sharded()) {
+        return false;
+    }
+
+    const auto& shape = t.padded_shape();
+    const auto& shard = t.shard_spec()->shape;
+    const auto rank = shape.rank();
+
+    // Compute product of all dimensions except the last
+    uint64_t volume_except_last = 1;
+    for (int i = 0; i < static_cast<int>(rank) - 1; ++i) {
+        volume_except_last *= shape[i];
+    }
+
+    return (volume_except_last % shard[0]) != 0 || (shape[-1] % shard[1]) != 0;
+}
+
+bool is_native_L1_sharding(
+    const ttnn::Tensor& predicate,
+    const std::optional<ttnn::Tensor>& value_true,
+    const std::optional<ttnn::Tensor>& value_false,
+    const ttnn::Tensor& output) {
+    // Check if output is sharded in L1
+    if (!output.memory_config().is_sharded()) {
+        return false;
+    }
+
+    // For TTT: all tensors must have identical shape and be sharded without uneven shards
+    if (value_true.has_value() && value_false.has_value()) {
+        if (predicate.logical_shape() == value_true->logical_shape() &&
+            predicate.logical_shape() == value_false->logical_shape()) {
+            if (is_uneven(predicate) || is_uneven(*value_true) || is_uneven(*value_false) || is_uneven(output)) {
+                return false;
+            }
+            if (predicate.memory_config().is_sharded() &&
+                predicate.memory_config().buffer_type() == tt::tt_metal::BufferType::L1) {
+                return true;
+            }
+            if (value_true->memory_config().is_sharded() &&
+                value_true->memory_config().buffer_type() == tt::tt_metal::BufferType::L1) {
+                return true;
+            }
+            if (value_false->memory_config().is_sharded() &&
+                value_false->memory_config().buffer_type() == tt::tt_metal::BufferType::L1) {
+                return true;
+            }
+            if (output.memory_config().is_sharded() &&
+                output.memory_config().buffer_type() == tt::tt_metal::BufferType::L1) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+std::optional<AllShardSpecs> get_shard_specs(
+    const ttnn::Tensor& predicate,
+    const std::optional<ttnn::Tensor>& value_true,
+    const std::optional<ttnn::Tensor>& value_false,
+    const ttnn::Tensor& output) {
+    bool predicate_sharded = predicate.memory_config().is_sharded();
+    bool value_true_sharded = value_true.has_value() && value_true->memory_config().is_sharded();
+    bool value_false_sharded = value_false.has_value() && value_false->memory_config().is_sharded();
+    bool output_sharded = output.memory_config().is_sharded();
+
+    if (!predicate_sharded && !value_true_sharded && !value_false_sharded && !output_sharded) {
+        return std::nullopt;
+    }
+
+    if (!is_native_L1_sharding(predicate, value_true, value_false, output)) {
+        // Treat as interleaved
+        return std::nullopt;
+    }
+
+    const auto& predicate_shape = predicate.padded_shape();
+    auto value_true_shape = value_true.has_value() ? value_true->padded_shape() : ttnn::Shape{1, 1};
+    auto value_false_shape = value_false.has_value() ? value_false->padded_shape() : ttnn::Shape{1, 1};
+    const auto& output_shape = output.padded_shape();
+
+    // Determine base shard spec from output or first sharded input
+    tt::tt_metal::ShardSpec output_shard_spec =
+        output_sharded       ? *output.shard_spec()
+        : predicate_sharded  ? adjust_to_shape(*predicate.shard_spec(), predicate_shape, output_shape)
+        : value_true_sharded ? adjust_to_shape(*value_true->shard_spec(), value_true_shape, output_shape)
+                             : adjust_to_shape(*value_false->shard_spec(), value_false_shape, output_shape);
+
+    return AllShardSpecs{
+        predicate_sharded ? *predicate.shard_spec() : adjust_to_shape(output_shard_spec, output_shape, predicate_shape),
+        value_true_sharded && value_true.has_value()
+            ? *value_true->shard_spec()
+            : adjust_to_shape(output_shard_spec, output_shape, value_true_shape),
+        value_false_sharded && value_false.has_value()
+            ? *value_false->shard_spec()
+            : adjust_to_shape(output_shard_spec, output_shape, value_false_shape),
+        output_shard_spec};
+}
+
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::ternary;
@@ -353,12 +488,16 @@ void set_or_update_runtime_arguments(
         const uint32_t tile_h = tile.get_height();
         const uint32_t tile_w = tile.get_width();
         auto output_dims = extract_tensor_dimensions(output, out_rank, tile_h, tile_w);
-        bool has_sharding = false;
-        // calculate has_sharding when support is added
-        // has_sharding = predicate_tensor.memory_config().is_sharded() ||
-        //                 value_true_tensor.value().memory_config().is_sharded() ||
-        //                 value_false_tensor.value().memory_config().is_sharded() ||
-        //                 output.memory_config().is_sharded();
+        // Check if any tensor is sharded
+        bool has_sharding = predicate_tensor.memory_config().is_sharded() || output.memory_config().is_sharded();
+        if (variant == WhereVariant::TTS || variant == WhereVariant::TTT) {
+            has_sharding =
+                has_sharding || (value_true_tensor.has_value() && value_true_tensor->memory_config().is_sharded());
+        }
+        if (variant == WhereVariant::TST || variant == WhereVariant::TTT) {
+            has_sharding =
+                has_sharding || (value_false_tensor.has_value() && value_false_tensor->memory_config().is_sharded());
+        }
 
         // Set reader runtime arguments based on variant
         if (variant == ttnn::operations::ternary::WhereVariant::TTS ||
@@ -547,22 +686,48 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto all_device_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
-    // Number of tiles to store per input CB (double buffer)
+    // Calculate shard specs for native L1 sharding
+    const auto shard_specs = get_shard_specs(predicate_tensor, value_true_tensor, value_false_tensor, output);
+    const bool has_sharding = shard_specs.has_value();
+    const bool is_native_sharding =
+        has_sharding && is_native_L1_sharding(predicate_tensor, value_true_tensor, value_false_tensor, output);
+
+    // Calculate tiles per shard for each tensor
+    auto tile_hw = output.tensor_spec().tile().get_tile_hw();
+    uint32_t predicate_num_tiles_per_shard = has_sharding ? shard_specs->predicate_shard_spec.numel() / tile_hw : 0;
+    uint32_t value_true_num_tiles_per_shard = has_sharding ? shard_specs->value_true_shard_spec.numel() / tile_hw : 0;
+    uint32_t value_false_num_tiles_per_shard = has_sharding ? shard_specs->value_false_shard_spec.numel() / tile_hw : 0;
+    uint32_t output_num_tiles_per_shard = has_sharding ? shard_specs->output_shard_spec.numel() / tile_hw : 0;
+
+    // Get buffer pointers for sharded tensors
+    bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
+    bool value_true_sharded = value_true_tensor.has_value() && value_true_tensor->memory_config().is_sharded();
+    bool value_false_sharded = value_false_tensor.has_value() && value_false_tensor->memory_config().is_sharded();
+    bool output_sharded = output.memory_config().is_sharded();
+
+    auto predicate_buffer = predicate_tensor.buffer();
+    auto value_true_buffer = value_true_tensor.has_value() ? value_true_tensor->buffer() : nullptr;
+    auto value_false_buffer = value_false_tensor.has_value() ? value_false_tensor->buffer() : nullptr;
+    auto output_buffer = output.buffer();
+
+    // Number of tiles to store per input CB (double buffer for non-sharded)
     constexpr uint32_t num_tiles_per_cb = 2;
+
     // Input buffers - Create predicate CB (always c_0)
     auto [predicate_tensor_cb, predicate_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_0,
         program,
         all_device_cores,
         predicate_single_tile_size,
-        num_tiles_per_cb,
-        predicate_data_format);  // predicate_tensor
+        (predicate_sharded && is_native_sharding) ? predicate_num_tiles_per_shard : num_tiles_per_cb,
+        predicate_data_format,
+        (predicate_sharded && is_native_sharding) ? predicate_buffer : nullptr);
 
     // Create c_1 based on variant - this is the primary tensor CB
     uint32_t value_true_tensor_cb = 0;
-    tt::tt_metal::CBHandle value_true_tensor_cb_handle;
+    tt::tt_metal::CBHandle value_true_tensor_cb_handle = 0;
     uint32_t value_false_tensor_cb = 0;
-    tt::tt_metal::CBHandle value_false_tensor_cb_handle;
+    tt::tt_metal::CBHandle value_false_tensor_cb_handle = 0;
 
     if (variant == WhereVariant::TTS) {
         // TTS: c_1 = value_true tensor (value_false is scalar)
@@ -571,8 +736,9 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
             program,
             all_device_cores,
             value_true_single_tile_size,
-            num_tiles_per_cb,
-            value_true_data_format);
+            (value_true_sharded && is_native_sharding) ? value_true_num_tiles_per_shard : num_tiles_per_cb,
+            value_true_data_format,
+            (value_true_sharded && is_native_sharding) ? value_true_buffer : nullptr);
         value_true_tensor_cb = cb;
         value_true_tensor_cb_handle = cb_handle;
     } else if (variant == WhereVariant::TST) {
@@ -582,8 +748,9 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
             program,
             all_device_cores,
             value_false_single_tile_size,
-            num_tiles_per_cb,
-            value_false_data_format);
+            (value_false_sharded && is_native_sharding) ? value_false_num_tiles_per_shard : num_tiles_per_cb,
+            value_false_data_format,
+            (value_false_sharded && is_native_sharding) ? value_false_buffer : nullptr);
         value_false_tensor_cb = cb;
         value_false_tensor_cb_handle = cb_handle;
     } else if (variant == WhereVariant::TTT) {
@@ -592,8 +759,9 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
             program,
             all_device_cores,
             value_true_single_tile_size,
-            num_tiles_per_cb,
-            value_true_data_format);
+            (value_true_sharded && is_native_sharding) ? value_true_num_tiles_per_shard : num_tiles_per_cb,
+            value_true_data_format,
+            (value_true_sharded && is_native_sharding) ? value_true_buffer : nullptr);
         value_true_tensor_cb = cb1;
         value_true_tensor_cb_handle = cb1_handle;
 
@@ -603,8 +771,9 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
             program,
             all_device_cores,
             value_false_single_tile_size,  // Using actual false tensor size
-            num_tiles_per_cb,
-            value_false_data_format);  // Using actual false tensor format
+            (value_false_sharded && is_native_sharding) ? value_false_num_tiles_per_shard : num_tiles_per_cb,
+            value_false_data_format,
+            (value_false_sharded && is_native_sharding) ? value_false_buffer : nullptr);
         value_false_tensor_cb = cb2;
         value_false_tensor_cb_handle = cb2_handle;
     } else {
@@ -618,8 +787,9 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         program,
         all_device_cores,
         output_single_tile_size,
-        num_tiles_per_cb,
-        output_data_format);  // output
+        (output_sharded && is_native_sharding) ? output_num_tiles_per_shard : num_tiles_per_cb,
+        output_data_format,
+        (output_sharded && is_native_sharding) ? output_buffer : nullptr);
 
     // BROADCAST DETECTION - Common for both reader and compute kernels
     bool pred_is_bcast = false, true_is_bcast = false, false_is_bcast = false;
@@ -670,9 +840,17 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
             (std::uint32_t)predicate_tensor_cb,
             (std::uint32_t)value_true_tensor_cb,
             (std::uint32_t)value_false_tensor_cb};
-        TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);
-        TensorAccessorArgs(*value_true_tensor.value().buffer()).append_to(reader_compile_time_args);
-        TensorAccessorArgs(*value_false_tensor.value().buffer()).append_to(reader_compile_time_args);
+
+        // Only append TensorAccessorArgs for non-sharded tensors
+        auto [predicate_sharded, value_true_sharded, value_false_sharded] =
+            get_tensor_sharding_status(predicate_tensor, value_true_tensor, value_false_tensor);
+        bool all_sharded = predicate_sharded && value_true_sharded && value_false_sharded;
+
+        if (!all_sharded) {
+            TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);
+            TensorAccessorArgs(*value_true_tensor.value().buffer()).append_to(reader_compile_time_args);
+            TensorAccessorArgs(*value_false_tensor.value().buffer()).append_to(reader_compile_time_args);
+        }
         reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines);
     }
 
@@ -804,8 +982,33 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         broadcast_type,
         set_runtime_args);
 
+    // Update dynamic circular buffer addresses for sharded tensors
+    if (is_native_sharding) {
+        if (predicate_sharded) {
+            UpdateDynamicCircularBufferAddress(program, predicate_tensor_cb_handle, *predicate_buffer);
+        }
+        if (variant == WhereVariant::TTS || variant == WhereVariant::TTT) {
+            if (value_true_sharded && value_true_buffer != nullptr) {
+                UpdateDynamicCircularBufferAddress(program, value_true_tensor_cb_handle, *value_true_buffer);
+            }
+        }
+        if (variant == WhereVariant::TST || variant == WhereVariant::TTT) {
+            if (value_false_sharded && value_false_buffer != nullptr) {
+                UpdateDynamicCircularBufferAddress(program, value_false_tensor_cb_handle, *value_false_buffer);
+            }
+        }
+        if (output_sharded) {
+            UpdateDynamicCircularBufferAddress(program, output_tensor_cb_handle, *output_buffer);
+        }
+    }
+
+    // Store CB handles for use in override_runtime_arguments
+    std::vector<tt::tt_metal::CBHandle> cb_handles = {
+        predicate_tensor_cb_handle, value_true_tensor_cb_handle, value_false_tensor_cb_handle, output_tensor_cb_handle};
+
     return {
-        std::move(program), {reader_kernel_id, writer_kernel_id, compute_kernel_id, compute_with_storage_grid_size}};
+        std::move(program),
+        {reader_kernel_id, writer_kernel_id, compute_kernel_id, compute_with_storage_grid_size, cb_handles}};
 }
 
 void WhereDeviceOperation::WhereProgramFactory::override_runtime_arguments(
@@ -849,6 +1052,30 @@ void WhereDeviceOperation::WhereProgramFactory::override_runtime_arguments(
         output,
         broadcast_type,
         update_args);
+
+    // Update dynamic circular buffer addresses for sharded tensors (for cached program)
+    WhereVariant variant = operation_attributes.where_variant;
+
+    bool is_native_sharding = is_native_L1_sharding(predicate_tensor, value_true_tensor, value_false_tensor, output);
+    if (is_native_sharding) {
+        // Get CB handles from cached program
+        auto& cb_handles = cached_program.shared_variables.cb_handles;
+
+        if (predicate_tensor.is_sharded() && cb_handles.size() > 0) {
+            UpdateDynamicCircularBufferAddress(cached_program.program, cb_handles[0], *predicate_tensor.buffer());
+        }
+        if ((variant == WhereVariant::TTS || variant == WhereVariant::TTT) && value_true_tensor.has_value() &&
+            value_true_tensor->is_sharded() && cb_handles.size() > 1) {
+            UpdateDynamicCircularBufferAddress(cached_program.program, cb_handles[1], *value_true_tensor->buffer());
+        }
+        if ((variant == WhereVariant::TST || variant == WhereVariant::TTT) && value_false_tensor.has_value() &&
+            value_false_tensor->is_sharded() && cb_handles.size() > 2) {
+            UpdateDynamicCircularBufferAddress(cached_program.program, cb_handles[2], *value_false_tensor->buffer());
+        }
+        if (output.is_sharded() && cb_handles.size() > 3) {
+            UpdateDynamicCircularBufferAddress(cached_program.program, cb_handles[3], *output.buffer());
+        }
+    }
 }
 
 }  // namespace ttnn::operations::ternary

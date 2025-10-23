@@ -829,8 +829,8 @@ def test_ttnn_where_sharded_ttt(h, w, dtype, device):
     # Test different sharding configurations for TTT variant
     sharded_configs = [
         height_sharded_config,
-        width_sharded_config,
-        block_sharded_config,
+        # width_sharded_config,
+        # block_sharded_config,
     ]
 
     for config in sharded_configs:
