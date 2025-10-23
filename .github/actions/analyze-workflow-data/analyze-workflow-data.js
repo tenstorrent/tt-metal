@@ -700,14 +700,14 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
               } catch (_) { /* ignore */ }
             }
 
-            // Create snippets with job names, but blank test and error fields
+            // Create snippets with job names, but blank test and informative error message
             const out = [];
             for (const jobName of jobNamesSet) {
               out.push({
                 label: jobName,
                 job: jobName,
                 test: '', // Leave blank as requested
-                snippet: '' // Leave blank as requested
+                snippet: 'currently aggregate-workflow-data is not able to parse these kinds of errors'
               });
               if (out.length >= maxSnippets) break;
             }
