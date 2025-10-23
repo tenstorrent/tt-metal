@@ -52,7 +52,7 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
-      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
+      options: "--device /dev/tenstorrent"
     defaults:
       run:
         shell: bash
@@ -272,12 +272,8 @@ jobs:
 
       - name: Save environment data
         if: ${{ !cancelled() }}
-        uses: ./.github/actions/docker-run
-        with:
-          docker_image: ${{ inputs.docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: ${{ env.DOCKER_OPTS }}
-          run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+        shell: bash
+        run: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
 
       - name: Upload benchmark data
         if: ${{ !cancelled() }}
