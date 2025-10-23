@@ -924,7 +924,9 @@ def test_demo_text(
         # Currently only supporting greedy decoding (temperature=0) on device
         sampling_on_device = model[0]._supports_on_device_sampling
         if sampling_on_device:
-            device_sampling_params = SamplingParams(temperature=0.0, top_k=1, top_p=1.0)
+            device_sampling_params = SamplingParams(
+                temperature=sampling_params["temperature"], top_k=32, top_p=sampling_params["top_p"]
+            )
         else:
             device_sampling_params = None
 
