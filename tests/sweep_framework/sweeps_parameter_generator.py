@@ -241,6 +241,12 @@ if __name__ == "__main__":
         help="If set, dumps the results to disk in JSON instead of using ES",
     )
     parser.add_argument(
+        "--shuffle-seed",
+        required=False,
+        type=int,
+        help="Seed for random shuffling of vectors (logged when auto-generated) to allow reproducible order.",
+    )
+    parser.add_argument(
         "--skip-modules",
         required=False,
         help="Comma-separated list of module names to skip during generation",
