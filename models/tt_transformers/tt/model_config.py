@@ -106,7 +106,12 @@ class ModelOptimizations:
                 base_model_name.startswith("Llama-3")
                 or base_model_name.startswith("Mistral-7B")
                 or base_model_name.startswith("Phi-3-mini")
+                or base_model_name.startswith("phi-4")
             ):
+                if model_name.startswith("phi-4"):
+                    logger.info(
+                        f"Model {model_name} is running out of DRAM memory for weight fetching under standard accuracy settings, using BFP8 for WQKV"
+                    )
                 logger.info(
                     f"Llama 3, Mistral 7B and Phi3-mini models test insensitive to attention precision, using BFP8 attention and kv-cache with FP16 MLP accumulation even in accuracy mode"
                 )
@@ -508,6 +513,7 @@ class ModelArgs:
         elif HF_MODEL:
             self.CKPT_DIR = HF_MODEL
             self.TOKENIZER_PATH = HF_MODEL
+
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
             else:  # For HF models, always append the device name (e.g. N150/N300/T3K/TG) to the cache path
@@ -568,7 +574,6 @@ class ModelArgs:
                     f"No local params found for {self.CKPT_DIR}, dummy weights are not supported for this model"
                 )
             self._set_model_params(self.LOCAL_LLAMA_PARAMS[local_params])
-
         # Set the max number of tokens for each prefill chunk based on the model and device
         max_prefill_chunk_size_div1024 = os.getenv("MAX_PREFILL_CHUNK_SIZE")
         if max_prefill_chunk_size_div1024 is None:
@@ -582,7 +587,7 @@ class ModelArgs:
                 "Llama-3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Llama-3.2-90B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
-                "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128},
                 "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
@@ -2917,6 +2922,17 @@ class HfModelWrapper:
 
 
 class DecodersPrecision:
+    @classmethod
+    def from_string(cls, optimizations: str):
+        if optimizations == "performance":
+            return cls.performance
+        elif optimizations == "accuracy":
+            return cls.accuracy
+        else:
+            raise ValueError(
+                f"Invalid optimization configuration: {optimizations}. Allowed values are 'performance' or 'accuracy'"
+            )
+
     @classmethod
     def accuracy(cls, num_decoders, model_name):
         inst = cls._precision_factory(num_decoders, model_name, ModelOptimizations.accuracy)
