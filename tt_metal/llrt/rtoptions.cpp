@@ -127,6 +127,10 @@ RunTimeOptions::RunTimeOptions() :
     profiler_mid_run_dump = false;
     profiler_buffer_usage_enabled = false;
     profiler_trace_profiler = false;
+<<<<<<< HEAD
+=======
+    profiler_trace_tracking = false;
+>>>>>>> fd40f5334fc855bfd7afe7199611672771939b8d
 
     const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
 #if defined(TRACY_ENABLE)

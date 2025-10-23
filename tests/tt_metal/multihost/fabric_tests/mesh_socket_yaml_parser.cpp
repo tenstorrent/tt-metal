@@ -539,18 +539,18 @@ PatternType MeshSocketYamlParser::parse_pattern_type(const std::string& pattern_
     }
 }
 
-std::vector<std::vector<eth_coord_t>> MeshSocketYamlParser::parse_eth_coord_mapping(const YAML::Node& yaml_node) {
-    std::vector<std::vector<eth_coord_t>> array;
+std::vector<std::vector<EthCoord>> MeshSocketYamlParser::parse_eth_coord_mapping(const YAML::Node& yaml_node) {
+    std::vector<std::vector<EthCoord>> array;
 
     TT_FATAL(yaml_node.IsSequence(), "Expected a sequence for 2D array");
 
     for (const auto& row : yaml_node) {
         TT_FATAL(row.IsSequence(), "Expected each row to be a sequence");
-        std::vector<eth_coord_t> row_vector;
+        std::vector<EthCoord> row_vector;
         row_vector.reserve(row.size());
         for (const auto& entry : row) {
             TT_FATAL(entry.size() == 5, "Expected ethernet core coordinates to be a sequence of 5 elements");
-            row_vector.push_back(eth_coord_t{
+            row_vector.push_back(EthCoord{
                 entry[0].as<uint32_t>(),
                 entry[1].as<uint32_t>(),
                 entry[2].as<uint32_t>(),

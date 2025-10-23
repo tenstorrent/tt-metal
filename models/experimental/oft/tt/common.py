@@ -204,7 +204,7 @@ class GroupNorm:
         self.input_height = layer_args.input_height
         self.input_width = layer_args.input_width
 
-    def __call__(self, device, input_tensor, shard="HS", num_splits=1):
+    def __call__(self, device, input_tensor, shard="HS", num_splits=1, negative_mask=False):
         compute_grid = device.compute_with_storage_grid_size()
         grid_size = ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x)
         grid_y = grid_size.y
@@ -216,6 +216,9 @@ class GroupNorm:
             grid_x *= grid_y
             grid_y = 1
 
+        self.num_groups = self.num_groups // num_splits
+        self.channels = self.channels // num_splits
+
         # Generate input mask
         input_mask_tensor = ttnn.create_group_norm_input_mask(self.channels, self.num_groups, grid_y)
         input_mask_tensor = ttnn.from_torch(
@@ -225,6 +228,17 @@ class GroupNorm:
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        if negative_mask:
+            input_nmask_tensor = ttnn.create_group_norm_input_negative_mask(self.channels, self.num_groups, grid_y)
+            input_nmask_tensor = ttnn.from_torch(
+                input_nmask_tensor,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            input_nmask_tensor = None
         # Generate gamma/beta tensors
         gamma = ttnn.create_group_norm_weight_bias_rm(self.weight, self.channels, grid_y)
         beta = ttnn.create_group_norm_weight_bias_rm(self.bias, self.channels, grid_y)
@@ -260,14 +274,17 @@ class GroupNorm:
             sharded_mem_config = ttnn.MemoryConfig(
                 ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
             )
-        # logger.debug(
-        #     f"input tensor shape: {input_tensor.shape}, layout: {input_tensor.layout} memory config: {input_tensor.memory_config}"
-        # )
+
         input_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
+        if negative_mask and input_tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+            input_tensor = ttnn.move(input_tensor)
+
         tt_output_tensor = ttnn.group_norm(
             input_tensor,
             num_groups=self.num_groups,
             input_mask=input_mask_tensor,
+            negative_mask=input_nmask_tensor,
             weight=gamma_t,
             bias=beta_t,
             memory_config=sharded_mem_config,
@@ -275,6 +292,9 @@ class GroupNorm:
             epsilon=1e-5,
             inplace=True if input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT else False,
         )
+
+        self.num_groups = self.num_groups * num_splits
+        self.channels = self.channels * num_splits
         return tt_output_tensor
 
 
