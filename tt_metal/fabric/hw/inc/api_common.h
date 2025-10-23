@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <type_traits>
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 
 namespace tt::tt_fabric::common::experimental {
 

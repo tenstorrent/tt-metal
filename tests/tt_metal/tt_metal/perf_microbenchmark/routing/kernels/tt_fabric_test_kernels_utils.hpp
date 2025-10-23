@@ -8,11 +8,21 @@
 #include "dataflow_api.h"
 #include "debug/dprint.h"
 #include "fabric/fabric_edm_packet_header.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+
+#include "tt_metal/fabric/hw/inc/api_common.h"
+using namespace tt::tt_fabric::common::experimental;
+#if defined(FABRIC_2D)
+#include "tt_metal/fabric/hw/inc/mesh/api.h"
+using namespace tt::tt_fabric::mesh::experimental;
+#else
+#include "tt_metal/fabric/hw/inc/linear/api.h"
+using namespace tt::tt_fabric::linear::experimental;
+#endif
 
 namespace tt::tt_fabric {
 namespace fabric_tests {
@@ -232,6 +242,8 @@ struct ChipMulticastFields1D {
         return ChipMulticastFields1D(mcast_start_hops, num_hops);
     }
 
+    ChipMulticastFields1D() : mcast_start_hops(0), num_hops(0) {}
+
     ChipMulticastFields1D(uint32_t mcast_start_hops, uint32_t num_hops) :
         mcast_start_hops(mcast_start_hops), num_hops(num_hops) {}
 
@@ -249,6 +261,9 @@ struct ChipMulticastFields2D {
         uint16_t num_hops_w = get_local_arg_val<uint32_t>(arg_idx++);
         return ChipMulticastFields2D(dst_device_id, dst_mesh_id, num_hops_n, num_hops_s, num_hops_e, num_hops_w);
     }
+
+    ChipMulticastFields2D() :
+        dst_device_id(0), dst_mesh_id(0), num_hops_n(0), num_hops_s(0), num_hops_e(0), num_hops_w(0) {}
 
     ChipMulticastFields2D(
         uint16_t dst_device_id,
@@ -304,6 +319,8 @@ struct NocUnicastAtomicIncFields {
         }
         return NocUnicastAtomicIncFields(atomic_inc_val, atomic_inc_wrap, dst_address, dst_noc_encoding);
     }
+
+    NocUnicastAtomicIncFields() : atomic_inc_val(0), atomic_inc_wrap(0), dst_address(0), dst_noc_encoding(0) {}
 
     NocUnicastAtomicIncFields(
         uint16_t atomic_inc_val, uint16_t atomic_inc_wrap, uint32_t dst_address, uint32_t dst_noc_encoding) :
@@ -377,12 +394,7 @@ struct NocUnicastScatterWriteFields {
 template <typename T>
 void setup_2d_unicast_route(uint32_t packet_header_address, const ChipUnicastFields2D& unicast_fields) {
     // Template constraint: T must be MeshPacketHeader or HybridMeshPacketHeader
-    fabric_set_unicast_route(
-        (T*)packet_header_address,
-        unicast_fields.src_device_id,
-        unicast_fields.dst_device_id,
-        unicast_fields.dst_mesh_id,
-        unicast_fields.ew_dim);
+    fabric_set_unicast_route((T*)packet_header_address, unicast_fields.dst_device_id, unicast_fields.dst_mesh_id);
 }
 
 template <typename T>
@@ -931,12 +943,7 @@ struct SenderKernelMemoryMap {
         return SenderKernelMemoryMap(common_map, rt_args_idx);
     }
 
-    uint32_t get_packet_header_address() {
-        uint32_t addr = curr_packet_header_address_;
-        ASSERT(addr + sizeof(PACKET_HEADER_TYPE) < payload_buffer_region_base_);
-        curr_packet_header_address_ += sizeof(PACKET_HEADER_TYPE);
-        return addr;
-    }
+    uint32_t get_packet_header_address() { return (uint32_t)PacketHeaderPool::allocate_header(); }
 
     uint32_t get_payload_buffer_address(uint32_t size) {
         uint32_t addr = curr_payload_buffer_address_;
@@ -951,19 +958,15 @@ private:
     SenderKernelMemoryMap(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
         // Use pre-parsed common memory map and parse only sender-specific args
         common = common_map;
-        packet_header_region_base_ = get_arg_val<uint32_t>(rt_args_idx++);
         payload_buffer_region_base_ = get_arg_val<uint32_t>(rt_args_idx++);
         highest_usable_address_ = get_arg_val<uint32_t>(rt_args_idx++);
 
         // set the current addresses to the base
-        curr_packet_header_address_ = packet_header_region_base_;
         curr_payload_buffer_address_ = payload_buffer_region_base_;
     }
 
-    uint32_t packet_header_region_base_;
     uint32_t payload_buffer_region_base_;
     uint32_t highest_usable_address_;
-    uint32_t curr_packet_header_address_;
     uint32_t curr_payload_buffer_address_;
 };
 
@@ -1476,17 +1479,10 @@ struct SyncKernelConfig {
     }
 
     void global_sync(uint8_t sync_iter) {
-        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
-            sync_fabric_connections()[i].open();
-        }
-        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
-            line_sync_configs()[i].global_sync_start();
-        }
-        // only need one of the config to check for the acks
-        line_sync_configs()[0].global_sync_finish(sync_iter);
-        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
-            sync_fabric_connections()[i].close();
-        }
+        connection_manager.open();
+        fabric_multicast_noc_unicast_atomic_inc_with_state(connection_manager, sync_headers);
+        noc_semaphore_wait_min(line_sync_ptrs[0], line_sync_val * (sync_iter + 1));
+        connection_manager.close();
     }
 
     void local_sync(uint8_t sync_iter) { local_sync_config().local_sync(sync_iter); }
@@ -1496,18 +1492,15 @@ struct SyncKernelConfig {
     uint32_t get_result_buffer_size() const { return memory_map.common.result_buffer_size; }
 
     SenderKernelMemoryMap memory_map;
-    alignas(WorkerToFabricEdmSender)
-        std::array<char, NUM_SYNC_FABRIC_CONNECTIONS * sizeof(WorkerToFabricEdmSender)> sync_fabric_connections_storage;
-    alignas(LineSyncConfig)
-        std::array<char, NUM_SYNC_FABRIC_CONNECTIONS * sizeof(LineSyncConfig)> line_sync_configs_storage;
+    tt::tt_fabric::RoutingPlaneConnectionManager connection_manager;
+    std::array<uint32_t, NUM_SYNC_FABRIC_CONNECTIONS> line_packet_header_addresses;
+    std::array<volatile tt_l1_ptr uint32_t*, NUM_SYNC_FABRIC_CONNECTIONS> line_sync_ptrs;
+    uint32_t line_sync_val;
+    uint8_t sync_headers;
     alignas(LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>)
         std::array<char, sizeof(LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>)> local_sync_config_storage;
 
     // Helper accessors
-    WorkerToFabricEdmSender* sync_fabric_connections() {
-        return reinterpret_cast<WorkerToFabricEdmSender*>(sync_fabric_connections_storage.data());
-    }
-    LineSyncConfig* line_sync_configs() { return reinterpret_cast<LineSyncConfig*>(line_sync_configs_storage.data()); }
     LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>& local_sync_config() {
         return *reinterpret_cast<LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>*>(local_sync_config_storage.data());
     }
@@ -1520,23 +1513,54 @@ private:
         // Parse memory map args from runtime args using pre-parsed common map
         this->memory_map = SenderKernelMemoryMap::build_from_args(common_map, rt_args_idx);
 
-        // Initialize sync fabric connections using placement new - these use normal runtime args
+        // Build and open routing-plane connection manager from RT args
+        connection_manager = tt::tt_fabric::RoutingPlaneConnectionManager::build_from_args<
+            tt::tt_fabric::RoutingPlaneConnectionManager::BUILD_ONLY>(rt_args_idx, NUM_SYNC_FABRIC_CONNECTIONS);
+
+        // Initialize line sync header and NOC atomic inc fields per connection
+        line_sync_val = get_local_arg_val<uint32_t>(local_args_idx++);
+        sync_headers = PacketHeaderPool::allocate_header_n(NUM_SYNC_FABRIC_CONNECTIONS);
+        NocUnicastAtomicIncFields fields_vec[NUM_SYNC_FABRIC_CONNECTIONS];
+        NocUnicastAtomicIncCommandHeader commands[NUM_SYNC_FABRIC_CONNECTIONS];
+#if defined(FABRIC_2D)
+        ChipMulticastFields2D mcast_fields_vec[NUM_SYNC_FABRIC_CONNECTIONS];
+        MeshMcastRange mcast_range[NUM_SYNC_FABRIC_CONNECTIONS];
         for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
-            auto sync_connection = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-            new (&sync_fabric_connections()[i]) WorkerToFabricEdmSender(sync_connection);
+            const auto mcast_fields = ChipMulticastFields2D::build_from_args(local_args_idx);
+            auto fields = NocUnicastAtomicIncFields::build_from_args<true>(local_args_idx);
+            mcast_fields_vec[i] = mcast_fields;
+            mcast_range[i] = {
+                (uint8_t)mcast_fields.num_hops_e,
+                (uint8_t)mcast_fields.num_hops_w,
+                (uint8_t)mcast_fields.num_hops_n,
+                (uint8_t)mcast_fields.num_hops_s};
+            fields_vec[i] = fields;
+            auto noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_address);
+            commands[i] = NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val, fields.atomic_inc_wrap};
         }
 
-        // Initialize line sync configurations
-        uint32_t line_sync_val = get_local_arg_val<uint32_t>(local_args_idx++);
+        fabric_multicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Wrap | UnicastAtomicIncUpdateMask::Val |
+            UnicastAtomicIncUpdateMask::Flush>(connection_manager, sync_headers, mcast_range, commands[0]);
+#else
+        ChipMulticastFields1D mcast_fields_vec[NUM_SYNC_FABRIC_CONNECTIONS];
+        uint8_t start_distances[NUM_SYNC_FABRIC_CONNECTIONS];
+        uint8_t ranges[NUM_SYNC_FABRIC_CONNECTIONS];
         for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
-            uint32_t packet_header_address = this->memory_map.get_packet_header_address();
-            new (&line_sync_configs()[i])
-                LineSyncConfig(&sync_fabric_connections()[i], packet_header_address, line_sync_val);
-
-            // setup packet header fields
-            line_sync_configs()[i].template setup_packet_header<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(
-                local_args_idx, packet_header_address);
+            const auto mcast_fields = ChipMulticastFields1D::build_from_args(local_args_idx);
+            auto fields = NocUnicastAtomicIncFields::build_from_args<true>(local_args_idx);
+            mcast_fields_vec[i] = mcast_fields;
+            start_distances[i] = mcast_fields.mcast_start_hops;
+            ranges[i] = mcast_fields.num_hops;
+            fields_vec[i] = fields;
+            auto noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_address);
+            commands[i] = NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val, fields.atomic_inc_wrap};
         }
+
+        fabric_multicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Wrap | UnicastAtomicIncUpdateMask::Val |
+            UnicastAtomicIncUpdateMask::Flush>(connection_manager, sync_headers, start_distances, ranges, commands[0]);
+#endif
 
         // Initialize local sync config
         uint32_t sync_address = get_local_arg_val<uint32_t>(local_args_idx++);

@@ -53,6 +53,17 @@ public:
         const std::vector<uint32_t>& local_args,
         uint32_t local_args_address,
         const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear) const;
+    // Specialized helper to create kernel and append RoutingPlaneConnectionManager RT args
+    void create_kernel_with_rpcm(
+        const MeshCoordinate& device_coord,
+        const std::vector<uint32_t>& ct_args,
+        std::vector<uint32_t>& rt_args,
+        const std::vector<uint32_t>& local_args,
+        uint32_t local_args_address,
+        const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear,
+        const std::vector<FabricNodeId>& dst_nodes,
+        const std::vector<uint32_t>& connection_link_indices,
+        tt::tt_fabric::FabricApiType api_type) const;
     void collect_results();
     virtual bool validate_results(std::vector<uint32_t>& data) const = 0;
     void dump_results();
@@ -233,6 +244,48 @@ inline void TestWorker::create_kernel(
         tt::tt_metal::detail::WriteToDeviceL1(device_handle, this->logical_core_, address, zero_vec);
     }
     */
+}
+
+inline void TestWorker::create_kernel_with_rpcm(
+    const MeshCoordinate& device_coord,
+    const std::vector<uint32_t>& ct_args,
+    std::vector<uint32_t>& rt_args,
+    const std::vector<uint32_t>& local_args,
+    uint32_t local_args_address,
+    const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear,
+    const std::vector<FabricNodeId>& dst_nodes,
+    const std::vector<uint32_t>& connection_link_indices,
+    tt::tt_fabric::FabricApiType api_type) const {
+    auto kernel_handle = tt::tt_metal::CreateKernel(
+        this->test_device_ptr_->get_program_handle(),
+        this->kernel_src_,
+        {this->logical_core_},
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = ct_args,
+            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+
+    // Append RoutingPlaneConnectionManager RT args and defines
+    tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+        this->test_device_ptr_->get_node_id(),
+        dst_nodes,
+        connection_link_indices,
+        this->test_device_ptr_->get_program_handle(),
+        kernel_handle,
+        this->logical_core_,
+        rt_args,
+        api_type);
+
+    // Set runtime args (now includes RPCM args)
+    tt::tt_metal::SetRuntimeArgs(
+        this->test_device_ptr_->get_program_handle(), kernel_handle, this->logical_core_, rt_args);
+
+    // Set local args to memory buffer
+    if (!local_args.empty()) {
+        this->test_device_ptr_->set_local_runtime_args_for_core(
+            device_coord, this->logical_core_, local_args_address, local_args);
+    }
 }
 
 /* ********************
@@ -528,13 +581,6 @@ inline void TestDevice::create_sync_kernel() {
     // Runtime args: memory map args, then sync fabric connection args
     std::vector<uint32_t> rt_args = sender_memory_map_->get_memory_map_args();
 
-    // Add sync fabric connection args (for WorkerToFabricEdmSender::build_from_args)
-    std::vector<uint32_t> sync_fabric_connection_args;
-    if (!sync_sender.sync_fabric_connections_.empty()) {
-        sync_fabric_connection_args = generate_fabric_connection_args(sync_core, sync_sender.sync_fabric_connections_);
-        rt_args.insert(rt_args.end(), sync_fabric_connection_args.begin(), sync_fabric_connection_args.end());
-    }
-
     // Local args (all the rest go to local args buffer)
     std::vector<uint32_t> local_args;
 
@@ -573,8 +619,33 @@ inline void TestDevice::create_sync_kernel() {
         local_args.push_back(sender_noc_encoding);
     }
 
-    // create sync kernel with local args
-    sync_sender.create_kernel(coord_, ct_args, rt_args, local_args, sender_memory_map_->get_local_args_address(), {});
+    // Prepare RoutingPlaneConnectionManager args
+    std::vector<FabricNodeId> dst_nodes;
+    std::vector<uint32_t> connection_link_indices;
+    dst_nodes.reserve(sync_sender.sync_fabric_connections_.size());
+    connection_link_indices.reserve(sync_sender.sync_fabric_connections_.size());
+    for (const auto& [direction, link_idx] : sync_sender.sync_fabric_connections_) {
+        const auto neighbor_node_id = this->route_manager_->get_neighbor_node_id(this->fabric_node_id_, direction);
+        dst_nodes.push_back(neighbor_node_id);
+        connection_link_indices.push_back(link_idx);
+    }
+    fprintf(stderr, "\n");
+
+    // Choose API type based on fabric config
+    tt::tt_fabric::FabricApiType api_type =
+        is_2D_routing_enabled ? tt::tt_fabric::FabricApiType::Mesh : tt::tt_fabric::FabricApiType::Linear;
+
+    // create sync kernel with RPCM and local args
+    sync_sender.create_kernel_with_rpcm(
+        coord_,
+        ct_args,
+        rt_args,
+        local_args,
+        sender_memory_map_->get_local_args_address(),
+        {},
+        dst_nodes,
+        connection_link_indices,
+        api_type);
     log_debug(tt::LogTest, "created sync kernel on core: {}", sync_core);
 }
 

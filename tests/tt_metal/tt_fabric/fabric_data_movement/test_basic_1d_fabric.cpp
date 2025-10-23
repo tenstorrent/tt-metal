@@ -1400,58 +1400,9 @@ void RunTest2DMCastConnAPI(
     uint32_t num_packets = 100;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
-    const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-    uint32_t mcast_mode;
-    auto arbitrary_fabric_node_id = src_fabric_node_id;
-    if (north_hops > 0 && south_hops > 0) {
-        mcast_mode = 3;
-        if (north_branch_east_hops > 0) {
-            arbitrary_fabric_node_id = north_east_fabric_node_id;
-        } else if (north_branch_west_hops > 0) {
-            arbitrary_fabric_node_id = north_west_fabric_node_id;
-        } else {
-            arbitrary_fabric_node_id = north_fabric_node_id;
-        }
-    } else if (south_hops > 0) {
-        mcast_mode = 2;
-        if (south_branch_west_hops > 0) {
-            arbitrary_fabric_node_id = south_west_fabric_node_id;
-        } else if (south_branch_east_hops > 0) {
-            arbitrary_fabric_node_id = south_east_fabric_node_id;
-        } else {
-            arbitrary_fabric_node_id = south_fabric_node_id;
-        }
-    } else if (north_hops > 0) {
-        mcast_mode = 1;
-        if (north_branch_east_hops > 0) {
-            arbitrary_fabric_node_id = north_east_fabric_node_id;
-        } else if (north_branch_west_hops > 0) {
-            arbitrary_fabric_node_id = north_west_fabric_node_id;
-        } else {
-            arbitrary_fabric_node_id = north_fabric_node_id;
-        }
-    } else {
-        mcast_mode = 0;
-        if (east_hops > 0) {
-            arbitrary_fabric_node_id = right_fabric_node_id;
-        } else {
-            arbitrary_fabric_node_id = left_fabric_node_id;
-        }
-    }
     // common compile time args for sender and receiver
     std::vector<uint32_t> compile_time_args = {
-        worker_mem_map.test_results_address,
-        worker_mem_map.test_results_size_bytes,
-        worker_mem_map.target_address,
-        0 /* use_dram_dst */,
-        mcast_mode,
-        topology == Topology::Mesh,
-        fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
-        1 /* is_chip_multicast */,
-        1 /* additional_dir */};
-
-    std::map<std::string, std::string> defines = {};
-    defines["FABRIC_2D"] = "";
+        worker_mem_map.test_results_address, worker_mem_map.test_results_size_bytes, worker_mem_map.target_address};
 
     auto sender_program = tt_metal::CreateProgram();
     auto sender_kernel = tt_metal::CreateKernel(
@@ -1461,8 +1412,7 @@ void RunTest2DMCastConnAPI(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_time_args,
-            .defines = defines});
+            .compile_args = compile_time_args});
 
     std::vector<uint32_t> sender_runtime_args = {
         worker_mem_map.source_l1_buffer_address,
@@ -1470,137 +1420,38 @@ void RunTest2DMCastConnAPI(
         num_packets,
         receiver_noc_encoding,
         time_seed,
-        ew_dim,
-        src_fabric_node_id.chip_id,
-        *mesh_id.value(),
         north_hops,
         (north_branch_west_hops << 16) | north_branch_east_hops,
-    };
+        south_hops,
+        (south_branch_west_hops << 16) | south_branch_east_hops,
+        east_hops,
+        west_hops};
 
-    // append the EDM connection rt args for fwd connection
-    uint32_t link_idx;
+    std::vector<FabricNodeId> connection_next_hops;
+    connection_next_hops.reserve(4);
     if (north_hops > 0) {
-        if (north_branch_east_hops > 0) {
-            link_idx = get_forwarding_link_indices(src_fabric_node_id, north_east_fabric_node_id)[0];
-            append_fabric_connection_rt_args(
-                src_fabric_node_id,
-                north_east_fabric_node_id,
-                link_idx,
-                sender_program,
-                {sender_logical_core},
-                sender_runtime_args);
-        } else if (north_branch_west_hops) {
-            link_idx = get_forwarding_link_indices(src_fabric_node_id, north_west_fabric_node_id)[0];
-            append_fabric_connection_rt_args(
-                src_fabric_node_id,
-                north_west_fabric_node_id,
-                link_idx,
-                sender_program,
-                {sender_logical_core},
-                sender_runtime_args);
-        } else {
-            link_idx = get_forwarding_link_indices(src_fabric_node_id, north_fabric_node_id)[0];
-            append_fabric_connection_rt_args(
-                src_fabric_node_id,
-                north_fabric_node_id,
-                link_idx,
-                sender_program,
-                {sender_logical_core},
-                sender_runtime_args);
-        }
-    } else {
-        link_idx = 0;
-        append_fabric_connection_rt_args(
-            src_fabric_node_id,
-            arbitrary_fabric_node_id,
-            link_idx,
-            sender_program,
-            {sender_logical_core},
-            sender_runtime_args);
+        connection_next_hops.push_back(north_fabric_node_id);
     }
-    sender_runtime_args.push_back(south_hops);
-    sender_runtime_args.push_back((south_branch_west_hops << 16) | south_branch_east_hops);
-
     if (south_hops > 0) {
-        if (south_branch_west_hops > 0) {
-            link_idx = get_forwarding_link_indices(src_fabric_node_id, south_west_fabric_node_id)[0];
-            append_fabric_connection_rt_args(
-                src_fabric_node_id,
-                south_west_fabric_node_id,
-                link_idx,
-                sender_program,
-                {sender_logical_core},
-                sender_runtime_args);
-        } else if (south_branch_east_hops > 0) {
-            link_idx = get_forwarding_link_indices(src_fabric_node_id, south_east_fabric_node_id)[0];
-            append_fabric_connection_rt_args(
-                src_fabric_node_id,
-                south_east_fabric_node_id,
-                link_idx,
-                sender_program,
-                {sender_logical_core},
-                sender_runtime_args);
-        } else {
-            link_idx = get_forwarding_link_indices(src_fabric_node_id, south_fabric_node_id)[0];
-            append_fabric_connection_rt_args(
-                src_fabric_node_id,
-                south_fabric_node_id,
-                link_idx,
-                sender_program,
-                {sender_logical_core},
-                sender_runtime_args);
-        }
-    } else {
-        link_idx = 0;
-        append_fabric_connection_rt_args(
-            src_fabric_node_id,
-            arbitrary_fabric_node_id,
-            link_idx,
-            sender_program,
-            {sender_logical_core},
-            sender_runtime_args);
+        connection_next_hops.push_back(south_fabric_node_id);
     }
-    sender_runtime_args.push_back(left_fabric_node_id.chip_id);
-    sender_runtime_args.push_back(right_fabric_node_id.chip_id);
-    sender_runtime_args.push_back((west_hops << 16) | east_hops);
     if (west_hops > 0) {
-        link_idx = get_forwarding_link_indices(src_fabric_node_id, left_fabric_node_id)[0];
-        append_fabric_connection_rt_args(
-            src_fabric_node_id,
-            left_fabric_node_id,
-            link_idx,
-            sender_program,
-            {sender_logical_core},
-            sender_runtime_args);
-    } else {
-        link_idx = 0;
-        append_fabric_connection_rt_args(
-            src_fabric_node_id,
-            arbitrary_fabric_node_id,
-            link_idx,
-            sender_program,
-            {sender_logical_core},
-            sender_runtime_args);
+        connection_next_hops.push_back(left_fabric_node_id);
     }
     if (east_hops > 0) {
-        link_idx = get_forwarding_link_indices(src_fabric_node_id, right_fabric_node_id)[0];
-        append_fabric_connection_rt_args(
-            src_fabric_node_id,
-            right_fabric_node_id,
-            link_idx,
-            sender_program,
-            {sender_logical_core},
-            sender_runtime_args);
-    } else {
-        link_idx = 0;
-        append_fabric_connection_rt_args(
-            src_fabric_node_id,
-            arbitrary_fabric_node_id,
-            link_idx,
-            sender_program,
-            {sender_logical_core},
-            sender_runtime_args);
+        connection_next_hops.push_back(right_fabric_node_id);
     }
+
+    append_routing_plane_connection_manager_rt_args(
+        src_fabric_node_id,
+        connection_next_hops,
+        {},
+        sender_program,
+        sender_kernel,
+        {sender_logical_core},
+        sender_runtime_args,
+        tt::tt_fabric::FabricApiType::Mesh);
+
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};

@@ -129,11 +129,6 @@ struct SenderMemoryMap {
             kernel_config_base,
             CommonMemoryMap::KERNEL_CONFIG_BUFFER_SIZE);
 
-        // Packet headers
-        uint32_t packet_header_base = current_addr;
-        current_addr += PACKET_HEADER_BUFFER_SIZE;
-        packet_headers = BaseMemoryRegion(packet_header_base, PACKET_HEADER_BUFFER_SIZE);
-
         // global sync region
         uint32_t global_sync_region_base = current_addr;
         uint32_t global_sync_region_size = l1_alignment;
@@ -160,12 +155,11 @@ struct SenderMemoryMap {
             l1_unreserved_size);
     }
 
-    bool is_valid() const { return common.is_valid() && packet_headers.is_valid() && payload_buffers.is_valid(); }
+    bool is_valid() const { return common.is_valid() && payload_buffers.is_valid(); }
 
     std::vector<uint32_t> get_memory_map_args() const {
         std::vector<uint32_t> args = common.get_kernel_args();
 
-        args.push_back(packet_headers.start);
         args.push_back(payload_buffers.start);
         args.push_back(highest_usable_address);
 
