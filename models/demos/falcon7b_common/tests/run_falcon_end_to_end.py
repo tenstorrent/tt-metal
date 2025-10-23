@@ -106,7 +106,6 @@ def run_test_FalconCausalLM_end_to_end(
     model_config,
     model_config_str,
     tt_cache_path,
-    model_location_generator,
     e2e_perf=False,
     expected_inference_time=None,
     device_perf=False,
@@ -128,7 +127,7 @@ def run_test_FalconCausalLM_end_to_end(
     global_batch = batch * num_devices
 
     profiler.start("hugging_face_model_setup")
-    hugging_face_reference_model, state_dict = load_hf_model(model_location_generator, model_version)
+    hugging_face_reference_model, state_dict = load_hf_model(model_version)
     configuration = hugging_face_reference_model.config
     pytorch_FalconCausalLM = PytorchFalconCausalLM(hugging_face_reference_model, num_layers)
     profiler.end("hugging_face_model_setup")
