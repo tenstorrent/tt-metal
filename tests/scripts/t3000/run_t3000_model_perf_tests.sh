@@ -160,7 +160,7 @@ main() {
   cd $TT_METAL_HOME
   export PYTHONPATH=$TT_METAL_HOME
 
-  elif [[ "$pipeline_type" == "model_perf_t3000" ]]; then
+  if [[ "$pipeline_type" == "model_perf_t3000" ]]; then
     run_t3000_model_perf_tests
   else
     echo "$pipeline_type is invalid (supported: [ccl_perf_t3000_device, model_perf_t3000])" 2>&1
