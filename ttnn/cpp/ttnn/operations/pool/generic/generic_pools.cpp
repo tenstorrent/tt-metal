@@ -143,17 +143,8 @@ static std::vector<Tensor> pool2d_invoke(
         num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config);
         num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
 
-        // This is the code path of the non sharded input tensor, this means that input channels
-        // can be whatever number here so we need to have the shard_width aligned to the l1 memory alignment
-        // which is 8, in case shard_width is multiple of 16 or 32 we will take largest number possible. We are aligning
-        // it by changing the padded shape of the tensor.
-        uint32_t input_channels_alignment = is_in_tiled ? tt::constants::TILE_WIDTH : 8U;
-        if (input_tensor.memory_config().is_sharded() && input_tensor.layout() == Layout::ROW_MAJOR) {
-            const uint32_t shard_width = input_tensor.memory_config().shard_spec()->shape[1];
-            input_channels_alignment = (shard_width % tt::constants::TILE_WIDTH == 0) ? tt::constants::TILE_WIDTH
-                                       : (shard_width % 16 == 0)                      ? 16U
-                                                                                      : 8U;
-        }
+        uint32_t input_channels_alignment = conv::get_input_channels_alignment(
+            shard_layout, input_tensor.layout(), BufferType::L1, false, input_tensor.memory_config());
 
         ttnn::Shape input_tensor_shape = input_tensor.padded_shape();
 
@@ -180,9 +171,9 @@ static std::vector<Tensor> pool2d_invoke(
         if (padding_needed > 0 && is_block_float(dtype)) {
             ttnn::SmallVector<std::array<uint32_t, 2>> pad_spec = {{0, 0}, {0, 0}, {0, 0}, {0, padding_needed}};
 
-            input_tensor_padded = ttnn::pad(input_tensor, pad_spec, 0.0f);
+            input_tensor_padded = ttnn::pad(input_tensor_flattened, pad_spec, 0.0f);
         } else {
-            input_tensor_padded = input_tensor;
+            input_tensor_padded = input_tensor_flattened;
         }
 
         // Create target shape and apply sharding
@@ -192,11 +183,9 @@ static std::vector<Tensor> pool2d_invoke(
              input_tensor_shape[2],
              input_tensor_width_snapped_to_channels_alignment});
 
-        input_tensor_flattened = input_tensor_flattened.reshape(input_tensor_shape, input_padded_shape);
-
         auto sharded_mem_config = conv::create_sharded_memory_config_from_parallel_config(
             input_padded_shape, parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
-        input_tensor_sharded = ttnn::to_memory_config(input_tensor_flattened, sharded_mem_config, std::nullopt);
+        input_tensor_sharded = ttnn::to_memory_config(input_tensor_padded, sharded_mem_config, std::nullopt);
         out_memory_config = input_tensor_sharded.memory_config();
     } else {
         TT_FATAL(
