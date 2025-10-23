@@ -2599,7 +2599,11 @@ def test_binary_sharded_shardspec_mixed_buffer_type(dtype_pt, dtype_tt, device):
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (2, 3))})
     N, C, H, W = input_shape
     n_cores = 12
-    shard_spec = ttnn.ShardSpec(shard_grid, [(N * C * H) // n_cores, W], ttnn.ShardOrientation.ROW_MAJOR)
+    import math
+
+    shard_spec = ttnn.ShardSpec(
+        shard_grid, [math.ceil((N * C * H) / n_cores / 32) * 32, W], ttnn.ShardOrientation.ROW_MAJOR
+    )
     a_config = ttnn.MemoryConfig(ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
     print("dram_grid_size:", dram_grid_size.x * dram_grid_size.y)
