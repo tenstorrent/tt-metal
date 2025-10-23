@@ -8,6 +8,7 @@ from tqdm import tqdm
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.common.tt_sampling import TTSampling
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import copy_host_to_device, get_decode_mask
 from models.tt_transformers.tt.decoder import TransformerBlock
@@ -128,6 +129,17 @@ class Transformer(LightweightModule):
             weight_cache_path=weight_cache_path,
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
         )
+
+        # Initialize on-device sampling if supported
+        # N150 does not support on-device sampling
+        # Sampling on device is supported only if each devuce has maximum logits size of 64*1024
+        self._supports_on_device_sampling = (
+            self.args.vocab_size // self.args.num_devices <= 64 * 1024 and self.mesh_device.shape != (1, 1)
+        )
+        if self._supports_on_device_sampling:
+            self.tt_sampling = TTSampling(mesh_device=mesh_device, tt_ccl=self.tt_ccl, args=args)
+        else:
+            self.tt_sampling = None
 
         if hasattr(self.args, "sliding_window") and self.args.sliding_window is not None:
             # We are using sliding window attention in this model. We can create a custom attention mask to apply the sliding attention
@@ -321,8 +333,9 @@ class Transformer(LightweightModule):
         Input is ttnn host tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
         if is_tokens:
+            padded_batch_size = 32
+            tt_out = ttnn.reshape(tt_out, ttnn.Shape([1, 1, padded_batch_size, 1]))
             return self.concat_host_output(tt_out)[0, 0, :B, 0]
-
         if self.args.num_devices > 1:
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         else:
@@ -401,7 +414,7 @@ class Transformer(LightweightModule):
         rot_mat_idxs=None,
         page_table=None,
         kv_cache=None,
-        argmax_on_device=False,
+        sampling_on_device=False,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -420,6 +433,13 @@ class Transformer(LightweightModule):
             kv_cache=kv_cache,
             sliding_attn_mask=self.device_decode_sliding_mask,
         )
+
+        if sampling_on_device and self.tt_sampling is not None:
+            # Perform on-device sampling using TTSampling
+            tt_toks = self.tt_sampling(tt_logits, tt_out_tok=x)
+            # Update device tensors for the next iteration
+            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
+            return tt_toks
 
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:
@@ -442,15 +462,7 @@ class Transformer(LightweightModule):
 
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
-        if argmax_on_device:
-            tt_logits = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
-
-            # Update device tensors for the next iteration
-            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
-
-            # Update input tokens with sampled tokens for the next iteration
-            ttnn.copy(tt_logits.reshape(x.shape), x)
-        elif not self.args.is_galaxy:
+        if not self.args.is_galaxy:
             # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
             tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
 

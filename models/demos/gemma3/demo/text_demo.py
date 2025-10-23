@@ -922,9 +922,11 @@ def test_demo_text(
         user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
 
         # Currently only supporting greedy decoding (temperature=0) on device
-        argmax_on_device = sampling_params["temperature"] == 0
-        if argmax_on_device:
-            device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
+        sampling_on_device = model[0]._supports_on_device_sampling
+        if sampling_on_device:
+            device_sampling_params = SamplingParams(
+                temperature=sampling_params["temperature"], top_k=32, top_p=sampling_params["top_p"]
+            )
         else:
             device_sampling_params = None
 

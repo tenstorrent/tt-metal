@@ -202,7 +202,7 @@ class Model:
         return (self.apply_rope, tt_cos, tt_sin)
 
     def ttnn_decode_forward(
-        self, tokens, current_pos, rot_mat_idxs=None, page_table=None, kv_cache=None, argmax_on_device=False
+        self, tokens, current_pos, rot_mat_idxs=None, page_table=None, kv_cache=None, sampling_on_device=False
     ):
         """Decode forward pass - processes single tokens"""
         # Embed tokens
