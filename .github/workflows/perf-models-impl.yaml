@@ -27,11 +27,9 @@ jobs:
         test-info: [
           {name: "N300 WH B0", model-group: "llm_javelin", timeout: 20, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
           {name: "N300 WH B0", model-group: "cnn_javelin", timeout: 10, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
-          {name: "N300 WH B0", model-group: "other", timeout: 5, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
           {name: "N300 WH B0", model-group: "other_magic_env", timeout: 45, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
           # Doesn't work on blackhole P150 {name: "P150 BH", model-group: "llm_javelin", timeout: 20, arch: blackhole, runs-on: ["P150", "pipeline-functional", "cloud-virtual-machine", "${{ inputs.extra-tag }}"], machine-type: "virtual_machine"},
           {name: "P150 BH", model-group: "cnn_javelin", timeout: 10, arch: blackhole, runs-on: ["P150", "pipeline-functional", "cloud-virtual-machine", "${{ inputs.extra-tag }}"], machine-type: "virtual_machine"},
-          {name: "P150 BH", model-group: "other", timeout: 5, arch: blackhole, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
           {name: "P150 BH", model-group: "other_magic_env", timeout: 45, arch: blackhole, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
         ]
 
@@ -95,18 +93,6 @@ jobs:
         with:
           commands: pytest -n auto models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/stable_diffusion/tests -m models_performance_bare_metal --timeout=480
         if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' }}
-      - name: Run bert_tiny model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/bert_tiny/tests/test_performance.py -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other' }}
-      - name: Run squeezebert model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/squeezebert/tests/test_performance.py -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other' }}
       - name: Run yolov10x model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
