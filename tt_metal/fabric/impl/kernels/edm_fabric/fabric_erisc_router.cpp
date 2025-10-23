@@ -26,6 +26,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_packet_recorder.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_channel_traits.hpp"
 
 #include "noc_overlay_parameters.h"
 #include "tt_metal/hw/inc/utils/utils.h"
@@ -288,7 +289,7 @@ struct RouterElasticChannelWriterAdapter {};
 template <uint8_t SENDER_NUM_BUFFERS>
 using RouterToRouterSender = std::conditional_t<
     PERSISTENT_SENDER_CHANNELS_ARE_ELASTIC,
-    RouterElasticChannelWriterAdapter<CHUNK_N_PKTS, channel_buffer_size>,
+    tt::tt_fabric::RouterElasticChannelWriterAdapter<CHUNK_N_PKTS, channel_buffer_size>,
     tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>>;
 
 constexpr bool is_spine_direction(eth_chan_directions direction) {
@@ -437,33 +438,10 @@ FORCE_INLINE void send_next_data(
 //   RECEIVER SIDE HELPERS
 /////////////////////////////////////////////
 
-/*
- * Acting the receiver, we are looking at our receiver channel and acking the sender who sent us the latest packet.
- * Doesn't check to see if indeed a new message is available. It's assumed the caller has handled that separately.
- * MUST CHECK !is_eth_txq_busy() before calling
- */
-template <uint8_t RECEIVER_NUM_BUFFERS>
-FORCE_INLINE void receiver_send_received_ack(
-    // currently the pointer is working multiple jobs (ack, completion, read) because we haven't implemented the
-    // decoupling of those jobs yet to separate pointrers
-    ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
-    BufferIndex receiver_buffer_index,
-    const tt::tt_fabric::EthChannelBuffer<PACKET_HEADER_TYPE, RECEIVER_NUM_BUFFERS>& local_receiver_buffer_channel) {
-    // Set the acknowledgement bits
-    invalidate_l1_cache();
-    volatile tt_l1_ptr auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
-        local_receiver_buffer_channel.get_buffer_address(receiver_buffer_index));
-    const auto src_id = pkt_header->src_ch_id;
 
-    while (internal_::eth_txq_is_busy(receiver_txq_id)) {
-    };
-
-    receiver_channel_response_credit_sender.send_ack_credit(src_id);
-}
-
-template <uint8_t SENDER_NUM_BUFFERS>
+template <typename DownstreamSenderT>
 FORCE_INLINE bool can_forward_packet_completely(
-    ROUTING_FIELDS_TYPE cached_routing_fields, RouterToRouterSender<SENDER_NUM_BUFFERS>& downstream_edm_interface) {
+    ROUTING_FIELDS_TYPE cached_routing_fields, DownstreamSenderT& downstream_edm_interface) {
     // We always check if it is the terminal mcast packet value. We can do this because all unicast packets have the
     // mcast terminal value masked in to the routing field. This simplifies the check here to a single compare.
     bool deliver_locally_only;
@@ -525,12 +503,12 @@ FORCE_INLINE size_t get_downstream_edm_interface_index(eth_chan_directions downs
     return downstream_edm_interface_index;
 }
 
-template <uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>
+template <typename DownstreamSenderVC0T, typename DownstreamSenderVC1T>
 FORCE_INLINE bool check_downstream_interface_has_space_runtime(
     size_t edm_index,
-    std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>&
+    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>&
         downstream_edm_interfaces_vc0,
-    RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>& downstream_edm_interface_vc1) {
+    DownstreamSenderVC1T& downstream_edm_interface_vc1) {
     if constexpr (enable_deadlock_avoidance) {
         if (edm_index == NUM_USED_RECEIVER_CHANNELS - 1) {
             return downstream_edm_interface_vc1.edm_has_space_for_packet();
@@ -542,12 +520,12 @@ FORCE_INLINE bool check_downstream_interface_has_space_runtime(
     }
 }
 
-template <uint8_t rx_channel_id, uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>
+template <uint8_t rx_channel_id, typename DownstreamSenderVC0T, typename DownstreamSenderVC1T>
 FORCE_INLINE bool can_forward_packet_completely(
     tt_l1_ptr MeshPacketHeader* packet_header,
-    std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>&
+    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>&
         downstream_edm_interfaces_vc0,
-    RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>& downstream_edm_interface_vc1,
+    DownstreamSenderVC1T& downstream_edm_interface_vc1,
     std::array<uint8_t, num_eth_ports>& port_direction_table) {
     invalidate_l1_cache();
     if (packet_header->is_mcast_active) {
@@ -560,9 +538,7 @@ FORCE_INLINE bool can_forward_packet_completely(
             if (packet_header->mcast_params[i] and i != my_direction) {
                 const auto edm_index =
                     get_downstream_edm_interface_index<rx_channel_id>(static_cast<eth_chan_directions>(i));
-                has_space &= check_downstream_interface_has_space_runtime<
-                    DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
-                    DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+                has_space &= check_downstream_interface_has_space_runtime(
                     edm_index, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             }
         }
@@ -580,9 +556,7 @@ FORCE_INLINE bool can_forward_packet_completely(
             const auto downstream_direction =
                 static_cast<eth_chan_directions>(port_direction_table[downstream_channel]);
             const auto edm_index = get_downstream_edm_interface_index<rx_channel_id>(downstream_direction);
-            return check_downstream_interface_has_space_runtime<
-                DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
-                DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+            return check_downstream_interface_has_space_runtime(
                 edm_index, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
         } else {
             if (dest_chip_id == routing_table->my_device_id) {
@@ -595,9 +569,7 @@ FORCE_INLINE bool can_forward_packet_completely(
                         mcast_active = true;
                         const auto edm_index =
                             get_downstream_edm_interface_index<rx_channel_id>(static_cast<eth_chan_directions>(i));
-                        has_space &= check_downstream_interface_has_space_runtime<
-                            DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
-                            DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+                        has_space &= check_downstream_interface_has_space_runtime(
                             edm_index, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
                     }
                 }
@@ -611,9 +583,7 @@ FORCE_INLINE bool can_forward_packet_completely(
                 const auto downstream_direction =
                     static_cast<eth_chan_directions>(port_direction_table[downstream_channel]);
                 const auto edm_index = get_downstream_edm_interface_index<rx_channel_id>(downstream_direction);
-                return check_downstream_interface_has_space_runtime<
-                    DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
-                    DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+                return check_downstream_interface_has_space_runtime(
                     edm_index, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             }
         }
@@ -622,13 +592,13 @@ FORCE_INLINE bool can_forward_packet_completely(
 
 template <
     uint8_t rx_channel_id,
-    uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
-    uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+    typename DownstreamSenderVC0T,
+    typename DownstreamSenderVC1T,
     eth_chan_directions DIRECTION>
 FORCE_INLINE bool check_downstream_has_space(
-    std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>&
+    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>&
         downstream_edm_interfaces_vc0,
-    RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>& downstream_edm_interface_vc1) {
+    DownstreamSenderVC1T& downstream_edm_interface_vc1) {
     if constexpr (DIRECTION == my_direction) {
         return true;
     } else {
@@ -647,24 +617,24 @@ FORCE_INLINE bool check_downstream_has_space(
 
 template <
     uint8_t rx_channel_id,
-    uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
-    uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+    typename DownstreamSenderVC0T,
+    typename DownstreamSenderVC1T,
     eth_chan_directions... DIRECTIONS>
 FORCE_INLINE bool downstreams_have_space(
-    std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>&
+    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>&
         downstream_edm_interfaces_vc0,
-    RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>& downstream_edm_interface_vc1) {
+    DownstreamSenderVC1T& downstream_edm_interface_vc1) {
     return (
-        ... && check_downstream_has_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, DIRECTIONS>(
+        ... && check_downstream_has_space<rx_channel_id, DownstreamSenderVC0T, DownstreamSenderVC1T, DIRECTIONS>(
                    downstream_edm_interfaces_vc0, downstream_edm_interface_vc1));
 }
 
-template <uint8_t rx_channel_id, uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>
+template <uint8_t rx_channel_id, typename DownstreamSenderVC0T, typename DownstreamSenderVC1T>
 FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_completely(
     uint32_t hop_cmd,
-    std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>&
+    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>&
         downstream_edm_interfaces_vc0,
-    RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>& downstream_edm_interface_vc1) {
+    DownstreamSenderVC1T& downstream_edm_interface_vc1) {
     bool ret_val = false;
 
     using eth_chan_directions::EAST;
@@ -675,83 +645,83 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
     switch (hop_cmd) {
         case LowLatencyMeshRoutingFields::NOOP: break;
         case LowLatencyMeshRoutingFields::FORWARD_EAST:
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, EAST>(
+            ret_val = downstreams_have_space<rx_channel_id, DownstreamSenderVC0T, DownstreamSenderVC1T, EAST>(
                 downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::FORWARD_WEST:
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, WEST>(
+            ret_val = downstreams_have_space<rx_channel_id, DownstreamSenderVC0T, DownstreamSenderVC1T, WEST>(
                 downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_EW:
             // Line Mcast East<->West
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, EAST, WEST>(
+            ret_val = downstreams_have_space<rx_channel_id, DownstreamSenderVC0T, DownstreamSenderVC1T, EAST, WEST>(
                 downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::FORWARD_NORTH:
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, NORTH>(
+            ret_val = downstreams_have_space<rx_channel_id, DownstreamSenderVC0T, DownstreamSenderVC1T, NORTH>(
                 downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::FORWARD_SOUTH:
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, SOUTH>(
+            ret_val = downstreams_have_space<rx_channel_id, DownstreamSenderVC0T, DownstreamSenderVC1T, SOUTH>(
                 downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS:
             // Line Mcast North<->South
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, NORTH, SOUTH>(
+            ret_val = downstreams_have_space<rx_channel_id, DownstreamSenderVC0T, DownstreamSenderVC1T, NORTH, SOUTH>(
                 downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSEW:
             // 2D Mcast Trunk: North<->South
             // 2D Mcast Branch: East and West
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, EAST, WEST, NORTH, SOUTH>(
+            ret_val = downstreams_have_space<rx_channel_id, DownstreamSenderVC0T, DownstreamSenderVC1T, EAST, WEST, NORTH, SOUTH>(
                 downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSE:
             // 2D Mcast Trunk: North<->South
             // 2D Mcast Branch: East
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, EAST, NORTH, SOUTH>(
+            ret_val = downstreams_have_space<rx_channel_id, DownstreamSenderVC0T, DownstreamSenderVC1T, EAST, NORTH, SOUTH>(
                 downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSW:
             // 2D Mcast Trunk: North<->South
             // 2D Mcast Branch: West
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, WEST, NORTH, SOUTH>(
+            ret_val = downstreams_have_space<rx_channel_id, DownstreamSenderVC0T, DownstreamSenderVC1T, WEST, NORTH, SOUTH>(
                 downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SEW:
             // 2D Mcast Trunk: Last hop North
             // 2D Mcast Branch: East and West
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, EAST, WEST, SOUTH>(
+            ret_val = downstreams_have_space<rx_channel_id, DownstreamSenderVC0T, DownstreamSenderVC1T, EAST, WEST, SOUTH>(
                 downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NEW:
             // 2D Mcast Trunk: Last hop South
             // 2D Mcast Branch: East and West
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, EAST, WEST, NORTH>(
+            ret_val = downstreams_have_space<rx_channel_id, DownstreamSenderVC0T, DownstreamSenderVC1T, EAST, WEST, NORTH>(
                 downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SE:
             // 2D Mcast Trunk: Last hop North
             // 2D Mcast Branch: East
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, EAST, SOUTH>(
+            ret_val = downstreams_have_space<rx_channel_id, DownstreamSenderVC0T, DownstreamSenderVC1T, EAST, SOUTH>(
                 downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SW:
             // 2D Mcast Trunk: Last hop North
             // 2D Mcast Branch: West
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, WEST, SOUTH>(
+            ret_val = downstreams_have_space<rx_channel_id, DownstreamSenderVC0T, DownstreamSenderVC1T, WEST, SOUTH>(
                 downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NE:
             // 2D Mcast Trunk: Last hop South
             // 2D Mcast Branch: East
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, EAST, NORTH>(
+            ret_val = downstreams_have_space<rx_channel_id, DownstreamSenderVC0T, DownstreamSenderVC1T, EAST, NORTH>(
                 downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NW:
             // 2D Mcast Trunk: Last hop South
             // 2D Mcast Branch: West
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, WEST, NORTH>(
+            ret_val = downstreams_have_space<rx_channel_id, DownstreamSenderVC0T, DownstreamSenderVC1T, WEST, NORTH>(
                 downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         default: __builtin_unreachable();
@@ -760,12 +730,12 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
 }
 
 // !!!WARNING!!! - MAKE SURE CONSUMER HAS SPACE BEFORE CALLING
-template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS>
+template <uint8_t rx_channel_id, typename DownstreamSenderT>
 FORCE_INLINE void receiver_forward_packet(
     // TODO: have a separate cached copy of the packet header to save some additional L1 loads
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
     ROUTING_FIELDS_TYPE cached_routing_fields,
-    RouterToRouterSender<SENDER_NUM_BUFFERS>& downstream_edm_interface,
+    DownstreamSenderT& downstream_edm_interface,
     uint8_t transaction_id) {
     constexpr bool ENABLE_STATEFUL_NOC_APIS =
 #if !defined(DEBUG_PRINT_ENABLED) and !defined(WATCHER_ENABLED)
@@ -823,13 +793,13 @@ FORCE_INLINE void receiver_forward_packet(
 
 #if defined(FABRIC_2D) && defined(DYNAMIC_ROUTING_ENABLED)
 // !!!WARNING!!! - MAKE SURE CONSUMER HAS SPACE BEFORE CALLING
-template <uint8_t rx_channel_id, uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>
+template <uint8_t rx_channel_id, typename DownstreamSenderVC0T, typename DownstreamSenderVC1T>
 FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_packet(
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
     ROUTING_FIELDS_TYPE cached_routing_fields,
-    std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>&
+    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>&
         downstream_edm_interfaces_vc0,
-    RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>& downstream_edm_interface_vc1,
+    DownstreamSenderVC1T& downstream_edm_interface_vc1,
     uint8_t transaction_id,
     std::array<uint8_t, num_eth_ports>& port_direction_table) {
     const auto dest_mesh_id = packet_start->dst_start_mesh_id;
@@ -1002,13 +972,13 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
 
 #if defined(FABRIC_2D)
 // !!!WARNING!!! - MAKE SURE CONSUMER HAS SPACE BEFORE CALLING
-template <uint8_t rx_channel_id, uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>
+template <uint8_t rx_channel_id, typename DownstreamSenderVC0T, typename DownstreamSenderVC1T>
 FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_packet(
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
     ROUTING_FIELDS_TYPE cached_routing_fields,
-    std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>&
+    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>&
         downstream_edm_interfaces_vc0,
-    RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>& downstream_edm_interface_vc1,
+    DownstreamSenderVC1T& downstream_edm_interface_vc1,
     uint8_t transaction_id,
     uint32_t hop_cmd) {
     uint16_t payload_size_bytes = packet_start->payload_size_bytes;
@@ -1682,15 +1652,16 @@ template <
     uint8_t receiver_channel,
     uint8_t to_receiver_pkts_sent_id,
     typename WriteTridTracker,
-    uint8_t RECEIVER_NUM_BUFFERS,
-    uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
-    uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>
+    typename ReceiverChannelBufferT,
+    typename ReceiverChannelPointersT,
+    typename DownstreamSenderVC0T,
+    typename DownstreamSenderVC1T>
 void run_receiver_channel_step_impl(
-    tt::tt_fabric::EthChannelBuffer<PACKET_HEADER_TYPE, RECEIVER_NUM_BUFFERS>& local_receiver_channel,
-    std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>&
+    ReceiverChannelBufferT& local_receiver_channel,
+    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>&
         downstream_edm_interfaces_vc0,
-    RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>& downstream_edm_interface_vc1,
-    ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& receiver_channel_pointers,
+    DownstreamSenderVC1T& downstream_edm_interface_vc1,
+    ReceiverChannelPointersT& receiver_channel_pointers,
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender) {
@@ -1734,21 +1705,21 @@ void run_receiver_channel_step_impl(
             //  mcast)
 #if defined(FABRIC_2D) && defined(DYNAMIC_ROUTING_ENABLED)
             // need this ifdef since the 2D dynamic routing packet header contains unique fields
-            can_send_to_all_local_chip_receivers = can_forward_packet_completely<receiver_channel, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+            can_send_to_all_local_chip_receivers = can_forward_packet_completely<receiver_channel>(
                 packet_header, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1, port_direction_table);
 #elif defined(FABRIC_2D)
             // need this ifdef since the packet header for 1D does not have router_buffer field in it.
             hop_cmd = packet_header->route_buffer[cached_routing_fields.hop_index];
-            can_send_to_all_local_chip_receivers = can_forward_packet_completely<receiver_channel, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+            can_send_to_all_local_chip_receivers = can_forward_packet_completely<receiver_channel>(
                 hop_cmd, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
 #endif
         } else {
             if constexpr (receiver_channel == 0) {
-                can_send_to_all_local_chip_receivers = can_forward_packet_completely<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>(
+                can_send_to_all_local_chip_receivers = can_forward_packet_completely(
                     cached_routing_fields, downstream_edm_interfaces_vc0[receiver_channel]);
             } else {
                 can_send_to_all_local_chip_receivers =
-                    can_forward_packet_completely<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(cached_routing_fields, downstream_edm_interface_vc1);
+                    can_forward_packet_completely(cached_routing_fields, downstream_edm_interface_vc1);
             }
         }
         if constexpr (enable_trid_flush_check_on_noc_txn) {
@@ -1761,7 +1732,7 @@ void run_receiver_channel_step_impl(
                 receiver_buffer_index);
             if constexpr (is_2d_fabric) {
 #if defined(FABRIC_2D) && defined(DYNAMIC_ROUTING_ENABLED)
-                receiver_forward_packet<receiver_channel, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+                receiver_forward_packet<receiver_channel>(
                     packet_header,
                     cached_routing_fields,
                     downstream_edm_interfaces_vc0,
@@ -1769,7 +1740,7 @@ void run_receiver_channel_step_impl(
                     trid,
                     port_direction_table);
 #elif defined(FABRIC_2D)
-                receiver_forward_packet<receiver_channel, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+                receiver_forward_packet<receiver_channel>(
                     packet_header,
                     cached_routing_fields,
                     downstream_edm_interfaces_vc0,
@@ -1779,10 +1750,10 @@ void run_receiver_channel_step_impl(
 #endif
             } else {
                 if constexpr (receiver_channel == 0) {
-                    receiver_forward_packet<receiver_channel, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>(
+                    receiver_forward_packet<receiver_channel>(
                         packet_header, cached_routing_fields, downstream_edm_interfaces_vc0[0], trid);
                 } else {
-                    receiver_forward_packet<receiver_channel, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+                    receiver_forward_packet<receiver_channel>(
                         packet_header, cached_routing_fields, downstream_edm_interface_vc1, trid);
                 }
             }
@@ -1849,22 +1820,29 @@ void run_receiver_channel_step_impl(
 
 template <
     uint8_t receiver_channel,
-    uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
-    uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+    typename DownstreamSenderVC0T,
+    typename DownstreamSenderVC1T,
     typename EthReceiverChannels,
     typename WriteTridTracker,
-    uint8_t RECEIVER_NUM_BUFFERS>
+    typename ReceiverChannelPointersT>
 FORCE_INLINE void run_receiver_channel_step(
     EthReceiverChannels& local_receiver_channels,
-    std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>&
+    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>&
         downstream_edm_interfaces_vc0,
-    RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>& downstream_edm_interface_vc1,
-    ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& receiver_channel_pointers,
+    DownstreamSenderVC1T& downstream_edm_interface_vc1,
+    ReceiverChannelPointersT& receiver_channel_pointers,
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     std::array<ReceiverChannelResponseCreditSender, NUM_RECEIVER_CHANNELS>& receiver_channel_response_credit_senders) {
     if constexpr (is_receiver_channel_serviced[receiver_channel]) {
-        run_receiver_channel_step_impl<receiver_channel, to_receiver_packets_sent_streams[receiver_channel], WriteTridTracker, RECEIVER_NUM_BUFFERS, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+        run_receiver_channel_step_impl<
+            receiver_channel,
+            to_receiver_packets_sent_streams[receiver_channel],
+            WriteTridTracker,
+            decltype(local_receiver_channels.template get<receiver_channel>()),
+            ReceiverChannelPointersT,
+            DownstreamSenderVC0T,
+            DownstreamSenderVC1T>(
             local_receiver_channels.template get<receiver_channel>(),
             downstream_edm_interfaces_vc0,
             downstream_edm_interface_vc1,
@@ -1895,8 +1873,8 @@ bool any_sender_channels_active(
 template <
     bool enable_packet_header_recording,
     size_t NUM_RECEIVER_CHANNELS,
-    uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
-    uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+    typename DownstreamSenderVC0T,
+    typename DownstreamSenderVC1T,
     size_t NUM_SENDER_CHANNELS,
     size_t MAX_NUM_SENDER_CHANNELS,
     typename EthSenderChannels,
@@ -1909,9 +1887,9 @@ void run_fabric_edm_main_loop(
     EthReceiverChannels& local_receiver_channels,
     EthSenderChannels& local_sender_channels,
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
-    std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>&
+    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>&
         downstream_edm_noc_interfaces_vc0,
-    RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>& downstream_edm_noc_interface_vc1,
+    DownstreamSenderVC1T& downstream_edm_noc_interface_vc1,
     RemoteEthReceiverChannels& remote_receiver_channels,
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr,
     std::array<PacketHeaderRecorder<PACKET_HEADER_TYPE>, MAX_NUM_SENDER_CHANNELS>& sender_channel_packet_recorders,
@@ -1983,7 +1961,7 @@ void run_fabric_edm_main_loop(
                 sender_channel_from_receiver_credits,
                 inner_loop_perf_telemetry_collector);
             if constexpr (!dateline_connection) {
-                run_receiver_channel_step<0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+                run_receiver_channel_step<0, DownstreamSenderVC0T, DownstreamSenderVC1T>(
                     local_receiver_channels,
                     downstream_edm_noc_interfaces_vc0,
                     downstream_edm_noc_interface_vc1,
@@ -1993,7 +1971,7 @@ void run_fabric_edm_main_loop(
                     receiver_channel_response_credit_senders);
             }
             if constexpr (enable_deadlock_avoidance && !skip_receiver_channel_1_connection) {
-                run_receiver_channel_step<1, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+                run_receiver_channel_step<1, DownstreamSenderVC0T, DownstreamSenderVC1T>(
                     local_receiver_channels,
                     downstream_edm_noc_interfaces_vc0,
                     downstream_edm_noc_interface_vc1,
@@ -2988,7 +2966,11 @@ void kernel_main() {
     //        MAIN LOOP
     //////////////////////////////
     //////////////////////////////
-    run_fabric_edm_main_loop<enable_packet_header_recording, NUM_RECEIVER_CHANNELS, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+    run_fabric_edm_main_loop<
+        enable_packet_header_recording,
+        NUM_RECEIVER_CHANNELS,
+        RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>,
+        RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>>(
         local_receiver_channels,
         local_sender_channels,
         local_sender_channel_worker_interfaces,

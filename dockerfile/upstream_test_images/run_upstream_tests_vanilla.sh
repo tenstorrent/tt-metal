@@ -177,10 +177,8 @@ test_suite_wh_6u_metal_qsfp_links_health_check_tests() {
 test_suite_wh_6u_model_unit_tests() {
     echo "[upstream-tests] running WH 6U upstream model unit tests"
     pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py
-    pytest tests/ttnn/unit_tests/operations/test_prefetcher_TG.py
+    pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_TG.py
     pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_matmul_1d_gather_in0.py::test_matmul_1d_ring_llama_perf
-    pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py
-    # pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py hang???
 }
 
 test_suite_wh_6u_llama_demo_tests() {

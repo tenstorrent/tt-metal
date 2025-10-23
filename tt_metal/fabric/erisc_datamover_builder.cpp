@@ -571,7 +571,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
 // TODO: will be deprecated. non device init fabric case
 void append_worker_to_fabric_edm_sender_rt_args(
     const SenderWorkerAdapterSpec& connection,
-    chip_id_t chip_id,
+    ChipId chip_id,
     const CoreRangeSet& worker_cores,
     size_t sender_worker_terminate_semaphore_id,
     size_t sender_worker_buffer_index_semaphore_id,
@@ -1050,8 +1050,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program,
     const CoreCoord& ethernet_core,
-    chip_id_t local_physical_chip_id,
-    chip_id_t peer_physical_chip_id,
+    ChipId local_physical_chip_id,
+    ChipId peer_physical_chip_id,
     const FabricEriscDatamoverConfig& config,
     bool build_in_worker_connection_mode,
     FabricEriscDatamoverType fabric_edm_type,

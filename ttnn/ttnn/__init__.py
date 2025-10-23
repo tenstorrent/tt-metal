@@ -430,6 +430,6 @@ if "TT_METAL_RUNTIME_ROOT" not in os.environ:
         root_dir = this_dir.parent.parent
     else:
         # For installed packages, reference bundled data directory
-        root_dir = this_dir / "tt-metalium"
+        root_dir = this_dir
 
     SetRootDir(str(root_dir))
