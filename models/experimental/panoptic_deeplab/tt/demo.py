@@ -496,7 +496,7 @@ def run_panoptic_deeplab_demo(
     # Prepare inputs for both models
     # Convert to TTNN format (values still in [0,1] range)
     ttnn_input = ttnn.from_torch(
-        input_tensor.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        input_tensor.permute(0, 2, 3, 1), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
     )
 
     # Apply ImageNet normalization
@@ -505,7 +505,7 @@ def run_panoptic_deeplab_demo(
 
         # Apply normalization on device for TTNN using the efficient module
         ttnn_input = imagenet_normalizer.forward(ttnn_input)
-
+        # ttnn_input = ttnn.to_layout(ttnn_input, ttnn.ROW_MAJOR_LAYOUT)
         # For PyTorch: Apply normalization on CPU
         mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
         std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
