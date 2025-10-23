@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -326,17 +326,18 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
         bool inherited_from_input_b =
             input_b_shard_spec.has_value() && shard_spec.has_value() && *shard_spec == *input_b_shard_spec;
 
-        auto temp_layout = TensorLayout(attributes.get_dtype(), PageConfig(Layout::TILE), attributes.memory_config);
-        auto padded_output_shape = temp_layout.compute_padded_shape(output_shape);
         if (shard_spec.has_value() && !inherited_from_input_a && !inherited_from_input_b) {
             // User explicitly provided a shard spec that differs from both inputs - use as-is
             output_shard_spec = *shard_spec;
         } else if (input_a_shard_spec.has_value() && !inherited_from_input_b) {
             // A has a spec AND we're not using B's spec → adjust from A
+            auto padded_output_shape = input_tensor_a.tensor_spec().tensor_layout().compute_padded_shape(output_shape);
             output_shard_spec =
                 adjust_to_shape(*input_a_shard_spec, input_tensor_a.padded_shape(), padded_output_shape);
         } else if (input_b_shard_spec.has_value()) {
             // B has a spec (either inherited from B or fallback to B) → adjust from B
+            TT_FATAL(tensor_b.has_value(), "Cannot adjust from input_b when tensor_b is not present");
+            auto padded_output_shape = tensor_b->tensor_spec().tensor_layout().compute_padded_shape(output_shape);
             output_shard_spec = adjust_to_shape(*input_b_shard_spec, tensor_b->padded_shape(), padded_output_shape);
         } else {
             TT_FATAL(shard_spec.has_value(), "Sharded memory config specified but no shard spec available");
