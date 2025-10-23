@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -50,9 +50,7 @@ FabricNodeId decode_fabric_node_id(std::uint64_t encoded_value) {
 std::chrono::duration<float> get_topology_mapping_timeout() {
     auto timeout = tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations();
     if (timeout.count() <= 0.0f) {
-        const char* env_override = std::getenv("TT_FABRIC_BUILD_MAP_TIMEOUT_SECONDS");
-        float seconds = env_override ? std::strtof(env_override, nullptr) : 60.0f;
-        timeout = std::chrono::duration<float>(seconds);
+        timeout = std::chrono::duration<float>(60.0f);
     }
     return timeout;
 }
