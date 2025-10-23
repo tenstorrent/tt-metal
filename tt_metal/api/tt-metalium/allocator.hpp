@@ -45,9 +45,44 @@ class Buffer;
 enum class BufferType;
 struct AllocatorConfig;
 class AllocatorState;
+// This is the internal representation for Allocator, not exposed for general usage.
+class AllocatorImpl;
+
+// Looking at the member functions, there is a way better name we can give to this struct.
+// Currently kept as "Allocator" to avoid breaking anyone.
+class Allocator {
+public:
+    // AllocatorImpl is internal to Runtime, this effectively means there's no way
+    // to construct Allocator publicy.
+    explicit Allocator(AllocatorImpl* _impl);
+
+    void deallocate_buffers();
+    std::unordered_set<Buffer*> get_allocated_buffers() const;
+    uint32_t get_num_banks(const BufferType& buffer_type) const;
+    DeviceAddr get_bank_size(const BufferType& buffer_type) const;
+    CoreCoord get_logical_core_from_bank_id(uint32_t bank_id) const;
+    int32_t get_bank_offset(BufferType buffer_type, uint32_t bank_id) const;
+    const std::vector<uint32_t>& get_bank_ids_from_logical_core(
+        BufferType buffer_type, const CoreCoord& logical_core) const;
+    DeviceAddr get_base_allocator_addr(const HalMemType& mem_type) const;
+    uint32_t get_alignment(BufferType buffer_type) const;
+    Statistics get_statistics(const BufferType& buffer_type) const;
+    // AllocatorState Methods
+    // Extracts the current state of the allocator.
+    AllocatorState extract_state() const;
+    // Overrides the current state with the given state, deallocating all of existing buffers.
+    void override_state(const AllocatorState& state);
+
+    // This a proxy of get_config().worker_l1_size,
+    // this helper function is made for reports.cpp in TTNN and act as a transient member function.
+    size_t get_worker_l1_size() const;
+
+private:
+    AllocatorImpl* impl;
+};
 
 // THREAD SAFETY: Allocator is thread safe.
-class Allocator {
+class AllocatorImpl {
 public:
     // AllocatorConfig is not in the API directory, thus Allocator currently cannot be constructed publicly,
     // this is because we are in the middle of moving Allocator into implementation details.
@@ -60,9 +95,9 @@ public:
     // coming up with a memory profile access interface to replace current Allocator API into two (or more) PRs.
     //
     // See: #29569
-    explicit Allocator(const AllocatorConfig& alloc_config);
+    explicit AllocatorImpl(const AllocatorConfig& alloc_config);
 
-    ~Allocator();
+    ~AllocatorImpl();
 
     DeviceAddr allocate_buffer(Buffer* buffer);
 
@@ -108,6 +143,7 @@ public:
     void mark_allocations_unsafe();
     void mark_allocations_safe();
 
+    // what does clear even mean on an allocator???
     void clear();
 
     // AllocatorState Methods
@@ -116,6 +152,10 @@ public:
 
     // Overrides the current state with the given state, deallocating all of existing buffers.
     void override_state(const AllocatorState& state);
+
+    // We likely won't need to perform heap allocation just to expose the user side of Allocator,
+    // this is to ease transition so we keep the pointer-to-allocator semantics.
+    const std::unique_ptr<Allocator>& view() const;
 
 protected:
     // Initializers for mapping banks to DRAM channels / L1 banks
@@ -148,6 +188,11 @@ private:
     //
     // TODO(river): revert this to inplace storage if we can shove Allocator into impl.
     std::unique_ptr<AllocatorConfig> config_;
+
+    // External view of the allocator, this shouldn't need to be a unique_ptr, but currently kept as so to preserve API
+    // stability
+    // TODO(river): Revisit during API refactor.
+    std::unique_ptr<Allocator> view_;
 };
 
 namespace detail {

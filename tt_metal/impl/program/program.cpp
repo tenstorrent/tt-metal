@@ -96,7 +96,7 @@ using namespace tt::tt_metal;
 
 size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable_core_type) {
     if (programmable_core_type == HalProgrammableCoreType::TENSIX) {
-        return device->allocator()->get_config().l1_unreserved_base -
+        return device->allocator_impl()->get_config().l1_unreserved_base -
                MetalContext::instance().hal().get_dev_addr(
                    HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
     } else {
@@ -825,7 +825,7 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
         return;
     }
 
-    uint64_t base_cb_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    uint64_t base_cb_address = device->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
     for (const auto& circular_buffer : this->circular_buffers_) {
         if (circular_buffer->globally_allocated()) {
             continue;
@@ -841,7 +841,7 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
                 }
             }
         }
-        computed_addr = align(computed_addr, device->allocator()->get_alignment(BufferType::DRAM));
+        computed_addr = align(computed_addr, device->allocator_impl()->get_alignment(BufferType::DRAM));
         for (const CoreRange& core_range : circular_buffer->core_ranges().ranges()) {
             for (CircularBufferAllocator& cb_allocator : this->cb_allocators_) {
                 if (cb_allocator.core_range.intersects(core_range)) {

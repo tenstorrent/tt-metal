@@ -460,7 +460,7 @@ void add_paged_dram_data_to_device_data(
     uint32_t last_page = start_page + pages;
     for (uint32_t page_idx = start_page; page_idx < last_page; page_idx++) {
         uint32_t dram_bank_id = page_idx % num_dram_banks_g;
-        auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(dram_bank_id);
+        auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(dram_bank_id);
         CoreCoord bank_core = device->logical_core_from_dram_channel(dram_channel);
         uint32_t bank_offset = base_addr_words + (page_size_words * (page_idx / num_dram_banks_g));
 
@@ -516,7 +516,7 @@ void gen_dram_packed_read_cmd(
         uint32_t page_idx = sub_cmd.start_page;
         for (uint32_t i = 0; i < length_words; i += page_size_words) {
             uint32_t dram_bank_id = page_idx % num_dram_banks_g;
-            auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(dram_bank_id);
+            auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(dram_bank_id);
             CoreCoord bank_core = device->logical_core_from_dram_channel(dram_channel);
             uint32_t bank_offset = base_addr_words + (page_size_words * (page_idx / num_dram_banks_g));
 
@@ -1073,7 +1073,7 @@ void gen_dram_ringbuffer_read_cmd(
         uint32_t page_idx = ringbuffer_cmd.start_page;
         for (uint32_t i = 0; i < length_words; i += page_size_words) {
             uint32_t dram_bank_id = page_idx % num_dram_banks_g;
-            auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(dram_bank_id);
+            auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(dram_bank_id);
             CoreCoord bank_core = device->logical_core_from_dram_channel(dram_channel);
             uint32_t bank_offset = base_addr_words + (page_size_words * (page_idx / num_dram_banks_g));
 
@@ -1214,7 +1214,7 @@ void gen_prefetcher_exec_buf_cmd_and_write_to_dram(
     add_prefetcher_cmd(exec_buf_cmds, empty_sizes, CQ_PREFETCH_CMD_EXEC_BUF_END, dispatch_cmds);
 
     // writes cmds to dram
-    num_dram_banks_g = device->allocator()->get_num_banks(BufferType::DRAM);
+    num_dram_banks_g = device->allocator_impl()->get_num_banks(BufferType::DRAM);
 
     uint32_t page_size = 1 << exec_buf_log_page_size_g;
 
@@ -1648,7 +1648,7 @@ void gen_relay_linear_h_test(
             // Set up the source NOC address - we'll read from DRAM where data is initialized
             // Use DRAM bank 0 for simplicity
             const uint32_t dram_bank_id = 0;
-            auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(dram_bank_id);
+            auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(dram_bank_id);
             CoreCoord dram_logical_core = device->logical_core_from_dram_channel(dram_channel);
             CoreCoord dram_physical_core = tt::tt_metal::MetalContext::instance()
                                                .get_cluster()
@@ -1656,7 +1656,7 @@ void gen_relay_linear_h_test(
                                                .get_preferred_worker_core_for_dram_view(dram_channel, NOC::NOC_0);
             cmd.relay_linear_h.noc_xy_addr = device->get_noc_unicast_encoding(NOC::NOC_0, dram_physical_core);
 
-            [[maybe_unused]] auto offset = device->allocator()->get_bank_offset(BufferType::DRAM, dram_bank_id);
+            [[maybe_unused]] auto offset = device->allocator_impl()->get_bank_offset(BufferType::DRAM, dram_bank_id);
             // Read from DRAM result data address where data is stored
             // DeviceData uses the logical coordinates as keys
             cmd.relay_linear_h.addr = dram_data_base_addr + offset;
@@ -1892,8 +1892,9 @@ void write_prefetcher_cmds(
 
 // Clear DRAM (helpful for paged write to DRAM debug to have a fresh slate)
 void initialize_dram_banks(IDevice* device) {
-    auto num_banks = device->allocator()->get_num_banks(BufferType::DRAM);
-    auto bank_size = DRAM_DATA_SIZE_WORDS * sizeof(uint32_t);  // device->allocator()->get_bank_size(BufferType::DRAM);
+    auto num_banks = device->allocator_impl()->get_num_banks(BufferType::DRAM);
+    auto bank_size =
+        DRAM_DATA_SIZE_WORDS * sizeof(uint32_t);  // device->allocator_impl()->get_bank_size(BufferType::DRAM);
     auto fill = std::vector<uint32_t>(bank_size / sizeof(uint32_t), 0xBADDF00D);
 
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
@@ -2405,7 +2406,8 @@ int main(int argc, char** argv) {
         configure_for_single_chip(
             device, program, host_hugepage_base, prefetch_q_base, prefetch_q_rd_ptr_addr, dev_hugepage_base_g);
 
-        if ((1 << exec_buf_log_page_size_g) * device->allocator()->get_num_banks(BufferType::DRAM) > cmddat_q_size_g) {
+        if ((1 << exec_buf_log_page_size_g) * device->allocator_impl()->get_num_banks(BufferType::DRAM) >
+            cmddat_q_size_g) {
             log_fatal(
                 tt::LogTest,
                 "Exec buffer must fit in cmddat_q, page size too large ({})",
@@ -2451,7 +2453,7 @@ int main(int argc, char** argv) {
             (uint32_t*)host_hugepage_completion_buffer_base_g,
             false,
             DRAM_DATA_SIZE_WORDS);
-        num_dram_banks_g = device->allocator()->get_num_banks(BufferType::DRAM);
+        num_dram_banks_g = device->allocator_impl()->get_num_banks(BufferType::DRAM);
 
         if (debug_g) {
             initialize_dram_banks(device);
