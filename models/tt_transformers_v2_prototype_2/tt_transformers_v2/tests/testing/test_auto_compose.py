@@ -68,6 +68,20 @@ def _make_known_pattern(num_chunks: int) -> torch.Tensor:
     return data.to(torch.bfloat16)
 
 
+def _make_arange_bf16(shape: tuple[int, ...]) -> torch.Tensor:
+    """Create a deterministic tensor with arange data and bfloat16 dtype."""
+    numel = 1
+    for s in shape:
+        numel *= s
+    data = torch.arange(numel, dtype=torch.float32).reshape(shape)
+    return data.to(torch.bfloat16)
+
+
+def _pos_dim(dim: int, rank: int) -> int:
+    """Convert possibly-negative dim to positive index for given rank."""
+    return dim % rank
+
+
 # ======================================================================================
 # Tests
 # ======================================================================================
@@ -124,3 +138,149 @@ def test_device_sharded_1d(mesh_device: ttnn.MeshDevice, num_devices: int, min_d
 
     assert torch.equal(torch_ref, torch_in), "Explicit composer mismatch (device-sharded)"
     assert torch.equal(torch_auto, torch_in), "Auto-composer mismatch on device-sharded tensor"
+
+
+# --------------------------------------------------------------------------------------
+# Additional coverage: shard various tensor dims on 1D meshes
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("dim", [0, 1, -1])
+@pytest.mark.parametrize("min_devices", [2])
+def test_host_sharded_various_dims(mesh_device: ttnn.MeshDevice, num_devices: int, dim: int, min_devices: int) -> None:
+    if num_devices < min_devices:
+        pytest.skip(f"Test requires at least {min_devices} devices, found {num_devices}")
+
+    rank = 4
+    axis = _pos_dim(dim, rank)
+    shape = [2, 3, 4, 1]
+    shape[axis] = num_devices
+    torch_in = _make_arange_bf16(tuple(shape))
+
+    tt_host_sharded = ttnn.from_torch(
+        torch_in, device=None, dtype=ttnn.bfloat16, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim)
+    )
+
+    torch_auto = to_torch_auto_compose(tt_host_sharded, device=mesh_device)
+    torch_ref = ttnn.to_torch(tt_host_sharded, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=dim))
+
+    assert torch.equal(torch_ref, torch_in)
+    assert torch.equal(torch_auto, torch_in)
+
+
+@pytest.mark.parametrize("dim", [0, 1, -1])
+@pytest.mark.parametrize("min_devices", [2])
+def test_device_sharded_various_dims(
+    mesh_device: ttnn.MeshDevice, num_devices: int, dim: int, min_devices: int
+) -> None:
+    if num_devices < min_devices:
+        pytest.skip(f"Test requires at least {min_devices} devices, found {num_devices}")
+
+    rank = 4
+    axis = _pos_dim(dim, rank)
+    shape = [2, 3, 4, 1]
+    shape[axis] = num_devices
+    torch_in = _make_arange_bf16(tuple(shape))
+
+    tt_dev_sharded = ttnn.from_torch(
+        torch_in, device=mesh_device, dtype=ttnn.bfloat16, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim)
+    )
+
+    torch_auto = to_torch_auto_compose(tt_dev_sharded, device=mesh_device)
+    torch_ref = ttnn.to_torch(tt_dev_sharded, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=dim))
+
+    assert torch.equal(torch_ref, torch_in)
+    assert torch.equal(torch_auto, torch_in)
+
+
+# --------------------------------------------------------------------------------------
+# Coverage for 2D mesh sharding: shard-shard and replicate-shard
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("dims_pair", [(0, 1), (0, -1), (1, -1)])
+def test_host_sharded_2d_shard_shard(mesh_device: ttnn.MeshDevice, dims_pair: tuple[int, int]) -> None:
+    mesh_shape = tuple(mesh_device.shape)
+    if len(mesh_shape) != 2 or mesh_shape[0] <= 1 or mesh_shape[1] <= 1:
+        pytest.skip("Requires a 2D mesh with both dims > 1")
+
+    rank = 4
+    d0 = _pos_dim(dims_pair[0], rank)
+    d1 = _pos_dim(dims_pair[1], rank)
+    assert d0 != d1, "Shard dims for 2D sharding must be distinct"
+
+    shape = [2, 3, 4, 5]
+    shape[d0] = mesh_shape[0]
+    shape[d1] = mesh_shape[1]
+    torch_in = _make_arange_bf16(tuple(shape))
+
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(dims_pair[0], dims_pair[1]))
+    tt_host_sharded = ttnn.from_torch(torch_in, device=None, dtype=ttnn.bfloat16, mesh_mapper=mapper)
+
+    torch_auto = to_torch_auto_compose(tt_host_sharded, device=mesh_device)
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(dims_pair[0], dims_pair[1]))
+    torch_ref = ttnn.to_torch(tt_host_sharded, mesh_composer=composer)
+
+    assert torch.equal(torch_ref, torch_in)
+    assert torch.equal(torch_auto, torch_in)
+
+
+@pytest.mark.parametrize("dims_pair", [(0, 1), (0, -1), (1, -1)])
+def test_device_sharded_2d_shard_shard(mesh_device: ttnn.MeshDevice, dims_pair: tuple[int, int]) -> None:
+    mesh_shape = tuple(mesh_device.shape)
+    if len(mesh_shape) != 2 or mesh_shape[0] <= 1 or mesh_shape[1] <= 1:
+        pytest.skip("Requires a 2D mesh with both dims > 1")
+
+    rank = 4
+    d0 = _pos_dim(dims_pair[0], rank)
+    d1 = _pos_dim(dims_pair[1], rank)
+    assert d0 != d1, "Shard dims for 2D sharding must be distinct"
+
+    shape = [2, 3, 4, 5]
+    shape[d0] = mesh_shape[0]
+    shape[d1] = mesh_shape[1]
+    torch_in = _make_arange_bf16(tuple(shape))
+
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(dims_pair[0], dims_pair[1]))
+    tt_dev_sharded = ttnn.from_torch(torch_in, device=mesh_device, dtype=ttnn.bfloat16, mesh_mapper=mapper)
+
+    torch_auto = to_torch_auto_compose(tt_dev_sharded, device=mesh_device)
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(dims_pair[0], dims_pair[1]))
+    torch_ref = ttnn.to_torch(tt_dev_sharded, mesh_composer=composer)
+
+    assert torch.equal(torch_ref, torch_in)
+    assert torch.equal(torch_auto, torch_in)
+
+
+@pytest.mark.parametrize(
+    "dims_pair,replicate_axis",
+    [
+        ((None, -1), 0),  # replicate along mesh dim 0, shard along last tensor dim
+        ((1, None), 1),  # shard along tensor dim 1 on mesh dim 0, replicate mesh dim 1
+    ],
+)
+def test_host_sharded_2d_with_replicate(
+    mesh_device: ttnn.MeshDevice, dims_pair: tuple[object, object], replicate_axis: int
+) -> None:
+    mesh_shape = tuple(mesh_device.shape)
+    if len(mesh_shape) != 2 or mesh_shape[replicate_axis] <= 1 or mesh_shape[1 - replicate_axis] <= 1:
+        pytest.skip("Requires a 2D mesh with both dims > 1 to observe replication")
+
+    rank = 4
+    # Determine which tensor axis is sharded (the non-None entry)
+    shard_dim = [d for d in dims_pair if d is not None][0]
+    shard_axis = _pos_dim(shard_dim, rank)
+    shape = [2, 3, 4, 5]
+    # Set size along sharded axis to corresponding mesh dim
+    shape[shard_axis] = mesh_shape[1 - replicate_axis]
+    torch_in = _make_arange_bf16(tuple(shape))
+
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims_pair)  # type: ignore[arg-type]
+    tt_host = ttnn.from_torch(torch_in, device=None, dtype=ttnn.bfloat16, mesh_mapper=mapper)
+
+    torch_auto = to_torch_auto_compose(tt_host, device=mesh_device)
+
+    # Expected: auto-composer concatenates replicas along axis 0
+    repeat_factor = mesh_shape[replicate_axis]
+    expected = torch_in.repeat((repeat_factor, 1, 1, 1))
+    assert torch.equal(torch_auto, expected)
