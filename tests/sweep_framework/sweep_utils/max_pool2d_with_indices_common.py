@@ -195,6 +195,8 @@ def run_max_pool2d_with_indices(
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
     # convert indexes to int64 for compatability with torch
     ttnn_indices_torch = ttnn.to_torch(ttnn_indices, dtype=torch.int64)
+    # manually fix the wrapping since TTNN uint16 tensors get converted to int16 torch tensors, even when data type is specified as int64
+    ttnn_indices_torch = torch.where(ttnn_indices_torch < 0, ttnn_indices_torch + 65536, ttnn_indices_torch)
 
     torch_output, torch_indices = torch.nn.functional.max_pool2d(
         torch_input,
