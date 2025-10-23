@@ -119,10 +119,16 @@ RunTimeOptions::RunTimeOptions() :
         !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()),
         "Cannot enable both debug printing and profiling");
 
-    // YOUR ENCHANTUM SYSTEM - Keep this!
     InitializeFromEnvVars();
 
     // Profiler setup from main
+    profiler_enabled = false;
+    profile_dispatch_cores = false;
+    profiler_sync_enabled = false;
+    profiler_mid_run_dump = false;
+    profiler_buffer_usage_enabled = false;
+    profiler_trace_profiler = false;
+    
     const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
 #if defined(TRACY_ENABLE)
     if (profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1') {
