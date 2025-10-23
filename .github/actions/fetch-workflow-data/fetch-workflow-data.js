@@ -423,6 +423,7 @@ async function run() {
           if (!fs.existsSync(annRoot)) fs.mkdirSync(annRoot, { recursive: true });
           const allAnnotations = [];
           let sawFailingAnnotationForGtest = false;
+          let sawAnyFailureAnnotations = false;
           for (const { id: checkRunId, job_name } of checkRunIds) {
             let page = 1;
             const budget = 500; // safety cap per run
@@ -450,6 +451,7 @@ async function run() {
                   const isUnknownFileLead = msgLc.startsWith('unknown file');
                   // Primary heuristic: failing/error annotation whose message starts with 'unknown file' is a gtest indicator
                   if (levelLc === 'failure' || levelLc === 'error') {
+                    sawAnyFailureAnnotations = true;
                     if (isUnknownFileLead) {
                       sawFailingAnnotationForGtest = true;
                       if (job_name) gtestAnnotationJobNames.add(String(job_name));
@@ -472,9 +474,9 @@ async function run() {
           annotationsIndex[String(targetRun.id)] = relativeAnn;
           core.info(`Fetched annotations for failing run ${targetRun.id} → ${allAnnotations.length} items`);
 
-          // If any failing gtest job detected, download and extract run logs once and index gtest job logs
+          // Download logs if: gtest failure detected OR no error/failure annotations found
           try {
-            const shouldFetchGtestLogs = sawFailingAnnotationForGtest;
+            const shouldFetchGtestLogs = sawFailingAnnotationForGtest || !sawAnyFailureAnnotations;
             if (shouldFetchGtestLogs) {
               const runLogsZip = await octokit.rest.actions.downloadWorkflowRunLogs({ owner, repo, run_id: targetRun.id });
               const runDir = path.join(logsRoot, String(targetRun.id));
