@@ -13,7 +13,7 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import run_prefetcher_mm
 LLAMA_INPUT_SHAPES = [(2304, 1536), (1536, 2304), (2304, 3840), (2304, 3840), (3840, 2304)]
 LLAMA_INPUT_DTYPES = [ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat4_b, ttnn.bfloat8_b]
 QWEN_INPUT_SHAPES = [(1536, 1536), (1536, 1536), (1536, 3840), (1536, 3840), (3840, 1536)]
-QWEN_INPUT_DTYPES = [tttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16]
+QWEN_INPUT_DTYPES = [ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16]
 
 
 @pytest.mark.skipif(is_grayskull(), reason="GS not supported")
