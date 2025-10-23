@@ -181,7 +181,7 @@ void MAIN {
         cb_wait_front(alias_momentum_modified_idx, block_size);
         tile_regs_acquire();
         mul_tiles_bcast_scalar_init_short(alias_momentum_modified_idx, cb_bcast_lr_idx);
-        // reconfig_data_format(cb_momentum_out_idx, cb_bcast_lr_idx);
+        reconfig_data_format(cb_momentum_out_idx, cb_bcast_lr_idx);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             mul_tiles_bcast_scalar(alias_momentum_modified_idx, cb_bcast_lr_idx, block_idx, 0, block_idx);
         }
