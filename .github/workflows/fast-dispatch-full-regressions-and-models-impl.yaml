@@ -79,7 +79,8 @@ jobs:
           # Stable set (CIv2)
           STABLE_CIv2='[
             {"model":"yolov8s"},
-            {"model":"vadv2"}
+            {"model":"vadv2"},
+            {"model":"gemma-3-4b-it"}
           ]'
 
           # Unstable set (explicit commands)
@@ -276,7 +277,7 @@ jobs:
         card: [N150, N300]
         test-config: ${{ fromJSON(needs.create-test-matrix.outputs.stable_ci_v2_matrix) }}
     name: Nightly CIv2-compatible ${{ matrix.card }} ${{ matrix.test-config.model }}
-    runs-on: ${{ format('tt-ubuntu-2204-{0}-metal', matrix.card) }}
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', matrix.card) }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -303,7 +304,11 @@ jobs:
       - name: Run frequent reg tests scripts
         timeout-minutes: ${{ matrix.test-config.timeout || 30 }}
         run: |
-          pytest tests/nightly/single_card/${{ matrix.test-config.model }}
+          if [[ "${{ matrix.test-config.model }}" == *"gemma-3"* ]]; then
+            pytest tests/nightly/single_card/gemma3 -k ${{ matrix.test-config.model }}
+          else
+            pytest tests/nightly/single_card/${{ matrix.test-config.model }}
+          fi
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

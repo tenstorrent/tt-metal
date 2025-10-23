@@ -31,11 +31,11 @@ jobs:
       matrix:
         test-group:
           - name: "test_sharding_on_bh_20_cores_test1"
-            cmd:  tests/ttnn/unit_tests/test_bh_20_cores_sharding.py::test_sharding_on_bh_20_cores
+            cmd:  tests/ttnn/unit_tests/base_functionality/test_bh_20_cores_sharding.py::test_sharding_on_bh_20_cores
     name: ${{ matrix.test-group.name }}
     runs-on: >-
       ${{
-        (github.event.pull_request.head.repo.fork == true) || format('tt-ubuntu-2204-{0}-metal', inputs.runner-label)
+        (github.event.pull_request.head.repo.fork == true) || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     container:
       image: ${{ inputs.docker-image }}

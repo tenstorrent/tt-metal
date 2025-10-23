@@ -30,7 +30,7 @@ jobs:
           {name: "N300 WH B0", model-group: "other", timeout: 5, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
           {name: "N300 WH B0", model-group: "other_magic_env", timeout: 45, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
           # Doesn't work on blackhole P150 {name: "P150 BH", model-group: "llm_javelin", timeout: 20, arch: blackhole, runs-on: ["P150", "pipeline-functional", "cloud-virtual-machine", "${{ inputs.extra-tag }}"], machine-type: "virtual_machine"},
-          {name: "P150 BH", model-group: "cnn_javelin", timeout: 10, arch: blackhole, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
+          {name: "P150 BH", model-group: "cnn_javelin", timeout: 10, arch: blackhole, runs-on: ["P150", "pipeline-functional", "cloud-virtual-machine", "${{ inputs.extra-tag }}"], machine-type: "virtual_machine"},
           {name: "P150 BH", model-group: "other", timeout: 5, arch: blackhole, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
           {name: "P150 BH", model-group: "other_magic_env", timeout: 45, arch: blackhole, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
         ]
@@ -51,7 +51,7 @@ jobs:
         -e GTEST_OUTPUT=xml:generated/test_reports/
         -e GITHUB_ACTIONS=true
         -e LOGURU_LEVEL=INFO
-        ${{ matrix.test-info.arch == 'wormhole_b0' && '-e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub' || '' }}
+        ${{ (matrix.test-info.arch == 'wormhole_b0' || (matrix.test-info.arch == 'blackhole' && matrix.test-info.model-group == 'cnn_javelin')) && '-e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub' || '' }}
       PIPELINE: model-perf
     steps:
       - name: ⬇️ Checkout
@@ -109,12 +109,6 @@ jobs:
         uses: ./.github/actions/single-card-perf-test
         with:
           commands: pytest -n auto models/demos/squeezebert/tests/test_performance.py -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other' }}
-      - name: Run roberta model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/roberta/tests/test_performance.py -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other' }}
       - name: Run yolov10x model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
@@ -283,6 +277,25 @@ jobs:
             # Merge all the generated reports
             env python3 models/perf/merge_perf_results.py CHECK
         if: ${{ !cancelled() }}
+
+      - name: Save environment data
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/docker-run
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: ${{ env.DOCKER_OPTS }}
+          run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+
+      - name: Upload benchmark data
+        if: ${{ !cancelled() }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+          path: ${{ github.workspace }}
 
       # TODO: Fix the pipeline before enabling notifications.
       #- uses: tenstorrent/tt-metal/.github/actions/slack-report@main

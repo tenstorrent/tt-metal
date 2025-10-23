@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <semaphore.hpp>
+#include "semaphore.hpp"
 #include <stdint.h>
 
 #include "hal_types.hpp"
