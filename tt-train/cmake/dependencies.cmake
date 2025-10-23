@@ -83,8 +83,8 @@ CPMAddPackage(
     NAME xtl
     GITHUB_REPOSITORY xtensor-stack/xtl
     GIT_TAG 0.8.0
-    PATCHES
-        xtl.patch
+    PATCH_COMMAND
+        patch --dry-run -p1 -R < ${CMAKE_CURRENT_LIST_DIR}/xtl.patch || patch -p1 < ${CMAKE_CURRENT_LIST_DIR}/xtl.patch
     OPTIONS
         "XTL_ENABLE_TESTS OFF"
 )
@@ -93,8 +93,8 @@ CPMAddPackage(
     NAME xtensor
     GITHUB_REPOSITORY xtensor-stack/xtensor
     GIT_TAG 0.26.0
-    PATCHES
-        xtensor.patch
+    PATCH_COMMAND
+        patch --dry-run -p1 -R < ${CMAKE_CURRENT_LIST_DIR}/xtensor.patch || patch -p1 < ${CMAKE_CURRENT_LIST_DIR}/xtensor.patch
     OPTIONS
         "XTENSOR_ENABLE_TESTS OFF"
 )
@@ -103,8 +103,8 @@ CPMAddPackage(
     NAME xtensor-blas
     GITHUB_REPOSITORY xtensor-stack/xtensor-blas
     GIT_TAG 0.22.0
-    PATCHES
-        xtensor-blas.patch
+    PATCH_COMMAND
+        patch --dry-run -p1 -R < ${CMAKE_CURRENT_LIST_DIR}/xtensor-blas.patch || patch -p1 < ${CMAKE_CURRENT_LIST_DIR}/xtensor-blas.patch
     OPTIONS
         "XTENSOR_ENABLE_TESTS OFF"
 )
