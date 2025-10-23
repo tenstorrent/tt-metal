@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cinttypes>
 #include <cstdint>
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
@@ -17,6 +18,7 @@
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #include "compute_kernel_api/welford.h"
 #include "compute_kernel_api/transpose_wh.h"
+#include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -24,6 +26,8 @@ ALWI void REL() { release_dst(); }
 namespace NAMESPACE {
 
 void MAIN {
+    namespace kutil = norm::kernel_util;
+
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t blk = get_compile_time_arg_val(1);
@@ -45,10 +49,11 @@ void MAIN {
     constexpr auto cb_beta = tt::CBIndex::c_6;
     constexpr auto cb_xmm = tt::CBIndex::c_24;  // x - E[x]
 
-    constexpr auto cb_ex = tt::CBIndex::c_18;      // E[x]
-    constexpr auto cb_ex2 = tt::CBIndex::c_19;     // E[(x-E[x])^2]
-    constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // E[(x-E[x])^2]+eps
-    constexpr auto cb_fusion = tt::CBIndex::c_22;  // stream gamma/beta
+    constexpr auto cb_ex = tt::CBIndex::c_18;           // E[x]
+    constexpr auto cb_ex2 = tt::CBIndex::c_19;          // E[(x-E[x])^2]
+    constexpr auto cb_ex2pe = tt::CBIndex::c_21;        // E[(x-E[x])^2]+eps
+    constexpr auto cb_fusion = tt::CBIndex::c_22;       // stream gamma/beta
+    constexpr auto cb_reciprocals = tt::CBIndex::c_25;  // Pre-computed reciprocals for Welford's algorithm
     constexpr auto cb_im_or_out = (do_gamma | do_beta) ? cb_fusion : cb_out;
 
     constexpr auto scaler0 = 0;
@@ -76,6 +81,10 @@ void MAIN {
         binary_op_init_common(cb_in, cb_scaler, cb_ex);
         pack_reconfig_data_format(cb_ex);
     }
+
+    // Get pointer to the reciprocal LUT
+    using recip_LUT_t = std::array<uint32_t, W>;
+    auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<recip_LUT_t>(cb_reciprocals, 0);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         if constexpr (fuse_pre_add) {
@@ -111,7 +120,7 @@ void MAIN {
             for (uint32_t j = 0; j < blk; j++) {
                 // Welford's needs transposed input tile
                 transpose_wh_tile(cb_x, wt + j, dst0);
-                welford_tile<dst0, dst1, dst2, true, 0>(start_N, W, 0, {});
+                welford_tile<dst0, dst1, dst2, true, W>(start_N, W, 0, *p_reciprocals);
                 start_N += tile_width;
             }
         }
