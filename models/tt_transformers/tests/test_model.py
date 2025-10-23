@@ -136,8 +136,7 @@ def test_model_inference(
 
         # Define tight final PCC thresholds for quick mode
         final_model_pcc = {
-            # TODO: Investigate why math reconfig fix lowers llama32_1b PCC from 0.9864 to 0.9863 (Issue #28246)
-            "llama32_1b": 0.9991 if mode_accuracy else 0.9863,
+            "llama32_1b": 0.9991 if mode_accuracy else 0.9864,
             "llama32_3b": 0.9989 if mode_accuracy else 0.9837,
             "llama31_8b": 0.9987 if mode_accuracy else 0.9850,
             "llama32_11b": 0.9987 if mode_accuracy else 0.9850,

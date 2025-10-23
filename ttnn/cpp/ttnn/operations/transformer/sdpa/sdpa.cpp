@@ -22,6 +22,7 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
     const std::optional<ttnn::Tensor>& attn_mask,
     bool is_causal,
     std::optional<float> scale,
+    std::optional<uint32_t> sliding_window_size,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
@@ -40,7 +41,9 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
                    .is_causal = is_causal,
                    .chunk_start_idx = std::nullopt,
                    .compute_kernel_config = kernel_config_val,
-                   .use_mla = false},
+                   .use_mla = false,
+                   .head_dim_v = std::nullopt,
+                   .sliding_window_size = sliding_window_size},
                {input_tensor_q, input_tensor_k, input_tensor_v},
                {attn_mask},
                {})
@@ -72,7 +75,9 @@ ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
                    .is_causal = true,  // Always causal for chunked version
                    .chunk_start_idx = chunk_start_idx,
                    .compute_kernel_config = kernel_config_val,
-                   .use_mla = false},
+                   .use_mla = false,
+                   .head_dim_v = std::nullopt,
+                   .sliding_window_size = std::nullopt},  // Chunked version doesn't support sliding window yet
                {input_tensor_q, input_tensor_k, input_tensor_v},
                {std::nullopt, page_table_tensor},  // No attention mask - handled internally based on chunk_start_idx
                {})
@@ -225,7 +230,8 @@ ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
                    .chunk_start_idx = std::nullopt,
                    .compute_kernel_config = kernel_config_val,
                    .use_mla = true,
-                   .head_dim_v = head_dim_v},
+                   .head_dim_v = head_dim_v,
+                   .sliding_window_size = std::nullopt},  // MLA version doesn't support sliding window yet
                {input_tensor_q, input_tensor_k},
                {attn_mask},
                {})
@@ -258,7 +264,8 @@ ttnn::Tensor ExecuteChunkedFlashMLAPrefill::invoke(
                    .chunk_start_idx = chunk_start_idx,
                    .compute_kernel_config = kernel_config_val,
                    .use_mla = true,
-                   .head_dim_v = head_dim_v},
+                   .head_dim_v = head_dim_v,
+                   .sliding_window_size = std::nullopt},  // Chunked MLA version doesn't support sliding window yet
                {input_tensor_q, input_tensor_k},
                {std::nullopt, page_table_tensor},  // No attention mask - handled internally based on chunk_start_idx
                {})

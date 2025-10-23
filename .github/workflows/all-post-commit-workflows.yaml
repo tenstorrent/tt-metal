@@ -56,18 +56,9 @@ jobs:
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
-      version: ${{ inputs.version || '22.04' }}
-      skip-tt-train: false
-  build-artifact-profiler:
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
       tracy: true
       version: ${{ inputs.version || '22.04' }}
+      skip-tt-train: false
 
   find-changed-files:
     runs-on: ubuntu-latest
@@ -227,7 +218,8 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
   run-profiler-regression:
-    needs: [build-artifact-profiler, find-changed-files]
+    needs: [build-artifact, find-changed-files]
+
     strategy:
       fail-fast: false
       matrix:
@@ -241,9 +233,9 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch}}
       runner-label: ${{ matrix.test-group.runner-label}}
-      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   t3000-apc-fast-tests:
     if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
     needs: [build-artifact, find-changed-files]
