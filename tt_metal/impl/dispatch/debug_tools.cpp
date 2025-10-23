@@ -296,7 +296,7 @@ uint32_t dump_prefetch_cmd(CQPrefetchCmd* cmd, uint32_t cmd_addr, std::ofstream&
 }
 
 void print_progress_bar(float progress, bool init = false) {
-    progress = std::min<double>(progress, 1.0);
+    progress = std::min(progress, 1.0f);
     static int prev_bar_position = -1;
     if (init) {
         prev_bar_position = -1;
