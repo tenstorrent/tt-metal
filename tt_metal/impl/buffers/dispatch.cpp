@@ -730,7 +730,7 @@ void write_interleaved_buffer_to_device(
 
     // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
     uint32_t byte_offset_in_cq = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
-    
+
     dispatch_params.calculate_issue_wait();
     update_offset_on_issue_wait_cmd(byte_offset_in_cq, dispatch_params.issue_wait, sub_device_ids.size());
 
@@ -840,7 +840,7 @@ void write_to_device_buffer(
     if (has_pinned_inputs && is_unpadded && !is_sharded(buffer.buffer_layout())) {
         auto device_id = buffer.device()->id();
         const auto& cluster = MetalContext::instance().get_cluster();
-        const chip_id_t mmio_device_id = cluster.get_associated_mmio_device(device_id);
+        const ChipId mmio_device_id = cluster.get_associated_mmio_device(device_id);
         auto noc_addr_pair_opt = pinned_memory->get_noc_addr(device_id);
         if (noc_addr_pair_opt.has_value() and noc_addr_pair_opt->device_id == mmio_device_id) {
             const uint64_t pinned_noc_base = noc_addr_pair_opt->addr;
@@ -871,7 +871,7 @@ void write_to_device_buffer(
                 const uint64_t src_noc_addr = pinned_noc_base + src_offset_base;
                 pinned_src_addr_lo = static_cast<uint32_t>(src_noc_addr - pcie_base);
                 const auto& soc = cluster.get_soc_desc(mmio_device_id);
-                const auto& pcie_cores = soc.get_cores(CoreType::PCIE, tt::umd::CoordSystem::NOC0);
+                const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::NOC0);
                 TT_FATAL(!pcie_cores.empty(), "No PCIE core found on MMIO device {}", mmio_device_id);
                 pinned_src_noc_xy =
                     MetalContext::instance().hal().noc_xy_encoding(pcie_cores.front().x, pcie_cores.front().y);
@@ -1004,9 +1004,8 @@ void issue_read_buffer_dispatch_command_sequence(
     uint32_t pinned_dst_addr_lo = 0;
 
     if (has_pinned_inputs && is_unpadded) {
-        const chip_id_t mmio_device_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(
-                dispatch_params.device->id());
+        const ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(
+            dispatch_params.device->id());
         auto noc_addr_pair_opt = dispatch_params.pinned_memory->get_noc_addr(dispatch_params.device->id());
         if (noc_addr_pair_opt.has_value() && noc_addr_pair_opt->device_id == mmio_device_id) {
             const uint64_t pinned_noc_base = noc_addr_pair_opt->addr;
@@ -1024,7 +1023,7 @@ void issue_read_buffer_dispatch_command_sequence(
                 const uint64_t dst_noc_addr = pinned_noc_base + dst_offset_base;
                 pinned_dst_addr_lo = static_cast<uint32_t>(dst_noc_addr - pcie_base);
                 const auto& soc = cluster.get_soc_desc(mmio_device_id);
-                const auto& pcie_cores = soc.get_cores(CoreType::PCIE, tt::umd::CoordSystem::NOC0);
+                const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::NOC0);
                 TT_FATAL(!pcie_cores.empty(), "No PCIE core found on MMIO device {}", mmio_device_id);
                 pinned_dst_noc_xy =
                     MetalContext::instance().hal().noc_xy_encoding(pcie_cores.front().x, pcie_cores.front().y);
