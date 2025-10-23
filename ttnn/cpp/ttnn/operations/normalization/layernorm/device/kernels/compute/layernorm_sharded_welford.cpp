@@ -15,6 +15,7 @@
 #include "compute_kernel_api/welford.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
+#include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 
 /**
  * @brief This kernel computes layernorm for sharded tensors using
@@ -93,6 +94,21 @@ inline auto get_next_set_size(
     // be a full block or a partial one if it's the last
     return block == num_blocks_combine - 1 ? last_block_w : block_w;
 }
+
+template <typename To, typename From>
+inline To bit_cast(const From& from) noexcept {
+    static_assert(sizeof(To) == sizeof(From), "Types must have same size");
+    static_assert(std::is_trivially_copyable_v<From>, "From must be trivially copyable");
+    static_assert(std::is_trivially_copyable_v<To>, "To must be trivially copyable");
+
+    union {
+        From f;
+        To t;
+    } u;
+
+    u.f = from;
+    return u.t;
+}
 }  // namespace
 void MAIN {
     // ============================================================================
@@ -122,6 +138,9 @@ void MAIN {
     constexpr uint32_t last_tile_w = get_compile_time_arg_val(15);
     constexpr uint32_t W = get_compile_time_arg_val(16);
     constexpr uint32_t eps = get_compile_time_arg_val(17);
+    constexpr uint32_t per_core_recip_lut_size = get_compile_time_arg_val(18);
+
+    DPRINT << "per_core_recip_lut_size: " << per_core_recip_lut_size << ENDL();
 
     // ---------------------------------------------------------------------------
     // CB definitions
@@ -141,7 +160,7 @@ void MAIN {
                                                           // (workaround for bug in transpose_wh_dest)
     constexpr uint32_t cb_fusion = tt::CBIndex::c_18;     // stream gamma/beta
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
-
+    constexpr uint32_t cb_reciprocals = tt::CBIndex::c_25;  // LUT of pre-computed reciprocals for Welford's algorithm
     constexpr uint32_t cb_im = (do_gamma | do_beta) ? cb_x : cb_out;
     constexpr uint32_t cb_outgamma = do_beta ? cb_fusion : cb_out;
 #ifdef FUSE_PRE_ADD
@@ -193,6 +212,15 @@ void MAIN {
     constexpr uint32_t welford_input_dst = 0;
     constexpr uint32_t welford_mean_dst = 1;
     constexpr uint32_t welford_var_dst = 2;
+
+    // Pointer to the reciprocal LUT
+
+    using recip_lut_t = std::array<uint32_t, per_core_recip_lut_size>;
+    auto p_reciprocals = norm::kernel_util::compute::memory::get_pointer_to_cb_data<recip_lut_t>(cb_reciprocals, 0);
+    // DPRINT << "p_reciprocals: " << p_reciprocals << ENDL();
+    for (uint32_t i = 0; i < per_core_recip_lut_size; i++) {
+        DPRINT << "p_reciprocals[" << i << "]: " << bit_cast<float>((*p_reciprocals)[i]) << ENDL();
+    }
 
     int index_subblock_w_offset = 0;
     int index_h_offset = 0;
@@ -252,8 +280,8 @@ void MAIN {
         tile_regs_acquire();
         for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
             transpose_wh_tile(cb_in, w + index_h_offset, welford_input_dst);
-            welford_tile<welford_input_dst, welford_mean_dst, welford_var_dst, true, 0>(
-                w * tile_width, partial_reduce_W, 0, {});
+            welford_tile<welford_input_dst, welford_mean_dst, welford_var_dst, true, per_core_recip_lut_size>(
+                w * tile_width, partial_reduce_W, 0, *p_reciprocals);
         }
         // We should transpose back to columns here
         // However, transpose_wh_dest() is currently buggy.

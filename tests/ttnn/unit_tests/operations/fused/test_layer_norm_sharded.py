@@ -166,6 +166,7 @@ def single_stage_param_sets():
                                 subblock_wt_valid = subblock_wt >= 1 and subblock_wt <= block_wt
                                 if block_ht_valid and block_wt_valid and subblock_wt_valid:
                                     param_sets.append((h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt))
+                                    return param_sets
     return param_sets
 
 
