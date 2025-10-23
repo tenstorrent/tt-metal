@@ -88,6 +88,7 @@ jobs:
       models-changed: ${{ steps.find-changes.outputs.models-changed }}
       test-metalium: ${{ steps.set-test-metalium.outputs.test-metalium }}
       test-ttnn: ${{ steps.set-test-ttnn.outputs.test-ttnn }}
+      test-tt-train: ${{ steps.set-test-tt-train.outputs.test-tt-train }}
       test-everything: ${{ steps.set-test-everything.outputs.test-everything }}
     steps:
       - id: find-changes
@@ -104,6 +105,10 @@ jobs:
           echo "test-ttnn=${{ steps.set-test-metalium.outputs['test-metalium'] == 'true' ||
                               steps.find-changes.outputs['tt-nn-changed'] == 'true' ||
                               steps.find-changes.outputs['tt-nn-tests-changed'] == 'true' }}" >> "$GITHUB_OUTPUT"
+      - id: set-test-tt-train
+        run: |
+          echo "test-tt-train=${{ steps.set-test-metalium.outputs['test-ttnn'] == 'true' ||
+                                  steps.find-changes.outputs['tt-train-changed'] == 'true' }}" >> "$GITHUB_OUTPUT"
       - id: set-test-everything
         run: |
           echo "test-everything=${{ github.event_name == 'push' || steps.find-changes.outputs['any-code-changed'] == 'true' }}" >> "$GITHUB_OUTPUT"
@@ -193,7 +198,7 @@ jobs:
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
+    if: ${{ needs.find-changed-files.outputs.test-tt-train == 'true' }}
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
