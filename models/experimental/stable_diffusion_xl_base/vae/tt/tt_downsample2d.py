@@ -10,7 +10,9 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.vae_utility import get_
 
 
 class TtDownsample2D(LightweightModule):
-    def __init__(self, device, state_dict, module_path, stride, padding, dilation, groups, model_config):
+    def __init__(
+        self, device, state_dict, module_path, stride, padding, dilation, groups, model_config, debug_mode=False
+    ):
         super().__init__()
 
         self.device = device
@@ -35,7 +37,7 @@ class TtDownsample2D(LightweightModule):
     def forward(self, hidden_states, input_shape):
         B, C, H, W = input_shape
 
-        [hidden_states, [H, W], [self.tt_weights, self.tt_bias]] = ttnn.conv2d(
+        [hidden_states, [H, W], [tt_weights, tt_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_weights,
             in_channels=self.conv_params["input_channels"],
@@ -59,5 +61,8 @@ class TtDownsample2D(LightweightModule):
             dtype=self.conv_output_dtype,
         )
         C = self.conv_params["output_channels"]
+        if not self.debug_mode:
+            self.tt_weights = tt_weights
+            self.tt_bias = tt_bias
 
         return hidden_states, [C, H, W]
