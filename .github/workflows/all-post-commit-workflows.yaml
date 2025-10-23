@@ -88,7 +88,7 @@ jobs:
       models-changed: ${{ steps.find-changes.outputs.models-changed }}
       test-metalium: ${{ steps.set-test-metalium.outputs.test-metalium }}
       test-ttnn: ${{ steps.set-test-ttnn.outputs.test-ttnn }}
-      test-everything: ${{ steps.set-test-always.outputs.test-everything }}
+      test-everything: ${{ steps.set-test-everything.outputs.test-everything }}
     steps:
       - id: find-changes
         uses: tenstorrent/tt-metal/.github/actions/find-changed-files@blozano-apc-savior
@@ -104,7 +104,7 @@ jobs:
           echo "test-ttnn=${{ steps.set-test-metalium.outputs['test-metalium'] == 'true' ||
                               steps.find-changes.outputs['tt-nn-changed'] == 'true' ||
                               steps.find-changes.outputs['tt-nn-tests-changed'] == 'true' }}" >> "$GITHUB_OUTPUT"
-      - id: set-test-always
+      - id: set-test-everything
         run: |
           echo "test-everything=${{ github.event_name == 'push' || steps.find-changes.outputs['any-code-changed'] == 'true' }}" >> "$GITHUB_OUTPUT"
 
@@ -249,7 +249,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   galaxy-apc-fast-tests:
-    if: ${{ github.event.pull_request.head.repo.fork == false && needs.find-changed-files.outputs.test-always == 'true' }}
+    if: ${{ github.event.pull_request.head.repo.fork == false && needs.find-changed-files.outputs.test-everything == 'true' }}
     needs: [build-artifact, find-changed-files]
     secrets: inherit
     strategy:
