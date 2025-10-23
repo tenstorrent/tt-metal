@@ -40,9 +40,15 @@ def mesh_shape():
 @pytest.fixture(scope="module")
 def mesh_device(mesh_shape):
     """Create and yield a mesh device, cleanup on teardown."""
-    device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(mesh_shape))
-    yield device
-    ttnn.close_mesh_device(device)
+    try:
+        device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(mesh_shape))
+    except Exception as e:  # environment without TT hardware
+        pytest.skip(f"Mesh device unavailable or no hardware detected: {e}")
+        return
+    try:
+        yield device
+    finally:
+        ttnn.close_mesh_device(device)
 
 
 @pytest.fixture(scope="module")
@@ -80,6 +86,17 @@ def _make_arange_bf16(shape: tuple[int, ...]) -> torch.Tensor:
 def _pos_dim(dim: int, rank: int) -> int:
     """Convert possibly-negative dim to positive index for given rank."""
     return dim % rank
+
+
+def _get_hw_shard_unit() -> int:
+    """
+    Hardware-related shard unit threshold (default 32).
+    Override via env var TT_TEST_SHARD_UNIT for future hardware.
+    """
+    try:
+        return int(os.environ.get("TT_TEST_SHARD_UNIT", "32"))
+    except Exception:
+        return 32
 
 
 # ======================================================================================
@@ -284,3 +301,80 @@ def test_host_sharded_2d_with_replicate(
     repeat_factor = mesh_shape[replicate_axis]
     expected = torch_in.repeat((repeat_factor, 1, 1, 1))
     assert torch.equal(torch_auto, expected)
+
+
+# --------------------------------------------------------------------------------------
+# Tensor shape categories around hardware threshold (e.g., 32)
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("category", ["lt", "eq", "gt"])  # per-shard length relative to threshold
+@pytest.mark.parametrize("min_devices", [2])
+def test_host_sharded_shape_thresholds(
+    mesh_device: ttnn.MeshDevice, num_devices: int, category: str, min_devices: int
+) -> None:
+    if num_devices < min_devices:
+        pytest.skip(f"Test requires at least {min_devices} devices, found {num_devices}")
+
+    unit = _get_hw_shard_unit()
+    if category == "lt":
+        per_shard = max(1, unit - 1)
+    elif category == "eq":
+        per_shard = unit
+    else:
+        per_shard = unit + 1
+
+    shard_dim = -1  # test last dimension as sharded axis (rank=4)
+    rank = 4
+    axis = _pos_dim(shard_dim, rank)
+    # Global size across sharded dim = per_shard_len * num_devices
+    shape = [2, 3, 4, 5]
+    shape[axis] = per_shard * num_devices
+    torch_in = _make_arange_bf16(tuple(shape))
+
+    tt_host_sharded = ttnn.from_torch(
+        torch_in, device=None, dtype=ttnn.bfloat16, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim)
+    )
+
+    torch_auto = to_torch_auto_compose(tt_host_sharded, device=mesh_device)
+    torch_ref = ttnn.to_torch(tt_host_sharded, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim))
+
+    assert torch.equal(torch_ref, torch_in)
+    assert torch.equal(torch_auto, torch_in)
+
+
+@pytest.mark.parametrize("category", ["lt", "eq", "gt"])  # per-shard length relative to threshold
+@pytest.mark.parametrize("min_devices", [2])
+def test_device_sharded_shape_thresholds(
+    mesh_device: ttnn.MeshDevice, num_devices: int, category: str, min_devices: int
+) -> None:
+    if num_devices < min_devices:
+        pytest.skip(f"Test requires at least {min_devices} devices, found {num_devices}")
+
+    unit = _get_hw_shard_unit()
+    if category == "lt":
+        per_shard = max(1, unit - 1)
+    elif category == "eq":
+        per_shard = unit
+    else:
+        per_shard = unit + 1
+
+    shard_dim = -1  # test last dimension as sharded axis (rank=4)
+    rank = 4
+    axis = _pos_dim(shard_dim, rank)
+    shape = [2, 3, 4, 5]
+    shape[axis] = per_shard * num_devices
+    torch_in = _make_arange_bf16(tuple(shape))
+
+    tt_dev_sharded = ttnn.from_torch(
+        torch_in,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim),
+    )
+
+    torch_auto = to_torch_auto_compose(tt_dev_sharded, device=mesh_device)
+    torch_ref = ttnn.to_torch(tt_dev_sharded, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim))
+
+    assert torch.equal(torch_ref, torch_in)
+    assert torch.equal(torch_auto, torch_in)
