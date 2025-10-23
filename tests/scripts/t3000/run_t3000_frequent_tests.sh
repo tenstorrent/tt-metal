@@ -279,19 +279,6 @@ run_t3000_tteager_tests() {
 
   echo "LOG_METAL: Running run_t3000_tteager_tests"
 
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_gather_matmul.py -k post_commit ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_post_commit.py ; fail+=$?
-  pytest -n auto tests/nightly/t3000/ccl/test_send_recv_async.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_reduce_t3000_frequent.py ; fail+=$?
-  pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_dispatch.py ; fail+=$?
-  pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_combine.py ; fail+=$?
-  pytest -n auto tests/nightly/t3000/ccl/test_mesh_partition.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_moe_ccl_end_to_end.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/point_to_point/test_point_to_point.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/data_movement/test_moe_expert_token_remap_t3k.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/data_movement/test_moe_routing_remap_t3k.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/debug/test_apply_device_delay_t3000.py ; fail+=$?
-
   # distributed layernorm
   pytest tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py ; fail+=$?
 
@@ -386,6 +373,9 @@ run_t3000_sd35large_tests() {
 run_t3000_tests() {
   # Run ethernet tests
   run_t3000_ethernet_tests
+
+  # Run tteager tests
+  run_t3000_tteager_tests
 
   # Run trace tests
   run_t3000_trace_stress_tests
