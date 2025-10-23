@@ -564,9 +564,9 @@ run_t3000_ccl_tests() {
   pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_dispatch.py::test_all_to_all_dispatch_no_trace[wormhole_b0-dtype0-MAX_LINKS-b1s3-l1-7168-8-8-cluster_col-2x4_grid-False-fabric_2d]
 
   # all to all combine: 1 test for 1d ring and 1 for 2d should be enough
-  pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[silicon_arch_name=wormhole_b0-dtype=DataType.BFLOAT16-topology=None-dram-dram-num_iters=2-scheme=random-local_reduce=True-seq=2-hidden_size=7000-select_experts_k=8-experts_per_device=8-batches_per_device=8-fabric_1d_ring_axis_1]
+  pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-dtype0-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_1d_ring_axis_1]
   # fabric 2d test on cluster axis 0 - Re-enable this test when we have more T3K availability
-  # pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[silicon_arch_name=wormhole_b0-dtype=DataType.BFLOAT16-topology=None-dram-dram-num_iters=2-scheme=random-local_reduce=True-seq=2-hidden_size=7000-select_experts_k=8-experts_per_device=8-batches_per_device=8-fabric_2d_axis_0]
+  # pytest -n auto tests/nightly/t3000/ccl/test_all_to_all_combine.py::test_all_to_all_combine_no_trace[wormhole_b0-dtype0-None-dram-dram-2-random-True-2-7000-8-8-8-fabric_2d_axis_0]
 
   # Record the end time
   end_time=$(date +%s)
