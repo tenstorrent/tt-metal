@@ -72,11 +72,18 @@ int main(int argc, char** argv) {
     TestContext test_context;
     test_context.init(fixture, allocation_policies);
 
-    bool benchmark_mode = std::any_of(raw_test_configs.begin(), raw_test_configs.end(),
-        [](const auto& config) {
-            return config.benchmark_mode;
-        }
-    );
+    // Configure progress monitoring from cmdline flags
+    if (cmdline_parser.show_progress()) {
+        ProgressMonitorConfig progress_config;
+        progress_config.enabled = true;
+        progress_config.poll_interval_seconds = cmdline_parser.get_progress_interval();
+        progress_config.hung_threshold_seconds = cmdline_parser.get_hung_threshold();
+
+        test_context.enable_progress_monitoring(progress_config);
+    }
+
+    bool benchmark_mode = std::any_of(
+        raw_test_configs.begin(), raw_test_configs.end(), [](const auto& config) { return config.benchmark_mode; });
 
     // Initialize CSV file for bandwidth results if any of the configs have benchmark mode set
     if (benchmark_mode) {
@@ -163,8 +170,7 @@ int main(int argc, char** argv) {
 
             // Set code profiling enabled based on rtoptions
             auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-            test_context.set_code_profiling_enabled(
-                rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd());
+            test_context.set_code_profiling_enabled(rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd());
 
             for (auto& built_test : built_tests) {
                 log_info(tt::LogTest, "Running Test: {}", built_test.parametrized_name);
@@ -174,9 +180,6 @@ int main(int argc, char** argv) {
 
                 test_context.process_traffic_config(built_test);
                 log_info(tt::LogTest, "Traffic config processed");
-
-                // Initialize sync memory if line sync is enabled
-                test_context.initialize_sync_memory();
 
                 // Clear code profiling buffers before test execution
                 if (test_context.get_code_profiling_enabled()) {
@@ -190,11 +193,14 @@ int main(int argc, char** argv) {
                 log_info(tt::LogTest, "Compiling programs");
                 test_context.compile_programs();
 
+                // multi-host barrier to synchronize before starting the test (as we could be clearing out addresses)
+                fixture->barrier();
+
                 log_info(tt::LogTest, "Launching programs");
                 test_context.launch_programs();
 
                 log_info(tt::LogTest, "Waiting for programs");
-                test_context.wait_for_programs();
+                test_context.wait_for_programs_with_progress();
                 log_info(tt::LogTest, "Test {} Finished.", built_test.parametrized_name);
 
                 test_context.process_telemetry_data(built_test);
