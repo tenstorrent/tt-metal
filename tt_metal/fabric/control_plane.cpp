@@ -460,13 +460,21 @@ void ControlPlane::initialize_distributed_contexts() {
 }
 
 FabricNodeId ControlPlane::get_fabric_node_id_from_asic_id(uint64_t asic_id) const {
+    // Check cache first for faster lookup
+    auto cache_it = asic_id_to_fabric_node_cache_.find(asic_id);
+    if (cache_it != asic_id_to_fabric_node_cache_.end()) {
+        return cache_it->second;
+    }
+
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& chip_unique_ids = cluster.get_unique_chip_ids();
 
     for (const auto& [physical_chip_id, unique_id] : chip_unique_ids) {
-        // TODO: We can maintain a map of unique_id to physical_chip_id for faster lookup
         if (unique_id == asic_id) {
-            return this->get_fabric_node_id_from_physical_chip_id(physical_chip_id);
+            FabricNodeId fabric_node_id = this->get_fabric_node_id_from_physical_chip_id(physical_chip_id);
+            // Cache the result for future lookups
+            asic_id_to_fabric_node_cache_.emplace(asic_id, fabric_node_id);
+            return fabric_node_id;
         }
     }
 
@@ -2924,7 +2932,7 @@ bool ControlPlane::is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_con
     if (fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
         return false;
     }
-    
+
     static const std::unordered_set<tt::tt_fabric::FabricConfig> torus_fabric_configs = {
         tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X,
         tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y,
@@ -2933,11 +2941,11 @@ bool ControlPlane::is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_con
         tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y,
         tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY
     };
-    
+
     if (torus_fabric_configs.count(fabric_config)) {
         return validate_torus_setup(fabric_config);
     }
-    
+
     // Non-torus configurations are valid by default since we always have at least mesh topology,
     // and mesh configurations don't require special validation like torus does
     return true;
@@ -2983,7 +2991,7 @@ bool ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
         // Dump the physical system descriptor to YAML
         std::string temp_gsd_path = "/tmp/temp_gsd_" + std::to_string(getpid()) + ".yaml";
         physical_system_descriptor.dump_to_yaml(temp_gsd_path);
-        
+
         // Actually validate the FSD against the GSD
         tt::scaleout_tools::validate_fsd_against_gsd(temp_fsd_path, temp_gsd_path, false, false);
 
@@ -3004,7 +3012,7 @@ std::string ControlPlane::get_cabling_descriptor_path(tt::tt_fabric::FabricConfi
     static const std::string X_TORUS_PATH = "tools/tests/scaleout/cabling_descriptors/wh_galaxy_x_torus_superpod.textproto";
     static const std::string Y_TORUS_PATH = "tools/tests/scaleout/cabling_descriptors/wh_galaxy_y_torus_superpod.textproto";
     static const std::string XY_TORUS_PATH = "tools/tests/scaleout/cabling_descriptors/wh_galaxy_xy_torus_superpod.textproto";
-    
+
     static const std::unordered_map<tt::tt_fabric::FabricConfig, std::string> cabling_map = {
         {tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X, X_TORUS_PATH},
         {tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X, X_TORUS_PATH},

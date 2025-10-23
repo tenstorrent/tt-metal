@@ -373,6 +373,10 @@ private:
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> host_local_context_;
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;
 
+    // Performance caches for frequently accessed data
+    // Cache for faster asic_id to fabric_node_id lookup
+    mutable std::unordered_map<uint64_t, FabricNodeId> asic_id_to_fabric_node_cache_;
+
     // Private helper methods for torus validation
     bool validate_torus_setup(tt::tt_fabric::FabricConfig fabric_config) const;
     std::string get_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) const;
