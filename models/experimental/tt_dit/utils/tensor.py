@@ -124,10 +124,7 @@ def to_torch(
     tensor is distributed and not on device, composer_device must be provided.
     """
     if mesh_axes is None:
-        if x.tensor_topology().distribution_shape() != ttnn.MeshShape([1]):
-            msg = "mesh_axes must be specified for distributed tensors"
-            raise ValueError(msg)
-        return ttnn.to_torch(x)
+        mesh_axes = (None,) * len(x.shape)
 
     composer_device = composer_device or x.device()
     if composer_device is None:
