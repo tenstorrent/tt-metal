@@ -114,7 +114,8 @@ class Conv2d(Module):
         padding: Sequence[int] | int = 0,
         dilation: Sequence[int] | int = 1,
         mesh_device: ttnn.MeshDevice,
-        mesh_axis: int | None = None,
+        in_mesh_axis: int | None = None,
+        out_mesh_axis: int | None = None,
         ccl_manager: CCLManager | None = None,
         # TODO: remove torch_ref, use from_torch instead
         torch_ref: torch.nn.Conv2d | None = None,
@@ -135,6 +136,17 @@ class Conv2d(Module):
             torch_ref: Reference to the torch layer. Paramaters from this will be used to iniitialize the layer
         """
         super().__init__()
+
+        if in_mesh_axis is not None:
+            if out_mesh_axis is not None:
+                msg = "only one of in_mesh_axis and out_mesh_axis can be set"
+                raise ValueError(msg)
+
+            if ccl_manager is None:
+                msg = "ccl_manager must be provided if in_mesh_axis is not None"
+                raise ValueError(msg)
+
+        in_mesh_axis_size = mesh_device.shape[in_mesh_axis] if in_mesh_axis is not None else 1
 
         if torch_ref is not None:
             assert not isinstance(torch_ref.padding, str)
@@ -161,15 +173,15 @@ class Conv2d(Module):
             total_shape=[out_channels, in_channels, *kernel_size],
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
-            mesh_axes=[mesh_axis, None, None, None],
+            mesh_axes=[out_mesh_axis, in_mesh_axis, None, None],
             on_host=True,
         )
 
         self.bias = Parameter(
-            total_shape=[1, 1, 1, out_channels],
+            total_shape=[in_mesh_axis_size, 1, 1, out_channels],
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
-            mesh_axes=[None, None, None, mesh_axis],
+            mesh_axes=[in_mesh_axis, None, None, out_mesh_axis],
             on_host=True,
         )
 
@@ -180,7 +192,9 @@ class Conv2d(Module):
         self.padding = padding
         self.dilation = dilation
         self.mesh_device = mesh_device
-        self.mesh_axis = mesh_axis
+        self.out_mesh_axis = out_mesh_axis
+        self.in_mesh_axis = in_mesh_axis
+        self.in_mesh_axis_size = in_mesh_axis_size
         self.ccl_manager = ccl_manager
 
         if torch_ref is not None:
@@ -192,7 +206,8 @@ class Conv2d(Module):
         torch_ref: torch.nn.Conv2d,
         *,
         mesh_device: ttnn.MeshDevice,
-        mesh_axis: int | None,
+        in_mesh_axis: int | None = None,
+        out_mesh_axis: int | None = None,
         ccl_manager: CCLManager | None,
     ) -> Self:
         assert not isinstance(torch_ref.padding, str)
@@ -205,7 +220,8 @@ class Conv2d(Module):
             padding=torch_ref.padding,
             dilation=torch_ref.dilation,
             mesh_device=mesh_device,
-            mesh_axis=mesh_axis,
+            out_mesh_axis=out_mesh_axis,
+            in_mesh_axis=in_mesh_axis,
             ccl_manager=ccl_manager,
         )
 
@@ -214,8 +230,12 @@ class Conv2d(Module):
         return model
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        if "bias" in state:
-            state["bias"] = state["bias"].reshape([1, 1, 1, -1])
+        bias = state.pop("bias", None)
+        if bias is not None:
+            (out_dim,) = bias.shape
+            bias = bias.reshape([1, 1, 1, out_dim])
+            bias_zeros = torch.zeros([self.in_mesh_axis_size - 1, 1, 1, out_dim])
+            state["bias"] = torch.cat([bias, bias_zeros])
 
     def estimate_input_mesh_axis(self, x):
         """
@@ -242,7 +262,7 @@ class Conv2d(Module):
         Data is left in the state of the final compute. The burden is on the next layer to prepare its input as needed.
         TODO: Add support for DP and SP
         """
-        if self.is_sharded_tensor(x):
+        if self.out_mesh_axis is not None and self.is_sharded_tensor(x):
             x = vae_all_gather(self.ccl_manager, x, estimate_mesh_axis(x, 3, self.in_channels))
 
         b, h, w, c = x.shape
@@ -254,7 +274,7 @@ class Conv2d(Module):
         )
 
         try:
-            output_tensor, [out_height, out_width] = ttnn.conv2d(
+            x, [out_height, out_width] = ttnn.conv2d(
                 input_tensor=x,
                 weight_tensor=self.weight.data,
                 bias_tensor=self.bias.data if self.bias is not None else None,
@@ -284,4 +304,9 @@ class Conv2d(Module):
             )
             raise RuntimeError(msg) from e
 
-        return ttnn.reshape(output_tensor, (b, out_height, out_width, -1))
+        x = ttnn.reshape(x, (b, out_height, out_width, -1))
+
+        if self.in_mesh_axis is not None:
+            x = self.ccl_manager.reduce_scatter_persistent_buffer(x, dim=-1, mesh_axis=self.in_mesh_axis)
+
+        return x
