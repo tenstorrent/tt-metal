@@ -103,7 +103,7 @@ public:
         }
 
         validate_and_setup_control_plane_config(this);
-        this->DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+        this->DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
     }
 
     void TearDown() override {

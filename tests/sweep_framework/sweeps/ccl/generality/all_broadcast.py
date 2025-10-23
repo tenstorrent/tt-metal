@@ -24,7 +24,6 @@ FABRIC_CONFIGS = [
     ttnn.FabricConfig.FABRIC_1D,
     ttnn.FabricConfig.FABRIC_1D_RING,
     ttnn.FabricConfig.FABRIC_2D,
-    ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
 ]
 
 # Define the parameter space for the sweep test

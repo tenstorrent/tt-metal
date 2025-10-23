@@ -24,12 +24,7 @@ static FORCE_INLINE void fabric_set_unicast_route(
     uint8_t i) {
 #if defined(FABRIC_2D)
     const auto& slot = connection_manager.get(i);
-#if defined(DYNAMIC_ROUTING_ENABLED)
-    fabric_set_unicast_route(
-        packet_header, connection_manager.my_chip_id, slot.dst_dev_id, slot.dst_mesh_id, connection_manager.ew_dim);
-#else
     fabric_set_unicast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id);
-#endif
 #else
     // 1D unicast, nop
 #endif
@@ -45,9 +40,6 @@ static FORCE_INLINE void fabric_set_mcast_route(
     const auto& slot = connection_manager.get(i);
     if (range[i] != 0) {
         auto hop = range[i];
-#if defined(DYNAMIC_ROUTING_ENABLED)
-        hop -= 1;
-#endif
         switch (static_cast<eth_chan_directions>(slot.tag)) {
             case eth_chan_directions::EAST: {
                 fabric_set_mcast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id, hop, 0, 0, 0);
@@ -61,7 +53,7 @@ static FORCE_INLINE void fabric_set_mcast_route(
             case eth_chan_directions::SOUTH: {
                 fabric_set_mcast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id, 0, 0, 0, hop);
             } break;
-            default: ASSERT(FALSE);
+            default: ASSERT(false); break;
         }
     }
 #else

@@ -29,7 +29,6 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
-
     uint32_t input_base_addr = get_arg_val<uint32_t>(0);
 
     auto input_addr_gen_args = TensorAccessorArgs<input_args_cta_idx, input_args_crta_idx>();
@@ -48,6 +47,7 @@ void kernel_main() {
                 noc_async_read<input_page_size>(noc_read_addr, l1_write_addr, input_page_size);
                 page_index++;
                 l1_write_addr += socket_page_size;
+                // DPRINT << " read one page\n";
             }
             noc_async_read_barrier();
             cb_push_back(cb0_id, 1);
