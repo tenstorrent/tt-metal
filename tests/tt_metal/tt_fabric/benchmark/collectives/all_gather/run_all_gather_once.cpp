@@ -354,33 +354,33 @@ Notes:
     // -------------------------- end PROGRAM FACTORY --------------------------
 
     // Phase A hops: bounding box of all receivers relative to sender
-    uint16_t e_hops = 0, w_hops = 0, n_hops = 0, s_hops = 0;
-    int src_r = src_coord[0], src_c = src_coord[1];
-    int min_r = src_r, max_r = src_r, min_c = src_c, max_c = src_c;
-    for (auto mc : dst_coords) {
-        min_r = std::min(min_r, (int)mc[0]);
-        max_r = std::max(max_r, (int)mc[0]);
-        min_c = std::min(min_c, (int)mc[1]);
-        max_c = std::max(max_c, (int)mc[1]);
-    }
-    if (max_c > src_c) {
-        e_hops = (uint16_t)(max_c - src_c);
-    }
-    if (min_c < src_c) {
-        w_hops = (uint16_t)(src_c - min_c);
-    }
-    if (max_r > src_r) {
-        s_hops = (uint16_t)(max_r - src_r);
-    }
-    if (min_r < src_r) {
-        n_hops = (uint16_t)(src_r - min_r);
-    }
+    // uint16_t e_hops = 0, w_hops = 0, n_hops = 0, s_hops = 0;
+    // int src_r = src_coord[0], src_c = src_coord[1];
+    // int min_r = src_r, max_r = src_r, min_c = src_c, max_c = src_c;
+    // for (auto mc : dst_coords) {
+    //     min_r = std::min(min_r, (int)mc[0]);
+    //     max_r = std::max(max_r, (int)mc[0]);
+    //     min_c = std::min(min_c, (int)mc[1]);
+    //     max_c = std::max(max_c, (int)mc[1]);
+    // }
+    // if (max_c > src_c) {
+    //     e_hops = (uint16_t)(max_c - src_c);
+    // }
+    // if (min_c < src_c) {
+    //     w_hops = (uint16_t)(src_c - min_c);
+    // }
+    // if (max_r > src_r) {
+    //     s_hops = (uint16_t)(max_r - src_r);
+    // }
+    // if (min_r < src_r) {
+    //     n_hops = (uint16_t)(src_r - min_r);
+    // }
 
     // Append hops AFTER fabric connection args so the kernel’s parsing isn’t disturbed.
-    writer_rt.push_back((uint32_t)e_hops);
-    writer_rt.push_back((uint32_t)w_hops);
-    writer_rt.push_back((uint32_t)n_hops);
-    writer_rt.push_back((uint32_t)s_hops);
+    writer_rt.push_back((uint32_t)0);
+    writer_rt.push_back((uint32_t)0);
+    writer_rt.push_back((uint32_t)0);
+    writer_rt.push_back((uint32_t)1);
 
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
 
