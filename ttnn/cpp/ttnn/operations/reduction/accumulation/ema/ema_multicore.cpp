@@ -34,24 +34,22 @@ tt::tt_metal::operation::ProgramWithCallbacks ema_multi_core(
     auto a_shape = a.padded_shape();
     auto num_batches = a_shape[1];
     auto num_channels = a_shape[2];
+    auto num_samples_per_channel = a_shape[3];
 
     auto num_channel_tiles = num_channels / a.tensor_spec().tile().get_height();
-    auto tiles_per_channel = a_shape[3] / a.tensor_spec().tile().get_width();
+    auto tiles_per_channel = num_samples_per_channel / a.tensor_spec().tile().get_width();
 
     auto total_tiles = num_batches * num_channel_tiles * tiles_per_channel;
 
     // We pick the maximum number of cores (from the available) that divides total_tiles equally
-    uint32_t num_cores = num_cores_available;
-    while ((num_cores > 1) && (total_tiles % num_cores != 0)) {
-        --num_cores;
-    }
+    auto [num_cores, total_tiles_per_core] = tt::tt_metal::get_max_cores_divisible_by_tiles_per_core_tiles(
+        total_tiles, num_cores_available, /*request_even=*/false);
 
     // We now have the number of cores to use, compute per core parameters
     auto all_cores = CoreRangeSet(grid_to_cores(num_cores, grid_size.x, grid_size.y, false));
     log_debug(tt::LogOp, "Provided grid size: y={}, x={}", grid_size.y, grid_size.x);
     log_debug(tt::LogOp, "Using {} cores out of {} available", num_cores, num_cores_available);
 
-    auto total_tiles_per_core = total_tiles / num_cores;
     auto total_batches_per_core = total_tiles_per_core / tiles_per_channel;
 
     // Premcompute the alpha and beta bits
