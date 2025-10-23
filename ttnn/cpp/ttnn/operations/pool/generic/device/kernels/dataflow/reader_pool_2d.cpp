@@ -79,6 +79,104 @@ ALWI void clear_out_tiles(uint64_t write_addr, uint64_t clear_value_addr) {
     noc_async_read_barrier();
 }
 
+// Initialize indices and increment tiles for return_indices functionality
+template <
+    uint32_t kernel_h,
+    uint32_t kernel_w,
+    uint32_t in_w,
+    uint32_t in_c,
+    uint32_t pad_t,
+    uint32_t pad_l,
+    uint32_t dilation_h,
+    uint32_t dilation_w,
+    uint16_t right_inc,
+    uint16_t down_left_wrap_inc,
+    uint16_t up_left_wrap_inc,
+    uint32_t in_idx_cb_id,
+    uint32_t right_inc_cb_id,
+    uint32_t down_left_wrap_inc_cb_id,
+    uint32_t up_left_wrap_inc_cb_id>
+ALWI void initialize_return_indices_data() {
+    // since kernels can start in padded regions we need to have "indexes" in these regions
+    // we choose a paradigm where we padding indexes must satisfy the following conditions:
+    //   1. they are 1 less than the index to the right (whether it's padding or not)
+    //   2. they are in_w less than the index below (whether it's padding or not)
+    // this results in repeat indexes, negative indexes and other such effects, but since
+    // padding is never chosen as a max index, validity of the padding index is unimportant
+    // we only care that when they are incremented they result in the correct index which
+    // this paradigm guarantees
+    // Note we also use unsigned integers and allow wrapping for negatives to preserve range
+    // and since all negative values correspond to padding indexes which will never be a max
+
+    // Calculate initial index based on padding conditions
+    uint16_t init_index = 0;
+    constexpr uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
+    const uint16_t start_row = (uint16_t)get_arg_val<uint32_t>(0);
+    const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(1);
+
+    if (start_row <= pad_t) {
+        // top left is in top padding, we increment from the padding index in the top left
+        // of the padded tensor
+        uint16_t global_top_left_pad_idx = -(uint16_t)pad_l - (uint16_t)pad_t * (uint16_t)in_w;
+        init_index = global_top_left_pad_idx + start_col + start_row * in_w;
+    } else if (start_col <= pad_l) {
+        // top left is in left padding, we increment from the padding index in the leftmost
+        // column of the starting row of the padded tensor
+        uint16_t leftmost_valid_index = (start_row - (uint16_t)pad_t) * (uint16_t)in_w;
+        uint16_t start_row_left_pad_idx = leftmost_valid_index - (uint16_t)pad_l;
+        init_index = start_row_left_pad_idx + start_col;
+    } else {
+        // top left is in valid region, we choose the valid index
+        init_index = (start_row - (uint16_t)pad_t) * (uint16_t)in_w + (start_col - (uint16_t)pad_l);
+    }
+
+    // initialize the index CB - TODO for c > 1 we could optimize by storing two values per write
+    volatile tt_l1_ptr uint16_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(in_idx_cb_id));
+    uint16_t kernel_idx = 0;
+    for (uint32_t h = 0; h < kernel_h; ++h) {
+        for (uint32_t w = 0; w < kernel_w; ++w) {
+            uint16_t hw = h * kernel_w + w;
+            const uint32_t fill_c = in_c <= TILE_WIDTH ? in_c : TILE_WIDTH;
+            for (uint32_t c = 0; c < fill_c; ++c) {
+                uint16_t index = init_index + kernel_idx;
+                idx_ptr[hw * TILE_WIDTH + c] = index;
+            }
+            kernel_idx += dilation_w;
+        }
+        kernel_idx += dilation_h * in_w - eff_kernel_w - (dilation_w - 1);
+    }
+
+    // initialize the right inc tile
+    cb_reserve_back(right_inc_cb_id, 1);
+    uint32_t right_inc_32_bit = (uint32_t)right_inc | ((uint32_t)right_inc << 16);
+    volatile tt_l1_ptr uint32_t* right_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(right_inc_cb_id));
+    for (uint32_t i = 0; i < kernel_h * kernel_w * TILE_WIDTH / 2; ++i) {
+        right_ptr[i] = right_inc_32_bit;
+    }
+    cb_push_back(right_inc_cb_id, 1);
+
+    // initialize the down left wrap inc tile
+    cb_reserve_back(down_left_wrap_inc_cb_id, 1);
+    uint32_t down_left_wrap_inc_32_bit = (uint32_t)down_left_wrap_inc | ((uint32_t)down_left_wrap_inc << 16);
+    volatile tt_l1_ptr uint32_t* down_left_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(down_left_wrap_inc_cb_id));
+    for (uint32_t i = 0; i < kernel_h * kernel_w * TILE_WIDTH / 2; ++i) {
+        down_left_ptr[i] = down_left_wrap_inc_32_bit;
+    }
+    cb_push_back(down_left_wrap_inc_cb_id, 1);
+
+    // initialize the up left wrap inc tile
+    cb_reserve_back(up_left_wrap_inc_cb_id, 1);
+    uint32_t up_left_wrap_inc_32_bit = (uint32_t)up_left_wrap_inc | ((uint32_t)up_left_wrap_inc << 16);
+    volatile tt_l1_ptr uint32_t* up_left_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(up_left_wrap_inc_cb_id));
+    for (uint32_t i = 0; i < kernel_h * kernel_w * TILE_WIDTH / 2; ++i) {
+        up_left_ptr[i] = up_left_wrap_inc_32_bit;
+    }
+    cb_push_back(up_left_wrap_inc_cb_id, 1);
+}
+
 // Fill an L1 buffer with the given val
 // WARNING: Use with caution as there's no memory protection. Make sure size is within limits
 template <
@@ -367,88 +465,29 @@ void kernel_main() {
         }
         // for average pool clear out tiles runs in loop, no need to initialize here
         // TODO do we really need to init the in CB for return indices?
+        // - yes until LLK is updated for arbitrary kernel sizes, for now we rely on init
         if constexpr (!is_avg_pool || !is_large_kernel || return_indices) {
             clear_out_tiles<in_cb_id, clear_value_cb_id>();
-            // TODO we don't need to init the idx CBs, but eases debugging for now
-            if constexpr (return_indices) {
-                clear_out_tiles<in_idx_cb_id, clear_value_cb_id>();
-            }
         }
     }
 
-    // since kernels can start in padded regions we need to have "indexes" in these regions
-    // we choose a paradigm where we padding indexes must satisfy the following conditions:
-    //   1. they are 1 less than the index to the right (whether it's padding or not)
-    //   2. they are in_w less than the index below (whether it's padding or not)
-    // this results in repeat indexes, negative indexes and other such effects, but since
-    // padding is never chosen as a max index, validity of the padding index is unimportant
-    // we only care that when they are incremented they result in the correct index which
-    // this paradigm guarantees
-    // Note we also use unsigned integers and allow wrapping for negatives to preserve range
-    // and since all negative values correspond to padding indexes which will never be a max
-    uint16_t init_index = 0;
     if constexpr (reader_id == 0 && return_indices) {
-        const uint16_t start_row = (uint16_t)get_arg_val<uint32_t>(0);
-        const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(1);
-        if (start_row <= pad_t) {
-            // top left is in top padding, we increment from the padding index in the top left
-            // of the padded tensor
-            uint16_t global_top_left_pad_idx = -(uint16_t)pad_l - (uint16_t)pad_t * in_w;
-            init_index = global_top_left_pad_idx + start_col + start_row * in_w;
-        } else if (start_col <= pad_l) {
-            // top left is in left padding, we increment from the padding index in the leftmost
-            // column of the starting row of the padded tensor
-            uint16_t leftmost_valid_index = (start_row - pad_t) * in_w;
-            uint16_t start_row_left_pad_idx = leftmost_valid_index - (uint16_t)pad_l;
-            init_index = start_row_left_pad_idx + start_col;
-        } else {
-            // top left is in valid region, we choose the valid index
-            init_index = (start_row - (uint16_t)pad_t) * in_w + (start_col - (uint16_t)pad_l);
-        }
-
-        // initialize the index CB
-        volatile tt_l1_ptr uint16_t* idx_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(in_idx_cb_id));
-        uint16_t kernel_idx = 0;
-        for (uint32_t h = 0; h < kernel_h; ++h) {
-            for (uint32_t w = 0; w < kernel_w; ++w) {
-                uint16_t hw = h * kernel_w + w;
-                const uint32_t fill_c = in_c <= TILE_WIDTH ? in_c : TILE_WIDTH;
-                for (uint32_t c = 0; c < fill_c; ++c) {
-                    uint16_t index = init_index + kernel_idx;
-                    idx_ptr[hw * TILE_WIDTH + c] = index;
-                }
-                kernel_idx += dilation_w;
-            }
-            kernel_idx += dilation_h * in_w - eff_kernel_w - (dilation_w - 1);
-        }
-
-        // initialize the right inc tile
-        cb_reserve_back(right_inc_cb_id, 1);
-        volatile tt_l1_ptr uint16_t* right_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(right_inc_cb_id));
-        for (uint32_t i = 0; i < TILE_HEIGHT * TILE_WIDTH; ++i) {
-            right_ptr[i] = right_inc;
-        }
-        cb_push_back(right_inc_cb_id, 1);
-
-        // initialize the down left wrap inc tile
-        cb_reserve_back(down_left_wrap_inc_cb_id, 1);
-        volatile tt_l1_ptr uint16_t* down_left_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(down_left_wrap_inc_cb_id));
-        for (uint32_t i = 0; i < TILE_HEIGHT * TILE_WIDTH; ++i) {
-            down_left_ptr[i] = down_left_wrap_inc;
-        }
-        cb_push_back(down_left_wrap_inc_cb_id, 1);
-
-        // initialize the up left wrap inc tile
-        cb_reserve_back(up_left_wrap_inc_cb_id, 1);
-        volatile tt_l1_ptr uint16_t* up_left_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(up_left_wrap_inc_cb_id));
-        for (uint32_t i = 0; i < TILE_HEIGHT * TILE_WIDTH; ++i) {
-            up_left_ptr[i] = up_left_wrap_inc;
-        }
-        cb_push_back(up_left_wrap_inc_cb_id, 1);
+        initialize_return_indices_data<
+            kernel_h,
+            kernel_w,
+            in_w,
+            in_c,
+            pad_t,
+            pad_l,
+            dilation_h,
+            dilation_w,
+            right_inc,
+            down_left_wrap_inc,
+            up_left_wrap_inc,
+            in_idx_cb_id,
+            right_inc_cb_id,
+            down_left_wrap_inc_cb_id,
+            up_left_wrap_inc_cb_id>();
     }
 
     // initialize the scalar CB
