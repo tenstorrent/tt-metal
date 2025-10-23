@@ -136,9 +136,9 @@ def run_ring_joint_sdpa(
         packer_l1_acc=False,
     )
 
-    Q = fa_rand(b, nh, seq_len, d)
-    K = fa_rand(b, nh, seq_len, d)
-    V = fa_rand(b, nh, seq_len, d)
+    Q = fa_rand(b, nh, seq_len, d).bfloat16().float()
+    K = fa_rand(b, nh, seq_len, d).bfloat16().float()
+    V = fa_rand(b, nh, seq_len, d).bfloat16().float()
 
     joint_Q = fa_rand(b, nh, joint_seq_len, d)
     joint_K = fa_rand(b, nh, joint_seq_len, d)
@@ -205,6 +205,7 @@ def run_ring_joint_sdpa(
 
     tt_out_list = []
     tt_joint_out_list = []
+    ttnn.synchronize_device(submesh)
 
     def run_iters(tt_out_list, tt_joint_out_list):
         for i in range(n_iters):
@@ -271,6 +272,40 @@ def run_ring_joint_sdpa(
             tt_joint_out_list[i],
             mesh_composer=ttnn.ConcatMesh2dToTensor(submesh, mesh_shape=tuple(submesh.shape), dims=joint_shard_dims),
         )[:1]
+        tt_k_out = ttnn.to_torch(
+            persistent_output_buffers[i][0],
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims
+            ),
+        )
+        tt_v_out = ttnn.to_torch(
+            persistent_output_buffers[i][1],
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims
+            ),
+        )
+        tt_k_out = tt_k_out[:, :, :seq_len, :]
+        tt_v_out = tt_v_out[:, :, :seq_len, :]
+
+        tt_Q_back = ttnn.to_torch(
+            tt_Q,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims
+            ),
+        )
+        tt_K_back = ttnn.to_torch(
+            tt_K,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims
+            ),
+        )
+        tt_V_back = ttnn.to_torch(
+            tt_V,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims
+            ),
+        )
+
         # Slice out any tile-padding
         tt_out = tt_out[:, :, :seq_len, :]
         tt_joint_out = tt_joint_out[:, :, :joint_seq_len, :]
@@ -278,7 +313,15 @@ def run_ring_joint_sdpa(
         logger.debug(f"tt_joint_out: {tt_joint_out.shape}")
 
         passing = True
-        for out, gt in [(tt_out, gt_out), (tt_joint_out, gt_joint_out)]:
+        for out, gt in [
+            (tt_out, gt_out),
+            (tt_joint_out, gt_joint_out),
+            (tt_k_out, K),
+            (tt_v_out, V),
+            (tt_Q_back, Q),
+            (tt_K_back, K),
+            (tt_V_back, V),
+        ]:
             out_pass, out_pcc = comp_pcc(gt, out, 0.994)
             logger.debug(f"python vs pytorch: {out_pcc}")
             logger.debug(f"mse: {((gt - out) ** 2).mean()}")

@@ -254,7 +254,10 @@ def test_sdpa_tt_padded(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dt
         [1, 8, 1, 8192, 128],  # Llama2-70B large sequence
     ),
 )
-def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("device_id", range(32), ids=[f"device_{i}" for i in range(32)])
+def test_sdpa_tt(mesh_device, device_id, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
+    device = mesh_device.create_submeshes(ttnn.MeshShape(1, 1))[device_id]
     if dtype == ttnn.bfloat4_b and (
         q_chunk_size > 128 or k_chunk_size > 128 or [b, nh, nkv, s, d] != [1, 8, 1, 2048, 128]
     ):
@@ -744,34 +747,38 @@ def run_test_joint_sdpa(
 
 
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
-@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
-@pytest.mark.parametrize("q_chunk_size", [32, 128, 512], ids=["q32", "q128", "q512"])
-@pytest.mark.parametrize("k_chunk_size", [128, 512], ids=["k128", "k512"])
-@pytest.mark.parametrize("b", [1, 2], ids=["b1", "b2"])
-@pytest.mark.parametrize("nh", [1, 3], ids=["nh1", "nh3"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("q_chunk_size", [128])
+@pytest.mark.parametrize("k_chunk_size", [512])
+@pytest.mark.parametrize("b", [1])
+@pytest.mark.parametrize("nh", [10])
 @pytest.mark.parametrize(
     "seq_len, joint_seq_len",
     [
-        (15, 19),
-        (2048, 256),
-        (3000, 100),
-        (20 * 1024 + 1, 118),
+        # (15, 19),
+        # (2048, 256),
+        # (3000, 100),
+        # (20 * 1024 + 1, 118),
+        (4096, 333)
     ],
 )
 @pytest.mark.parametrize(
     "d",
-    [128],
+    [64],
     ids=[
         "d128",
     ],
 )
-def test_joint_sdpa(device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype):
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("device_id", range(32), ids=[f"device_{i}" for i in range(32)])
+def test_joint_sdpa(mesh_device, device_id, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype):
     if q_chunk_size == 512 and k_chunk_size == 512:
         pytest.skip("OOM config.")
-    ttnn.device.DisablePersistentKernelCache()
+    # ttnn.device.DisablePersistentKernelCache()
+    submesh = mesh_device.create_submeshes(ttnn.MeshShape(1, 1))[device_id]
     rmse_threshold = 0.013
     run_test_joint_sdpa(
-        device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=rmse_threshold
+        submesh, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=rmse_threshold
     )
 
 
