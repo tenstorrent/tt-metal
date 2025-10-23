@@ -14,6 +14,92 @@
 namespace ttnn::experimental::jit {
 
 // ============================================================================
+// Field size tracking: Extract how many tensors each field consumes
+// ============================================================================
+
+// Helper to get the size of a single field (how many tensors it represents)
+template <typename FieldType>
+size_t get_field_tensor_count(const FieldType& field) {
+    using BareType = std::remove_cv_t<std::remove_reference_t<FieldType>>;
+
+    if constexpr (std::is_same_v<BareType, Tensor>) {
+        return 1;
+    } else if constexpr (std::is_same_v<BareType, std::optional<Tensor>>) {
+        return field.has_value() ? 1 : 0;
+    } else if constexpr (std::is_same_v<BareType, std::optional<std::reference_wrapper<const Tensor>>>) {
+        return field.has_value() ? 1 : 0;
+    } else if constexpr (std::is_same_v<BareType, std::optional<std::reference_wrapper<Tensor>>>) {
+        return field.has_value() ? 1 : 0;
+    } else if constexpr (std::is_same_v<BareType, std::vector<Tensor>>) {
+        return field.size();
+    } else if constexpr (std::is_same_v<BareType, std::vector<std::optional<Tensor>>>) {
+        // Count only non-nullopt elements (actual tensors)
+        size_t count = 0;
+        for (const auto& opt : field) {
+            if (opt.has_value()) {
+                count++;
+            }
+        }
+        return count;
+    } else if constexpr (std::is_same_v<BareType, std::vector<std::optional<const Tensor>>>) {
+        // Count only non-nullopt elements (actual tensors)
+        size_t count = 0;
+        for (const auto& opt : field) {
+            if (opt.has_value()) {
+                count++;
+            }
+        }
+        return count;
+    } else {
+        static_assert(std::is_same_v<FieldType, void>, "Unsupported field type for tensor count");
+        return 0;
+    }
+}
+
+// Helper to get the total size of a vector field (for vector<optional<T>>, this is different from tensor count)
+template <typename FieldType>
+size_t get_field_vector_size(const FieldType& field) {
+    using BareType = std::remove_cv_t<std::remove_reference_t<FieldType>>;
+
+    if constexpr (std::is_same_v<BareType, std::vector<Tensor>>) {
+        return field.size();
+    } else if constexpr (std::is_same_v<BareType, std::vector<std::optional<Tensor>>>) {
+        return field.size();
+    } else if constexpr (std::is_same_v<BareType, std::vector<std::optional<const Tensor>>>) {
+        return field.size();
+    } else {
+        // For non-vector fields, return 0 (not applicable)
+        return 0;
+    }
+}
+
+// Extract tensor counts for all fields in a struct
+template <typename S, std::size_t... Indices>
+std::vector<size_t> extract_field_tensor_counts_impl(const S& s, std::index_sequence<Indices...>) {
+    return std::vector<size_t>{get_field_tensor_count(boost::pfr::get<Indices>(s))...};
+}
+
+// Extract vector sizes for all fields in a struct
+template <typename S, std::size_t... Indices>
+std::vector<size_t> extract_field_vector_sizes_impl(const S& s, std::index_sequence<Indices...>) {
+    return std::vector<size_t>{get_field_vector_size(boost::pfr::get<Indices>(s))...};
+}
+
+// Public API: extract tensor counts from a struct
+template <typename S>
+std::vector<size_t> extract_field_tensor_counts(const S& s) {
+    constexpr std::size_t num_fields = boost::pfr::tuple_size_v<S>;
+    return extract_field_tensor_counts_impl(s, std::make_index_sequence<num_fields>{});
+}
+
+// Public API: extract vector sizes from a struct
+template <typename S>
+std::vector<size_t> extract_field_vector_sizes(const S& s) {
+    constexpr std::size_t num_fields = boost::pfr::tuple_size_v<S>;
+    return extract_field_vector_sizes_impl(s, std::make_index_sequence<num_fields>{});
+}
+
+// ============================================================================
 // from_range_pfr: Construct aggregate structs from iterator ranges
 //
 // This solves the problem of constructing structs with reference members from
@@ -62,12 +148,16 @@ decltype(auto) extract_from_storage(StorageType& storage) {
 
 // Helper to bind a single field
 template <typename S, std::size_t N, typename It>
-static field_storage_t<field_type_t<S, N>> bind_field_to_storage(It& it, It end) {
+static field_storage_t<field_type_t<S, N>> bind_field_to_storage(
+    It& it, It end, size_t expected_count, size_t expected_vector_size) {
     using FieldType = field_type_t<S, N>;
     using BareFieldType = std::remove_cv_t<std::remove_reference_t<FieldType>>;
 
     // Check if this is a Tensor reference (not optional<Tensor>& etc.)
     if constexpr (std::is_reference_v<FieldType> && std::is_same_v<BareFieldType, Tensor>) {
+        if (expected_count == 0) {
+            TT_THROW("Expected count is 0 for non-optional Tensor reference field");
+        }
         if (it == end) {
             TT_THROW("Not enough tensors for reference field");
         }
@@ -77,6 +167,9 @@ static field_storage_t<field_type_t<S, N>> bind_field_to_storage(It& it, It end)
         return &r;
     } else if constexpr (std::is_same_v<BareFieldType, Tensor>) {
         // Plain Tensor by value
+        if (expected_count == 0) {
+            TT_THROW("Expected count is 0 for non-optional Tensor value field");
+        }
         if (it == end) {
             TT_THROW("Not enough tensors for value field");
         }
@@ -84,26 +177,81 @@ static field_storage_t<field_type_t<S, N>> bind_field_to_storage(It& it, It end)
         ++it;
         return v;
     } else if constexpr (std::is_same_v<BareFieldType, std::optional<Tensor>>) {
-        if (it == end) {
+        if (expected_count == 0) {
             return std::optional<Tensor>(std::nullopt);
+        }
+        if (it == end) {
+            TT_THROW("Not enough tensors for optional<Tensor> field");
         }
         Tensor v = *it;
         ++it;
         return std::optional<Tensor>(std::move(v));
     } else if constexpr (std::is_same_v<BareFieldType, std::optional<std::reference_wrapper<const Tensor>>>) {
-        if (it == end) {
+        if (expected_count == 0) {
             return std::optional<std::reference_wrapper<const Tensor>>(std::nullopt);
+        }
+        if (it == end) {
+            TT_THROW("Not enough tensors for optional<reference_wrapper<const Tensor>> field");
         }
         Tensor& r = *it;
         ++it;
         return std::optional<std::reference_wrapper<const Tensor>>(std::cref(r));
     } else if constexpr (std::is_same_v<BareFieldType, std::optional<std::reference_wrapper<Tensor>>>) {
-        if (it == end) {
+        if (expected_count == 0) {
             return std::optional<std::reference_wrapper<Tensor>>(std::nullopt);
+        }
+        if (it == end) {
+            TT_THROW("Not enough tensors for optional<reference_wrapper<Tensor>> field");
         }
         Tensor& r = *it;
         ++it;
         return std::optional<std::reference_wrapper<Tensor>>(std::ref(r));
+    } else if constexpr (std::is_same_v<BareFieldType, std::vector<Tensor>>) {
+        // Consume expected_count tensors into a vector
+        std::vector<Tensor> vec;
+        vec.reserve(expected_count);
+        for (size_t i = 0; i < expected_count; ++i) {
+            if (it == end) {
+                TT_THROW("Not enough tensors for vector<Tensor> field");
+            }
+            vec.push_back(*it);
+            ++it;
+        }
+        return vec;
+    } else if constexpr (std::is_same_v<BareFieldType, std::vector<std::optional<Tensor>>>) {
+        // Consume expected_count tensors and wrap each in optional, then pad with nullopt
+        // Convention: actual tensors come first, then nullopts
+        std::vector<std::optional<Tensor>> vec;
+        vec.reserve(expected_vector_size);
+        for (size_t i = 0; i < expected_count; ++i) {
+            if (it == end) {
+                TT_THROW("Not enough tensors for vector<optional<Tensor>> field");
+            }
+            vec.push_back(std::optional<Tensor>(*it));
+            ++it;
+        }
+        // Fill remaining positions with nullopt
+        for (size_t i = expected_count; i < expected_vector_size; ++i) {
+            vec.push_back(std::nullopt);
+        }
+        return vec;
+    } else if constexpr (std::is_same_v<BareFieldType, std::vector<std::optional<const Tensor>>>) {
+        // Consume expected_count tensors and wrap each in optional<const Tensor>, then pad with nullopt
+        // Convention: actual tensors come first, then nullopts
+        std::vector<std::optional<const Tensor>> vec;
+        vec.reserve(expected_vector_size);
+        for (size_t i = 0; i < expected_count; ++i) {
+            if (it == end) {
+                TT_THROW("Not enough tensors for vector<optional<const Tensor>> field");
+            }
+            vec.push_back(std::optional<const Tensor>(*it));
+            ++it;
+        }
+        // Fill remaining positions with nullopt
+        for (size_t i = expected_count; i < expected_vector_size; ++i) {
+            vec.push_back(std::nullopt);
+        }
+        return vec;
     } else {
         static_assert(std::is_same_v<FieldType, void>, "Unsupported field wrapper type");
         return field_storage_t<FieldType>{};  // unreachable
@@ -112,8 +260,14 @@ static field_storage_t<field_type_t<S, N>> bind_field_to_storage(It& it, It end)
 
 // Helper to build storage tuple
 template <typename S, typename It, std::size_t... Indices>
-static auto build_storage_tuple(It& it, It end, std::index_sequence<Indices...>) {
-    return std::tuple<field_storage_t<field_type_t<S, Indices>>...>{bind_field_to_storage<S, Indices>(it, end)...};
+static auto build_storage_tuple(
+    It& it,
+    It end,
+    const std::vector<size_t>& field_counts,
+    const std::vector<size_t>& field_vector_sizes,
+    std::index_sequence<Indices...>) {
+    return std::tuple<field_storage_t<field_type_t<S, Indices>>...>{
+        bind_field_to_storage<S, Indices>(it, end, field_counts[Indices], field_vector_sizes[Indices])...};
 }
 
 // Helper to construct struct from storage - specialized for different field counts
@@ -267,20 +421,36 @@ static S construct_from_storage(StorageTuple& storage, std::index_sequence<Indic
 
 // Main function: construct struct S from iterator range
 template <typename S, typename It>
-static S from_range_impl(It it, It end) {
+static S from_range_impl(
+    It it, It end, const std::vector<size_t>& field_counts, const std::vector<size_t>& field_vector_sizes) {
     constexpr std::size_t num_fields = boost::pfr::tuple_size_v<S>;
 
+    // Validate that field_counts matches the number of fields
+    TT_FATAL(
+        field_counts.size() == num_fields,
+        "field_counts size mismatch: expected {} fields, got {}",
+        num_fields,
+        field_counts.size());
+
+    TT_FATAL(
+        field_vector_sizes.size() == num_fields,
+        "field_vector_sizes size mismatch: expected {} fields, got {}",
+        num_fields,
+        field_vector_sizes.size());
+
     // Build storage tuple with all field values/references
-    auto storage = build_storage_tuple<S>(it, end, std::make_index_sequence<num_fields>{});
+    auto storage =
+        build_storage_tuple<S>(it, end, field_counts, field_vector_sizes, std::make_index_sequence<num_fields>{});
 
     // Extract from storage and construct the struct
     return construct_from_storage<S>(storage, std::make_index_sequence<num_fields>{});
 }
 
-// Public API: construct struct S from iterator range
+// Public API: construct struct S from iterator range with field tensor counts and vector sizes
 template <typename S, typename It>
-S from_range_pfr(It it, It end) {
-    return from_range_impl<S>(it, end);
+S from_range_pfr(
+    It it, It end, const std::vector<size_t>& field_counts, const std::vector<size_t>& field_vector_sizes) {
+    return from_range_impl<S>(it, end, field_counts, field_vector_sizes);
 }
 
 }  // namespace ttnn::experimental::jit

@@ -33,9 +33,12 @@ public:
     using tensor_return_value_t = typename operation_t::tensor_return_value_t;
 
     LazyDeviceOperation(operation_attributes_t attributes, tensor_args_t tensor_args) :
-        attributes_(std::move(attributes)), tensor_args_(std::move(tensor_args)) {
+        attributes_(std::move(attributes)),
+        tensor_args_(tensor_args),  // Copy tensor_args (shallow copy since Tensor is shallow-copyable)
+        field_tensor_counts_(extract_field_tensor_counts(tensor_args)),  // Extract tensor counts from parameter
+        field_vector_sizes_(extract_field_vector_sizes(tensor_args))     // Extract vector sizes from parameter
+    {
         // Compute and cache output specs once at construction time
-        // Since Tensor is shallow-copyable, we can store tensor_args directly
         if constexpr (requires { operation_t::compute_output_specs(attributes_, tensor_args_); }) {
             auto spec = operation_t::compute_output_specs(attributes_, tensor_args_);
             cached_output_specs_ = convert_spec_to_vector(spec);
@@ -48,7 +51,9 @@ public:
         std::vector<Tensor> mutable_tensors = input_tensors;
 
         // Construct tensor_args from input_tensors with proper reference binding
-        auto temp_tensor_args = from_range_pfr<tensor_args_t>(mutable_tensors.begin(), mutable_tensors.end());
+        // Pass field_tensor_counts_ and field_vector_sizes_ for proper reconstruction
+        auto temp_tensor_args = from_range_pfr<tensor_args_t>(
+            mutable_tensors.begin(), mutable_tensors.end(), field_tensor_counts_, field_vector_sizes_);
 
         // Call the operation's validation method if it exists
         // Use validate_on_program_cache_miss for comprehensive validation
@@ -64,7 +69,9 @@ public:
 
     std::vector<Tensor> invoke(std::vector<Tensor> input_tensors) override {
         // Construct tensor_args from input_tensors with proper reference binding
-        auto tensor_args = from_range_pfr<tensor_args_t>(input_tensors.begin(), input_tensors.end());
+        // Pass field_tensor_counts_ and field_vector_sizes_ for proper reconstruction
+        auto tensor_args = from_range_pfr<tensor_args_t>(
+            input_tensors.begin(), input_tensors.end(), field_tensor_counts_, field_vector_sizes_);
 
         // Use the standard device operation eager execution path
         auto result = ttnn::device_operation::detail::invoke<operation_t>(attributes_, tensor_args);
@@ -110,6 +117,8 @@ private:
     operation_attributes_t attributes_;
     tensor_args_t tensor_args_;
     std::vector<ttnn::TensorSpec> cached_output_specs_;
+    std::vector<size_t> field_tensor_counts_;  // Number of tensors each field consumes
+    std::vector<size_t> field_vector_sizes_;   // Total size of vector fields (for vector<optional<T>>)
 
     // Helper to convert any spec type to vector
     template <typename SpecType>

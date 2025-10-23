@@ -5,6 +5,8 @@
 #pragma once
 
 #include <reflect>
+#include <optional>
+#include <vector>
 #include <tt-metalium/graph_tracking.hpp>
 #include <tracy/Tracy.hpp>
 #include "ttnn/device_operation.hpp"
@@ -94,7 +96,13 @@ struct is_supported_lazy_field_type {
         // std::optional<std::reference_wrapper<Tensor>>
         std::is_same_v<BareType, std::optional<std::reference_wrapper<Tensor>>> ||
         // std::optional<std::reference_wrapper<const Tensor>>
-        std::is_same_v<BareType, std::optional<std::reference_wrapper<const Tensor>>>;
+        std::is_same_v<BareType, std::optional<std::reference_wrapper<const Tensor>>> ||
+        // std::vector<Tensor>
+        std::is_same_v<BareType, std::vector<Tensor>> ||
+        // std::vector<std::optional<Tensor>>
+        std::is_same_v<BareType, std::vector<std::optional<Tensor>>> ||
+        // std::vector<std::optional<const Tensor>>
+        std::is_same_v<BareType, std::vector<std::optional<const Tensor>>>;
 };
 
 // Helper to check all fields in a struct using index sequence

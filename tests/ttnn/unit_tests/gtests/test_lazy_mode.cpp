@@ -10,9 +10,14 @@
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d.hpp"
+#include "ttnn/operations/data_movement/permute/permute.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/lazy_mode.hpp"
 #include "ttnn/experimental/jit/context.hpp"
+#include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
 namespace ttnn {
@@ -40,6 +45,10 @@ protected:
 
         TTNNFixtureWithDevice::TearDown();
     }
+
+public:
+    // Constructor that sets L1_SMALL size to 16KB for conv2d operations
+    LazyModeFixture() : TTNNFixtureWithDevice(DEFAULT_TRACE_REGION_SIZE, 16384) {}
 };
 
 // Test: Simple unary operations in lazy mode with verification
@@ -49,6 +58,7 @@ TEST_F(LazyModeFixture, SimpleUnaryOperationsLazy) {
     log_info(tt::LogTest, "==== Starting SimpleUnaryOperationsLazy test ====");
 
     // Verify lazy mode is enabled
+    ttnn::lazy_mode::enable();
     ASSERT_TRUE(ttnn::lazy_mode::is_lazy_enabled()) << "Lazy mode should be enabled";
 
     // Create input tensor
@@ -127,6 +137,7 @@ TEST_F(LazyModeFixture, BinaryOperationsLazy) {
     log_info(tt::LogTest, "==== Starting BinaryOperationsLazy test ====");
 
     // Verify lazy mode is enabled
+    ttnn::lazy_mode::enable();
     ASSERT_TRUE(ttnn::lazy_mode::is_lazy_enabled()) << "Lazy mode should be enabled";
 
     // Create input tensors
@@ -182,6 +193,7 @@ TEST_F(LazyModeFixture, MixedOperationsLazy) {
     log_info(tt::LogTest, "==== Starting MixedOperationsLazy test ====");
 
     // Verify lazy mode is enabled
+    ttnn::lazy_mode::enable();
     ASSERT_TRUE(ttnn::lazy_mode::is_lazy_enabled()) << "Lazy mode should be enabled";
 
     // Create input tensors
@@ -250,6 +262,7 @@ TEST_F(LazyModeFixture, ExecutionOrderCorrect) {
     log_info(tt::LogTest, "==== Starting ExecutionOrderCorrect test ====");
 
     // Verify lazy mode is enabled
+    ttnn::lazy_mode::enable();
     ASSERT_TRUE(ttnn::lazy_mode::is_lazy_enabled()) << "Lazy mode should be enabled";
 
     // Create a diamond-shaped dependency graph
@@ -298,6 +311,95 @@ TEST_F(LazyModeFixture, ExecutionOrderCorrect) {
 
     log_info(tt::LogTest, "✓ Lazy and eager results match!");
     log_info(tt::LogTest, "==== Finished ExecutionOrderCorrect test ====");
+}
+
+// Test: Matmul with element-wise operations in lazy mode
+TEST_F(LazyModeFixture, MatmulWithElementwiseLazy) {
+    auto& device = *device_;
+    auto& context = ttnn::experimental::jit::Context::instance();
+
+    log_info(tt::LogTest, "==== Starting MatmulWithElementwiseLazy test ====");
+
+    // Verify lazy mode is enabled
+    ttnn::lazy_mode::enable();
+    ASSERT_TRUE(ttnn::lazy_mode::is_lazy_enabled()) << "Lazy mode should be enabled";
+
+    // Create input tensors for matmul
+    // Use smaller values to avoid numerical overflow in exp()
+    ttnn::Shape matmul_shape1({32, 64});
+    ttnn::Shape matmul_shape2({64, 32});
+    ttnn::Shape matmul_shape3({32, 32});
+
+    const auto matmul_input1 = ttnn::full(matmul_shape1, 0.1f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
+    const auto matmul_input2 = ttnn::full(matmul_shape2, 0.1f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
+    const auto add_input = ttnn::full(matmul_shape3, 0.5f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
+
+    log_info(
+        tt::LogTest,
+        "Created matmul input tensors with shapes [{}, {}] and [{}, {}]",
+        matmul_shape1[0],
+        matmul_shape1[1],
+        matmul_shape2[0],
+        matmul_shape2[1]);
+
+    // Apply matmul and element-wise operations - these should be captured lazily
+    log_info(tt::LogTest, "Applying matmul and element-wise operations in lazy mode...");
+    const auto matmul_result =
+        ttnn::matmul(matmul_input1, matmul_input2, /* transpose_a */ false, /* transpose_b */ false);
+    const auto add_result = ttnn::add(matmul_result, add_input);  // Add a constant
+    const auto relu_result = ttnn::relu(add_result);              // Apply relu
+    const auto matmul_result2 =
+        ttnn::matmul(relu_result, matmul_input1, /* transpose_a */ false, /* transpose_b */ false);
+    const auto exp_result = ttnn::exp(matmul_result2);                    // Apply exp
+    const auto final_result = ttnn::multiply(exp_result, matmul_input1);  // Multiply
+
+    // Check that we have captured the expected number of operations
+    // matmul: 2, add: 2, relu: 1, exp: 1 = 6 total
+    ASSERT_EQ(context.size(), 6) << "Expected 6 nodes in lazy graph";
+    log_info(tt::LogTest, "Lazy graph size: {} nodes", context.size());
+
+    // List all operations in the graph
+    log_info(tt::LogTest, "Operations in lazy graph:");
+    const auto& nodes = context.get_all_nodes();
+    for (size_t i = 0; i < nodes.size(); ++i) {
+        log_info(tt::LogTest, "  Node {}: {}", nodes[i].id(), nodes[i].operation_name());
+    }
+
+    // Now execute the lazy graph
+    log_info(tt::LogTest, "Executing lazy graph with {} operations...", context.size());
+    context.execute_node(final_result.producer_node());
+    auto final_result_materialized = context.get_materialized_tensor(final_result);
+
+    // Get lazy result to host for comparison
+    const auto lazy_result = ttnn::from_device(final_result_materialized);
+
+    // Clear the lazy graph and disable lazy mode
+    context.clear();
+    ttnn::lazy_mode::disable();
+
+    // Run the same operations in eager mode
+    log_info(tt::LogTest, "Running same operations in eager mode for verification...");
+    const auto matmul_input1_eager = ttnn::full(matmul_shape1, 0.1f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
+    const auto matmul_input2_eager = ttnn::full(matmul_shape2, 0.1f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
+    const auto add_input_eager = ttnn::full(matmul_shape3, 0.5f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
+
+    const auto matmul_result_eager =
+        ttnn::matmul(matmul_input1_eager, matmul_input2_eager, /* transpose_a */ false, /* transpose_b */ false);
+    const auto add_result_eager = ttnn::add(matmul_result_eager, add_input_eager);
+    const auto relu_result_eager = ttnn::relu(add_result_eager);
+    const auto matmul_result2_eager =
+        ttnn::matmul(relu_result_eager, matmul_input1_eager, /* transpose_a */ false, /* transpose_b */ false);
+    const auto exp_result_eager = ttnn::exp(matmul_result2_eager);
+    const auto final_eager = ttnn::multiply(exp_result_eager, matmul_input1_eager);
+    const auto eager_result = ttnn::from_device(final_eager);
+
+    // Compare results
+    log_info(tt::LogTest, "Comparing lazy and eager results...");
+    ASSERT_TRUE(ttnn::allclose<::bfloat16>(lazy_result, eager_result))
+        << "Lazy and eager execution results should match";
+
+    log_info(tt::LogTest, "✓ Lazy and eager results match!");
+    log_info(tt::LogTest, "==== Finished MatmulWithElementwiseLazy test ====");
 }
 
 }  // namespace test
