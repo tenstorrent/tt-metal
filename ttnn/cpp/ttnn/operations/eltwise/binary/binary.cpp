@@ -372,7 +372,7 @@ inline auto invoke_binary_ng(
     if (not typecast_a and not typecast_b) {
         const auto input_a_rm = detail::is_layout(lhs, Layout::ROW_MAJOR);
         // For scalar case, check if we need layout conversion
-        constexpr bool is_scalar_rhs = !requires { rhs.dtype(); };
+        constexpr bool is_scalar_rhs = std::is_floating_point_v<std::decay_t<decltype(rhs)>>;
         const auto input_b_rm = is_scalar_rhs ? false : detail::is_layout(rhs, Layout::ROW_MAJOR);
         const auto input_a = detail::to_layout(lhs, Layout::TILE);
         const auto input_b = detail::to_layout(rhs, Layout::TILE);
