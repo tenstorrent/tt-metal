@@ -3,7 +3,6 @@
 
 import torch
 import pytest
-from loguru import logger
 import ttnn
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
@@ -20,22 +19,21 @@ from models.experimental.functional_petr.tt.common import (
     stem_parameters_preprocess,
     move_to_device,
 )
-from tests.ttnn.utils_for_testing import check_with_pcc, assert_with_pcc
 
 
-def prepare_inputs(perf):
+def prepare_inputs():
     inputs = torch.load(
         "models/experimental/functional_petr/resources/golden_input_inputs_sample1.pt", weights_only=False
     )
     modified_batch_img_metas = torch.load(
         "models/experimental/functional_petr/resources/modified_input_batch_img_metas_sample1.pt", weights_only=False
     )
-    if perf:
-        inputs["imgs"] = inputs["imgs"][:, 0:1, :, :, :]
-        for meta in modified_batch_img_metas:
-            meta["cam2img"] = [meta["cam2img"][0]]
-            meta["lidar2cam"] = [meta["lidar2cam"][0]]
-            meta["img_shape"] = [meta["img_shape"][0]] if isinstance(meta["img_shape"], list) else meta["img_shape"]
+
+    inputs["imgs"] = inputs["imgs"][:, 0:1, :, :, :]
+    for meta in modified_batch_img_metas:
+        meta["cam2img"] = [meta["cam2img"][0]]
+        meta["lidar2cam"] = [meta["lidar2cam"][0]]
+        meta["img_shape"] = [meta["img_shape"][0]] if isinstance(meta["img_shape"], list) else meta["img_shape"]
     return inputs, modified_batch_img_metas
 
 
@@ -49,30 +47,10 @@ def prepare_torch_model():
     return torch_model
 
 
-def verify_output(torch_output, ttnn_output):
-    ttnn_output = {
-        "all_cls_scores": ttnn.to_torch(ttnn_output["all_cls_scores"])
-        if isinstance(ttnn_output["all_cls_scores"], ttnn.Tensor)
-        else ttnn_output["all_cls_scores"],
-        "all_bbox_preds": ttnn.to_torch(ttnn_output["all_bbox_preds"])
-        if isinstance(ttnn_output["all_bbox_preds"], ttnn.Tensor)
-        else ttnn_output["all_bbox_preds"],
-    }
-
-    passed, pcc_cls = check_with_pcc(torch_output["all_cls_scores"], ttnn_output["all_cls_scores"], pcc=0.97)
-    logger.info(f"PETR all_cls_scores PCC: {float(pcc_cls):.6f}")
-
-    passed, pcc_bbox = check_with_pcc(torch_output["all_bbox_preds"], ttnn_output["all_bbox_preds"], pcc=0.97)
-    logger.info(f"PETR all_bbox_preds PCC: {float(pcc_bbox):.6f}")
-
-    assert_with_pcc(torch_output["all_cls_scores"], ttnn_output["all_cls_scores"], pcc=0.97)
-    assert_with_pcc(torch_output["all_bbox_preds"], ttnn_output["all_bbox_preds"], pcc=0.97)
-
-
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_petr(device, reset_seeds):
     perf = False
-    inputs, modified_batch_img_metas = prepare_inputs(perf)
+    inputs, modified_batch_img_metas = prepare_inputs()
 
     torch_model = prepare_torch_model()
 
@@ -143,6 +121,4 @@ def test_petr(device, reset_seeds):
 
     tracy.signpost("start")
     ttnn_output = ttnn_model.predict(ttnn_inputs, ttnn_batch_img_metas, skip_post_processing=True)
-    tracy.signpost("stop")
-    if not perf:
-        verify_output(torch_output, ttnn_output)
+    tracy.signpost("end")

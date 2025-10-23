@@ -24,7 +24,6 @@ class ttnn_PETR:
         device=None,
     ):
         self.with_img_neck = True
-        tracy.signpost("head_start")
         self.pts_bbox_head = ttnn_PETRHead(
             num_classes=10,
             in_channels=256,
@@ -37,64 +36,16 @@ class ttnn_PETR:
             device=device,
             query_embedding_input=query_embedding_input,
         )
-        tracy.signpost("head_end")
-        tracy.signpost("backbone_start")
         self.img_backbone = ttnn_VoVNetCP(
             parameters=parameters["img_backbone"], stem_parameters=parameters["stem_parameters"], device=device
         )
-        tracy.signpost("backbone_end")
-
-        tracy.signpost("neck_start")
         self.img_neck = ttnn_CPFPN(
             in_channels=[768, 1024], out_channels=256, num_outs=2, parameters=parameters["img_neck"]
         )
-        tracy.signpost("neck_end")
         self.grid_mask = ttnn_GridMask(True, True, rotate=1, offset=False, ratio=0.5, mode=1, prob=0.7)
         self.use_grid_mask = use_grid_mask
         self.device = device
         self.head_outs = None
-
-    # def extract_img_feat(self, img, img_metas):
-    #     """Extract features of images."""
-    #     if isinstance(img, list):
-    #         img = torch.stack(img, dim=0)
-
-    #     B = img.shape[0]
-    #     if img is not None:
-    #         input_shape = tuple((img.shape[-2], img.shape[-1]))
-
-    #         # update real input shape of each single img
-    #         for img_meta in img_metas:
-    #             img_meta.update(input_shape=input_shape)
-    #         if len(img.shape) == 5:
-    #             B, N, C, H, W = img.shape[0], img.shape[1], img.shape[2], img.shape[3], img.shape[4]
-
-    #             if B == 1 and N != 1:
-    #                 img = ttnn.reshape(img, (N, C, H, W))
-    #             else:
-    #                 B, N, C, H, W = img.shape[0], img.shape[1], img.shape[2], img.shape[3], img.shape[4]
-    #                 img = ttnn.reshape(img, (B * N, C, H, W))
-    #         if self.use_grid_mask:
-    #             img = self.grid_mask(img)
-
-    #         img_nhwc = ttnn.permute(img, (0, 2, 3, 1))
-
-    #         img_feats = self.img_backbone(
-    #             device=self.device, x=ttnn.permute(img, (0, 2, 3, 1))
-    #         )  # permute is done to change the input from NCHW to NHWC
-    #         if isinstance(img_feats, dict):
-    #             img_feats = list(img_feats.values())
-    #     else:
-    #         return None
-    #     if self.with_img_neck:
-    #         img_feats = self.img_neck(device=self.device, inputs=img_feats)
-
-    #     img_feats_reshaped = []
-    #     for img_feat in img_feats:
-    #         img_feat = ttnn.permute(img_feat, (0, 3, 1, 2))  # converting img_neck output from NHWC to NCHW
-    #         BN, C, H, W = img_feat.shape[0], img_feat.shape[1], img_feat.shape[2], img_feat.shape[3]
-    #         img_feats_reshaped.append(ttnn.reshape(img_feat, (B, int(BN / B), C, H, W)))
-    #     return img_feats_reshaped
 
     def extract_img_feat(self, img, img_metas):
         """Extract features of images."""

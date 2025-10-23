@@ -66,8 +66,8 @@ class Conv:
         input_width = input_tensor.shape[2]
         input_channels = input_tensor.shape[3]
 
-        # Ensure input is in DRAM and interleaved
-        input_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Ensure input is in L1 and interleaved
+        input_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         if hasattr(input_tensor, "memory_config") and input_tensor.memory_config().is_sharded():
             input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
