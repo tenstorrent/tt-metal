@@ -8,10 +8,7 @@ import torch
 import numpy as np
 
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.detr3d.reference.model_utils import (
-    FurthestPointSampling,
-    BoxProcessor,
-)
+from models.experimental.detr3d.reference.model_utils import BoxProcessor
 from models.experimental.detr3d.ttnn.masked_transformer_encoder import (
     TtnnTransformerEncoderLayer,
     TtnnMaskedTransformerEncoder,
@@ -24,6 +21,7 @@ from models.experimental.detr3d.ttnn.transformer_decoder import (
 )
 from models.experimental.detr3d.ttnn.generic_mlp import TtnnGenericMLP
 from models.experimental.detr3d.ttnn.pointnet_samodule_votes import TtnnPointnetSAModuleVotes
+from models.experimental.detr3d.reference.torch_pointnet2_ops import FurthestPointSampling
 
 
 class TtnnModel3DETR(LightweightModule):

@@ -23,8 +23,6 @@ from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_m
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_multihead_attention(device, batch_size, seq_len, d_model, nhead, reset_seeds):
-    """Test TTNN MultiheadAttention against PyTorch reference implementation"""
-
     # Create PyTorch reference model
     torch_mha = torch.nn.MultiheadAttention(embed_dim=d_model, num_heads=nhead, batch_first=False)
     load_torch_model_state(torch_mha, "encoder.layers.0.self_attn")

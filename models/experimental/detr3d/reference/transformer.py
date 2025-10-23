@@ -1,18 +1,15 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-"""
-Modified from DETR Transformer class.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
-Copy-paste from torch.nn.Transformer with modifications:
-    * positional encodings are passed in MHattention
-    * extra LN at the end of encoder is removed
-    * decoder returns a stack of activations from all decoding layers
-"""
-from typing import Optional
+# SPDX-License-Identifier: Apache-2.0
 
 import torch
+from typing import Optional
 from torch import Tensor, nn
-
 from models.experimental.detr3d.reference.helpers import ACTIVATION_DICT, NORM_DICT, WEIGHT_INIT_DICT, get_clones
+
+"""
+Copy-paste from https://github.com/facebookresearch/3detr
+"""
 
 
 class TransformerEncoder(nn.Module):

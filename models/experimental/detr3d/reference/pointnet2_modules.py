@@ -1,28 +1,22 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
-# TODO: Check copyright
-""" Pointnet2 layers.
-Modified based on: https://github.com/erikwijmans/Pointnet2_PyTorch
-Extended with the following:
-1. Uniform sampling in each local region (sample_uniformly)
-2. Return sampled points indices to support votenet.
-"""
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from typing import List
-from models.experimental.detr3d.reference.model_utils import (
-    # QueryAndGroup,
-    GroupAll,
-    # GatherOperation,
-    # FurthestPointSampling,
-    Conv2d,
-)
+from models.experimental.detr3d.reference.model_utils import Conv2d
 from models.experimental.detr3d.reference.torch_pointnet2_ops import (
     QueryAndGroup,
     GatherOperation,
     FurthestPointSampling,
 )
+
+"""
+Copy-paste from https://github.com/facebookresearch/3detr
+"""
 
 
 class SharedMLP(nn.Sequential):
@@ -94,7 +88,7 @@ class PointnetSAModuleVotes(nn.Module):
                 ret_unique_cnt=ret_unique_cnt,
             )
         else:
-            self.grouper = GroupAll(use_xyz, ret_grouped_xyz=True)
+            raise NotImplementedError("Only QueryAndGroup is supported")
 
         mlp_spec = mlp
         if use_xyz and len(mlp_spec) > 0:

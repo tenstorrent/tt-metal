@@ -1,12 +1,16 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-"""
-Various positional encodings for the transformer.
-"""
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import math
 import torch
-from torch import nn
 import numpy as np
+from torch import nn
 from models.experimental.detr3d.reference.model_utils import shift_scale_points
+
+"""
+Copy-paste from https://github.com/facebookresearch/3detr
+"""
 
 
 class PositionEmbeddingCoordsSine(nn.Module):
