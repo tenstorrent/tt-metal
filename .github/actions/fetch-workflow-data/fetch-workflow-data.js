@@ -441,12 +441,15 @@ async function run() {
         if (!targetRun) continue;
 
         // Fetch check-run annotations for this failing run
+        let sawGtestFailure = false;
+        let sawAnyFailureAnnotations = false;
+        let annotationsFetchFailed = false;
+        const gtestJobNames = new Set();
         try {
           // List jobs and extract check_run_ids
           const jobsResp = await octokit.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: targetRun.id, per_page: 100 });
           const jobs = Array.isArray(jobsResp.data.jobs) ? jobsResp.data.jobs : [];
           const checkRunIds = [];
-          const gtestJobNames = new Set();
           for (const j of jobs) {
             const cru = j && j.check_run_url;
             if (typeof cru === 'string' && cru.includes('/check-runs/')) {
@@ -458,8 +461,6 @@ async function run() {
           const annRoot = path.join(workspace, 'annotations', String(targetRun.id));
           if (!fs.existsSync(annRoot)) fs.mkdirSync(annRoot, { recursive: true });
           const allAnnotations = [];
-          let sawGtestFailure = false;
-          let sawAnyFailureAnnotations = false;
           for (const { id: checkRunId, job_name } of checkRunIds) {
             let page = 1;
             const budget = 500; // safety cap per run
@@ -509,100 +510,101 @@ async function run() {
           const relativeAnn = path.relative(workspace, annRoot) || annRoot;
           annotationsIndex[String(targetRun.id)] = relativeAnn;
           core.info(`Fetched annotations for failing run ${targetRun.id} → ${allAnnotations.length} items`);
+        } catch (e) {
+          core.warning(`Failed to fetch annotations for run ${targetRun.id}: ${e.message}`);
+          annotationsFetchFailed = true;
+        }
 
-          // Download logs if: gtest failure detected OR no error/failure annotations found
-          // Separate gtest logs from other logs into different directories
-          try {
-            if (sawGtestFailure) {
-              // Download and index gtest logs
-              const runLogsZip = await octokit.rest.actions.downloadWorkflowRunLogs({ owner, repo, run_id: targetRun.id });
-              const runDir = path.join(gtestLogsRoot, String(targetRun.id));
-              if (!fs.existsSync(runDir)) fs.mkdirSync(runDir, { recursive: true });
-              const zipPath = path.join(runDir, `logs-${targetRun.id}.zip`);
-              fs.writeFileSync(zipPath, Buffer.from(runLogsZip.data));
-              const extractDir = path.join(runDir, 'extract');
-              if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
-              // Extract quietly to avoid ENOBUFS
-              execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
+        // Download logs if: gtest failure detected OR no error/failure annotations found OR annotations fetch failed
+        // Separate gtest logs from other logs into different directories
+        try {
+          if (sawGtestFailure) {
+            // Download and index gtest logs
+            const runLogsZip = await octokit.rest.actions.downloadWorkflowRunLogs({ owner, repo, run_id: targetRun.id });
+            const runDir = path.join(gtestLogsRoot, String(targetRun.id));
+            if (!fs.existsSync(runDir)) fs.mkdirSync(runDir, { recursive: true });
+            const zipPath = path.join(runDir, `logs-${targetRun.id}.zip`);
+            fs.writeFileSync(zipPath, Buffer.from(runLogsZip.data));
+            const extractDir = path.join(runDir, 'extract');
+            if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
+            // Extract quietly to avoid ENOBUFS
+            execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
 
-              // Helper to sanitize strings for fuzzy file matching
-              const sanitize = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
-              const wanted = new Map();
-              // Add any job names discovered via 'unknown file' annotations (gtest jobs)
-              for (const jn of Array.from(gtestJobNames.values())) {
-                const key = sanitize(jn);
-                if (!wanted.has(key)) wanted.set(key, { name: jn, files: [] });
-              }
-              if (wanted.size === 0) {
-                // If we didn't identify explicit gtest jobs from jobs API, fall back to any file containing 'gtest'
-                wanted.set('gtest', { name: 'gtest', files: [] });
-              }
-              // Walk extracted tree and record .txt files that match wanted keys
-              const stack = [extractDir];
-              while (stack.length) {
-                const dir = stack.pop();
-                const entries = fs.readdirSync(dir, { withFileTypes: true });
-                for (const ent of entries) {
-                  const p = path.join(dir, ent.name);
-                  if (ent.isDirectory()) {
-                    stack.push(p);
-                  } else if (ent.isFile() && /\.txt$/i.test(ent.name)) {
-                    const fileKey = sanitize(p);
-                    for (const [k, rec] of wanted.entries()) {
-                      if (fileKey.includes(k)) {
-                        const rel = path.relative(runDir, p);
-                        if (!rec.files.includes(rel)) rec.files.push(rel);
-                      }
+            // Helper to sanitize strings for fuzzy file matching
+            const sanitize = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+            const wanted = new Map();
+            // Add any job names discovered via 'unknown file' annotations (gtest jobs)
+            for (const jn of Array.from(gtestJobNames.values())) {
+              const key = sanitize(jn);
+              if (!wanted.has(key)) wanted.set(key, { name: jn, files: [] });
+            }
+            if (wanted.size === 0) {
+              // If we didn't identify explicit gtest jobs from jobs API, fall back to any file containing 'gtest'
+              wanted.set('gtest', { name: 'gtest', files: [] });
+            }
+            // Walk extracted tree and record .txt files that match wanted keys
+            const stack = [extractDir];
+            while (stack.length) {
+              const dir = stack.pop();
+              const entries = fs.readdirSync(dir, { withFileTypes: true });
+              for (const ent of entries) {
+                const p = path.join(dir, ent.name);
+                if (ent.isDirectory()) {
+                  stack.push(p);
+                } else if (ent.isFile() && /\.txt$/i.test(ent.name)) {
+                  const fileKey = sanitize(p);
+                  for (const [k, rec] of wanted.entries()) {
+                    if (fileKey.includes(k)) {
+                      const rel = path.relative(runDir, p);
+                      if (!rec.files.includes(rel)) rec.files.push(rel);
                     }
                   }
                 }
               }
-              const jobsIndex = { jobs: Array.from(wanted.values()).filter(j => (j.files || []).length > 0) };
-              const jobsIndexPath = path.join(runDir, 'jobs.json');
-              fs.writeFileSync(jobsIndexPath, JSON.stringify(jobsIndex));
-              const relativeRunDir = path.relative(workspace, runDir) || runDir;
-              gtestLogsIndex[String(targetRun.id)] = relativeRunDir;
-              core.info(`Downloaded and indexed gtest logs for failing run ${targetRun.id} → ${jobsIndex.jobs.length} job(s)`);
-            } else if (!sawAnyFailureAnnotations) {
-              // Download other logs (non-gtest failures with no annotations)
-              // Just download and list files, no detailed indexing
-              const runLogsZip = await octokit.rest.actions.downloadWorkflowRunLogs({ owner, repo, run_id: targetRun.id });
-              const runDir = path.join(otherLogsRoot, String(targetRun.id));
-              if (!fs.existsSync(runDir)) fs.mkdirSync(runDir, { recursive: true });
-              const zipPath = path.join(runDir, `logs-${targetRun.id}.zip`);
-              fs.writeFileSync(zipPath, Buffer.from(runLogsZip.data));
-              const extractDir = path.join(runDir, 'extract');
-              if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
-              // Extract quietly to avoid ENOBUFS
-              execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
+            }
+            const jobsIndex = { jobs: Array.from(wanted.values()).filter(j => (j.files || []).length > 0) };
+            const jobsIndexPath = path.join(runDir, 'jobs.json');
+            fs.writeFileSync(jobsIndexPath, JSON.stringify(jobsIndex));
+            const relativeRunDir = path.relative(workspace, runDir) || runDir;
+            gtestLogsIndex[String(targetRun.id)] = relativeRunDir;
+            core.info(`Downloaded and indexed gtest logs for failing run ${targetRun.id} → ${jobsIndex.jobs.length} job(s)`);
+          } else if (!sawAnyFailureAnnotations || annotationsFetchFailed) {
+            // Download other logs (non-gtest failures with no annotations, or if annotation fetch failed entirely)
+            // Just download and list files, no detailed indexing
+            const runLogsZip = await octokit.rest.actions.downloadWorkflowRunLogs({ owner, repo, run_id: targetRun.id });
+            const runDir = path.join(otherLogsRoot, String(targetRun.id));
+            if (!fs.existsSync(runDir)) fs.mkdirSync(runDir, { recursive: true });
+            const zipPath = path.join(runDir, `logs-${targetRun.id}.zip`);
+            fs.writeFileSync(zipPath, Buffer.from(runLogsZip.data));
+            const extractDir = path.join(runDir, 'extract');
+            if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
+            // Extract quietly to avoid ENOBUFS
+            execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
 
-              // Build a simple index of all .txt log files (no parsing, just list files)
-              const logFiles = [];
-              const stack = [extractDir];
-              while (stack.length) {
-                const dir = stack.pop();
-                const entries = fs.readdirSync(dir, { withFileTypes: true });
-                for (const ent of entries) {
-                  const p = path.join(dir, ent.name);
-                  if (ent.isDirectory()) {
-                    stack.push(p);
-                  } else if (ent.isFile() && /\.txt$/i.test(ent.name)) {
-                    const rel = path.relative(runDir, p);
-                    logFiles.push(rel);
-                  }
+            // Build a simple index of all .txt log files (no parsing, just list files)
+            const logFiles = [];
+            const stack = [extractDir];
+            while (stack.length) {
+              const dir = stack.pop();
+              const entries = fs.readdirSync(dir, { withFileTypes: true });
+              for (const ent of entries) {
+                const p = path.join(dir, ent.name);
+                if (ent.isDirectory()) {
+                  stack.push(p);
+                } else if (ent.isFile() && /\.txt$/i.test(ent.name)) {
+                  const rel = path.relative(runDir, p);
+                  logFiles.push(rel);
                 }
               }
-              const logsListPath = path.join(runDir, 'logs-list.json');
-              fs.writeFileSync(logsListPath, JSON.stringify({ files: logFiles }));
-              const relativeRunDir = path.relative(workspace, runDir) || runDir;
-              otherLogsIndex[String(targetRun.id)] = relativeRunDir;
-              core.info(`Downloaded other logs for failing run ${targetRun.id} → ${logFiles.length} file(s)`);
             }
-          } catch (e) {
-            core.warning(`Failed to download/index logs for run ${targetRun.id}: ${e.message}`);
+            const logsListPath = path.join(runDir, 'logs-list.json');
+            fs.writeFileSync(logsListPath, JSON.stringify({ files: logFiles }));
+            const relativeRunDir = path.relative(workspace, runDir) || runDir;
+            otherLogsIndex[String(targetRun.id)] = relativeRunDir;
+            core.info(`Downloaded other logs for failing run ${targetRun.id} → ${logFiles.length} file(s)`);
           }
         } catch (e) {
-          core.warning(`Failed to fetch annotations for run ${targetRun.id}: ${e.message}`);
+          core.warning(`Failed to download/index logs for run ${targetRun.id}: ${e.message}`);
         }
       } catch (e) {
         core.warning(`Failed to fetch logs for latest failing run in workflow '${name}': ${e.message}`);
