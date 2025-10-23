@@ -536,6 +536,8 @@ def run_matmul_2d_multiple_output_blocks_per_core(
         )
     else:
         in0_memory_config = ttnn.L1_MEMORY_CONFIG
+
+    device.disable_program_cache()
     in0_t = ttnn.from_torch(
         in0,
         dtype=ttnn.bfloat16,
@@ -550,6 +552,7 @@ def run_matmul_2d_multiple_output_blocks_per_core(
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    device.enable_program_cache()
 
     if has_bias:
         bias = torch.randn(bias_shape).bfloat16().float()
@@ -669,6 +672,7 @@ def test_matmul_2d_multiple_output_blocks_per_core(
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
+        mesh_device.disable_program_cache()
         tt_dummy_tensor = ttnn.from_torch(
             py_dummy_tensor,
             dtype=ttnn.DataType.BFLOAT16,
@@ -676,6 +680,7 @@ def test_matmul_2d_multiple_output_blocks_per_core(
             device=mesh_device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        mesh_device.enable_program_cache()
     assert mesh_device.num_program_cache_entries() == 1
 
 
@@ -823,6 +828,7 @@ def test_matmul_2d_tiny_tile(
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
+        device.disable_program_cache()
         tt_dummy_tensor = ttnn.from_torch(
             py_dummy_tensor,
             dtype=ttnn.DataType.BFLOAT16,
@@ -830,6 +836,7 @@ def test_matmul_2d_tiny_tile(
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        device.enable_program_cache()
     assert device.num_program_cache_entries() == 1
 
 
