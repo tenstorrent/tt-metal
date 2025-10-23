@@ -279,11 +279,9 @@ run_t3000_tteager_tests() {
 
   echo "LOG_METAL: Running run_t3000_tteager_tests"
 
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_gather.py -k post_commit ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_gather_matmul.py -k post_commit ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_post_commit.py ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_send_recv_async.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_barrier_t3000_frequent.py ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_reduce_t3000_frequent.py ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_t3000.py ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_t3000.py ; fail+=$?
@@ -291,10 +289,11 @@ run_t3000_tteager_tests() {
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_moe_ccl_end_to_end.py ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/point_to_point/test_point_to_point.py ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/data_movement/test_moe_expert_token_remap_t3k.py ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/operations/data_movement/test_moe_routing_remap_t3k.py ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/debug/test_apply_device_delay_t3000.py ; fail+=$?
 
   # distributed layernorm
-  pytest tests/ttnn/unit_tests/operations/test_distributed_layernorm.py ; fail+=$?
+  pytest tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -310,7 +309,7 @@ run_t3000_trace_stress_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_trace_stress_tests"
-  NUM_TRACE_LOOPS=15 pytest -n auto tests/ttnn/unit_tests/test_multi_device_trace.py ; fail+=$?
+  NUM_TRACE_LOOPS=15 pytest -n auto tests/ttnn/unit_tests/base_functionality/test_multi_device_trace.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

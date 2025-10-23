@@ -37,7 +37,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
-#include <tt-metalium/semaphore.hpp>
+#include "impl/buffers/semaphore.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -1460,31 +1460,6 @@ TEST_F(UnitMeshCQFixture, TensixTestRuntimeArgsCorrectlySentSingleCore) {
     for (auto& device : devices_) {
         local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
             device, device->mesh_command_queue(), dummy_program_config, 9, 12, 15, 1);
-    }
-}
-
-auto CQFabricConfigsToTest = ::testing::Values(
-    tt::tt_fabric::FabricConfig::FABRIC_1D,
-    tt::tt_fabric::FabricConfig::FABRIC_1D_RING,
-    tt::tt_fabric::FabricConfig::FABRIC_2D,
-    tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
-
-INSTANTIATE_TEST_SUITE_P(CommandQueueMultiDevice, DISABLED_CQMultiDeviceOnFabricFixture, CQFabricConfigsToTest);
-
-INSTANTIATE_TEST_SUITE_P(
-    MultiCommandQueueMultiDevice, DISABLED_UnitMeshMultiCQMultiDeviceOnFabricFixture, CQFabricConfigsToTest);
-
-TEST_P(DISABLED_CQMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) {
-    for (const auto& device : devices_) {
-        local_test_functions::test_basic_dispatch_functions(device, 0);
-    }
-}
-
-TEST_P(DISABLED_UnitMeshMultiCQMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) {
-    for (const auto& device : devices_) {
-        for (uint32_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
-            local_test_functions::test_basic_dispatch_functions(device, cq_id);
-        }
     }
 }
 
