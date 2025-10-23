@@ -279,7 +279,7 @@ async function run() {
         core.warning(`[TEST MODE] Failed to restore commits artifact: ${e.message}`);
       }
 
-      // Additionally download and index logs for failing gtest workflow runs referenced by this prior aggregate run (test mode)
+      // Additionally download and index logs for failing workflow runs referenced by this prior aggregate run (test mode)
       try {
         const owner = github.context.repo.owner;
         const repo = github.context.repo.repo;
@@ -410,7 +410,7 @@ async function run() {
           const jobsResp = await octokit.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: targetRun.id, per_page: 100 });
           const jobs = Array.isArray(jobsResp.data.jobs) ? jobsResp.data.jobs : [];
           const checkRunIds = [];
-          const gtestAnnotationJobNames = new Set();
+          const gtestJobNames = new Set();
           for (const j of jobs) {
             const cru = j && j.check_run_url;
             if (typeof cru === 'string' && cru.includes('/check-runs/')) {
@@ -422,7 +422,7 @@ async function run() {
           const annRoot = path.join(workspace, 'annotations', String(targetRun.id));
           if (!fs.existsSync(annRoot)) fs.mkdirSync(annRoot, { recursive: true });
           const allAnnotations = [];
-          let sawFailingAnnotationForGtest = false;
+          let sawGtestFailure = false;
           let sawAnyFailureAnnotations = false;
           for (const { id: checkRunId, job_name } of checkRunIds) {
             let page = 1;
@@ -453,13 +453,13 @@ async function run() {
                   if (levelLc === 'failure' || levelLc === 'error') {
                     sawAnyFailureAnnotations = true;
                     if (isUnknownFileLead) {
-                      sawFailingAnnotationForGtest = true;
-                      if (job_name) gtestAnnotationJobNames.add(String(job_name));
+                      sawGtestFailure = true;
+                      if (job_name) gtestJobNames.add(String(job_name));
                     }
                     // Keep legacy job-name heuristic as a secondary signal
                     else if ((/gtest/i.test(String(job_name || '')) || /gtests/i.test(String(job_name || '')))) {
-                      sawFailingAnnotationForGtest = true;
-                      if (job_name) gtestAnnotationJobNames.add(String(job_name));
+                      sawGtestFailure = true;
+                      if (job_name) gtestJobNames.add(String(job_name));
                     }
                   }
                 } catch (_) { /* ignore */ }
@@ -476,8 +476,8 @@ async function run() {
 
           // Download logs if: gtest failure detected OR no error/failure annotations found
           try {
-            const shouldFetchGtestLogs = sawFailingAnnotationForGtest || !sawAnyFailureAnnotations;
-            if (shouldFetchGtestLogs) {
+            const shouldFetchLogs = sawGtestFailure || !sawAnyFailureAnnotations;
+            if (shouldFetchLogs) {
               const runLogsZip = await octokit.rest.actions.downloadWorkflowRunLogs({ owner, repo, run_id: targetRun.id });
               const runDir = path.join(logsRoot, String(targetRun.id));
               if (!fs.existsSync(runDir)) fs.mkdirSync(runDir, { recursive: true });
@@ -491,12 +491,12 @@ async function run() {
               // Helper to sanitize strings for fuzzy file matching
               const sanitize = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
               const wanted = new Map();
-              // Add any job names discovered via 'unknown file' annotations
-              for (const jn of Array.from(gtestAnnotationJobNames.values())) {
+              // Add any job names discovered via 'unknown file' annotations (gtest jobs)
+              for (const jn of Array.from(gtestJobNames.values())) {
                 const key = sanitize(jn);
                 if (!wanted.has(key)) wanted.set(key, { name: jn, files: [] });
               }
-              if (shouldFetchGtestLogs && wanted.size === 0) {
+              if (sawGtestFailure && wanted.size === 0) {
                 // If we didn't identify explicit gtest jobs from jobs API, fall back to any file containing 'gtest'
                 wanted.set('gtest', { name: 'gtest', files: [] });
               }
@@ -520,12 +520,12 @@ async function run() {
                   }
                 }
               }
-              const gtestIndex = { jobs: Array.from(wanted.values()).filter(j => (j.files || []).length > 0) };
-              const gtestIndexPath = path.join(runDir, 'gtest-jobs.json');
-              fs.writeFileSync(gtestIndexPath, JSON.stringify(gtestIndex));
+              const jobsIndex = { jobs: Array.from(wanted.values()).filter(j => (j.files || []).length > 0) };
+              const jobsIndexPath = path.join(runDir, 'jobs.json');
+              fs.writeFileSync(jobsIndexPath, JSON.stringify(jobsIndex));
               const relativeRunDir = path.relative(workspace, runDir) || runDir;
               logsIndex[String(targetRun.id)] = relativeRunDir;
-              core.info(`Downloaded and indexed logs for failing gtest run ${targetRun.id} → ${gtestIndex.jobs.length} job(s)`);
+              core.info(`Downloaded and indexed logs for failing run ${targetRun.id} → ${jobsIndex.jobs.length} job(s)`);
             }
           } catch (e) {
             core.warning(`Failed to download/index logs for run ${targetRun.id}: ${e.message}`);

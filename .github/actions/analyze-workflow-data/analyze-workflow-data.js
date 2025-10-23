@@ -504,7 +504,7 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
     try {
       const runLogsDir = logsDirPath || getLogsDirForRunId(runId);
       if (runLogsDir && fs.existsSync(runLogsDir)) {
-        const idxPath = path.join(runLogsDir, 'gtest-jobs.json');
+        const idxPath = path.join(runLogsDir, 'jobs.json');
         const extractDir = path.join(runLogsDir, 'extract');
         if (fs.existsSync(idxPath) && fs.existsSync(extractDir)) {
           core.info(`[GTEST] Using logs for run ${runId}: runLogsDir=${runLogsDir}`);
