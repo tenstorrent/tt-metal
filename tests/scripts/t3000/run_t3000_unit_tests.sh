@@ -539,11 +539,11 @@ run_t3000_ccl_tests() {
   # sharded intermediate case with cluster axis 1
   pytest -n auto tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_minimal_async_linear_sharded
   # composite case
-  pytest -n auto tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async_training_shapes[wormhole_b0-fabric_linear-random-check-mem_config_input0-mem_config_rs0-tt_training_test_one-mesh_device0-1link]
+  pytest -n auto tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async_training_shapes[wormhole_b0-fabric_linear-random-mem_config_input0-mem_config_rs0-tt_training_test_one-check-mesh_device0-1link]
   # long trace test on dim=1 with ring, currently hanging when run in the suite even though it passes when run in isolation - Re-enable this test when we have more T3K availability
-  # pytest -n auto tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-fabric_ring-barrier_without_persistent_buffers-random-perf-mem_config_input0-mem_config_rs0-scatter_dim_1_test_one-1link-mesh_device0]
+  # pytest -n auto tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-fabric_ring-random-mem_config_input0-mem_config_rs0-scatter_dim_1_test_one-perf-no_barrier_with_persistent-1link-mesh_device0]
   # long running dim = 3 trace test without barrier and with persistent buffers
-  pytest -n auto tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-fabric_ring-no_barrier_with_persistent_buffers-random-perf-mem_config_input0-mem_config_rs0-padded_dim_2_test_one-1link-mesh_device0]
+  pytest -n auto tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-fabric_ring-random-mem_config_input0-mem_config_rs0-padded_dim_2_test_two-perf-no_barrier_with_persistent-1link-mesh_device0]
 
   # all reduce: 1 test should be enough
   # 4 chip test with bfloat8_b
