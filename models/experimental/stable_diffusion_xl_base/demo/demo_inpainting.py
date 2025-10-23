@@ -198,10 +198,6 @@ def run_demo_inference(
             torch_add_text_embeds,
         ) = tt_sdxl.encode_prompts(prompts_batch, negative_prompts_batch, prompts_2_batch, negative_prompts_2_batch)
 
-        # This is a hack to get things working, but essentially:
-        # We start with num_inference_steps == 20 say, generate_input_tensors() will reduce this to 19, and it will
-        # persist until the next image generation call, so we need to set it back to the original value
-        tt_sdxl.set_num_inference_steps(num_inference_steps)
         (
             tt_image_latents,
             tt_masked_image_latents,
@@ -253,8 +249,8 @@ def run_demo_inference(
             if is_ci_env:
                 logger.info(f"Image {len(images)}/{len(prompts) // batch_size} generated successfully")
             else:
-                img.save(f"output/output{len(images) + start_from}.png")
-                logger.info(f"Image saved to output/output{len(images) + start_from}.png")
+                img.save(f"output/output{len(images) + start_from}_inpainting.png")
+                logger.info(f"Image saved to output/output{len(images) + start_from}_inpainting.png")
 
     return images
 

@@ -69,6 +69,7 @@ class TtSDXLPipeline(LightweightModule):
         )
         self.torch_pipeline = torch_pipeline
         self.pipeline_config = pipeline_config
+        self._reset_num_inference_steps()
 
         # Validate config parameters once at initialization
         self.__validate_config()
@@ -142,6 +143,9 @@ class TtSDXLPipeline(LightweightModule):
         # When changing num_inference_steps, the timesteps and latents need to be recreated.
         self.pipeline_config.num_inference_steps = num_inference_steps
         self.generated_input_tensors = False
+
+    def _reset_num_inference_steps(self):
+        self.num_inference_steps = self.pipeline_config.num_inference_steps
 
     def set_guidance_scale(self, guidance_scale: float):
         self.pipeline_config.guidance_scale = guidance_scale
@@ -328,6 +332,7 @@ class TtSDXLPipeline(LightweightModule):
             if self.pipeline_config.capture_trace:
                 self.__trace_image_processing()
 
+            self._reset_num_inference_steps()
             self.image_processing_compiled = True
 
     def encode_prompts(self, prompts, negative_prompts, prompt_2=None, negative_prompt_2=None):
@@ -568,7 +573,7 @@ class TtSDXLPipeline(LightweightModule):
             self.tt_prompt_embeds_device,
             self.tt_time_ids_device,
             self.tt_text_embeds_device,
-            self.pipeline_config.num_inference_steps,
+            self.num_inference_steps,
             self.extra_step_kwargs,
             self.guidance_scale,
             self.scaling_factor,
@@ -584,12 +589,13 @@ class TtSDXLPipeline(LightweightModule):
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
             guidance_rescale=self.pipeline_config.guidance_rescale,
         )
+        self._reset_num_inference_steps()
         return imgs
 
     def _prepare_timesteps(self, timesteps=None, sigmas=None):
         # Helper method for timestep preparation.
 
-        self.ttnn_timesteps, self.pipeline_config.num_inference_steps = retrieve_timesteps(
+        self.ttnn_timesteps, self.num_inference_steps = retrieve_timesteps(
             self.torch_pipeline.scheduler, self.pipeline_config.num_inference_steps, self.cpu_device, timesteps, sigmas
         )
 

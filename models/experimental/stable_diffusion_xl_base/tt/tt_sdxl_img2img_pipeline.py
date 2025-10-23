@@ -51,14 +51,14 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
     def _prepare_timesteps(self, timesteps=None, sigmas=None):
         super()._prepare_timesteps(timesteps, sigmas)
 
-        self.ttnn_timesteps, self.pipeline_config.num_inference_steps = get_timesteps(
-            self.torch_pipeline.scheduler, self.pipeline_config.num_inference_steps, self.pipeline_config.strength, None
+        self.ttnn_timesteps, self.num_inference_steps = get_timesteps(
+            self.torch_pipeline.scheduler, self.num_inference_steps, self.pipeline_config.strength, None
         )
 
-        if self.pipeline_config.num_inference_steps < 1:
+        if self.num_inference_steps < 1:
             raise ValueError(
                 f"After adjusting the num_inference_steps by strength parameter: {self.pipeline_config.strength}, the number of pipeline"
-                f"steps is {self.pipeline_config.num_inference_steps} which is < 1 and not appropriate for this pipeline."
+                f"steps is {self.num_inference_steps} which is < 1 and not appropriate for this pipeline."
             )
 
     def generate_input_tensors(

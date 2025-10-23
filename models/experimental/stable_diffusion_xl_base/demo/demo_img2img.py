@@ -170,7 +170,6 @@ def run_demo_inference(
             torch_add_text_embeds,
         ) = tt_sdxl.encode_prompts(prompts_batch, negative_prompts_batch, prompts_2_batch, negative_prompts_2_batch)
 
-        tt_sdxl.set_num_inference_steps(num_inference_steps)
         tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
             torch_image=images[iter * batch_size : (iter + 1) * batch_size],
             all_prompt_embeds_torch=all_prompt_embeds_torch,

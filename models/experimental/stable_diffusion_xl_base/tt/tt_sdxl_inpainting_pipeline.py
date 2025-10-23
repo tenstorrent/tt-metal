@@ -208,6 +208,7 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
             if self.pipeline_config.capture_trace:
                 self.__trace_image_processing()
 
+            self._reset_num_inference_steps()
             self.image_processing_compiled = True
 
     def prepare_input_tensors(self, host_tensors):
@@ -247,7 +248,7 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
             self.tt_prompt_embeds_device,
             self.tt_time_ids_device,
             self.tt_text_embeds_device,
-            self.pipeline_config.num_inference_steps,
+            self.num_inference_steps,
             self.extra_step_kwargs,
             self.guidance_scale,
             self.scaling_factor,
@@ -264,6 +265,7 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
             guidance_rescale=self.pipeline_config.guidance_rescale,
         )
+        self._reset_num_inference_steps()
         return imgs
 
     def __allocate_device_tensors(
