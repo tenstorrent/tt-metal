@@ -408,7 +408,10 @@ def test_dispatch_cores():
 # Eth dispatch will be deprecated
 @skip_for_blackhole()
 def test_ethernet_dispatch_cores():
-    REF_COUNT_DICT = {"Ethernet CQ Dispatch": [590, 1080, 1430, 1660, 4237], "Ethernet CQ Prefetch": [572, 1058, 4030]}
+    REF_COUNT_DICT = {
+        "Ethernet CQ Dispatch": [590, 1080, 1430, 1660, 3769, 4237],
+        "Ethernet CQ Prefetch": [572, 1058, 4030],
+    }
     devicesData = run_device_profiler_test(
         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops -k DispatchCoreType.ETH",
         setupAutoExtract=True,
