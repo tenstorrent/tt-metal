@@ -29,8 +29,7 @@ ttnn::Tensor ExecuteReduceScatter::invoke(
     std::optional<tt::tt_fabric::Topology> topology) {
     auto mesh_device = input_tensor.device();
     uint32_t normalized_dim = input_tensor.logical_shape().get_normalized_index(dim);
-    tt::tt_fabric::Topology topology_ = topology.value_or(
-        ::ttnn::ccl::get_usable_topology(input_tensor, tt::tt_fabric::get_fabric_topology(), cluster_axis));
+    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
     // TODO: until #27196 is resolved, the fabric API does not subtract out the one link correctly for dispatch used
     // when not all devices are mmio capable. Manually doing it requires the use of "is_mmio_capable" counting, but as

@@ -29,8 +29,7 @@ ttnn::Tensor ExecuteAllGather::invoke(
     std::optional<tt::tt_fabric::Topology> topology) {
     auto mesh_device = input_tensor.device();
     uint32_t normalized_dim = input_tensor.logical_shape().get_normalized_index(dim);
-    tt::tt_fabric::Topology topology_ = topology.value_or(
-        ::ttnn::ccl::get_usable_topology(input_tensor, tt::tt_fabric::get_fabric_topology(), cluster_axis));
+    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
     uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, cluster_axis));
 

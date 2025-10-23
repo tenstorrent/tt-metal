@@ -19,6 +19,7 @@ std::vector<ttnn::Tensor> BarrierOperation::invoke(
     const std::vector<ttnn::Tensor>& input_tensors,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology) {
+    topology = ::ttnn::ccl::get_usable_topology(input_tensors.at(0), topology, std::nullopt);
     return barrier_function(
         input_tensors,
         Barrier{

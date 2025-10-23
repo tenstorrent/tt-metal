@@ -32,6 +32,7 @@ std::vector<ttnn::Tensor> ExecuteAllGatherMatmulAsync::invoke(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
+    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
     return ttnn::operations::experimental::ccl::all_gather_matmul_async(
         input_tensor,
         weight_tensor,
@@ -42,7 +43,7 @@ std::vector<ttnn::Tensor> ExecuteAllGatherMatmulAsync::invoke(
         bias,
         num_links,
         memory_config_ag,
-        topology,
+        topology_,
         barrier_semaphore,
         subdevice_id,
         memory_config_mm,

@@ -17,8 +17,9 @@ std::vector<ttnn::Tensor> ExecuteAllBroadcastAsync::invoke(
     const ttnn::ccl::Topology topology,
     std::optional<uint32_t> cluster_axis,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     return ttnn::operations::experimental::ccl::all_broadcast_async(
-        input_tensor, num_links, memory_config, topology, cluster_axis, subdevice_id);
+        input_tensor, num_links, memory_config, topology_, cluster_axis, subdevice_id);
 }
 
 }  // namespace ttnn::operations::experimental::ccl
