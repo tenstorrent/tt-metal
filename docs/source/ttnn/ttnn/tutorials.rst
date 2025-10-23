@@ -41,3 +41,5 @@ Available tutorials:
    tutorials/ttnn_basic_conv.ipynb
    tutorials/ttnn_simplecnn_inference.ipynb
    tutorials/ttnn_visualizer.md
+   tutorials/ttnn_basic_matrix_multiplication.ipynb
+   tutorials/ttnn_tracer_model.ipynb
