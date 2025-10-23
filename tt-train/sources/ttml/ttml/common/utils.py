@@ -58,7 +58,7 @@ def create_optimizer(model, yaml_config: dict):
         AdamW or MorehAdamW optimizer instance based on configuration
     """
     optimizer_config = yaml_config.get("training_config", {})
-    
+
     lr = optimizer_config.get("learning_rate", 0.0003)
     beta1 = optimizer_config.get("beta1", 0.9)
     beta2 = optimizer_config.get("beta2", 0.999)
@@ -73,7 +73,7 @@ def create_optimizer(model, yaml_config: dict):
         float(eps),
         float(weight_decay),
     )
-    
+
     if use_moreh_adamw:
         return ttml.optimizers.MorehAdamW(model.parameters(), adamw_cfg)
     else:
