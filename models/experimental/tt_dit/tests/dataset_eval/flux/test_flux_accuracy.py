@@ -30,8 +30,8 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "flux_test_results.json"
 @pytest.mark.parametrize(
     ("mesh_device", "sp", "tp", "encoder_tp", "vae_tp", "topology", "num_links"),
     [
-        # pytest.param((2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1, id="2x4sp0tp1"),
-        pytest.param((4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 4, id="4x8sp0tp1"),
+        pytest.param((2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1, id="2x4sp0tp1"),
+        # pytest.param((4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 4, id="4x8sp0tp1"),
     ],
     indirect=["mesh_device"],
 )
