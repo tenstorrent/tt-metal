@@ -79,6 +79,9 @@ if [ ! -d "$PYTHON_ENV_DIR" ]; then
   pip install -r models/tt_transformers/requirements.txt
 else
   echo "Using existing virtual environment: $PYTHON_ENV_DIR"
+  source $PYTHON_ENV_DIR/bin/activate
+  pip install -r models/tt_transformers/requirements.txt
+  pip install -r $(pwd)/tt_metal/python_env/requirements-dev.txt
 fi
 
 git cat-file -e "$good_commit^{commit}" 2>/dev/null || die "Invalid good commit: $good_commit"
@@ -191,35 +194,13 @@ while [[ "$found" == "false" ]]; do
   build_rc=0
 
   # Try to download artifacts first if artifact mode is enabled
-  if [ "$artifact_mode" = true ]; then
-    if try_download_artifacts "$full_sha"; then
-      echo "Using downloaded artifacts for $rev"
-      build_rc=0
-    else
-      echo "WARNING: Artifact download failed, falling back to local build"
-      if [ "$tracy_enabled" -eq 1 ]; then
-        ./build_metal.sh \
-          --build-all \
-          --enable-ccache \
-          --enable-profiler || build_rc=$?
-      else
-        ./build_metal.sh \
-          --build-all \
-          --enable-ccache || build_rc=$?
-      fi
-    fi
+  if [ "$artifact_mode" = true ] && try_download_artifacts "$full_sha"; then
+    echo "Using downloaded artifacts for $rev"
   else
-    # Standard local build
-    if [ "$tracy_enabled" -eq 1 ]; then
-      ./build_metal.sh \
-        --build-all \
-        --enable-ccache \
-        --enable-profiler || build_rc=$?
-    else
-      ./build_metal.sh \
-        --build-all \
-        --enable-ccache || build_rc=$?
-    fi
+    [ "$artifact_mode" = true ] && echo "WARNING: Artifact download failed, falling back to local build"
+    build_args="--build-all --enable-ccache"
+    [ "$tracy_enabled" -eq 1 ] && build_args="$build_args --enable-profiler"
+    ./build_metal.sh $build_args || build_rc=$?
   fi
 
   echo "::endgroup::"
