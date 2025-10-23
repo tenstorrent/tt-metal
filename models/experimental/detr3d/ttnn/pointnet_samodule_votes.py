@@ -281,7 +281,7 @@ class TtnnPointnetSAModuleVotes(LightweightModule):
         if not isinstance(features, torch.Tensor) and features is not None:
             features = ttnn.to_torch(features, dtype=torch.float32)
         if not isinstance(inds, torch.Tensor) and inds is not None:
-            inds = ttnn.to_torch(inds)
+            inds = ttnn.to_torch(inds, dtype=torch.int64)
 
         xyz_flipped = xyz.transpose(1, 2).contiguous()
         if inds is None:
@@ -300,8 +300,6 @@ class TtnnPointnetSAModuleVotes(LightweightModule):
                 xyz, new_xyz, features
             )  # (B, C, npoint, nsample), (B,3,npoint,nsample), (B,npoint)
 
-        if inds is not None:
-            inds = ttnn.from_torch(inds, dtype=ttnn.bfloat16, device=self.device)
         if unique_cnt is not None:
             unique_cnt = ttnn.from_torch(unique_cnt, dtype=ttnn.bfloat16, device=self.device)
         grouped_features = ttnn.from_torch(
@@ -342,11 +340,10 @@ class TtnnPointnetSAModuleVotes(LightweightModule):
                     )
 
                 for i in range(len(partial_maxpool_out)):
-                    partial_maxpool_out[i] = ttnn.reshape(partial_maxpool_out[i], (B, H, 1, C))
+                    partial_maxpool_out[i] = ttnn.reshape(partial_maxpool_out[i], (B, H, C))
 
                 new_features = ttnn.concat((partial_maxpool_out), dim=1)
-                new_features = ttnn.permute(new_features, (0, 3, 1, 2))
-                new_features = ttnn.squeeze(new_features, -1)  # (B, mlp[-1], npoint)
+                new_features = ttnn.permute(new_features, (0, 2, 1))  # (B, mlp[-1], npoint)
             else:
                 B, H, W, C = new_features.shape
                 new_features = ttnn.reshape(new_features, (1, 1, B * H * W, C))
@@ -363,9 +360,8 @@ class TtnnPointnetSAModuleVotes(LightweightModule):
                     applied_shard_scheme=None,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
-                new_features = ttnn.reshape(new_features, (B, H, 1, C))
-                new_features = ttnn.permute(new_features, (0, 3, 1, 2))
-                new_features = ttnn.squeeze(new_features, -1)  # (B, mlp[-1], npoint)
+                new_features = ttnn.reshape(new_features, (B, H, C))
+                new_features = ttnn.permute(new_features, (0, 2, 1))  # (B, mlp[-1], npoint
         else:
             raise NotImplementedError("Currently only Maxpool is supported")
 

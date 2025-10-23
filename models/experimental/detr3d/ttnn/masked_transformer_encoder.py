@@ -265,23 +265,17 @@ class TtnnMaskedTransformerEncoder(LightweightModule):
         xyz: Optional[ttnn.Tensor] = None,
         transpose_swap: Optional[bool] = False,
     ):
-        # Convert inputs to ttnn tensors if needed
-        if not isinstance(src, ttnn.Tensor):
-            src = ttnn.from_torch(src, device=self.device)
-
         if transpose_swap:
             bs, c, h, w = src.shape
-            # Flatten and permute: (bs, c, h, w) -> (h*w, bs, c)
+            # Flatten and permute: (bs, c, h, w) -> (bs, h*w, c)
             src = ttnn.reshape(src, (bs, c, h * w))
             src = ttnn.transpose(src, 1, 2)  # (bs, h*w, c)
-            src = ttnn.transpose(src, 0, 1)  # (h*w, bs, c)
 
             if pos is not None:
                 if not isinstance(pos, ttnn.Tensor):
                     pos = ttnn.from_torch(pos, device=self.device)
                 pos = ttnn.reshape(pos, (bs, c, h * w))
                 pos = ttnn.transpose(pos, 1, 2)
-                pos = ttnn.transpose(pos, 0, 1)
 
         output = src
         xyz_dist = None
@@ -294,21 +288,21 @@ class TtnnMaskedTransformerEncoder(LightweightModule):
                 # attn_mask, xyz_dist = self.compute_mask_ttnn(xyz, self.masking_radius[idx], xyz_dist) # FIXME: Minor pcc drop
                 attn_mask = ttnn.unsqueeze(attn_mask, 1)
 
-            output = ttnn.permute(output, (1, 0, 2))
+            # encoder layer is implemented in batch first form to make use of ttnn.sdpa
+            # output is in batch x npoints x channels
             output = layer(output, src_mask=attn_mask, pos=pos)
-            output = ttnn.permute(output, (1, 0, 2))
 
             if idx == 0 and self.interim_downsampling:
-                output = ttnn.permute(output, (1, 2, 0))
+                # convert output to batch x channels x npoints format for pointnet
+                output = ttnn.permute(output, (0, 2, 1))
                 xyz, output, xyz_inds = self.interim_downsampling(xyz, output)
-                output = ttnn.permute(output, (2, 0, 1))
+                output = ttnn.permute(output, (0, 2, 1))
 
         if self.norm is not None:
             output = self.norm(output)
 
         if transpose_swap:
             # Reshape back to original format
-            output = ttnn.transpose(output, 0, 1)  # (bs, h*w, c)
             output = ttnn.transpose(output, 1, 2)  # (bs, c, h*w)
             output = ttnn.reshape(output, (bs, c, h, w))
 

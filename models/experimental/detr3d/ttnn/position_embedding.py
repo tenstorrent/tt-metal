@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
 import torch
 import ttnn
 import numpy as np
@@ -13,36 +12,19 @@ from models.experimental.detr3d.ttnn.utils import shift_scale_points_ttnn
 class TtnnPositionEmbeddingCoordsSine(LightweightModule):
     def __init__(
         self,
-        temperature=10000,
         normalize=False,
-        scale=None,
         pos_type="fourier",
-        d_pos=None,
-        d_in=3,
-        gauss_scale=1.0,
         device=None,
         gauss_B=None,
     ):
         super().__init__()
-        self.temperature = temperature
         self.normalize = normalize
         self.device = device
-        if scale is not None and normalize is False:
-            raise ValueError("normalize should be True if scale is passed")
-        if scale is None:
-            scale = 2 * math.pi
         self.pos_type = pos_type
-        self.scale = scale
         if self.pos_type == "fourier":
-            assert d_pos is not None
-            assert d_pos % 2 == 0
+            assert gauss_B is not None
             # define a gaussian matrix input_ch -> output_ch
-            if gauss_B is None:
-                B = torch.empty((d_in, d_pos // 2)).normal_()
-                B *= gauss_scale
-            else:
-                B = gauss_B
-            self.gauss_B = ttnn.from_torch(B, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
+            self.gauss_B = ttnn.from_torch(gauss_B, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
         else:
             raise ValueError(f"Unknown {self.pos_type}, only fourier is currently supported")
 

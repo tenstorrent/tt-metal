@@ -256,7 +256,7 @@ def test_masked_transformer_encoder_inference(
     )
 
     tt_src = ttnn.from_torch(
-        src,
+        src.permute(1, 0, 2),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -269,6 +269,7 @@ def test_masked_transformer_encoder_inference(
     for idx, (tt_out, torch_out) in enumerate(zip(tt_output, ref_out)):
         if not isinstance(tt_out, torch.Tensor):
             tt_out = ttnn.to_torch(tt_out)
+            tt_out = tt_out.permute(1, 0, 2)
             tt_out = torch.reshape(tt_out, torch_out.shape)
 
         passing, pcc_message = comp_pcc(torch_out, tt_out, pcc=0.99)
