@@ -15,8 +15,6 @@ Description:
 from dataclasses import dataclass
 import os
 
-from ttexalens.hw.tensix.wormhole.wormhole import WormholeDevice
-from ttexalens.hw.tensix.blackhole.blackhole import BlackholeDevice
 from inspector_data import run as get_inspector_data, InspectorData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from triage import triage_singleton, ScriptConfig, run_script, log_check
@@ -88,14 +86,14 @@ class DispatcherData:
             # Use build_env for initial firmware paths
             brisc_elf_path = os.path.join(build_env.firmwarePath, "brisc", "brisc.elf")
             idle_erisc_elf_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
-            active_erisc_elf_name = "erisc" if isinstance(run_checks.devices[0], WormholeDevice) else "active_erisc"
+            active_erisc_elf_name = "erisc" if run_checks.devices[0].is_wormhole() else "active_erisc"
             active_erisc_elf_path = os.path.join(
                 build_env.firmwarePath, active_erisc_elf_name, active_erisc_elf_name + ".elf"
             )
 
             # On blackhole we have 2 modes (1-ERISC and 2-ERISC)
             # By checking if the subordinate active erisc elf exists, we can determine in which mode we are
-            if isinstance(run_checks.devices[0], BlackholeDevice):
+            if run_checks.devices[0].is_blackhole():
                 self._is_2_erisc_mode = os.path.exists(
                     os.path.join(build_env.firmwarePath, "subordinate_active_erisc", "subordinate_active_erisc.elf")
                 )
@@ -354,12 +352,10 @@ class DispatcherData:
                 else:
                     kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
             kernel_path = os.path.realpath(kernel_path)
-            if proc_name == "NCRISC" and isinstance(location._device, WormholeDevice):
+            if proc_name == "NCRISC" and location._device.is_wormhole():
                 kernel_offset = 0xFFC00000
             # In wormhole we only use text offset to calculate the kernel offset for active ETH
-            elif location in location._device.active_eth_block_locations and isinstance(
-                location._device, WormholeDevice
-            ):
+            elif location in location._device.active_eth_block_locations and location._device.is_wormhole():
                 kernel_offset = kernel_text_offset
             else:
                 kernel_offset = kernel_config_base + kernel_text_offset

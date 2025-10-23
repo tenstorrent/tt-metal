@@ -92,7 +92,8 @@ TrayID get_tray_id_for_chip(
 std::pair<TrayID, ASICLocation> get_asic_position(
     const std::unique_ptr<tt::umd::Cluster>& cluster, tt::ARCH arch, ChipId chip_id, bool using_mock_cluster_desc) {
     auto cluster_desc = cluster->get_cluster_description();
-    if (cluster_desc->get_board_type(chip_id) == BoardType::UBB) {
+    if (cluster_desc->get_board_type(chip_id) == BoardType::UBB_WORMHOLE ||
+        cluster_desc->get_board_type(chip_id) == BoardType::UBB_BLACKHOLE) {
         constexpr std::string_view ubb_mobo_name = "S7T-MB";
 
         TT_FATAL(

@@ -33,23 +33,32 @@ set(IRAM_OPTIONS
 )
 
 # determine sfpi version information
-set(SFPI_ROOT "${PROJECT_SOURCE_DIR}/runtime/sfpi")
-file(MAKE_DIRECTORY ${SFPI_ROOT})
-# sfpi-version.sh generates a cmake script, which we include just below.
+set(SFPI_BASE "${PROJECT_SOURCE_DIR}/runtime")
+file(MAKE_DIRECTORY ${SFPI_BASE})
+
+# sfpi-info.sh generates a cmake script, which we include just below.
 execute_process(
     COMMAND
         ${CMAKE_CURRENT_SOURCE_DIR}/../sfpi-info.sh CMAKE txz
-    OUTPUT_FILE ${SFPI_ROOT}/sfpi-version.cmake
+    OUTPUT_FILE ${SFPI_BASE}/sfpi-version.cmake
     COMMAND_ERROR_IS_FATAL ANY
 )
+# sfpi-info.sh sources sfpi-version, if either changes we should reconfigure
+set_property(
+    DIRECTORY
+    APPEND
+    PROPERTY
+        CMAKE_CONFIGURE_DEPENDS
+            "../sfpi-info.sh;../sfpi-version"
+)
 # this script sets a bunch of variables of the form SFPI_snake_case_name
-include(${SFPI_ROOT}/sfpi-version.cmake)
+include(${SFPI_BASE}/sfpi-version.cmake)
 
 if(TT_USE_SYSTEM_SFPI)
     # we'll use the system's version
-    set(SFPI_ROOT "/opt/tenstorrent/sfpi")
+    set(SFPI_BASE "/opt/tenstorrent")
 elseif(NOT "${SFPI_md5}" STREQUAL "")
-    # download a toolchain as directed by sfpi_info's output
+    # download a toolchain
     include(FetchContent)
     FetchContent_Declare(
         sfpi
@@ -57,28 +66,41 @@ elseif(NOT "${SFPI_md5}" STREQUAL "")
             "${SFPI_url}/${SFPI_filename}"
         URL_HASH "MD5=${SFPI_md5}"
         SOURCE_DIR
-        "${SFPI_ROOT}"
+        "${SFPI_BASE}/sfpi"
     )
     FetchContent_MakeAvailable(sfpi)
 else()
-    # FIXME:This is where we'd clone sfpi and build it locally
-    # something like (untested meta-code)
-    # git clone -b ${SFPI_version} -depth 1 ${SFPI_repo} ${LOCAL_PATH}
-    # cd ${LOCAL_PATH}
-    # scripts/build.sh --test-tt
-    # tar -C build cf - sfpi | tar -C ${SFPI_ROOT} xf -
-    # add some caching so we don't do this every time!
-    # you'll have to install a bunch of packages for this to work
-    # Perhaps, sfpi-version.sh should be augmented to do all that,
-    # seems like the right place.
-    # if NOT EXISTS $LOCATION/sfpi.tgz
-    # sfpi-version.sh BUILD $LOCATION > sfpi-build.log
-    # endif
-    # tar xzf $LOCATION/sfpi.tgz -c ${SFPI_ROOT}/..
-    message(FATAL_ERROR "SFPI tarball for ${SFPI_arch} ${SFPI_dist} is not available")
+    message(STATUS "No downloadable SFPI tarball for ${SFPI_arch} ${SFPI_dist}")
+    if(IS_READABLE "${SFPI_BASE}/${SFPI_filename}")
+        message(STATUS "Locally-built ${SFPI_filename} present")
+    else()
+        file(REMOVE_RECURSE "${SFPI_BASE}/sfpi")
+        message(
+            STATUS
+            "Building SFPI, this could take some time (~10 CPU-hours)\n"
+            "Logging to ${SFPI_BASE}/sfpi-build.log ..."
+        )
+        execute_process(
+            COMMAND
+                ${CMAKE_CURRENT_SOURCE_DIR}/../sfpi-info.sh BUILD ${SFPI_BASE}/sfpi-src
+            OUTPUT_FILE ${SFPI_BASE}/sfpi-build.log
+            COMMAND_ERROR_IS_FATAL ANY
+        )
+    endif()
+    if(EXISTS "${SFPI_BASE}/sfpi")
+        message(STATUS "Locally-built toolchain present")
+    else()
+        message(STATUS "Unpacking locally-built ${SFPI_filename}")
+        execute_process(
+            COMMAND
+                tar xJf ${SFPI_BASE}/${SFPI_filename}
+            WORKING_DIRECTORY ${SFPI_BASE}
+            COMMAND_ERROR_IS_FATAL ANY
+        )
+    endif()
 endif()
 
-set(GPP_CMD "${SFPI_ROOT}/compiler/bin/riscv-tt-elf-g++")
+set(GPP_CMD "${SFPI_BASE}/sfpi/compiler/bin/riscv-tt-elf-g++")
 if(NOT EXISTS "${GPP_CMD}")
     message(FATAL_ERROR "GPP_CMD path '${GPP_CMD}' does not exist. Please check your configuration.")
 endif()
@@ -95,7 +117,14 @@ message(STATUS "Using SFPI compiler: ${GPP_CMD} ${GPP_VERSION}")
 # check this is the version we want (the system version might be wrong)
 string(REGEX REPLACE "^\\([^:]*:([^)]*)\\) .*$" "\\1" GPP_VERSION ${GPP_VERSION})
 if(NOT ${GPP_VERSION} STREQUAL ${SFPI_version})
-    message(FATAL_ERROR "SFPI compiler version ${GPP_VERSION} does not match required SFPI version ${SFPI_version}")
+    if(TT_USE_SYSTEM_SFPI)
+        message(
+            FATAL_ERROR
+            "Installed SFPI version ${GPP_VERSION} does not match required version ${SFPI_version}\nYou need to run `${PROJECT_SOURCE_DIR}/install_dependencies.sh --sfpi`."
+        )
+    else()
+        message(FATAL_ERROR "SFPI packaging malfunction, ${SFPI_version} delivers ${GPP_VERSION}")
+    endif()
 endif()
 
 if(NOT TT_USE_SYSTEM_SFPI)
@@ -104,8 +133,8 @@ if(NOT TT_USE_SYSTEM_SFPI)
     # undefined symbol: blob\t(./a.out)
     file(
         GLOB SFPI_BINARIES
-        "${SFPI_ROOT}/compiler/bin/*"
-        "${SFPI_ROOT}/compiler/libexec/gcc/*"
+        "${SFPI_BASE}/sfpi/compiler/bin/*"
+        "${SFPI_BASE}/sfpi/compiler/libexec/gcc/riscv-tt-elf/*/*"
     )
     execute_process(
         COMMAND
