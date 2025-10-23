@@ -24,7 +24,12 @@ GOLDEN_FILE_DIR = os.path.join(os.environ["TT_METAL_HOME"], "tests/tt_metal/micr
 GOLDEN_FILE_NAME = "fabric_mux_bandwidth_golden.csv"
 GOLDEN_FILE_PATH = os.path.join(GOLDEN_FILE_DIR, GOLDEN_FILE_NAME)
 
+SUMMARY_FILE_NAME = "fabric_mux_bandwidth_summary.txt"
+SUMMARY_FILE_PATH = os.path.join(OUTPUT_FILE_DIR, SUMMARY_FILE_NAME)
+
 BW_THRESHOLD = 0.1
+
+SPEEDUPS = []  # Track speedup for each test
 
 HEADERS = [
     "Test name",
@@ -38,6 +43,73 @@ HEADERS = [
     "Num iters b/w teardown checks",
     "Bandwidth (B/c)",
 ]
+
+
+def calculate_geomean(values):
+    """Calculate geometric mean of a list of values"""
+    if not values:
+        return 1.0
+    product = np.prod(values)
+    return product ** (1.0 / len(values))
+
+
+def validate_geomean_speedup(geomean_speedup, tolerance=0.015):
+    """
+    Validate that geomean speedup is within acceptable range of 1.0.
+
+    Args:
+        geomean_speedup: The calculated geomean speedup value
+        tolerance: Acceptable deviation from 1.0 (default: 0.015 for 1.5%)
+
+    Raises:
+        AssertionError: If speedup is outside acceptable range
+    """
+    target_speedup = 1.0
+    min_acceptable = target_speedup - tolerance
+    max_acceptable = target_speedup + tolerance
+
+    if not (min_acceptable <= geomean_speedup <= max_acceptable):
+        error_msg = (
+            f"Geomean speedup {geomean_speedup:.6f} is outside acceptable range "
+            f"[{min_acceptable:.6f}, {max_acceptable:.6f}] (1.0 ± {tolerance*100:.1f}%)"
+        )
+        logger.error(error_msg)
+        assert False, error_msg
+
+
+def report_speedup_summary(tolerance=0.015):
+    """
+    Calculate and report geomean speedup over golden values.
+
+    Logs results to console, writes to summary file, validates speedup is within
+    acceptable range, and clears the SPEEDUPS list.
+
+    Args:
+        tolerance: Acceptable deviation from 1.0 (default: 0.015 for 1.5%)
+    """
+    if not SPEEDUPS:
+        return
+
+    geomean_speedup = calculate_geomean(SPEEDUPS)
+    num_tests = len(SPEEDUPS)
+
+    # Log to console
+    logger.info(f"Geomean speedup over golden: {geomean_speedup:.6f} (across {num_tests} tests)")
+
+    # Write to summary file
+    with open(SUMMARY_FILE_PATH, "w") as f:
+        f.write(f"Fabric Mux Bandwidth Test Summary\n")
+        f.write(f"==================================\n\n")
+        f.write(f"Number of tests: {num_tests}\n")
+        f.write(f"Geomean speedup over golden: {geomean_speedup:.6f}\n")
+
+    logger.info(f"Summary written to {SUMMARY_FILE_PATH}")
+
+    # Validate geomean speedup is within acceptable range
+    validate_geomean_speedup(geomean_speedup, tolerance=tolerance)
+
+    # Clear speedups for clean state
+    SPEEDUPS.clear()
 
 
 def read_golden_results(test_params):
@@ -79,6 +151,10 @@ def process_results(test_params, current_bw):
     if expected_bw is None:
         assert 0, "Probably a new test, please update the golden file accrodingly"
     else:
+        # Calculate and track speedup
+        speedup = current_bw / expected_bw
+        SPEEDUPS.append(speedup)
+
         assert (
             expected_bw - BW_THRESHOLD <= current_bw <= expected_bw + BW_THRESHOLD
         ), f"Bandwidth mismatch. expected: {expected_bw} B/c, actual: {current_bw} B/c, test params: {test_params}"
@@ -309,6 +385,9 @@ def setup(request):
         logger.info("Created log file")
 
     yield
+
+    # Calculate and report geomean speedup
+    report_speedup_summary(tolerance=0.015)
 
     # clear the log file
     if os.path.exists(LOG_FILE_PATH):
