@@ -390,6 +390,7 @@ run_t3000_mochi_tests() {
 
   echo "LOG_METAL: Running run_t3000_mochi_tests"
 
+  export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
   pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_vae_mochi.py -k "decoder and 1link-load_dit-large_latent or conv3d_1x1x1 or -1link-l768" --timeout=1500; fail+=$?
   pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_attention_mochi.py -k "short_seq"; fail+=$?
   pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py -k "1x8 or 2x4 and short_seq and not yes_load_cache and not model_caching"; fail+=$?
