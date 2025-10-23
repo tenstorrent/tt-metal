@@ -103,7 +103,6 @@ template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_ge(uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_unary_ge<APPROXIMATE>, dst_index, vector_mode, param0);
-    // ckernel::sfpu::_calculate_comp_unary_<APPROXIMATE, SfpuType::unary_ge>, dst_index, vector_mode, param0);
 }
 
 // Unary lesser than or equal to
@@ -123,6 +122,5 @@ template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_le(uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_unary_le<APPROXIMATE>, dst_index, vector_mode, param0);
-    // ckernel::sfpu::_calculate_comp_unary_<APPROXIMATE, SfpuType::unary_le>, dst_index, vector_mode, param0);
 }
 }  // namespace ckernel
