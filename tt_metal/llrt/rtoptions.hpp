@@ -42,7 +42,7 @@ enum class EnvVarID {
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
     ARCH_NAME,                                // Architecture name (simulation mode)
     TT_MESH_GRAPH_DESC_PATH,                  // Custom fabric mesh graph descriptor
-    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE,  // Core grid override (deprecated)
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE,  // Core grid override
 
     // ========================================
     // KERNEL EXECUTION CONTROL
@@ -83,6 +83,7 @@ enum class EnvVarID {
     TT_METAL_ENABLE_ERISC_IRAM,             // Enable ERISC IRAM (inverted logic)
     RELIABILITY_MODE,                       // Fabric reliability mode (strict/relaxed)
     TT_METAL_MULTI_AERISC,                  // Enable experimental multi-erisc mode
+    TT_METAL_USE_MGD_1_0,                   // Use mesh graph descriptor 1.0 
     TT_METAL_USE_MGD_2_0,                   // Use mesh graph descriptor 2.0
 
     // ========================================
@@ -123,7 +124,7 @@ enum class EnvVarID {
     TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION,  // Enable NoC linked transaction sanitization
 
     // ========================================
-    // INSPECTOR SYSTEM
+    // INSPECTOR
     // ========================================
     TT_METAL_INSPECTOR,                              // Enable/disable inspector
     TT_METAL_INSPECTOR_LOG_PATH,                     // Inspector log output path
@@ -144,7 +145,6 @@ enum class EnvVarID {
     TT_METAL_DPRINT_ONE_FILE_PER_RISC,         // Separate file per RISC-V processor
     TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC,  // Prepend device/core/RISC info
 
-    COUNT  // Total number of environment variables
 };
 
 inline std::string g_root_dir;

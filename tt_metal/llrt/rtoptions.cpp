@@ -13,8 +13,6 @@
 #include <string>
 #include <enchantum/enchantum.hpp>
 #include "tt_stl/assert.hpp"
-#include <umd/device/tt_core_coordinates.h>
-
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
@@ -57,13 +55,120 @@ RunTimeOptions::RunTimeOptions() :
     profiler_mid_run_dump(false),
     profiler_buffer_usage_enabled(false),
     profiler_trace_profiler(false) {
-#if defined(TRACY_ENABLE)
-#endif
+    
+    // Root directory handling from main (more robust)
+    log_debug(tt::LogMetal, "initial root_dir: {}", this->root_dir);
+
+    // ENV Can Override
+    const char* root_dir_str = std::getenv("TT_METAL_RUNTIME_ROOT");
+    if (root_dir_str != nullptr) {
+        this->root_dir = std::string(root_dir_str);
+        log_debug(tt::LogMetal, "ENV override root_dir: {}", this->root_dir);
+    } else if (!g_root_dir.empty()) {
+        this->root_dir = g_root_dir;
+        log_debug(tt::LogMetal, "API override root_dir: {}", this->root_dir);
+    } else if (this->root_dir.empty()) {
+        // If the current working directory contains a "tt_metal/" directory,
+        // treat the current working directory as the repository root.
+        std::filesystem::path current_working_directory = std::filesystem::current_path();
+        std::filesystem::path tt_metal_subdirectory = current_working_directory / "tt_metal";
+        if (std::filesystem::is_directory(tt_metal_subdirectory)) {
+            this->root_dir = current_working_directory.string();
+            log_debug(tt::LogMetal, "current working directory fallback root_dir: {}", this->root_dir);
+        }
+    }
+
+    TT_FATAL(!this->root_dir.empty(), "Root Directory is not set.");
+
+    {
+        std::filesystem::path p(root_dir);
+        p /= "";  // ensures trailing slash, never duplicates
+        this->root_dir = p.string();
+    }
+
+    // Check if user has specified a cache path.
+    const char* cache_dir_str = std::getenv("TT_METAL_CACHE");
+    if (cache_dir_str != nullptr) {
+        this->is_cache_dir_env_var_set = true;
+        this->cache_dir_ = std::string(cache_dir_str) + "/tt-metal-cache/";
+    }
+
+    const char* kernel_dir_str = std::getenv("TT_METAL_KERNEL_PATH");
+    if (kernel_dir_str != nullptr) {
+        this->is_kernel_dir_env_var_set = true;
+        this->kernel_dir = std::string(kernel_dir_str) + "/";
+    }
+
+    const char* custom_fabric_mesh_graph_desc_path_str = std::getenv("TT_MESH_GRAPH_DESC_PATH");
+    if (custom_fabric_mesh_graph_desc_path_str != nullptr) {
+        this->is_custom_fabric_mesh_graph_desc_path_set = true;
+        this->custom_fabric_mesh_graph_desc_path = std::string(custom_fabric_mesh_graph_desc_path_str);
+    }
+
+    const char* core_grid_override_todeprecate_str = std::getenv("TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE");
+    if (core_grid_override_todeprecate_str != nullptr) {
+        this->is_core_grid_override_todeprecate_env_var_set = true;
+        this->core_grid_override_todeprecate = std::string(core_grid_override_todeprecate_str);
+    }
+
+    build_map_enabled = (getenv("TT_METAL_KERNEL_MAP") != nullptr);
+
+    test_mode_enabled = (getenv("TT_METAL_WATCHER_TEST_MODE") != nullptr);
+
     TT_FATAL(
         !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()),
         "Cannot enable both debug printing and profiling");
 
+    // YOUR ENCHANTUM SYSTEM - Keep this!
     InitializeFromEnvVars();
+
+    // Profiler setup from main
+    const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
+#if defined(TRACY_ENABLE)
+    if (profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1') {
+        profiler_enabled = true;
+        const char* profile_dispatch_str = std::getenv("TT_METAL_DEVICE_PROFILER_DISPATCH");
+        if (profile_dispatch_str != nullptr && profile_dispatch_str[0] == '1') {
+            profile_dispatch_cores = true;
+        }
+        const char* profiler_sync_enabled_str = std::getenv("TT_METAL_PROFILER_SYNC");
+        if (profiler_sync_enabled_str != nullptr && profiler_sync_enabled_str[0] == '1') {
+            profiler_sync_enabled = true;
+        }
+        const char* profiler_trace_profiler_str = std::getenv("TT_METAL_TRACE_PROFILER");
+        if (profiler_trace_profiler_str != nullptr && profiler_trace_profiler_str[0] == '1') {
+            profiler_trace_profiler = true;
+        }
+        const char* profiler_trace_tracking_str = std::getenv("TT_METAL_PROFILER_TRACE_TRACKING");
+        if (profiler_trace_tracking_str != nullptr && profiler_trace_tracking_str[0] == '1') {
+            profiler_trace_tracking = true;
+        }
+        const char* profiler_mid_run_dump_str = std::getenv("TT_METAL_PROFILER_MID_RUN_DUMP");
+        if (profiler_mid_run_dump_str != nullptr && profiler_mid_run_dump_str[0] == '1') {
+            profiler_mid_run_dump = true;
+        }
+    }
+
+    const char *profiler_noc_events_str = std::getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS");
+    if (profiler_noc_events_str != nullptr && profiler_noc_events_str[0] == '1') {
+        profiler_enabled = true;
+        profiler_noc_events_enabled = true;
+    }
+
+    const char *profiler_noc_events_report_path_str = std::getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH");
+    if (profiler_noc_events_report_path_str != nullptr) {
+        profiler_noc_events_report_path = profiler_noc_events_report_path_str;
+    }
+
+    const char *profile_buffer_usage_str = std::getenv("TT_METAL_MEM_PROFILER");
+    if (profile_buffer_usage_str != nullptr && profile_buffer_usage_str[0] == '1') {
+        profiler_buffer_usage_enabled = true;
+    }
+#else
+    TT_FATAL(
+        !(profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1'),
+        "TT_METAL_DEVICE_PROFILER env var is set to 1. This requires a Tracy-enabled build of tt-metal.");
+#endif
 
     null_kernels = (std::getenv("TT_METAL_NULL_KERNELS") != nullptr);
 
@@ -81,16 +186,6 @@ RunTimeOptions::RunTimeOptions() :
         this->clear_dram = true;
     }
 
-    const char* skip_eth_cores_with_retrain_str = std::getenv("TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN");
-    if (skip_eth_cores_with_retrain_str != nullptr) {
-        if (skip_eth_cores_with_retrain_str[0] == '0') {
-            skip_eth_cores_with_retrain = false;
-        }
-        if (skip_eth_cores_with_retrain_str[0] == '1') {
-            skip_eth_cores_with_retrain = true;
-        }
-    }
-
     const char* riscv_debug_info_enabled_str = std::getenv("TT_METAL_RISCV_DEBUG_INFO");
     bool enable_riscv_debug_info = get_inspector_enabled();
     if (riscv_debug_info_enabled_str != nullptr) {
@@ -101,78 +196,15 @@ RunTimeOptions::RunTimeOptions() :
     }
     set_riscv_debug_info_enabled(enable_riscv_debug_info);
 
-    const char* validate_kernel_binaries = std::getenv("TT_METAL_VALIDATE_PROGRAM_BINARIES");
-    set_validate_kernel_binaries(validate_kernel_binaries != nullptr && validate_kernel_binaries[0] == '1');
-
     const char* num_cqs = getenv("TT_METAL_GTEST_NUM_HW_CQS");
     if (num_cqs != nullptr) {
         try {
             set_num_hw_cqs(std::stoi(num_cqs));
         } catch (const std::invalid_argument& ia) {
             TT_THROW("Invalid TT_METAL_GTEST_NUM_HW_CQS: {}", num_cqs);
+        } catch (const std::out_of_range&) {
+            TT_THROW("TT_METAL_GTEST_NUM_HW_CQS value out of range: {}", num_cqs);
         }
-    }
-
-    using_slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
-
-    const char* dispatch_data_collection_str = std::getenv("TT_METAL_DISPATCH_DATA_COLLECTION");
-    if (dispatch_data_collection_str != nullptr) {
-        enable_dispatch_data_collection = true;
-    }
-
-    if (getenv("TT_METAL_GTEST_ETH_DISPATCH")) {
-        this->dispatch_core_type = tt_metal::DispatchCoreType::ETH;
-    }
-
-    if (getenv("TT_METAL_SKIP_LOADING_FW")) {
-        this->skip_loading_fw = true;
-    }
-
-    if (getenv("TT_METAL_SKIP_DELETING_BUILT_CACHE")) {
-        this->skip_deleting_built_cache = true;
-    }
-
-    if (getenv("TT_METAL_ENABLE_HW_CACHE_INVALIDATION")) {
-        this->enable_hw_cache_invalidation = true;
-    }
-
-    // Parse RELIABILITY_MODE: "strict" or "relaxed"
-    if (const char* reliability_mode_str = getenv("RELIABILITY_MODE"); reliability_mode_str != nullptr) {
-        std::string mode(reliability_mode_str);
-        if (mode == "relaxed") {
-            reliability_mode = tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE;
-        } else if (mode == "strict") {
-            reliability_mode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
-        }
-    }
-
-    // Enable mock cluster if TT_METAL_MOCK is set to a descriptor path
-    // This is used for initializing UMD without any hardware using a mock cluster descriptor
-    if (const char* mock_path = std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH")) {
-        this->mock_cluster_desc_path = std::string(mock_path);
-        this->runtime_target_device_ = tt::TargetDevice::Mock;
-    }
-
-    // Enable simulator if TT_METAL_SIMULATOR is set to a simulator path
-    // This must be set after the mock cluster path is set to have the correct TargetDevice
-    if (std::getenv("TT_METAL_SIMULATOR")) {
-        this->simulator_path = std::getenv("TT_METAL_SIMULATOR");
-        this->runtime_target_device_ = tt::TargetDevice::Simulator;
-    }
-
-    if (auto str = getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
-        bool disabled = strcmp(str, "0") == 0;
-        this->erisc_iram_enabled = !disabled;
-        this->erisc_iram_enabled_env_var = !disabled;
-    }
-    this->fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
-
-    if (getenv("TT_METAL_DISABLE_RELAXED_MEM_ORDERING")) {
-        this->disable_relaxed_memory_ordering = true;
-    }
-
-    if (getenv("TT_METAL_ENABLE_GATHERING")) {
-        this->enable_gathering = true;
     }
 
     const char* arc_debug_enabled_str = std::getenv("TT_METAL_ARC_DEBUG_BUFFER_SIZE");
@@ -180,40 +212,9 @@ RunTimeOptions::RunTimeOptions() :
         sscanf(arc_debug_enabled_str, "%u", &arc_debug_buffer_size);
     }
 
-    const char* disable_dma_ops_str = std::getenv("TT_METAL_DISABLE_DMA_OPS");
-    if (disable_dma_ops_str != nullptr) {
-        if (disable_dma_ops_str[0] == '1') {
-            this->disable_dma_ops = true;
-        }
-    }
-
-    if (getenv("TT_METAL_FABRIC_TELEMETRY")) {
-        enable_fabric_telemetry = true;
-    }
-
+    // TT_FABRIC_PROFILE_RX_CH_FWD is not in the EnvVarID enum, handle separately
     if (getenv("TT_FABRIC_PROFILE_RX_CH_FWD")) {
         fabric_profiling_settings.enable_rx_ch_fwd = true;
-    }
-
-    if (getenv("TT_METAL_FORCE_REINIT")) {
-        force_context_reinit = true;
-    }
-
-    if (getenv("TT_METAL_FABRIC_BLACKHOLE_TWO_ERISC")) {
-        this->enable_2_erisc_mode_with_fabric = true;
-    }
-
-    if (getenv("TT_METAL_MULTI_AERISC")) {
-        log_info(tt::LogMetal, "Enabling experimental multi-erisc mode");
-        this->enable_2_erisc_mode = true;
-    }
-
-    if (getenv("TT_METAL_LOG_KERNELS_COMPILE_COMMANDS")) {
-        this->log_kernels_compilation_commands = true;
-    }
-
-    if (getenv("TT_METAL_USE_MGD_1_0")) {
-        this->use_mesh_graph_descriptor_1_0 = true;
     }
 
     const char* timeout_duration_for_operations_value = std::getenv("TT_METAL_OPERATION_TIMEOUT_SECONDS");
@@ -290,21 +291,26 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_SIMULATOR
-        // Path to simulator executable for testing without hardware.
+        // Path to simulator executable. When set, overrides mock cluster mode if both are set.
         // Default: Hardware mode (no simulator)
         // Usage: export TT_METAL_SIMULATOR=/path/to/simulator
         case EnvVarID::TT_METAL_SIMULATOR:
             this->simulator_path = std::string(value);
+            // Simulator takes precedence over Mock (will be set even if Mock was set first)
             this->runtime_target_device_ = tt::TargetDevice::Simulator;
             break;
 
         // TT_METAL_MOCK_CLUSTER_DESC_PATH
         // Path to mock cluster descriptor for testing without hardware.
+        // Note: If both MOCK and SIMULATOR are set, SIMULATOR takes precedence
         // Default: Hardware mode (no mock cluster)
         // Usage: export TT_METAL_MOCK_CLUSTER_DESC_PATH=/path/to/mock_cluster_desc.yaml
         case EnvVarID::TT_METAL_MOCK_CLUSTER_DESC_PATH:
             this->mock_cluster_desc_path = std::string(value);
-            this->runtime_target_device_ = tt::TargetDevice::Mock;
+            // Only set Mock target if Simulator hasn't been set already
+            if (this->simulator_path.empty()) {
+                this->runtime_target_device_ = tt::TargetDevice::Mock;
+            }
             break;
 
         // TT_METAL_VISIBLE_DEVICES
@@ -413,19 +419,19 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // ========================================
 
         // TT_METAL_ENABLE_HW_CACHE_INVALIDATION
-        // Enable hardware cache invalidation.
+        // Enable hardware to automatically invalidate Blackhole's data cache.
         // Default: false (cache invalidation disabled)
         // Usage: export TT_METAL_ENABLE_HW_CACHE_INVALIDATION=1
         case EnvVarID::TT_METAL_ENABLE_HW_CACHE_INVALIDATION: this->enable_hw_cache_invalidation = true; break;
 
         // TT_METAL_DISABLE_RELAXED_MEM_ORDERING
-        // Disable relaxed memory ordering optimizations.
+        // Disable relaxed memory ordering optimizations on Blackhole.
         // Default: false (relaxed ordering enabled)
         // Usage: export TT_METAL_DISABLE_RELAXED_MEM_ORDERING=1
         case EnvVarID::TT_METAL_DISABLE_RELAXED_MEM_ORDERING: this->disable_relaxed_memory_ordering = true; break;
 
         // TT_METAL_ENABLE_GATHERING
-        // Enable data gathering functionality.
+        // Enable data gathering on Blackhole.
         // Default: false (gathering disabled)
         // Usage: export TT_METAL_ENABLE_GATHERING=1
         case EnvVarID::TT_METAL_ENABLE_GATHERING: this->enable_gathering = true; break;
@@ -435,6 +441,58 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (telemetry disabled)
         // Usage: export TT_METAL_FABRIC_TELEMETRY=1
         case EnvVarID::TT_METAL_FABRIC_TELEMETRY: this->enable_fabric_telemetry = true; break;
+
+        // RELIABILITY_MODE
+        // Sets the fabric reliability mode (STRICT, RELAXED, or DYNAMIC).
+        // Default: nullopt (uses system default)
+        // Usage: export RELIABILITY_MODE=STRICT (or strict/0), RELAXED (or relaxed/1), DYNAMIC (or dynamic/2)
+        case EnvVarID::RELIABILITY_MODE:
+            if (value != nullptr) {
+                std::string mode_str(value);
+                // Accept both uppercase and lowercase for backwards compatibility
+                if (mode_str == "STRICT" || mode_str == "strict" || mode_str == "0") {
+                    this->reliability_mode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+                } else if (mode_str == "RELAXED" || mode_str == "relaxed" || mode_str == "1") {
+                    this->reliability_mode = tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE;
+                } else if (mode_str == "DYNAMIC" || mode_str == "dynamic" || mode_str == "2") {
+                    this->reliability_mode = tt::tt_fabric::FabricReliabilityMode::DYNAMIC_RECONFIGURATION_SETUP_MODE;
+                }
+            }
+            break;
+
+        // TT_METAL_MULTI_AERISC
+        // Experimental multi-ERISC mode flag that enables 2-ERISC mode.
+        // Default: false (single ERISC mode)
+        // Usage: export TT_METAL_MULTI_AERISC=1
+        case EnvVarID::TT_METAL_MULTI_AERISC:
+            if (value != nullptr) {
+                log_info(tt::LogMetal, "Enabling experimental multi-erisc mode");
+                this->enable_2_erisc_mode = true;
+            }
+            break;
+
+        // TT_METAL_USE_MGD_1_0
+        // Enables use of Mesh Graph Descriptor 1.0 format (deprecated, will be removed).
+        // Default: false
+        // Usage: export TT_METAL_USE_MGD_1_0=1
+        case EnvVarID::TT_METAL_USE_MGD_1_0:
+            if (value != nullptr) {
+                this->use_mesh_graph_descriptor_1_0 = true;
+            }
+            break;
+
+        // TT_METAL_USE_MGD_2_0
+        // Enables use of Mesh Graph Descriptor 2.0 format for fabric configuration.
+        // Default: false (uses MGD 1.0)
+        // Usage: export TT_METAL_USE_MGD_2_0=1
+        case EnvVarID::TT_METAL_USE_MGD_2_0:
+            if (value != nullptr) {
+                this->use_mesh_graph_descriptor_2_0 = true;
+                if (std::strncmp(value, "0", 1) == 0) {
+                    this->use_mesh_graph_descriptor_2_0 = false;
+                }
+            }
+            break;
 
         // TT_METAL_FORCE_REINIT
         // Force context reinitialization on each run.
@@ -458,7 +516,10 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Use slow dispatch mode for debugging.
         // Default: false (fast dispatch mode)
         // Usage: export TT_METAL_SLOW_DISPATCH_MODE=1
-        case EnvVarID::TT_METAL_SLOW_DISPATCH_MODE: this->using_slow_dispatch = true; break;
+        case EnvVarID::TT_METAL_SLOW_DISPATCH_MODE:
+            this->using_slow_dispatch = true;
+            this->fast_dispatch = false;
+            break;
 
         // TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN
         // Skip Ethernet cores during retraining process.
@@ -729,7 +790,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->watcher_settings.noc_sanitize_linked_transaction = true;
             break;
         // ========================================
-        // INSPECTOR SYSTEM
+        // INSPECTOR
         // ========================================
 
         // TT_METAL_INSPECTOR
@@ -799,6 +860,41 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
         }
 
+        // TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS
+        // Sets the RPC server address for the inspector. Format: "host:port" or just "host" (uses default port).
+        // Default: localhost:50051
+        // Usage: export TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS=127.0.0.1:8080
+        case EnvVarID::TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS:
+            if (value != nullptr) {
+                // Parse address into host and port
+                std::string addr(value);
+                size_t colon_pos = addr.find(':');
+                if (colon_pos != std::string::npos) {
+                    this->inspector_settings.rpc_server_host = addr.substr(0, colon_pos);
+                    try {
+                        this->inspector_settings.rpc_server_port = std::stoi(addr.substr(colon_pos + 1));
+                    } catch (...) {
+                        TT_THROW("Invalid port in TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS: {}", value);
+                    }
+                } else {
+                    this->inspector_settings.rpc_server_host = addr;
+                }
+            }
+            break;
+
+        // TT_METAL_INSPECTOR_RPC
+        // Enables or disables the inspector RPC server. Set to '0' to disable, any other value enables it.
+        // Default: true (enabled)
+        // Usage: export TT_METAL_INSPECTOR_RPC=1
+        case EnvVarID::TT_METAL_INSPECTOR_RPC:
+            if (value != nullptr) {
+                this->inspector_settings.rpc_server_enabled = true;
+                if (std::strncmp(value, "0", 1) == 0) {
+                    this->inspector_settings.rpc_server_enabled = false;
+                }
+            }
+            break;
+
         // ========================================
         // DEBUG PRINTING (DPRINT)
         // ========================================
@@ -857,39 +953,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Prepends device/core/RISC information to each debug print line. Set to '0' to disable.
         // Default: true (prepend enabled)
         // Usage: export TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC=0
-        case EnvVarID::TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS:
-            if (value != nullptr) {
-                // Parse address into host and port
-                std::string addr(value);
-                size_t colon_pos = addr.find(':');
-                if (colon_pos != std::string::npos) {
-                    this->inspector_settings.rpc_server_host = addr.substr(0, colon_pos);
-                    try {
-                        this->inspector_settings.rpc_server_port = std::stoi(addr.substr(colon_pos + 1));
-                    } catch (...) {
-                        TT_THROW("Invalid port in TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS: {}", value);
-                    }
-                } else {
-                    this->inspector_settings.rpc_server_host = addr;
-                }
-            }
-            break;
-
-        case EnvVarID::TT_METAL_INSPECTOR_RPC:
-            if (value != nullptr) {
-                this->inspector_settings.rpc_server_enabled = true;
-                if (std::strncmp(value, "0", 1) == 0) {
-                    this->inspector_settings.rpc_server_enabled = false;
-                }
-            }
-            break;
-
-        case EnvVarID::RELIABILITY_MODE:
-        case EnvVarID::TT_METAL_MULTI_AERISC:
-        case EnvVarID::TT_METAL_USE_MGD_2_0:
-        case EnvVarID::COUNT:
-            // These variables are not yet implemented or are just markers
-            break;
         case EnvVarID::TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC:
             // Handled by ParseFeatureEnv() - this is for documentation
             break;
@@ -898,7 +961,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 void RunTimeOptions::InitializeFromEnvVars() {
     // Use enchantum to automatically iterate over all EnvVarID enum values
     for (const auto [id, name] : enchantum::entries_generator<EnvVarID>) {
-        const char* value = std::getenv(name.data());
+        const char* value = std::getenv(std::string(name).c_str());
 
         // Only process if the environment variable is set
         if (value != nullptr) {
