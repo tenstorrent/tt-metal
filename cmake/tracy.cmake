@@ -44,6 +44,7 @@ if(ENABLE_TRACY)
             -fno-omit-frame-pointer
         PRIVATE
             "$<$<CXX_COMPILER_ID:Clang>:-Wno-conditional-uninitialized>" # FIXME: Fix this upstream
+            "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-function>" # InitFailure is unused when TRACY_TIMER_FALLBACK is ON
     )
     target_link_options(TracyClient PUBLIC -rdynamic)
 endif()

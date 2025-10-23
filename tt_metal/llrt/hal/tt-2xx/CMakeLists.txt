@@ -9,7 +9,8 @@ set(HAL_INCLUDE_DIRS
     ${PROJECT_SOURCE_DIR}/tt_metal/llrt
 )
 
-add_library(qa_hal OBJECT ${QA_HAL_SRC})
+add_library(qa_hal OBJECT)
+add_dependencies(qa_hal hal_generate_dev_msgs_header)
 target_sources(
     qa_hal
     PRIVATE
@@ -38,6 +39,7 @@ target_link_libraries(
 
 add_library(hal_2xx STATIC)
 add_library(HAL::2xx ALIAS hal_2xx)
+add_dependencies(hal_2xx qa_hal)
 target_sources(hal_2xx PRIVATE hal_2xx_common.cpp)
 target_include_directories(hal_2xx BEFORE PRIVATE ${HAL_INCLUDE_DIRS})
 target_link_libraries(

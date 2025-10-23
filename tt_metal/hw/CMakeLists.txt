@@ -195,6 +195,8 @@ foreach(ARCH IN LISTS ARCHS)
                     OUTPUT
                         ${OUTPUT_FILE}
                     COMMAND
+                        ${CMAKE_COMMAND} -E make_directory ${HW_OUTPUT_DIR}
+                    COMMAND
                         ${CMAKE_CXX_COMPILER} ${IRAM_FLAG} -I${HW_INCLUDES} -E -P -x c -o ${OUTPUT_FILE}
                         ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-${SCRIPT_TYPE}.ld
                     DEPENDS

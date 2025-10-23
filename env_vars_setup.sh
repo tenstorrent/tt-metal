@@ -1,9 +1,9 @@
-
 #!/bin/bash
+
 export TT_METAL_HOME=$(pwd)
 source $(pwd)/python_env/bin/activate
 export TT_METAL_INSTALL_DIR=$(pwd)/build/install
-export PYTHONPATH=$TT_METAL_HOME:$PYTHONPATH
+export PYTHONPATH=$TT_METAL_HOME:$TT_METAL_HOME/tools:$PYTHONPATH
 export TT_METAL_LIB_PATH=$TT_METAL_INSTALL_DIR/lib
 export LD_LIBRARY_PATH=$TT_METAL_LIB_PATH:$LD_LIBRARY_PATH
 # MPI paths
