@@ -148,6 +148,8 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
+          { arch: blackhole, runner-label: P150 },  # Use P150 instead of P150b to stay on CIv1 for capacity reasons
+          { arch: blackhole, runner-label: P100 },
         ]
     uses: ./.github/workflows/build-and-unit-tests.yaml
     with:
@@ -167,6 +169,8 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
+          { arch: blackhole, runner-label: P150 },  # Use P150 instead of P150b to stay on CIv1 for capacity reasons
+          { arch: blackhole, runner-label: P100 },
         ]
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     with:
@@ -185,6 +189,8 @@ jobs:
       matrix:
         test-group: [
           { arch: wormhole_b0, runner-label: N150 },
+          { arch: blackhole, runner-label: P150b },
+          { arch: blackhole, runner-label: P100 },
         ]
     with:
       arch: ${{ matrix.test-group.arch }}
