@@ -25,8 +25,11 @@ const DEFAULT_INFRA_OWNER = { id: 'S0985AN7TC5', name: 'metal infra team' };
 // This is populated when action inputs provide their paths.
 let __annotationsIndexMap = undefined;
 
-// Optional logs index mapping (runId -> directory)
-let __logsIndexMap = undefined;
+// Optional gtest logs index mapping (runId -> directory)
+let __gtestLogsIndexMap = undefined;
+
+// Optional other logs index mapping (runId -> directory)
+let __otherLogsIndexMap = undefined;
 
 
 
@@ -75,11 +78,21 @@ function loadLogsIndexFromFile(filePath) {
   return undefined;
 }
 
-function getLogsDirForRunId(runId) {
+function getGtestLogsDirForRunId(runId) {
   try {
-    if (!__logsIndexMap) return undefined;
+    if (!__gtestLogsIndexMap) return undefined;
     const key = String(runId);
-    return __logsIndexMap.get(key);
+    return __gtestLogsIndexMap.get(key);
+  } catch (_) {
+    return undefined;
+  }
+}
+
+function getOtherLogsDirForRunId(runId) {
+  try {
+    if (!__otherLogsIndexMap) return undefined;
+    const key = String(runId);
+    return __otherLogsIndexMap.get(key);
   } catch (_) {
     return undefined;
   }
@@ -500,146 +513,219 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
       } catch (_) { return arr || []; }
     };
 
-    // If logs (gtest) are available for this run, parse them and return. This leaves pytest/others unchanged.
+    // If gtest logs are available for this run, parse them and return. This leaves pytest/others unchanged.
     try {
-      const runLogsDir = logsDirPath || getLogsDirForRunId(runId);
+      const runLogsDir = logsDirPath || getGtestLogsDirForRunId(runId);
       if (runLogsDir && fs.existsSync(runLogsDir)) {
         const idxPath = path.join(runLogsDir, 'jobs.json');
         const extractDir = path.join(runLogsDir, 'extract');
         if (fs.existsSync(idxPath) && fs.existsSync(extractDir)) {
           core.info(`[GTEST] Using logs for run ${runId}: runLogsDir=${runLogsDir}`);
           core.info(`[GTEST] Index path: ${idxPath}`);
-          const idx = JSON.parse(fs.readFileSync(idxPath, 'utf8'));
-          const jobs = Array.isArray(idx.jobs) ? idx.jobs : [];
-          core.info(`[GTEST] Jobs detected: ${jobs.length}`);
-          const out = [];
-          // Helper to strip ANSI color codes and other escape sequences
-          const stripAnsi = (s) => typeof s === 'string' ? s.replace(/\x1b\[[0-9;]*m/g, '') : s; // this is probably unnecessary but no harm in doing it
+          let idx;
+          try {
+            idx = JSON.parse(fs.readFileSync(idxPath, 'utf8'));
+          } catch (parseErr) {
+            core.warning(`[GTEST] Failed to parse jobs.json for run ${runId}: ${parseErr.message}`);
+            // Continue to other log sources
+          }
+          if (idx) {
+            const jobs = Array.isArray(idx.jobs) ? idx.jobs : [];
+            core.info(`[GTEST] Jobs detected: ${jobs.length}`);
+            const out = [];
+            // Helper to strip ANSI color codes and other escape sequences
+            const stripAnsi = (s) => typeof s === 'string' ? s.replace(/\x1b\[[0-9;]*m/g, '') : s; // this is probably unnecessary but no harm in doing it
 
-          for (const job of jobs) {
-            const jobName = (job && job.name) ? String(job.name) : 'gtest';
-            const files = Array.isArray(job.files) ? job.files : [];
-            core.info(`[GTEST] Processing job: name='${jobName}', files=${files.length}`);
-            let lastSeenTestName = undefined; // persist across files in this job
-            for (const rel of files) {
-              if (out.length >= maxSnippets) break;
-              try {
-                const abs = path.join(runLogsDir, rel);
-                if (!fs.existsSync(abs)) { core.info(`[GTEST]   Skip missing file: ${abs}`); continue; }
-                const text = fs.readFileSync(abs, 'utf8');
-                const rawLines = text.split(/\r?\n/);
-                const lines = rawLines.map(l =>
-                  stripAnsi(l)
-                    .replace(/^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+/, '')
-                    .replace(/^\s*\[[0-9]+,[0-9]+\]<[^>]+>:\s*/, '')
-                );
-                core.info(`[GTEST]   Parsing file: ${abs} (lines=${lines.length})`);
-                let currentTest = lastSeenTestName;
-                let capturing = false;
-                let buf = [];
-                let snippetsAdded = 0;
+            for (const job of jobs) {
+              const jobName = (job && job.name) ? String(job.name) : 'gtest';
+              const files = Array.isArray(job.files) ? job.files : [];
+              core.info(`[GTEST] Processing job: name='${jobName}', files=${files.length}`);
+              let lastSeenTestName = undefined; // persist across files in this job
+              for (const rel of files) {
+                if (out.length >= maxSnippets) break;
+                try {
+                  const abs = path.join(runLogsDir, rel);
+                  if (!fs.existsSync(abs)) { core.info(`[GTEST]   Skip missing file: ${abs}`); continue; }
+                  const text = fs.readFileSync(abs, 'utf8');
+                  const rawLines = text.split(/\r?\n/);
+                  const lines = rawLines.map(l =>
+                    stripAnsi(l)
+                      .replace(/^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+/, '')
+                      .replace(/^\s*\[[0-9]+,[0-9]+\]<[^>]+>:\s*/, '')
+                  );
+                  core.info(`[GTEST]   Parsing file: ${abs} (lines=${lines.length})`);
+                  let currentTest = lastSeenTestName;
+                  let capturing = false;
+                  let buf = [];
+                  let snippetsAdded = 0;
 
-                const flush = (lineNo, iIndex) => {
-                  if (!capturing) return;
-                  const msg = buf.join('\n').trim();
-                  if (msg) {
-                    // If name unknown, try to infer by scanning forward a small window
-                    let labelName = (currentTest && String(currentTest).trim()) || '';
-                    if (!labelName) {
-                      for (let j = iIndex + 1; j < Math.min(lines.length, iIndex + 200); j++) {
-                        const l2 = lines[j];
-                        const mFail = l2 && l2.match(/\[\s*FAILED\s*\]\s+(.+?)\s*$/);
-                        if (mFail) { labelName = mFail[1]; break; }
-                        const mRun2 = l2 && l2.match(/\[\s*RUN\s*\]\s+(.+?)\s*$/);
-                        if (mRun2) { labelName = mRun2[1]; break; }
+                  const flush = (lineNo, iIndex) => {
+                    if (!capturing) return;
+                    const msg = buf.join('\n').trim();
+                    if (msg) {
+                      // If name unknown, try to infer by scanning forward a small window
+                      let labelName = (currentTest && String(currentTest).trim()) || '';
+                      if (!labelName) {
+                        for (let j = iIndex + 1; j < Math.min(lines.length, iIndex + 200); j++) {
+                          const l2 = lines[j];
+                          const mFail = l2 && l2.match(/\[\s*FAILED\s*\]\s+(.+?)\s*$/);
+                          if (mFail) { labelName = mFail[1]; break; }
+                          const mRun2 = l2 && l2.match(/\[\s*RUN\s*\]\s+(.+?)\s*$/);
+                          if (mRun2) { labelName = mRun2[1]; break; }
+                        }
                       }
+                      if (!labelName) labelName = lastSeenTestName || 'unknown gtest';
+                      // Do not assign owners here; only return raw snippet with inferred job/test via label for hint
+                      out.push({ label: `${jobName}: ${labelName}`, job: jobName, test: labelName, snippet: msg });
+                      snippetsAdded++;
+                      core.info(`[GTEST]     Added snippet for '${labelName}' (len=${msg.length}) @ line ${lineNo}`);
                     }
-                    if (!labelName) labelName = lastSeenTestName || 'unknown gtest';
-                    // Do not assign owners here; only return raw snippet with inferred job/test via label for hint
-                    out.push({ label: `${jobName}: ${labelName}`, job: jobName, test: labelName, snippet: msg });
-                    snippetsAdded++;
-                    core.info(`[GTEST]     Added snippet for '${labelName}' (len=${msg.length}) @ line ${lineNo}`);
-                  }
-                  capturing = false; buf = [];
-                };
-
-                for (let i = 0; i < lines.length && out.length < maxSnippets; i++) {
-                  const rawLine = lines[i];
-                  const line = stripAnsi(rawLine);
-                  // Detect new test start
-                  // Match RUN anywhere in the line (timestamps/prefixes may precede it)
-                  const runMatch = line && line.match(/\[\s*RUN\s*\]\s+(.+?)\s*$/);
-                  if (runMatch) {
-                    // Starting a new test block; stop any capture in progress (without emitting)
                     capturing = false; buf = [];
-                    currentTest = runMatch[1];
-                    lastSeenTestName = currentTest;
-                    core.info(`[GTEST]     RUN -> '${currentTest}' @ line ${i+1}`);
-                    continue;
-                  }
+                  };
 
-                  // Look for info/backtrace block boundaries
-                  const infoMatch = line && line.match(/^\s*info:\s*(.*)$/i);
-                  if (!capturing && infoMatch) {
-                    const lower = line.toLowerCase();
-                    const btIdx = lower.indexOf('backtrace:');
-                    if (btIdx !== -1) {
-                      // Same-line info..backtrace
-                      const infoIdx = lower.indexOf('info:');
-                      const between = line.substring(infoIdx + 5, btIdx).replace(/^\s*|\s*$/g, '');
-                      if (between) buf.push(between);
-                      flush(i+1, i);
+                  for (let i = 0; i < lines.length && out.length < maxSnippets; i++) {
+                    const rawLine = lines[i];
+                    const line = stripAnsi(rawLine);
+                    // Detect new test start
+                    // Match RUN anywhere in the line (timestamps/prefixes may precede it)
+                    const runMatch = line && line.match(/\[\s*RUN\s*\]\s+(.+?)\s*$/);
+                    if (runMatch) {
+                      // Starting a new test block; stop any capture in progress (without emitting)
+                      capturing = false; buf = [];
+                      currentTest = runMatch[1];
+                      lastSeenTestName = currentTest;
+                      core.info(`[GTEST]     RUN -> '${currentTest}' @ line ${i+1}`);
                       continue;
                     }
-                    // Start multi-line capture
-                    capturing = true;
-                    buf = [];
-                    if (infoMatch[1]) buf.push(infoMatch[1]);
-                    core.info(`[GTEST]       info: begin capture @ line ${i+1}`);
-                    continue;
-                  }
 
-                  if (capturing) {
-                    const lower = line.toLowerCase();
-                    const btIdx2 = lower.indexOf('backtrace:');
-                    if (btIdx2 !== -1) {
-                      const head = line.substring(0, btIdx2).replace(/^\s*|\s*$/g, '');
-                      if (head) buf.push(head);
-                      flush(i+1, i);
+                    // Look for info/backtrace block boundaries
+                    const infoMatch = line && line.match(/^\s*info:\s*(.*)$/i);
+                    if (!capturing && infoMatch) {
+                      const lower = line.toLowerCase();
+                      const btIdx = lower.indexOf('backtrace:');
+                      if (btIdx !== -1) {
+                        // Same-line info..backtrace
+                        const infoIdx = lower.indexOf('info:');
+                        const between = line.substring(infoIdx + 5, btIdx).replace(/^\s*|\s*$/g, '');
+                        if (between) buf.push(between);
+                        flush(i+1, i);
+                        continue;
+                      }
+                      // Start multi-line capture
+                      capturing = true;
+                      buf = [];
+                      if (infoMatch[1]) buf.push(infoMatch[1]);
+                      core.info(`[GTEST]       info: begin capture @ line ${i+1}`);
                       continue;
                     }
-                    buf.push(line);
+
+                    if (capturing) {
+                      const lower = line.toLowerCase();
+                      const btIdx2 = lower.indexOf('backtrace:');
+                      if (btIdx2 !== -1) {
+                        const head = line.substring(0, btIdx2).replace(/^\s*|\s*$/g, '');
+                        if (head) buf.push(head);
+                        flush(i+1, i);
+                        continue;
+                      }
+                      buf.push(line);
+                    }
                   }
+                  core.info(`[GTEST]   File complete: snippets_added=${snippetsAdded}`);
+                } catch (errFile) {
+                  core.info(`[GTEST]   Failed parsing file '${rel}': ${errFile && errFile.message || String(errFile)}`);
                 }
-                core.info(`[GTEST]   File complete: snippets_added=${snippetsAdded}`);
-              } catch (errFile) {
-                core.info(`[GTEST]   Failed parsing file '${rel}': ${errFile && errFile.message || String(errFile)}`);
               }
             }
-          }
-          if (out.length) {
-            // Dedupe by normalized label+snippet to avoid repeated rows
-            const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
-            const seen = new Set();
-            const unique = [];
-            for (const e of out) {
-              const key = `${norm(e && e.label)}|${norm(e && e.snippet)}`;
-              if (!seen.has(key)) { seen.add(key); unique.push(e); }
+            if (out.length) {
+              // Dedupe by normalized label+snippet to avoid repeated rows
+              const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+              const seen = new Set();
+              const unique = [];
+              for (const e of out) {
+                const key = `${norm(e && e.label)}|${norm(e && e.snippet)}`;
+                if (!seen.has(key)) { seen.add(key); unique.push(e); }
+              }
+              core.info(`[GTEST] Total snippets before cap: ${out.length}, after dedupe: ${unique.length}`);
+              snippets = unique.slice(0, Math.max(1, Math.min(maxSnippets, unique.length)));
+              // Apply generic-exit filter per job
+              snippets = filterGenericExitSnippets(snippets);
+              core.info(`[GTEST] Collected ${snippets.length} gtest snippet(s) from logs for run ${runId} (after filtering)`);
+              // Do not attach owners here; ownership resolution is performed later
+              return snippets;
+            } else {
+              core.info(`[GTEST] No snippets extracted from logs for run ${runId}`);
             }
-            core.info(`[GTEST] Total snippets before cap: ${out.length}, after dedupe: ${unique.length}`);
-            snippets = unique.slice(0, Math.max(1, Math.min(maxSnippets, unique.length)));
-            // Apply generic-exit filter per job
-            snippets = filterGenericExitSnippets(snippets);
-            core.info(`[GTEST] Collected ${snippets.length} gtest snippet(s) from logs for run ${runId} (after filtering)`);
-            // Do not attach owners here; ownership resolution is performed later
-            return snippets;
-          } else {
-            core.info(`[GTEST] No snippets extracted from logs for run ${runId}`);
           }
         }
       }
     } catch (e) {
       core.warning(`Failed gtest log parsing for run ${runId}: ${e.message}`);
+    }
+
+    // If other logs (non-gtest) are available for this run, extract job names from file names
+    // Don't parse the logs, just use the file names to determine job names
+    try {
+      const otherLogsDir = getOtherLogsDirForRunId(runId);
+      if (otherLogsDir && fs.existsSync(otherLogsDir)) {
+        const logsListPath = path.join(otherLogsDir, 'logs-list.json');
+        if (fs.existsSync(logsListPath)) {
+          core.info(`[OTHER LOGS] Using logs list for run ${runId}: otherLogsDir=${otherLogsDir}`);
+          let logsListData;
+          try {
+            logsListData = JSON.parse(fs.readFileSync(logsListPath, 'utf8'));
+          } catch (parseErr) {
+            core.warning(`[OTHER LOGS] Failed to parse logs-list.json for run ${runId}: ${parseErr.message}`);
+            // Continue to annotations
+          }
+          if (logsListData) {
+            const files = Array.isArray(logsListData.files) ? logsListData.files : [];
+            core.info(`[OTHER LOGS] Files detected: ${files.length}`);
+
+            // Extract job names from file paths (e.g., "extract/1_job-name/step.txt" -> "job-name")
+            const jobNamesSet = new Set();
+            for (const filePath of files) {
+              try {
+                // Parse the path to extract job name
+                // Expected format: extract/<step>_<job-name>/<file>.txt
+                const parts = filePath.split(path.sep);
+                if (parts.length >= 2) {
+                  const folderName = parts[1]; // e.g., "1_job-name"
+                  // Remove leading step number and underscore
+                  const jobName = folderName.replace(/^\d+_/, '').trim();
+                  if (jobName) {
+                    jobNamesSet.add(jobName);
+                  }
+                }
+              } catch (_) { /* ignore */ }
+            }
+
+            // Create snippets with job names, but blank test and error fields
+            const out = [];
+            for (const jobName of jobNamesSet) {
+              out.push({
+                label: jobName,
+                job: jobName,
+                test: '', // Leave blank as requested
+                snippet: '' // Leave blank as requested
+              });
+              if (out.length >= maxSnippets) break;
+            }
+
+            if (out.length > 0) {
+              core.info(`[OTHER LOGS] Collected ${out.length} job name(s) from logs for run ${runId}`);
+              snippets = out;
+              // Apply generic-exit filter per job
+              snippets = filterGenericExitSnippets(snippets);
+              return snippets;
+            } else {
+              core.info(`[OTHER LOGS] No job names extracted from logs for run ${runId}`);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      core.warning(`Failed other log processing for run ${runId}: ${e.message}`);
     }
 
     // Primary (default): use annotations if available (non-gtest)
@@ -1104,7 +1190,8 @@ async function run() {
     const alertAll = String(core.getInput('alert-all') || 'false').toLowerCase() === 'true'; // get the alert-all input from the action inputs
     const annotationsIndexPath = core.getInput('annotations-index-path', { required: false }); // optional: path to JSON mapping runId -> annotations dir
     const commitsPath = core.getInput('commits-path', { required: false }); // optional: path to commits index JSON
-    const logsIndexPath = core.getInput('logs-index-path', { required: false }); // optional: path to logs index JSON
+    const gtestLogsIndexPath = core.getInput('gtest-logs-index-path', { required: false }); // optional: path to gtest logs index JSON
+    const otherLogsIndexPath = core.getInput('other-logs-index-path', { required: false }); // optional: path to other logs index JSON
 
     // Validate inputs
     if (!fs.existsSync(cachePath)) {
@@ -1132,12 +1219,21 @@ async function run() {
       }
     }
 
-    if (logsIndexPath) {
-      __logsIndexMap = loadLogsIndexFromFile(logsIndexPath);
-      if (__logsIndexMap && __logsIndexMap.size) {
-        core.info(`Loaded logs index with ${__logsIndexMap.size} entries from ${logsIndexPath}`);
-      } else if (logsIndexPath) {
-        core.info(`No valid entries found in logs index file at ${logsIndexPath}`);
+    if (gtestLogsIndexPath) {
+      __gtestLogsIndexMap = loadLogsIndexFromFile(gtestLogsIndexPath);
+      if (__gtestLogsIndexMap && __gtestLogsIndexMap.size) {
+        core.info(`Loaded gtest logs index with ${__gtestLogsIndexMap.size} entries from ${gtestLogsIndexPath}`);
+      } else if (gtestLogsIndexPath) {
+        core.info(`No valid entries found in gtest logs index file at ${gtestLogsIndexPath}`);
+      }
+    }
+
+    if (otherLogsIndexPath) {
+      __otherLogsIndexMap = loadLogsIndexFromFile(otherLogsIndexPath);
+      if (__otherLogsIndexMap && __otherLogsIndexMap.size) {
+        core.info(`Loaded other logs index with ${__otherLogsIndexMap.size} entries from ${otherLogsIndexPath}`);
+      } else if (otherLogsIndexPath) {
+        core.info(`No valid entries found in other logs index file at ${otherLogsIndexPath}`);
       }
     }
 
