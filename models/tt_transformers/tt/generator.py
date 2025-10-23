@@ -356,11 +356,6 @@ class Generator:
             )
 
             device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
-            if (
-                hasattr(self.model[i], "device_decode_sliding_mask")
-                and self.model[i].device_decode_sliding_mask is not None
-            ):
-                self.model[i].update_attention_masks(current_pos[i])
             device_inputs.append(device_inputs_i)
 
         for i in range(self.data_parallel):
