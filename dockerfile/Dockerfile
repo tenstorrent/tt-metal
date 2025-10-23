@@ -290,7 +290,9 @@ RUN tar -xf /artifacts/ttm_any.tar -C /tt-metal
 ENV TT_METAL_HOME=/tt-metal
 #ENV TT_METAL_RUNTIME_ROOT=/tt-metal
 
+# Required for MPI
 RUN mkdir -p /run/sshd
+RUN echo "StrictModes no" >> /etc/ssh/sshd_config
 
 #############################################################
 
