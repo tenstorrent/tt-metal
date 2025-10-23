@@ -90,7 +90,6 @@ def test_petr(device, reset_seeds):
         query_embedding_input=query_embedding_input,
         device=device,
     )
-
     tracy.signpost("start")
     ttnn_output = ttnn_model.predict(ttnn_inputs, ttnn_batch_img_metas, skip_post_processing=True)
     verify_output(torch_output, ttnn_output)

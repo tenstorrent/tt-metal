@@ -542,7 +542,7 @@ def test_demo(device, reset_seeds):
     weights_url = (
         "https://download.openmmlab.com/mmdetection3d/v1.1.0_models/petr/petr_vovnet_gridmask_p4_800x320-e2191752.pth"
     )
-    resources_dir = os.path.join(os.path.dirname(__file__), "..", "..", "resources")
+    resources_dir = os.path.join(os.path.dirname(__file__), "..", "resources")
     weights_path = os.path.abspath(os.path.join(resources_dir, "petr_vovnet_gridmask_p4_800x320-e2191752.pth"))
 
     if not os.path.exists(resources_dir):

@@ -48,6 +48,72 @@ def ttnn_pos2posemb3d(pos, num_pos_feats=128, temperature=10000, device=None):  
     return posemb
 
 
+def pos2posemb3d_ttnn_pure(pos, num_pos_feats=128, temperature=10000, device=None):
+    """
+    Fully pure TTNN implementation (no torch fallback except for constant dim_t)
+
+    Note: This is complex because TTNN doesn't have easy even/odd indexing
+    """
+    import math
+    import torch
+    import ttnn
+
+    scale = 2 * math.pi
+    pos = ttnn.multiply(pos, scale)
+
+    # Precompute dim_t (constant)
+    dim_t_cpu = torch.arange(num_pos_feats, dtype=torch.float32)
+    dim_t_cpu = temperature ** (2 * (dim_t_cpu // 2).float() / num_pos_feats)
+    dim_t_cpu = dim_t_cpu.reshape(1, 1, 1, num_pos_feats)
+    dim_t = ttnn.from_torch(dim_t_cpu, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    # Reshape pos to [1, 1, 900, 3]
+    batch_size = pos.shape[0]
+    pos = ttnn.reshape(pos, (1, 1, batch_size, 3))
+
+    # Extract x, y, z
+    pos_x = ttnn.slice(pos, [0, 0, 0, 0], [1, 1, batch_size, 1])
+    pos_y = ttnn.slice(pos, [0, 0, 0, 1], [1, 1, batch_size, 2])
+    pos_z = ttnn.slice(pos, [0, 0, 0, 2], [1, 1, batch_size, 3])
+
+    # Broadcast divide by dim_t
+    pos_x = ttnn.reshape(pos_x, (1, 1, batch_size, 1))
+    pos_x = ttnn.multiply(pos_x, ttnn.reciprocal(dim_t))
+
+    pos_y = ttnn.reshape(pos_y, (1, 1, batch_size, 1))
+    pos_y = ttnn.multiply(pos_y, ttnn.reciprocal(dim_t))
+
+    pos_z = ttnn.reshape(pos_z, (1, 1, batch_size, 1))
+    pos_z = ttnn.multiply(pos_z, ttnn.reciprocal(dim_t))
+
+    # Apply sin/cos
+    pos_x_sin = ttnn.sin(pos_x)
+    pos_x_cos = ttnn.cos(pos_x)
+    pos_y_sin = ttnn.sin(pos_y)
+    pos_y_cos = ttnn.cos(pos_y)
+    pos_z_sin = ttnn.sin(pos_z)
+    pos_z_cos = ttnn.cos(pos_z)
+
+    # For interleaving, we need to use torch temporarily
+    # This is unavoidable without custom ttnn kernels for gather/scatter
+    def interleave_ttnn(sin_t, cos_t):
+        s = ttnn.to_torch(sin_t).squeeze(0).squeeze(0)
+        c = ttnn.to_torch(cos_t).squeeze(0).squeeze(0)
+        result = torch.zeros(batch_size, num_pos_feats, dtype=s.dtype)
+        result[:, 0::2] = s[:, 0::2]
+        result[:, 1::2] = c[:, 1::2]
+        return ttnn.from_torch(result, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    pos_x_emb = interleave_ttnn(pos_x_sin, pos_x_cos)
+    pos_y_emb = interleave_ttnn(pos_y_sin, pos_y_cos)
+    pos_z_emb = interleave_ttnn(pos_z_sin, pos_z_cos)
+
+    # Concatenate along last dimension
+    posemb = ttnn.concat([pos_y_emb, pos_x_emb, pos_z_emb], dim=-1)
+
+    return posemb
+
+
 def pos2posemb3d(pos, num_pos_feats=128, temperature=10000):
     scale = 2 * math.pi
     pos = pos * scale

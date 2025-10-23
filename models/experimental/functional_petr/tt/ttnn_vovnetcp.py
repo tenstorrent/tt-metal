@@ -3,7 +3,6 @@
 
 import ttnn
 from models.experimental.functional_petr.tt.common import Conv, Conv_with_split
-import torch.nn.functional as F
 import torch
 
 
@@ -303,36 +302,18 @@ class ttnn_osa_stage:
 
     def __call__(self, device, x):
         if self.pooling is True:
-            original_dtype = x.dtype if hasattr(x, "dtype") else ttnn.bfloat16
-
-            # Maxpool in torch
-            x_torch = ttnn.to_torch(x).to(torch.bfloat16)
-
-            # NHWC → NCHW
-            x_torch = x_torch.permute(0, 3, 1, 2)
-
-            # Apply pooling
-            x_torch = F.max_pool2d(x_torch, kernel_size=3, stride=2, padding=0, ceil_mode=True)
-
-            # NCHW → NHWC
-            x_torch = x_torch.permute(0, 2, 3, 1)
-
-            x = ttnn.from_torch(x_torch.to(torch.float32), dtype=ttnn.bfloat16, device=device)
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-            # print(f"x.shape: {x.shape}")
-            # print(f"x.layout: {x.get_layout()}")
-            # x = ttnn.max_pool2d(
-            #     input_tensor=x,
-            #     batch_size=x.shape[0],
-            #     input_h=x.shape[1],
-            #     input_w=x.shape[2],
-            #     channels=x.shape[3],
-            #     kernel_size=[3, 3],
-            #     stride=[2, 2],
-            #     padding=[0, 0],
-            #     dilation=[1, 1],
-            #     ceil_mode=True,
-            # )
+            x = ttnn.max_pool2d(
+                input_tensor=x,
+                batch_size=x.shape[0],
+                input_h=x.shape[1],
+                input_w=x.shape[2],
+                channels=x.shape[3],
+                kernel_size=[3, 3],
+                stride=[2, 2],
+                padding=[0, 0],
+                dilation=[1, 1],
+                ceil_mode=True,
+            )
 
         for module_name in self.blocks:
             module = getattr(self, module_name)  # Retrieve the block by name
