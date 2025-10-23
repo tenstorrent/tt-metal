@@ -21,6 +21,8 @@
 #include <string_view>
 #include <utility>
 
+#include "impl/buffers/buffer_page_mapping.hpp"
+
 #include "fmt/base.h"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include <tt_stl/strong_type.hpp>
@@ -504,7 +506,6 @@ CoreType Buffer::core_type() const {
 
 bool Buffer::is_l1() const { return is_l1_impl(buffer_type()); }
 bool Buffer::is_dram() const { return buffer_type() == BufferType::DRAM || buffer_type() == BufferType::TRACE; }
-bool Buffer::is_trace() const { return buffer_type() == BufferType::TRACE; }
 
 bool Buffer::is_valid_region(const BufferRegion& region) const { return region.offset + region.size <= this->size(); }
 
