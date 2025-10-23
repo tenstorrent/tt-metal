@@ -197,10 +197,14 @@ ENV PYTHON_ENV_DIR=/opt/venv
 ENV TT_METAL_HOME=/tt-metal
 ENV PYTHONPATH=/tt-metal
 
+# Accept git reference argument
+ARG GIT_REF=main
+
 # Clone tt-metal
 RUN /bin/bash -c "git clone --filter=blob:none --recurse-submodules --tags \
     https://github.com/tenstorrent/tt-metal.git ${TT_METAL_HOME} \
-    && cd ${TT_METAL_HOME}"
+    && cd ${TT_METAL_HOME} \
+    && git checkout ${GIT_REF}"
 
 WORKDIR /tt-metal
 
