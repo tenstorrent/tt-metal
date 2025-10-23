@@ -452,7 +452,7 @@ int common_tm_bw_model(
             output_only ? total_write_cycles_not_local
                         : std::max(total_read_cycles_not_local, total_write_cycles_not_local);
         ideal_dev_clock_cycles = output_only ? total_write_cycles : std::max(total_read_cycles, total_write_cycles);
-        ideal_dev_clock_cycles = std::min(ideal_dev_clock_cycles_not_local, ideal_dev_clock_cycles);
+        ideal_dev_clock_cycles = std::min<unsigned int>(ideal_dev_clock_cycles_not_local, ideal_dev_clock_cycles);
     }
     // latency for llk compute kernels
     int total_compute_cycles = 0;
