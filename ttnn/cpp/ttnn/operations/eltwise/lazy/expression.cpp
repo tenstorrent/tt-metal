@@ -535,9 +535,9 @@ void format_to_kernel_string(
         ttsl::overloaded{
             [&](UnaryWithParam alternative) {
                 fmt::format_to(
-                    out, "{}(get_arg_val<uint32_t>({}))", lazy::function_name(dtype, alternative), rt_offset);
+                    out, "::views::{}(get_arg_val<uint32_t>({}))", lazy::function_name(dtype, alternative), rt_offset);
             },
-            [&](auto alternative) { fmt::format_to(out, "{}()", lazy::function_name(dtype, alternative)); }},
+            [&](auto alternative) { fmt::format_to(out, "::views::{}()", lazy::function_name(dtype, alternative)); }},
         operation);
 }
 
@@ -546,7 +546,7 @@ void format_to_kernel_string(std::back_insert_iterator<std::string> out, Functio
 
     fmt::format_to(
         out,
-        "with_cb_ids<{},{}>(",
+        "::views::with_cb_ids<{},{}>(",
         fmt::join(function.arguments() | std::views::transform(to_cb_index), ","),
         to_cb_index(function));
     // n_tiles precedes runtime arguments in expression tree
@@ -580,10 +580,12 @@ std::string to_compute_kernel_string(FunctionView expression) {
                 // prefix or separator
                 if (result.empty()) {
                     fmt::format_to(
-                        std::back_inserter(result), "using View=MakeComputeView<{}>;", expression.circular_buffers());
+                        std::back_inserter(result),
+                        "using View=::views::MakeComputeView<{}>;",
+                        expression.circular_buffers());
                     fmt::format_to(
                         std::back_inserter(result),
-                        "View::init_tiles(init_sfpu<c_0,{}>());",
+                        "View::init_tiles(::views::init_sfpu<c_0,{}>());",
                         enchantum::to_string(expression.cb_index()));
                     result.append("View::compute_tiles<num_tiles_per_cycle>(n_tiles,");
                 } else {
