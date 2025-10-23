@@ -385,10 +385,6 @@ public:
         std::vector<TestConfig> built_tests;
 
         for (const auto& raw_config : raw_configs) {
-            // Skip tests based on topology and device requirements
-            if (should_skip_test(raw_config)) {
-                continue;
-            }
             std::vector<ParsedTestConfig> parametrized_configs = this->expand_parametrizations(raw_config);
 
             // For each newly generated parametrized config, expand its high-level patterns
@@ -407,10 +403,6 @@ public:
 
         return built_tests;
     }
-
-private:
-    static constexpr uint32_t MIN_RING_TOPOLOGY_DEVICES = 4;
-
     // Helper function to check if a test should be skipped based on:
     // 1. topology and device count
     // 2. architecture or cluster type
@@ -442,6 +434,9 @@ private:
         }
         return false;
     }
+
+private:
+    static constexpr uint32_t MIN_RING_TOPOLOGY_DEVICES = 4;
 
     // Convert ParsedTestConfig to TestConfig by resolving device identifiers
     TestConfig resolve_test_config(const ParsedTestConfig& parsed_test, uint32_t iteration_number) {

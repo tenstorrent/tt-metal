@@ -20,6 +20,7 @@ class TtCrossAttnUpBlock2D(LightweightModule):
         num_attn_heads,
         out_dim,
         has_upsample=False,
+        debug_mode=False,
     ):
         super().__init__()
 
@@ -49,12 +50,21 @@ class TtCrossAttnUpBlock2D(LightweightModule):
                     f"{module_path}.resnets.{i}",
                     model_config=model_config,
                     conv_shortcut=True,
+                    debug_mode=debug_mode,
                 )
             )
 
         self.upsamplers = (
             TtUpsample2D(
-                device, state_dict, f"{module_path}.upsamplers.0", (1, 1), (1, 1), (1, 1), 1, model_config=model_config
+                device,
+                state_dict,
+                f"{module_path}.upsamplers.0",
+                (1, 1),
+                (1, 1),
+                (1, 1),
+                1,
+                model_config=model_config,
+                debug_mode=debug_mode,
             )
             if has_upsample
             else None
