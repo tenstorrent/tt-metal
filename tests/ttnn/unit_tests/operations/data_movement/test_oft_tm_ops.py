@@ -40,14 +40,14 @@ def random_torch_tensor(dtype, shape):
 @pytest.mark.parametrize(
     "shape, perm, dtype, layout, in_mem_config, out_mem_config",
     [
-        ([1, 48, 160, 256], [2, 1, 0, 3], ttnn.uint32, TILE, DRAM, DRAM),
+        ([1, 48, 160, 256], [2, 1, 0, 3], ttnn.uint32, TILE, DRAM, DRAM),  # row invariant
         ([160, 48, 1, 256], [2, 1, 0, 3], ttnn.uint32, TILE, DRAM, DRAM),
         ([1, 24, 80, 256], [2, 1, 0, 3], ttnn.uint32, TILE, DRAM, DRAM),
         ([80, 24, 1, 256], [2, 1, 0, 3], ttnn.uint32, TILE, DRAM, DRAM),
         ([1, 12, 40, 256], [2, 1, 0, 3], ttnn.uint32, TILE, DRAM, DRAM),
         ([40, 12, 1, 256], [2, 1, 0, 3], ttnn.uint32, TILE, DRAM, DRAM),
-        ([1, 1, 25281, 9], [0, 3, 1, 2], ttnn.bfloat16, RM, DRAM, L1),
-        ([1, 3, 159, 160], [0, 2, 3, 1], ttnn.bfloat16, TILE, L1, L1),
+        ([1, 1, 25281, 9], [0, 3, 1, 2], ttnn.bfloat16, RM, DRAM, L1),  # ...
+        ([1, 3, 159, 160], [0, 2, 3, 1], ttnn.bfloat16, TILE, L1, L1),  # generic invariant
         ([1, 1, 159, 160], [0, 2, 3, 1], ttnn.bfloat16, TILE, L1, L1),
     ],
 )
