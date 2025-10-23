@@ -74,9 +74,30 @@ void kernel_main() {
     const uint32_t rx_noc_y = get_arg_val<uint32_t>(idx++);
     const uint32_t sem_l1_addr = get_arg_val<uint32_t>(idx++);
 
-    // Build the fabric connection next (these args were appended by the host
-    // right after the fixed 6 args).
-    auto sender = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
+    // directional connections — parse a bitmask and build up to four senders in fixed order: W,E,N,S
+    const uint32_t dir_mask = get_arg_val<uint32_t>(idx++);
+    const bool hasW = (dir_mask & 0x1u) != 0;
+    const bool hasE = (dir_mask & 0x2u) != 0;
+    const bool hasN = (dir_mask & 0x4u) != 0;
+    const bool hasS = (dir_mask & 0x8u) != 0;
+
+    WorkerToFabricEdmSender senderW{};
+    WorkerToFabricEdmSender senderE{};
+    WorkerToFabricEdmSender senderN{};
+    WorkerToFabricEdmSender senderS{};
+
+    if (hasW) {
+        senderW = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
+    }
+    if (hasE) {
+        senderE = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
+    }
+    if (hasN) {
+        senderN = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
+    }
+    if (hasS) {
+        senderS = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
+    }
 
     // Phase A diagnostics (optional): hops were appended by the host
     // AFTER the fabric-connection args, so read them now.
@@ -90,7 +111,18 @@ void kernel_main() {
     volatile tt_l1_ptr PACKET_HEADER_TYPE* north_packet_header = PacketHeaderPool::allocate_header();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* south_packet_header = PacketHeaderPool::allocate_header();
 
-    sender.open<true>();
+    if (hasW) {
+        senderW.open<true>();
+    }
+    if (hasE) {
+        senderE.open<true>();
+    }
+    if (hasN) {
+        senderN.open<true>();
+    }
+    if (hasS) {
+        senderS.open<true>();
+    }
 
     const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/PAGE_SIZE);
 
@@ -98,52 +130,57 @@ void kernel_main() {
         cb_wait_front(CB_ID, 1);
         const uint32_t src_l1_addr = get_read_ptr(CB_ID);
 
-        // Pace transmissions so we don’t overrun the fabric send queue.
-        sender.wait_for_empty_write_slot();
-
         // Compute destination NOC address (DRAM or L1 interleaved)
         uint64_t dest_noc_addr = dst_acc.get_noc_addr(/*page_id=*/i, /*offset=*/0, /*noc=*/0);
 
         // Build the NOC header for this page (mcast route already set above)
         // --- Branch 1: direct WEST fanout (left) ---
         if (w_hops > 0) {
+            // Pace transmissions so we don’t overrun the fabric send queue.
+            senderW.wait_for_empty_write_slot();
             // Program header for WEST-only branch (no trunk)
             set_mcast_header(left_packet_header, eth_chan_directions::WEST, /*trunk_hops=*/0, /*E*/ 0, /*W*/ w_hops);
             // Build the NOC header for this page
             left_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
             // Pace & send
-            sender.wait_for_empty_write_slot();
-            sender.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
-            sender.send_payload_blocking_from_address((uint32_t)left_packet_header, sizeof(PACKET_HEADER_TYPE));
+            senderW.wait_for_empty_write_slot();
+            senderW.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
+            senderW.send_payload_blocking_from_address((uint32_t)left_packet_header, sizeof(PACKET_HEADER_TYPE));
         }
 
         // --- Branch 2: direct EAST fanout (right) ---
         if (e_hops > 0) {
+            // Pace transmissions so we don’t overrun the fabric send queue.
+            senderE.wait_for_empty_write_slot();
             set_mcast_header(right_packet_header, eth_chan_directions::EAST, /*trunk_hops=*/0, /*E*/ e_hops, /*W*/ 0);
             right_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
-            sender.wait_for_empty_write_slot();
-            sender.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
-            sender.send_payload_blocking_from_address((uint32_t)right_packet_header, sizeof(PACKET_HEADER_TYPE));
+            senderE.wait_for_empty_write_slot();
+            senderE.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
+            senderE.send_payload_blocking_from_address((uint32_t)right_packet_header, sizeof(PACKET_HEADER_TYPE));
         }
 
         // --- Branch 3: NORTH trunk (optional) ---
         if (n_hops > 0) {
+            // Pace transmissions so we don’t overrun the fabric send queue.
+            senderN.wait_for_empty_write_slot();
             set_mcast_header(
                 north_packet_header, eth_chan_directions::NORTH, /*trunk*/ n_hops, /*E*/ e_hops, /*W*/ w_hops);
             north_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
-            sender.wait_for_empty_write_slot();
-            sender.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
-            sender.send_payload_blocking_from_address((uint32_t)north_packet_header, sizeof(PACKET_HEADER_TYPE));
+            senderN.wait_for_empty_write_slot();
+            senderN.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
+            senderN.send_payload_blocking_from_address((uint32_t)north_packet_header, sizeof(PACKET_HEADER_TYPE));
         }
 
         // --- Branch 4: SOUTH trunk (optional) ---
         if (s_hops > 0) {
+            // Pace transmissions so we don’t overrun the fabric send queue.
+            senderS.wait_for_empty_write_slot();
             set_mcast_header(
                 south_packet_header, eth_chan_directions::SOUTH, /*trunk*/ s_hops, /*E*/ e_hops, /*W*/ w_hops);
             south_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
-            sender.wait_for_empty_write_slot();
-            sender.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
-            sender.send_payload_blocking_from_address((uint32_t)south_packet_header, sizeof(PACKET_HEADER_TYPE));
+            senderS.wait_for_empty_write_slot();
+            senderS.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
+            senderS.send_payload_blocking_from_address((uint32_t)south_packet_header, sizeof(PACKET_HEADER_TYPE));
         }
 
         cb_pop_front(CB_ID, 1);
@@ -160,30 +197,41 @@ void kernel_main() {
         set_mcast_header(left_packet_header, eth_chan_directions::WEST, /*trunk*/ 0, /*E*/ 0, /*W*/ w_hops);
         left_packet_header->to_noc_unicast_atomic_inc(
             NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
-        sender.wait_for_empty_write_slot();
-        sender.send_payload_flush_non_blocking_from_address((uint32_t)left_packet_header, sizeof(PACKET_HEADER_TYPE));
+        senderW.wait_for_empty_write_slot();
+        senderW.send_payload_flush_non_blocking_from_address((uint32_t)left_packet_header, sizeof(PACKET_HEADER_TYPE));
     }
     if (e_hops > 0) {
         set_mcast_header(right_packet_header, eth_chan_directions::EAST, /*trunk*/ 0, /*E*/ e_hops, /*W*/ 0);
         right_packet_header->to_noc_unicast_atomic_inc(
             NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
-        sender.wait_for_empty_write_slot();
-        sender.send_payload_flush_non_blocking_from_address((uint32_t)right_packet_header, sizeof(PACKET_HEADER_TYPE));
+        senderE.wait_for_empty_write_slot();
+        senderE.send_payload_flush_non_blocking_from_address((uint32_t)right_packet_header, sizeof(PACKET_HEADER_TYPE));
     }
     if (n_hops > 0) {
         set_mcast_header(north_packet_header, eth_chan_directions::NORTH, /*trunk*/ n_hops, /*E*/ e_hops, /*W*/ w_hops);
         north_packet_header->to_noc_unicast_atomic_inc(
             NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
-        sender.wait_for_empty_write_slot();
-        sender.send_payload_flush_non_blocking_from_address((uint32_t)north_packet_header, sizeof(PACKET_HEADER_TYPE));
+        senderN.wait_for_empty_write_slot();
+        senderN.send_payload_flush_non_blocking_from_address((uint32_t)north_packet_header, sizeof(PACKET_HEADER_TYPE));
     }
     if (s_hops > 0) {
         set_mcast_header(south_packet_header, eth_chan_directions::SOUTH, /*trunk*/ s_hops, /*E*/ e_hops, /*W*/ w_hops);
         south_packet_header->to_noc_unicast_atomic_inc(
             NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
-        sender.wait_for_empty_write_slot();
-        sender.send_payload_flush_non_blocking_from_address((uint32_t)south_packet_header, sizeof(PACKET_HEADER_TYPE));
+        senderS.wait_for_empty_write_slot();
+        senderS.send_payload_flush_non_blocking_from_address((uint32_t)south_packet_header, sizeof(PACKET_HEADER_TYPE));
     }
 
-    sender.close();
+    if (hasW) {
+        senderW.close();
+    }
+    if (hasE) {
+        senderE.close();
+    }
+    if (hasN) {
+        senderN.close();
+    }
+    if (hasS) {
+        senderS.close();
+    }
 }
