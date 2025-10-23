@@ -10,6 +10,7 @@ import ttnn
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from types import EllipsisType
 
     import torch
 
@@ -83,16 +84,17 @@ def from_torch(
     dtype: ttnn.DataType = ttnn.bfloat16,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     pad_value: float | None = None,
-    mesh_axes: Sequence[int | None] | None = None,
+    mesh_axes: Sequence[int | None | EllipsisType] | None = None,
     on_host: bool = False,
 ) -> ttnn.Tensor:
+    """Convert a torch.Tensor to a ttnn.Tensor with convenient mesh distribution."""
     if mesh_axes is not None:
         if device is None:
             msg = "device must be specified if mesh_axes is given"
             raise ValueError(msg)
 
         mesh_rank = len(list(device.shape))
-        verify_tensor_mesh_axes(mesh_axes, tensor_rank=len(x.shape), mesh_rank=mesh_rank)
+        mesh_axes = canonicalize_tensor_mesh_axes(mesh_axes, tensor_rank=len(x.shape), mesh_rank=mesh_rank)
 
         placements = _invert_placements(mesh_axes, output_rank=mesh_rank)
         placements = [ttnn.PlacementShard(p) if p is not None else ttnn.PlacementReplicate() for p in placements]
@@ -115,7 +117,7 @@ def to_torch(
     x: ttnn.Tensor,
     /,
     *,
-    mesh_axes: Sequence[int | None] | None = None,
+    mesh_axes: Sequence[int | None | EllipsisType] | None = None,
     composer_device: ttnn.MeshDevice | None = None,
 ) -> torch.Tensor:
     """Converts a ttnn.Tensor to a torch.Tensor.
@@ -132,7 +134,7 @@ def to_torch(
         raise ValueError(msg)
 
     mesh_rank = len(list(composer_device.shape))
-    verify_tensor_mesh_axes(mesh_axes, tensor_rank=len(x.shape), mesh_rank=mesh_rank)
+    mesh_axes = canonicalize_tensor_mesh_axes(mesh_axes, tensor_rank=len(x.shape), mesh_rank=mesh_rank)
 
     replicated_mesh_axes = list(set(range(mesh_rank)) - {axis for axis in mesh_axes if axis is not None})
     mesh_axes = replicated_mesh_axes + list(mesh_axes)
@@ -147,6 +149,7 @@ def to_torch(
 
 
 def verify_tensor_mesh_axes(mesh_axes: Sequence[int | None], /, *, tensor_rank: int, mesh_rank: int) -> None:
+    """Validates tensor mesh axes specification."""
     if len(mesh_axes) != tensor_rank:
         msg = f"mesh axis list {tuple(mesh_axes)} should have length {tensor_rank}"
         raise ValueError(msg)
@@ -160,6 +163,25 @@ def verify_tensor_mesh_axes(mesh_axes: Sequence[int | None], /, *, tensor_rank: 
     if len(non_none_values) != len(set(non_none_values)):
         msg = f"mesh axis list {tuple(mesh_axes)} contains duplicate mesh axis assignments"
         raise ValueError(msg)
+
+
+def canonicalize_tensor_mesh_axes(
+    mesh_axes: Sequence[int | None | EllipsisType], /, *, tensor_rank: int, mesh_rank: int
+) -> tuple[int | None, ...]:
+    """Cononicalizes mesh axes specification by expanding Ellipsis and validating."""
+    mesh_axes = list(mesh_axes)
+
+    if Ellipsis in mesh_axes:
+        if mesh_axes.count(Ellipsis) > 1:
+            msg = "mesh_axes can contain at most one Ellipsis"
+            raise ValueError(msg)
+
+        ellipsis_index = mesh_axes.index(Ellipsis)
+        mesh_axes[ellipsis_index : ellipsis_index + 1] = [None] * (tensor_rank - mesh_rank + 1)
+
+    verify_tensor_mesh_axes(mesh_axes, tensor_rank=tensor_rank, mesh_rank=mesh_rank)
+
+    return tuple(mesh_axes)
 
 
 def _invert_placements(placements: Sequence[int | None], *, output_rank: int) -> tuple[int | None, ...]:
