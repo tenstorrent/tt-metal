@@ -32,8 +32,7 @@ jobs:
       ${{
         matrix.test-group.civ2-compatible == true
         && 'tt-ubuntu-2204-N300-llmbox-stable'
-        || (matrix.test-group.runner-label == 'N300' && matrix.test-group.performance)
-          && fromJSON(format('["{0}", "arch-wormhole_b0", "pipeline-functional", "config-t3000"]',
+        || fromJSON(format('["{0}", "arch-wormhole_b0", "pipeline-functional", "config-t3000"]',
               inputs.extra-tag
             ))
       }}
