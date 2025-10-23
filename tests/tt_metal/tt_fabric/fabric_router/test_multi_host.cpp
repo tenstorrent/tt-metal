@@ -441,17 +441,23 @@ TEST(MultiHost, TestQuadGalaxyFabric1DSanity) {
 }
 
 TEST(MultiHost, TestClosetBoxTTSwitchControlPlaneInit) {
-    auto& instance = tt::tt_metal::MetalContext::instance();
-
-    // Get the host name
-    auto host_rank = *instance.get_distributed_context_ptr()->rank();
     char hostname[HOST_NAME_MAX + 1];
     gethostname(hostname, sizeof(hostname));
     auto host_name = std::string(hostname);
 
-    // Savve the cluster descriptors
-    auto cluster_descriptor = instance.get_cluster().get_cluster_desc()->serialize_to_file(
-        "closet_box_cluster_desc_" + host_name + "_rank_" + std::to_string(host_rank) + ".yaml");
+    log_info(tt::LogTest, "Host name: {}", host_name);
+
+    auto& instance = tt::tt_metal::MetalContext::instance();
+
+    // Save the cluster descriptor in the WH closet box directory
+    const std::filesystem::path output_dir =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/wh_closetbox_cluster_desc";
+    std::filesystem::create_directories(output_dir);
+    const auto filename = "closet_box_cluster_desc_" + host_name + ".yaml";
+    const auto output_path = (output_dir / filename).string();
+
+    auto cluster_descriptor = instance.get_cluster().get_cluster_desc()->serialize_to_file(output_path);
 
     log_info(tt::LogTest, "Cluster descriptor saved to: {}", cluster_descriptor);
 }

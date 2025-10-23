@@ -27,7 +27,7 @@ graph_descriptors {
   }
 }
 
-# SUPERPOD/CLUSTER: 5 PODs with inter-POD ALL_TO_ALL connections
+# SUPERPOD/CLUSTER: 4 PODs with inter-POD ALL_TO_ALL connections
 graph_descriptors {
   name: "G1"
   type: "CLUSTER"
@@ -35,7 +35,6 @@ graph_descriptors {
   instances { graph { graph_descriptor: "G0" graph_id: 1 } }
   instances { graph { graph_descriptor: "G0" graph_id: 2 } }
   instances { graph { graph_descriptor: "G0" graph_id: 3 } }
-  instances { graph { graph_descriptor: "G0" graph_id: 4 } }
 
   graph_topology: {
     layout_type: ALL_TO_ALL
