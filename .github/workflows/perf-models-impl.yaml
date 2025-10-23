@@ -260,10 +260,27 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: |
+          echo "=== CI Environment Check ==="
+          echo "GITHUB_ACTIONS: ${GITHUB_ACTIONS:-not set}"
+          echo "CI: ${CI:-not set}"
+          echo "TT_GH_CI_INFRA: ${TT_GH_CI_INFRA:-not set}"
+          echo "Current working directory: $(pwd)"
           echo "=== Current directory contents ==="
           ls -la
           echo "=== Looking for generated directory ==="
           find . -name "generated" -type d 2>/dev/null || echo "No generated directory found"
+          echo "=== Contents of generated directory ==="
+          if [ -d "generated" ]; then
+            ls -la generated/
+            echo "=== Contents of generated/benchmark_data ==="
+            if [ -d "generated/benchmark_data" ]; then
+              ls -la generated/benchmark_data/
+            else
+              echo "generated/benchmark_data directory does not exist"
+            fi
+          else
+            echo "generated directory does not exist"
+          fi
           echo "=== Looking for benchmark_data directory ==="
           find . -name "benchmark_data" -type d 2>/dev/null || echo "No benchmark_data directory found"
           echo "=== Looking for partial_run_*.pkl files ==="
