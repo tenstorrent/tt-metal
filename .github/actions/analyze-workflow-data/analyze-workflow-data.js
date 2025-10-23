@@ -706,7 +706,7 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
               out.push({
                 label: jobName,
                 job: jobName,
-                test: '', // Leave blank as requested
+                test: '',
                 snippet: 'currently aggregate-workflow-data is not able to parse these kinds of errors'
               });
               if (out.length >= maxSnippets) break;
