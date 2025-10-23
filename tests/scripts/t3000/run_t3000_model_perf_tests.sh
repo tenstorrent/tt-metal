@@ -133,50 +133,6 @@ run_t3000_mochi_tests() {
   fi
 }
 
-run_t3000_ccl_all_gather_perf_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_ccl_all_gather_perf_tests"
-
-  tests/ttnn/unit_tests/operations/ccl/perf/run_all_gather_profile.sh -t t3000
-  fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_ccl_all_gather_perf_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
-run_t3000_ccl_reduce_scatter_perf_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_ccl_reduce_scatter_perf_tests"
-
-  tests/ttnn/unit_tests/operations/ccl/perf/run_reduce_scatter_profile.sh -t t3000
-  fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_ccl_reduce_scatter_perf_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
-run_t3000_ccl_tests() {
-  # Run ccl performance tests
-  run_t3000_ccl_all_gather_perf_tests
-  run_t3000_ccl_reduce_scatter_perf_tests
-}
-
 run_t3000_model_perf_tests() {
   # Run model performance tests
   run_t3000_sentence_bert_tests
