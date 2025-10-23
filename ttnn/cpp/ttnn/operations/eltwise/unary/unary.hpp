@@ -351,12 +351,6 @@ struct Rsub {
         ttnn::operations::unary::ExecuteUnaryWithFloatParameter<                      \
             ttnn::operations::unary::UnaryOpType::operation_type>>();
 
-#define REGISTER_UNARY_OPERATION_WITH_SCALAR_PARAMETER(operation_name, operation_type) \
-    constexpr auto operation_name = ttnn::register_operation<                          \
-        "ttnn::" #operation_name,                                                      \
-        ttnn::operations::unary::ExecuteUnaryWithScalarParameter<                      \
-            ttnn::operations::unary::UnaryOpType::operation_type>>();
-
 #define REGISTER_UNARY_OPERATION_WITH_TWO_FLOAT_PARAMETER(operation_name, operation_type) \
     constexpr auto operation_name = ttnn::register_operation<                             \
         "ttnn::" #operation_name,                                                         \
