@@ -55,8 +55,26 @@ class TtAutoencoderKL(LightweightModule):
             device, post_quant_conv_weights, post_quant_conv_bias, model_config.conv_w_dtype
         )
 
-    def encode(self, hidden_states, input_shape):
-        B, C, H, W = input_shape
+    def encode(self, hidden_states):
+        assert isinstance(
+            hidden_states, torch.Tensor
+        ), "encode only supports torch tensors as input, conversion to ttnn done within"
+
+        B, C, H, W = hidden_states.shape
+
+        initial_batch_size = hidden_states.shape[0]
+        hidden_states = torch.permute(hidden_states, (0, 2, 3, 1))
+        hidden_states = torch.reshape(hidden_states, (B, 1, H * W, C))
+        hidden_states = ttnn.from_torch(
+            hidden_states,
+            dtype=ttnn.bfloat16,
+            device=self.device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.device, list(self.device.shape), dims=(None, 0)),
+        )
+        B = hidden_states.shape[0]
+
         hidden_states, [C, H, W] = self.encoder(hidden_states, [B, C, H, W])
         hidden_states = ttnn.linear(
             hidden_states,
@@ -64,11 +82,15 @@ class TtAutoencoderKL(LightweightModule):
             bias=self.tt_quant_conv_bias,
         )
 
-        h = ttnn.to_torch(hidden_states, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0)).float()
+        h = ttnn.to_torch(hidden_states, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0)).float()[
+            :initial_batch_size, ...
+        ]
+        B = h.shape[0]
         h = h.reshape(B, H, W, C)
         h = torch.permute(h, (0, 3, 1, 2))
 
-        posterior = DiagonalGaussianDistribution(h)
+        h = h.chunk(B, dim=0)
+        posterior = [DiagonalGaussianDistribution(h_i) for h_i in h]
         return AutoencoderKLOutput(latent_dist=posterior)
 
     def decode(self, hidden_states, input_shape):
