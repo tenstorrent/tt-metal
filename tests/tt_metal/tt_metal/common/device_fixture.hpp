@@ -18,7 +18,7 @@ namespace tt::tt_metal {
 
 class MeshDeviceFixture : public MeshDispatchFixture {
 private:
-    std::map<chip_id_t, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
+    std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
 
 protected:
     void SetUp() override {
@@ -34,8 +34,8 @@ protected:
         if (num_devices_ > 2) {
             this->num_devices_ = 2;
         }
-        std::vector<chip_id_t> ids;
-        for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
+        std::vector<ChipId> ids;
+        for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
             ids.push_back(id);
         }
         this->create_devices(ids);
@@ -61,7 +61,7 @@ protected:
         return true;
     }
 
-    void create_devices(const std::vector<chip_id_t>& device_ids) {
+    void create_devices(const std::vector<ChipId>& device_ids) {
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
         id_to_device_ = distributed::MeshDevice::create_unit_meshes(
@@ -122,8 +122,8 @@ protected:
     }
 
     void create_devices() {
-        std::vector<chip_id_t> ids;
-        for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
+        std::vector<ChipId> ids;
+        for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
             ids.push_back(id);
         }
         const auto& dispatch_core_config =
@@ -138,7 +138,7 @@ protected:
     }
 
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices_{};
-    std::map<chip_id_t, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
+    std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
     size_t num_devices_{};
 };
 
