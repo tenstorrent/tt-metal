@@ -205,6 +205,11 @@ test_suite_wh_6u_llama_long_stress_tests() {
     pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "stress-test and not mini-stress-test"
 }
 
+test_suite_bh_ttnn_stress_tests() {
+    echo "[upstream-tests] running BH upstream ttnn stress tests"
+    pytest tests/ttnn/stress_tests/
+}
+
 # Define test suite mappings for different hardware topologies
 declare -A hw_topology_test_suites
 
@@ -251,6 +256,9 @@ test_suite_wh_6u_llama_demo_tests
 test_suite_wh_6u_metal_unit_tests
 test_suite_wh_6u_metal_torus_xy_health_check_tests
 test_suite_wh_6u_metal_qsfp_links_health_check_tests"
+
+hw_topology_test_suites["blackhole_ttnn_stress_tests"]="
+test_suite_bh_ttnn_stress_tests"
 
 # Function to display help
 show_help() {
