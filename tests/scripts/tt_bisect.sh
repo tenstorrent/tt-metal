@@ -75,17 +75,11 @@ if [ "$artifact_mode" = true ]; then
   echo "Artifact download optimization enabled."
 fi
 
-# Set up environment (skip if already in CI container with pre-configured venv)
-if [ ! -d "$PYTHON_ENV_DIR" ]; then
-  echo "Creating virtual environment and installing dependencies..."
-  ./create_venv.sh
-  pip install -r models/tt_transformers/requirements.txt
-else
-  echo "Using existing virtual environment: $PYTHON_ENV_DIR"
-  source $PYTHON_ENV_DIR/bin/activate
-  pip install -r models/tt_transformers/requirements.txt
-  pip install -r $(pwd)/tt_metal/python_env/requirements-dev.txt
-fi
+
+echo "Creating virtual environment and installing dependencies..."
+./create_venv.sh
+pip install -r models/tt_transformers/requirements.txt
+
 
 git cat-file -e "$good_commit^{commit}" 2>/dev/null || die "Invalid good commit: $good_commit"
 git cat-file -e "$bad_commit^{commit}" 2>/dev/null  || die "Invalid bad commit: $bad_commit"
