@@ -572,9 +572,18 @@ def get_state_dicts(
     return torch.stack(tensors, dim=concat_dim)
 
 
-def sub_state_dict(state_dict: dict[str, torch.Tensor], prefix: str):
+def sub_state_dict(state_dict: dict[str, torch.Tensor], prefix: str, num_layers: int | None = None):
     """Get a subset of the state dict with a given prefix."""
-    return {k[len(prefix) :]: v for k, v in state_dict.items() if k.startswith(prefix)}
+    if num_layers is None:
+        return {k[len(prefix) :]: v for k, v in state_dict.items() if k.startswith(prefix)}
+    else:
+        return {
+            k[len(prefix) :]: v
+            for k, v in state_dict.items()
+            if k.startswith(prefix)
+            for layer_idx_str in ["".join(itertools.takewhile(str.isdigit, k.removeprefix("model.layers.")))]
+            if not layer_idx_str or int(layer_idx_str) < num_layers
+        }
 
 
 def sub_state_dicts(
