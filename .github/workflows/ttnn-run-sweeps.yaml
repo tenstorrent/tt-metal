@@ -589,6 +589,17 @@ on:
           - BH-DeskBox
           - BH-LoudBox
         default: "N150"
+      log_level:
+        description: "Long sweeps on INFO log level may overwhelm the runner"
+        required: true
+        type: choice
+        options:
+          - DEBUG
+          - INFO
+          - WARNING
+          - CRITICAL
+        default: "INFO"
+
 
   schedule:
     - cron: "0 4 * * 1,2,4,5" # This cron schedule runs the workflow at 4:00 AM UTC on Mon, Tue, Thu, Fri (nightly runs)
@@ -749,7 +760,8 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ matrix.test-group.arch }}
-        LOGURU_LEVEL: INFO
+        LOGURU_LEVEL: ${{ inputs.log-level }}
+        TT_LOGGER_LEVEL: ${{ inputs.log-level }}
         GITHUB_ACTIONS: true
         ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
         ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
