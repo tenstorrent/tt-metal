@@ -150,7 +150,6 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
 
     // CBs
     using tt::tt_metal::CBHandle;
-    using tt::tt_metal::CircularBuffer;
     using tt::tt_metal::CircularBufferConfig;
 
     uint32_t next_cb_index = CBIndex::c_0;
