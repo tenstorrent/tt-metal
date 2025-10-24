@@ -888,6 +888,7 @@ def run_tt_image_gen_inpainting(
     capture_trace=False,
     use_cfg_parallel=False,
     guidance_rescale=0.0,
+    one_minus_guidance_rescale=1.0,
 ):
     assert not (capture_trace and num_steps != 1), "Trace should capture only 1 iteration"
     profiler.start("image_gen")
@@ -962,7 +963,7 @@ def run_tt_image_gen_inpainting(
             noise_pred_rescaled = ttnn.mul(noise_pred, std_ratio)
 
             rescaled_term = ttnn.mul(noise_pred_rescaled, guidance_rescale)
-            original_term = ttnn.mul(noise_pred, (1.0 - guidance_rescale))
+            original_term = ttnn.mul(noise_pred, one_minus_guidance_rescale)
             ttnn.deallocate(noise_pred)
             noise_pred = ttnn.add(rescaled_term, original_term)
             ttnn.deallocate(std_text)
