@@ -554,7 +554,9 @@ def test_conv2d_localrun(device, input_spec):
 
 # fmt: off
 failing_parameters = [
-# [batch_size, output_channels, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, groups, dilation_h, dilation_w, bias, [input_layout, input_memory_config, input_datatype], [weight_layout, weight_memory_config, weight_datatype], [output_layout, output_memory_config, output_datatype]]
+    # [batch_size, output_channels, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, groups, dilation_h, dilation_w, bias, [input_layout, input_memory_config, input_datatype], [weight_layout, weight_memory_config, weight_datatype], [output_layout, output_memory_config, output_datatype]]
+    # Will be fixed in https://github.com/tenstorrent/tt-metal/pull/30446
+    [1, 320, 320, 80, 80, 3, 3, 16, 16, 0, 0, 1, 1, 1, False, [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], ],
 
 ]
 # fmt: on
