@@ -26,12 +26,17 @@ pytestmark = [
     pytest.mark.parametrize(
         "mesh_device",
         [
-            # [1, 1],  # single device # [INFO] apply auto_compose on single device would incur error in c++ code
+            [1, 1],  # single device # [INFO] apply auto_compose on single device would incur error in c++ code
             [1, 2],  # 1D mesh, 2 devices
             [1, 8],  # 1D mesh, 8 devices
             [2, 4],  # 2D mesh, 8 devices
         ],
-        ids=["1x2", "1x8", "2x4"],
+        ids=[
+            "1x1",
+            "1x2",
+            "1x8",
+            "2x4",
+        ],
         indirect=True,
     ),
     pytest.mark.parametrize(
@@ -161,8 +166,6 @@ def _get_hw_shard_unit() -> int:
 def test_host_sharded_1d(mesh_device: ttnn.MeshDevice, layout) -> None:
     """Test automatic composition of host-sharded 1D tensors."""
     num_devices = mesh_device.get_num_devices()
-    if num_devices < 2:
-        pytest.skip(f"Test requires at least 2 devices, found {num_devices}")
 
     # Input tensor of shape [num_devices, 1, 3, 1]
     torch_in = _make_known_pattern(num_devices)
@@ -189,8 +192,6 @@ def test_host_sharded_1d(mesh_device: ttnn.MeshDevice, layout) -> None:
 def test_device_sharded_1d(mesh_device: ttnn.MeshDevice, layout) -> None:
     """Test automatic composition of device-sharded 1D tensors."""
     num_devices = mesh_device.get_num_devices()
-    if num_devices < 2:
-        pytest.skip(f"Test requires at least 2 devices, found {num_devices}")
 
     # Input tensor of shape [num_devices, 1, 3, 1]
     torch_in = _make_known_pattern(num_devices)
@@ -227,8 +228,6 @@ def test_device_sharded_1d(mesh_device: ttnn.MeshDevice, layout) -> None:
 @pytest.mark.parametrize("dim", [0, 1, -1])
 def test_host_sharded_various_dims(mesh_device: ttnn.MeshDevice, layout, dim: int) -> None:
     num_devices = mesh_device.get_num_devices()
-    if num_devices < 2:
-        pytest.skip(f"Test requires at least 2 devices, found {num_devices}")
 
     rank = 4
     axis = _pos_dim(dim, rank)
@@ -254,8 +253,6 @@ def test_host_sharded_various_dims(mesh_device: ttnn.MeshDevice, layout, dim: in
 @pytest.mark.parametrize("dim", [0, 1, -1])
 def test_device_sharded_various_dims(mesh_device: ttnn.MeshDevice, layout, dim: int) -> None:
     num_devices = mesh_device.get_num_devices()
-    if num_devices < 2:
-        pytest.skip(f"Test requires at least 2 devices, found {num_devices}")
 
     rank = 4
     axis = _pos_dim(dim, rank)
@@ -381,8 +378,6 @@ def test_host_sharded_2d_with_replicate(
 @pytest.mark.parametrize("category", ["lt", "eq", "gt"])  # per-shard length relative to threshold
 def test_host_sharded_shape_thresholds(mesh_device: ttnn.MeshDevice, layout, category: str) -> None:
     num_devices = mesh_device.get_num_devices()
-    if num_devices < 2:
-        pytest.skip(f"Test requires at least 2 devices, found {num_devices}")
 
     unit = _get_hw_shard_unit()
     if category == "lt":
@@ -418,8 +413,6 @@ def test_host_sharded_shape_thresholds(mesh_device: ttnn.MeshDevice, layout, cat
 @pytest.mark.parametrize("category", ["lt", "eq", "gt"])  # per-shard length relative to threshold
 def test_device_sharded_shape_thresholds(mesh_device: ttnn.MeshDevice, layout, category: str) -> None:
     num_devices = mesh_device.get_num_devices()
-    if num_devices < 2:
-        pytest.skip(f"Test requires at least 2 devices, found {num_devices}")
 
     unit = _get_hw_shard_unit()
     if category == "lt":
