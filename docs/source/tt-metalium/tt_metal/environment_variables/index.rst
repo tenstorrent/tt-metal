@@ -6,7 +6,7 @@ Environment Variables
 TT_METAL_HOME
 -------------
 
-**Required:** Conditional (only when required by a given workflow)
+**Optional:** Needed only for specific workflows.
 
 **Description:**
 
@@ -31,7 +31,7 @@ TT_METAL_RUNTIME_ROOT
 
 **Description:**
 
-``TT_METAL_RUNTIME_ROOT`` serves as an override to tell ``libtt_metal.so`` where to look for its runtime artifacts (files that get read from disk).
+``TT_METAL_RUNTIME_ROOT`` serves as an override to tell ``libtt_metal.so`` where to look for artifacts - firmware blobs, etc.. that is needed during runtime.
 
 **When is it required:**
 
