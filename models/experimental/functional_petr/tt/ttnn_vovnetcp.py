@@ -170,16 +170,16 @@ class ttnn_osa_module:
             if hasattr(x, "memory_config") and x.memory_config().is_sharded():
                 x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
             output.append(x)
-        output_float32 = []
+        output_tensor = []
         for idx in range(len(output)):
             if output[idx].get_layout() != ttnn.ROW_MAJOR_LAYOUT:
                 output[idx] = ttnn.to_layout(output[idx], ttnn.ROW_MAJOR_LAYOUT)
             if hasattr(output[idx], "memory_config") and output[idx].memory_config().is_sharded():
                 output[idx] = ttnn.to_memory_config(output[idx], ttnn.L1_MEMORY_CONFIG)
-            output_torch = ttnn.to_torch(output[idx]).to(torch.float32)
-            output_float32.append(ttnn.from_torch(output_torch, dtype=ttnn.bfloat16, device=device))
+            output_torch = ttnn.to_torch(output[idx]).to(torch.bfloat16)
+            output_tensor.append(ttnn.from_torch(output_torch, dtype=ttnn.bfloat16, device=device))
 
-        x = ttnn.concat(output_float32, dim=3)
+        x = ttnn.concat(output_tensor, dim=3)
 
         for y in output:
             ttnn.deallocate(y)
@@ -241,7 +241,7 @@ class ttnn_osa_stage:
         SE=False,
         depthwise=False,
     ):
-        self.torch_fallback = True
+        self.torch_fallback = True  # TODO: Remove this once we have a better pcc with ttnn maxpool implementation
         self.blocks = []
         if not stage_num == 2:
             self.pooling = True
@@ -292,6 +292,7 @@ class ttnn_osa_stage:
         if self.pooling is True:
             if self.torch_fallback:
                 # Maxpool in torch
+                # PCC for cls_scores = 0.978699
                 x_torch = ttnn.to_torch(x).to(torch.bfloat16)
                 x_torch = x_torch.permute(0, 3, 1, 2)
                 x_torch = F.max_pool2d(x_torch, kernel_size=3, stride=2, padding=0, ceil_mode=True)
@@ -300,6 +301,7 @@ class ttnn_osa_stage:
                 x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
             else:
                 # Maxpool in ttnn
+                # PCC for cls_scores = 0.806960
                 x = ttnn.max_pool2d(
                     input_tensor=x,
                     batch_size=x.shape[0],
