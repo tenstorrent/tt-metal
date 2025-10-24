@@ -71,7 +71,6 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
     uint32_t input_buffer_address = mesh_buffer->address();
 
     // Input
-    // vector<uint32_t> packed_input = create_arange_vector_of_bfloat16(total_size_bytes, true);
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f, 100.0f, total_size_bytes / sizeof(bfloat16), chrono::system_clock::now().time_since_epoch().count());
 
