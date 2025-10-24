@@ -53,13 +53,19 @@ int main(int argc, char** argv) {
     std::vector<ParsedTestConfig> raw_test_configs;
     tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies;
     std::optional<tt::tt_fabric::fabric_tests::PhysicalMeshConfig> physical_mesh_config = std::nullopt;
+    bool use_dynamic_policies = true;  // Default to dynamic
+
     if (auto yaml_path = cmdline_parser.get_yaml_config_path()) {
         YamlConfigParser yaml_parser;
         auto parsed_yaml = yaml_parser.parse_file(yaml_path.value());
         raw_test_configs = std::move(parsed_yaml.test_configs);
+
+        // Check if YAML explicitly provided allocation_policies
         if (parsed_yaml.allocation_policies.has_value()) {
             allocation_policies = parsed_yaml.allocation_policies.value();
+            use_dynamic_policies = false;  // User provided explicit policies
         }
+
         if (parsed_yaml.physical_mesh_config.has_value()) {
             physical_mesh_config = parsed_yaml.physical_mesh_config;
         }
@@ -70,7 +76,7 @@ int main(int argc, char** argv) {
     fixture->init(physical_mesh_config);
 
     TestContext test_context;
-    test_context.init(fixture, allocation_policies);
+    test_context.init(fixture, allocation_policies, use_dynamic_policies);
 
     // Configure progress monitoring from cmdline flags
     if (cmdline_parser.show_progress()) {

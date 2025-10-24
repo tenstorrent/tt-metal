@@ -507,8 +507,14 @@ public:
     // Get pristine cores for a device (for local mux allocation)
     std::vector<CoreCoord> get_pristine_cores_for_device(const FabricNodeId& node_id) const;
 
+    // Set whether to use dynamic allocation policies
+    void set_use_dynamic_policies(bool use_dynamic) { use_dynamic_policies_ = use_dynamic; }
+
 private:
     TestDeviceResources& get_or_create_device_resources(const FabricNodeId& node_id);
+
+    // Compute dynamic allocation policies based on test configuration
+    AllocatorPolicies compute_dynamic_policies(const TestConfig& config);
 
     const IDeviceInfoProvider& device_info_provider_;
     const IRouteManager& route_manager_;
@@ -518,6 +524,7 @@ private:
     std::optional<CoreCoord> worker_grid_size_;
     std::unordered_map<FabricNodeId, std::unique_ptr<TestDeviceResources>> all_device_resources_;
     bool enable_flow_control_ = false;  // Set during allocate_resources, used during device creation
+    bool use_dynamic_policies_ = true;  // Default to dynamic policy computation
 };
 
 inline GlobalAllocator::GlobalAllocator(
@@ -558,7 +565,222 @@ inline TestDeviceResources& GlobalAllocator::get_or_create_device_resources(cons
     return *inserted_it->second;
 }
 
+// Constants for dynamic policy computation
+namespace {
+constexpr uint32_t MIN_BUFFER_SIZE_BYTES = 16 * 1024;                                            // 16KB
+constexpr uint32_t USABLE_L1_SIZE_BYTES = 1024 * 1024;                                           // 1MB
+constexpr uint32_t MAX_CONFIGS_PER_CORE_CEILING = USABLE_L1_SIZE_BYTES / MIN_BUFFER_SIZE_BYTES;  // 64
+constexpr uint32_t SAFETY_MARGIN_CORES = 2;
+constexpr uint32_t DEFAULT_MIN_CONFIGS_PER_CORE = 1;
+constexpr uint32_t NUM_DIRECTIONS = 4;  // N, S, E, W
+}  // namespace
+
+inline AllocatorPolicies GlobalAllocator::compute_dynamic_policies(const TestConfig& config) {
+    // 1. Query system parameters
+    CoreCoord worker_grid = device_info_provider_.get_worker_grid_size();
+    uint32_t total_worker_cores = worker_grid.x * worker_grid.y;
+
+    // 2. Determine mux cores per device (if flow control enabled)
+    uint32_t mux_cores_per_device = 0;
+    if (config.enable_flow_control) {
+        // Determine num_links from test config
+        uint32_t max_link_id = 0;
+        for (const auto& sender : config.senders) {
+            max_link_id = std::max(max_link_id, sender.link_id);
+        }
+        uint32_t num_links = max_link_id + 1;  // link_id is 0-indexed
+
+        // Per device max: 4 directions × num_links
+        mux_cores_per_device = NUM_DIRECTIONS * num_links;
+    }
+
+    // 3. Build per-device receiver load histogram
+    std::unordered_map<FabricNodeId, uint32_t> receiver_load_per_device;
+
+    for (const auto& sender : config.senders) {
+        for (const auto& pattern : sender.patterns) {
+            const auto& dest = pattern.destination.value();
+
+            if (dest.hops.has_value()) {
+                auto dst_node_ids = route_manager_.get_dst_node_ids_from_hops(
+                    sender.device,
+                    const_cast<std::unordered_map<RoutingDirection, uint32_t>&>(dest.hops.value()),
+                    pattern.ftype.value());
+                for (const auto& dst_id : dst_node_ids) {
+                    receiver_load_per_device[dst_id]++;
+                }
+            } else if (dest.device.has_value()) {
+                receiver_load_per_device[dest.device.value()]++;
+            }
+        }
+    }
+
+    // 4. Per-device analysis - find worst case
+    uint32_t max_configs_per_core_needed = DEFAULT_MIN_CONFIGS_PER_CORE;
+    std::optional<FabricNodeId> worst_case_device;  // Use optional since we might have no receivers
+    uint32_t worst_case_reserved = 0;
+    uint32_t worst_case_receivers = 0;
+
+    for (const auto& [device_id, num_receivers] : receiver_load_per_device) {
+        // Count reserved cores on this device
+        uint32_t sender_cores_on_device = 0;
+        for (const auto& sender : config.senders) {
+            if (sender.device == device_id) {
+                sender_cores_on_device++;
+            }
+        }
+
+        bool has_sync = false;
+        for (const auto& sync : config.global_sync_configs) {
+            if (sync.device == device_id) {
+                has_sync = true;
+                break;
+            }
+        }
+
+        uint32_t reserved_cores =
+            (has_sync ? 1 : 0) + sender_cores_on_device + mux_cores_per_device + SAFETY_MARGIN_CORES;
+
+        // Feasibility check 1: No cores left for receivers
+        if (reserved_cores >= total_worker_cores) {
+            log_fatal(
+                tt::LogTest,
+                "Device [mesh={}, chip={}] allocation is INFEASIBLE!\n"
+                "  Reserved cores: {} >= Total cores: {}\n"
+                "  Breakdown: sync={}, senders={}, mux={}, safety={}\n"
+                "  No cores left for {} receiver configs!\n"
+                "  Suggestions: Reduce link count, disable flow control, or use larger core grid.",
+                device_id.mesh_id,
+                device_id.chip_id,
+                reserved_cores,
+                total_worker_cores,
+                (has_sync ? 1 : 0),
+                sender_cores_on_device,
+                mux_cores_per_device,
+                SAFETY_MARGIN_CORES,
+                num_receivers);
+            TT_FATAL(false, "Infeasible allocation configuration");
+        }
+
+        uint32_t available_for_receivers = total_worker_cores - reserved_cores;
+
+        // Feasibility check 2: Insufficient cores for minimum buffer size
+        uint32_t min_cores_needed = (num_receivers + MAX_CONFIGS_PER_CORE_CEILING - 1) / MAX_CONFIGS_PER_CORE_CEILING;
+
+        if (available_for_receivers < min_cores_needed) {
+            log_fatal(
+                tt::LogTest,
+                "Device [mesh={}, chip={}] allocation is INFEASIBLE!\n"
+                "  Receiver configs: {}\n"
+                "  Minimum cores needed: {} (to provide 16KB per receiver)\n"
+                "  Available cores: {}\n"
+                "  Reserved cores: {}\n"
+                "  The test requires more receiver cores than available even at maximum sharing.\n"
+                "  Suggestions: Reduce test scale, links, or use larger core grid.",
+                device_id.mesh_id,
+                device_id.chip_id,
+                num_receivers,
+                min_cores_needed,
+                available_for_receivers,
+                reserved_cores);
+            TT_FATAL(false, "Infeasible allocation: insufficient receiver cores");
+        }
+
+        // Compute required configs per core
+        uint32_t required = (num_receivers + available_for_receivers - 1) / available_for_receivers;
+
+        if (required > max_configs_per_core_needed) {
+            max_configs_per_core_needed = required;
+            worst_case_device = device_id;
+            worst_case_reserved = reserved_cores;
+            worst_case_receivers = num_receivers;
+        }
+    }
+
+    // 5. Apply bounds
+    uint32_t max_configs_per_core = std::min(max_configs_per_core_needed, MAX_CONFIGS_PER_CORE_CEILING);
+    uint32_t payload_chunk_size = USABLE_L1_SIZE_BYTES / max_configs_per_core;
+
+    // 6. Validate packet sizes
+    uint32_t max_packet_size = 0;
+    for (const auto& sender : config.senders) {
+        for (const auto& pattern : sender.patterns) {
+            if (pattern.size.has_value()) {
+                max_packet_size = std::max(max_packet_size, pattern.size.value());
+            }
+        }
+    }
+
+    if (max_packet_size > payload_chunk_size) {
+        log_fatal(
+            tt::LogTest,
+            "Test configuration is INVALID!\n"
+            "  Max packet size: {} bytes\n"
+            "  Computed buffer size: {} bytes\n"
+            "  The packet size exceeds buffer capacity even with optimal allocation.\n"
+            "  Fix: Reduce packet size to <= {} bytes.",
+            max_packet_size,
+            payload_chunk_size,
+            payload_chunk_size);
+        TT_FATAL(false, "Invalid test configuration: packet size exceeds buffer capacity");
+    }
+
+    // 7. Log computed policy
+    if (worst_case_device.has_value()) {
+        log_info(tt::LogTest, "");
+        log_info(tt::LogTest, "[Dynamic Allocation Policy - Worst Case Device]");
+        log_info(
+            tt::LogTest,
+            "  Device: [mesh={}, chip={}]",
+            worst_case_device.value().mesh_id,
+            worst_case_device.value().chip_id);
+        log_info(tt::LogTest, "  Reserved cores: {} (of {} total)", worst_case_reserved, total_worker_cores);
+        log_info(tt::LogTest, "  Available for receivers: {}", total_worker_cores - worst_case_reserved);
+        log_info(tt::LogTest, "  Receiver configs: {}", worst_case_receivers);
+        log_info(tt::LogTest, "  Computed: max_configs_per_core = {}", max_configs_per_core);
+        log_info(
+            tt::LogTest,
+            "  Computed: default_payload_chunk_size = {} bytes ({} KB)",
+            payload_chunk_size,
+            payload_chunk_size / 1024);
+        log_info(tt::LogTest, "");
+    }
+
+    // 8. Build and return policies
+    AllocatorPolicies computed_policies = policies_;
+    computed_policies.receiver_config.max_configs_per_core = max_configs_per_core;
+    computed_policies.default_payload_chunk_size = payload_chunk_size;
+
+    return computed_policies;
+}
+
 inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
+    // Determine effective policies
+    AllocatorPolicies effective_policies = policies_;
+
+    if (use_dynamic_policies_) {
+        // Compute dynamic policies based on test configuration
+        effective_policies = compute_dynamic_policies(test_config);
+
+        log_debug(tt::LogTest, "[Using Dynamic Allocation Policy]");
+        log_debug(tt::LogTest, "  Test: {}", test_config.parametrized_name);
+        log_debug(tt::LogTest, "  max_configs_per_core: {}", effective_policies.receiver_config.max_configs_per_core);
+        log_debug(
+            tt::LogTest, "  default_payload_chunk_size: {} KB", effective_policies.default_payload_chunk_size / 1024);
+        log_debug(tt::LogTest, "");
+    } else {
+        log_debug(tt::LogTest, "[Using Explicit YAML Allocation Policy]");
+        log_debug(tt::LogTest, "  Test: {}", test_config.parametrized_name);
+        log_debug(tt::LogTest, "  max_configs_per_core: {}", effective_policies.receiver_config.max_configs_per_core);
+        log_debug(
+            tt::LogTest, "  default_payload_chunk_size: {} KB", effective_policies.default_payload_chunk_size / 1024);
+        log_debug(tt::LogTest, "");
+    }
+
+    // Temporarily use effective policies for this allocation
+    AllocatorPolicies original_policies = policies_;
+    policies_ = effective_policies;
+
     // Store flow control flag for use during device creation
     enable_flow_control_ = test_config.enable_flow_control;
 
@@ -808,6 +1030,9 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
             }
         }
     }
+
+    // Restore original policies for next test
+    policies_ = original_policies;
 }
 
 inline void GlobalAllocator::reset() {
