@@ -54,7 +54,6 @@ LayerNormPostAllGatherWelfordProgramFactory::cached_program_t LayerNormPostAllGa
     LayerNormPostAllGatherTensorReturnValue& output) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBHandle;
-    using tt::tt_metal::CircularBuffer;
     using tt::tt_metal::CircularBufferConfig;
 
     const auto& a = tensor_args.input;
