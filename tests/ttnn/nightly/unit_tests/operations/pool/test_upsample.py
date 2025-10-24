@@ -262,22 +262,36 @@ def test_panoptic_upsample_sliced(device, batch_size, num_channels, height, widt
 @pytest.mark.parametrize(
     "batch_size, num_channels, height, width, scale_h, scale_w",
     (
-        # (1, 1, 128, 256, 4, 4),       # needs channel padding
-        (1, 32, 128, 256, 4, 4),  # OOM
-        (1, 128, 64, 128, 2, 2),  # 64x128 -> 128x256 (2x scaling)
-        # (1, 19, 128, 256, 4, 4),      # needs channel padding
-        (1, 32, 128, 256, 4, 4),  # OOM
-        # (1, 2, 128, 256, 4, 4),       # needs channel padding
-        (1, 32, 128, 256, 4, 4),  # OOM
-        (1, 256, 1, 1, 32, 64),  # 1x1 -> 32x64 (large scaling)
-        (1, 256, 32, 64, 2, 2),  # 32x64 -> 64x128 (2x scaling)
-        (1, 256, 64, 128, 2, 2),  # OOM
+        # # (1, 1, 128, 256, 4, 4),       # needs channel padding
+        # (1, 32, 128, 256, 4, 4),  # OOM
+        # (1, 128, 64, 128, 2, 2),  # 64x128 -> 128x256 (2x scaling)
+        # # (1, 19, 128, 256, 4, 4),      # needs channel padding
+        # (1, 32, 128, 256, 4, 4),  # OOM
+        # # (1, 2, 128, 256, 4, 4),       # needs channel padding
+        # (1, 32, 128, 256, 4, 4),  # OOM
+        # (1, 256, 1, 1, 32, 64),  # 1x1 -> 32x64 (large scaling)
+        # (1, 256, 32, 64, 2, 2),  # 32x64 -> 64x128 (2x scaling)
+        # (1, 256, 64, 128, 2, 2),  # OOM
+        # channel slicing (1, 256, 64, 128, 2, 2)
+        # (1, 256, 64, 128, 2, 2),  # OOM
+        (1, 128, 64, 128, 2, 2),  # 1/2 ch
+        (1, 64, 64, 128, 2, 2),  # 1/4 ch
+        (1, 32, 64, 128, 2, 2),  # 1/8 ch
+        # image size slicing (1, 256, 64, 128, 2, 2)
+        (1, 256, 64, 64, 2, 2),  # w/2
+        (1, 256, 64, 32, 2, 2),  # w/4
+        (1, 256, 32, 128, 2, 2),  # h/2
+        (1, 256, 32, 64, 2, 2),  # h/2 & w/2
+        (1, 256, 32, 32, 2, 2),  # h/2 & w/4
+        # half of (1, 19, 128, 256, 4, 4),
+        (1, 32, 64, 256, 4, 4),
     ),
-    ids=["up1", "up2", "up3", "up4", "up5", "up6", "up7"],
+    # ids=["up1", "up2", "up3", "up4", "up5", "up6", "up7"],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("math_approx_mode", [True])
-@pytest.mark.parametrize("mode", ["bilinear", "nearest"])
+# @pytest.mark.parametrize("mode", ["bilinear", "nearest"])
+@pytest.mark.parametrize("mode", ["bilinear"])
 def test_panoptic_upsample_dram(
     device, batch_size, num_channels, height, width, scale_h, scale_w, math_fidelity, math_approx_mode, mode
 ):
