@@ -3658,35 +3658,12 @@ def test_binary_sharded_bcast_h_mixed_strategy_mixed_L1(device, dtype_pt, dtype_
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
+    import itertools
 
-    input_combinations = (
-        (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
-        (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
-        (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, a_sharded_config),
-        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.L1_MEMORY_CONFIG),
-        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
-        (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
-        (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        (ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        (ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
-        (ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, a_sharded_config),
-        (ttnn.L1_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        (ttnn.L1_MEMORY_CONFIG, b_sharded_config, ttnn.L1_MEMORY_CONFIG),
-        (ttnn.L1_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
-        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
-        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        (a_sharded_config, ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        (a_sharded_config, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
-        (a_sharded_config, ttnn.L1_MEMORY_CONFIG, a_sharded_config),
-        (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        (a_sharded_config, b_sharded_config, ttnn.L1_MEMORY_CONFIG),
-        (a_sharded_config, b_sharded_config, a_sharded_config),
+    input_combinations = itertools.product(
+        [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, a_sharded_config],
+        [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, b_sharded_config],
+        [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, a_sharded_config],
     )
     for a_config, b_config, dst_config in input_combinations:
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
