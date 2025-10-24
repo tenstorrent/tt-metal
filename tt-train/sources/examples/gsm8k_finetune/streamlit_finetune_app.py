@@ -18,6 +18,14 @@ import subprocess
 import signal
 import json
 
+device_mesh_shapes = {
+    "N150": [1, 1],
+    "N300": [1, 2],
+    "LoudBox": [1, 8],
+    "Galaxy": [1, 32],
+    "3-tier": [5, 32],  # Example shape for 5-Galaxy system
+}
+
 # Set page configuration
 st.set_page_config(page_title="LLM Fine-tuning Dashboard", layout="wide", initial_sidebar_state="expanded")
 
@@ -211,8 +219,8 @@ def create_training_yaml(config_dict, output_path="/home/ubuntu/tt-metal/tt-trai
     }
 
     device_config = {
-        "enable_ddp": True,
-        "mesh_shape": [1, 32]
+        "enable_ddp": config_dict["enable_ddp"],
+        "mesh_shape": config_dict["mesh_shape"],
     }
 
     # Write YAML with blank lines between top-level sections
@@ -234,10 +242,10 @@ def create_training_yaml(config_dict, output_path="/home/ubuntu/tt-metal/tt-trai
         f.write("\n")  # Blank line between sections
 
         f.write("device_config:\n")
-        device_yaml = yaml.dump(device_config, default_flow_style=False, sort_keys=False)
-        # Indent each line
-        for line in device_yaml.strip().split("\n"):
-            f.write(f"  {line}\n")
+        # Handle mesh_shape as flow sequence, others as block style
+        f.write(f"  enable_ddp: {device_config['enable_ddp']}\n")
+        mesh_shape_flow = yaml.dump(device_config['mesh_shape'], default_flow_style=True).strip()
+        f.write(f"  mesh_shape: {mesh_shape_flow}\n")
 
     return output_path
 
@@ -356,10 +364,11 @@ def main():
         # Device selection
         st.subheader("Device Settings")
         devices_options = [
-            "N300",
-            "LoudBox",
-            "Galaxy",
-            "3-tier"
+            "N150", # [1,1]
+            "N300", # [1,2]
+            "LoudBox", # [1, 8]
+            "Galaxy", # [1, 32]
+            "3-tier" # [???]
         ]
         selected_devices = st.selectbox("Devices", devices_options, index=2)
         # Dataset selection
@@ -444,6 +453,8 @@ def main():
                     "gradient_accumulation": gradient_accumulation,
                     "max_seq_length": max_seq_length,
                     "yaml_dir": yaml_output_dir,
+                    "enable_ddp": True if selected_devices != "N150" else False,
+                    "mesh_shape": device_mesh_shapes[selected_devices]
                 }
                 success, message = start_training(config)
                 if success:
