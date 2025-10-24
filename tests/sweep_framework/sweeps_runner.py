@@ -201,7 +201,7 @@ def get_timeout(test_module_name):
 
 
 def sanitize_inputs(test_vectors):
-    info_field_names = ["sweep_name", "suite_name", "vector_id", "input_hash"]
+    info_field_names = ["sweep_name", "suite_name", "input_hash"]
     header_info = []
     for vector in test_vectors:
         header = dict()
@@ -542,8 +542,8 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
         p.start()
 
     for i, test_vector in enumerate(test_vectors):
-        vector_id = header_info[i].get("vector_id", "N/A")
-        logger.info(f"Executing test: Module='{module_name}', Suite='{suite_name}', Vector ID='{vector_id}'")
+        input_hash = header_info[i].get("input_hash", "N/A")
+        logger.info(f"Executing test: Module='{module_name}', Suite='{suite_name}', Input Hash='{input_hash}'")
         if config.dry_run:
             logger.info(f"Would have executed test for vector {test_vector}")
             suite_pbar.update()
@@ -553,7 +553,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
         # Capture the original test vector data BEFORE any modifications
         original_vector_data = test_vector.copy()
         result["start_time_ts"] = dt.datetime.now(dt.timezone.utc)
-        result["input_hash"] = vector_id
+        result["input_hash"] = input_hash
         validity = deserialize(test_vector["validity"]).split(".")[-1]
         if validity == VectorValidity.INVALID:
             invalid_vectors_count += 1
@@ -698,6 +698,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                     for j in range(i + 1, len(test_vectors)):
                         remaining_vector = test_vectors[j]
                         skipped_result = dict()
+                        skipped_result["input_hash"] = header_info[j].get("input_hash", "N/A")
                         skipped_result["start_time_ts"] = dt.datetime.now(dt.timezone.utc)
                         skipped_result["original_vector_data"] = remaining_vector.copy()
                         skipped_result["status"] = TestStatus.NOT_RUN
