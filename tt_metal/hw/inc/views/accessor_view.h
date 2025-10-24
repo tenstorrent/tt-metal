@@ -32,7 +32,7 @@ public:
 
     // reader members
 
-    __attribute__((always_inline)) auto reserve_back(uint32_t num_tiles_per_cycle) const noexcept {
+    __attribute__((always_inline)) void reserve_back(uint32_t num_tiles_per_cycle) const noexcept {
         cb_reserve_back(cb_index, num_tiles_per_cycle);
 
         // recurse for remaining accessors
@@ -41,7 +41,7 @@ public:
         }
     }
 
-    __attribute__((always_inline)) auto read_tile_block(
+    __attribute__((always_inline)) void async_read_tile_block(
         uint32_t start_id, uint32_t num_tiles_per_cycle) const noexcept {
         auto write_ptr = get_write_ptr(cb_index);
 
@@ -52,11 +52,11 @@ public:
 
         // recurse for remaining accessors
         if constexpr (Accessors > 1) {
-            this->tail.read_tile_block(start_id, num_tiles_per_cycle);
+            this->tail.async_read_tile_block(start_id, num_tiles_per_cycle);
         }
     }
 
-    __attribute__((always_inline)) auto push_back(uint32_t num_tiles_per_cycle) const noexcept {
+    __attribute__((always_inline)) void push_back(uint32_t num_tiles_per_cycle) const noexcept {
         // recurse for remaining accessors
         if constexpr (Accessors > 1) {
             this->tail.push_back(num_tiles_per_cycle);
@@ -66,10 +66,10 @@ public:
     }
 
     template <uint32_t NumTilesPerCycle = DefaultNumTilesPerCycle>
-    auto read_tiles(uint32_t tiles, uint32_t id = 0) const noexcept {
+    void read_tiles(uint32_t tiles, uint32_t id = 0) const noexcept {
         for (; tiles >= NumTilesPerCycle; tiles -= NumTilesPerCycle, id += NumTilesPerCycle) {
             this->reserve_back(NumTilesPerCycle);
-            this->read_tile_block(id, NumTilesPerCycle);
+            this->async_read_tile_block(id, NumTilesPerCycle);
             noc_async_read_barrier();
             this->push_back(NumTilesPerCycle);
         }
@@ -84,7 +84,7 @@ public:
 
     // writer members
 
-    __attribute__((always_inline)) auto wait_front(uint32_t num_tiles_per_cycle) const noexcept {
+    __attribute__((always_inline)) void wait_front(uint32_t num_tiles_per_cycle) const noexcept {
         cb_wait_front(cb_index, num_tiles_per_cycle);
 
         // recurse for remaining accessors
@@ -93,7 +93,7 @@ public:
         }
     }
 
-    __attribute__((always_inline)) auto write_tile_block(
+    __attribute__((always_inline)) void async_write_tile_block(
         uint32_t start_id, uint32_t num_tiles_per_cycle) const noexcept {
         auto read_ptr = get_read_ptr(cb_index);
 
@@ -104,11 +104,11 @@ public:
 
         // recurse for remaining accessors
         if constexpr (Accessors > 1) {
-            this->tail.write_tile_block(start_id, num_tiles_per_cycle);
+            this->tail.async_write_tile_block(start_id, num_tiles_per_cycle);
         }
     }
 
-    __attribute__((always_inline)) auto pop_front(uint32_t num_tiles_per_cycle) const noexcept {
+    __attribute__((always_inline)) void pop_front(uint32_t num_tiles_per_cycle) const noexcept {
         // recurse for remaining accessors
         if constexpr (Accessors > 1) {
             this->tail.pop_front(num_tiles_per_cycle);
@@ -118,11 +118,11 @@ public:
     }
 
     template <uint32_t NumTilesPerCycle = DefaultNumTilesPerCycle>
-    auto write_tiles(uint32_t tiles, uint32_t id = 0) const noexcept {
+    void write_tiles(uint32_t tiles, uint32_t id = 0) const noexcept {
         for (; tiles >= NumTilesPerCycle; tiles -= NumTilesPerCycle, id += NumTilesPerCycle) {
             this->wait_front(NumTilesPerCycle);
-            this->write_tile_block(id, NumTilesPerCycle);
-            noc_async_write_barrier();
+            this->async_write_tile_block(id, NumTilesPerCycle);
+            noc_async_writes_flushed();
             this->pop_front(NumTilesPerCycle);
         }
 
@@ -130,8 +130,11 @@ public:
         if constexpr (NumTilesPerCycle > 1) {
             if (tiles > 0) {
                 this->write_tiles<1>(tiles, id);
+                return;
             }
         }
+
+        noc_async_write_barrier();
     }
 };
 
