@@ -121,7 +121,7 @@ autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbedding
     auto seq_len = input_logical_shape[2];
     auto head_dim = input_logical_shape[3];
 
-    auto squish_batch = [num_batch, num_heads, seq_len, head_dim](const ttnn::Tensor& input) {
+    auto squish_batch = [num_batch, num_heads](const ttnn::Tensor& input) {
         auto shape = input.logical_shape();
         auto seq_len = shape[2];
         auto head_dim = shape[3];

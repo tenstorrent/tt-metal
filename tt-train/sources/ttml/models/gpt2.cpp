@@ -218,7 +218,7 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
         return it->second;
     };
     serialization::SafetensorSerialization::TensorCallback loading_callback =
-        [&parameters, &get_parameter](
+        [&get_parameter](
             const serialization::SafetensorSerialization::TensorInfo &info, std::span<const std::byte> bytes) {
             fmt::print("Loading tensor: {}, shape:{}, format: {}\n", info.name, info.shape, info.dtype);
             auto float_vec = serialization::SafetensorSerialization::bytes_to_float_vec(bytes, info.dtype);

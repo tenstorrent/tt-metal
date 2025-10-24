@@ -5,21 +5,26 @@
 
 """
 Usage:
-    dump_callstacks [--full-callstack] [--gdb-callstack] [--active-cores]
+    dump_callstacks [--full-callstack] [--gdb-callstack] [--all-cores]
 
 Options:
     --full-callstack   Dump full callstack with all frames. Defaults to dumping only the top frame.
     --gdb-callstack    Dump callstack using GDB client instead of built-in methods.
-    --active-cores     Only dump callstacks for cores running kernels.
+    --all-cores        Show all cores including ones with Go Message = DONE. By default, DONE cores are filtered out.
 
 Description:
     Dumps callstacks for all devices in the system and for every supported risc processor.
-    If will also dump dispatcher data for each risc processor, including firmware path, kernel path, kernel offset, etc.
+    By default, filters out cores with DONE status and shows essential fields.
+    Use --all-cores to see all cores, and -v/-vv to show more columns.
+
+    Color output is automatically enabled when stdout is a TTY (terminal) and can be overridden
+    with TT_TRIAGE_COLOR environment variable (0=disable, 1=enable).
 """
 
 from dataclasses import dataclass
 
 from triage import ScriptConfig, TTTriageError, log_check, recurse_field, triage_field, hex_serializer, run_script
+from ttexalens.hw.tensix.wormhole.wormhole import WormholeDevice
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from run_checks import run as get_run_checks
@@ -35,6 +40,7 @@ import socket
 import subprocess
 import threading
 from contextlib import closing
+from pathlib import Path
 
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "elfs_cache"],
@@ -199,24 +205,36 @@ def get_callstack(
             pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
             try:
                 cs = top_callstack(pc, elfs, offsets, context)
-                error_message = "PC was not in range of any provided ELF files" if len(cs) == 0 else None
+                error_message = None
+                if len(cs) == 0:
+                    error_message = "PC was not in range of any provided ELF files."
+                    if location in location._device.active_eth_block_locations:
+                        error_message += " Probably context switch occurred and PC is contained in base ERISC firmware."
                 return KernelCallstackWithMessage(callstack=cs, message=error_message)
             except Exception as e:
                 return KernelCallstackWithMessage(callstack=[], message=str(e))
         else:
             try:
-                return KernelCallstackWithMessage(callstack=callstack(location, elfs, offsets, risc_name), message=None)
+                cs = callstack(location, elfs, offsets, risc_name)
+                error_message = None
+                if len(cs) == 0:
+                    error_message = "PC was not in range of any provided ELF files."
+                    if location in location._device.active_eth_block_locations:
+                        error_message += " Probably context switch occurred and PC is contained in base ERISC firmware."
+                return KernelCallstackWithMessage(callstack=cs, message=error_message)
             except Exception as e:
                 try:
                     # If full callstack failed, we default to top callstack
                     pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
                     error_message = str(e) + " - defaulting to top callstack"
                     cs = top_callstack(pc, elfs, offsets, context)
-                    error_message = (
-                        "\n".join([error_message, "PC was not in range of any provided ELF files"])
-                        if len(cs) == 0
-                        else error_message
-                    )
+                    if len(cs) == 0:
+                        additional_message = "PC was not in range of any provided ELF files."
+                        if location in location._device.active_eth_block_locations:
+                            additional_message += (
+                                " Probably context switch occurred and PC is contained in base ERISC firmware."
+                            )
+                        error_message = "\n".join([error_message, additional_message])
                     return KernelCallstackWithMessage(callstack=cs, message=error_message)
                 except Exception as e:
                     # If top callstack failed too, print both error messages
@@ -229,6 +247,8 @@ def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
     """Return string representation of the callstack."""
     frame_number_width = len(str(len(callstack) - 1))
     result = []
+    cwd = Path.cwd()
+
     for i, frame in enumerate(callstack):
         line = f"  #{i:<{frame_number_width}} "
         if frame.pc is not None:
@@ -236,7 +256,19 @@ def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
         if frame.function_name is not None:
             line += f"{ORANGE}{frame.function_name}{RST} () "
         if frame.file is not None:
-            line += f"at {GREEN}{frame.file}{RST}"
+            # Convert absolute path to relative path with ./ prefix
+            file_path = Path(frame.file)
+            try:
+                if file_path.is_absolute():
+                    rel_path = file_path.relative_to(cwd)
+                    display_path = f"./{rel_path}"
+                else:
+                    display_path = frame.file
+            except ValueError:
+                # Path is not relative to cwd, keep as is
+                display_path = frame.file
+
+            line += f"at {GREEN}{display_path}{RST}"
             if frame.line is not None:
                 line += f" {GREEN}{frame.line}{RST}"
                 if frame.column is not None:
@@ -248,6 +280,7 @@ def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
 def format_callstack_with_message(callstack_with_message: KernelCallstackWithMessage) -> str:
     """Return string representation of the callstack with optional error message. Adding empty line at the beginning for prettier look."""
     empty_line = ""  # For prettier look
+
     if callstack_with_message.message is not None:
         return "\n".join(
             [f"{RED}{callstack_with_message.message}{RST}"] + _format_callstack(callstack_with_message.callstack)
@@ -258,7 +291,16 @@ def format_callstack_with_message(callstack_with_message: KernelCallstackWithMes
 
 @dataclass
 class DumpCallstacksData:
+    """Callstack data with verbosity levels.
+
+    Level 0: Essential fields (Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, Callstack)
+    Level 1+: Includes all dispatcher core data fields
+    """
+
+    # Recurse into dispatcher core data (fields have their own verbose levels)
     dispatcher_core_data: DispatcherCoreData = recurse_field()
+
+    # Always show PC and callstack
     pc: int | None = triage_field("PC", hex_serializer)
     kernel_callstack_with_message: KernelCallstackWithMessage = triage_field(
         "Kernel Callstack", format_callstack_with_message
@@ -272,16 +314,19 @@ def dump_callstacks(
     elfs_cache: ElfsCache,
     full_callstack: bool,
     gdb_callstack: bool,
-    active_cores: bool,
     gdb_server: GdbServer | None,
     process_ids: dict[OnChipCoordinate, dict[str, int]] | None,
+    show_all_cores: bool = False,
 ) -> DumpCallstacksData | None:
     result: DumpCallstacksData | None = None
 
     try:
         dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
-        if active_cores and dispatcher_core_data.go_message != "GO":
+
+        # Skip DONE cores unless --all-cores is specified
+        if not show_all_cores and dispatcher_core_data.go_message == "DONE":
             return result
+
         risc_debug = location._device.get_block(location).get_risc_debug(risc_name)
         if risc_debug.is_in_reset():
             return DumpCallstacksData(
@@ -336,6 +381,7 @@ def dump_callstacks(
                 location, risc_name, dispatcher_core_data, elfs_cache, full_callstack
             )
 
+        # Create result with dispatcher core data (verbose levels handled in serialization)
         result = DumpCallstacksData(
             dispatcher_core_data=dispatcher_core_data,
             pc=callstack_with_message.callstack[0].pc
@@ -388,10 +434,17 @@ def start_gdb_server(port: int, context: Context) -> GdbServer:
 
 
 def run(args, context: Context):
+    from triage import set_verbose_level
+
     full_callstack = args["--full-callstack"]
     gdb_callstack = args["--gdb-callstack"]
-    active_cores = args["--active-cores"]
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
+    show_all_cores = args["--all-cores"]
+
+    # Set verbose level from -v count (controls which columns are displayed)
+    verbose_level = args["-v"]
+    set_verbose_level(verbose_level)
+
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
     elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
@@ -413,9 +466,9 @@ def run(args, context: Context):
             elfs_cache,
             full_callstack,
             gdb_callstack,
-            active_cores,
             gdb_server,
             process_ids,
+            show_all_cores,
         ),
         block_filter=BLOCK_TYPES_TO_CHECK,
     )

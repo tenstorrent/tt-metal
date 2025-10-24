@@ -7,6 +7,7 @@ from time import sleep
 import torch
 import pytest
 from loguru import logger
+import random
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 import ttnn
@@ -179,6 +180,7 @@ def gen_tensors(
     local_reduce=False,
 ):
     torch.manual_seed(20)
+    random.seed(20)
     # create input tokens
     assert experts % devices == 0
     assert selected_experts_k < experts
@@ -307,13 +309,13 @@ def trace_all_to_all_combine(
         for i in range(n):
             tt_out_tensor = ttnn.all_to_all_combine(
                 tt_input_contribs,
-                tt_expert_mapping,
                 tt_metadata,
+                tt_expert_mapping,
                 local_reduce=local_reduce,
                 num_links=num_links,
                 topology=topology,
                 memory_config=output_memory_config,
-                axis=axis,
+                cluster_axis=axis,
             )
 
     # compile run:
@@ -551,13 +553,13 @@ def run_all_to_all_combine_test(
                 ttnn.apply_device_delay(mesh_device, delays)
             tt_out_tensor = ttnn.all_to_all_combine(
                 input_tensors[i],
-                expert_mapping_tensors[i],
                 metadata_tensors[i],
+                expert_mapping_tensors[i],
                 num_links=num_links,
                 topology=topology,
                 memory_config=output_memory_config,
                 local_reduce=local_reduce,
-                axis=axis,
+                cluster_axis=axis,
             )
 
             ttnn.synchronize_device(mesh_device)
@@ -591,10 +593,9 @@ def check_results(test_tensor, ref_tensor, data_map):
         for b in range(ref_tensor.shape[1]):
             for s in range(ref_tensor.shape[2]):
                 if data_map[k, b, s].item() == 1:
-                    assert (
-                        torch.equal(test_tensor[k, b, s, :], ref_tensor[k, b, s, :]),
-                        f"Equal check failed for k={k}, b={b}, s={s} with test_tensor {test_tensor[k, b, s, :]} and ref_tensor {ref_tensor[k, b, s, :]}",
-                    )
+                    assert torch.equal(
+                        test_tensor[k, b, s, :], ref_tensor[k, b, s, :]
+                    ), f"Equal check failed for k={k}, b={b}, s={s} with test_tensor {test_tensor[k, b, s, :]} and ref_tensor {ref_tensor[k, b, s, :]}"
 
 
 @pytest.mark.parametrize(
@@ -989,10 +990,10 @@ def test_all_to_all_combine_batch_1(
 
     tt_output_tensor = ttnn.all_to_all_combine(
         tt_input_contribs,
-        tt_expert_mapping,
         tt_metadata,
+        tt_expert_mapping,
         local_reduce=local_reduce,
-        axis=axis,
+        cluster_axis=axis,
         output_shard_dim=2,
         memory_config=output_memory_config,
     )

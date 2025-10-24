@@ -114,6 +114,7 @@ struct SparseMatmulOperation {
         const Tensor& sparsity,
         std::optional<uint32_t> nnz,
         bool is_input_a_sparse = false,
+        bool is_input_b_sparse = true,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         std::optional<const DataType> dtype = std::nullopt,
         const std::optional<const MatmulProgramConfig>& program_config = std::nullopt,

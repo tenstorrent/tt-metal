@@ -5,12 +5,12 @@
 
 import pytest
 import torch
-from diffusers import StableDiffusionPipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_unet
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_basic_transformer_block import basic_transformer_block
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
@@ -20,14 +20,12 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
-@pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "input_shape, shard_layout, shard_end_core, shard_shape, attention_head_dim, block, block_index, attention_index",
     TRANSFORMER_PARAMETERIZATIONS,
 )
 def test_basic_transformer_block_512x512(
     device,
-    model_name,
     input_shape,
     shard_layout,
     shard_end_core,
@@ -36,22 +34,23 @@ def test_basic_transformer_block_512x512(
     block,
     block_index,
     attention_index,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
 ):
     torch.manual_seed(0)
 
     N, C, H, W = input_shape
 
-    pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
-    model = pipe.unet
-    model.eval()
-    config = model.config
+    unet = get_reference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
+    config = unet.config
 
     if block == "up":
-        basic_transformer = pipe.unet.up_blocks[block_index].attentions[attention_index].transformer_blocks[0]
+        basic_transformer = unet.up_blocks[block_index].attentions[attention_index].transformer_blocks[0]
     elif block == "down":
-        basic_transformer = pipe.unet.down_blocks[block_index].attentions[attention_index].transformer_blocks[0]
+        basic_transformer = unet.down_blocks[block_index].attentions[attention_index].transformer_blocks[0]
     elif block == "mid":
-        basic_transformer = pipe.unet.mid_block.attentions[0].transformer_blocks[0]
+        basic_transformer = unet.mid_block.attentions[0].transformer_blocks[0]
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: basic_transformer, custom_preprocessor=custom_preprocessor, device=device

@@ -18,6 +18,8 @@
 #include <functional>
 #include <memory>
 #include <ostream>
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/cluster_types.hpp>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -253,6 +255,7 @@ public:
     using DispatchFeatureQueryFunc = std::function<bool(DispatchFeature)>;
     using SetIRAMTextSizeFunc = std::function<void(
         dev_msgs::launch_msg_t::View, HalProgrammableCoreType, HalProcessorClassType, uint32_t, uint32_t)>;
+    using VerifyFwVersionFunc = std::function<void(tt::umd::tt_version)>;
 
 private:
     tt::ARCH arch_;
@@ -285,7 +288,6 @@ private:
     uint32_t virtual_worker_start_x_{};
     uint32_t virtual_worker_start_y_{};
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
-    bool intermesh_eth_links_enabled_ = false;  // set when an architecture enable intermesh routing
     std::unordered_set<dev_msgs::AddressableCoreType> virtualized_core_types_;
     HalTensixHarvestAxis tensix_harvest_axis_{HalTensixHarvestAxis::ROW};
 
@@ -314,6 +316,7 @@ private:
     DispatchFeatureQueryFunc device_features_func_;
     std::unique_ptr<HalJitBuildQueryInterface> jit_build_query_;
     SetIRAMTextSizeFunc set_iram_text_size_func_;
+    VerifyFwVersionFunc verify_eth_fw_version_func_;
 
 public:
     Hal(tt::ARCH arch, bool is_base_routing_fw_enabled);
@@ -368,7 +371,6 @@ public:
     std::uint32_t get_virtual_worker_start_x() const { return this->virtual_worker_start_x_; }
     std::uint32_t get_virtual_worker_start_y() const { return this->virtual_worker_start_y_; }
     bool get_eth_fw_is_cooperative() const { return this->eth_fw_is_cooperative_; }
-    bool intermesh_eth_links_enabled() const { return this->intermesh_eth_links_enabled_; }
     const std::unordered_set<dev_msgs::AddressableCoreType>& get_virtualized_core_types() const {
         return this->virtualized_core_types_;
     }
@@ -476,6 +478,12 @@ public:
     uint64_t get_pcie_addr_lower_bound() const;
     // Inclusive upper bound
     uint64_t get_pcie_addr_upper_bound() const;
+
+    // Verify that the eth version is compatible with the HAL capabilities. Throws an exception if version is
+    // not compatible.
+    void verify_eth_fw_version(tt::umd::tt_version eth_fw_version) const {
+        this->verify_eth_fw_version_func_(eth_fw_version);
+    }
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }

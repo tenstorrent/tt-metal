@@ -634,6 +634,11 @@ def test_demo_text(
     Simple demo with limited dependence on reference code.
     """
     test_id = request.node.callspec.id
+    HF_MODEL = os.getenv("HF_MODEL")
+    if HF_MODEL:
+        os.environ["HF_MODEL"] = str(
+            model_location_generator(os.getenv("HF_MODEL"), download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
+        )
     if is_ci_env:
         if not ci_only:
             pytest.skip("CI only runs the CI-only tests")
@@ -1202,7 +1207,7 @@ def test_demo_text(
                 # N300 targets
                 "N300_Qwen2.5-7B": (95, 1.20),  # (value, high_tolerance_ratio)
                 # T3K targets
-                "T3K_Llama-3.1-70B": 204,
+                "T3K_Llama-3.1-70B": 228,
                 "T3K_Qwen2.5-72B": (290, 1.35),  # (value, high_tolerance_ratio)
                 "T3K_Qwen2.5-Coder-32B": (215, 1.27),  # (value, high_tolerance_ratio)
                 "T3K_Qwen3-32B": 230,  # Issue: Perf regression being tracked on issue #29834

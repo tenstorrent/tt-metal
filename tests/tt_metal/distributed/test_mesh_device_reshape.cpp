@@ -151,7 +151,7 @@ TEST_F(MeshDevice1x8ReshapeTest, From1x8To2x4ThenBackTo1x8) {
     mesh_device_->reshape(MeshShape(2, 4));
 
     EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 4));
-    std::vector<chip_id_t> expected_physical_device_id_order = {
+    std::vector<ChipId> expected_physical_device_id_order = {
         original_order[0],
         original_order[1],
         original_order[2],
@@ -202,7 +202,7 @@ public:
 TEST_F(MeshDevice2x2ReshapeTest, From1x4To2x2Valid) {
     // Fetch the device ids for a physically connected 2x2 mesh.
     EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 2));
-    std::vector<chip_id_t> physical_device_ids = mesh_device_->get_device_ids();
+    std::vector<ChipId> physical_device_ids = mesh_device_->get_device_ids();
 
     // Supply the physical device ids to the mesh constructor that we know we know is 2x2 physically connected.
     // We will create a 1x4 mesh and then reshape it to 2x2.

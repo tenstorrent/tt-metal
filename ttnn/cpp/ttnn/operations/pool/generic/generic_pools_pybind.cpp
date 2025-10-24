@@ -13,6 +13,7 @@
 
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::pool {
 namespace py = pybind11;
@@ -186,6 +187,7 @@ void bind_avg_pool2d_operation(py::module& module) {
             reallocate_halo_output (bool, optional): whether to reallocate the halo output tensor after the operation, ideally used with deallocate_activation = true. Defaults to `True`.
             dtype (ttnn.DataType, optional): the data format for the output tensor. Defaults to `ttnn.bfloat16`.
             output_layout (ttnn.Layout, optional): the layout for the output tensor. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
+            compute_kernel_config (DeviceComputeKernelConfig, optional): the device compute kernel configuration. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the average pool convolved output tensor.
@@ -241,6 +243,7 @@ void bind_avg_pool2d_operation(py::module& module) {
                std::optional<int32_t> divisor_override,
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
+               const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
                bool in_place_halo,
                bool deallocate_input,
                bool reallocate_halo_output,
@@ -260,6 +263,7 @@ void bind_avg_pool2d_operation(py::module& module) {
                     divisor_override,
                     memory_config,
                     applied_shard_scheme,
+                    compute_kernel_config,
                     in_place_halo,
                     deallocate_input,
                     reallocate_halo_output,
@@ -280,6 +284,7 @@ void bind_avg_pool2d_operation(py::module& module) {
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("applied_shard_scheme") = std::nullopt,
+            py::arg("compute_kernel_config") = std::nullopt,
             py::arg("in_place_halo") = false,
             py::arg("deallocate_input") = false,
             py::arg("reallocate_halo_output") = true,

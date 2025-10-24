@@ -55,13 +55,13 @@ ParsedYamlConfig YamlConfigParser::parse_file(const std::string& yaml_config_pat
 
 DeviceIdentifier YamlConfigParser::parse_device_identifier(const YAML::Node& node) {
     if (node.IsScalar()) {
-        chip_id_t chip_id = parse_scalar<chip_id_t>(node);
+        ChipId chip_id = parse_scalar<ChipId>(node);
         return chip_id;
     } else if (node.IsSequence() && node.size() == 2) {
         MeshId mesh_id = parse_mesh_id(node[0]);
         if (node[1].IsScalar()) {
             // Format: [mesh_id, chip_id]
-            chip_id_t chip_id = parse_scalar<chip_id_t>(node[1]);
+            ChipId chip_id = parse_scalar<ChipId>(node[1]);
             return std::make_pair(mesh_id, chip_id);
         } else if (node[1].IsSequence()) {
             // Format: [mesh_id, [row, col]]
@@ -339,7 +339,7 @@ PhysicalMeshConfig YamlConfigParser::parse_physical_mesh_config(const YAML::Node
 
     PhysicalMeshConfig physical_mesh_config;
     physical_mesh_config.mesh_descriptor_path = parse_scalar<std::string>(physical_mesh_yaml["mesh_descriptor_path"]);
-    physical_mesh_config.eth_coord_mapping = parse_2d_array<eth_coord_t>(physical_mesh_yaml["eth_coord_mapping"]);
+    physical_mesh_config.eth_coord_mapping = parse_2d_array<EthCoord>(physical_mesh_yaml["eth_coord_mapping"]);
 
     return physical_mesh_config;
 }
@@ -718,8 +718,8 @@ std::vector<ParsedTestConfig> CmdlineParser::generate_default_configs() {
         std::string src_device_str = test_args::get_command_option(input_args_, "--src-device", "0");
         std::string dst_device_str = test_args::get_command_option(input_args_, "--dst-device", "1");
 
-        chip_id_t src_device_id = std::stoul(src_device_str);
-        chip_id_t dst_device_id = std::stoul(dst_device_str);
+        ChipId src_device_id = std::stoul(src_device_str);
+        ChipId dst_device_id = std::stoul(dst_device_str);
 
         ParsedTrafficPatternConfig pattern = {.destination = ParsedDestinationConfig{.device = dst_device_id}};
         ParsedSenderConfig sender = {.device = src_device_id, .patterns = {pattern}};

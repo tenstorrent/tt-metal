@@ -4,6 +4,7 @@
 
 import ttnn
 import torch
+from dataclasses import replace, fields
 from loguru import logger
 from typing import List
 from collections import defaultdict
@@ -65,6 +66,65 @@ class Generator:
         self.trace_inputs_prefill = defaultdict(lambda: None)
         self.trace_output_prefill = defaultdict(lambda: None)
         self.prev_page_table = None
+        self.prefill_traces_warmup = False
+
+    def warmup_prefill_traces(
+        self,
+        tokens: torch.Tensor,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
+        enable_trace=True,
+        sampling_params=None,
+        empty_slots=None,
+        tt_out_logits_all_users=None,
+    ):
+        # Avoids an infinite loop
+        self.prefill_traces_warmup = True
+
+        logger.info("Warming up prefill traces for all supported sequence lengths")
+        for supported_length in self.model.tt_ccl.support_seqlens:
+            logger.info(f"Creating warmup tensor for sequence length: {supported_length}")
+            # Capture trace for both
+            for batch in (1, 32):  # TODO add proper support for batched prefill == b-32
+                # For batched prefill this needs to be *32
+                if batch == 32 and supported_length == 4096:
+                    # For batched prefill max batch sequence length is 2048 or lower (128k limit)
+                    logger.info(f"Skipping warm up step on batched prefill for sequence length {supported_length}")
+                    continue
+                if batch == 32:
+                    current_batch = page_table.shape[0]
+                    if current_batch < batch:
+                        pad_rows = batch - current_batch
+                        padding = torch.full((pad_rows, page_table.shape[1]), -1, dtype=torch.int32)
+                        warmup_page_table = torch.cat([page_table, padding], dim=0)
+                    else:
+                        warmup_page_table = page_table
+                else:
+                    warmup_page_table = page_table
+                warmup_tokens = torch.zeros(batch, supported_length, dtype=torch.long)
+                warmup_prompt_lens = torch.tensor([supported_length] * batch, dtype=torch.long)
+                warmup_empty_slots = list(range(batch))
+                self.prefill_forward_text(
+                    warmup_tokens,
+                    warmup_page_table,
+                    kv_cache,
+                    warmup_prompt_lens,
+                    enable_trace,
+                    sampling_params,
+                    warmup_empty_slots,
+                    tt_out_logits_all_users,
+                )
+        # trace_id_prefill dict check
+        logger.info("Prefill traces warmup completed")
+
+    @staticmethod
+    def _clamp(value, min_value, max_value):
+        if value < min_value:
+            return min_value
+        elif value > max_value:
+            return max_value
+        return value
 
     def prefill_forward_text(
         self,
@@ -77,6 +137,18 @@ class Generator:
         empty_slots=None,
         tt_out_logits_all_users=None,
     ):
+        if self.prefill_traces_warmup is False:
+            self.warmup_prefill_traces(
+                tokens,
+                page_table,
+                kv_cache,
+                prompt_lens,
+                enable_trace,
+                sampling_params,
+                empty_slots,
+                tt_out_logits_all_users,
+            )
+
         if sampling_params is None:
             return_logits = True
         else:
@@ -358,13 +430,46 @@ class Generator:
             "is_page_table_sharded": is_page_table_sharded,
         }
         if reset_inputs and sampling_params is not None:
-            if sampling_params.temperature == 0:  # argmax
-                sampling_params = SamplingParams(temperature=1.0, top_k=1, top_p=0.0)
+            if not isinstance(sampling_params.temperature, List):
+                # convert all sampling_params to lists
+                update_dict = {field.name: [getattr(sampling_params, field.name)] for field in fields(sampling_params)}
+                sampling_params = replace(sampling_params, **update_dict)
+
+            # must pad sampling_params to max_batch_size
+            default_params = {"temp": 0.0, "p": 1.0, "k": 0.0}
+            target_len = self.model_args.max_batch_size
+            for name, tensor in zip(
+                ("temp", "p", "k"), (sampling_params.temperature, sampling_params.top_p, sampling_params.top_k)
+            ):
+                current_len = len(tensor)
+                if current_len < target_len:
+                    tensor.extend([default_params[name]] * (target_len - current_len))
+
+            # we must clamp top-p in range [0.0, 1.0]
+            # cannot rely on external SamplingParams to be clamped
+            TOP_P_MIN = 0.0
+            TOP_P_MAX = 1.0
+
+            for i, (top_p, temp) in enumerate(zip(sampling_params.top_p, sampling_params.temperature)):
+                # Clamp top-p
+                clamped_top_p = self._clamp(top_p, TOP_P_MIN, TOP_P_MAX)
+                if clamped_top_p != top_p:
+                    logger.warning(f"Clamped Top-P value of {top_p} to {clamped_top_p}")
+                    sampling_params.top_p[i] = clamped_top_p
+
+                # Process temperature
+                if temp == 0:
+                    sampling_params.temperature[i] = 1.0
+                    sampling_params.top_k[i] = 1
+                else:
+                    sampling_params.temperature[i] = 1 / temp
+
             self.model.tt_sampling.reset_params(
-                k=[sampling_params.top_k] * 32,
-                p=[sampling_params.top_p] * 32,
-                temp=[1 / sampling_params.temperature] * 32,
+                k=sampling_params.top_k,
+                p=sampling_params.top_p,
+                temp=sampling_params.temperature,
             )
+
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
         if enable_trace:
@@ -606,7 +711,6 @@ class Generator:
 
     def _get_prefill_user_page_table(self, page_table, kv_cache, prefill_len, user_id, use_batched_prefill=False):
         # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
-
         block_size = get_block_size(kv_cache)
         num_blocks = num_blocks_in_seq(prefill_len, block_size)
         page_table = page_table[:, :num_blocks]

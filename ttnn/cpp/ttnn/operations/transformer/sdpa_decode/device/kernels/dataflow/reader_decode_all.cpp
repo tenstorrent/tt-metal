@@ -8,7 +8,6 @@
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
-// #include "debug/dprint.h"
 
 void kernel_main() {
     /*
@@ -46,8 +45,9 @@ void kernel_main() {
     constexpr bool is_cur_pos_tensor_sharded = get_compile_time_arg_val(27);
     constexpr bool is_page_table_sharded = get_compile_time_arg_val(28);
     constexpr uint32_t q_page_size_bytes = get_compile_time_arg_val(29);
+    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(30);
 
-    constexpr auto k_args = TensorAccessorArgs<30>();
+    constexpr auto k_args = TensorAccessorArgs<31>();
     constexpr auto q_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -113,8 +113,13 @@ void kernel_main() {
     auto k_chunk_size_dynamic = Sk_chunk_t_dynamic * tt::constants::TILE_HEIGHT;
 
     // Sequence length assignment
-    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] =
-        get_runtime_args(cur_pos, cur_batch, core_num_in_reduce, num_cores_per_head, k_chunk_size_dynamic);
+    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end, window_start_unaligned, window_start_chunk] = get_runtime_args(
+        cur_pos,
+        cur_batch,
+        core_num_in_reduce,
+        num_cores_per_head,
+        k_chunk_size_dynamic,
+        sliding_window_size > 0 ? std::optional<uint32_t>(sliding_window_size) : std::nullopt);
 
     if (k_chunk_start == k_chunk_end) {
         return;  // early exit because no computes needs to be done

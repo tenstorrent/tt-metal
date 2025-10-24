@@ -66,4 +66,6 @@ ttnn::Tensor composite_all_to_all(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id);
 
+bool is_fabric_2d();
+
 }  // namespace composite_common

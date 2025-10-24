@@ -12,11 +12,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 60
-      num-groups:
-        required: false
-        type: number
-        default: 12
+        default: 40
       docker-image:
         required: true
         type: string
@@ -49,11 +45,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 60
-      num-groups:
-        required: false
-        type: number
-        default: 12
+        default: 40
       docker-image:
         required: true
         type: string
@@ -73,30 +65,44 @@ jobs:
       matrix:
         os: ["ubuntu-22.04"]
         test-group:
-          - name: ttnn group 1
-            cmd: TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 1 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 2
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 2 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 3
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 3 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 4
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 4 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 5
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 5 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 6
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 6 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 7
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 7 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 8
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 8 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 9
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 9 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 10
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 10 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 11
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 11 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 12
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 12 -m "not disable_fast_runtime_mode"
+          - name: ttnn eltwise group 1
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 8 --group 1 -m "not disable_fast_runtime_mode"
+          - name: ttnn eltwise group 2
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 8 --group 2 -m "not disable_fast_runtime_mode"
+          - name: ttnn eltwise group 3
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 8 --group 3 -m "not disable_fast_runtime_mode"
+          - name: ttnn eltwise group 4
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 8 --group 4 -m "not disable_fast_runtime_mode"
+          - name: ttnn eltwise group 5
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 8 --group 5 -m "not disable_fast_runtime_mode"
+          - name: ttnn eltwise group 6
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 8 --group 6 -m "not disable_fast_runtime_mode"
+          - name: ttnn eltwise group 7
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 8 --group 7 -m "not disable_fast_runtime_mode"
+          - name: ttnn eltwise group 8
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 8 --group 8 -m "not disable_fast_runtime_mode"
+          - name: ttnn data_movement/ccl group 1
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point -xv --splits 3 --group 1 -m "not disable_fast_runtime_mode"
+          - name: ttnn data_movement/ccl group 2
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point -xv --splits 3 --group 2 -m "not disable_fast_runtime_mode"
+          - name: ttnn data_movement/ccl group 3
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point -xv --splits 3 --group 3 -m "not disable_fast_runtime_mode"
+          - name: ttnn conv group
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"
+          - name: ttnn pool group
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"
+          - name: ttnn matmul group
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"
+          - name: ttnn fused group
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/fused -xv -m "not disable_fast_runtime_mode"
+          - name: ttnn moreh group
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/moreh -xv -m "not disable_fast_runtime_mode"
+          - name: ttnn transformers group
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode"
+          - name: ttnn reduce and misc ops group
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/reduce tests/ttnn/unit_tests/operations/rand tests/ttnn/unit_tests/operations/debug tests/ttnn/unit_tests/operations/ssm -xv -m "not disable_fast_runtime_mode"
+          - name: core ttnn unit test group
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/light_metal tests/ttnn/unit_tests/tensor -xv -m "not disable_fast_runtime_mode"
           - name: ttnn notebook
             cmd: TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto --timeout 300 tests/ttnn/notebook_tests -xv -m "not disable_fast_runtime_mode"
           - name: ttnn fast runtime off
@@ -108,8 +114,8 @@ jobs:
     runs-on: >-
       ${{
         (inputs.runner-label == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
-        || ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-metal', inputs.runner-label))
-        || format('tt-ubuntu-2204-{0}-viommu-metal', inputs.runner-label)
+        || ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
       image: ${{ ((inputs.runner-label != 'P100') && format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image)) || inputs.docker-image || 'docker-image-unresolved!' }}

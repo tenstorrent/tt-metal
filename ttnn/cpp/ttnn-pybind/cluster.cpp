@@ -74,7 +74,8 @@ void py_cluster_module_types(py::module& module) {
         .value("N300_2x2", tt::tt_metal::ClusterType::N300_2x2, "2 N300 cards, ethernet connected to form 2x2")
         .value("P300", tt::tt_metal::ClusterType::P300, "Production P300")
         .value(
-            "BLACKHOLE_GALAXY", tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "Blackhole Galaxy, all chips with mmio");
+            "BLACKHOLE_GALAXY", tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "Blackhole Galaxy, all chips with mmio")
+        .value("P300_X2", tt::tt_metal::ClusterType::P300_X2, "2 P300 cards");
 }
 
 void py_cluster_module(py::module& module) {

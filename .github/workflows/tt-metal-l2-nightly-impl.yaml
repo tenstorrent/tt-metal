@@ -83,7 +83,7 @@ jobs:
     name: ttnn nightly conv tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-metal', inputs.runner-label))
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
     steps:
@@ -131,7 +131,7 @@ jobs:
     name: ttnn nightly matmul tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-metal', inputs.runner-label))
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
         || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
       }}
     steps:
@@ -179,7 +179,7 @@ jobs:
     name: ttnn nightly pool tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-metal', inputs.runner-label))
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
         || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
       }}
     steps:
@@ -228,7 +228,7 @@ jobs:
     name: ttnn nightly sdxl tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-metal', inputs.runner-label))
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
         || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
       }}
     steps:
@@ -287,7 +287,7 @@ jobs:
     name: tt-train nightly tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-metal', inputs.runner-label))
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
         || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
       }}
     steps:
@@ -334,7 +334,7 @@ jobs:
     name: tt-sdpa-stress tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (contains('P150b, N150, N300', inputs.runner-label) && format('tt-ubuntu-2204-{0}-metal', inputs.runner-label))
+        (contains('P150b, N150, N300', inputs.runner-label) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
         || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
       }}
     steps:
@@ -384,7 +384,7 @@ jobs:
     name: ttnn nightly bos conv tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-metal', inputs.runner-label))
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
     steps:
@@ -433,7 +433,7 @@ jobs:
     name: ttnn nightly bos group norm tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (format('tt-ubuntu-2204-{0}-metal', inputs.runner-label))
+        (format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
       }}
     steps:
       - name: ⬇️  Setup Job
@@ -481,7 +481,7 @@ jobs:
     name: ttnn nightly eltwise tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-metal', inputs.runner-label))
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
     steps:

@@ -66,10 +66,10 @@ jobs:
     name: 🤖 Clang Tidy
     needs: [ build-docker-image, determine-scan-type ]
     if: ${{ needs.determine-scan-type.outputs.do-scan == 'true' }}
-    runs-on: tt-ubuntu-2204-xlarge-metal
+    runs-on: tt-ubuntu-2204-xlarge-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: ${{ needs.build-docker-image.outputs.dev-tag || 'docker-image-unresolved!'}}
+      image: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!'}}
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache

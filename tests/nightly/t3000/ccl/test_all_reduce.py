@@ -8,7 +8,10 @@ from loguru import logger
 import ttnn
 import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.ttnn.unit_tests.operations.ccl.test_all_reduce_async import run_all_reduce_test
+from tests.ttnn.unit_tests.operations.ccl.test_all_reduce_async import (
+    run_all_reduce_test,
+    run_all_reduce_with_mesh_tensor_along_row,
+)
 
 
 @pytest.mark.timeout(120)
@@ -132,9 +135,9 @@ def test_ring_all_reduce_post_commit(
     ],
 )
 @pytest.mark.parametrize(
-    "mem_config",
+    "buffer_type",
     [
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ttnn.BufferType.DRAM,
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
@@ -147,11 +150,11 @@ def test_ring_all_reduce_post_commit_2chip(
     math_op,
     input_dtype,
     layout,
-    mem_config,
+    buffer_type,
     function_level_defaults,
     num_iters=2,
 ):
-    run_all_reduce_test(
+    run_all_reduce_with_mesh_tensor_along_row(
         t3k_mesh_device,
         num_devices,
         per_chip_output_shape,
@@ -159,8 +162,9 @@ def test_ring_all_reduce_post_commit_2chip(
         math_op,
         input_dtype,
         layout,
-        mem_config,
+        buffer_type,
         function_level_defaults,
         num_iters=num_iters,
-        topology=ttnn.Topology.Linear,
+        cluster_axis=None,
+        use_semaphore_free_all_reduce_impl=True,
     )

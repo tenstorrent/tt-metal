@@ -51,6 +51,10 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc)
 
     reference_model = model_args.reference_mlp()
     reference_model.load_state_dict(partial_state_dict)
+    if model_args.is_90b:
+        # float32 ~3x faster than bfloat16. Also LLAMA_DIR uses float32
+        # bfloat16 fails on CI (32k and 64k seq_len) with "This test seems to have hung... Timing out test case"
+        reference_model.to(torch.float32)
 
     tt_ccl = TT_CCL(mesh_device)
     tt_model = MLP(

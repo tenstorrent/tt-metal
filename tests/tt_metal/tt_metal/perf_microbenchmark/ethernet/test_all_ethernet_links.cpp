@@ -106,7 +106,7 @@ struct SenderReceiverPair {
 };
 
 tt_metal::distributed::MeshDevice* find_device_with_id(
-    const std::vector<std::shared_ptr<tt_metal::distributed::MeshDevice>>& devices, chip_id_t chip_id) {
+    const std::vector<std::shared_ptr<tt_metal::distributed::MeshDevice>>& devices, ChipId chip_id) {
     for (auto& device : devices) {
         if (device->get_devices()[0]->id() == chip_id) {
             return device.get();
@@ -119,14 +119,14 @@ tt_metal::distributed::MeshDevice* find_device_with_id(
 // NOLINTBEGIN(cppcoreguidelines-prefer-member-initializer)
 class ConnectedDevicesHelper {
 private:
-    std::map<chip_id_t, tt_metal::IDevice*> devices_map;
+    std::map<ChipId, tt_metal::IDevice*> devices_map;
 
 public:
     ConnectedDevicesHelper(const TestParams& params) {
         this->arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         this->num_devices = tt::tt_metal::GetNumAvailableDevices();
-        std::vector<chip_id_t> ids(this->num_devices, 0);
+        std::vector<ChipId> ids(this->num_devices, 0);
         std::iota(ids.begin(), ids.end(), 0);
 
         const auto& dispatch_core_config =
@@ -173,7 +173,7 @@ private:
             params.benchmark_type != BenchmarkType::EthEthTensixBiDir) {
             return {std::nullopt, nullptr};
         }
-        static std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> assigned_tensix_per_chip;
+        static std::unordered_map<ChipId, std::unordered_set<CoreCoord>> assigned_tensix_per_chip;
         auto& assigned_phys_tensix = assigned_tensix_per_chip[logical_eth_core.chip];
         const auto& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(logical_eth_core.chip);
 
@@ -228,26 +228,26 @@ private:
         // chip id -> active eth ch on chip -> (connected chip, remote active eth ch)
         auto all_eth_connections = tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connections();
 
-        std::set<chip_id_t> sender_chips, receiver_chips;
+        std::set<ChipId> sender_chips, receiver_chips;
         bool slow_dispath_mode = (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr);
 
-        std::queue<chip_id_t> chip_q;
+        std::queue<ChipId> chip_q;
         chip_q.push(this->devices[0]->get_devices()[0]->id());  // Start with the first device's chip ID
         sender_chips.insert(this->devices[0]->get_devices()[0]->id());
-        std::unordered_set<chip_id_t> visited_chips;
+        std::unordered_set<ChipId> visited_chips;
 
         // Need sender and receiver chips to be disjoint because we profile wrt. sender and don't want devices to be out
         // of sync
         while (visited_chips.size() != this->devices.size()) {
             while (!chip_q.empty()) {
-                chip_id_t chip_id = chip_q.front();
+                ChipId chip_id = chip_q.front();
                 chip_q.pop();
                 visited_chips.insert(chip_id);
 
                 bool is_sender = sender_chips.find(chip_id) != sender_chips.end();
                 bool is_receiver = receiver_chips.find(chip_id) != receiver_chips.end();
 
-                for (chip_id_t connected_chip :
+                for (ChipId connected_chip :
                      tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connected_device_ids(chip_id)) {
                     bool connected_chip_is_sender = sender_chips.find(connected_chip) != sender_chips.end();
                     bool connected_chip_is_receiver = receiver_chips.find(connected_chip) != receiver_chips.end();
@@ -322,7 +322,7 @@ private:
 std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper, const TestParams& params) {
     std::vector<tt_metal::Program> programs(device_helper.num_devices);
     // Create a mapping from chip ID to vector index
-    std::map<chip_id_t, size_t> chip_to_index;
+    std::map<ChipId, size_t> chip_to_index;
     for (size_t i = 0; i < device_helper.devices.size(); i++) {
         chip_to_index[device_helper.devices[i]->get_devices()[0]->id()] = i;
         log_info(tt::LogTest, "Device {} index {}", device_helper.devices[i]->get_devices()[0]->id(), i);

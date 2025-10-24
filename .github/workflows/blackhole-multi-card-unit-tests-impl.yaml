@@ -35,10 +35,10 @@ jobs:
         test-group:
           - name: fabric 1D unit tests
             cmd: |
-              TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+              ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
             timeout: 15
           - name: fabric 2D fixture unit tests
-            cmd: TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+            cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
             timeout: 15
           - name: fabric system health tests
             cmd: ./build/test/tt_metal/tt_fabric/test_system_health
@@ -70,6 +70,7 @@ jobs:
             cmd: |
               TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
               TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_at_least_2x2_mesh.yaml
+              TT_FABRIC_PROFILE_RX_CH_FWD=1 TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_code_profiling.yaml
             timeout: 15
           # - name: t3000 fast fabric tests
           #   cmd: "source tests/scripts/t3000/run_t3000_unit_tests.sh && run_t3000_ttfabric_tests"

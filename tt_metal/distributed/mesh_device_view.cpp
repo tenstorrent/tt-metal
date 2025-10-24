@@ -174,7 +174,7 @@ size_t MeshDeviceView::num_cols() const {
 }
 size_t MeshDeviceView::num_devices() const { return devices_.shape().mesh_size(); }
 
-MeshCoordinate MeshDeviceView::find_device(chip_id_t device_id) const {
+MeshCoordinate MeshDeviceView::find_device(ChipId device_id) const {
     auto it = device_coordinates_.find(device_id);
     TT_FATAL(it != device_coordinates_.end(), "Device not found in mesh: {}", device_id);
     return it->second;

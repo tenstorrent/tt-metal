@@ -135,7 +135,7 @@ For example, the ``Device`` constructor shown above is instrumented as follows:
 
 ..  code-block:: C++
 
-    Device::Device(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap) : id_(device_id)
+    Device::Device(ChipId device_id, const std::vector<uint32_t>& l1_bank_remap) : id_(device_id)
     {
         ZoneScoped;
         this->initialize(l1_bank_remap);

@@ -7,7 +7,7 @@
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_graph.hpp>                   // FabricType
-#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include "erisc_datamover_builder.hpp"
 #include <vector>
 #include <limits>
@@ -53,11 +53,11 @@ public:
     // Initialize fabric tensix config (call after routing tables are configured)
     void initialize_tensix_config();
 
-    void set_num_fabric_initialized_routers(chip_id_t chip_id, size_t num_routers);
-    uint32_t get_num_fabric_initialized_routers(chip_id_t chip_id) const;
+    void set_num_fabric_initialized_routers(ChipId chip_id, size_t num_routers);
+    uint32_t get_num_fabric_initialized_routers(ChipId chip_id) const;
 
-    void set_fabric_master_router_chan(chip_id_t chip_id, chan_id_t chan_id);
-    chan_id_t get_fabric_master_router_chan(chip_id_t chip_id) const;
+    void set_fabric_master_router_chan(ChipId chip_id, chan_id_t chan_id);
+    chan_id_t get_fabric_master_router_chan(ChipId chip_id) const;
 
     std::vector<size_t> get_fabric_router_addresses_to_clear() const;
 

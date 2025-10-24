@@ -18,11 +18,11 @@ on:
       ttsim-ref:
         required: false
         type: string
-        default: "8d6a0c997c4ba585c519c27f304b976b243d4bd9"
+        default: "dd4e39719e9816baf3f527de892a3b4f0ab6a654"
 
 jobs:
   ttsim-integration:
-    runs-on: tt-ubuntu-2204-small-metal
+    runs-on: tt-ubuntu-2204-small-stable
     name: "TTSim Integration - ${{ matrix.arch }}"
     strategy:
       fail-fast: false
@@ -196,24 +196,14 @@ jobs:
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_qb.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_lb.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_p300.py \
-            tests/ttnn/unit_tests/operations/ccl/perf/test_ccl_async_perf.py \
-            tests/ttnn/unit_tests/operations/ccl/perf/test_ccl_perf.py \
             tests/ttnn/unit_tests/operations/ccl/test_ag_rs_llama_prefill_TG.py \
-            tests/ttnn/unit_tests/operations/ccl/test_all_gather.py \
-            tests/ttnn/unit_tests/operations/ccl/test_all_gather_N300_post_commit.py \
-            tests/ttnn/unit_tests/operations/ccl/test_all_gather_TG_nightly.py \
-            tests/ttnn/unit_tests/operations/ccl/test_all_gather_TG_post_commit.py \
-            tests/ttnn/unit_tests/operations/ccl/test_all_gather_async_TG_nightly.py \
-            tests/ttnn/unit_tests/operations/ccl/test_all_gather_llama_perf_sweep.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_gather_matmul.py \
-            tests/ttnn/unit_tests/operations/ccl/test_all_gather_nightly.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_reduce_async.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_reduce_t3000_frequent.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_6U.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_t3000.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_6U.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_t3000.py \
-            tests/ttnn/unit_tests/operations/ccl/test_barrier_t3000_frequent.py \
             tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py \
             tests/ttnn/unit_tests/operations/ccl/test_fabric_ccl.py \
             tests/ttnn/unit_tests/operations/ccl/test_llama_prefill_ccl_ops.py \
@@ -226,7 +216,6 @@ jobs:
             tests/ttnn/unit_tests/operations/ccl/test_minimals.py \
             tests/ttnn/unit_tests/operations/ccl/test_moe_ccl_end_to_end.py \
             tests/ttnn/unit_tests/operations/ccl/test_new_all_broadcast.py \
-            tests/ttnn/unit_tests/operations/ccl/test_new_all_gather.py \
             tests/ttnn/unit_tests/operations/ccl/test_new_all_reduce.py \
             tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py \
             tests/ttnn/unit_tests/operations/ccl/test_qkv_all_reduce_minimal.py \
@@ -283,19 +272,18 @@ jobs:
             tests/ttnn/unit_tests/operations/eltwise/test_unary_uint16.py \
             tests/ttnn/unit_tests/operations/point_to_point/test_moe_p2p.py \
             tests/ttnn/unit_tests/operations/point_to_point/test_point_to_point.py \
-            tests/ttnn/unit_tests/operations/test_concatenate_heads.py \
-            tests/ttnn/unit_tests/operations/test_distributed_layernorm.py \
-            tests/ttnn/unit_tests/operations/test_examples.py \
-            tests/ttnn/unit_tests/operations/test_full.py \
-            tests/ttnn/unit_tests/operations/test_full_like.py \
-            tests/ttnn/unit_tests/operations/test_generic_op.py \
-            tests/ttnn/unit_tests/operations/test_hardtanh.py \
-            tests/ttnn/unit_tests/operations/test_index_fill.py \
-            tests/ttnn/unit_tests/operations/test_moreh_full.py \
-            tests/ttnn/unit_tests/operations/test_non_zero_indices.py \
-            tests/ttnn/unit_tests/operations/test_paged_cache_mask.py \
-            tests/ttnn/unit_tests/operations/test_polyval.py \
-            tests/ttnn/unit_tests/operations/test_prefetcher_TG.py \
-            tests/ttnn/unit_tests/operations/test_reallocate.py \
-            tests/ttnn/unit_tests/operations/test_small_resnet50_block.py \
-            tests/ttnn/unit_tests/operations/test_tosa_gather.py
+            tests/ttnn/unit_tests/operations/transformers/test_concatenate_heads.py \
+            tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py \
+            tests/ttnn/unit_tests/operations/debug/test_examples.py \
+            tests/ttnn/unit_tests/operations/data_movement/test_full.py \
+            tests/ttnn/unit_tests/operations/data_movement/test_full_like.py \
+            tests/ttnn/unit_tests/operations/debug/test_generic_op.py \
+            tests/ttnn/unit_tests/operations/eltwise/test_hardtanh.py \
+            tests/ttnn/unit_tests/operations/data_movement/test_index_fill.py \
+            tests/ttnn/unit_tests/operations/moreh/test_moreh_full.py \
+            tests/ttnn/unit_tests/operations/data_movement/test_non_zero_indices.py \
+            tests/ttnn/unit_tests/operations/transformers/test_paged_cache_mask.py \
+            tests/ttnn/unit_tests/operations/eltwise/test_polyval.py \
+            tests/ttnn/unit_tests/operations/transformers/test_prefetcher_TG.py \
+            tests/ttnn/unit_tests/operations/data_movement/test_reallocate.py \
+            tests/ttnn/unit_tests/operations/data_movement/test_tosa_gather.py
