@@ -210,12 +210,12 @@ public:
 
     static const std::unique_ptr<tt::umd::Cluster> null_cluster;
 
-    // Utility APIs for output/serialization
+    // Utility APIs to Print Physical System Descriptor
     void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt) const;
     YAML::Node generate_yaml_node() const;
     void emit_to_text_proto(const std::optional<std::string>& path_to_text_proto = std::nullopt);
 
-    // Ethernet metrics API
+    // API to generate Ethernet Metrics
     void generate_local_ethernet_metrics();
 
 private:
@@ -229,9 +229,6 @@ private:
     void remove_unresolved_nodes();
     void resolve_hostname_uniqueness();
     void validate_graphs();
-    
-    // Helper method to build YAML node structure shared by dump_to_yaml and generate_yaml_string
-    YAML::Node build_yaml_node() const;
 
     const std::unique_ptr<tt::umd::Cluster>& cluster_;
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;

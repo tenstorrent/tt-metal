@@ -487,7 +487,7 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
     }
 }
 
-YAML::Node PhysicalSystemDescriptor::build_yaml_node() const {
+YAML::Node PhysicalSystemDescriptor::generate_yaml_node() const {
     YAML::Node root;
     YAML::Node compute_nodes;
     YAML::Node local_eth_connections(YAML::NodeType::Sequence);
@@ -579,7 +579,7 @@ YAML::Node PhysicalSystemDescriptor::build_yaml_node() const {
 }
 
 void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& path_to_yaml) const {
-    YAML::Node root = build_yaml_node();
+    YAML::Node root = generate_yaml_node();
 
     if (path_to_yaml.has_value()) {
         std::ofstream fout(path_to_yaml.value());
@@ -593,10 +593,6 @@ void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& pa
     } else {
         std::cout << root << '\n';
     }
-}
-
-YAML::Node PhysicalSystemDescriptor::generate_yaml_node() const {
-    return build_yaml_node();
 }
 
 void PhysicalSystemDescriptor::emit_to_text_proto(const std::optional<std::string>& file_path) {
