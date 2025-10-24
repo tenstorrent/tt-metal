@@ -176,7 +176,9 @@ TopologyMapper::TopologyMapper(
 }
 
 ChipId TopologyMapper::get_physical_chip_id_from_asic_id(tt::tt_metal::AsicID asic_id) const {
-    return asic_id_to_physical_chip_id_.at(asic_id);
+    auto asic_id_it = asic_id_to_physical_chip_id_.find(asic_id);
+    TT_FATAL(asic_id_it != asic_id_to_physical_chip_id_.end(), "Physical chip id not found for ASIC id {}", asic_id);
+    return asic_id_it->second;
 }
 
 void TopologyMapper::build_asic_physical_chip_id_mappings() {
@@ -185,6 +187,13 @@ void TopologyMapper::build_asic_physical_chip_id_mappings() {
         tt::tt_metal::AsicID asic_id{unique_id};
         asic_id_to_physical_chip_id_.emplace(asic_id, physical_chip_id);
         physical_chip_id_to_asic_id_.emplace(physical_chip_id, asic_id);
+    }
+
+    // Check the physical chip asic ids from UMD cluster with the physical chip asic ids from the physical system descriptor
+    for (const auto& [physical_chip_id, unique_id] : cluster.get_unique_chip_ids()) {
+        tt::tt_metal::AsicID asic_id{unique_id};
+        auto asic_ids_for_host = physical_system_descriptor_.get_asics_connected_to_host(physical_system_descriptor_.my_host_name());
+        TT_FATAL(std::find(asic_ids_for_host.begin(), asic_ids_for_host.end(), asic_id) != asic_ids_for_host.end(), "Asic id {} in UMD cluster not found for in Physical System {}", asic_id, physical_system_descriptor_.my_host_name());
     }
 }
 

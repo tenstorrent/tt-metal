@@ -1122,7 +1122,7 @@ TEST(MeshCoordinateRangeTest, Wraparound3D_Intersection) {
     MeshCoordinateRange b(MeshCoordinate(0, 0, 0), MeshCoordinate(3, 3, 3), shape);
     auto inter_opt = a.intersection(b);
     ASSERT_TRUE(inter_opt.has_value());
-    auto inter = inter_opt.value();
+    auto& inter = inter_opt.value();
     // Check bounding range contains intersecting points (overapprox ok)
     EXPECT_TRUE(inter.contains(MeshCoordinate(0, 0, 0)));
     EXPECT_TRUE(inter.contains(MeshCoordinate(1, 1, 1)));

@@ -21,6 +21,10 @@ namespace tt::umd {
 class Cluster;
 }
 
+namespace tt {
+enum class TargetDevice: std::uint8_t;
+}
+
 namespace tt::llrt {
 class RunTimeOptions;
 }
@@ -147,7 +151,7 @@ public:
         const std::unique_ptr<tt::umd::Cluster>& cluster,
         const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
         const Hal* hal,
-        bool using_mock_cluster_descriptor,
+        tt::TargetDevice target_device_type,
         bool run_discovery = true);
     // Constructor generating a PhysicalSystemDescriptor based on a protobuf
     // descriptor (can be used entirely offline).
@@ -194,7 +198,7 @@ public:
     const std::unordered_map<std::string, std::string>& get_host_mobo_name_map() const { return host_to_mobo_name_; }
     const std::unordered_map<std::string, uint32_t>& get_host_to_rank_map() const { return host_to_rank_; }
     const ExitNodeConnectionTable& get_exit_node_connection_table() const { return exit_node_connection_table_; }
-    bool is_using_mock_cluster() const { return using_mock_cluster_desc_; }
+    bool is_using_mock_cluster() const;
     LocalEthernetMetrics query_local_ethernet_metrics() const;
 
     PhysicalConnectivityGraph& get_system_graph() { return system_graph_; }
@@ -226,7 +230,7 @@ private:
 
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
     const Hal* hal_;
-    const bool using_mock_cluster_desc_;
+    tt::TargetDevice target_device_type_;
     PhysicalConnectivityGraph system_graph_;
     std::unordered_map<AsicID, ASICDescriptor> asic_descriptors_;
     std::unordered_map<std::string, std::string> host_to_mobo_name_;

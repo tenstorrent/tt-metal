@@ -151,8 +151,9 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
             driver,
             context.get_distributed_context_ptr(),
             &context.hal(),
-            context.rtoptions().get_mock_enabled(),
-            run_discovery);
+            context.rtoptions(),
+            run_discovery
+        );
         log_output_rank0("Physical Discovery Complete");
         log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
         return physical_system_descriptor;
