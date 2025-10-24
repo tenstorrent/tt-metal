@@ -68,6 +68,19 @@ RunTimeOptions::RunTimeOptions() {
         }
     }
 
+    if (this->root_dir.empty()) {
+        log_critical(
+            tt::LogMetal,
+            "Failed to determine TT-Metal root directory. "
+            "Root directory must be set via one of the following methods:\n"
+            "1. Automatically determined when using a package install\n"
+            "2. Set TT_METAL_RUNTIME_ROOT environment variable to the path containing tt_metal/\n"
+            "3. Call RunTimeOptions::set_root_dir() API before creating RunTimeOptions\n"
+            "4. Run from the root of the repository\n"
+            "Current working directory: {}",
+            std::filesystem::current_path().string());
+    }
+
     TT_FATAL(!this->root_dir.empty(), "Root Directory is not set.");
 
     {
