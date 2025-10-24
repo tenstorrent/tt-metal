@@ -107,35 +107,6 @@ class CombinedTimestepGuidanceTextProjEmbeddings(Module):
 
         self.time_proj_factor = self._create_time_proj_factor(256)
 
-    # def to_cached_state_dict(self, path_prefix):
-    #     timestep_embedder_cache = self.timestep_embedder.to_cached_state_dict(path_prefix + "timestep_embedder.")
-    #     if self.with_guidance:
-    #         guidance_embedder_cache = self.guidance_embedder.to_cached_state_dict(path_prefix + "guidance_embedder.")
-    #     text_embedder_cache = self.text_embedder.to_cached_state_dict(path_prefix + "text_embedder.")
-
-    #     cache_dict = {}
-    #     for key, value in timestep_embedder_cache.items():
-    #         cache_dict[f"timestep_embedder.{key}"] = value
-    #     if self.with_guidance:
-    #         for key, value in guidance_embedder_cache.items():
-    #             cache_dict[f"guidance_embedder.{key}"] = value
-    #     for key, value in text_embedder_cache.items():
-    #         cache_dict[f"text_embedder.{key}"] = value
-
-    #     return cache_dict
-
-    # def from_cached_state_dict(self, cache_dict):
-    #     self.timestep_embedder.from_cached_state_dict(substate(cache_dict, "timestep_embedder"))
-    #     if self.with_guidance:
-    #         self.guidance_embedder.from_cached_state_dict(substate(cache_dict, "guidance_embedder"))
-    #     self.text_embedder.from_cached_state_dict(substate(cache_dict, "text_embedder"))
-
-    # def load_state_dict(self, state_dict):
-    #     self.timestep_embedder.load_state_dict(substate(state_dict, "timestep_embedder"))
-    #     if self.with_guidance:
-    #         self.guidance_embedder.load_state_dict(substate(state_dict, "guidance_embedder"))
-    #     self.text_embedder.load_state_dict(substate(state_dict, "text_embedder"))
-
     def _create_time_proj_factor(self, num_channels) -> ttnn.Tensor:
         assert num_channels % 2 == 0
         half_dim = num_channels // 2
