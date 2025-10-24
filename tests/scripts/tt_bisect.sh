@@ -7,10 +7,8 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 Usage:
   -f TEST        : test command to run (quote if it has spaces)
   -s SCRIPT      : path to script to run instead of test command (optional)
-  -s SCRIPT      : path to script to run instead of test command (optional)
   -g GOOD_SHA    : known good commit
   -b BAD_SHA     : known bad commit
-  -t TIMEOUT     : per-iteration timeout in minutes (default 30)
   -t TIMEOUT     : per-iteration timeout in minutes (default 30)
   -p             : enable Tracy profiling
   -r RETRIES     : number of retries (default 3)
@@ -21,9 +19,7 @@ Note: Either -f or -s must be specified, but not both.
 END
 
 timeout_duration_iteration="30"
-timeout_duration_iteration="30"
 test=""
-script_path=""
 script_path=""
 good_commit=""
 bad_commit=""
@@ -38,7 +34,6 @@ timeout_rc=1
 while getopts ":f:s:g:b:t:pr:nac:" opt; do
   case "$opt" in
     f) test="$OPTARG" ;;
-    s) script_path="$OPTARG" ;;
     s) script_path="$OPTARG" ;;
     g) good_commit="$OPTARG" ;;
     b) bad_commit="$OPTARG" ;;
@@ -63,23 +58,8 @@ elif [ -z "$script_path" ] && [ -z "$test" ]; then
   die "Please specify either -f TEST or -s SCRIPT."
 fi
 
-export CXX=clang++-17
-export CC=clang-17
-
-# Either test or script_path must be specified, but not both
-if [ -n "$script_path" ] && [ -n "$test" ]; then
-  die "Cannot specify both -f TEST and -s SCRIPT. Use one or the other."
-elif [ -z "$script_path" ] && [ -z "$test" ]; then
-  die "Please specify either -f TEST or -s SCRIPT."
-fi
-
 [ -n "$good_commit" ] || die "Please specify -g GOOD_SHA."
 [ -n "$bad_commit" ] || die "Please specify -b BAD_SHA."
-
-# Validate script exists if specified
-if [ -n "$script_path" ] && [ ! -f "$script_path" ]; then
-  die "Script not found: $script_path"
-fi
 
 # Validate script exists if specified
 if [ -n "$script_path" ] && [ ! -f "$script_path" ]; then
@@ -213,7 +193,7 @@ try_download_artifacts() {
     "$download_script" "$commit_sha"
   fi
 }
-# START GIT BISECT
+
 # START GIT BISECT
 echo "Starting git bisect…"
 git bisect start "$bad_commit" "$good_commit"
@@ -259,13 +239,6 @@ while [[ "$found" == "false" ]]; do
     build_args="--build-all --enable-ccache"
     [ "$tracy_enabled" -eq 1 ] && build_args="$build_args --enable-profiler"
     ./build_metal.sh $build_args || build_rc=$?
-  if [ "$artifact_mode" = true ] && try_download_artifacts "$full_sha"; then
-    echo "Using downloaded artifacts for $rev"
-  else
-    [ "$artifact_mode" = true ] && echo "WARNING: Artifact download failed, falling back to local build"
-    build_args="--build-all --enable-ccache"
-    [ "$tracy_enabled" -eq 1 ] && build_args="$build_args --enable-profiler"
-    ./build_metal.sh $build_args || build_rc=$?
   fi
 
   echo "::endgroup::"
@@ -277,7 +250,6 @@ while [[ "$found" == "false" ]]; do
   fi
 
   echo "::group::Import sanity ($rev)"
-  if ! verify_import_path 2>&1; then
   if ! verify_import_path 2>&1; then
     echo "Import path check failed; skipping this commit"
     git bisect skip
@@ -322,15 +294,6 @@ while [[ "$found" == "false" ]]; do
         tt-smi -r >/dev/null 2>&1 || true  # use regular reset mode
       fi
 
-      if [ -n "$script_path" ]; then
-        echo "Run: $script_path"
-        run_cmd="$script_path"
-      else
-        echo "Run: $test"
-        run_cmd="$test"
-      fi
-
-      if timeout -k 10s "${timeout_duration_iteration}m" bash -lc "$run_cmd" 2>&1 | tee "$output_file"; then
       if [ -n "$script_path" ]; then
         echo "Run: $script_path"
         run_cmd="$script_path"
@@ -415,19 +378,6 @@ while [[ "$found" == "false" ]]; do
     timeout_rc=1
     while [ $run_idx -le $retries ]; do
       echo "Attempt $run_idx/$retries on $(git rev-parse HEAD)"
-      echo "Resetting devices..."
-      tt-smi -r >/dev/null 2>&1 || true
-      echo "Devices reset"
-
-      if [ -n "$script_path" ]; then
-        echo "Run: $script_path"
-        run_cmd="$script_path"
-      else
-        echo "Run: $test"
-        run_cmd="$test"
-      fi
-
-      if timeout -k 10s "${timeout_duration_iteration}m" bash -lc "$run_cmd" 2>&1 | tee "$output_file"; then
       echo "Resetting devices..."
       tt-smi -r >/dev/null 2>&1 || true
       echo "Devices reset"
