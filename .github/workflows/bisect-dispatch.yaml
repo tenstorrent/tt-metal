@@ -21,7 +21,7 @@ on:
           - N300
           - P150
           - config-t3000
-          - config-BH-LoudBox
+          - BH-LoudBox
           - topology-6u-wormhole_b0
         description: "Runner Type Label"
       commit-range:
