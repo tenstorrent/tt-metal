@@ -823,6 +823,23 @@ std::filesystem::path MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type
             return std::filesystem::path(root_dir) / MESH_GRAPH_DESCRIPTOR_DIR / cluster_it->second;
         }
     }
+
+    // Fallback: if a torus fabric type was requested but not found, try MESH fabric type.
+    if (fabric_type != FabricType::MESH) {
+        auto mesh_fabric_it = fabric_to_cluster_map.find(FabricType::MESH);
+        const auto& cluster_to_descriptor_map = mesh_fabric_it->second;
+        auto cluster_it = cluster_to_descriptor_map.find(cluster_type);
+        if (cluster_it != cluster_to_descriptor_map.end()) {
+            log_warning(
+                tt::LogFabric,
+                "Mesh Graph Descriptor for fabric type {} and cluster type {} not found. Picking mesh graph descriptor "
+                "for MESH fabric type.",
+                enchantum::to_string(fabric_type),
+                enchantum::to_string(cluster_type));
+            return std::filesystem::path(root_dir) / MESH_GRAPH_DESCRIPTOR_DIR / cluster_it->second;
+        }
+    }
+
     TT_THROW("Cannot find mesh graph descriptor for fabric type {} and cluster type {}", fabric_type, cluster_type);
 }
 
