@@ -211,7 +211,7 @@ def test_device_sharded_1d(mesh_device: ttnn.MeshDevice, layout) -> None:
     # }[INFO]
 
     # Validate that auto-composition returns original torch input
-    torch_auto = to_torch_auto_compose(tt_dev_sharded, device=mesh_device)
+    torch_auto = to_torch_auto_compose(tt_dev_sharded)
 
     # Reference using explicit composer through high-level API
     torch_ref = ttnn.to_torch(tt_dev_sharded, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
@@ -268,7 +268,7 @@ def test_device_sharded_various_dims(mesh_device: ttnn.MeshDevice, layout, dim: 
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim),
     )
 
-    torch_auto = to_torch_auto_compose(tt_dev_sharded, device=mesh_device)
+    torch_auto = to_torch_auto_compose(tt_dev_sharded)
     torch_ref = ttnn.to_torch(tt_dev_sharded, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=dim))
 
     assert torch.equal(torch_ref, torch_in)
@@ -328,7 +328,7 @@ def test_device_sharded_2d_shard_shard(mesh_device: ttnn.MeshDevice, layout, dim
         torch_in, device=mesh_device, dtype=ttnn.bfloat16, layout=layout, mesh_mapper=mapper
     )
 
-    torch_auto = to_torch_auto_compose(tt_dev_sharded, device=mesh_device)
+    torch_auto = to_torch_auto_compose(tt_dev_sharded)
     composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(dims_pair[0], dims_pair[1]))
     torch_ref = ttnn.to_torch(tt_dev_sharded, mesh_composer=composer)
 
@@ -437,7 +437,7 @@ def test_device_sharded_shape_thresholds(mesh_device: ttnn.MeshDevice, layout, c
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim),
     )
 
-    torch_auto = to_torch_auto_compose(tt_dev_sharded, device=mesh_device)
+    torch_auto = to_torch_auto_compose(tt_dev_sharded)
     torch_ref = ttnn.to_torch(tt_dev_sharded, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim))
 
     assert torch.equal(torch_ref, torch_in)
