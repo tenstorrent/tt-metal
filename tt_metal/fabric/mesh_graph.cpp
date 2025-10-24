@@ -86,7 +86,6 @@ const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mes
         {tt::tt_fabric::FabricType::TORUS_XY,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_xy_graph_descriptor.yaml"},
-             {tt::tt_metal::ClusterType::T3K, "t3k_mesh_graph_descriptor.yaml"}, // It may be here because of 1D ring
          }}});
 
 const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mesh_graph_descriptor_mgd2 =
@@ -122,7 +121,6 @@ const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mes
         {tt::tt_fabric::FabricType::TORUS_XY,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_xy_graph_descriptor.textproto"},
-             {tt::tt_metal::ClusterType::T3K, "t3k_mesh_graph_descriptor.yaml"}, // It may be here because of 1D ring
          }}});
 
 bool has_flag(FabricType flags, FabricType test) { return (flags & test) == test; }
