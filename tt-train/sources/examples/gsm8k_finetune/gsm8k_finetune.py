@@ -30,19 +30,7 @@ import tt_serialization  # noqa: F401
 
 # Configuration
 CONFIG = "training_shakespeare_tinyllama.yaml"
-
-
-@dataclass
-class SchedulerConfig:
-    lr_max: float = 3e-4
-    min_lr: float = 1e-5
-    warmup_steps: int = 10
-    hold_steps: int = 0
-    total_steps: int = 100
-    # optional momentum warmup (beta1 ramp)
-    beta1_start: Optional[float] = None  # e.g., 0.85
-    beta1_end: Optional[float] = None  # e.g., 0.9
-    beta1_warmup_steps: int = 0
+VALIDATION_BATCH_SIZE_PER_DEVICE = 6
 
 
 class SpeedrunScheduler:
@@ -56,7 +44,7 @@ class SpeedrunScheduler:
         w = max(0, self.cfg.warmup_steps)
         h = max(0, self.cfg.hold_steps)
         T = max(1, self.cfg.total_steps)
-        peak = self.cfg.lr_max
+        peak = self.cfg.max_lr
         min_lr = self.cfg.min_lr
 
         if s <= w:
@@ -391,8 +379,6 @@ class TokenizedDataset(torch.utils.data.Dataset):
         return self.X[idx], self.y[idx]
 
 
-
-
 def train():
     print("Loading tokenizer and config...")
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
@@ -425,7 +411,7 @@ def train():
 
 
     training_config = TrainingConfig(yaml_config)
-    scheduler_config = ttml.common.config.SchedulerConfig(yaml_config)
+    scheduler_config = SchedulerConfig(yaml_config)
 
     batch_size = training_config.batch_size
 
@@ -476,13 +462,9 @@ def train():
         drop_last=True,
         num_workers=0,
         collate_fn=CollateFn(tokenizer.eos_token_id, max_sequence_length, padded_vocab_size),
-        # persistent_workers=True,
     )
 
     num_devices = device_config.total_devices()
-    # it's not clear why we picked 6 here
-    # TODO(Adriel): please add comments
-    VALIDATION_BATCH_SIZE_PER_DEVICE = 6
     testing_dataloader = DataLoader(
         testing_data,
         batch_size=VALIDATION_BATCH_SIZE_PER_DEVICE * num_devices,
@@ -490,7 +472,6 @@ def train():
         drop_last=True,
         num_workers=0,
         collate_fn=CollateFn(tokenizer.eos_token_id, max_sequence_length, padded_vocab_size),
-        # persistent_workers=True,
     )
 
     # Setup training
@@ -526,18 +507,7 @@ def train():
     print("Tokens per micro-batch:", tokens_per_batch)
     print("Tokens per accumulated batch:", tokens_per_batch * training_config.gradient_accumulation_steps)
 
-    sched = SpeedrunScheduler(
-        SchedulerConfig(
-            lr_max=scheduler_config.max_lr,
-            min_lr=scheduler_config.min_lr,
-            warmup_steps=scheduler_config.warmup_steps,
-            hold_steps=scheduler_config.hold_steps,
-            total_steps=training_config.steps,
-            beta1_start=0.85,
-            beta1_end=0.9,
-            beta1_warmup_steps=3000,
-        )
-    )
+    sched = SpeedrunScheduler(scheduler_config)
     setter = OptimParamSetter(optim)
 
     f = open("validation.txt", "w")

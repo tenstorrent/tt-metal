@@ -165,10 +165,17 @@ class SchedulerConfig:
             yaml_config: Dictionary containing configuration
         """
         sc = yaml_config.get("scheduler_config", {})
+        tc = yaml_config.get("training_config", {})
         self.max_lr = float(sc.get("max_lr", 0.001))
         self.min_lr = float(sc.get("min_lr", 0.0))
         self.warmup_steps = int(sc.get("warmup_steps", 100))
         self.hold_steps = int(sc.get("hold_steps", 0))
+        self.total_steps = int(tc.get("total_steps", 1000))
+
+        # optional momentum warmup (beta1 ramp)
+        beta1_start = float(sc.get("beta1_start", 0.85))
+        beta1_end = float(sc.get("beta1_end", 0.95))
+        beta1_warmup_steps = int(sc.get("beta1_warmup_steps", 0))
 
     def update_config(self, yaml_config: dict):
         """Update scheduler configuration from another YAML config.

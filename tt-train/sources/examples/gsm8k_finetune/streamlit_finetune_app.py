@@ -127,7 +127,7 @@ def create_loss_plot(history_df, eval_every=None):
     if eval_every is not None and eval_every > 0:
         # Filter to only show validation loss at eval_every intervals
         # This includes step 0 and steps that are multiples of eval_every
-        val_mask = (history_df["step"] % eval_every == 0) | (history_df["step"] == 0)
+        val_mask = ((history_df["step"]+1) % eval_every == 0) | (history_df["step"] == 0)
         val_df = history_df[val_mask]
     else:
         # If eval_every not provided, show all validation points
