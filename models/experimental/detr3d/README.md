@@ -1,6 +1,6 @@
 # DETR3D: 3D Object Detection with Transformers
 
-A PyTorch implementation of DETR3D (Detection Transformer for 3D Object Detection) with TTNN (Tensor Train Neural Network) acceleration support.
+A PyTorch implementation of DETR3D (Detection Transformer for 3D Object Detection) with TTNN acceleration support.
 
 ## Overview
 
@@ -28,7 +28,7 @@ models/experimental/detr3d/
 │   └── utils/                     # Reference utilities
 │       ├── dataset/              # Dataset implementations
 │       │   ├── __init__.py
-│       │   └── sunrgbd.py         # SUNRGBD dataset (minimal, self-contained)
+│       │   └── sunrgbd.py         # SUNRGBD dataset
 │       ├── ap_calculator.py      # Average Precision calculation
 │       ├── box_util.py           # 3D bounding box utilities
 │       ├── eval_det.py           # Detection evaluation
@@ -41,16 +41,6 @@ models/experimental/detr3d/
 └── tests/                         # Test files
     └── pcc/                       # Performance comparison tests
 ```
-
-## Installation
-
-### Prerequisites
-
-- Python 3.8+
-- PyTorch 1.9+
-- NumPy
-- SciPy
-- TTNN (for accelerated inference)
 
 ### Dependencies
 
@@ -97,10 +87,15 @@ python models/experimental/detr3d/demo/detr3d_demo.py \
 
 **Example with SUNRGBD dataset:**
 
+To download weights run:
+```bash
+models/experimental/detr3d/resources/detr3d_weights_download.sh
+```
+
 ```bash
 python models/experimental/detr3d/demo/detr3d_demo.py \
-    --dataset-root-dir sunrgbd \
-    --test-ckpt sunrgbd_masked_ep720.pth
+    --dataset-root-dir  models/experimental/detr3d/resources/sunrgbd
+    --test-ckpt models/experimental/detr3d/resources/sunrgbd_masked_ep720.pth
 ```
 
 ### Command Line Arguments
@@ -123,20 +118,12 @@ python models/experimental/detr3d/demo/detr3d_demo.py \
 The SUNRGBD dataset should be organized as follows:
 
 ```
-sunrgbd/
-├── sunrgbd_val/                    # Validation split
-│   ├── 000001_bbox.npy            # Bounding box annotations (K×8)
-│   ├── 000001_pc.npz              # Point cloud data (N×6: x,y,z,r,g,b)
-│   ├── 000001_votes.npz           # Vote supervision data (optional)
-│   ├── 000002_bbox.npy
-│   ├── 000002_pc.npz
-│   ├── 000002_votes.npz
-│   └── ...
-└── sunrgbd_train/                  # Training split (same structure)
-    ├── 000001_bbox.npy
-    ├── 000001_pc.npz
-    ├── 000001_votes.npz
-    └── ...
+sunrgbd_val/                    # Validation split
+├── 000001_bbox.npy            # Bounding box annotations (K×8)
+├── 000001_pc.npz              # Point cloud data (N×6: x,y,z,r,g,b)
+├── 000001_votes.npz           # Vote supervision data (optional)
+└── ...
+
 ```
 
 **File Formats:**
@@ -237,41 +224,14 @@ The project includes TTNN-accelerated models for efficient inference:
 - **Detections**: Dictionary with bounding boxes, classes, and scores
 - **Metrics**: AP scores and per-class performance
 
-## Troubleshooting
-
-### Common Issues
-
-1. **Dataset Path**: Ensure correct dataset directory structure
-2. **Memory Issues**: Reduce batch size or number of points
-3. **CUDA Issues**: Check GPU memory and CUDA compatibility
-4. **Dependency Issues**: Install all required packages
-
-### Performance Tips
-
-- Use appropriate batch size for your GPU memory
-- Enable data loading workers for faster training
-- Use mixed precision training for memory efficiency
-- Consider TTNN acceleration for inference
-
 ## Citation
 
-If you use this code, please cite the original DETR3D paper:
 
 ```bibtex
-@article{wang2022detr3d,
-  title={DETR3D: 3D Object Detection from Multi-view Images via 3D-to-2D Queries},
-  author={Wang, Yue and Guizilini, Vitor and Zhang, Tianyuan and Wang, Yilun and Zhao, Hang and Solomon, Justin},
-  journal={arXiv preprint arXiv:2110.06922},
-  year={2022}
+@inproceedings{misra2021-3detr,
+    title={{An End-to-End Transformer Model for 3D Object Detection}},
+    author={Misra, Ishan and Girdhar, Rohit and Joulin, Armand},
+    booktitle={{ICCV}},
+    year={2021},
 }
 ```
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Acknowledgments
-
-- Original DETR3D implementation from Facebook Research
-- TTNN acceleration framework
-- SUNRGBD and ScanNet dataset providers
