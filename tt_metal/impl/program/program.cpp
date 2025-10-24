@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <allocator.hpp>
 #include <circular_buffer.hpp>
 #include <circular_buffer_config.hpp>
