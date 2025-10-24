@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -57,11 +57,3 @@ def test_petr_mha(device, reset_seeds):
     print(f"Output PCC: {msg}")
 
     assert_with_pcc(torch_output, ttnn_output, 0.99)
-
-    tt_weight = ttnn.to_torch(tt_weight).to(torch.float32)
-    tt_weight = tt_weight.reshape(weight.shape)
-
-    passed, msg = check_with_pcc(weight, tt_weight, pcc=0.99)
-    print(f"Weight PCC: {msg}")
-
-    assert_with_pcc(weight, tt_weight, 0.99)

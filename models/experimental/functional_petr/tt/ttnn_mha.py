@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import torch
 from ttnn.model_preprocessing import preprocess_linear_weight, preprocess_linear_bias
 import math
 
@@ -14,11 +13,10 @@ class TTPETRMultiheadAttention:
         self.num_heads = num_heads
         self.device = device
 
-        self.attn_in_proj__eight = torch_model.attn.in_proj_weight
-        self.attn_in_proj__ias = torch_model.attn.in_proj_bias
+        self.attn_in_proj_weight = torch_model.attn.in_proj_weight
+        self.attn_in_proj_bias = torch_model.attn.in_proj_bias
         self.attn_out_proj_weight = torch_model.attn.out_proj.weight
         self.attn_out_proj_bias = torch_model.attn.out_proj.bias
-        self.torch_fallback = False
 
     def __call__(
         self,
@@ -62,8 +60,8 @@ class TTPETRMultiheadAttention:
             key = ttnn.permute(key, (1, 0))
             value = ttnn.permute(value, (1, 0))
 
-        in_proj_bias = self.attn_in_proj__ias
-        in_proj_weight = self.attn_in_proj__eight
+        in_proj_bias = self.attn_in_proj_bias
+        in_proj_weight = self.attn_in_proj_weight
 
         tgt_len, bsz, embed_dim = query.shape
         src_len, _, _ = key.shape
@@ -133,24 +131,14 @@ class TTPETRMultiheadAttention:
         else:
             attn_output_weights = ttnn.matmul(q_scaled, key_transposed, dtype=ttnn.bfloat16)
 
-        if self.torch_fallback:
-            # TORCH Softmax
-            attn_weights_torch = ttnn.to_torch(attn_output_weights).to(torch.bfloat16)
-            attn_weights_torch = torch.nn.functional.softmax(attn_weights_torch, dim=-1)
-
-            # Convert back to ttnn
-            attn_output_weights = ttnn.from_torch(
-                attn_weights_torch.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-            )
-        else:
-            # TTNN Softmax
-            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=True,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=True,
-            )
-            attn_output_weights = ttnn.softmax(attn_output_weights, dim=-1, compute_kernel_config=compute_kernel_config)
+        # TTNN Softmax
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        attn_output_weights = ttnn.softmax(attn_output_weights, dim=-1, compute_kernel_config=compute_kernel_config)
 
         attn_output = ttnn.matmul(attn_output_weights, value)
 
@@ -166,12 +154,6 @@ class TTPETRMultiheadAttention:
         attn_output = ttnn.linear(attn_output, self.attn_out_proj_weight, bias=self.attn_out_proj_bias)
         attn_output = ttnn.reshape(attn_output, (tgt_len, bsz, attn_output.shape[1]))
         attn_output_weights = ttnn.reshape(attn_output_weights, (bsz, self.num_heads, tgt_len, src_len))
-        attn_weights_torch = ttnn.to_torch(attn_output_weights).to(torch.bfloat16)
-        attn_weights_avg = attn_weights_torch.mean(dim=1)
-
-        # Convert back
-        attn_output_weights = ttnn.from_torch(
-            attn_weights_avg.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-        )
+        attn_output_weights = ttnn.mean(attn_output_weights, dim=1)
 
         return attn_output + identity, attn_output_weights
