@@ -63,6 +63,82 @@ def _add_device_perf_from_dict(metrics: set, perf: dict, suffix: Optional[str] =
         _add_metric(metrics, _normalize_device_metric_name(k, suffix), v)
 
 
+def _map_status(value: Any) -> Optional[TestStatus]:
+    if value is None:
+        return None
+    try:
+        from framework.statuses import TestStatus as RunnerStatus
+
+        # TODO: consider removing this mapping and just using the TestStatus enum directly
+        if isinstance(value, RunnerStatus):
+            mapping = {
+                RunnerStatus.PASS: "pass",
+                RunnerStatus.FAIL_ASSERT_EXCEPTION: "fail_assert_exception",
+                RunnerStatus.FAIL_CRASH_HANG: "fail_crash_hang",
+                RunnerStatus.NOT_RUN: "skipped",
+                RunnerStatus.FAIL_L1_OUT_OF_MEM: "fail_l1_out_of_mem",
+                RunnerStatus.FAIL_WATCHER: "fail_watcher",
+                RunnerStatus.FAIL_UNSUPPORTED_DEVICE_PERF: "fail_unsupported_device_perf",
+                RunnerStatus.XFAIL: "xfail",  # Expected failure
+                RunnerStatus.XPASS: "xpass",  # Unexpected pass
+            }
+            return TestStatus(mapping.get(value, "error"))
+    except Exception:
+        pass
+    # If already a string, trust but verify
+    try:
+        s = str(value)
+        # Normalize common forms like "TestStatus.PASS"
+        if s.startswith("TestStatus."):
+            suffix = s.split(".", 1)[1].lower()
+            if suffix == "pass":
+                return TestStatus("pass")
+            return TestStatus(suffix)
+        return TestStatus(s)
+    except Exception:
+        return TestStatus("error")
+
+
+def _collect_all_metrics(raw: dict[str, Any]) -> Optional[set[PerfMetric]]:
+    """Collect both e2e performance and device performance metrics into PerfMetric set"""
+    metrics: set[PerfMetric] = set()
+
+    # Collect e2e and device metrics via helpers
+    _add_e2e_metrics(metrics, raw)
+    _add_device_metrics(metrics, raw)
+
+    return metrics if metrics else None
+
+
+def _coerce_to_optional_string(value: Any) -> Optional[str]:
+    """Convert any value to an optional string, handling common numeric types gracefully."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+
+    # Handle numpy numeric types first (before checking for regular float/int)
+    if np is not None and isinstance(value, np.number):
+        if np.isnan(value):
+            return None
+        if np.isinf(value):
+            return "inf" if value > 0 else "-inf"
+        return str(value)
+
+    # Handle regular Python numeric types
+    if isinstance(value, (int, float)):
+        # Handle special float cases
+        if isinstance(value, float):
+            if math.isnan(value):
+                return None
+            if math.isinf(value):
+                return "inf" if value > 0 else "-inf"
+        return str(value)
+
+    # For any other type, convert to string
+    return str(value)
+
+
 def _add_e2e_metrics(metrics: set, raw: dict[str, Any]) -> None:
     e2e_perf = raw.get("e2e_perf")
     if e2e_perf is not None:
@@ -250,79 +326,7 @@ class FileResultDestination(ResultDestination):
         # this will be the list of OpTest objects that will be exported to the file
         validated_records = []
 
-        # Map internal TestStatus enum (or strings) to file schema enum values
-        def _map_status(value: Any) -> Optional[TestStatus]:
-            if value is None:
-                return None
-            try:
-                from framework.statuses import TestStatus as RunnerStatus
-
-                # TODO: consider removing this mapping and just using the TestStatus enum directly
-                if isinstance(value, RunnerStatus):
-                    mapping = {
-                        RunnerStatus.PASS: "pass",
-                        RunnerStatus.FAIL_ASSERT_EXCEPTION: "fail_assert_exception",
-                        RunnerStatus.FAIL_CRASH_HANG: "fail_crash_hang",
-                        RunnerStatus.NOT_RUN: "skipped",
-                        RunnerStatus.FAIL_L1_OUT_OF_MEM: "fail_l1_out_of_mem",
-                        RunnerStatus.FAIL_WATCHER: "fail_watcher",
-                        RunnerStatus.FAIL_UNSUPPORTED_DEVICE_PERF: "fail_unsupported_device_perf",
-                        RunnerStatus.XFAIL: "xfail",  # Expected failure
-                        RunnerStatus.XPASS: "xpass",  # Unexpected pass
-                    }
-                    return TestStatus(mapping.get(value, "error"))
-            except Exception:
-                pass
-            # If already a string, trust but verify
-            try:
-                s = str(value)
-                # Normalize common forms like "TestStatus.PASS"
-                if s.startswith("TestStatus."):
-                    suffix = s.split(".", 1)[1].lower()
-                    if suffix == "pass":
-                        return TestStatus("pass")
-                    return TestStatus(suffix)
-                return TestStatus(s)
-            except Exception:
-                return TestStatus("error")
-
-        def _collect_all_metrics(raw: dict[str, Any]) -> Optional[set[PerfMetric]]:
-            """Collect both e2e performance and device performance metrics into PerfMetric set"""
-            metrics: set[PerfMetric] = set()
-
-            # Collect e2e and device metrics via helpers
-            _add_e2e_metrics(metrics, raw)
-            _add_device_metrics(metrics, raw)
-
-            return metrics if metrics else None
-
-        def _coerce_to_optional_string(value: Any) -> Optional[str]:
-            """Convert any value to an optional string, handling common numeric types gracefully."""
-            if value is None:
-                return None
-            if isinstance(value, str):
-                return value
-
-            # Handle numpy numeric types first (before checking for regular float/int)
-            if np is not None and isinstance(value, np.number):
-                if np.isnan(value):
-                    return None
-                if np.isinf(value):
-                    return "inf" if value > 0 else "-inf"
-                return str(value)
-
-            # Handle regular Python numeric types
-            if isinstance(value, (int, float)):
-                # Handle special float cases
-                if isinstance(value, float):
-                    if math.isnan(value):
-                        return None
-                    if math.isinf(value):
-                        return "inf" if value > 0 else "-inf"
-                return str(value)
-
-            # For any other type, convert to string
-            return str(value)
+        # Map internal TestStatus enum (or strings) to file schema enum values via module helper
 
         for i in range(len(results)):
             header = header_info[i]
