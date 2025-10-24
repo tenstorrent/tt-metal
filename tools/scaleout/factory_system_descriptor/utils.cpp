@@ -24,12 +24,11 @@
 
 namespace tt::scaleout_tools {
 
-std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
+void validate_fsd_against_gsd(
     const std::string& fsd_filename,
     const std::string& gsd_filename,
     bool strict_validation,
-    bool assert_on_connection_mismatch,
-    bool log_output) {
+    bool assert_on_connection_mismatch) {
     // Read the generated FSD using protobuf
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor generated_fsd;
     std::ifstream fsd_file(fsd_filename);
@@ -181,6 +180,11 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
     bool has_global_eth_connections = discovered_gsd["global_eth_connections"] &&
                                       !discovered_gsd["global_eth_connections"].IsNull() &&
                                       discovered_gsd["global_eth_connections"].size() > 0;
+
+    // At least one connection type should exist
+    if (!(has_local_eth_connections || has_global_eth_connections)) {
+        throw std::runtime_error("No connection types found in discovered GSD");
+    }
 
     // Convert generated connections to a comparable format
     std::set<std::pair<PhysicalChannelEndpoint, PhysicalChannelEndpoint>> generated_connections;
@@ -451,9 +455,7 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
         for (const auto& conn : missing_port_info) {
             oss << "  - " << conn.first << " <-> " << conn.second << "\n";
         }
-        if (log_output) {
-            std::cout << oss.str() << std::endl;
-        }
+        std::cout << oss.str() << std::endl;
     }
 
     // Report extra connections (in GSD but not in FSD) - both modes check this
@@ -473,9 +475,7 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
         for (const auto& conn : extra_port_info) {
             oss << "  - " << conn.first << " <-> " << conn.second << "\n";
         }
-        if (log_output) {
-            std::cout << oss.str() << std::endl;
-        }
+        std::cout << oss.str() << std::endl;
     }
 
     // Handle validation results
@@ -487,17 +487,14 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
         }
     } else {
         // Success message differs based on validation mode
-        if (log_output) {
-            if (strict_validation) {
-                std::cout << "All connections match between FSD and GSD (" << generated_connections.size()
-                          << " connections)" << std::endl;
-            } else {
-                std::cout << "All GSD connections found in FSD (" << discovered_connections.size()
-                          << " connections checked)" << std::endl;
-            }
+        if (strict_validation) {
+            std::cout << "All connections match between FSD and GSD (" << generated_connections.size()
+                      << " connections)" << std::endl;
+        } else {
+            std::cout << "All GSD connections found in FSD (" << discovered_connections.size()
+                      << " connections checked)" << std::endl;
         }
     }
-    return missing_in_gsd;
 }
 
 }  // namespace tt::scaleout_tools
