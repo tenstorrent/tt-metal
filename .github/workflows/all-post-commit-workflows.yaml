@@ -34,10 +34,10 @@ on:
         default: false
         type: boolean
         description: "Re-run failed jobs (max 3)"
-      force-run-all:
-        default: false
+      force-test-everything:
+        default: true
         type: boolean
-        description: "Force run all tests regardless of file changes"
+        description: "Force test everything regardless of file changes"
   push:
     branches: ["main"]
 
@@ -91,7 +91,7 @@ jobs:
       - id: set-test-metalium
         run: |
           echo "test-metalium=${{ github.event_name != 'workflow_dispatch' ||
-                                 (github.event_name == 'workflow_dispatch' && inputs.force-run-all) ||
+                                 (github.event_name == 'workflow_dispatch' && inputs.force-test-everything) ||
                                  steps.find-changes.outputs['cmake-changed'] == 'true' ||
                                  steps.find-changes.outputs['submodule-changed'] == 'true' ||
                                  steps.find-changes.outputs['tt-metalium-changed'] == 'true' ||
@@ -108,7 +108,7 @@ jobs:
       - id: set-test-everything
         run: |
           echo "test-everything=${{ github.event_name != 'workflow_dispatch' ||
-                                  (github.event_name == 'workflow_dispatch' && inputs.force-run-all) ||
+                                  (github.event_name == 'workflow_dispatch' && inputs.force-test-everything) ||
                                   steps.find-changes.outputs['any-code-changed'] == 'true' }}" >> "$GITHUB_OUTPUT"
 
   # Fabric Unit Tests
