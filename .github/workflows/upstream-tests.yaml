@@ -22,6 +22,7 @@ env:
   BLACKHOLE_LOUDBOX_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-loudbox
   BLACKHOLE_P300_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-p300
   BLACKHOLE_QB_GE_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-qb-ge
+  BH_GLX_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx
 
 jobs:
   build-artifact:
@@ -47,6 +48,7 @@ jobs:
       bh-loudbox-image-tag: ${{ steps.set-image-tags.outputs.bh-loudbox-image-tag }}
       bh-p300-image-tag: ${{ steps.set-image-tags.outputs.bh-p300-image-tag }}
       bh-qb-ge-image-tag: ${{ steps.set-image-tags.outputs.bh-qb-ge-image-tag }}
+      bh-glx-image-tag: ${{ steps.set-image-tags.outputs.bh-glx-image-tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -67,6 +69,7 @@ jobs:
           echo "bh-loudbox-image-tag=${{ env.BLACKHOLE_LOUDBOX_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
           echo "bh-p300-image-tag=${{ env.BLACKHOLE_P300_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
           echo "bh-qb-ge-image-tag=${{ env.BLACKHOLE_QB_GE_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
+          echo "bh-glx-image-tag=${{ env.BH_GLX_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
   build-images:
     needs:
       - build-artifact
@@ -136,6 +139,13 @@ jobs:
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
             hw-topology: blackhole_qb_ge
+            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+            techdebt-install-ttt-reqs: true
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
+            dockerfile: dockerfile/upstream_test_images/Dockerfile
+            test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
+            hw-topology: blackhole_glx
             build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
             techdebt-install-ttt-reqs: true
@@ -214,6 +224,27 @@ jobs:
       - name: Run profiler image
         timeout-minutes: 10
         run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
+  test-bh-glx-image:
+    needs:
+      - get-image-tags
+      - build-images
+    runs-on:
+      - arch-blackhole
+      - topology-6u
+      - in-service
+      - pipeline-functional
+    steps:
+      # TODO -likely need to put this into a script which can be parameterized on the build number
+      # and whether to only pull
+      - name: Pull image
+        timeout-minutes: 10
+        run: docker pull ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
+      - name: Run image
+        timeout-minutes: 45
+        env:
+          SOURCE_LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
+          LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
+        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $SOURCE_LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
   test-bh-multicard-image:
     needs:
       - get-image-tags
@@ -313,6 +344,7 @@ jobs:
       - test-bh-image
       - test-bh-p300-image
       - test-bh-multicard-image
+      - test-bh-glx-image
     permissions:
       packages: write
       contents: read
@@ -328,6 +360,7 @@ jobs:
           - image-tag: ${{ needs.get-image-tags.outputs.bh-loudbox-image-tag }}
           - image-tag: ${{ needs.get-image-tags.outputs.bh-p300-image-tag }}
           - image-tag: ${{ needs.get-image-tags.outputs.bh-qb-ge-image-tag }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
