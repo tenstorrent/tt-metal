@@ -34,7 +34,7 @@ ttnn::Tensor ExecuteMinimalMatmul::invoke(
     return operation::run(
                MinimalMatmulOp{
                    .config = config,
-                   .fused_activation = fused_activation,
+                   .fused_activation = std::move(fused_activation),
                    .output_mem_config = memory_config,
                    .compute_kernel_config = kernel_config_val},
                {input_tensor, weight_tensor},
