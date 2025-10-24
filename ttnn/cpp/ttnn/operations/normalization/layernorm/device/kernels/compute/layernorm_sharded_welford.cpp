@@ -62,10 +62,10 @@
  * calculation is done using the global mean and 1/sqrt(var + eps) results.
  *
  * @note Depending on the tensor and core grid shape, some cores may
- *       not participate in the reduction (i.e., `is_allgather_worker`
- *       will be false). These cores just receive the multicasted
- *       global results and perform the rest of layernorm for their
- *       row(s) width slices.
+ *       not participate in the combine (i.e., `is_allgather_worker`
+ *       will be false). These cores do their partial reduction and
+ *       receive the multicasted global results and perform
+ *       the rest of layernorm for their row(s) width slices.
  */
 namespace NAMESPACE {
 namespace {
@@ -93,21 +93,6 @@ inline auto get_next_set_size(
     // not a second stage reader, so the next block will either
     // be a full block or a partial one if it's the last
     return block == num_blocks_combine - 1 ? last_block_w : block_w;
-}
-
-template <typename To, typename From>
-inline To bit_cast(const From& from) noexcept {
-    static_assert(sizeof(To) == sizeof(From), "Types must have same size");
-    static_assert(std::is_trivially_copyable_v<From>, "From must be trivially copyable");
-    static_assert(std::is_trivially_copyable_v<To>, "To must be trivially copyable");
-
-    union {
-        From f;
-        To t;
-    } u;
-
-    u.f = from;
-    return u.t;
 }
 }  // namespace
 void MAIN {
@@ -139,8 +124,6 @@ void MAIN {
     constexpr uint32_t W = get_compile_time_arg_val(16);
     constexpr uint32_t eps = get_compile_time_arg_val(17);
     constexpr uint32_t per_core_recip_lut_size = get_compile_time_arg_val(18);
-
-    DPRINT << "per_core_recip_lut_size: " << per_core_recip_lut_size << ENDL();
 
     // ---------------------------------------------------------------------------
     // CB definitions
@@ -217,10 +200,6 @@ void MAIN {
 
     using recip_lut_t = std::array<uint32_t, per_core_recip_lut_size>;
     auto p_reciprocals = norm::kernel_util::compute::memory::get_pointer_to_cb_data<recip_lut_t>(cb_reciprocals, 0);
-    // DPRINT << "p_reciprocals: " << p_reciprocals << ENDL();
-    for (uint32_t i = 0; i < per_core_recip_lut_size; i++) {
-        DPRINT << "p_reciprocals[" << i << "]: " << bit_cast<float>((*p_reciprocals)[i]) << ENDL();
-    }
 
     int index_subblock_w_offset = 0;
     int index_h_offset = 0;
