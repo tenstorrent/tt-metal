@@ -78,7 +78,7 @@ void TernaryDeviceOperation::validate_on_program_cache_miss(
             "SCALAR_B_BCAST");
 
     } else if (args.ternary_variant == TernaryVariant::TST) {
-        TT_FATAL(!input_b.has_value() && input_c.has_value(), "TST variant requires input_a scalar and input_c tensor");
+        TT_FATAL(!input_b.has_value() && input_c.has_value(), "TST variant requires input_b scalar and input_c tensor");
         TT_FATAL(
             args.scalar_input_a.has_value(),
             "Ternary TST operation requires scalar_input_a to be set in operation attributes");

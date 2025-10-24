@@ -34,9 +34,9 @@ struct TernaryDeviceOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& input_tensor_a;          // First input (predicate for where, input for lerp)
-        std::optional<Tensor> input_tensor_b;  // Second input (value_true for where, end for lerp)
-        std::optional<Tensor> input_tensor_c;  // Third input (value_false for where, weight for lerp)
+        const Tensor& input_tensor_a;
+        std::optional<Tensor> input_tensor_b;
+        std::optional<Tensor> input_tensor_c;
         std::optional<Tensor> optional_output_tensor;
     };
 
