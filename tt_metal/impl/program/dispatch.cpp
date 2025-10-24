@@ -2607,6 +2607,7 @@ ExpectedNumWorkerUpdates get_expected_num_workers_completed_updates(
         num_workers = 0;
         previous_expected_num_workers_completed = 0;
         wrapped = true;
+        std::cout << "Wrapped\n";
     }
 
     num_workers += num_additional_workers;

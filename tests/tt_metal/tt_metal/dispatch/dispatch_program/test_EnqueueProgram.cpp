@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <memory>
 #include <random>
@@ -2573,6 +2574,33 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestLargeProgramInBetweenFiveSmallPro
     }
 
     Finish(device_->mesh_command_queue());
+}
+
+TEST_F(UnitMeshRandomProgramFixture, TensixTestWorkerCountWrap) {
+    constexpr uint32_t wrap_count = std::numeric_limits<uint32_t>::max();
+
+    uint32_t num_sub_devices = device_->num_sub_devices();
+    ASSERT_EQ(num_sub_devices, 1);
+
+    const auto sub_device_id = device_->get_sub_device_ids().back();
+    uint32_t worker_count = device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+
+    // Number of enqueue programs required to wrap the worker counter
+    uint32_t iterations = (wrap_count / worker_count) + 1;
+
+    distributed::MeshWorkload workload;
+    Program program = CreateProgram();
+    workload.add_program(device_range_, std::move(program));
+    auto& program_ = workload.get_programs().at(device_range_);
+    KernelProperties kernel_properties;
+    kernel_properties = this->get_small_kernel_properties();
+    this->create_kernel(program_, CoreType::WORKER, false, kernel_properties);
+
+    log_info(tt::LogTest, "Looping {} iterations to wrap worker count on host", iterations);
+
+    for (uint32_t i = 0; i < iterations; i++) {
+        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
+    }
 }
 
 }  // namespace stress_tests
