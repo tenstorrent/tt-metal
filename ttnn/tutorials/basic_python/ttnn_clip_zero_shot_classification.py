@@ -563,27 +563,42 @@ def main():
         except Exception as e:
             raise Exception(f"Failed to process downloaded image: {e}")
 
+    def download_model(model_name):
+        clip_model_location = model_name  # By default, download from Hugging Face
+
+        # If TTNN_TUTORIALS_MODELS_CLIP_PATH is set, use it as the cache directory to avoid requests to Hugging Face
+        cache_dir = os.getenv("TTNN_TUTORIALS_MODELS_CLIP_PATH")
+        if cache_dir is not None:
+            # clip_model_location = os.path.join(cache_dir, "")
+            clip_model_location = f"{cache_dir}/model"
+
+        # Load model weights (download if cache_dir was not set)
+        model = CLIPModel.from_pretrained(clip_model_location)
+
+        return model
+
+    def download_tokenizer(tokenizer_name):
+        clip_tokenizer_location = tokenizer_name  # By default, download from Hugging Face
+
+        # If TTNN_TUTORIALS_MODELS_CLIP_PATH is set, use it as the cache directory to avoid requests to Hugging Face
+        cache_dir = os.getenv("TTNN_TUTORIALS_MODELS_CLIP_PATH")
+        if cache_dir is not None:
+            clip_tokenizer_location = f"{cache_dir}/tokenizer"
+
+        tokenizer = CLIPTokenizer.from_pretrained(clip_tokenizer_location)
+
+        return tokenizer
+
     # Initialize TT-NN device for hardware acceleration
     open_ttnn()
 
     # Load pre-trained CLIP model and convert weights to TT-NN format
     logger.info("Loading pre-trained CLIP model...")
 
-    clip_model_location = "openai/clip-vit-base-patch32"  # Default: downloading from Hugging Face
-    tokenizer_location = "openai/clip-vit-base-patch32"  # Default: downloading from Hugging Face
-
-    # If TTNN_TUTORIALS_MODELS_CLIP_PATH is set, use it as the cache directory to avoid requests to Hugging Face
-    cache_dir = os.getenv("TTNN_TUTORIALS_MODELS_CLIP_PATH")
-    if cache_dir is not None:
-        clip_model_location = os.path.join(cache_dir, "model")
-        tokenizer_location = os.path.join(cache_dir, "tokenizer")
-
-    # Load model weights (download if cache_dir was not set)
-    model = CLIPModel.from_pretrained(clip_model_location)
-
-    tokenizer = CLIPTokenizer.from_pretrained(tokenizer_location)
-
+    model = download_model("openai/clip-vit-base-patch32")
     state_dict = convert_model_to_ttnn(model.state_dict())
+
+    tokenizer = download_tokenizer("openai/clip-vit-base-patch32")
 
     # Initialize our TT-NN CLIP implementation
     clip = CLIP(state_dict)
