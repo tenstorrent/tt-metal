@@ -5,7 +5,10 @@
 #pragma once
 
 #include <string>
-#include <yaml-cpp/yaml.h>
+
+namespace YAML {
+    class Node;
+}
 
 namespace tt::scaleout_tools {
 

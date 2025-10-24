@@ -53,6 +53,7 @@
 #include "tt_metal/fabric/serialization/port_descriptor_serialization.hpp"
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include "protobuf/physical_system_descriptor.pb.h"
+#include "tools/scaleout/factory_system_descriptor/utils.hpp"
 #include <unistd.h>
 #include <chrono>
 #include <sstream>
@@ -2959,25 +2960,26 @@ bool ControlPlane::is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_con
 }
 
 bool ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_config) const {
+    // Validate torus setup using the appropriate cabling descriptor for the configuration
     TT_ASSERT(physical_system_descriptor_ != nullptr, "Physical system descriptor not initialized");
 
     try {
-        // Use the existing physical system descriptor's textproto serialization
-        tt::fabric::proto::PhysicalSystemDescriptor proto_desc;
-        physical_system_descriptor_to_proto(*physical_system_descriptor_, &proto_desc);
-        
-        std::string gsd_textproto;
-        google::protobuf::TextFormat::PrintToString(proto_desc, &gsd_textproto);
-        
-        // Generate GSD YAML from the physical system descriptor  
+        // Get the cabling descriptor path for this torus configuration
+        std::string cabling_descriptor_path = get_cabling_descriptor_path(fabric_config);
+        if (cabling_descriptor_path.empty()) {
+            log_warning(tt::LogFabric, "No cabling descriptor available for torus configuration: {}", static_cast<int>(fabric_config));
+            return false;
+        }
+
+        // Generate GSD YAML from the current physical system descriptor
         YAML::Node gsd_yaml = physical_system_descriptor_->generate_yaml_node();
         
-        // Use existing validation infrastructure
+        // Use the existing validation infrastructure to validate against the cabling descriptor
         tt::scaleout_tools::validate_fsd_against_gsd(
-            gsd_textproto,
-            gsd_yaml,
-            false,                  // strict_validation = false
-            false                   // assert_on_connection_mismatch = false
+            cabling_descriptor_path,    // FSD file path (cabling descriptor)
+            gsd_yaml,                   // GSD YAML from current system
+            false,                      // strict_validation = false
+            false                       // assert_on_connection_mismatch = false
         );
         
         log_info(tt::LogFabric, "Torus validation passed for configuration: {}", static_cast<int>(fabric_config));
@@ -2988,6 +2990,31 @@ bool ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
         return false;
     }
 }
+
+std::string ControlPlane::get_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) const {
+    static const std::string X_TORUS_PATH = "tools/tests/scaleout/cabling_descriptors/wh_galaxy_x_torus_superpod.textproto";
+    static const std::string Y_TORUS_PATH = "tools/tests/scaleout/cabling_descriptors/wh_galaxy_y_torus_superpod.textproto";
+    static const std::string XY_TORUS_PATH = "tools/tests/scaleout/cabling_descriptors/wh_galaxy_xy_torus_superpod.textproto";
+
+    static const std::unordered_map<tt::tt_fabric::FabricConfig, std::string> cabling_map = {
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X, X_TORUS_PATH},
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X, X_TORUS_PATH},
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y, Y_TORUS_PATH},
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y, Y_TORUS_PATH},
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY, XY_TORUS_PATH},
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY, XY_TORUS_PATH}
+    };
+
+    auto it = cabling_map.find(fabric_config);
+    if (it == cabling_map.end()) {
+        log_warning(tt::LogFabric, "Unknown torus configuration: {}", static_cast<int>(fabric_config));
+        return "";  // Return empty string for unknown configurations
+    }
+
+    const auto& root_dir = tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir();
+    return root_dir + it->second;
+}
+
 
 ControlPlane::~ControlPlane() = default;
 

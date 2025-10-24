@@ -5,7 +5,6 @@
 #pragma once
 
 #include <unordered_set>
-#include <yaml-cpp/yaml.h>
 
 #include <tt_stl/span.hpp>
 #include <tt-metalium/routing_table_generator.hpp>
@@ -380,6 +379,7 @@ private:
 
     // Private helper methods for torus validation
     bool validate_torus_setup(tt::tt_fabric::FabricConfig fabric_config) const;
+    std::string get_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) const;
 };
 
 }  // namespace tt::tt_fabric
