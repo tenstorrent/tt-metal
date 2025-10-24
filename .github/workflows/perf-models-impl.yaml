@@ -272,19 +272,19 @@ jobs:
           python3 -c "import inspect; from models.perf.perf_utils import prep_perf_report; source = inspect.getsource(prep_perf_report); print('prep_perf_report calls save_partial_run_json:', 'save_partial_run_json' in source)" || echo "Failed to check prep_perf_report"
 
           echo "=== Check files after BenchmarkData test ==="
-          find . -name "generated" -type d 2>/dev/null || echo "Still no generated directory after test"
-          find . -name "partial_run_*.pkl" 2>/dev/null || echo "Still no .pkl files after test"
+          find / -name "generated" -type d 2>/dev/null || echo "Still no generated directory after test"
+          find / -name "partial_run_*.pkl" 2>/dev/null || echo "Still no .pkl files after test"
 
           echo "=== Check files after BenchmarkData test ==="
-          find . -name "generated" -type d 2>/dev/null || echo "Still no generated directory after test"
-          find . -name "partial_run_*.pkl" 2>/dev/null || echo "Still no .pkl files after test"
+          find / -name "generated" -type d 2>/dev/null || echo "Still no generated directory after test"
+          find / -name "partial_run_*.pkl" 2>/dev/null || echo "Still no .pkl files after test"
 
           echo "=== Looking for benchmark_data directory ==="
-          find . -name "benchmark_data" -type d 2>/dev/null || echo "No benchmark_data directory found"
+          find / -name "benchmark_data" -type d 2>/dev/null || echo "No benchmark_data directory found"
           echo "=== Looking for partial_run_*.pkl files ==="
-          find . -name "partial_run_*.pkl" 2>/dev/null || echo "No partial_run_*.pkl files found"
+          find / -name "partial_run_*.pkl" 2>/dev/null || echo "No partial_run_*.pkl files found"
           echo "=== Looking for *.json files ==="
-          find . -name "*.json" 2>/dev/null | head -10 || echo "No JSON files found"
+          find / -name "*.json" 2>/dev/null | head -10 || echo "No JSON files found"
 
       - name: Save environment data
         if: ${{ !cancelled() }}
