@@ -18,8 +18,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 from enum import Enum
 
 
-@pytest.mark.ignore
-class TestMode(Enum):
+class UniformTestMode(Enum):
     VALIDATE = 0
     BENCHMARK = 1
 
@@ -76,13 +75,13 @@ def validate_uniform(npu_input, shape, rand_from, rand_to, seed, dtype, compute_
 
 
 # Due to the issue with tensix instruction to generated pseudo-random numbers: #13904, the seed is temporarily fixed to make the test result consistent.
-def run_uniform(shape, rand_range, dtype, device, seed=0, compute_kernel_options=None, mode=TestMode.VALIDATE):
+def run_uniform(shape, rand_range, dtype, device, seed=0, compute_kernel_options=None, mode=UniformTestMode.VALIDATE):
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
     rand_from, rand_to = rand_range[0], rand_range[1]
     cpu_input = torch.ones(shape, dtype=get_lib_dtype(torch, dtype))
     npu_input = ttnn.from_torch(cpu_input, device=device, dtype=get_lib_dtype(ttnn, dtype), layout=ttnn.TILE_LAYOUT)
 
-    if mode == TestMode.BENCHMARK:
+    if mode == UniformTestMode.BENCHMARK:
         benchmark_uniform(cpu_input=cpu_input, npu_input=npu_input, rand_from=rand_from, rand_to=rand_to)
     else:
         validate_uniform(
