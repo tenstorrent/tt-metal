@@ -94,11 +94,11 @@ ALWI void welford_tile(
  *                           be computed using float division.
  *
  * @param scale_factor       The reciprocal of this value (1/scale_factor) is multiplied with the M2 value in the DST
- * register at tile offset 2 to compute the variance.
- * @param group_id           The group that the tile belongs to. The dst regs can hold welford values for a maximum of
- *                           16 groups at a time.
+ *                           register at tile offset 2 to compute the variance.
+ * @param group_id           The group for which the variance is computed. The dst regs can hold welford values for a
+ *                           maximum of 16 groups.
  * @param reciprocal_lut     The reference to the reciprocal lookup table. If an empty array is passed (reciprocal_size
- * is 0), the reciprocal will be computed using float division.
+ *                           is 0), the reciprocal will be computed using float division.
  *
  * @return                   None. The mean and variance tiles are updated in place. TILE_WIDTH (32) number of values
  *                           are written to the DST register.
