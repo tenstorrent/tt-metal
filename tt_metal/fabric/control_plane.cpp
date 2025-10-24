@@ -2974,20 +2974,26 @@ bool ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
         return false;
     }
 
-    // Generate GSD YAML from the current physical system descriptor
-    YAML::Node gsd_yaml = physical_system_descriptor_->generate_yaml_node();
-    
-    // Use the new validation function that handles CablingGenerator internally
-    tt::scaleout_tools::validate_cabling_descriptor_against_gsd(
-        cabling_descriptor_path,
-        all_hostnames,
-        gsd_yaml,
-        false,                      // strict_validation
-        false                       // assert_on_connection_mismatch
-    );
-    
-    log_info(tt::LogFabric, "Torus validation passed for configuration: {}", static_cast<int>(fabric_config));
-    return true;
+    try {
+        // Generate GSD YAML from the current physical system descriptor
+        YAML::Node gsd_yaml = physical_system_descriptor_->generate_yaml_node();
+        
+        // Use the new validation function that handles CablingGenerator internally
+        tt::scaleout_tools::validate_cabling_descriptor_against_gsd(
+            cabling_descriptor_path,
+            all_hostnames,
+            gsd_yaml,
+            false,                      // strict_validation
+            false                       // assert_on_connection_mismatch
+        );
+        
+        log_info(tt::LogFabric, "Torus validation passed for configuration: {}", static_cast<int>(fabric_config));
+        return true;
+
+    } catch (const std::exception& e) {
+        log_warning(tt::LogFabric, "Torus validation failed for configuration: {} - {}", static_cast<int>(fabric_config), e.what());
+        return false;
+    }
 }
 
 std::string ControlPlane::get_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) const {
