@@ -30,8 +30,6 @@ import tt_serialization  # noqa: F401
 
 # Configuration
 CONFIG = "training_shakespeare_tinyllama.yaml"
-VALIDATION_BATCH_SIZE_PER_DEVICE = 6
-
 
 class SpeedrunScheduler:
     """Linear warmup -> optional hold -> linear decay; optional beta1 warmup."""
@@ -431,7 +429,7 @@ def train():
     num_devices = device_config.total_devices()
     testing_dataloader = DataLoader(
         testing_data,
-        batch_size=VALIDATION_BATCH_SIZE_PER_DEVICE * num_devices,
+        batch_size=training_config.validation_batch_size * num_devices,
         shuffle=False,  # Disable shuffling for validation
         drop_last=True,
         num_workers=0,
@@ -465,7 +463,7 @@ def train():
         training_dataloader, batch_size, max_sequence_length, padded_vocab_size, tokenizer, device_config
     )
 
-    val_batch_generator = get_batch_generator(testing_dataloader, VALIDATION_BATCH_SIZE_PER_DEVICE * num_devices, max_sequence_length, padded_vocab_size, tokenizer, device_config)
+    val_batch_generator = get_batch_generator(testing_dataloader, training_config.validation_batch_size * num_devices, max_sequence_length, padded_vocab_size, tokenizer, device_config)
 
     tokens_per_batch = batch_size * max_sequence_length
     print("Tokens per micro-batch:", tokens_per_batch)

@@ -205,6 +205,7 @@ def create_training_yaml(config_dict, output_path="/home/ubuntu/tt-metal/tt-trai
     """Create a training YAML configuration file."""
     training_config = {
         "batch_size": config_dict["batch_size"],
+        "validation_batch_size" : config_dict["validation_batch_size"],
         "max_steps": config_dict["max_steps"],
         "gradient_accumulation_steps": config_dict["gradient_accumulation"],
         "eval_every": config_dict["eval_every"],
@@ -401,7 +402,7 @@ def main():
 
         col1, col2 = st.columns(2)
         with col1:
-            batch_size = st.number_input("Batch Size", min_value=1, max_value=64, value=64, step=1)
+            batch_size = st.number_input("Batch Size", min_value=1, max_value=64, value=64, step=1, help="Training batch size per device")
 
             max_steps = st.number_input("Max Steps", min_value=10, max_value=100000, value=60, step=100)
 
@@ -411,12 +412,17 @@ def main():
             hold_steps = st.number_input("Hold Steps", min_value=0, max_value=10000, value=1000, step=10)
 
         eval_every = st.number_input("Eval Every", min_value=10, max_value=1000, value=20, step=10)
+        validation_batch_size = st.number_input("Validation Batch Size", min_value=1, max_value=64, value=32, step=1, help="Validation batch size per device")
 
         gradient_accumulation = st.number_input(
             "Gradient Accumulation Steps", min_value=1, max_value=128, value=8, step=1
         )
 
         max_seq_length = st.number_input("Max Sequence Length", min_value=128, max_value=4096, value=512, step=128)
+
+        effective_batch_size = batch_size * gradient_accumulation * device_mesh_shapes[selected_devices][0] * device_mesh_shapes[selected_devices][1]
+        st.markdown(f"Effective batch size: **{effective_batch_size}**")
+        st.markdown(f"Effective num. tokens per batch: **{effective_batch_size * max_seq_length}**")
 
         st.divider()
 
@@ -446,6 +452,7 @@ def main():
                     "min_lr": min_lr,
                     "max_lr": max_lr,
                     "batch_size": batch_size,
+                    "validation_batch_size" : validation_batch_size,
                     "max_steps": max_steps,
                     "warmup_steps": warmup_steps,
                     "hold_steps": hold_steps,
@@ -463,7 +470,7 @@ def main():
                     st.rerun()
                 else:
                     st.error(message)
-                    
+
         with col_stop:
             if st.button("Stop Training", use_container_width=True, disabled=not is_running):
                 success, message = stop_training()
