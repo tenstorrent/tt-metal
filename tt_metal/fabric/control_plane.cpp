@@ -2961,14 +2961,18 @@ bool ControlPlane::is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_con
 }
 
 bool ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_config) const {
-    // Validate torus setup using the appropriate cabling descriptor for the configuration
-    TT_ASSERT(physical_system_descriptor_ != nullptr, "Physical system descriptor not initialized");
+    if (physical_system_descriptor_ == nullptr) {
+        log_warning(tt::LogFabric, "Physical system descriptor not initialized");
+        return false;
+    }
 
     auto all_hostnames = physical_system_descriptor_->get_all_hostnames();
     auto cabling_descriptor_path = get_cabling_descriptor_path(fabric_config);
     // Check if the cabling descriptor file exists
-    TT_ASSERT(std::filesystem::exists(cabling_descriptor_path), 
-                "Cabling descriptor file not found: {}", cabling_descriptor_path);
+    if (!std::filesystem::exists(cabling_descriptor_path)) {
+        log_warning(tt::LogFabric, "Cabling descriptor file not found: {}", cabling_descriptor_path);
+        return false;
+    }
 
     // Generate GSD YAML from the current physical system descriptor
     YAML::Node gsd_yaml = physical_system_descriptor_->generate_yaml_node();
