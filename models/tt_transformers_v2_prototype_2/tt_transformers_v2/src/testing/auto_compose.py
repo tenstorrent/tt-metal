@@ -30,7 +30,7 @@ def to_torch_auto_compose(tensor: ttnn.Tensor, device: Optional[ttnn.MeshDevice]
         PyTorch tensor with shards composed
     """
     composer = _infer_mesh_composer_from_topology(tensor, device=device)
-    return tensor.to_torch(mesh_composer=composer)
+    return ttnn.to_torch(tensor, mesh_composer=composer)
 
 
 # ======================================================================================
