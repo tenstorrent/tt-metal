@@ -141,7 +141,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             mesh_device,
             max_batch_size=model_args.max_batch_size,
             max_seq_len=model_args.max_seq_len,
-            optimizations=optimizations,
+            optimizations=DecodersPrecision.performance(config.vision_config.depth, ref_model_name),
         )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
         visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args)
