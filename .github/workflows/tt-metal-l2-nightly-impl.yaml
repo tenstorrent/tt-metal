@@ -584,31 +584,31 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     name: ttnn nightly moreh tests ${{ inputs.arch }} ${{ inputs.runner-label }}
-      runs-on: >-
-        ${{
-          ((inputs.runner-label == 'P100') && fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
-          || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        }}
-      steps:
-        - name: ⬇️  Setup Job
-          uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
-          timeout-minutes: 10
-          with:
-            build-artifact-name: ${{ inputs.build-artifact-name }}
-            wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-        - name: ttnn nightly moreh tests
-          timeout-minutes: ${{ inputs.timeout }}
-          run: pytest -n auto tests/ttnn/nightly/unit_tests/operations/moreh -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
-        - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-          timeout-minutes: 10
-          if: ${{ !cancelled() }}
-          with:
-            prefix: "test_reports_"
-        - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-          # Only notify during failed scheduled runs
-          if: ${{ failure() && github.event_name == 'schedule' }}
-          with:
-            slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-            owner: U06UEFWB4P9 # Colman Glagovich
-        - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-          if: always()
+    runs-on: >-
+      ${{
+        ((inputs.runner-label == 'P100') && fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+        || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+      }}
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: ttnn nightly moreh tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: pytest -n auto tests/ttnn/nightly/unit_tests/operations/moreh -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        # Only notify during failed scheduled runs
+        if: ${{ failure() && github.event_name == 'schedule' }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U06UEFWB4P9 # Colman Glagovich
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
