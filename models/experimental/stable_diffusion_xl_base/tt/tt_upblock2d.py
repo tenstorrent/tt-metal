@@ -8,7 +8,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_resnetblock2d import TtR
 
 
 class TtUpBlock2D(LightweightModule):
-    def __init__(self, device, state_dict, module_path, model_config):
+    def __init__(self, device, state_dict, module_path, model_config, debug_mode=False):
         super().__init__()
 
         num_layers = 3
@@ -22,6 +22,7 @@ class TtUpBlock2D(LightweightModule):
                     f"{module_path}.resnets.{i}",
                     model_config,
                     True,
+                    debug_mode=debug_mode,
                 )
             )
 
