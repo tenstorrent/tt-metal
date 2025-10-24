@@ -277,6 +277,7 @@ foreach(ARCH IN LISTS ARCHS)
         "tdma_xmov.o:tt_metal/hw/firmware/src/tt-1xx/tdma_xmov.c"
         "noc.o:tt_metal/hw/firmware/src/${HW_VERSION_PATH}/${ARCH}/noc.c"
         "tmu-crt0.o:tt_metal/hw/toolchain/tmu-crt0.S"
+        "tmu-crt0-no-gp.o:tt_metal/hw/toolchain/tmu-crt0-no-gp.S"
     )
     set(ARCH_ALIAS ${ARCH})
 
