@@ -54,23 +54,25 @@ constexpr uint32_t cb_intermediates = tt::CBIndex::c_6;  // Forward pass interme
 // Temporary/utility buffers
 constexpr uint32_t cb_mat_mul_reduction = tt::CBIndex::c_7;  // Temporary computations
 constexpr uint32_t cb_reduction_scaler = tt::CBIndex::c_8;   // Reduction scaler
-constexpr uint32_t cb_mm_result_holder = tt::CBIndex::c_9;   // used for holding current matmul output
+
+constexpr uint32_t cb_prev_grad_value = tt::CBIndex::c_9;  // used for holding previous grad value
+constexpr uint32_t cb_cur_grad_value = tt::CBIndex::c_10;  // used for holding current grad value
 
 // Intermediate computation buffers
-constexpr uint32_t cb_attention_weights = tt::CBIndex::c_10;  // Recomputed attention weights = softmax(QK^T / sqrt(Et))
-constexpr uint32_t cb_grad_attention = tt::CBIndex::c_11;     // Gradient w.r.t. attention
-constexpr uint32_t cb_grad_scores = tt::CBIndex::c_12;        // Gradient w.r.t. QK scores
-constexpr uint32_t cb_transpose_wh = tt::CBIndex::c_13;       // Transpose of attention weights
-constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_14;       // u_scalar per row
+constexpr uint32_t cb_attention_weights = tt::CBIndex::c_11;  // Recomputed attention weights = softmax(QK^T / sqrt(Et))
+constexpr uint32_t cb_grad_attn_weights = tt::CBIndex::c_12;     // Gradient w.r.t. attention: dL/dP = dL/d(softmax(QK^T / sqrt(Et)))
+constexpr uint32_t cb_grad_scores = tt::CBIndex::c_13;        // Gradient w.r.t. QK scores
+constexpr uint32_t cb_transpose_wh = tt::CBIndex::c_14;       // Transpose of attention weights
+constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_15;       // u_scalar per row
 
 // Output buffers
-constexpr uint32_t cb_grad_query = tt::CBIndex::c_15;          // Output: grad_Q
-constexpr uint32_t cb_grad_key = tt::CBIndex::c_16;            // Output: grad_K
-constexpr uint32_t cb_grad_value = tt::CBIndex::c_17;          // Output: grad_V
-constexpr uint32_t cb_sync_output_writer = tt::CBIndex::c_18;  // Used to sync with output writer kernel
+constexpr uint32_t cb_grad_query = tt::CBIndex::c_16;          // Output: grad_Q
+constexpr uint32_t cb_grad_key = tt::CBIndex::c_17;            // Output: grad_K
+constexpr uint32_t cb_grad_value = tt::CBIndex::c_18;          // Output: grad_V
+constexpr uint32_t cb_sync_output_writer = tt::CBIndex::c_19;  // Used to sync with output writer kernel
 
 // [DEBUG]: Used for debug, should be removed later
-constexpr auto cb_masked_interm = tt::CBIndex::c_19;
+constexpr auto cb_masked_interm = tt::CBIndex::c_20;
 
 const uint32_t onetile = 1U;
 
@@ -92,6 +94,9 @@ void MAIN {
         cb_wait_front(cb_key, tiles_per_row);
         cb_wait_front(cb_value, tiles_per_row);
 
+        uint32_t alias_cb_prev_grad_value = cb_prev_grad_value;
+        uint32_t alias_cb_cur_grad_value = cb_cur_grad_value;
+
         for (uint32_t head_idx = 0; head_idx < heads_per_group; ++head_idx) {
             const uint32_t matmul_accum_reg = 0;
 
@@ -105,7 +110,8 @@ void MAIN {
                 // Step 1: Recompute attention weights(we will produce column of attention weights matrix while
                 // streaming through Q, dO, O)
                 reconfig_data_format(cb_query, cb_key);
-                mm_init_short(cb_query, cb_key, /* transpose */ 1);
+                mm_init(cb_query, cb_key, cb_attention_weights, /* transpose */ 1);
+                // mm_init_short(cb_query, cb_key, /* transpose */ 1);
                 tile_regs_acquire();
                 for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
                     matmul_tiles(
@@ -138,31 +144,67 @@ void MAIN {
                     cb_attention_weights, cb_masked_interm, cb_mat_mul_reduction, num_of_interm_tiles);
 
                 // Step 2: Accumulate grad_V = Attention^T @ grad_output
+                // update_grad_value(
+                //     cb_attention_weights,
+                //     cb_transpose_wh,
+                //     cb_grad_output,
+                //     cb_mm_result_holder,
+                //     cb_grad_value,
+                //     tiles_per_row,
+                //     block_size,
+                //     h > 0);  // fix: accumulate after first row of first head
+
                 update_grad_value(
                     cb_attention_weights,
                     cb_transpose_wh,
                     cb_grad_output,
-                    cb_mm_result_holder,
-                    cb_grad_value,
+                    alias_cb_prev_grad_value,
+                    alias_cb_cur_grad_value,
                     tiles_per_row,
                     block_size,
                     h > 0);  // fix: accumulate after first row of first head
 
+                cb_wait_front(alias_cb_cur_grad_value, tiles_per_row);
+
                 // Step 3: calculate u_scalar_row
                 compute_u_scalar_row(
                     cb_grad_output, cb_attn_output, cb_u_scalar_row, cb_mat_mul_reduction, tiles_per_row);
+
+                // compute_grad_attn_weights(cb_grad_output, cb_value, tiles_per_row, cb_grad_attn_weights);
+
+                //[DEBUG]: Put u_scaler in grad_key for debug, need to be removed later
+                // cb_wait_front(cb_u_scalar_row, onetile);
+                // cb_reserve_back(cb_grad_key, onetile);
+                // pack_reconfig_data_format(cb_grad_key);
+
+                // tile_regs_acquire();
+                // copy_tile_init(cb_u_scalar_row);
+                // copy_tile(cb_u_scalar_row, /* tile_idx */ 0, /* register idx */ 0);
+                // tile_regs_commit();
+
+                // tile_regs_wait();
+                // pack_tile(0, cb_grad_key);
+                // tile_regs_release();
+                // cb_push_back(cb_grad_key, onetile);
+
+                
+
+                cb_pop_front(cb_u_scalar_row, onetile);
 
                 cb_pop_front(cb_query, tiles_per_row);
                 cb_pop_front(cb_grad_output, tiles_per_row);
                 cb_pop_front(cb_attn_output, tiles_per_row);
                 cb_pop_front(cb_attention_weights, onetile);
 
-                cb_pop_front(cb_u_scalar_row, onetile);
+                std::swap(alias_cb_prev_grad_value, alias_cb_cur_grad_value);
             }
         }
 
+        // cb_wait_front(alias_cb_prev_grad_value, tiles_per_row);
+        pack_result(alias_cb_prev_grad_value, cb_grad_value, tiles_per_row);
+
         // update pointer ins cb_sync_output_writer to signal output writer that one row is done
-        sync_with_writer(cb_sync_output_writer);
+        // sync_with_writer(cb_sync_output_writer);
 
         cb_pop_front(cb_key, tiles_per_row);
         cb_pop_front(cb_value, tiles_per_row);

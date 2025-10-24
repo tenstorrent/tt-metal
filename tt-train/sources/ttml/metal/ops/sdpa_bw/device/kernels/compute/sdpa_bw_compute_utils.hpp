@@ -161,12 +161,11 @@ void apply_statistics_inplace(
 //     uint32_t block_size,
 //     bool do_accumulate = false) {
 //     cb_wait_front(cb_attention_weights, onetile);
-//     cb_wait_front(cb_grad_output, tiles_per_row);
+//     // cb_wait_front(cb_grad_output, tiles_per_row); // wait it once when loop starts
 
 //     // transpose attention weights
 //     cb_reserve_back(cb_transpose_wh, onetile);
 //     pack_reconfig_data_format(cb_transpose_wh);
-
 //     tile_regs_acquire();
 //     transpose_wh_init(cb_attention_weights, cb_transpose_wh);
 //     transpose_wh_tile(cb_attention_weights, /* tile idx */ 0, /* reg idx */ 0);
@@ -180,17 +179,18 @@ void apply_statistics_inplace(
 //     // grad_V = Attention^T @ grad_output
 //     cb_wait_front(cb_transpose_wh, onetile);
 //     reconfig_data_format(cb_transpose_wh, cb_grad_output);
-//     mm_init_short(cb_transpose_wh, cb_grad_output, /* transpose */ 0);
+//     // mm_init_short(cb_transpose_wh, cb_grad_output, /* transpose */ 0);
+//     mm_init(cb_transpose_wh, cb_grad_output, cb_grad_value, 0);
 
 //     if (do_accumulate) {
 //         cb_wait_front(cb_grad_value, tiles_per_row);
 //     }
 
-//     // dummy implementation
-//     pack_reconfig_data_format(cb_mm_result_holder);
 //     cb_reserve_back(cb_mm_result_holder, tiles_per_row);
+//     pack_reconfig_data_format(cb_mm_result_holder);
 //     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx++) {
 //         tile_regs_acquire();
+//         mm_init_short(cb_transpose_wh, cb_grad_output, /* transpose */ 0);
 //         matmul_tiles(
 //             cb_transpose_wh,
 //             cb_grad_output,
@@ -206,6 +206,7 @@ void apply_statistics_inplace(
 //             add_binary_tile_init();
 //             add_binary_tile(0, 1U, 0);  // accumulate in register 0
 //         }
+
 //         tile_regs_commit();
 
 //         tile_regs_wait();
@@ -214,70 +215,65 @@ void apply_statistics_inplace(
 //     }
 //     cb_push_back(cb_mm_result_holder, tiles_per_row);
 
-//     cb_wait_front(cb_mm_result_holder, tiles_per_row);
-
 //     if (do_accumulate) {
 //         cb_pop_front(cb_grad_value, tiles_per_row);
 //     }
+
+//     // dummy implementation
+//     cb_wait_front(cb_mm_result_holder, tiles_per_row);
 //     cb_reserve_back(cb_grad_value, tiles_per_row);
 //     pack_reconfig_data_format(cb_grad_value);
-//     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx += block_size) {
+//     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx++) {
 //         tile_regs_acquire();
 //         copy_tile_init(cb_mm_result_holder);
-//         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-//             copy_tile(cb_mm_result_holder, /* tile_idx */ tile_idx + block_idx, /* register idx */ block_idx);
-//         }
+//         copy_tile(cb_mm_result_holder, /* tile_idx */ tile_idx, /* register idx */ 0);
 //         tile_regs_commit();
+
 //         tile_regs_wait();
-//         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-//             pack_tile(/*dst_reg_idx*/ block_idx, cb_grad_value);
-//         }
+//         pack_tile(0, cb_grad_value);
 //         tile_regs_release();
 //     }
 //     cb_push_back(cb_grad_value, tiles_per_row);
 
-//     // pop data form temp CBs
+//     // pop data from temporary cbs
 //     cb_pop_front(cb_transpose_wh, onetile);
 //     cb_pop_front(cb_mm_result_holder, tiles_per_row);
 // }
+
+inline void transpose_attn_weights(uint32_t cb_attention_weights, uint32_t cb_transpose_wh) {
+    cb_wait_front(cb_attention_weights, onetile);
+    // transpose attention weights
+    tile_regs_acquire();
+    transpose_wh_init_short(cb_attention_weights);
+    transpose_wh_tile(cb_attention_weights, /* tile idx */ 0, /* reg idx */ 0);
+    tile_regs_commit();
+
+    cb_reserve_back(cb_transpose_wh, onetile);
+    pack_reconfig_data_format(cb_transpose_wh);
+    tile_regs_wait();
+    pack_tile(0, cb_transpose_wh);
+    tile_regs_release();
+    cb_push_back(cb_transpose_wh, onetile);
+}
 
 void update_grad_value(
     uint32_t cb_attention_weights,
     uint32_t cb_transpose_wh,
     uint32_t cb_grad_output,
-    uint32_t cb_mm_result_holder,
-    uint32_t cb_grad_value,
+    uint32_t cb_prev_grad_value,
+    uint32_t cb_cur_grad_value,
     uint32_t tiles_per_row,
     uint32_t block_size,
     bool do_accumulate = false) {
-    cb_wait_front(cb_attention_weights, onetile);
-    // cb_wait_front(cb_grad_output, tiles_per_row); // wait it once when loop starts
-
-    // transpose attention weights
-    cb_reserve_back(cb_transpose_wh, onetile);
-    pack_reconfig_data_format(cb_transpose_wh);
-    tile_regs_acquire();
-    transpose_wh_init(cb_attention_weights, cb_transpose_wh);
-    transpose_wh_tile(cb_attention_weights, /* tile idx */ 0, /* reg idx */ 0);
-    tile_regs_commit();
-
-    tile_regs_wait();
-    pack_tile(0, cb_transpose_wh);
-    tile_regs_release();
-    cb_push_back(cb_transpose_wh, onetile);
+    transpose_attn_weights(cb_attention_weights, cb_transpose_wh);
 
     // grad_V = Attention^T @ grad_output
     cb_wait_front(cb_transpose_wh, onetile);
+
+    // mm_init(cb_transpose_wh, cb_grad_output, cb_cur_grad_value, 0);
+    cb_reserve_back(cb_cur_grad_value, tiles_per_row);
+    pack_reconfig_data_format(cb_cur_grad_value);
     reconfig_data_format(cb_transpose_wh, cb_grad_output);
-    // mm_init_short(cb_transpose_wh, cb_grad_output, /* transpose */ 0);
-    mm_init(cb_transpose_wh, cb_grad_output, cb_grad_value, 0);
-
-    if (do_accumulate) {
-        cb_wait_front(cb_grad_value, tiles_per_row);
-    }
-
-    cb_reserve_back(cb_mm_result_holder, tiles_per_row);
-    pack_reconfig_data_format(cb_mm_result_holder);
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx++) {
         tile_regs_acquire();
         mm_init_short(cb_transpose_wh, cb_grad_output, /* transpose */ 0);
@@ -290,44 +286,25 @@ void update_grad_value(
             /* transpose */ 0);
 
         if (do_accumulate) {
-            copy_tile_init(cb_grad_value);
-            copy_tile(cb_grad_value, /* tile_idx */ tile_idx, /* register idx */ 1U);
+            copy_tile_init(cb_prev_grad_value);
+            copy_tile(cb_prev_grad_value, /* tile_idx */ tile_idx, /* register idx */ 1U);
 
             add_binary_tile_init();
             add_binary_tile(0, 1U, 0);  // accumulate in register 0
         }
-
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, cb_mm_result_holder);
+        pack_tile(0, cb_cur_grad_value);
         tile_regs_release();
     }
-    cb_push_back(cb_mm_result_holder, tiles_per_row);
+    cb_push_back(cb_cur_grad_value, tiles_per_row);
 
-    if (do_accumulate) {
-        cb_pop_front(cb_grad_value, tiles_per_row);
-    }
-
-    // dummy implementation
-    cb_wait_front(cb_mm_result_holder, tiles_per_row);
-    cb_reserve_back(cb_grad_value, tiles_per_row);
-    pack_reconfig_data_format(cb_grad_value);
-    for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx++) {
-        tile_regs_acquire();
-        copy_tile_init(cb_mm_result_holder);
-        copy_tile(cb_mm_result_holder, /* tile_idx */ tile_idx, /* register idx */ 0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile(0, cb_grad_value);
-        tile_regs_release();
-    }
-    cb_push_back(cb_grad_value, tiles_per_row);
-
-    // pop data from temporary cbs
+    // pop temporary cbs
     cb_pop_front(cb_transpose_wh, onetile);
-    cb_pop_front(cb_mm_result_holder, tiles_per_row);
+    if (do_accumulate) {
+        cb_pop_front(cb_prev_grad_value, tiles_per_row);
+    }
 }
 
 void compute_u_scalar_row(
@@ -376,6 +353,42 @@ void compute_u_scalar_row(
     pack_tile(accum_register, cb_u_scalar_row);
     tile_regs_release();
     cb_push_back(cb_u_scalar_row, onetile);
+}
+
+void compute_grad_attn_weights(uint32_t cb_grad_output, uint32_t cb_value, uint32_t tiles_per_row, uint32_t cb_grad_attn_weights) {
+    cb_reserve_back(cb_grad_attn_weights, tiles_per_row);
+
+    // Compute gradient w.r.t. attention weights
+    for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
+        tile_regs_acquire();
+        // Perform the necessary computations here
+        tile_regs_commit();
+    }
+
+    cb_push_back(cb_grad_attn_weights, tiles_per_row);
+}
+
+void pack_result(uint32_t cb_source, uint32_t cb_output, uint32_t num_tiles) {
+    cb_wait_front(cb_source, num_tiles);
+    cb_reserve_back(cb_output, num_tiles);
+
+    pack_reconfig_data_format(cb_output);
+    reconfig_data_format(cb_source, cb_output);
+
+    copy_tile_init(cb_source);
+    for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
+        tile_regs_acquire();
+        copy_tile(
+            cb_source,
+            /* tile_idx */ tile_idx,
+            /* register idx */ 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(/* register idx */ 0, cb_output);
+        tile_regs_release();
+    }
+    cb_push_back(cb_output, num_tiles);
+    cb_pop_front(cb_source, num_tiles);
 }
 
 void sync_with_writer(uint32_t cb_sync_output_writer) {

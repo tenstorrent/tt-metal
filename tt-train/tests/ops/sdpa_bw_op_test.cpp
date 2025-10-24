@@ -45,6 +45,27 @@ xt::xarray<float> generate_attn_mask(const xt::xarray<float>& query) {
     return mask;
 }
 
+xt::xarray<float> dot_product(const xt::xarray<float>& input_0, const xt::xarray<float>& input_1) {
+    assert(input_0.shape() == input_1.shape());
+    auto shape = input_0.shape();
+    size_t B = shape[0], H = shape[1], S = shape[2], D = shape[3];
+    shape[3] = 1U;  // output shape is (B,H,S,1)
+    xt::xarray<float> result = xt::zeros<float>(shape);
+
+    for (size_t b = 0; b < B; ++b) {
+        for (size_t h = 0; h < H; ++h) {
+            for (size_t s = 0; s < S; ++s) {
+                float sum = 0.0F;
+                for (size_t d = 0; d < D; ++d) {
+                    sum += input_0(b, h, s, d) * input_1(b, h, s, d);
+                }
+                result(b, h, s, 0) = sum;
+            }
+        }
+    }
+    return result;
+}
+
 // Wrapper around matmul to handle sharing of KV heads across groups of query
 // heads.
 // For e.g. Q @ V, there are two cases:
@@ -297,10 +318,15 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
         fp32_dest_acc_en);
 
     xt::xarray<float> sdpa_bw_dV = core::to_xtensor(op_result[2]);  // dL_dV
-
     xt::xarray<float> composite_dV = core::to_xtensor(dL_dV);
-
     assert(sdpa_bw_dV.shape() == composite_dV.shape());
+
+    xt::xarray<float> u_scaler = core::to_xtensor(op_result[1]);           // u scaler from kernel
+    xt::xarray<float> attn_output_tensor = core::to_xtensor(attn_output);  // u scaler from composite
+    xt::xarray<float> u_scaler_ref = dot_product(grad_output_tensor, attn_output_tensor);
+    assert(u_scaler.shape() == u_scaler_ref.shape());
+
+    EXPECT_TRUE(xt::allclose(u_scaler, u_scaler_ref, 1e-2F, 1e-2F));
 
     // Check if values are close enough
     bool is_close = xt::allclose(sdpa_bw_dV, composite_dV, 2e-2F, 2e-2F);

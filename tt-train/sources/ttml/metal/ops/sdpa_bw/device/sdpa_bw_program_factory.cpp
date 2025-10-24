@@ -46,21 +46,23 @@ constexpr auto kAttnMaskCbIndex = tt::CBIndex::c_5;
 constexpr auto kIntermediatesCbIndex = tt::CBIndex::c_6;
 constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_7;
 constexpr auto kReductionScalerCbIndex = tt::CBIndex::c_8;
-constexpr auto kMatMulResultHolderCbIndex = tt::CBIndex::c_9;
 
-constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_10;
-constexpr auto kGradAttentionCbIndex = tt::CBIndex::c_11;
-constexpr auto kGradScoresCbIndex = tt::CBIndex::c_12;
-constexpr auto kTransposeWhCbIndex = tt::CBIndex::c_13;
-constexpr auto kUScalarRowCbIndex = tt::CBIndex::c_14;
+constexpr auto kPrevGradValueHolderCbIndex = tt::CBIndex::c_9;
+constexpr auto kCurGradValueHolderCbIndex = tt::CBIndex::c_10;
 
-constexpr auto kGradQueryCbIndex = tt::CBIndex::c_15;
-constexpr auto kGradKeyCbIndex = tt::CBIndex::c_16;
-constexpr auto kGradValueCbIndex = tt::CBIndex::c_17;
-constexpr auto kSyncOutputWriterCbIndex = tt::CBIndex::c_18;
+constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_11;
+constexpr auto kGradAttentionCbIndex = tt::CBIndex::c_12;
+constexpr auto kGradScoresCbIndex = tt::CBIndex::c_13;
+constexpr auto kTransposeWhCbIndex = tt::CBIndex::c_14;
+constexpr auto kUScalarRowCbIndex = tt::CBIndex::c_15;
+
+constexpr auto kGradQueryCbIndex = tt::CBIndex::c_16;
+constexpr auto kGradKeyCbIndex = tt::CBIndex::c_17;
+constexpr auto kGradValueCbIndex = tt::CBIndex::c_18;
+constexpr auto kSyncOutputWriterCbIndex = tt::CBIndex::c_19;
 
 // [DEBUG]: Used for debug, should be removed later
-constexpr auto kMaskedIntermCbIndex = tt::CBIndex::c_19;
+constexpr auto kMaskedIntermCbIndex = tt::CBIndex::c_20;
 
 constexpr uint32_t kNumScalerTiles = 1U;
 constexpr uint32_t kSingleTileBuffer = 1U;
@@ -167,8 +169,8 @@ SDPABackwardProgramFactory::cached_program_t SDPABackwardProgramFactory::create(
 
     tt::tt_metal::Program program{};
     auto input_data_format = datatype_to_dataformat_converter(grad_output.dtype());
-    uint32_t bfloat16_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
-    uint32_t float32_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float32);
+    uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
 
     // Get tensor dimensions and extract heads from shapes
     auto [qB, qNH, qS, qEmbd] = grad_output.padded_shape().to_array_4D();
@@ -286,9 +288,12 @@ SDPABackwardProgramFactory::cached_program_t SDPABackwardProgramFactory::create(
 
     [[maybe_unused]] auto cb_reduction_scaler = create_circular_buffer(
         program, all_cores, kReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
+    
+    [[maybe_unused]] auto cb_prev_grad_value_holder = create_circular_buffer(
+        program, all_cores, kPrevGradValueHolderCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
 
-    [[maybe_unused]] auto cb_mm_result_holder = create_circular_buffer(
-        program, all_cores, kMatMulResultHolderCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
+    [[maybe_unused]] auto cb_cur_grad_value_holder = create_circular_buffer(
+        program, all_cores, kCurGradValueHolderCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
 
     // used to hold transpose value of attention weights, which is used in grad_V computation
     [[maybe_unused]] auto cb_transpose_wh = create_circular_buffer(
