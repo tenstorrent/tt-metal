@@ -1491,8 +1491,8 @@ def test_binary_sharded_bcast_scalar_value_uneven(
     "a_shape, shard_type, shard_size, core_range",
     (
         [
-            # shape cannot be uneven shard
-            torch.Size([63, 32]),
+            # TODO: shape cannot be uneven shard for now
+            torch.Size([64, 32]),
             ttnn.ShardStrategy.HEIGHT,
             [32, 32],
             ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))}),
@@ -1510,6 +1510,9 @@ def test_binary_sharded_scalar_invalid_row_major(scalar, a_shape, shard_type, sh
     )
 
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(a_shape)
+    out_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(
+        a_shape
+    )
 
     with pytest.raises(RuntimeError) as e:
         a_tt = ttnn.from_torch(
@@ -1520,7 +1523,17 @@ def test_binary_sharded_scalar_invalid_row_major(scalar, a_shape, shard_type, sh
             memory_config=a_sharded_config,
         )
 
-        tt_out = ttnn.add(a_tt, scalar, use_legacy=None)
+        out_tt = ttnn.from_torch(
+            out_pt,
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=a_sharded_config,
+        )
+
+        tt_out = ttnn.add(a_tt, scalar, output_tensor=out_tt, use_legacy=None)
+        tt_out = ttnn.to_torch(tt_out)
+        assert_with_pcc(tt_out, out_pt)
 
 
 @pytest.mark.parametrize("scalar", [-0.25])
