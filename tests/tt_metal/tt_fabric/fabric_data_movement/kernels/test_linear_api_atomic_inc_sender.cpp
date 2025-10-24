@@ -184,10 +184,7 @@ void kernel_main() {
                             route_id,
                             ranges,
                             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
-                                1,
-                                std::numeric_limits<uint16_t>::max(),
-                                true});
+                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 1, true});
                     }
                 } break;
                 case NOC_FUSED_UNICAST_ATOMIC_INC: {

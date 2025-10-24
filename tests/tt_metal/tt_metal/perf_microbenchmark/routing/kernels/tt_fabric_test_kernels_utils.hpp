@@ -1644,7 +1644,7 @@ private:
 // Encapsulates all credit batching logic in one place
 // Works with FabricConnectionArray (supports both direct and mux connections)
 struct ReceiverCreditManager {
-    ReceiverCreditManager() : credit_fields_(0, 0, 0, 0) {}
+    ReceiverCreditManager() : credit_fields_(0, 0, 0) {}
 
     template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
     void setup_packet_header(size_t& arg_idx, uint32_t packet_header_address) {
@@ -1654,7 +1654,7 @@ struct ReceiverCreditManager {
         credit_fields_ = NocUnicastAtomicIncFields::build_from_args<true>(arg_idx);
         uint64_t noc_addr = get_noc_addr_helper(credit_fields_.dst_noc_encoding, credit_fields_.dst_address);
         packet_header_->to_noc_unicast_atomic_inc(
-            NocUnicastAtomicIncCommandHeader{noc_addr, credit_fields_.atomic_inc_val, credit_fields_.atomic_inc_wrap});
+            NocUnicastAtomicIncCommandHeader{noc_addr, credit_fields_.atomic_inc_val});
     }
 
     // Initialize with credit info and fabric connection array
@@ -1712,8 +1712,7 @@ private:
         noc_async_writes_flushed();
 
         uint64_t noc_addr = get_noc_addr_helper(credit_fields_.dst_noc_encoding, credit_fields_.dst_address);
-        packet_header_->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
-            noc_addr, static_cast<uint16_t>(num_credits), credit_fields_.atomic_inc_wrap});
+        packet_header_->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc_addr, num_credits});
 
         connection_manager_->wait_for_empty_write_slot<false>(connection_ptr_, connection_idx_);
         connection_manager_->send_header_flush_blocking<false>(
