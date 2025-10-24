@@ -16,6 +16,8 @@ namespace tt::tt_fabric {
 class TopologyMapperTest : public ::testing::Test {
 protected:
     void SetUp() override {
+        setenv("TT_METAL_OPERATION_TIMEOUT_SECONDS", "10", 1);
+
         auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& hal = tt::tt_metal::MetalContext::instance().hal();
@@ -296,6 +298,156 @@ TEST_F(TopologyMapperTest, BHQB4x4MeshGraphTest) {
     MeshShape full_shape = mesh_graph.get_mesh_shape(mesh_id);
     EXPECT_EQ(full_shape, MeshShape(4, 4));
     EXPECT_EQ(topology_mapper.get_mesh_shape(mesh_id), full_shape);
+}
+
+TEST_F(TopologyMapperTest, BHQB4x4StrictReducedMeshGraphTest) {
+    const std::filesystem::path bh_qb_4x4_strict_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_4x4_strict_reduced_mesh_graph_descriptor.textproto";
+
+    auto mesh_graph = MeshGraph(bh_qb_4x4_strict_mesh_graph_desc_path.string());
+
+    // Create a local mesh binding for testing
+    LocalMeshBinding local_mesh_binding;
+    if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{0};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 1) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{1};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 2) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{2};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 3) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{3};
+    }
+
+    auto topology_mapper = TopologyMapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+
+    // Physical System Descriptor: 4x4 Blackhole mesh
+    // 0  1  | 2  3
+    // 4  5  | 6  7
+    // ------+-------
+    // 8  9  | 10 11
+    // 12 13 | 14 15
+
+    auto asic_id_0 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 0));
+    auto asic_id_1 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 1));
+    auto asic_id_7 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 7));
+    auto asic_id_4 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 4));
+    auto asic_id_13 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 13));
+    auto asic_id_14 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 14));
+    auto asic_id_15 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 15));
+    auto asic_id_3 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 3));
+
+    // Check for adjacency
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_0), asic_id_1));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_1), asic_id_0));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_7), asic_id_4));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_4), asic_id_7));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_13), asic_id_14));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_14), asic_id_13));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_15), asic_id_3));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_3), asic_id_15));
+
+    // Check the host ranks are right
+    const MeshId mesh_id{0};
+    const auto& host_ranks = topology_mapper.get_host_ranks(mesh_id);
+    EXPECT_EQ(host_ranks.size(), 4u);
+
+    // Check the full shape and sub shape are right
+    MeshShape full_shape = mesh_graph.get_mesh_shape(mesh_id);
+    EXPECT_EQ(full_shape, MeshShape(4, 4));
+    EXPECT_EQ(topology_mapper.get_mesh_shape(mesh_id), full_shape);
+}
+
+TEST_F(TopologyMapperTest, BHQB4x4RelaxedMeshGraphTest) {
+    const std::filesystem::path bh_qb_4x4_relaxed_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_4x4_relaxed_mesh_graph_descriptor.textproto";
+
+    auto mesh_graph = MeshGraph(bh_qb_4x4_relaxed_mesh_graph_desc_path.string());
+
+    // Create a local mesh binding for testing
+    LocalMeshBinding local_mesh_binding;
+    if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{0};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 1) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{1};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 2) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{2};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 3) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{3};
+    }
+
+    auto topology_mapper = TopologyMapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+
+    // Physical System Descriptor: 4x4 Blackhole mesh
+    // 0  1  | 2  3
+    // 4  5  | 6  7
+    // ------+-------
+    // 8  9  | 10 11
+    // 12 13 | 14 15
+
+    auto asic_id_0 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 0));
+    auto asic_id_1 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 1));
+    auto asic_id_7 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 7));
+    auto asic_id_4 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 4));
+    auto asic_id_13 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 13));
+    auto asic_id_14 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 14));
+    auto asic_id_15 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 15));
+    auto asic_id_3 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 3));
+
+    // Check for adjacency
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_0), asic_id_1));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_1), asic_id_0));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_7), asic_id_4));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_4), asic_id_7));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_13), asic_id_14));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_14), asic_id_13));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_15), asic_id_3));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_3), asic_id_15));
+
+    // Check the host ranks are right
+    const MeshId mesh_id{0};
+    const auto& host_ranks = topology_mapper.get_host_ranks(mesh_id);
+    EXPECT_EQ(host_ranks.size(), 4u);
+
+    // Check the full shape and sub shape are right
+    MeshShape full_shape = mesh_graph.get_mesh_shape(mesh_id);
+    EXPECT_EQ(full_shape, MeshShape(4, 4));
+    EXPECT_EQ(topology_mapper.get_mesh_shape(mesh_id), full_shape);
+}
+
+TEST_F(TopologyMapperTest, BHQB4x4StrictInvalidMeshGraphTest) {
+    const std::filesystem::path bh_qb_4x4_strict_invalid_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_4x4_strict_invalid_mesh_graph_descriptor.textproto";
+
+    auto mesh_graph = MeshGraph(bh_qb_4x4_strict_invalid_mesh_graph_desc_path.string());
+
+    // Create a local mesh binding for testing
+    LocalMeshBinding local_mesh_binding;
+    if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{0};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 1) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{1};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 2) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{2};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 3) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{3};
+    }
+
+    EXPECT_THROW(TopologyMapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding), std::exception);
 }
 
 TEST_F(TopologyMapperTest, T3kMultiMeshTest) {
