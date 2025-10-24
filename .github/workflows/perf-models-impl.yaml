@@ -291,7 +291,10 @@ jobs:
         shell: bash
         env:
           ARCH_NAME: ${{ matrix.test-info.arch }}
-        run: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+        run: |
+          pwd
+          cd /__w/tt-metal/tt-metal
+          python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
 
       - name: Upload benchmark data
         if: ${{ !cancelled() }}
