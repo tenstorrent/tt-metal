@@ -100,6 +100,7 @@ target_sources(
         core/tensor/types.cpp
         core/tensor/unit_mesh/unit_mesh_utils.cpp
         core/tensor/xtensor/partition.cpp
+        core/tensor/lazy_tensor.cpp
 )
 target_include_directories(
     ttnn_core

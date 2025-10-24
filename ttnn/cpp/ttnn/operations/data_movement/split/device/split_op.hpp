@@ -38,6 +38,10 @@ struct SplitDeviceOperation : public ttnn::experimental::jit::IDeviceOperation {
 
     std::vector<Tensor> invoke(std::vector<Tensor> input_tensors) override;
 
+    void validate(const std::vector<ttnn::experimental::jit::LazyTensor>& input_tensors) const override;
+    std::vector<ttnn::TensorSpec> compute_output_specs(
+        const std::vector<ttnn::experimental::jit::LazyTensor>& input_tensors) const override;
+
     void validate(const std::vector<Tensor>& input_tensors) const override;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const override;
     tt::tt_metal::operation::ProgramWithCallbacks create_program(
