@@ -21,28 +21,30 @@ void kernel_main() {
 
     constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(15);
 
+    constexpr bool fuse_bias = get_compile_time_arg_val(18);
+
     // Split reader args
 #ifdef SPLIT_READER
-    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(18);
-    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(19);
-    constexpr uint32_t weight_size_w = get_compile_time_arg_val(20);
-    constexpr uint32_t conv_act_size_w_padded = get_compile_time_arg_val(21);
-    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(22);
-    constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(23) == 1;
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(24);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(25);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(26);
-    constexpr uint32_t weights_size_h = get_compile_time_arg_val(27);
+    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(19);
+    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(20);
+    constexpr uint32_t weight_size_w = get_compile_time_arg_val(21);
+    constexpr uint32_t conv_act_size_w_padded = get_compile_time_arg_val(22);
+    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(23);
+    constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(24) == 1;
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(25);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(26);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(27);
+    constexpr uint32_t weights_size_h = get_compile_time_arg_val(28);
 
 #ifdef ACTIVATION_REUSE
-    constexpr uint32_t act_reuse_cb_tiles = get_compile_time_arg_val(28);
-    constexpr uint32_t act_block_w_tiles = get_compile_time_arg_val(29);
-    constexpr bool readers_process_full_image_widths = get_compile_time_arg_val(30) == 1;
-    constexpr uint32_t image_width_tiles = get_compile_time_arg_val(31);
-    constexpr uint32_t output_image_width = get_compile_time_arg_val(32);
-    constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(33);
-    constexpr bool need_to_push_remaining_tiles = get_compile_time_arg_val(34) == 1;
-    constexpr bool single_core_processes_multiple_batches = get_compile_time_arg_val(35) == 1;
+    constexpr uint32_t act_reuse_cb_tiles = get_compile_time_arg_val(29);
+    constexpr uint32_t act_block_w_tiles = get_compile_time_arg_val(30);
+    constexpr bool readers_process_full_image_widths = get_compile_time_arg_val(31) == 1;
+    constexpr uint32_t image_width_tiles = get_compile_time_arg_val(32);
+    constexpr uint32_t output_image_width = get_compile_time_arg_val(33);
+    constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(34);
+    constexpr bool need_to_push_remaining_tiles = get_compile_time_arg_val(35) == 1;
+    constexpr bool single_core_processes_multiple_batches = get_compile_time_arg_val(36) == 1;
 #endif
 #endif
 
@@ -91,10 +93,8 @@ void kernel_main() {
     const uint32_t cb_start_addr = get_write_ptr(cb_id_act_second_reader);
 #endif
 
-// read in bias if enabled (done only once for all batches)
-#ifdef FUSE_BIAS
+    // read in bias if enabled (done only once for all batches)
     bool load_bias = true;
-#endif
 
     for (uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
         // MCAST RECEIVE WEIGHTS
@@ -177,23 +177,23 @@ void kernel_main() {
             cb_push_back(cb_id_weight, weight_block_num_tiles);
         }
 
-#ifdef FUSE_BIAS
-        if (load_bias) {
-            cb_reserve_back(bias_cb_id, bias_ntiles);
+        if constexpr (fuse_bias) {
+            if (load_bias) {
+                cb_reserve_back(bias_cb_id, bias_ntiles);
 
-            // Set weights semaphore value to INVALID
-            noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, INVALID);
+                // Set weights semaphore value to INVALID
+                noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, INVALID);
 
-            // Atomic increment source core counter
-            noc_semaphore_inc(weights_mcast_sender_semaphore_noc_addr, 1);
+                // Atomic increment source core counter
+                noc_semaphore_inc(weights_mcast_sender_semaphore_noc_addr, 1);
 
-            // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
-            noc_semaphore_wait(weights_mcast_receiver_semaphore_addr_ptr, VALID);
+                // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
+                noc_semaphore_wait(weights_mcast_receiver_semaphore_addr_ptr, VALID);
 
-            cb_push_back(bias_cb_id, bias_ntiles);
-            load_bias = false;
+                cb_push_back(bias_cb_id, bias_ntiles);
+                load_bias = false;
+            }
         }
-#endif
 
 #ifdef SPLIT_READER
         // Increment reader index for the next number of segments (number of segments for other reader)
