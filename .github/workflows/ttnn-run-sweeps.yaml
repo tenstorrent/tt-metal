@@ -589,7 +589,7 @@ on:
           - BH-DeskBox
           - BH-LoudBox
         default: "N150"
-      log_level:
+      log-level:
         description: "Long sweeps on INFO log level may overwhelm the runner"
         required: true
         type: choice
@@ -599,7 +599,6 @@ on:
           - WARNING
           - CRITICAL
         default: "INFO"
-
 
   schedule:
     - cron: "0 4 * * 1,2,4,5" # This cron schedule runs the workflow at 4:00 AM UTC on Mon, Tue, Thu, Fri (nightly runs)
