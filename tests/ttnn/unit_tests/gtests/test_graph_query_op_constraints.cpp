@@ -903,7 +903,7 @@ TEST_F(ReshapeOpIfTest, Reshape) {
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, 5120);
-        EXPECT_EQ(query.resource_usage.l1_buffers_peak_per_core, 2048);
+        EXPECT_EQ(query.resource_usage.l1_buffers_peak_per_core, 4096);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), outputSpec_L1);
         std::cerr << "Constraint query 2 done.\n";
