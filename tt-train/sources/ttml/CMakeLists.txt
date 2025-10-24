@@ -28,8 +28,6 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/core/mesh_device.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/not_null.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/random.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/random_auto.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/random_avx.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/random_sse.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/scoped.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/system_utils.cpp

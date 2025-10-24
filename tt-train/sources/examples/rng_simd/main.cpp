@@ -17,7 +17,6 @@
 
 #include "core/cpu_features.hpp"
 #include "core/random.hpp"
-#include "core/random_avx.hpp"
 #include "core/random_sse.hpp"
 #include "tt-metalium/bfloat16.hpp"
 
@@ -58,7 +57,7 @@ struct DistributionParams {
     double expected_median{0.0};
     double expected_q25{0.0};
     double expected_q75{0.0};
-    bool has_simd_support{true};  // If false, skip SSE/AVX2 benchmarks
+    bool has_simd_support{true};  // If false, skip SSE benchmarks
 };
 
 // ============================================================================
@@ -235,19 +234,6 @@ void benchmark_distribution(
             ttml::core::sse::parallel_generate(std::span{data}, dist_factory, seed);
         };
         results.push_back(run_benchmark<T>("SSE (Parallel)", type_name, params.name, func_par, size));
-    }
-
-    // AVX2 Sequential and Parallel - only if SIMD is supported for this distribution
-    if (params.has_simd_support && CpuFeatures::has_avx2_support()) {
-        auto func_seq = [&](std::vector<T>& data) {
-            ttml::core::avx::sequential_generate(std::span{data}, dist_factory, seed);
-        };
-        results.push_back(run_benchmark<T>("AVX2 (Sequential)", type_name, params.name, func_seq, size));
-
-        auto func_par = [&](std::vector<T>& data) {
-            ttml::core::avx::parallel_generate(std::span{data}, dist_factory, seed);
-        };
-        results.push_back(run_benchmark<T>("AVX2 (Parallel)", type_name, params.name, func_par, size));
     }
 
     // Write CSV rows if enabled
@@ -504,7 +490,6 @@ int main(int argc, const char** argv) {
         // Print system info only in console mode
         std::cout << "CPU Features:\n";
         std::cout << "  SSE4.2 + AES-NI: " << (CpuFeatures::has_sse_support() ? "✓" : "✗") << "\n";
-        std::cout << "  AVX2 + AES-NI:   " << (CpuFeatures::has_avx2_support() ? "✓" : "✗") << "\n";
         std::cout << "  Hardware threads: " << std::thread::hardware_concurrency() << "\n";
     }
 
