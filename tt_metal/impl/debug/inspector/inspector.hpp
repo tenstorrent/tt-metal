@@ -84,8 +84,6 @@ public:
     // static method for clearing all core info to clear stale entries
     static void clear_all_core_info();
 
-    static void set_command_queue_event_info(const ChipId device_id, const uint8_t cq_id, const uint32_t event_id);
-
     static inspector::RpcServer& get_rpc_server();
 
     static void set_build_env_fw_compile_hash(uint64_t fw_compile_hash);

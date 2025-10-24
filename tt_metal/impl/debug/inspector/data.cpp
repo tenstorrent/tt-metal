@@ -34,18 +34,8 @@ Data::Data()
             get_rpc_server().setGetKernelCallback(
                 [this](auto params, auto result) { this->rpc_get_kernel(params, result); });
             get_rpc_server().setGetAllBuildEnvsCallback([this](auto result) { this->rpc_get_all_build_envs(result); });
-            get_rpc_server().setGetDispatchCoreInfoCallback(
-                [this](auto params, auto result) { this->rpc_get_dispatch_core_info(params, result); });
-            get_rpc_server().setGetPrefetchCoreInfoCallback(
-                [this](auto params, auto result) { this->rpc_get_prefetch_core_info(params, result); });
             get_rpc_server().setGetAllDispatchCoreInfosCallback(
                 [this](auto result) { this->rpc_get_all_dispatch_core_infos(result); });
-            get_rpc_server().setGetDispatchSCoreInfoCallback(
-                [this](auto params, auto result) { this->rpc_get_dispatch_s_core_info(params, result); });
-            get_rpc_server().setGetAllDispatchSCoreInfosCallback(
-                [this](auto result) { this->rpc_get_all_dispatch_s_core_infos(result); });
-            get_rpc_server().setGetAllPrefetchCoreInfosCallback(
-                [this](auto result) { this->rpc_get_all_prefetch_core_infos(result); });
         } catch (const std::exception& e) {
             TT_INSPECTOR_THROW("Failed to start Inspector RPC server: {}", e.what());
         }
@@ -226,148 +216,40 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
     }
 }
 
-// Get dispatch core info by virtual core
-void Data::rpc_get_dispatch_core_info(
-    rpc::Inspector::GetDispatchCoreInfoParams::Reader params,
-    rpc::Inspector::GetDispatchCoreInfoResults::Builder results) {
-    // This populates the cq_to_event_by_device map with an on-demand snapshot
-    // of the command queue event info
-    this->rpc_all_command_queue_event_infos();
-    std::scoped_lock locks(dispatch_core_info_mutex, cq_to_event_by_device_mutex);
-    // Get the key and find the core info
-    const auto key = params.getKey();
-    const tt_cxy_pair key_cxy{key.getChip(), key.getX(), key.getY()};
-    const auto it = dispatch_core_info.find(key_cxy);
-    if (it == dispatch_core_info.end()) {
-        throw std::runtime_error(fmt::format(
-            "Dispatch core (chip: {}, x: {}, y: {}) info not found", key.getChip(), key.getX(), key.getY()));
-    }
-    const auto& info = it->second;
-    // Get the event id for the core's command queue
-    uint32_t event_id = this->get_event_id_for_core(info);
-    // Populate the results
-    auto out = results.initInfo();
-    this->populate_core_info(out, info, event_id);
-}
-
-// Get dispatch_s core info by virtual core
-void Data::rpc_get_dispatch_s_core_info(
-    rpc::Inspector::GetDispatchSCoreInfoParams::Reader params,
-    rpc::Inspector::GetDispatchSCoreInfoResults::Builder results) {
-    // This populates the cq_to_event_by_device map with an on-demand snapshot
-    // of the command queue event info
-    this->rpc_all_command_queue_event_infos();
-    std::scoped_lock locks(dispatch_s_core_info_mutex, cq_to_event_by_device_mutex);
-    const auto key = params.getKey();
-    const tt_cxy_pair key_cxy{key.getChip(), key.getX(), key.getY()};
-    const auto it = dispatch_s_core_info.find(key_cxy);
-    if (it == dispatch_s_core_info.end()) {
-        throw std::runtime_error(fmt::format(
-            "Dispatch_s core (chip: {}, x: {}, y: {}) info not found", key.getChip(), key.getX(), key.getY()));
-    }
-    const auto& info = it->second;
-    // Get the event id for the core's command queue
-    uint32_t event_id = this->get_event_id_for_core(info);
-    // Populate the results
-    auto out = results.initInfo();
-    this->populate_core_info(out, info, event_id);
-}
-
-// Get prefetch core info by virtual core
-void Data::rpc_get_prefetch_core_info(
-    rpc::Inspector::GetPrefetchCoreInfoParams::Reader params,
-    rpc::Inspector::GetPrefetchCoreInfoResults::Builder results) {
-    // This populates the cq_to_event_by_device map with an on-demand snapshot
-    // of the command queue event info
-    this->rpc_all_command_queue_event_infos();
-    std::scoped_lock locks(prefetcher_core_info_mutex, cq_to_event_by_device_mutex);
-    const auto key = params.getKey();
-    const tt_cxy_pair key_cxy{key.getChip(), key.getX(), key.getY()};
-    const auto it = prefetcher_core_info.find(key_cxy);
-    if (it == prefetcher_core_info.end()) {
-        throw std::runtime_error(fmt::format(
-            "Prefetcher core (chip: {}, x: {}, y: {}) info not found", key.getChip(), key.getX(), key.getY()));
-    }
-    const auto& info = it->second;
-    // Get the event id for the core's command queue
-    uint32_t event_id = this->get_event_id_for_core(info);
-    // Populate the results
-    auto out = results.initInfo();
-    this->populate_core_info(out, info, event_id);
-}
-
-// Get all dispatch core info
+// Get all dispatch core infos for all active devices
+// Do an on-demand snapshot of the command queue event info
+// Populate the results with the dispatch core info and corresponding cq_id event info
 void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInfosResults::Builder results) {
     // This populates the cq_to_event_by_device map with an on-demand snapshot
     // of the command queue event info
     this->rpc_all_command_queue_event_infos();
-    // Lock to protect cq_to_event_by_device and dispatch_core_info
-    std::scoped_lock locks(dispatch_core_info_mutex, cq_to_event_by_device_mutex);
-    // Populate the results with the dispatch core info  and corresponding cq_id event info
-    auto list = results.initEntries(dispatch_core_info.size());
-    size_t i = 0;
-    for (const auto& kv : dispatch_core_info) {
-        // Get key, value from dispatch_core_info
-        const tt_cxy_pair& k = kv.first;
-        const auto& info = kv.second;
-        // Get the event id for the core's command queue
-        uint32_t event_id = this->get_event_id_for_core(info);
-        // Populate the core entry with the key, info, and event id
-        auto entry = list[i++];
-        this->populate_core_entry(entry, k, info, event_id);
+    // Lock to protect core info, and the on-demand snapshot of the command queue event info
+    std::scoped_lock locks(
+        dispatch_core_info_mutex, dispatch_s_core_info_mutex, prefetcher_core_info_mutex, cq_to_event_by_device_mutex);
+    // Populate the results with the dispatch core info and corresponding cq_id event info
+    auto list = results.initCoresByCategory(this->NUM_CORE_CATEGORIES);
+    size_t category_index = 0;
+    // Populate the dispatch core info
+    if (!dispatch_core_info.empty()) {
+        auto category = list[category_index++];
+        this->populate_core_entries_by_category(category, rpc::CoreCategory::DISPATCH, dispatch_core_info);
+    }
+    // Populate the dispatch_s core info
+    if (!dispatch_s_core_info.empty()) {
+        auto category = list[category_index++];
+        this->populate_core_entries_by_category(category, rpc::CoreCategory::DISPATCH_S, dispatch_s_core_info);
+    }
+    // Populate the prefetcher core info
+    if (!prefetcher_core_info.empty()) {
+        auto category = list[category_index++];
+        this->populate_core_entries_by_category(category, rpc::CoreCategory::PREFETCH, prefetcher_core_info);
     }
 }
 
-// Get all dispatch_s core info
-void Data::rpc_get_all_dispatch_s_core_infos(rpc::Inspector::GetAllDispatchSCoreInfosResults::Builder results) {
-    // This populates the cq_to_event_by_device map with an on-demand snapshot
-    // of the command queue event info
-    this->rpc_all_command_queue_event_infos();
-    // Lock to protect cq_to_event_by_device and dispatch_core_info
-    std::scoped_lock locks(dispatch_s_core_info_mutex, cq_to_event_by_device_mutex);
-    // Populate the results with the dispatch core info  and corresponding cq_id event info
-    auto list = results.initEntries(dispatch_s_core_info.size());
-    size_t i = 0;
-    for (const auto& kv : dispatch_s_core_info) {
-        // Get key, value from dispatch_s_core_info
-        const tt_cxy_pair& k = kv.first;
-        const auto& info = kv.second;
-        // Get the event id for the core's command queue
-        uint32_t event_id = this->get_event_id_for_core(info);
-        // Populate the core entry with the key, info, and event id
-        auto entry = list[i++];
-        this->populate_core_entry(entry, k, info, event_id);
-    }
-}
-
-// Get all prefetch core info
-void Data::rpc_get_all_prefetch_core_infos(rpc::Inspector::GetAllPrefetchCoreInfosResults::Builder results) {
-    // This populates the cq_to_event_by_device map with an on-demand snapshot
-    // of the command queue event info
-    this->rpc_all_command_queue_event_infos();
-    // Lock to protect cq_to_event_by_device and prefetcher_core_info
-    std::scoped_lock locks(prefetcher_core_info_mutex, cq_to_event_by_device_mutex);
-    // Populate the results with the dispatch core info  and corresponding cq_id event info
-    auto list = results.initEntries(prefetcher_core_info.size());
-    size_t i = 0;
-    for (const auto& kv : prefetcher_core_info) {
-        // Get key, value from prefetcher_core_info
-        const tt_cxy_pair& k = kv.first;
-        const auto& info = kv.second;
-        // Get the event id for the core's command queue
-        uint32_t event_id = this->get_event_id_for_core(info);
-        // Populate the core entry with the key, info, and event id
-        auto entry = list[i++];
-        this->populate_core_entry(entry, k, info, event_id);
-    }
-}
-
-// Get all devices from mesh on-demand (snapshot)
-// For each device, get system manager queue
-// Get last issued event_id for each cq
-// Append to results
+// Get all command queue event infos for all active devices (on-demand snapshot)
+// The key is the device id and the value is a vector of event ids for each command queue
 void Data::rpc_all_command_queue_event_infos() {
-    // Get all active devices
+    // Get all command queue event infos for all active devices
     auto map = DevicePool::instance().get_all_command_queue_event_infos();
     std::lock_guard<std::mutex> lock(cq_to_event_by_device_mutex);
     cq_to_event_by_device = std::move(map);
@@ -419,6 +301,28 @@ void Data::populate_core_entry(
     // Populate the info
     auto out = entry.initInfo();
     this->populate_core_info(out, info, event_id);
+}
+
+// Helper function to populate the core entries by category
+void Data::populate_core_entries_by_category(
+    rpc::CoreEntriesByCategory::Builder& category_builder,
+    rpc::CoreCategory category_type,
+    const std::unordered_map<tt_cxy_pair, CoreInfo>& core_info) {
+    // Set the category type
+    category_builder.setCategory(category_type);
+    // Initialize the entries
+    auto entries = category_builder.initEntries(core_info.size());
+    size_t i = 0;
+    for (const auto& kv : core_info) {
+        // Get key, value from core_info
+        const tt_cxy_pair& k = kv.first;
+        const auto& info = kv.second;
+        // Get the event id for the core's command queue
+        uint32_t event_id = this->get_event_id_for_core(info);
+        // Populate the core entry with the key, info, and event id
+        auto entry = entries[i++];
+        this->populate_core_entry(entry, k, info, event_id);
+    }
 }
 
 }  // namespace tt::tt_metal::inspector
