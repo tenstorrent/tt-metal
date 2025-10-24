@@ -253,6 +253,26 @@ void PermuteDeviceOperation::MultiCoreTileInvariant::override_runtime_arguments(
     }
 }
 
+void get_optimal_dram_bank_to_reader_assignment(
+    tt::tt_metal::distributed::MeshDevice* device,
+    std::vector<CoreCoord>& all_worker_cores_ordered,
+    CoreRangeSet& all_worker_cores,
+    tt::tt_metal::NOC noc) {
+    all_worker_cores_ordered = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    // TODO bug in P100 -> assigns on dispatch cores
+    for (auto& core : all_worker_cores_ordered) {
+        if (core.x == 11) {
+            core.x = 10;
+        }
+    }
+    // end bug fix
+    std::set<CoreRange> all_cores_set;
+    for (const auto& worker_core : all_worker_cores_ordered) {
+        all_cores_set.insert(CoreRange(worker_core));
+    }
+    all_worker_cores = CoreRangeSet(all_cores_set);
+}
+
 PermuteDeviceOperation::MultiCoreTileRowInvariant::cached_program_t
 PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     const operation_attributes_t& operation_attributes,
@@ -309,7 +329,8 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     uint32_t padded_num_tensor_tiles =
         num_output_tiles / (padded_output_shape[rank - 2] / tile_shape[0]);  // only last row of Xt should have padding
 
-    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    /*
+        auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
     auto
@@ -322,6 +343,27 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, padded_num_tensor_tiles);
 
     all_cores = num_cores > padded_num_cores ? all_cores : padded_all_cores;
+    */
+
+    CoreRangeSet all_cores;
+    std::vector<CoreCoord> all_cores_list;
+    get_optimal_dram_bank_to_reader_assignment(
+        input_tensor.device(), all_cores_list, all_cores, tt::tt_metal::NOC::NOC_0);
+
+    // for (auto core : all_cores_list) {
+    //     auto virtual_core = input_tensor.device()->worker_core_from_logical_core(core);
+    //     log_info(tt::LogTest, "logical core: {}, virtual core: {}", core, virtual_core);
+    // }
+
+    uint32_t num_tiles_per_core = num_tiles / all_cores_list.size();
+    uint32_t num_tiles_per_core_padding = padded_num_tensor_tiles / all_cores_list.size();
+
+    log_info(
+        tt::LogTest,
+        "num_cores: {}, num_tiles_per_core: {}, num_tiles_per_core_padding: {}",
+        all_cores_list.size(),
+        num_tiles_per_core,
+        num_tiles_per_core_padding);
 
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_input_pages_to_read * input_page_size, {{src0_cb_index, cb_data_format}})
@@ -397,7 +439,7 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
-        "reader_unary_transpose_hc_interleaved_tiled_padding_aware.cpp",
+        "reader_unary_transpose_hc_dramsharded_tiled_padding_aware.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_compile_time_args));
 
@@ -443,7 +485,7 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
 
     auto input_shape_view = input_shape.view();
 
-    std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), 0, 0};
+    std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), 0, 0, 0, 0};
 
     std::vector<uint32_t> writer_runtime_args = {dst_buffer->address(), 0, 0, 0, 0};
     writer_runtime_args.insert(writer_runtime_args.end(), input_shape_view.begin(), input_shape_view.end());
@@ -451,34 +493,53 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
 
     std::vector<uint32_t> compute_runtime_args = {0};
 
-    auto cores = corerange_to_cores(all_cores, std::nullopt);
+    // auto cores = corerange_to_cores(all_cores, std::nullopt);
     uint32_t start_tile = 0;
-    uint32_t num_tiles_per_core = 0;
+    // uint32_t num_tiles_per_core = 0;
     uint32_t start_tile_padding = 0;
-    uint32_t num_tiles_per_core_padding = 0;
+    // uint32_t num_tiles_per_core_padding = 0;
     uint32_t end_tile_padding = 0;
-    for (const auto& core : cores) {
-        if (core_group_1.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_2;
-        } else {
-            // no-op
-            num_tiles_per_core = 0;
-        }
-        if (needs_padding) {
-            if (padded_core_group_1.contains(core)) {
-                num_tiles_per_core_padding = padded_num_tiles_per_core_group_1;
-            } else if (padded_core_group_2.contains(core)) {
-                num_tiles_per_core_padding = padded_num_tiles_per_core_group_2;
-            } else {
-                // no-op
-                num_tiles_per_core_padding = 0;
+    std::vector<uint32_t> bank_ids;
+    for (int i = 0; i < all_cores_list.size(); i++) {
+        auto core = all_cores_list[i];
+
+        uint32_t bank_id = i;
+        uint32_t vc = bank_id & 0x3;
+
+        bank_ids.push_back(bank_id);
+
+        for (int j = 0; j < i; ++j) {
+            auto core_ = all_cores_list[j];
+
+            if (core_.y == core.y and ((bank_id & 0x3) == (bank_ids[j] & 0x3))) {  // same vc and same row
+                vc = (vc + 1) & 0x3;
+                break;
             }
         }
+
+        // if (core_group_1.contains(core)) {
+        //     num_tiles_per_core = num_tiles_per_core_group_1;
+        // } else if (core_group_2.contains(core)) {
+        //     num_tiles_per_core = num_tiles_per_core_group_2;
+        // } else {
+        //     // no-op
+        //     num_tiles_per_core = 0;
+        // }
+        // if (needs_padding) {
+        //     if (padded_core_group_1.contains(core)) {
+        //         num_tiles_per_core_padding = padded_num_tiles_per_core_group_1;
+        //     } else if (padded_core_group_2.contains(core)) {
+        //         num_tiles_per_core_padding = padded_num_tiles_per_core_group_2;
+        //     } else {
+        //         // no-op
+        //         num_tiles_per_core_padding = 0;
+        //     }
+        // }
         uint32_t end_tile = start_tile + num_tiles_per_core;
         reader_runtime_args[1] = num_tiles_per_core;
         reader_runtime_args[2] = start_tile;
+        reader_runtime_args[3] = bank_id;
+        reader_runtime_args[4] = vc;
 
         writer_runtime_args[1] = start_tile;  // for some reason num_tiles comes first in writer unary
         writer_runtime_args[2] = end_tile;    // start tile is second in writer unary

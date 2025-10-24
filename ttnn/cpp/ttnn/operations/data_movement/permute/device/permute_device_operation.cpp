@@ -13,24 +13,29 @@ namespace ttnn::operations::data_movement {
 
 PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    auto& input_tensor = tensor_args.input_tensor;
     auto& dims = operation_attributes.dims;
-    if (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR) {
+    if (input_tensor.layout() == Layout::ROW_MAJOR) {
         // If the last dimension is not permuted, we can use the row-invariant kernel
-        if (dims.back() == tensor_args.input_tensor.logical_shape().rank() - 1) {
+        if (dims.back() == input_tensor.logical_shape().rank() - 1) {
             return MultiCoreRowInvariant{};
         }
         // Otherwise, we need to use the blocked generic, row moving kernel
         return MultiCoreBlockedGeneric{};
     } else {
         // If the input tensor is not row-major, we need to use the tiled kernels
-        uint32_t rank = tensor_args.input_tensor.logical_shape().rank();
+        uint32_t rank = input_tensor.logical_shape().rank();
         // When the tiled dimensions are not moved, we use this kernel
         if ((dims[rank - 1] == rank - 1 && dims[rank - 2] == rank - 2) ||
             (dims[rank - 1] == rank - 2 && dims[rank - 2] == rank - 1)) {
             return MultiCoreTileInvariant{};
         } else if (dims[rank - 1] == rank - 1 || dims[rank - 1] == rank - 2) {  // When only one of the tiled dimensions
                                                                                 // is moved
+            // if (input_tensor.is_sharded() && input_tensor.buffer()->is_dram()) {
+            //  TODO
+            //} else {
             return MultiCoreTileRowInvariant{};
+            //}
         } else {
             return MultiCoreTiledGeneric{};  // When both the tiled dimensions are moved
         }
@@ -42,7 +47,9 @@ void PermuteDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         attributes.dims.size() == tensor_args.input_tensor.logical_shape().rank(),
         "Permute dimensions must match input tensor rank");
-    TT_FATAL(tensor_args.input_tensor.is_sharded() == false, "Permute operation does not support sharded input tensor");
+    TT_FATAL(
+        !(tensor_args.input_tensor.is_sharded() && tensor_args.input_tensor.buffer()->is_l1()),
+        "Permute operation does not support sharded input tensor");
 }
 
 void PermuteDeviceOperation::validate_on_program_cache_hit(

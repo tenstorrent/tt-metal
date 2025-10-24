@@ -60,8 +60,11 @@ ttnn::Tensor permute_impl(
         return ttnn::transpose(input, 0, 1, output_mem_config, std::nullopt);
     };
 
-    // Keep limited sharding support with recursive calls
-    if (a.is_sharded()) {
+    if (a.is_sharded() && a.buffer()->is_dram()) {
+        // DRAM sharded
+        output = prim_permute(formatted_input_tensor);
+    } else if (a.is_sharded()) {
+        // Keep limited sharding support with recursive calls
         if (N == 0 && C == 1 && H == 2 && W == 3) {
             output = formatted_input_tensor;
         } else if (N == 0 && C == 1 && H == 3 && W == 2) {
