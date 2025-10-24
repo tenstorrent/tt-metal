@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.petr.tt.common import Conv, Conv_with_split
+from models.experimental.functional_petr.tt.common import Conv, Conv_with_split
 import torch
 from torch.nn import functional as F
-from loguru import logger
 
 
 class ttnn_hsigmoid:
@@ -75,7 +74,7 @@ class ttnn_osa_module:
                         parameters["{}_{}".format(module_name, i)],
                         activation="relu",
                         act_block_h=128,
-                        height_sharding=False,
+                        height_sharding=True,
                     )
                 )
             elif i == 0 and "OSA3_1" not in module_name_with_i and "OSA2" not in module_name_with_i:
@@ -85,7 +84,7 @@ class ttnn_osa_module:
                         parameters["{}_{}".format(module_name, i)],
                         activation="relu",
                         act_block_h=128,
-                        height_sharding=False,
+                        height_sharding=True,
                     )
                 )
             elif (
@@ -100,7 +99,7 @@ class ttnn_osa_module:
                         parameters["{}_{}".format(module_name, i)],
                         activation="relu",
                         act_block_h=128,
-                        height_sharding=False,
+                        height_sharding=True,
                     )
                 )
             else:
@@ -109,7 +108,7 @@ class ttnn_osa_module:
                         [1, 1, 1, 1],
                         parameters["{}_{}".format(module_name, i)],
                         activation="relu",
-                        height_sharding=False,
+                        height_sharding=True,
                     )
                 )
 
@@ -119,28 +118,28 @@ class ttnn_osa_module:
                     [1, 1, 0, 0],
                     parameters["{}_{}".format(module_name, "concat")],
                     activation="relu",
-                    height_sharding=False,
+                    height_sharding=True,
                 )
             elif module_name == "OSA4_1":
                 self.conv_concat = Conv(
                     [1, 1, 0, 0],
                     parameters["{}_{}".format(module_name, "concat")],
                     activation="relu",
-                    height_sharding=False,
+                    height_sharding=True,
                 )
             elif "OSA5" in module_name:
                 self.conv_concat = Conv(
                     [1, 1, 0, 0],
                     parameters["{}_{}".format(module_name, "concat")],
                     activation="relu",
-                    height_sharding=False,
+                    height_sharding=True,
                 )
             else:
                 self.conv_concat = Conv(
                     [1, 1, 0, 0],
                     parameters["{}_{}".format(module_name, "concat")],
                     activation="relu",
-                    height_sharding=False,
+                    height_sharding=True,
                 )
         if module_name == "OSA5_1" or module_name == "OSA5_2" or module_name == "OSA5_3":
             self.ese = ttnn_esemodule(parameters, is_split=True)
@@ -198,14 +197,16 @@ class ttnn_osa_module:
         if self.identity:
             x = x + identity_feat
 
+        # Ensure we're maintaining 4D shape
         if len(x.shape) != 4:
-            logger.error(f"ERROR: {self.module_name} produced non-4D tensor: {x.shape}")
+            print(f"ERROR: {self.module_name} produced non-4D tensor: {x.shape}")
 
         if len(x.shape) == 4 and x.shape[1] == 1 and x.shape[2] > 100:
             batch_size = x.shape[0]
             channels = x.shape[3]
             total_spatial = x.shape[2]
 
+            # Determine expected dimensions based on module name
             if "OSA2" in self.module_name:
                 height, width = 80, 200
             elif "OSA3" in self.module_name:
@@ -334,11 +335,17 @@ class ttnn_VoVNetCP:
         self.out_features = out_features
 
         # Initialize stem convolutions using Conv class
-        self.stem_conv1 = Conv([2, 2, 1, 1], stem_parameters["stem_1"], activation="relu", height_sharding=False)
+        self.stem_conv1 = Conv(
+            [2, 2, 1, 1], stem_parameters["stem_1"], activation="relu", height_sharding=False  # stride=2, padding=1
+        )
 
-        self.stem_conv2 = Conv([1, 1, 1, 1], stem_parameters["stem_2"], activation="relu", height_sharding=False)
+        self.stem_conv2 = Conv(
+            [1, 1, 1, 1], stem_parameters["stem_2"], activation="relu", height_sharding=False  # stride=1, padding=1
+        )
 
-        self.stem_conv3 = Conv([2, 2, 1, 1], stem_parameters["stem_3"], activation="relu", height_sharding=False)
+        self.stem_conv3 = Conv(
+            [2, 2, 1, 1], stem_parameters["stem_3"], activation="relu", height_sharding=False  # stride=2, padding=1
+        )
 
         # Initialize stages
         self.stage2 = ttnn_osa_stage(parameters.stage2, 128, 128, 256, 1, 5, 2, SE=True, depthwise=False)
@@ -356,15 +363,16 @@ class ttnn_VoVNetCP:
 
         # Convert to NCHW for processing
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        # Stem conv 1
+        # Stem conv 1 (stride=2, padding=1)
         x = self.stem_conv1(device, x)
-        # Stem conv 2
+        # Stem conv 2 (stride=1, padding=1)
         x = self.stem_conv2(device, x)
 
-        # Stem conv 3
+        # Stem conv 3 (stride=2, padding=1)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x = self.stem_conv3(device, x)
 
+        # Now x is ready for stages
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         stage2 = self.stage2(device, x)
         x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)

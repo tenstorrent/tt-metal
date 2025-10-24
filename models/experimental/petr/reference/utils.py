@@ -256,6 +256,6 @@ class BaseInstance3DBoxes:
         return original_type(self.tensor.to(device, *args, **kwargs), box_dim=self.box_dim, with_yaw=self.with_yaw)
 
 
-# taken from mmdet3d/structures/bbox_3d/lidar_box3d.py, removed all the functions from this class as they are not invoked
+# taken from mmdet3d/structures/bbox_3d/lidar_box3d.py, removed all the functions from this class as they are not  invoked
 class LiDARInstance3DBoxes(BaseInstance3DBoxes):
     YAW_AXIS = 2

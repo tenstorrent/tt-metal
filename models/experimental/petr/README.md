@@ -37,9 +37,10 @@ models/
 └── experimental/
     └── petr/
         ├── resources/
-        │   ├── sample_input  # sample input images taken from nuscenes mini dataset
-        │   ├── weight file(.pth)        # if not present will be downloaded
-        │   └── sample_output # will be generated once the demo is run
+        │   ├──
+        │   ├──
+        │   ├──
+        │   ├──
         │
         ├── reference/
         │   ├── cp_fpn.py
@@ -68,8 +69,7 @@ models/
         │   ├── demo.py
         └── tests/
           ├── perf/
-          │   ├── test_ttnn_petr.py
-          │   ├── test_ttnn_petr_perf.py
+          │   ├── test_ttnn_perf.py
           └── pcc/
               └── test_ttnn_cp_fpn.py
               └── test_ttnn_petr_head.py
@@ -88,7 +88,7 @@ If missing, the code will download the same to the path
 
 Note: The weights are for nuScenes dataset VoVNet backbone.
 ## Quickstart
-## Run Tests
+### Run Tests
 ```
 models/experimental/petr/tests/pcc/test_ttnn_petr.py
 ```
@@ -99,26 +99,24 @@ This runs an end-to-end flow that:
 
 ### Run the Demo
 ```
-python3 models/experimental/petr/demo/demo.py
+TODO - To be filled
 ```
 ### Custom Images
-Sample nuScenes image(s) are placed under:
+You can place your image(s) under:
 ```
-models/experimental/petr/resources/sample_input
+models/experimental/petr/resources/
 ```
 Then re-run either the demo:
 ```
-python3 models/experimental/petr/demo/demo.py
+TODO - TO be filled
 ```
-Note: In the current demo, the calibration needs to be corrected. Since we do not use the nuScenes dataset fully at the moment, approximate calibration values were used. As a result, the predicted images shown in the visualization may not be fully accurate.
-
 ## Performance
+## TODO
 ### Single Device (BS=1):
-- end-2-end perf is `2.26` FPS
-
+- end-2-end perf is `` FPS
 To run perf test:
 ```
-pytest models/experimental/petr/test/perf/test_ttnn_petr_perf.py
+pytest models/experimental/petr/tests/perf/test_ttnn_perf.py
 ```
 To collect perf reports with the profiler, build with `--enable-profiler`
 ## Configuration Notes

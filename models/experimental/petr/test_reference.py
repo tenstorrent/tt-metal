@@ -87,14 +87,10 @@ def test_reference():
 
             return fpn_feats, fpn_feats
 
-            # return fpn_feats
-
     print("\n=== ONNX Export on CPU ===")
     wrapper = ONNXWrapper(model)
     wrapper.eval()
-    # wrapper = wrapper.to(device)  # Ensure on CPU
 
-    # Use CPU tensor for export
     input_tensor = inputs["imgs"].cpu()
 
     try:
@@ -104,11 +100,6 @@ def test_reference():
                 input_tensor,
                 "petr_full_model.onnx",
                 input_names=["multi_camera_images"],
-                # output_names=["features"],
-                # opset_version=11,
-                # do_constant_folding=False,  # Save memory
-                # verbose=False,
-                # export_params=True,
                 output_names=["cls_scores", "bbox_preds"],
                 dynamic_axes={
                     "multi_camera_images": {0: "batch_size"},
@@ -116,7 +107,7 @@ def test_reference():
                     "bbox_preds": {0: "batch_size"},
                 },
                 opset_version=11,
-                do_constant_folding=False,  # Save memory
+                do_constant_folding=False,
                 verbose=False,
                 export_params=True,
             )

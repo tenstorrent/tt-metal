@@ -3,11 +3,14 @@
 
 import torch
 import ttnn
-from models.experimental.petr.tt.ttnn_petr_head import ttnn_PETRHead
-from models.experimental.petr.tt.ttnn_vovnetcp import ttnn_VoVNetCP
-from models.experimental.petr.tt.ttnn_cp_fpn import ttnn_CPFPN
-from models.experimental.petr.tt.ttnn_grid_mask import ttnn_GridMask
-from models.experimental.petr.reference.utils import bbox3d2result
+
+from models.experimental.functional_petr.tt.ttnn_petr_head import ttnn_PETRHead
+from models.experimental.functional_petr.tt.ttnn_vovnetcp import ttnn_VoVNetCP
+from models.experimental.functional_petr.tt.ttnn_cp_fpn import ttnn_CPFPN
+from models.experimental.functional_petr.tt.ttnn_grid_mask import ttnn_GridMask
+
+from models.experimental.functional_petr.reference.utils import bbox3d2result
+import tracy
 
 
 class ttnn_PETR:
@@ -63,16 +66,25 @@ class ttnn_PETR:
             if self.use_grid_mask:
                 img = self.grid_mask(img)
 
+            # Process each camera separately to avoid L1 memory issues
             img_feats_list = []
             num_cameras = img.shape[0]
 
             for cam_idx in range(num_cameras):
-                single_img = img[cam_idx : cam_idx + 1]
+                # Extract single camera image
+                single_img = img[cam_idx : cam_idx + 1]  # Keep batch dim
 
+                # Convert to NHWC
                 single_img_nhwc = ttnn.permute(single_img, (0, 2, 3, 1))
-                single_feats = self.img_backbone(device=self.device, x=single_img_nhwc)
-                img_feats_list.append(single_feats)
 
+                # Process through backbone
+                tracy.signpost("backbone_start")
+                single_feats = self.img_backbone(device=self.device, x=single_img_nhwc)
+                tracy.signpost("backbone_end")
+                img_feats_list.append(single_feats)
+                # ttnn.device.dump_device_profiler(self.device)
+
+            # Combine features from all cameras
             img_feats = []
             num_stages = len(img_feats_list[0])
 
@@ -87,12 +99,16 @@ class ttnn_PETR:
             return None
 
         if self.with_img_neck:
+            tracy.signpost("neck_start")
             img_feats = self.img_neck(device=self.device, inputs=img_feats)
+            tracy.signpost("neck_end")
 
         img_feats_reshaped = []
+        tracy.signpost("reshape_start")
         for img_feat in img_feats:
-            img_feat = ttnn.permute(img_feat, (0, 3, 1, 2))
+            img_feat = ttnn.permute(img_feat, (0, 3, 1, 2))  # NHWC → NCHW
             BN, C, H, W = img_feat.shape[0], img_feat.shape[1], img_feat.shape[2], img_feat.shape[3]
+            # Reshape
             img_feats_reshaped.append(ttnn.reshape(img_feat, (B, int(BN / B), C, H, W)))
 
         return img_feats_reshaped
@@ -121,7 +137,9 @@ class ttnn_PETR:
 
     def simple_test_pts(self, x, img_metas, skip_post_processing=False, rescale=False):
         """Test function of point cloud branch."""
+        tracy.signpost("head_start")
         outs = self.pts_bbox_head(x, img_metas, device=self.device)
+        tracy.signpost("head_end")
         if skip_post_processing:
             return outs
         bbox_list = self.pts_bbox_head.get_bboxes(outs, img_metas, rescale=rescale)
@@ -142,6 +160,7 @@ class ttnn_PETR:
             result_dict["pts_bbox"] = pts_bbox
         return bbox_list
 
+    # may need speed-up
     def add_lidar2img(self, img, batch_input_metas):
         """add 'lidar2img' transformation matrix into batch_input_metas.
 

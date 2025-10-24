@@ -13,10 +13,10 @@
 
 import torch
 from torch import nn
-from models.experimental.petr.reference.petr_head import PETRHead
-from models.experimental.petr.reference.vovnetcp import VoVNetCP
-from models.experimental.petr.reference.cp_fpn import CPFPN
-from models.experimental.petr.reference.utils import bbox3d2result
+from models.experimental.functional_petr.reference.petr_head import PETRHead
+from models.experimental.functional_petr.reference.vovnetcp import VoVNetCP
+from models.experimental.functional_petr.reference.cp_fpn import CPFPN
+from models.experimental.functional_petr.reference.utils import bbox3d2result
 from .grid_mask import GridMask
 
 
@@ -81,6 +81,7 @@ class PETR(nn.Module):
             img_feats_reshaped.append(img_feat.view(B, int(BN / B), C, H, W))
         return img_feats_reshaped
 
+    # @auto_fp16(apply_to=('img'), out_fp32=True)
     def extract_feat(self, img, img_metas):
         """Extract features from images and points."""
         img_feats = self.extract_img_feat(img, img_metas)
@@ -106,6 +107,7 @@ class PETR(nn.Module):
     def simple_test_pts(self, x, img_metas, skip_post_processing=False, rescale=False):
         """Test function of point cloud branch."""
         outs = self.pts_bbox_head(x, img_metas)
+        # print("outs", outs)
         if skip_post_processing:
             return outs
         bbox_list = self.pts_bbox_head.get_bboxes(outs, img_metas, rescale=rescale)
@@ -122,10 +124,12 @@ class PETR(nn.Module):
                 img_feats, img_metas, skip_post_processing=skip_post_processing, rescale=rescale
             )
         bbox_pts = self.simple_test_pts(img_feats, img_metas, rescale=rescale)
+        # print("bbox_pts", bbox_pts)
         for result_dict, pts_bbox in zip(bbox_list, bbox_pts):
             result_dict["pts_bbox"] = pts_bbox
         return bbox_list
 
+    # may need speed-up
     def add_lidar2img(self, img, batch_input_metas):
         """add 'lidar2img' transformation matrix into batch_input_metas.
 

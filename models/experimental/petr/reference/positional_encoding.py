@@ -78,6 +78,7 @@ class SinePositionalEncoding3D(nn.Module):
         pos_n = n_embed[:, :, :, :, None] / dim_t
         pos_x = x_embed[:, :, :, :, None] / dim_t
         pos_y = y_embed[:, :, :, :, None] / dim_t
+        # use `view` instead of `flatten` for dynamically exporting to ONNX
         B, N, H, W = mask.size()
         pos_n = torch.stack((pos_n[:, :, :, :, 0::2].sin(), pos_n[:, :, :, :, 1::2].cos()), dim=4).view(B, N, H, W, -1)
         pos_x = torch.stack((pos_x[:, :, :, :, 0::2].sin(), pos_x[:, :, :, :, 1::2].cos()), dim=4).view(B, N, H, W, -1)

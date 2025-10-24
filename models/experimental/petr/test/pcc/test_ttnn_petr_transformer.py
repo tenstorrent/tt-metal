@@ -5,13 +5,12 @@
 import pytest
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
-from models.experimental.petr.reference import petr_transformer
-from models.experimental.petr.tt.model_preprocessing import (
+from models.experimental.functional_petr.reference import petr_transformer
+from models.experimental.functional_petr.tt.model_preprocessing import (
     create_petr_transformer_input_tensors,
     create_petr_transformer_model_parameters,
 )
-from models.experimental.petr.tt import ttnn_petr_transformer
-from loguru import logger
+from models.experimental.functional_petr.tt import ttnn_petr_transformer
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
@@ -38,10 +37,10 @@ def test_petr_transformer(device, reset_seeds):
     ttnn_memory = ttnn_memory.reshape(torch_memory.shape)
     ttnn_memory = ttnn.to_torch(ttnn_memory)
     passed, msg = check_with_pcc(torch_memory, ttnn_memory, pcc=0.99)
-    logger.info(f"Memory PCC: {msg}")
+    print(f"Memory PCC: {msg}")
     assert_with_pcc(torch_memory, ttnn_memory, 0.99)
     ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.reshape(torch_output.shape)
     passed, msg = check_with_pcc(torch_output, ttnn_output, pcc=0.99)
-    logger.info(f"Output PCC: {msg}")
+    print(f"Output PCC: {msg}")
     assert_with_pcc(torch_output, ttnn_output, 0.99)

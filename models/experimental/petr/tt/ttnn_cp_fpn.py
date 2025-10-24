@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.petr.tt.common import Conv
+from models.experimental.functional_petr.tt.common import Conv
 
 
 class ttnn_ConvModule:
@@ -65,6 +65,7 @@ class ttnn_CPFPN:
         self.add_extra_convs = add_extra_convs
         assert isinstance(add_extra_convs, (str, bool))
         if isinstance(add_extra_convs, str):
+            # Extra_convs_source choices: 'on_input', 'on_lateral', 'on_output'
             assert add_extra_convs in ("on_input", "on_lateral", "on_output")
         elif add_extra_convs:  # True
             self.add_extra_convs = "on_input"

@@ -6,15 +6,21 @@ import torch
 import pytest
 from loguru import logger
 import urllib.request
+import tracy
 import ttnn
-from models.experimental.petr.reference.petr import PETR
-from models.experimental.petr.tt.ttnn_petr import ttnn_PETR
-from models.experimental.petr.tt.common import get_parameters, generate_petr_inputs
+from models.experimental.functional_petr.reference.petr import PETR
+from models.experimental.functional_petr.tt.ttnn_petr import ttnn_PETR
+from models.experimental.functional_petr.tt.common import get_parameters
 from tests.ttnn.utils_for_testing import check_with_pcc, assert_with_pcc
 
 
 def prepare_inputs():
-    inputs, modified_batch_img_metas = generate_petr_inputs()
+    inputs = torch.load(
+        "models/experimental/functional_petr/resources/golden_input_inputs_sample1.pt", weights_only=False
+    )
+    modified_batch_img_metas = torch.load(
+        "models/experimental/functional_petr/resources/modified_input_batch_img_metas_sample1.pt", weights_only=False
+    )
     return inputs, modified_batch_img_metas
 
 
@@ -82,5 +88,7 @@ def test_petr(device, reset_seeds):
         query_embedding_input=query_embedding_input,
         device=device,
     )
+    tracy.signpost("start")
     ttnn_output = ttnn_model.predict(ttnn_inputs, ttnn_batch_img_metas, skip_post_processing=True)
     verify_output(torch_output, ttnn_output)
+    tracy.signpost("end")

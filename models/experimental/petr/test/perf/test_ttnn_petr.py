@@ -5,15 +5,20 @@ import torch
 import pytest
 import ttnn
 import tracy
-from loguru import logger
-from models.experimental.petr.reference.petr import PETR
-from models.experimental.petr.tt.ttnn_petr import ttnn_PETR
+from models.experimental.functional_petr.reference.petr import PETR
+from models.experimental.functional_petr.tt.ttnn_petr import ttnn_PETR
 import os
-from models.experimental.petr.tt.common import get_parameters, generate_petr_inputs
+from models.experimental.functional_petr.tt.common import get_parameters
 
 
 def prepare_inputs():
-    inputs, modified_batch_img_metas = generate_petr_inputs()
+    inputs = torch.load(
+        "models/experimental/functional_petr/resources/golden_input_inputs_sample1.pt", weights_only=False
+    )
+    modified_batch_img_metas = torch.load(
+        "models/experimental/functional_petr/resources/modified_input_batch_img_metas_sample1.pt", weights_only=False
+    )
+
     inputs["imgs"] = inputs["imgs"][:, 0:1, :, :, :]
     for meta in modified_batch_img_metas:
         meta["cam2img"] = [meta["cam2img"][0]]
@@ -36,9 +41,9 @@ def prepare_torch_model():
     if not os.path.exists(weights_path):
         import urllib.request
 
-        logger.info(f"Downloading PETR weights from {weights_url} ...")
+        print(f"Downloading PETR weights from {weights_url} ...")
         urllib.request.urlretrieve(weights_url, weights_path)
-        logger.info(f"Weights downloaded to {weights_path}")
+        print(f"Weights downloaded to {weights_path}")
 
     weights_state_dict = torch.load(weights_path, weights_only=False)["state_dict"]
     torch_model.load_state_dict(weights_state_dict)
@@ -71,4 +76,4 @@ def test_petr(device, reset_seeds):
 
     tracy.signpost("start")
     ttnn_output = ttnn_model.predict(ttnn_inputs, ttnn_batch_img_metas, skip_post_processing=True)
-    tracy.signpost("stop")
+    tracy.signpost("end")

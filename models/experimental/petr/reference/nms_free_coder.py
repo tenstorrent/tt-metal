@@ -12,7 +12,7 @@
 # ------------------------------------------------------------------------
 
 import torch
-from models.experimental.petr.reference.utils import denormalize_bbox, BaseBBoxCoder
+from models.experimental.functional_petr.reference.utils import denormalize_bbox, BaseBBoxCoder
 
 
 class NMSFreeCoder(BaseBBoxCoder):
