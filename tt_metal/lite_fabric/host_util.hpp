@@ -8,6 +8,7 @@
 
 #include "tt_cluster.hpp"
 #include "core_coord.hpp"
+#include <umd/device/types/cluster_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/control_plane.hpp>
 
@@ -69,5 +70,7 @@ void ResumeLiteFabric(
     tt::Cluster& cluster, const tt::tt_metal::Hal& hal, const SystemDescriptor& desc, HOST_INTERFACE& host_interface);
 
 void TerminateLiteFabric(tt::Cluster& cluster, const SystemDescriptor& desc);
+
+tt::umd::tt_version GetLiteFabricVersion(tt::Cluster& cluster, const SystemDescriptor& desc);
 
 }  // namespace lite_fabric

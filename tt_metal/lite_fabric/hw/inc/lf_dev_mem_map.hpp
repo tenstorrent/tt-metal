@@ -10,6 +10,10 @@
 
 #define LITE_FABRIC_BARRIER 12
 
+#define LITE_FABRIC_VERSION_MAJOR 0x1
+#define LITE_FABRIC_VERSION_MINOR 0x0
+#define LITE_FABRIC_VERSION_PATCH 0x0
+
 // NOTE: Base firmware data is starting at 0x70000.
 // We need to ensure that the Lite Fabric memory does not overlap with it or Metal
 #define MEM_LITE_FABRIC_MEMORY_BASE 0x6A000
@@ -20,6 +24,10 @@
 /* Text (firmware code) section */
 #define LITE_FABRIC_TEXT_START MEM_LITE_FABRIC_MEMORY_BASE
 #define LITE_FABRIC_TEXT_SIZE 0x2000
+
+/* Version at fixed address at end of text region (host must read from this fixed address) */
+#define LITE_FABRIC_VERSION_SIZE 32
+#define LITE_FABRIC_VERSION_ADDR (LITE_FABRIC_TEXT_START + LITE_FABRIC_TEXT_SIZE - LITE_FABRIC_VERSION_SIZE)
 
 /* Data section (in L1) */
 #define LITE_FABRIC_DATA_START (LITE_FABRIC_TEXT_START + LITE_FABRIC_TEXT_SIZE)
