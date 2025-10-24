@@ -76,9 +76,9 @@ def test_demo_multichip(
                 2048: {"prefill_t/s": 20400, "decode_t/s/u": 6.60},
             },
             "6U": {
-                128: {"prefill_t/s": 32900, "decode_t/s/u": 11.60},
-                1024: {"prefill_t/s": 32000, "decode_t/s/u": 11.50},
-                2048: {"prefill_t/s": 31100, "decode_t/s/u": 10.97},
+                128: {"prefill_t/s": 66485, "decode_t/s/u": 11.60},
+                1024: {"prefill_t/s": 104109, "decode_t/s/u": 11.50},
+                2048: {"prefill_t/s": 84600, "decode_t/s/u": 10.97},
             },
         }
         expected_perf_metrics = expected_perf_dict[galaxy_type][max_seq_len]
