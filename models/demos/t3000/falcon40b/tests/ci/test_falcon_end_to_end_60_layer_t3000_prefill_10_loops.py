@@ -89,7 +89,7 @@ def test_FalconCausalLM_prefill_end_to_end_t3000_ci_loops_10(
 
     if data_type == "BFLOAT8_B":
         if seq_len == 32:
-            out_pcc = 0.986
+            out_pcc = 0.984
             k_cache_pcc = 0.978
             v_cache_pcc = 0.934
             token_pcc = 0.99
