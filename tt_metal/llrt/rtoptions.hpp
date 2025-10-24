@@ -34,6 +34,7 @@ enum class EnvVarID {
     // ========================================
     // PATH CONFIGURATION
     // ========================================
+
     TT_METAL_CACHE,                           // Cache directory for compiled kernels
     TT_METAL_KERNEL_PATH,                     // Path to kernel source files
     TT_METAL_SIMULATOR,                       // Path to simulator executable
@@ -72,6 +73,7 @@ enum class EnvVarID {
     TT_METAL_DISABLE_RELAXED_MEM_ORDERING,  // Disable relaxed memory ordering
     TT_METAL_ENABLE_GATHERING,              // Enable instruction gathering
     TT_METAL_FABRIC_TELEMETRY,              // Enable fabric telemetry
+    TT_FABRIC_PROFILE_RX_CH_FWD,            // Enable fabric RX channel forwarding profiling
     TT_METAL_FORCE_REINIT,                  // Force context reinitialization
     TT_METAL_FABRIC_BLACKHOLE_TWO_ERISC,    // Enable 2-ERISC mode with fabric
     TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,  // Log kernel compilation commands
@@ -95,6 +97,7 @@ enum class EnvVarID {
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH,  // NoC events report path
     TT_METAL_MEM_PROFILER,                         // Enable memory/buffer profiling
     TT_METAL_TRACE_PROFILER,                       // Enable trace profiling
+    TT_METAL_PROFILER_TRACE_TRACKING,              // Enable trace tracking
     TT_METAL_PROFILER_MID_RUN_DUMP,                // Force mid-run profiler dumps
     TT_METAL_TRACY_MID_RUN_PUSH,                   // Force Tracy mid-run pushes
     TT_METAL_GTEST_NUM_HW_CQS,                     // Number of HW command queues in tests
@@ -314,7 +317,7 @@ class RunTimeOptions {
     // (#25048) TODO: Once all of init is moved to MetalContext, investigate removing this option.
     bool force_context_reinit = false;
     // Comma-separated list of device IDs to make visible to the runtime
-    std::string visible_devices = "";
+    std::string visible_devices;
 
     // Sets the architecture name (only necessary during simulation)
     std::string arch_name = "";

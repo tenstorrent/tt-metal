@@ -4,6 +4,7 @@
 
 #include "rtoptions.hpp"
 
+#include <algorithm>
 #include <ctype.h>
 #include <stdio.h>
 #include <cstdlib>
@@ -124,53 +125,6 @@ RunTimeOptions::RunTimeOptions() :
 
     InitializeFromEnvVars();
 
-    const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
-#if defined(TRACY_ENABLE)
-    if (profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1') {
-        profiler_enabled = true;
-        const char* profile_dispatch_str = std::getenv("TT_METAL_DEVICE_PROFILER_DISPATCH");
-        if (profile_dispatch_str != nullptr && profile_dispatch_str[0] == '1') {
-            profile_dispatch_cores = true;
-        }
-        const char* profiler_sync_enabled_str = std::getenv("TT_METAL_PROFILER_SYNC");
-        if (profiler_sync_enabled_str != nullptr && profiler_sync_enabled_str[0] == '1') {
-            profiler_sync_enabled = true;
-        }
-        const char* profiler_trace_profiler_str = std::getenv("TT_METAL_TRACE_PROFILER");
-        if (profiler_trace_profiler_str != nullptr && profiler_trace_profiler_str[0] == '1') {
-            profiler_trace_profiler = true;
-        }
-        const char* profiler_trace_tracking_str = std::getenv("TT_METAL_PROFILER_TRACE_TRACKING");
-        if (profiler_trace_tracking_str != nullptr && profiler_trace_tracking_str[0] == '1') {
-            profiler_trace_tracking = true;
-        }
-        const char* profiler_mid_run_dump_str = std::getenv("TT_METAL_PROFILER_MID_RUN_DUMP");
-        if (profiler_mid_run_dump_str != nullptr && profiler_mid_run_dump_str[0] == '1') {
-            profiler_mid_run_dump = true;
-        }
-    }
-
-    const char* profiler_noc_events_str = std::getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS");
-    if (profiler_noc_events_str != nullptr && profiler_noc_events_str[0] == '1') {
-        profiler_enabled = true;
-        profiler_noc_events_enabled = true;
-    }
-
-    const char* profiler_noc_events_report_path_str = std::getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH");
-    if (profiler_noc_events_report_path_str != nullptr) {
-        profiler_noc_events_report_path = profiler_noc_events_report_path_str;
-    }
-
-    const char* profile_buffer_usage_str = std::getenv("TT_METAL_MEM_PROFILER");
-    if (profile_buffer_usage_str != nullptr && profile_buffer_usage_str[0] == '1') {
-        profiler_buffer_usage_enabled = true;
-    }
-#else
-    TT_FATAL(
-        !(profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1'),
-        "TT_METAL_DEVICE_PROFILER env var is set to 1. This requires a Tracy-enabled build of tt-metal.");
-#endif
-
     TT_FATAL(
         !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()),
         "Cannot enable both debug printing and profiling");
@@ -215,11 +169,6 @@ RunTimeOptions::RunTimeOptions() :
     const char* arc_debug_enabled_str = std::getenv("TT_METAL_ARC_DEBUG_BUFFER_SIZE");
     if (arc_debug_enabled_str != nullptr) {
         sscanf(arc_debug_enabled_str, "%u", &arc_debug_buffer_size);
-    }
-
-    // TT_FABRIC_PROFILE_RX_CH_FWD is not in the EnvVarID enum, handle separately
-    if (getenv("TT_FABRIC_PROFILE_RX_CH_FWD")) {
-        fabric_profiling_settings.enable_rx_ch_fwd = true;
     }
 
     const char* timeout_duration_for_operations_value = std::getenv("TT_METAL_OPERATION_TIMEOUT_SECONDS");
@@ -334,7 +283,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE
-        // Override core grid configuration (deprecated).
+        // Override core grid configuration (this is meant to be deprecated).
         // Default: Hardware-detected core grid
         // Usage: export TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=custom_grid
         case EnvVarID::TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE:
@@ -441,19 +390,26 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_FABRIC_TELEMETRY=1
         case EnvVarID::TT_METAL_FABRIC_TELEMETRY: this->enable_fabric_telemetry = true; break;
 
+        // TT_FABRIC_PROFILE_RX_CH_FWD
+        // Enables fabric RX channel forwarding profiling.
+        // Default: false
+        // Usage: export TT_FABRIC_PROFILE_RX_CH_FWD=1
+        case EnvVarID::TT_FABRIC_PROFILE_RX_CH_FWD: this->fabric_profiling_settings.enable_rx_ch_fwd = true; break;
+
         // RELIABILITY_MODE
         // Sets the fabric reliability mode (STRICT, RELAXED, or DYNAMIC).
         // Default: nullopt (uses system default)
         // Usage: export RELIABILITY_MODE=STRICT (or strict/0), RELAXED (or relaxed/1), DYNAMIC (or dynamic/2)
         case EnvVarID::RELIABILITY_MODE:
-            if (value != nullptr) {
+            if (value) {
                 std::string mode_str(value);
-                // Accept both uppercase and lowercase for backwards compatibility
-                if (mode_str == "STRICT" || mode_str == "strict" || mode_str == "0") {
+                // Convert to lowercase for case-insensitive comparison
+                std::transform(mode_str.begin(), mode_str.end(), mode_str.begin(), ::tolower);
+                if (mode_str == "strict" || mode_str == "0") {
                     this->reliability_mode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
-                } else if (mode_str == "RELAXED" || mode_str == "relaxed" || mode_str == "1") {
+                } else if (mode_str == "relaxed" || mode_str == "1") {
                     this->reliability_mode = tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE;
-                } else if (mode_str == "DYNAMIC" || mode_str == "dynamic" || mode_str == "2") {
+                } else if (mode_str == "dynamic" || mode_str == "2") {
                     this->reliability_mode = tt::tt_fabric::FabricReliabilityMode::DYNAMIC_RECONFIGURATION_SETUP_MODE;
                 }
             }
@@ -464,7 +420,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (single ERISC mode)
         // Usage: export TT_METAL_MULTI_AERISC=1
         case EnvVarID::TT_METAL_MULTI_AERISC:
-            if (value != nullptr) {
+            if (value) {
                 log_info(tt::LogMetal, "Enabling experimental multi-erisc mode");
                 this->enable_2_erisc_mode = true;
             }
@@ -475,7 +431,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false
         // Usage: export TT_METAL_USE_MGD_1_0=1
         case EnvVarID::TT_METAL_USE_MGD_1_0:
-            if (value != nullptr) {
+            if (value) {
                 this->use_mesh_graph_descriptor_1_0 = true;
             }
             break;
@@ -485,7 +441,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (uses MGD 1.0)
         // Usage: export TT_METAL_USE_MGD_2_0=1
         case EnvVarID::TT_METAL_USE_MGD_2_0:
-            if (value != nullptr) {
+            if (value) {
                 this->use_mesh_graph_descriptor_2_0 = true;
                 if (std::strncmp(value, "0", 1) == 0) {
                     this->use_mesh_graph_descriptor_2_0 = false;
@@ -554,6 +510,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->erisc_iram_enabled_env_var = !disabled;
             break;
         }
+
         // ========================================
         // PROFILING & PERFORMANCE
         // ========================================
@@ -562,7 +519,15 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Enables device profiling (requires TRACY_ENABLE compilation flag).
         // Default: false (profiling disabled)
         // Usage: export TT_METAL_DEVICE_PROFILER=1
-        case EnvVarID::TT_METAL_DEVICE_PROFILER: this->profiler_enabled = true; break;
+        case EnvVarID::TT_METAL_DEVICE_PROFILER:
+#if defined(TRACY_ENABLE)
+            if (value && value[0] == '1') {
+                this->profiler_enabled = true;
+            }
+#else
+            TT_FATAL(false, "TT_METAL_DEVICE_PROFILER requires a Tracy-enabled build of tt-metal.");
+#endif
+            break;
 
         // TT_METAL_DEVICE_PROFILER_DISPATCH
         // Enables profiling of dispatch cores. Requires TT_METAL_DEVICE_PROFILER=1 to be effective.
@@ -583,15 +548,25 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Enables synchronous profiling mode for more accurate timing.
         // Default: false (asynchronous profiling)
         // Usage: export TT_METAL_PROFILER_SYNC=1
-        case EnvVarID::TT_METAL_PROFILER_SYNC: this->profiler_sync_enabled = true; break;
+        case EnvVarID::TT_METAL_PROFILER_SYNC: {
+            const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
+            if (profiler_enabled_str && profiler_enabled_str[0] == '1') {
+                if (value && value[0] == '1') {
+                    this->profiler_sync_enabled = true;
+                }
+            }
+            break;
+        }
 
         // TT_METAL_DEVICE_PROFILER_NOC_EVENTS
         // Enables NoC (Network-on-Chip) events profiling.
         // Default: false (NoC events not profiled)
         // Usage: export TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1
         case EnvVarID::TT_METAL_DEVICE_PROFILER_NOC_EVENTS:
-            this->profiler_enabled = true;
-            this->profiler_noc_events_enabled = true;
+            if (value && value[0] == '1') {
+                this->profiler_enabled = true;
+                this->profiler_noc_events_enabled = true;
+            }
             break;
 
         // TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH
@@ -606,19 +581,53 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Enables memory/buffer usage profiling for tracking memory allocation patterns.
         // Default: false (memory profiling disabled)
         // Usage: export TT_METAL_MEM_PROFILER=1
-        case EnvVarID::TT_METAL_MEM_PROFILER: this->profiler_buffer_usage_enabled = true; break;
+        case EnvVarID::TT_METAL_MEM_PROFILER:
+            if (value && value[0] == '1') {
+                this->profiler_buffer_usage_enabled = true;
+            }
+            break;
 
         // TT_METAL_TRACE_PROFILER
         // Enables trace profiler for detailed execution tracing.
         // Default: false (trace profiling disabled)
         // Usage: export TT_METAL_TRACE_PROFILER=1
-        case EnvVarID::TT_METAL_TRACE_PROFILER: this->profiler_trace_profiler = true; break;
+        case EnvVarID::TT_METAL_TRACE_PROFILER: {
+            const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
+            if (profiler_enabled_str && profiler_enabled_str[0] == '1') {
+                if (value && value[0] == '1') {
+                    this->profiler_trace_profiler = true;
+                }
+            }
+            break;
+        }
+
+        // TT_METAL_PROFILER_TRACE_TRACKING
+        // Enables trace tracking for detailed execution tracing.
+        // Default: false (trace tracking disabled)
+        // Usage: export TT_METAL_PROFILER_TRACE_TRACKING=1
+        case EnvVarID::TT_METAL_PROFILER_TRACE_TRACKING: {
+            const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
+            if (profiler_enabled_str && profiler_enabled_str[0] == '1') {
+                if (value && value[0] == '1') {
+                    this->profiler_trace_tracking = true;
+                }
+            }
+            break;
+        }
 
         // TT_METAL_PROFILER_MID_RUN_DUMP
         // Forces Tracy profiler dumps during execution for real-time profiling.
         // Default: false (no mid-run dumps)
         // Usage: export TT_METAL_PROFILER_MID_RUN_DUMP=1
-        case EnvVarID::TT_METAL_PROFILER_MID_RUN_DUMP: this->profiler_mid_run_dump = true; break;
+        case EnvVarID::TT_METAL_PROFILER_MID_RUN_DUMP: {
+            const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
+            if (profiler_enabled_str && profiler_enabled_str[0] == '1') {
+                if (value && value[0] == '1') {
+                    this->profiler_mid_run_dump = true;
+                }
+            }
+            break;
+        }
 
         // TT_METAL_TRACY_MID_RUN_PUSH
         // Forces Tracy profiler pushes during execution for real-time profiling.
@@ -653,7 +662,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->timeout_duration_for_operations = std::chrono::duration<float>(timeout_duration);
             break;
         }
-            // ========================================
+
+        // ========================================
         // WATCHER SYSTEM
         // ========================================
 
@@ -662,7 +672,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: disabled
         // Usage: export TT_METAL_WATCHER=1
         case EnvVarID::TT_METAL_WATCHER:
-            if (value != nullptr) {
+            if (value) {
                 int sleep_val = 0;
                 sscanf(value, "%d", &sleep_val);
                 if (strstr(value, "ms") == nullptr) {
@@ -788,6 +798,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION:
             this->watcher_settings.noc_sanitize_linked_transaction = true;
             break;
+
         // ========================================
         // INSPECTOR
         // ========================================
@@ -797,7 +808,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: true (enabled)
         // Usage: export TT_METAL_INSPECTOR=1
         case EnvVarID::TT_METAL_INSPECTOR:
-            if (value != nullptr) {
+            if (value) {
                 this->inspector_settings.enabled = true;
                 if (strcmp(value, "0") == 0) {
                     this->inspector_settings.enabled = false;
@@ -810,7 +821,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: Defaults to {TT_METAL_RUNTIME_ROOT}/generated/inspector
         // Usage: export TT_METAL_INSPECTOR_LOG_PATH=/path/to/inspector/logs
         case EnvVarID::TT_METAL_INSPECTOR_LOG_PATH:
-            if (value != nullptr) {
+            if (value) {
                 this->inspector_settings.log_path = std::filesystem::path(value);
             } else {
                 this->inspector_settings.log_path = std::filesystem::path(this->get_root_dir()) / "generated/inspector";
@@ -822,7 +833,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (not important)
         // Usage: export TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=1
         case EnvVarID::TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT:
-            if (value != nullptr) {
+            if (value) {
                 this->inspector_settings.initialization_is_important = true;
                 if (strcmp(value, "0") == 0) {
                     this->inspector_settings.initialization_is_important = false;
@@ -835,7 +846,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: true (warnings enabled)
         // Usage: export TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS=0
         case EnvVarID::TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS:
-            if (value != nullptr) {
+            if (value) {
                 this->inspector_settings.warn_on_write_exceptions = true;
                 if (strcmp(value, "0") == 0) {
                     this->inspector_settings.warn_on_write_exceptions = false;
@@ -849,7 +860,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_RISCV_DEBUG_INFO=1  # or =0 to disable
         case EnvVarID::TT_METAL_RISCV_DEBUG_INFO: {
             bool enable_riscv_debug_info = this->get_inspector_enabled();  // Default from inspector
-            if (value != nullptr) {
+            if (value) {
                 enable_riscv_debug_info = true;  // Default to true if set
                 if (strcmp(value, "0") == 0) {
                     enable_riscv_debug_info = false;  // Only "0" = false
@@ -864,7 +875,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: localhost:50051
         // Usage: export TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS=127.0.0.1:8080
         case EnvVarID::TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS:
-            if (value != nullptr) {
+            if (value) {
                 // Parse address into host and port
                 std::string addr(value);
                 size_t colon_pos = addr.find(':');
@@ -886,7 +897,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: true (enabled)
         // Usage: export TT_METAL_INSPECTOR_RPC=1
         case EnvVarID::TT_METAL_INSPECTOR_RPC:
-            if (value != nullptr) {
+            if (value) {
                 this->inspector_settings.rpc_server_enabled = true;
                 if (std::strncmp(value, "0", 1) == 0) {
                     this->inspector_settings.rpc_server_enabled = false;
@@ -957,13 +968,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
     }
 }
+
 void RunTimeOptions::InitializeFromEnvVars() {
     // Use enchantum to automatically iterate over all EnvVarID enum values
     for (const auto [id, name] : enchantum::entries_generator<EnvVarID>) {
         const char* value = std::getenv(std::string(name).c_str());
 
         // Only process if the environment variable is set
-        if (value != nullptr) {
+        if (value) {
             HandleEnvVar(id, value);
         }
     }
