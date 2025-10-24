@@ -71,6 +71,7 @@ const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std:
                 {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.yaml"},
                 {tt::tt_metal::ClusterType::P300_X2, "p300_x2_mesh_graph_descriptor.yaml"},
                 {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_mesh_graph_descriptor.yaml"},
+                {tt::tt_metal::ClusterType::P300_X2, "p300_x2_mesh_graph_descriptor.yaml"},
             });
 
 const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
@@ -94,6 +95,7 @@ const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std:
                 {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.textproto"},
                 {tt::tt_metal::ClusterType::P300_X2, "p300_x2_mesh_graph_descriptor.textproto"},
                 {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::P300_X2, "p300_x2_mesh_graph_descriptor.textproto"},
             });
 
 bool has_flag(FabricType flags, FabricType test) { return (flags & test) == test; }
