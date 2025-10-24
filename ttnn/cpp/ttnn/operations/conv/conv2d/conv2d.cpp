@@ -240,11 +240,7 @@ Result conv2d_DRAM(
     std::optional<ttnn::Tensor> bias_tensor_on_device;
     if (mm_conv) {
         const uint32_t input_channels_alignment = get_input_channels_alignment(
-            tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-            input_tensor.layout(),
-            BufferType::DRAM,
-            mm_conv,
-            std::nullopt);
+            tt::tt_metal::TensorMemoryLayout::INTERLEAVED, input_tensor.layout(), true, mm_conv, std::nullopt);
         // Configure weight and bias preparation parameters
         Conv2dWeightsBiasPrepConfig params(
             input_channels_alignment,
@@ -359,10 +355,29 @@ Result conv2d_DRAM(
             dram_slice_config.num_slices,
             output_sliced_dim);
     }
-
+    if (dram_slice_config.num_slices == 1) {
+        return conv2d_L1(
+            input_tensor_on_device,
+            weight_tensor,
+            device,
+            in_channels,
+            out_channels,
+            batch_size,
+            input_height,
+            input_width,
+            kernel_size,
+            stride,
+            padding_n4,
+            dilation,
+            groups,
+            output_dtype,
+            bias_tensor,
+            conv_config,
+            compute_config_,
+            DRAM_MEMORY_CONFIG);
+    }
     const auto unflattened_input_shape = ttnn::Shape{batch_size, input_height, input_width, in_channels};
     input_tensor_on_device = ttnn::reshape(input_tensor_on_device, unflattened_input_shape, unflattened_input_shape);
-
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
     TT_FATAL(
         input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -561,9 +576,6 @@ Result conv2d_DRAM(
         std::tie(sliced_output_tensor, std::ignore, std::ignore, weight_tensor_on_device, bias_tensor_on_device) =
             conv2d_L1(
                 sliced_input_tensor,
-                // TODO: Add check to ensure that the shard_layout and memory_config are the same as the last slice to
-                // re-use the weights tensor.
-                // TODO: Add caching mechanism for multiple weights tensors, depending on the memory configs.
                 first_run ? weight_tensor : weight_tensor_on_device,
                 device,
                 in_channels,
@@ -733,7 +745,7 @@ Result conv2d_L1(
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         input_tensor_post_tm.memory_config().memory_layout(),
         input_tensor_post_tm.layout(),
-        input_tensor_post_tm.memory_config().buffer_type(),
+        false,
         mm_conv,
         input_tensor_post_tm.memory_config());
     const uint32_t in_channels_padded = tt::round_up(
@@ -845,9 +857,6 @@ Result conv2d_L1(
 
         if (bypass_halo) {
             if (input_tensor_post_tm.layout() == Layout::TILE) {
-                // Reshape is used as a workaround to an issue in to_layout mentioned here :
-                // https://github.com/tenstorrent/tt-metal/issues/16330
-                input_tensor_post_tm = ttnn::reshape(input_tensor_post_tm, input_tensor_post_tm.padded_shape());
                 input_tensor_post_tm = ttnn::to_layout(input_tensor_post_tm, Layout::ROW_MAJOR);
             }
         } else {
