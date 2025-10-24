@@ -571,6 +571,9 @@ def main():
         if cache_dir is not None:
             # clip_model_location = os.path.join(cache_dir, "")
             clip_model_location = f"{cache_dir}/model"
+
+            logger.info(f"Current directory files: {os.listdir(cache_dir)}")
+            assert os.path.exists(cache_dir), f"Cache directory {cache_dir} does not exist"
             assert os.path.exists(clip_model_location), f"Model file {clip_model_location} does not exist"
 
         # Load model weights (download if cache_dir was not set)
