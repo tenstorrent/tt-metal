@@ -12,7 +12,7 @@ from models.common.utility_functions import (
     is_blackhole,
 )
 from models.common.utility_functions import run_for_blackhole
-from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout, assert_equal
 import ttnn
 from ttnn.operations.conv2d import get_torch_act_func_from_string
@@ -839,7 +839,7 @@ def test_conv_dram(
         input_layout=input_layout,
         output_layout=input_layout,
         packer_l1_acc=packer_l1_acc,
-        run_twice=False,
+        run_twice=True,
         fast_compare=True,
         throttle_level=throttle,
         use_dram_slicing=True,
@@ -3230,6 +3230,9 @@ def test_conv2d_model_fruit(
 
         # # input_channels 4
         (1, 4, 320, 128, 128,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 0,  1, True, ttnn.MathFidelity.HiFi2, False, False, 1, 1, True, False),
+
+        # # input_channels 9
+        (1, 9, 320, 128, 128,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 0,  1, True, ttnn.MathFidelity.HiFi2, False, False, 1, 1, True, False),
 
         # kernel 1x1
         (1, 1280, 640, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 1, 1, False, False),

@@ -42,7 +42,7 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Tra
         for _ in tqdm(range(num_layers), desc=f"Allocating TT kv caches for each layer (submesh {mesh_idx+1})"):
             kv_tt_i = [
                 ttnn.as_tensor(
-                    lp,
+                    cache_kv,
                     device=submesh,
                     # TODO: this could be ShardTensorToMesh, removing the need for vLLM to know about TP for num_kv_heads.
                     # Could affect other calculations which use TTCacheEngine.num_kv_heads, though.
@@ -50,9 +50,10 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Tra
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=ttnn.bfloat8_b,
-                    cache_file_name=tt_cache_path / f"empty_cache_paged_attention{kv_cache_shape}",
+                    # Separate cache files for K and V to avoid collision.
+                    cache_file_name=tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}",
                 )
-                for lp in (cache_kv, cache_kv)
+                for kv in ["k", "v"]
             ]
 
             kv_tt.append(kv_tt_i)
@@ -261,7 +262,10 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal, SupportsV0On
         self.max_gen_len = self.model_args[0].max_seq_len - 1  # TODO: double check what this should be
 
     @classmethod
-    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1):
+    def initialize_vllm_model(
+        cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations: str = None
+    ):
+        assert optimizations is None, "Custom optimizations are not supported for this model"
         from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
 
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
@@ -340,7 +344,14 @@ class LlamaForCausalLM(Generator):
 
     @classmethod
     def initialize_vllm_model(
-        cls, hf_config, mesh_device, max_batch_size, max_seq_len, n_layers=None, tt_data_parallel=1
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations: str = "performance",
     ):
         hf_model_name = hf_config._name_or_path
         if (
@@ -363,7 +374,9 @@ class LlamaForCausalLM(Generator):
             max_seq_len=max_seq_len,
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
-            optimizations=DecodersPrecision.performance,
+            optimizations=DecodersPrecision.from_string(optimizations)
+            if optimizations is not None
+            else DecodersPrecision.performance,
         )
         return cls(tt_model, model_args, mesh_device)
 
@@ -387,7 +400,14 @@ class QwenForCausalLM(Generator):
 
     @classmethod
     def initialize_vllm_model(
-        cls, hf_config, mesh_device, max_batch_size, max_seq_len, n_layers=None, tt_data_parallel=1
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations: str = "performance",
     ):
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
@@ -397,7 +417,9 @@ class QwenForCausalLM(Generator):
             max_seq_len=max_seq_len,
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
-            optimizations=DecodersPrecision.performance,
+            optimizations=DecodersPrecision.from_string(optimizations)
+            if optimizations is not None
+            else DecodersPrecision.performance,
         )
         return cls(tt_model, model_args, mesh_device)
 
@@ -421,7 +443,14 @@ class MistralForCausalLM(Generator):
 
     @classmethod
     def initialize_vllm_model(
-        cls, hf_config, mesh_device, max_batch_size, max_seq_len, n_layers=None, tt_data_parallel=1
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations: str = "performance",
     ):
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
@@ -431,7 +460,9 @@ class MistralForCausalLM(Generator):
             max_seq_len=max_seq_len,
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
-            optimizations=DecodersPrecision.performance,
+            optimizations=DecodersPrecision.from_string(optimizations)
+            if optimizations is not None
+            else DecodersPrecision.performance,
         )
         return cls(tt_model, model_args, mesh_device)
 
@@ -523,8 +554,16 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
 
     @classmethod
     def initialize_vllm_model(
-        cls, hf_config, mesh_device, max_batch_size, max_seq_len=131072, n_layers=None, tt_data_parallel=1
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len=131072,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations: str = None,
     ):
+        assert optimizations is None, "Custom optimizations are not supported for this model"
         from models.demos.gemma3.demo.vision_demo import create_multimodal_model
 
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
@@ -564,3 +603,67 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
 
     def decode_forward(self, *args, **kwargs):
         return super().decode_forward_text(*args, **kwargs)
+
+
+class GptOssForCausalLM(Generator):
+    """GPT-OSS model for vLLM integration"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @classmethod
+    def initialize_vllm_model(
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations: str = "performance",
+    ):
+        from models.demos.gpt_oss.tt.common import create_tt_model
+
+        optimizations = (
+            DecodersPrecision.from_string(optimizations) if optimizations is not None else DecodersPrecision.performance
+        )
+
+        submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+
+        model_args = []
+        model = []
+        state_dict = None
+
+        for submesh in submesh_devices:
+            # Use the existing create_tt_model function
+            model_args_i, model_i, _, state_dict = create_tt_model(
+                mesh_device=submesh,
+                instruct=True,
+                max_batch_size=max_batch_size // tt_data_parallel,
+                optimizations=lambda model_args: optimizations(model_args.n_layers, model_args.model_name),
+                max_seq_len=max_seq_len,
+                paged_attention_config=None,
+                dtype=ttnn.bfloat8_b,
+                state_dict=state_dict,
+                num_layers=n_layers,
+                mesh_config=None,
+                create_kv_cache=False,
+            )
+
+            model_args.append(model_args_i)
+            model.append(model_i)
+
+        return cls(model, model_args, mesh_device)
+
+    @property
+    def cache_path(self):
+        return self.model_args[0].weight_cache_path(ttnn.bfloat8_b)
+
+    def prefill_forward(self, *args, **kwargs):
+        return super().prefill_forward_text(*args, **kwargs)
+
+    def decode_forward(self, *args, **kwargs):
+        return super().decode_forward_text(*args, **kwargs)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)

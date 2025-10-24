@@ -33,7 +33,7 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t n
 uint32_t get_input_channels_alignment(
     TensorMemoryLayout input_tensor_memory_layout,
     Layout input_tensor_layout,
-    BufferType input_tensor_buffer_type,
+    bool sliced_op,
     bool is_mm_conv,
     const std::optional<MemoryConfig>& input_memory_config);
 
@@ -191,6 +191,15 @@ shard_or_reshard_tensor_if_required(
     uint32_t out_channels,
     bool is_mm_conv,
     bool auto_shard);
+
+bool auto_enable_kernel_folding(
+    std::optional<bool> enable_folding_,
+    bool is_dram,
+    uint32_t input_height,
+    uint32_t input_width,
+    std::array<uint32_t, 2>& kernel_size,
+    std::array<uint32_t, 2>& stride,
+    std::array<uint32_t, 4>& padding_n4);
 
 Tensor fold_input_tensor_if_required(
     const ttnn::Tensor& input_tensor,

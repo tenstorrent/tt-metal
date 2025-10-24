@@ -251,9 +251,6 @@ run_pipeline_tests() {
         demos_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode" "$model"
     elif [[ $pipeline_type == *"model_perf_tg_device" ]]; then
         model_perf_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode" "$model"
-    elif [[ $pipeline_type == "ccl_perf_tg_device" ]]; then
-        ./tests/ttnn/unit_tests/operations/ccl/perf/run_all_gather_profile.sh -t tg
-        ./tests/ttnn/unit_tests/operations/ccl/perf/run_reduce_scatter_profile.sh -t tg
     else
         echo "Unknown pipeline: $pipeline_type"
         exit 1

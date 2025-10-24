@@ -126,7 +126,7 @@ def get_metal_main_version_scheme(metal_build_config, version):
 
     if getattr(version, "exact", False):
         # Exact tag (release/rc/dev*) already normalized by packaging
-        return version.version.public
+        return version.format_with("{tag}")
 
     # Untagged commit → let setuptools_scm choose X.Y.Z.devN
     return _guess_next_dev(version)
@@ -332,6 +332,7 @@ class CMakeBuild(build_ext):
             "ttnn/operations/data_movement/**/*",
             "ttnn/operations/moreh/**/*",
             "ttnn/kernel/*",
+            "ttnn/operations/normalization/kernel_util/compute/*",
         ]
         tt_metal_patterns = [
             "api/tt-metalium/buffer_constants.hpp",
