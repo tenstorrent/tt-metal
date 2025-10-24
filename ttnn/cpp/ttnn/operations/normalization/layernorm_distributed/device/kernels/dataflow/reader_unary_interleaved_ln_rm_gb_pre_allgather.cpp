@@ -38,16 +38,15 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // read input tiles
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_reserve_back(cb_inp, blk);
             uint32_t inp_wr_ptr = get_write_ptr(cb_inp);
-
             for (uint32_t r = 0; r < blk; r++) {
+                cb_reserve_back(cb_inp, 1);
                 noc_async_read_tile(inp_tile_idx, src_a, inp_wr_ptr);
                 inp_wr_ptr += src0_tile_bytes;
                 inp_tile_idx++;
+                noc_async_read_barrier();
+                cb_push_back(cb_inp, 1);
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_inp, blk);
 
         }  // wt loop
 
