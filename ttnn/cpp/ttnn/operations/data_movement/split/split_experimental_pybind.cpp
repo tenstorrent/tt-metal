@@ -9,8 +9,6 @@
 
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/data_movement/split/device/split_op.hpp"
-#include "ttnn/experimental/jit/context.hpp"
-#include "ttnn/operations/operation_binder.hpp"
 #include "ttnn/types.hpp"
 
 #include "split.hpp"
@@ -39,9 +37,9 @@ void bind_experimental_split(pybind11::module& module) {
             SplitDeviceOperation split_op{num_splits, dim, output_mem_config};
             // Create inputs vector for the node
             std::vector<ttnn::Tensor> inputs = {input_tensor};
-
-            return ttnn::operations::bind_operation(
-                inputs, "ttnn::split", std::make_shared<SplitDeviceOperation>(split_op));
+            // return ttnn::python_binding::bind_operation(inputs, "ttnn:jit_split",
+            // std::make_shared<SplitDeviceOperation>(split_op));
+            return inputs;
         },
         py::arg("input_tensor"),
         py::arg("num_splits"),

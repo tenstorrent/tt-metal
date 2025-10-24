@@ -9,8 +9,6 @@
 
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/device/reshape_op.hpp"
-#include "ttnn/experimental/jit/context.hpp"
-#include "ttnn/operations/operation_binder.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::data_movement {
@@ -38,12 +36,12 @@ void py_bind_experimental_reshape(pybind11::module& module) {
 
             // Create ReshapeDeviceOperation struct
             ReshapeDeviceOperation reshape_op{logical_shape, padded_shape, output_mem_config};
-
+            return input_tensor;
             // Create inputs vector for the node
-            std::vector<ttnn::Tensor> inputs = {input_tensor};
-            auto result = ttnn::operations::bind_operation(
-                inputs, "ttnn::reshape_on_device", std::make_shared<ReshapeDeviceOperation>(reshape_op));
-            return result[0];
+            // std::vector<ttnn::Tensor> inputs = {input_tensor};
+            // auto result = ttnn::operations::bind_operation(
+            //    inputs, "ttnn::reshape_on_device", std::make_shared<ReshapeDeviceOperation>(reshape_op));
+            // return result[0];
         },
         py::arg("input_tensor"),
         py::arg("W"),
