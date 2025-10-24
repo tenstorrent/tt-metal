@@ -22,7 +22,7 @@ env:
   BLACKHOLE_LOUDBOX_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-loudbox
   BLACKHOLE_P300_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-p300
   BLACKHOLE_QB_GE_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-qb-ge
-  BH_GLX_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx
+  BLACKHOLE_GLX_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx
 
 jobs:
   build-artifact:
@@ -69,7 +69,7 @@ jobs:
           echo "bh-loudbox-image-tag=${{ env.BLACKHOLE_LOUDBOX_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
           echo "bh-p300-image-tag=${{ env.BLACKHOLE_P300_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
           echo "bh-qb-ge-image-tag=${{ env.BLACKHOLE_QB_GE_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
-          echo "bh-glx-image-tag=${{ env.BH_GLX_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
+          echo "bh-glx-image-tag=${{ env.BLACKHOLE_GLX_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
   build-images:
     needs:
       - build-artifact
