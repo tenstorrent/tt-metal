@@ -205,13 +205,6 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Extract files
-        run: tar --zstd -xvf ttm_any.tar.zst
-      - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
-        timeout-minutes: 10
-        with:
-          name: ${{ inputs.wheel-artifact-name }}
       - name: Check for invalid performance + civ2-compatible combination
         if: ${{ matrix.test-group.performance && matrix.test-group.civ2-compatible }}
         run: |
