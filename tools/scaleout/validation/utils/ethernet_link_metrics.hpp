@@ -21,6 +21,11 @@ struct LinkStatus {
     uint32_t num_mismatched_words = 0;
 };
 
+struct ResetPair {
+    uint32_t src_rank = 0;
+    uint32_t dst_rank = 0;
+};
+
 struct EthChannelIdentifier {
     std::string host;
     tt::tt_metal::AsicID asic_id;
