@@ -53,23 +53,42 @@ def decode_pose_keypoints_cpu(output, anchors, strides):
     kpt_v = keypoints[:, :, 2, :]  # [batch, 17, num_anchors]
 
     # Prepare anchors and strides for broadcasting
-    # Handle different anchor formats
+    # Ensure we have correct 2D format without extra dimensions
+
+    # Anchors should be [2, num_anchors]
+    if anchors.dim() > 2:
+        # Squeeze extra dimensions
+        while anchors.dim() > 2:
+            anchors = anchors.squeeze(0)
+
     if anchors.shape[0] == 2:
-        # Format: [2, num_anchors]
+        # Format: [2, num_anchors] - correct!
+        anchor_x = anchors[0, :].unsqueeze(0).unsqueeze(0)  # [1, 1, num_anchors]
+        anchor_y = anchors[1, :].unsqueeze(0).unsqueeze(0)  # [1, 1, num_anchors]
+    elif anchors.shape[1] == 2:
+        # Format: [num_anchors, 2] - transpose needed
+        anchors = anchors.transpose(0, 1)
         anchor_x = anchors[0, :].unsqueeze(0).unsqueeze(0)  # [1, 1, num_anchors]
         anchor_y = anchors[1, :].unsqueeze(0).unsqueeze(0)  # [1, 1, num_anchors]
     else:
-        # Format: [num_anchors, 2]
-        anchor_x = anchors[:, 0].unsqueeze(0).unsqueeze(0)  # [1, 1, num_anchors]
-        anchor_y = anchors[:, 1].unsqueeze(0).unsqueeze(0)  # [1, 1, num_anchors]
+        raise ValueError(f"Unexpected anchor shape: {anchors.shape}")
 
-    # Handle different stride formats
-    if strides.shape[0] == 1:
-        # Format: [1, num_anchors]
-        stride_val = strides[0, :].unsqueeze(0).unsqueeze(0)  # [1, 1, num_anchors]
+    # Strides should be [1, num_anchors]
+    if strides.dim() > 2:
+        while strides.dim() > 2:
+            strides = strides.squeeze(0)
+
+    if strides.dim() == 1:
+        # Format: [num_anchors] - add batch dim
+        stride_val = strides.unsqueeze(0).unsqueeze(0)  # [1, 1, num_anchors]
+    elif strides.shape[0] == 1:
+        # Format: [1, num_anchors] - correct!
+        stride_val = strides.unsqueeze(0)  # [1, 1, num_anchors]
+    elif strides.shape[1] == 1:
+        # Format: [num_anchors, 1] - transpose and reshape
+        stride_val = strides.transpose(0, 1).unsqueeze(0)  # [1, 1, num_anchors]
     else:
-        # Format: [num_anchors, 1]
-        stride_val = strides[:, 0].unsqueeze(0).unsqueeze(0)  # [1, 1, num_anchors]
+        raise ValueError(f"Unexpected stride shape: {strides.shape}")
 
     # Apply keypoint decoding formula (NO sigmoid on x,y!)
     # Formula: (x * 2 - 0.5 + anchor) * stride
@@ -78,6 +97,15 @@ def decode_pose_keypoints_cpu(output, anchors, strides):
 
     # Apply sigmoid only to visibility
     kpt_v_decoded = torch.sigmoid(kpt_v)
+
+    # Squeeze any extra dimensions from broadcasting
+    kpt_x_decoded = kpt_x_decoded.squeeze(1) if kpt_x_decoded.dim() > 3 else kpt_x_decoded
+    kpt_y_decoded = kpt_y_decoded.squeeze(1) if kpt_y_decoded.dim() > 3 else kpt_y_decoded
+
+    # Ensure all have shape [batch, 17, num_anchors]
+    assert (
+        kpt_x_decoded.shape == kpt_y_decoded.shape == kpt_v_decoded.shape
+    ), f"Shape mismatch: x={kpt_x_decoded.shape}, y={kpt_y_decoded.shape}, v={kpt_v_decoded.shape}"
 
     # Stack back together [batch, 17, 3, num_anchors]
     keypoints_decoded = torch.stack([kpt_x_decoded, kpt_y_decoded, kpt_v_decoded], dim=2)
@@ -114,6 +142,31 @@ def decode_pose_output_from_ttnn(ttnn_output, anchors, strides, device=None):
     output_torch = ttnn.to_torch(ttnn_output)
     anchors_torch = ttnn.to_torch(anchors) if not isinstance(anchors, torch.Tensor) else anchors
     strides_torch = ttnn.to_torch(strides) if not isinstance(strides, torch.Tensor) else strides
+
+    # Remove extra dimensions from TTNN tensors if present
+    # TTNN tensors might have shape [1, 2, 8400] or [1, 1, 8400]
+    while anchors_torch.dim() > 2:
+        anchors_torch = anchors_torch.squeeze(0)
+    while strides_torch.dim() > 2:
+        strides_torch = strides_torch.squeeze(0)
+
+    # Ensure anchors is [2, N] format
+    if anchors_torch.dim() == 2:
+        if anchors_torch.shape[0] != 2 and anchors_torch.shape[1] == 2:
+            anchors_torch = anchors_torch.transpose(0, 1)
+        elif anchors_torch.shape[0] == 2 and anchors_torch.shape[1] != 2:
+            pass  # Already [2, N]
+        else:
+            # Shape is [N, 2], transpose to [2, N]
+            if anchors_torch.shape[1] == 2:
+                anchors_torch = anchors_torch.transpose(0, 1)
+
+    # Ensure strides is [1, N] format
+    if strides_torch.dim() == 1:
+        strides_torch = strides_torch.unsqueeze(0)
+    elif strides_torch.dim() == 2:
+        if strides_torch.shape[0] != 1:
+            strides_torch = strides_torch.transpose(0, 1)
 
     # Decode keypoints on CPU
     decoded_output = decode_pose_keypoints_cpu(output_torch, anchors_torch, strides_torch)

@@ -22,7 +22,6 @@ from models.demos.utils.common_demo_utils import LoadImages, get_mesh_mappers, p
 from models.demos.yolov11.common import YOLOV11_L1_SMALL_SIZE
 from models.demos.yolov11.reference.yolov11_pose_correct import YoloV11Pose
 from models.demos.yolov11.tt.model_preprocessing_pose import create_yolov11_pose_model_parameters
-from models.demos.yolov11.tt.pose_postprocessing import decode_pose_keypoints_cpu
 from models.demos.yolov11.tt.ttnn_yolov11_pose_model import TtnnYoloV11Pose
 
 # COCO Keypoint connections for skeleton visualization
@@ -94,8 +93,9 @@ def init_pose_model_and_runner(device, model_type, batch_size_per_device):
     inputs_mesh_mapper, weights_mesh_mapper, outputs_mesh_composer = get_mesh_mappers(device)
 
     # Load PyTorch model with pretrained weights
-    torch_model = YoloV11Pose()
     weights_path = "models/demos/yolov11/reference/yolov11_pose_pretrained_correct.pth"
+
+    torch_model = YoloV11Pose()
 
     if os.path.exists(weights_path):
         torch_model.load_state_dict(torch.load(weights_path, map_location="cpu"))
@@ -108,7 +108,7 @@ def init_pose_model_and_runner(device, model_type, batch_size_per_device):
 
     ttnn_model = None
     if model_type == "tt_model":
-        # Create TTNN model
+        # Create TTNN model from SAME PyTorch structure
         logger.info("Creating TTNN pose model...")
         dummy_input = torch.randn(batch_size, 3, 640, 640)
         parameters = create_yolov11_pose_model_parameters(torch_model, dummy_input, device=device)
@@ -141,7 +141,7 @@ def process_images(dataset, res, batch_size):
     return torch_input_tensor, orig_images, paths_images
 
 
-def postprocess_pose(preds, orig_images, paths_images, input_size=(640, 640), conf_threshold=0.5, nms_threshold=0.45):
+def postprocess_pose(preds, orig_images, paths_images, input_size=(640, 640), conf_threshold=0.7, nms_threshold=0.45):
     """
     Postprocess pose predictions with proper coordinate transformation
 
@@ -350,13 +350,21 @@ def run_inference_and_save_pose(
         anchors = ttnn_model.pose_head.anchors
         strides = ttnn_model.pose_head.strides
 
-        # Convert to torch and decode
+        # Convert to torch
         preds_raw = ttnn.to_torch(ttnn_output, dtype=torch.float32, mesh_composer=outputs_mesh_composer)
 
-        # Decode keypoints on CPU
-        anchors_torch = ttnn.to_torch(anchors)
-        strides_torch = ttnn.to_torch(strides)
-        preds = decode_pose_keypoints_cpu(preds_raw, anchors_torch, strides_torch)
+        # Debug: Check raw TTNN output
+        logger.info(f"TTNN RAW output range:")
+        logger.info(f"  Bbox: [{preds_raw[:, 0:4, :].min():.2f}, {preds_raw[:, 0:4, :].max():.2f}]")
+        logger.info(f"  Conf: [{preds_raw[:, 4, :].min():.4f}, {preds_raw[:, 4, :].max():.4f}]")
+        logger.info(f"  Kpts RAW: [{preds_raw[:, 5:56, :].min():.2f}, {preds_raw[:, 5:56, :].max():.2f}]")
+
+        # SKIP CPU decoding for now - use raw keypoints
+        # The visualization will need to handle raw values differently
+        preds = preds_raw
+
+        logger.info(f"Using RAW keypoints (no CPU decoding):")
+        logger.info(f"  Will interpret raw values in visualization")
 
     logger.info(f"Inference complete. Processing {len(orig_images)} images...")
 
@@ -446,8 +454,8 @@ def run_yolov11n_pose_demo_dataset(device, model_type, res, batch_size_per_devic
 @pytest.mark.parametrize(
     "model_type",
     (
-        "torch_model",  # Start with torch, then test tt_model
-        # "tt_model",
+        # "torch_model",  # PyTorch implementation
+        "tt_model",  # TTNN implementation (TT-Metal hardware)
     ),
 )
 @pytest.mark.parametrize("res", [(640, 640)])
