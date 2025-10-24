@@ -366,8 +366,33 @@ public:
     }
 
     void validate_results() {
-        for (const auto& [_, test_device] : test_devices_) {
-            test_device.validate_results();
+        constexpr uint32_t MAX_CONCURRENT_DEVICES = 16;
+        
+        // Convert map to vector for easier indexing
+        std::vector<std::pair<MeshCoordinate, const TestDevice*>> devices;
+        devices.reserve(test_devices_.size());
+        for (const auto& [coord, device] : test_devices_) {
+            devices.push_back({coord, &device});
+        }
+        
+        // Process in groups
+        for (size_t i = 0; i < devices.size(); i += MAX_CONCURRENT_DEVICES) {
+            size_t group_end = std::min(i + MAX_CONCURRENT_DEVICES, devices.size());
+            
+            // Initiate reads for this group
+            std::vector<TestDevice::ValidationReadOps> read_ops;
+            read_ops.reserve(group_end - i);
+            for (size_t j = i; j < group_end; ++j) {
+                read_ops.push_back(devices[j].second->initiate_results_readback());
+            }
+            
+            // Barrier
+            fixture_->barrier_reads();
+            
+            // Validate results
+            for (size_t j = i; j < group_end; ++j) {
+                devices[j].second->validate_results_after_readback(read_ops[j - i]);
+            }
         }
     }
 
@@ -841,7 +866,19 @@ private:
 
         log_debug(tt::LogTest, "Reading performance results from sender cores");
 
-        // Process each test device
+        // Fixed group size for concurrent reads
+        constexpr uint32_t MAX_CONCURRENT_DEVICES = 16;
+
+        // Prepare read operation tracking
+        struct DeviceReadInfo {
+            MeshCoordinate device_coord;
+            FabricNodeId device_node_id;
+            std::vector<CoreCoord> sender_cores;
+            TestFixture::ReadBufferOperation read_op;
+        };
+
+        // Collect all devices that need reading
+        std::vector<DeviceReadInfo> all_devices;
         for (const auto& [device_coord, test_device] : test_devices_) {
             const auto& device_node_id = test_device.get_node_id();
 
@@ -852,25 +889,46 @@ private:
                 sender_cores.push_back(core);
             }
 
-            if (sender_cores.empty()) {
-                continue;
+            if (!sender_cores.empty()) {
+                all_devices.push_back({device_coord, device_node_id, sender_cores, {}});
+            }
+        }
+
+        // Process devices in groups
+        for (size_t group_start = 0; group_start < all_devices.size(); group_start += MAX_CONCURRENT_DEVICES) {
+            size_t group_end = std::min(group_start + MAX_CONCURRENT_DEVICES, all_devices.size());
+
+            log_debug(tt::LogTest, "Processing device group {}-{} of {}", 
+                     group_start, group_end - 1, all_devices.size() - 1);
+
+            // First loop: Initiate non-blocking reads for group
+            for (size_t i = group_start; i < group_end; ++i) {
+                auto& device = all_devices[i];
+                device.read_op = fixture_->initiate_read_buffer_from_cores(
+                    device.device_coord,
+                    device.sender_cores,
+                    sender_memory_map_.get_result_buffer_address(),
+                    sender_memory_map_.get_result_buffer_size()
+                );
             }
 
-            // Read buffer data from sender cores
-            auto data = fixture_->read_buffer_from_cores(
-                device_coord,
-                sender_cores,
-                sender_memory_map_.get_result_buffer_address(),
-                sender_memory_map_.get_result_buffer_size());
+            // Barrier to wait for all reads in this group to complete
+            fixture_->barrier_reads();
 
-            // Extract cycles from each core and store in map
-            for (const auto& [core, core_data] : data) {
-                // Cycles are stored as 64-bit value split across two 32-bit words
-                uint32_t cycles_low = core_data[TT_FABRIC_CYCLES_INDEX];
-                uint32_t cycles_high = core_data[TT_FABRIC_CYCLES_INDEX + 1];
-                uint64_t total_cycles = static_cast<uint64_t>(cycles_high) << 32 | cycles_low;
+            // Second loop: Process completed results
+            for (size_t i = group_start; i < group_end; ++i) {
+                auto& device = all_devices[i];
+                auto data = fixture_->complete_read_buffer_from_cores(device.read_op);
 
-                device_core_cycles_[device_node_id][core] = total_cycles;
+                // Extract cycles from each core and store in map
+                for (const auto& [core, core_data] : data) {
+                    // Cycles are stored as 64-bit value split across two 32-bit words
+                    uint32_t cycles_low = core_data[TT_FABRIC_CYCLES_INDEX];
+                    uint32_t cycles_high = core_data[TT_FABRIC_CYCLES_INDEX + 1];
+                    uint64_t total_cycles = static_cast<uint64_t>(cycles_high) << 32 | cycles_low;
+
+                    device_core_cycles_[device.device_node_id][core] = total_cycles;
+                }
             }
         }
     }
