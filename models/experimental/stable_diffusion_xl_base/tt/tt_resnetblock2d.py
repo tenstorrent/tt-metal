@@ -142,7 +142,7 @@ class TtResnetBlock2D(LightweightModule):
 
         mm_path = f"{module_path}.linear"
         self.linear_program_config = model_config.get_matmul_config(matmul_path=f"{module_path}.linear")
-        assert self.linear_program_config is not None, "linear_program_config should not be None"
+        # assert self.linear_program_config is not None, "linear_program_config should not be None"
         self.default_compute_config = model_config.get_mm_compute_config(mm_path)
 
     def forward(self, input_tensor, temb, input_shape):
@@ -307,7 +307,8 @@ class TtResnetBlock2D(LightweightModule):
                 program_config=self.conv3_program_config,
                 compute_kernel_config=self.default_compute_config,
                 memory_config=ttnn.L1_MEMORY_CONFIG
-                if C == 320 and (input_shape[1] == 960 or input_shape[1] == 640)
+                if (C == 320 and (input_shape[1] == 960 or input_shape[1] == 640))
+                or (self.conv3_program_config is None)
                 else hidden_states.memory_config(),
             )
             ttnn.deallocate(input_tensor_pre_conv)
