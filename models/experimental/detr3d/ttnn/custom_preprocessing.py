@@ -5,11 +5,17 @@
 import ttnn
 import torch
 
-from ttnn.model_preprocessing import convert_torch_model_to_ttnn_model, fold_batch_norm2d_into_conv2d
+from ttnn.dot_access import make_dot_access_dict
+from ttnn.model_preprocessing import (
+    ModuleArgs,
+    convert_torch_model_to_ttnn_model,
+    fold_batch_norm2d_into_conv2d,
+)
 
 from models.experimental.detr3d.reference.model_3detr import GenericMLP
 from models.experimental.detr3d.reference.model_3detr import MaskedTransformerEncoder, TransformerEncoderLayer
 from models.experimental.detr3d.reference.pointnet2_modules import SharedMLP
+from models.experimental.detr3d.reference.position_embedding import PositionEmbeddingCoordsSine
 
 
 def preprocess_conv_parameter(parameter, *, dtype):
@@ -48,6 +54,7 @@ def custom_preprocessor(
 ):
     parameters = {}
     weight_dtype = ttnn.bfloat16
+
     if isinstance(model, GenericMLP):
         mlp_layers = []
         for child_name, child in model.layers.named_children():
@@ -70,6 +77,8 @@ def custom_preprocessor(
                         bias = bias.unsqueeze(0).unsqueeze(0).unsqueeze(0)
                     parameters["layers"][layer_num]["bias"] = ttnn.from_torch(bias, mesh_mapper=mesh_mapper)
                 parameters["layers"][layer_num]["weight"] = ttnn.from_torch(weight, mesh_mapper=mesh_mapper)
+        parameters["conv_args"] = infer_module_args(model)
+
     elif isinstance(model, SharedMLP):
         weight, bias = fold_batch_norm2d_into_conv2d(model.layer0.conv, model.layer0.bn.bn)
         parameters["layer0"] = {}
@@ -91,6 +100,7 @@ def custom_preprocessor(
         parameters["layer2"]["conv"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
         bias = bias.reshape((1, 1, 1, -1))
         parameters["layer2"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["conv_args"] = infer_module_args(model)
 
     elif isinstance(model, torch.nn.MultiheadAttention):
         # Handle QKV weights for self-attention
@@ -121,6 +131,10 @@ def custom_preprocessor(
                     dtype=weight_dtype,
                     layout=ttnn.TILE_LAYOUT,
                 )
+
+    # Preprocess the position embedding params
+    elif isinstance(model, PositionEmbeddingCoordsSine):
+        parameters["gauss_B"] = ttnn.from_torch(model.gauss_B, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     # Preprocess feedforward parameters
     elif isinstance(model, torch.nn.Linear):
@@ -161,3 +175,37 @@ def create_custom_mesh_preprocessor(mesh_mapper=None):
         )
 
     return custom_mesh_preprocessor
+
+
+class ConvArgs(ModuleArgs):
+    __getattr__ = dict.__getitem__
+    __delattr__ = dict.__delitem__
+
+    def __repr__(self):
+        return super().__repr__()
+
+
+def infer_module_args(model):
+    if isinstance(
+        model,
+        (
+            torch.nn.Conv1d,
+            torch.nn.Conv2d,
+        ),
+    ):
+        return ConvArgs(
+            in_channels=model.in_channels,
+            out_channels=model.out_channels,
+            kernel_size=model.kernel_size,
+            stride=model.stride,
+            padding=model.padding,
+            dilation=model.dilation,
+            groups=model.groups,
+            padding_mode=model.padding_mode,
+        )
+    else:
+        module_args = {}
+        for child_name, child in model.named_children():
+            module_args[child_name] = infer_module_args(child)
+
+    return make_dot_access_dict(module_args, ignore_types=(ModuleArgs,))

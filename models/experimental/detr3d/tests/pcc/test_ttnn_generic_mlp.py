@@ -10,10 +10,10 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.common.utility_functions import comp_pcc, comp_allclose
 
+from models.experimental.detr3d.common import load_torch_model_state
 from models.experimental.detr3d.ttnn.generic_mlp import TtnnGenericMLP
 from models.experimental.detr3d.reference.model_3detr import GenericMLP
 from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
-from models.experimental.detr3d.common import load_torch_model_state
 
 
 @pytest.mark.parametrize(
@@ -151,7 +151,12 @@ def test_ttnn_generic_mlp(
         custom_preprocessor=create_custom_mesh_preprocessor(None),
         device=device,
     )
-    ttnn_model = TtnnGenericMLP(torch_model, parameters, device)
+    ttnn_model = TtnnGenericMLP(
+        parameters,
+        device,
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+        output_use_activation=output_use_activation,
+    )
     ttnn_x = ttnn.from_torch(
         x.permute(0, 2, 1),
         dtype=ttnn.bfloat16,

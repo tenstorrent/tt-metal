@@ -7,6 +7,7 @@ import torch
 import pytest
 
 from loguru import logger
+from ttnn.dot_access import make_dot_access_dict
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
@@ -16,14 +17,13 @@ from models.experimental.detr3d.reference.model_3detr import (
     build_encoder,
 )
 from models.experimental.detr3d.ttnn.masked_transformer_encoder import TtnnTransformerEncoderLayer
-from models.experimental.detr3d.common import load_torch_model_state, DotAccessibleDict
+from models.experimental.detr3d.common import load_torch_model_state
 from models.experimental.detr3d.reference.model_config import Detr3dArgs
 from models.experimental.detr3d.ttnn.model_3detr import build_ttnn_encoder
 
 
 class Tt3DetrArgs(Detr3dArgs):
     def __init__(self):
-        self.modules = None
         self.parameters = None
         self.device = None
 
@@ -170,9 +170,8 @@ def test_masked_transformer_encoder_inference(
     )
 
     tt_args = Tt3DetrArgs()
-    tt_args.modules = DotAccessibleDict({"encoder": reference_model})
     tt_args.device = device
-    tt_args.parameters = DotAccessibleDict({"encoder": parameters})
+    tt_args.parameters = make_dot_access_dict({"encoder": parameters})
     tt_encoder = build_ttnn_encoder(tt_args)
 
     tt_src = ttnn.from_torch(

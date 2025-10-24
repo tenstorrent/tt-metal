@@ -7,12 +7,12 @@ import torch
 import pytest
 
 from loguru import logger
+from ttnn.model_preprocessing import preprocess_model_parameters
 from models.common.utility_functions import comp_pcc, comp_allclose
 from models.experimental.detr3d.ttnn.shared_mlp import TtnnSharedMLP
-from ttnn.model_preprocessing import preprocess_model_parameters
+from models.experimental.detr3d.common import load_torch_model_state
 from models.experimental.detr3d.reference.pointnet2_modules import SharedMLP
 from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
-from models.experimental.detr3d.common import load_torch_model_state
 
 
 @pytest.mark.parametrize(
@@ -47,7 +47,7 @@ def test_ttnn_shared_mlp(device, mlp, bn, features_shape, weight_key_prefix, res
         custom_preprocessor=create_custom_mesh_preprocessor(None),
         device=device,
     )
-    ttnn_model = TtnnSharedMLP(torch_model, parameters, device)
+    ttnn_model = TtnnSharedMLP(parameters, device)
     ttnn_out = ttnn_model(ttnn_features)
 
     ttnn_out = ttnn.to_torch(ttnn_out)

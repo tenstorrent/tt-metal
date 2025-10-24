@@ -80,7 +80,6 @@ def test_pointnet_samodule_votes(
         npoint=npoint,
         mlp=mlp[:],
         normalize_xyz=normalize_xyz,
-        module=torch_model,
         parameters=parameters,
         device=device,
     )

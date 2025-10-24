@@ -22,6 +22,7 @@ from models.experimental.detr3d.ttnn.transformer_decoder import (
 from models.experimental.detr3d.ttnn.generic_mlp import TtnnGenericMLP
 from models.experimental.detr3d.ttnn.pointnet_samodule_votes import TtnnPointnetSAModuleVotes
 from models.experimental.detr3d.reference.torch_pointnet2_ops import FurthestPointSampling
+from models.experimental.detr3d.ttnn.position_embedding import TtnnPositionEmbeddingCoordsSine
 
 
 class TtnnModel3DETR(LightweightModule):
@@ -54,7 +55,6 @@ class TtnnModel3DETR(LightweightModule):
         decoder_dim=256,
         position_embedding="fourier",
         num_queries=256,
-        torch_module=None,
         parameters=None,
         device=None,
     ):
@@ -62,23 +62,21 @@ class TtnnModel3DETR(LightweightModule):
         super().__init__()
         self.pre_encoder = pre_encoder
         self.encoder = encoder
-        self.torch_module = torch_module
         self.parameters = parameters
         self.device = device
         self.encoder_to_decoder_projection = TtnnGenericMLP(
-            torch_module.encoder_to_decoder_projection,
             parameters.encoder_to_decoder_projection,
             device,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+            output_use_activation=True,
         )
-        # TODO: Check the feasibility
-        # self.pos_embedding = TtnnPositionEmbeddingCoordsSine(
-        #     d_pos=decoder_dim, pos_type=position_embedding, normalize=True, device=self.device, gauss_B=torch_module.pos_embedding.gauss_B
-        # )
-        self.torch_pos_embedding = torch_module.pos_embedding
+        self.pos_embedding = TtnnPositionEmbeddingCoordsSine(
+            pos_type=position_embedding, normalize=True, parameters=parameters.pos_embedding, device=self.device
+        )
         self.query_projection = TtnnGenericMLP(
-            torch_module.query_projection,
             parameters.query_projection,
             device,
+            output_use_activation=True,
         )
         self.decoder = decoder
         self.build_mlp_heads()
@@ -91,46 +89,35 @@ class TtnnModel3DETR(LightweightModule):
     def build_mlp_heads(self):
         self.mlp_heads = {
             "sem_cls_head": TtnnGenericMLP(
-                self.torch_module.mlp_heads.sem_cls_head,
                 self.parameters.mlp_heads.sem_cls_head,
                 self.device,
             ),
             "center_head": TtnnGenericMLP(
-                self.torch_module.mlp_heads.center_head,
                 self.parameters.mlp_heads.center_head,
                 self.device,
             ),
             "size_head": TtnnGenericMLP(
-                self.torch_module.mlp_heads.size_head,
                 self.parameters.mlp_heads.size_head,
                 self.device,
             ),
             "angle_cls_head": TtnnGenericMLP(
-                self.torch_module.mlp_heads.angle_cls_head,
                 self.parameters.mlp_heads.angle_cls_head,
                 self.device,
             ),
             "angle_residual_head": TtnnGenericMLP(
-                self.torch_module.mlp_heads.angle_residual_head,
                 self.parameters.mlp_heads.angle_residual_head,
                 self.device,
             ),
         }
 
-    def get_query_embeddings(self, torch_encoder_xyz, torch_point_cloud_dims):
+    def get_query_embeddings(self, torch_encoder_xyz, point_cloud_dims):
         torch_query_inds = self.torch_furthest_point_sample(torch_encoder_xyz, self.num_queries)
         torch_query_inds = torch_query_inds.long()
         torch_query_xyz = [torch.gather(torch_encoder_xyz[..., x], 1, torch_query_inds) for x in range(3)]
         torch_query_xyz = torch.stack(torch_query_xyz)
         torch_query_xyz = torch_query_xyz.permute(1, 2, 0)
 
-        # TODO: Either remove this completely or only use ttnn embedding
-        # query_xyz = ttnn.from_torch(torch_query_xyz, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
-        # pos_embed = self.pos_embedding(query_xyz, input_range=point_cloud_dims)
-        torch_pos_embed = self.torch_pos_embedding(torch_query_xyz, input_range=torch_point_cloud_dims)
-        pos_embed = ttnn.from_torch(
-            torch_pos_embed.permute(0, 2, 1), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
-        )
+        pos_embed = self.pos_embedding(torch_query_xyz, input_range=point_cloud_dims)
         query_embed = self.query_projection(pos_embed)
         return torch_query_xyz, query_embed
 
@@ -271,15 +258,9 @@ class TtnnModel3DETR(LightweightModule):
             for t in torch_point_cloud_dims
         ]
 
-        torch_query_xyz, query_embed = self.get_query_embeddings(torch_enc_xyz, torch_point_cloud_dims)
+        torch_query_xyz, query_embed = self.get_query_embeddings(torch_enc_xyz, point_cloud_dims)
         # query_embed: batch x npoint x channel
-        # TODO: Either remove this completely or only use ttnn embedding
-        # enc_xyz_ttnn = ttnn.from_torch(torch_enc_xyz, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
-        # enc_pos = self.pos_embedding(enc_xyz_ttnn, input_range=ttnn_point_cloud_dims)
-        torch_enc_pos = self.torch_pos_embedding(torch_enc_xyz, input_range=torch_point_cloud_dims)
-        enc_pos = ttnn.from_torch(
-            torch_enc_pos.permute(0, 2, 1), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
-        )
+        enc_pos = self.pos_embedding(torch_enc_xyz, input_range=point_cloud_dims)
 
         # decoder expects: batch x npoints x channel
         tgt = ttnn.zeros_like(query_embed, dtype=ttnn.bfloat16)
@@ -297,7 +278,6 @@ def build_ttnn_preencoder(args):
         npoint=args.preenc_npoints,
         mlp=mlp_dims,
         normalize_xyz=True,
-        module=args.modules.pre_encoder,
         parameters=args.parameters.pre_encoder.mlp_module,
         device=args.device,
     )
@@ -313,7 +293,6 @@ def build_ttnn_encoder(args):
             npoint=args.preenc_npoints // 2,
             mlp=[args.enc_dim, 256, 256, args.enc_dim],
             normalize_xyz=True,
-            module=args.modules.encoder.interim_downsampling,
             parameters=args.parameters.encoder.interim_downsampling.mlp_module,
             device=args.device,
         )
@@ -366,7 +345,6 @@ def build_ttnn_3detr(args, dataset_config):
         encoder_dim=args.enc_dim,
         decoder_dim=args.dec_dim,
         num_queries=args.nqueries,
-        torch_module=args.modules,
         parameters=args.parameters,
         device=args.device,
     )

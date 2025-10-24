@@ -20,7 +20,6 @@ from models.experimental.detr3d.reference.utils.ap_calculator import APCalculato
 
 class Tt3DetrArgs(Detr3dArgs):
     def __init__(self):
-        self.modules = None
         self.parameters = None
         self.device = None
 
@@ -106,7 +105,6 @@ def run_detr3d_inference(
         # Build TTNN model
         logger.info("Building TTNN model...")
         ttnn_args = Tt3DetrArgs()
-        ttnn_args.modules = ref_module
         ttnn_args.parameters = ref_module_parameters
         ttnn_args.device = ttnn_device
 
