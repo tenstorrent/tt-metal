@@ -1114,7 +1114,8 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
             TensorLayout(
                 strategy->host_convert_data_type,
                 PageConfig(strategy->construct_with_layout, tensor_layout.get_tile()),
-                tensor_layout.get_memory_config()),
+                tensor_layout.get_memory_config(),
+                tensor_layout.get_alignment()),
             device,
             cq_id,
             pad_value,
