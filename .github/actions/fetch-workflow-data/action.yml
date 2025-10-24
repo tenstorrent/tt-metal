@@ -41,10 +41,14 @@ outputs:
     description: 'Absolute path to directory containing per-run annotations'
   annotations-index-path:
     description: 'Absolute path to JSON mapping of run_id -> annotations dir'
-  logs-root:
-    description: 'Absolute path to directory containing downloaded logs per run (subset: failing gtest jobs)'
-  logs-index-path:
-    description: 'Absolute path to JSON mapping of run_id -> logs dir'
+  gtest-logs-root:
+    description: 'Absolute path to directory containing downloaded gtest logs per run'
+  gtest-logs-index-path:
+    description: 'Absolute path to JSON mapping of run_id -> gtest logs dir'
+  other-logs-root:
+    description: 'Absolute path to directory containing downloaded other logs per run (failures without annotations)'
+  other-logs-index-path:
+    description: 'Absolute path to JSON mapping of run_id -> other logs dir'
 
 runs:
   using: 'node20'
