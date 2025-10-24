@@ -19,26 +19,10 @@
 
 namespace ttml::nanobind::util {
 
-// Custom dtype code for NumPy structured/void types (kind='V') like ml_dtypes.bfloat16
-// These types don't support DLPack and nanobind can't determine their dtype automatically.
-// Value 200 is chosen to be well above standard DLPack codes (Int=0, UInt=1, Float=2, Bfloat=4, Complex=5, Bool=6)
-// to minimize collision risk with future DLPack additions.
-constexpr uint8_t DLPACK_DTYPE_CODE_CUSTOM = 200;
-
-// NumPy dtype.kind single-character codes
+// NumPy dtype.kind single-character code
 // See: https://numpy.org/doc/stable/reference/generated/numpy.dtype.kind.html
 namespace NumpyDtypeKind {
-constexpr char BOOLEAN = 'b';                          // Boolean
-constexpr char SIGNED_INT = 'i';                       // Signed integer
-constexpr char UNSIGNED_INT = 'u';                     // Unsigned integer
-constexpr char FLOAT = 'f';                            // Floating-point
-constexpr char COMPLEX = 'c';                          // Complex floating-point
-[[maybe_unused]] constexpr char TIMEDELTA = 'm';       // Timedelta
-[[maybe_unused]] constexpr char DATETIME = 'M';        // Datetime
-[[maybe_unused]] constexpr char OBJECT = 'O';          // Python object
-[[maybe_unused]] constexpr char BYTE_STRING = 'S';     // Byte string
-[[maybe_unused]] constexpr char UNICODE_STRING = 'U';  // Unicode string
-constexpr char VOID = 'V';                             // Void/structured (custom dtypes like ml_dtypes.bfloat16)
+constexpr char VOID = 'V';  // Void/structured (custom dtypes like ml_dtypes.bfloat16)
 }  // namespace NumpyDtypeKind
 
 namespace UnsupportedMessages {
@@ -51,7 +35,6 @@ constexpr auto INVALID = "Unsupported type: INVALID";
 constexpr auto UNKNOWN = "Unsupported type: unknown";
 constexpr auto COMPLEX = "Unsupported type: Complex";
 constexpr auto BOOL = "Unsupported type: Bool";
-// constexpr auto BFLOAT = "Unsupported type: Bfloat";
 
 }  // namespace UnsupportedMessages
 
@@ -137,6 +120,56 @@ auto dispatch_conversion(
     }
 }
 
+// Helper: Create tensor from numpy data span (common logic for both overloads)
+template <typename NumpyType, typename MetalType>
+tt::tt_metal::Tensor create_tensor_from_span(
+    std::span<const NumpyType> numpy_data_span,
+    const tt::tt_metal::ShapeBase::Container& shape_container,
+    tt::tt_metal::DataType tensor_data_type,
+    tt::tt_metal::Layout target_layout,
+    const ttnn::distributed::TensorToMesh* mapper) {
+    const tt::tt_metal::Shape tensor_shape(shape_container);
+    static const tt::tt_metal::MemoryConfig tensor_memory_config{};
+    const tt::tt_metal::PageConfig tensor_page_config(tt::tt_metal::Layout::ROW_MAJOR);
+    tt::tt_metal::TensorLayout tensor_layout(tensor_data_type, tensor_page_config, tensor_memory_config);
+    tt::tt_metal::TensorSpec tensor_spec(tensor_shape, tensor_layout);
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    if constexpr (!std::is_same_v<MetalType, NumpyType>) {
+        std::vector<MetalType> converted_data;
+        converted_data.reserve(numpy_data_span.size());
+        converted_data.assign(numpy_data_span.begin(), numpy_data_span.end());
+
+        auto row_major_tensor = (mapper != nullptr)
+                                    ? ttnn::distributed::create_distributed_tensor(
+                                          ttsl::make_const_span(converted_data), tensor_shape, tensor_layout, *mapper)
+                                    : tt::tt_metal::Tensor::from_vector(converted_data, tensor_spec, device);
+
+        if (mapper != nullptr) {
+            row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
+        }
+
+        if (target_layout == tt::tt_metal::Layout::ROW_MAJOR) {
+            return row_major_tensor;
+        }
+        return ttnn::tilize_with_zero_padding(row_major_tensor);
+    } else {
+        auto row_major_tensor = (mapper != nullptr)
+                                    ? ttnn::distributed::create_distributed_tensor(
+                                          ttsl::make_const_span(numpy_data_span), tensor_shape, tensor_layout, *mapper)
+                                    : tt::tt_metal::Tensor::from_span(numpy_data_span, tensor_spec, device);
+
+        if (mapper != nullptr) {
+            row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
+        }
+
+        if (target_layout == tt::tt_metal::Layout::ROW_MAJOR) {
+            return row_major_tensor;
+        }
+        return ttnn::tilize_with_zero_padding(row_major_tensor);
+    }
+}
+
 [[noreturn]] void throw_exception(
     std::source_location source_location,
     nb::exception_type exception_type,
@@ -192,9 +225,15 @@ nb::object make_numpy_tensor(
                 // Allocate buffer directly (single allocation, no temporary)
                 auto* numpy_data = new bfloat16[num_elements];
 
-                // Use memcpy for potentially better performance than std::copy
-                // bfloat16 is trivially copyable (just 16-bit data)
-                std::memcpy(numpy_data, tensor_data.data(), num_elements * sizeof(bfloat16));
+                // Check if we can use fast memcpy (when types match) or need type conversion
+                using TensorDataType = typename std::decay_t<decltype(tensor_data)>::value_type;
+                if constexpr (std::is_same_v<TensorDataType, bfloat16>) {
+                    // Fast path: direct memcpy when no conversion needed
+                    std::memcpy(numpy_data, tensor_data.data(), num_elements * sizeof(bfloat16));
+                } else {
+                    // Slow path: type conversion needed (e.g., float -> bfloat16)
+                    std::copy(tensor_data.begin(), tensor_data.end(), numpy_data);
+                }
 
                 // Create capsule to manage memory
                 const nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<bfloat16*>(p); });
@@ -214,8 +253,15 @@ nb::object make_numpy_tensor(
         const size_t num_elements = tensor_data.size();
         auto* numpy_data = new NumpyType[num_elements];
 
-        // Use memcpy for potentially better performance (NumpyType is trivially copyable)
-        std::memcpy(numpy_data, tensor_data.data(), num_elements * sizeof(NumpyType));
+        // Check if we can use fast memcpy (when types match) or need type conversion
+        using TensorDataType = typename std::decay_t<decltype(tensor_data)>::value_type;
+        if constexpr (std::is_same_v<TensorDataType, NumpyType>) {
+            // Fast path: direct memcpy when no conversion needed (types match exactly)
+            std::memcpy(numpy_data, tensor_data.data(), num_elements * sizeof(NumpyType));
+        } else {
+            // Slow path: type conversion needed (e.g., float -> int32_t, bfloat16 -> float)
+            std::copy(tensor_data.begin(), tensor_data.end(), numpy_data);
+        }
 
         const nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<NumpyType*>(p); });
 
@@ -328,64 +374,30 @@ tt::tt_metal::Tensor make_metal_tensor(
             shape_container[dimension] = dimension_size;
         }
 
-        const auto make_device_tensor = [target_layout,
-                                         tensor_data_type,
-                                         &numpy_data,
-                                         &shape_container,
-                                         mapper]<typename MetalType>() -> tt::tt_metal::Tensor {
-            const tt::tt_metal::Shape tensor_shape(shape_container);
-            static const tt::tt_metal::MemoryConfig tensor_memory_config{};
-            const tt::tt_metal::PageConfig tensor_page_config(tt::tt_metal::Layout::ROW_MAJOR);
-            tt::tt_metal::TensorLayout tensor_layout(tensor_data_type, tensor_page_config, tensor_memory_config);
-            tt::tt_metal::TensorSpec tensor_spec(tensor_shape, tensor_layout);
-            auto* device = &ttml::autograd::ctx().get_device();
+        // Compute data size and get pointer
+        size_t data_size =
+            std::accumulate(shape_container.begin(), shape_container.end(), size_t(1), std::multiplies<size_t>());
 
-            size_t data_size =
-                std::accumulate(shape_container.begin(), shape_container.end(), size_t(1), std::multiplies<size_t>());
+        // Fast path: get data pointer directly from ndarray (no Python attribute lookup)
+        const void* data_ptr = numpy_data.data();
+        std::span<const NumpyType> numpy_data_span(static_cast<const NumpyType*>(data_ptr), data_size);
 
-            // Fast path: get data pointer directly from ndarray (no Python attribute lookup)
-            const void* data_ptr = numpy_data.data();
-            std::span<const NumpyType> numpy_data_span(static_cast<const NumpyType*>(data_ptr), data_size);
-
-            if constexpr (!std::is_same_v<MetalType, NumpyType>) {
-                std::vector<MetalType> converted_data;
-                converted_data.reserve(numpy_data_span.size());  // Pre-allocate to avoid reallocations
-                converted_data.assign(numpy_data_span.begin(), numpy_data_span.end());
-
-                auto row_major_tensor =
-                    (mapper != nullptr)
-                        ? ttnn::distributed::create_distributed_tensor(
-                              ttsl::make_const_span(converted_data), tensor_shape, tensor_layout, *mapper)
-                        : tt::tt_metal::Tensor::from_vector(converted_data, tensor_spec, device);
-
-                if (mapper != nullptr) {
-                    row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
-                }
-
-                if (target_layout == tt::tt_metal::Layout::ROW_MAJOR) {
-                    return row_major_tensor;
-                }
-                return ttnn::tilize_with_zero_padding(row_major_tensor);
-            } else {
-                auto row_major_tensor =
-                    (mapper != nullptr)
-                        ? ttnn::distributed::create_distributed_tensor(
-                              ttsl::make_const_span(numpy_data_span), tensor_shape, tensor_layout, *mapper)
-                        : tt::tt_metal::Tensor::from_span(numpy_data_span, tensor_spec, device);
-
-                if (mapper != nullptr) {
-                    row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
-                }
-
-                if (target_layout == tt::tt_metal::Layout::ROW_MAJOR) {
-                    return row_major_tensor;
-                }
-                return ttnn::tilize_with_zero_padding(row_major_tensor);
-            }
-        };
-
-        // Use helper to dispatch - eliminates duplication
-        return dispatch_single_type(tensor_data_type, make_device_tensor);
+        // Dispatch based on target data type
+        switch (tensor_data_type) {
+            case tt::tt_metal::DataType::INT32:
+                return create_tensor_from_span<NumpyType, int32_t>(
+                    numpy_data_span, shape_container, tensor_data_type, target_layout, mapper);
+            case tt::tt_metal::DataType::UINT32:
+                return create_tensor_from_span<NumpyType, uint32_t>(
+                    numpy_data_span, shape_container, tensor_data_type, target_layout, mapper);
+            case tt::tt_metal::DataType::FLOAT32:
+                return create_tensor_from_span<NumpyType, float>(
+                    numpy_data_span, shape_container, tensor_data_type, target_layout, mapper);
+            case tt::tt_metal::DataType::BFLOAT16:
+                return create_tensor_from_span<NumpyType, bfloat16>(
+                    numpy_data_span, shape_container, tensor_data_type, target_layout, mapper);
+            default: throw_unsupported_datatype(tensor_data_type);
+        }
     };
 
     // Map dtype codes to appropriate handlers
@@ -398,21 +410,26 @@ tt::tt_metal::Tensor make_metal_tensor(
             return impl.operator()<float>(new_type.value_or(tt::tt_metal::DataType::FLOAT32));
         case static_cast<uint8_t>(nb::dlpack::dtype_code::Bfloat):
             return impl.operator()<bfloat16>(new_type.value_or(tt::tt_metal::DataType::BFLOAT16));
+        case static_cast<uint8_t>(nb::dlpack::dtype_code::Complex):
+            NB_THROW(nb::exception_type::type_error, UnsupportedMessages::COMPLEX);
+        case static_cast<uint8_t>(nb::dlpack::dtype_code::Bool):
+            NB_THROW(nb::exception_type::type_error, UnsupportedMessages::BOOL);
         default:
             NB_THROW(
                 nb::exception_type::type_error,
-                "Unsupported dtype code: {}. Falling back to custom dtype handler.",
+                "Unsupported dtype code: {}. For custom dtypes like ml_dtypes.bfloat16, use the nb::object overload.",
                 static_cast<int>(numpy_data_type.code));
     }
 }
 
-// Fallback: custom dtypes (like ml_dtypes.bfloat16)
+// Custom dtype handler: only accepts custom dtypes (like ml_dtypes.bfloat16)
+// Standard dtypes should use the fast path nb::ndarray<nb::numpy> overload
 tt::tt_metal::Tensor make_metal_tensor(
     nb::object numpy_data_obj,
     tt::tt_metal::Layout target_layout,
     std::optional<tt::tt_metal::DataType> new_type,
     const ttnn::distributed::TensorToMesh* mapper) {
-    // Check if this is a custom dtype (like ml_dtypes.bfloat16)
+    // Validate this is a custom dtype (like ml_dtypes.bfloat16)
     nb::object dtype_obj = numpy_data_obj.attr("dtype");
     nb::object itemsize_obj = dtype_obj.attr("itemsize");
     int itemsize_bytes = nb::cast<int>(itemsize_obj);
@@ -422,26 +439,42 @@ tt::tt_metal::Tensor make_metal_tensor(
     std::string dtype_kind = nb::cast<std::string>(kind_obj);
     bool is_custom_dtype = (dtype_kind.size() == 1 && dtype_kind[0] == NumpyDtypeKind::VOID);
 
-    // Special handling for 2-byte custom types (bfloat16)
-    if (is_custom_dtype && itemsize_bytes == sizeof(bfloat16)) {
-        // Check dtype name
-        nb::object name_obj = dtype_obj.attr("name");
-        std::string dtype_name = nb::cast<std::string>(name_obj);
-
-        if (dtype_name == "bfloat16") {
-            // Force bfloat16 type if not already specified
-            if (!new_type.has_value()) {
-                new_type = tt::tt_metal::DataType::BFLOAT16;
-            }
-        }
+    // Reject standard dtypes - they should use the fast path
+    if (!is_custom_dtype) {
+        NB_THROW(
+            nb::exception_type::type_error,
+            "Standard dtypes should use the nb::ndarray<nb::numpy> overload, not the nb::object overload. "
+            "This function is only for custom dtypes like ml_dtypes.bfloat16.");
     }
 
-    // Convert Python object to ndarray
-    nb::ndarray<> numpy_data(numpy_data_obj.ptr());
+    // Validate this is bfloat16 (the only supported custom dtype)
+    if (itemsize_bytes != sizeof(bfloat16)) {
+        nb::object name_obj = dtype_obj.attr("name");
+        std::string dtype_name = nb::cast<std::string>(name_obj);
+        NB_THROW(
+            nb::exception_type::type_error,
+            "Unsupported custom dtype '{}' with size {} bytes. Only ml_dtypes.bfloat16 (2 bytes) is supported.",
+            dtype_name,
+            itemsize_bytes);
+    }
 
-    auto numpy_data_type = numpy_data.dtype();
+    // Check dtype name
+    nb::object name_obj = dtype_obj.attr("name");
+    std::string dtype_name = nb::cast<std::string>(name_obj);
 
-    // Get rank and shape from Python directly (nanobind doesn't populate these reliably)
+    if (dtype_name != "bfloat16") {
+        NB_THROW(
+            nb::exception_type::type_error,
+            "Unsupported custom dtype '{}'. Only ml_dtypes.bfloat16 is supported.",
+            dtype_name);
+    }
+
+    // Force bfloat16 type if not already specified
+    if (!new_type.has_value()) {
+        new_type = tt::tt_metal::DataType::BFLOAT16;
+    }
+
+    // Get rank and shape from Python directly
     nb::object ndim_obj = numpy_data_obj.attr("ndim");
     size_t rank = nb::cast<size_t>(ndim_obj);
 
@@ -452,61 +485,10 @@ tt::tt_metal::Tensor make_metal_tensor(
         shape_from_python.push_back(nb::cast<size_t>(shape_tuple[i]));
     }
 
-    // Nanobind doesn't reliably populate dtype fields, so we synthesize them from Python
-    if (numpy_data_type.bits == 0 && itemsize_bytes > 0) {
-        numpy_data_type.bits = static_cast<uint8_t>(itemsize_bytes * 8);
-    }
-
-    // Determine dtype code from Python dtype kind
-    if (is_custom_dtype) {
-        numpy_data_type.code = DLPACK_DTYPE_CODE_CUSTOM;
-    } else if (dtype_kind.size() == 1) {
-        // Map NumPy dtype kind to DLPack code for standard dtypes
-        switch (dtype_kind[0]) {
-            case NumpyDtypeKind::FLOAT:
-                numpy_data_type.code = static_cast<uint8_t>(nb::dlpack::dtype_code::Float);
-                break;
-            case NumpyDtypeKind::SIGNED_INT:
-                numpy_data_type.code = static_cast<uint8_t>(nb::dlpack::dtype_code::Int);
-                break;
-            case NumpyDtypeKind::UNSIGNED_INT:
-                numpy_data_type.code = static_cast<uint8_t>(nb::dlpack::dtype_code::UInt);
-                break;
-            case NumpyDtypeKind::BOOLEAN:
-                numpy_data_type.code = static_cast<uint8_t>(nb::dlpack::dtype_code::Bool);
-                break;
-            case NumpyDtypeKind::COMPLEX:
-                numpy_data_type.code = static_cast<uint8_t>(nb::dlpack::dtype_code::Complex);
-                break;
-            default:
-                // Keep whatever nanobind gave us for unrecognized kinds
-                break;
-        }
-    }
-
-    NB_COND_THROW(
-        !(numpy_data_type.bits % 8),
-        nb::exception_type::type_error,
-        "Unsupported precision: {} bits",
-        numpy_data_type.bits);
-
-    const auto impl = [&numpy_data_type,
-                       rank,
-                       &numpy_data_obj,
-                       target_layout,
-                       mapper,
-                       is_custom_dtype,
-                       &shape_from_python]<typename NumpyType>(tt::tt_metal::DataType tensor_data_type) {
+    const auto impl = [rank, &numpy_data_obj, target_layout, mapper, &shape_from_python]<typename NumpyType>(
+                          tt::tt_metal::DataType tensor_data_type) {
         static_assert(std::is_same_v<NumpyType, std::remove_cvref_t<NumpyType>>);
-        // Skip precision check for custom dtypes since we manually set bits
-        if (!is_custom_dtype) {
-            NB_COND_THROW(
-                (numpy_data_type.bits == (sizeof(NumpyType) * 8)),
-                nb::exception_type::type_error,
-                "Unsupported precision: expected {} bits, got {} bits",
-                sizeof(NumpyType) * 8,
-                numpy_data_type.bits);
-        }
+        // Note: precision already validated above (bfloat16 is the only supported custom dtype)
 
         tt::tt_metal::ShapeBase::Container shape_container(rank);
         for (size_t dimension = 0; dimension < rank; ++dimension) {
@@ -521,97 +503,39 @@ tt::tt_metal::Tensor make_metal_tensor(
             shape_container[dimension] = dimension_size;
         }
 
-        const auto make_device_tensor = [target_layout,
-                                         tensor_data_type,
-                                         &numpy_data_obj,
-                                         &shape_container,
-                                         mapper]<typename MetalType>() -> tt::tt_metal::Tensor {
-            const tt::tt_metal::Shape tensor_shape(shape_container);
-            static const tt::tt_metal::MemoryConfig tensor_memory_config{};
-            // Our tensor will initially be created from row-major numpy data, regardless of target layout
-            const tt::tt_metal::PageConfig tensor_page_config(tt::tt_metal::Layout::ROW_MAJOR);
-            tt::tt_metal::TensorLayout tensor_layout(tensor_data_type, tensor_page_config, tensor_memory_config);
-            tt::tt_metal::TensorSpec tensor_spec(tensor_shape, tensor_layout);
-            auto* device = &ttml::autograd::ctx().get_device();
-            // device->enable_program_cache();
+        // Compute size from shape
+        size_t data_size =
+            std::accumulate(shape_container.begin(), shape_container.end(), size_t(1), std::multiplies<size_t>());
 
-            // Compute size from shape (nanobind doesn't populate size reliably)
-            size_t data_size =
-                std::accumulate(shape_container.begin(), shape_container.end(), size_t(1), std::multiplies<size_t>());
+        // Get data pointer from Python's __array_interface__
+        nb::object array_interface = numpy_data_obj.attr("__array_interface__");
+        nb::dict ai_dict = nb::cast<nb::dict>(array_interface);
+        nb::tuple data_tuple = nb::cast<nb::tuple>(ai_dict["data"]);
+        const void* data_ptr = reinterpret_cast<const void*>(nb::cast<uintptr_t>(data_tuple[0]));
 
-            // Get data pointer from Python's __array_interface__ (nanobind doesn't provide reliable data pointer)
-            nb::object array_interface = numpy_data_obj.attr("__array_interface__");
-            nb::dict ai_dict = nb::cast<nb::dict>(array_interface);
-            nb::tuple data_tuple = nb::cast<nb::tuple>(ai_dict["data"]);
-            const void* data_ptr = reinterpret_cast<const void*>(nb::cast<uintptr_t>(data_tuple[0]));
+        std::span<const NumpyType> numpy_data_span(static_cast<const NumpyType*>(data_ptr), data_size);
 
-            std::span<const NumpyType> numpy_data_span(static_cast<const NumpyType*>(data_ptr), data_size);
-
-            if constexpr (!std::is_same_v<MetalType, NumpyType>) {
-                std::vector<MetalType> converted_data;
-                converted_data.reserve(numpy_data_span.size());  // Pre-allocate to avoid reallocations
-                converted_data.assign(numpy_data_span.begin(), numpy_data_span.end());
-
-                auto row_major_tensor =
-                    (mapper != nullptr)
-                        ? ttnn::distributed::create_distributed_tensor(
-                              ttsl::make_const_span(converted_data), tensor_shape, tensor_layout, *mapper)
-                        : tt::tt_metal::Tensor::from_vector(converted_data, tensor_spec, device);
-
-                // Move distributed tensor to device
-                if (mapper != nullptr) {
-                    row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
-                }
-
-                if (target_layout == tt::tt_metal::Layout::ROW_MAJOR) {
-                    return row_major_tensor;
-                }
-                return ttnn::tilize_with_zero_padding(row_major_tensor);
-            } else {
-                auto row_major_tensor =
-                    (mapper != nullptr)
-                        ? ttnn::distributed::create_distributed_tensor(
-                              ttsl::make_const_span(numpy_data_span), tensor_shape, tensor_layout, *mapper)
-                        : tt::tt_metal::Tensor::from_span(numpy_data_span, tensor_spec, device);
-
-                // Move distributed tensor to device
-                if (mapper != nullptr) {
-                    row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
-                }
-
-                if (target_layout == tt::tt_metal::Layout::ROW_MAJOR) {
-                    return row_major_tensor;
-                }
-                return ttnn::tilize_with_zero_padding(row_major_tensor);
-            }
-        };
-
-        // Use helper to dispatch - eliminates duplication
-        return dispatch_single_type(tensor_data_type, make_device_tensor);
+        // Dispatch based on target data type
+        switch (tensor_data_type) {
+            case tt::tt_metal::DataType::INT32:
+                return create_tensor_from_span<NumpyType, int32_t>(
+                    numpy_data_span, shape_container, tensor_data_type, target_layout, mapper);
+            case tt::tt_metal::DataType::UINT32:
+                return create_tensor_from_span<NumpyType, uint32_t>(
+                    numpy_data_span, shape_container, tensor_data_type, target_layout, mapper);
+            case tt::tt_metal::DataType::FLOAT32:
+                return create_tensor_from_span<NumpyType, float>(
+                    numpy_data_span, shape_container, tensor_data_type, target_layout, mapper);
+            case tt::tt_metal::DataType::BFLOAT16:
+                return create_tensor_from_span<NumpyType, bfloat16>(
+                    numpy_data_span, shape_container, tensor_data_type, target_layout, mapper);
+            default: throw_unsupported_datatype(tensor_data_type);
+        }
     };
 
-    switch (static_cast<nb::dlpack::dtype_code>(numpy_data_type.code)) {
-        case nb::dlpack::dtype_code::Int:
-            return impl.template operator()<int32_t>(new_type.value_or(tt::tt_metal::DataType::INT32));
-        case nb::dlpack::dtype_code::UInt:
-            return impl.template operator()<uint32_t>(new_type.value_or(tt::tt_metal::DataType::UINT32));
-        case nb::dlpack::dtype_code::Float:
-            return impl.template operator()<float>(new_type.value_or(tt::tt_metal::DataType::FLOAT32));
-        case nb::dlpack::dtype_code::Bfloat:
-            return impl.template operator()<bfloat16>(new_type.value_or(tt::tt_metal::DataType::BFLOAT16));
-        case nb::dlpack::dtype_code::Complex:
-            NB_THROW(nb::exception_type::type_error, UnsupportedMessages::COMPLEX);
-            break;
-        case nb::dlpack::dtype_code::Bool: NB_THROW(nb::exception_type::type_error, UnsupportedMessages::BOOL); break;
-    }
-
-    // Handle custom dtype code (e.g., ml_dtypes.bfloat16 with code=200)
-    if (numpy_data_type.code == DLPACK_DTYPE_CODE_CUSTOM) {
-        // Currently only bfloat16 is supported as a custom dtype
-        return impl.template operator()<bfloat16>(new_type.value_or(tt::tt_metal::DataType::BFLOAT16));
-    }
-
-    NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UNKNOWN);
+    // Handle custom dtype (ml_dtypes.bfloat16)
+    // Already validated at the beginning of this function
+    return impl.template operator()<bfloat16>(new_type.value_or(tt::tt_metal::DataType::BFLOAT16));
 }
 
 }  // namespace ttml::nanobind::util
