@@ -56,11 +56,11 @@ parameters = {
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.
 # If you defined a device_mesh_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
-    input_shape=None,
-    input_a_dtype=None,
-    input_a_layout=None,
-    input_a_memory_config=None,
-    output_memory_config=None,
+    input_shape,
+    input_a_dtype=ttnn.bfloat16,
+    input_a_layout=ttnn.TILE_LAYOUT,
+    input_a_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     traced_config_name=None,
     *,
     device,
@@ -71,18 +71,6 @@ def run(
         input_shape, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config = unpack_traced_config(
             traced_config_name
         )
-
-    # Validate and set defaults for other suites
-    if input_shape is None:
-        raise ValueError("input_shape must be provided")
-    if input_a_dtype is None:
-        input_a_dtype = ttnn.bfloat16
-    if input_a_layout is None:
-        input_a_layout = ttnn.TILE_LAYOUT
-    if input_a_memory_config is None:
-        input_a_memory_config = ttnn.DRAM_MEMORY_CONFIG
-    if output_memory_config is None:
-        output_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)

@@ -53,11 +53,11 @@ parameters = {
 
 # 3. Update run() function
 def run(
-    input_shape=None,
-    input_a_dtype=None,
-    input_a_layout=None,
-    input_a_memory_config=None,
-    output_memory_config=None,
+    input_shape,  # Required parameter
+    input_a_dtype=ttnn.bfloat16,  # Set actual defaults
+    input_a_layout=ttnn.TILE_LAYOUT,
+    input_a_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     traced_config_name=None,  # Add this parameter
     *,
     device,
@@ -86,13 +86,13 @@ parameters = {
 
 # 3. Unpack BINARY config
 def run(
-    input_shape=None,
-    input_a_dtype=None,
-    input_b_dtype=None,
-    input_a_layout=None,
-    input_b_layout=None,
-    input_a_memory_config=None,
-    input_b_memory_config=None,
+    input_shape,  # Required parameter
+    input_a_dtype=ttnn.bfloat16,  # Set actual defaults
+    input_b_dtype=ttnn.bfloat16,
+    input_a_layout=ttnn.TILE_LAYOUT,
+    input_b_layout=ttnn.TILE_LAYOUT,
+    input_a_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    input_b_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     traced_config_name=None,
     *,
     device,
