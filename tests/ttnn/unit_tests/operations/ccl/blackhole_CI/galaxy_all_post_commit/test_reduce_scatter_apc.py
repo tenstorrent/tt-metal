@@ -11,7 +11,6 @@ from models.common.utility_functions import (
     skip_for_n_dev,
     skip_for_n_or_less_dev,
 )
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
 
 
 @skip_for_wormhole_b0()
@@ -88,7 +87,6 @@ def test_rs_row_2D_nightly_linear(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
-    validate_test(num_devices, rs_topology, bh_2d_mesh_device.shape, 0)
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
     run_reduce_scatter_impl(
@@ -186,7 +184,6 @@ def test_rs_row_4D_nightly_linear(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
-    validate_test(num_devices, rs_topology, bh_2d_mesh_device.shape, 0)
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
     run_reduce_scatter_impl(
@@ -262,7 +259,7 @@ def test_rs_row_4D_nightly_linear(
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
     ],
     indirect=["device_params"],
 )
@@ -390,7 +387,6 @@ def test_rs_row_2D_nightly_linear(
     num_buffers_per_channel,
 ):
     cluster_axis = 1
-    validate_test(num_devices, rs_topology, bh_2d_mesh_device.shape, cluster_axis)
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     run_reduce_scatter_impl(
         submesh_device,

@@ -13,7 +13,6 @@ from models.common.utility_functions import (
     skip_for_n_dev,
     skip_for_n_or_less_dev,
 )
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
 
 
 @skip_for_wormhole_b0()
@@ -251,7 +250,7 @@ def test_all_gather_4D_line(
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
     ],
     indirect=["device_params"],
 )
