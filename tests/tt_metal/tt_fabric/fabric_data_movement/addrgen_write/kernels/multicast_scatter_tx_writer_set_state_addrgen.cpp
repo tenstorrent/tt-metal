@@ -1,0 +1,215 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <cstdint>
+#include "dataflow_api.h"
+#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#include "tt_metal/fabric/hw/inc/mesh/api.h"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "accessor/tensor_accessor.h"
+#include "accessor/tensor_accessor_args.h"
+
+using namespace tt;
+using namespace tt::tt_fabric;
+using namespace tt::tt_fabric::mesh::experimental;
+
+//
+// Writer (fabric sender) kernel — sends pages from CB c_0 to the dst device using multicast scatter set_state +
+// with_state APIs. Per iteration: wait for 2 CB pages → scatter write to 2 destinations → send payload → send header.
+// After all pages: flush, then atomic-inc the receiver's global semaphore (completion signal).
+//
+// CT args:
+//   0: TOTAL_PAGES
+//   1: PAGE_SIZE
+//
+// RT args (must match host):
+//   0:  dst_base       (u32)
+//   1:  rx_noc_x       (u32)   // same worker on every chip
+//   2:  rx_noc_y       (u32)
+//   3:  sem_l1_addr    (u32)   // same L1 offset on every chip
+//   … fabric-connection args … (inserted by append_fabric_connection_rt_args on host)
+//   … then multicast hop counts:
+//      e_hops (u32), w_hops (u32), n_hops (u32), s_hops (u32)
+
+void kernel_main() {
+    constexpr auto ta_args = TensorAccessorArgs<0>();
+    constexpr uint32_t CTA_BASE = ta_args.next_compile_time_args_offset();
+    constexpr uint32_t TOTAL_PAGES = get_compile_time_arg_val(CTA_BASE + 0);
+    constexpr uint32_t PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 1);
+    constexpr uint32_t CB_ID = tt::CBIndex::c_0;
+
+    size_t idx = 0;
+    const uint32_t dst_base = get_arg_val<uint32_t>(idx++);
+    const uint32_t rx_noc_x = get_arg_val<uint32_t>(idx++);
+    const uint32_t rx_noc_y = get_arg_val<uint32_t>(idx++);
+    const uint32_t sem_l1_addr = get_arg_val<uint32_t>(idx++);
+
+    // directional connections — parse a bitmask and build up to four senders in fixed order: W,E,N,S
+    const uint32_t dir_mask = get_arg_val<uint32_t>(idx++);
+    const bool hasW = (dir_mask & 0x1u) != 0;
+    const bool hasE = (dir_mask & 0x2u) != 0;
+    const bool hasN = (dir_mask & 0x4u) != 0;
+    const bool hasS = (dir_mask & 0x8u) != 0;
+
+    WorkerToFabricEdmSender senderW{};
+    WorkerToFabricEdmSender senderE{};
+    WorkerToFabricEdmSender senderN{};
+    WorkerToFabricEdmSender senderS{};
+
+    if (hasW) {
+        senderW = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
+    }
+    if (hasE) {
+        senderE = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
+    }
+    if (hasN) {
+        senderN = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
+    }
+    if (hasS) {
+        senderS = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
+    }
+
+    // Multicast hop counts (E/W/N/S) appended by the host
+    // AFTER the fabric-connection args, so read them now.
+    const uint16_t e_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
+    const uint16_t w_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
+    const uint16_t n_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
+    const uint16_t s_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
+
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* left_packet_header = PacketHeaderPool::allocate_header();
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* right_packet_header = PacketHeaderPool::allocate_header();
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* north_packet_header = PacketHeaderPool::allocate_header();
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* south_packet_header = PacketHeaderPool::allocate_header();
+
+    if (hasW) {
+        senderW.open<true>();
+    }
+    if (hasE) {
+        senderE.open<true>();
+    }
+    if (hasN) {
+        senderN.open<true>();
+    }
+    if (hasS) {
+        senderS.open<true>();
+    }
+
+    const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/PAGE_SIZE);
+
+    // SetState pattern: initialize all header fields for each direction
+    if (w_hops > 0) {
+        MeshMcastRange ranges_w{0, static_cast<uint8_t>(w_hops), 0, 0};
+        fabric_multicast_noc_scatter_write_set_state(
+            left_packet_header, 0, 0, ranges_w, dst_acc, 0, 1);  // page_id0=0, page_id1=1 for initial setup
+    }
+    if (e_hops > 0) {
+        MeshMcastRange ranges_e{static_cast<uint8_t>(e_hops), 0, 0, 0};
+        fabric_multicast_noc_scatter_write_set_state(right_packet_header, 0, 0, ranges_e, dst_acc, 0, 1);
+    }
+    if (n_hops > 0) {
+        MeshMcastRange ranges_n{
+            static_cast<uint8_t>(e_hops), static_cast<uint8_t>(w_hops), static_cast<uint8_t>(n_hops), 0};
+        fabric_multicast_noc_scatter_write_set_state(north_packet_header, 0, 0, ranges_n, dst_acc, 0, 1);
+    }
+    if (s_hops > 0) {
+        MeshMcastRange ranges_s{
+            static_cast<uint8_t>(e_hops), static_cast<uint8_t>(w_hops), 0, static_cast<uint8_t>(s_hops)};
+        fabric_multicast_noc_scatter_write_set_state(south_packet_header, 0, 0, ranges_s, dst_acc, 0, 1);
+    }
+
+    // Scatter loop: each iteration writes 2 pages
+    for (uint32_t i = 0; i < TOTAL_PAGES; i += 2) {
+        cb_wait_front(CB_ID, 2);
+        const uint32_t src_l1_addr = get_read_ptr(CB_ID);
+
+        // --- Branch 1: direct WEST fanout (left) ---
+        if (w_hops > 0) {
+            MeshMcastRange ranges_w{0, static_cast<uint8_t>(w_hops), 0, 0};  // e, w, n, s
+            fabric_multicast_noc_scatter_write_with_state(
+                &senderW, left_packet_header, 0, 0, ranges_w, src_l1_addr, dst_acc, i, i + 1);
+        }
+
+        // --- Branch 2: direct EAST fanout (right) ---
+        if (e_hops > 0) {
+            MeshMcastRange ranges_e{static_cast<uint8_t>(e_hops), 0, 0, 0};  // e, w, n, s
+            fabric_multicast_noc_scatter_write_with_state(
+                &senderE, right_packet_header, 0, 0, ranges_e, src_l1_addr, dst_acc, i, i + 1);
+        }
+
+        // --- Branch 3: NORTH trunk ---
+        if (n_hops > 0) {
+            MeshMcastRange ranges_n{
+                static_cast<uint8_t>(e_hops),
+                static_cast<uint8_t>(w_hops),
+                static_cast<uint8_t>(n_hops),
+                0};  // e, w, n, s
+            fabric_multicast_noc_scatter_write_with_state(
+                &senderN, north_packet_header, 0, 0, ranges_n, src_l1_addr, dst_acc, i, i + 1);
+        }
+
+        // --- Branch 4: SOUTH trunk ---
+        if (s_hops > 0) {
+            MeshMcastRange ranges_s{
+                static_cast<uint8_t>(e_hops),
+                static_cast<uint8_t>(w_hops),
+                0,
+                static_cast<uint8_t>(s_hops)};  // e, w, n, s
+            fabric_multicast_noc_scatter_write_with_state(
+                &senderS, south_packet_header, 0, 0, ranges_s, src_l1_addr, dst_acc, i, i + 1);
+        }
+
+        cb_pop_front(CB_ID, 2);
+    }
+
+    noc_async_writes_flushed();
+
+    // === Single multicast completion to identical mailboxes on all destination chips ===
+    ASSERT(sem_l1_addr != 0);
+    const uint64_t sem_noc = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, /*NOC_INDEX=*/0);
+
+    // Send a completion per active branch so every sub-tree gets the semaphore bump.
+    if (w_hops > 0) {
+        fabric_set_mcast_route(left_packet_header, 0, 0, 0, w_hops, 0, 0);
+        left_packet_header->to_noc_unicast_atomic_inc(
+            NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
+        senderW.wait_for_empty_write_slot();
+        senderW.send_payload_flush_non_blocking_from_address((uint32_t)left_packet_header, sizeof(PACKET_HEADER_TYPE));
+    }
+    if (e_hops > 0) {
+        fabric_set_mcast_route(right_packet_header, 0, 0, e_hops, 0, 0, 0);
+        right_packet_header->to_noc_unicast_atomic_inc(
+            NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
+        senderE.wait_for_empty_write_slot();
+        senderE.send_payload_flush_non_blocking_from_address((uint32_t)right_packet_header, sizeof(PACKET_HEADER_TYPE));
+    }
+    if (n_hops > 0) {
+        fabric_set_mcast_route(north_packet_header, 0, 0, e_hops, w_hops, n_hops, 0);
+        north_packet_header->to_noc_unicast_atomic_inc(
+            NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
+        senderN.wait_for_empty_write_slot();
+        senderN.send_payload_flush_non_blocking_from_address((uint32_t)north_packet_header, sizeof(PACKET_HEADER_TYPE));
+    }
+    if (s_hops > 0) {
+        fabric_set_mcast_route(south_packet_header, 0, 0, e_hops, w_hops, 0, s_hops);
+        south_packet_header->to_noc_unicast_atomic_inc(
+            NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
+        senderS.wait_for_empty_write_slot();
+        senderS.send_payload_flush_non_blocking_from_address((uint32_t)south_packet_header, sizeof(PACKET_HEADER_TYPE));
+    }
+
+    if (hasW) {
+        senderW.close();
+    }
+    if (hasE) {
+        senderE.close();
+    }
+    if (hasN) {
+        senderN.close();
+    }
+    if (hasS) {
+        senderS.close();
+    }
+}
