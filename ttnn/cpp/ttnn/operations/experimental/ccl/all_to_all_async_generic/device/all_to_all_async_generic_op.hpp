@@ -26,7 +26,6 @@ namespace ttnn {
 using ccl::EriscDatamoverBuilder;
 
 struct AllToAllAsyncGeneric {
-    std::vector<IDevice*> devices;
     const uint32_t in_dim;
     const uint32_t out_dim;
     const uint32_t num_links;
@@ -37,7 +36,6 @@ struct AllToAllAsyncGeneric {
     std::optional<uint32_t> cluster_axis;
 
     AllToAllAsyncGeneric(
-        std::vector<IDevice*> devices,
         uint32_t in_dim,
         uint32_t out_dim,
         uint32_t num_links,
@@ -46,7 +44,6 @@ struct AllToAllAsyncGeneric {
         ccl::Topology topology,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         std::optional<uint32_t> cluster_axis) :
-        devices(std::move(devices)),
         in_dim(in_dim),
         out_dim(out_dim),
         num_links(num_links),
@@ -96,7 +93,7 @@ struct AllToAllAsyncGeneric {
 tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_generic_program(
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    IDevice* target_device,
+    std::optional<MeshCoordinate> target_device,
     std::optional<MeshCoordinate> forward_coord,
     std::optional<MeshCoordinate> backward_coord,
     uint32_t in_dim,

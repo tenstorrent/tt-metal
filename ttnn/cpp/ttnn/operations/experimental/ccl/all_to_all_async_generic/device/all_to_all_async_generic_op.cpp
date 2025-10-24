@@ -147,8 +147,6 @@ tt::tt_metal::operation::ProgramWithCallbacks AllToAllAsyncGeneric::create_progr
     const GlobalSemaphore& init_barrier_semaphore,
     const GlobalSemaphore& final_barrier_semaphore) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
-    auto mesh_device = input_tensors[0].device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
 
     uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(input_tensors[0], coord, cluster_axis);
 
@@ -162,7 +160,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllToAllAsyncGeneric::create_progr
     return all_to_all_async_generic_program(
         input_tensors[0],
         output_tensors.at(0),
-        target_device,
+        coord,
         forward_coord,
         backward_coord,
         this->in_dim,
@@ -223,8 +221,6 @@ Tensor all_to_all_async_generic(
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     std::optional<uint32_t> cluster_axis) {
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
-
     uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     TT_FATAL(
         num_devices > 1,
@@ -235,7 +231,6 @@ Tensor all_to_all_async_generic(
 
     return tt::tt_metal::operation::run(
                ttnn::AllToAllAsyncGeneric(
-                   devices,
                    in_dim,
                    out_dim,
                    num_links,

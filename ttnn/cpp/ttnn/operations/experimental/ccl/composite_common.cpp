@@ -248,7 +248,7 @@ bool use_composite_all_to_all(
     uint32_t tile_width = tile_shape[1];
 
     auto input_shape = input_tensor.logical_shape();
-    uint32_t num_devices = ttnn::ccl::get_active_physical_devices(input_tensor).size();
+    uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor, std::nullopt);
 
     int32_t rank = input_tensor.logical_shape().rank();
     in_dim = (in_dim < 0) ? rank + in_dim : in_dim;

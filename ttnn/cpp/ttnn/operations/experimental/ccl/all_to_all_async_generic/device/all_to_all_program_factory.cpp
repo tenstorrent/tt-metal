@@ -58,7 +58,7 @@ ttnn::Shape get_tiled_shape(const ttnn::Tensor& input_tensor) {
 tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_generic_program(
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    IDevice* sender_device,
+    std::optional<MeshCoordinate> target_device,
     std::optional<MeshCoordinate> forward_coord,
     std::optional<MeshCoordinate> backward_coord,
     const uint32_t in_dim,
@@ -199,8 +199,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_generic_program(
     sender_writer_rt_args.push_back(forward_coord.has_value());
 
     if (forward_coord.has_value()) {
-        const auto sender_device_fabric_node_id =
-            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+        const auto sender_device_fabric_node_id = device->get_fabric_node_id(target_device.value());
         const auto forward_device_fabric_node_id = device->get_fabric_node_id(forward_coord.value());
         tt::tt_fabric::append_fabric_connection_rt_args(
             sender_device_fabric_node_id,
@@ -213,8 +212,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_generic_program(
 
     sender_writer_rt_args.push_back(backward_coord.has_value());
     if (backward_coord.has_value()) {
-        const auto sender_device_fabric_node_id =
-            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+        const auto sender_device_fabric_node_id = device->get_fabric_node_id(target_device.value());
         const auto backward_device_fabric_node_id = device->get_fabric_node_id(backward_coord.value());
         tt::tt_fabric::append_fabric_connection_rt_args(
             sender_device_fabric_node_id,
