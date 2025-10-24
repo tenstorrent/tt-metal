@@ -74,7 +74,6 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
         target_link_libraries(
             ${TEST_TARGET}
             PRIVATE
-                yaml-cpp::yaml-cpp
                 TT::ScaleoutTools
         )
     endif()
