@@ -27,13 +27,6 @@
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 
-namespace tt {
-namespace tt_metal {
-class WorkerConfigBufferMgr;
-enum NOC : uint8_t;
-}  // namespace tt_metal
-}  // namespace tt
-
 using namespace tt::tt_metal;
 
 namespace tt::tt_metal {

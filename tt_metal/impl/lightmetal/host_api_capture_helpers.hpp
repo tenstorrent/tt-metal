@@ -4,7 +4,6 @@
 
 #pragma once
 
-// #include "flatbuffers/flatbuffers.h"
 #include "lightmetal/lightmetal_capture.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>

@@ -5,22 +5,15 @@
 #pragma once
 
 #include <stdint.h>
-// pruned unused includes
 
-// pruned unused includes
 #include "tt-metalium/program.hpp"
-// pruned unused includes
-#include "program/dispatch.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>
 
 namespace tt {
 namespace tt_metal {
 class IDevice;
-class Program;
 class SystemMemoryManager;
-class WorkerConfigBufferMgr;
-enum NOC : uint8_t;
 }  // namespace tt_metal
 }  // namespace tt
 

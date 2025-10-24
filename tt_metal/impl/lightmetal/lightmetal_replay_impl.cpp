@@ -15,7 +15,6 @@
 #include "trace/trace_buffer.hpp"
 #include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
-// #include "flatbuffer/base_types_from_flatbuffer.hpp"
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_from_flatbuffer.hpp"
 
@@ -333,7 +332,6 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::Command* comm
             execute(command->cmd_as_ProgramConstructorCommand());
             break;
         }
-        // Removed: EnqueueProgramCommand
         case ::tt::tt_metal::flatbuffer::CommandType::CreateKernelCommand: {
             execute(command->cmd_as_CreateKernelCommand());
             break;
@@ -526,8 +524,6 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ProgramConstr
     log_debug(tt::LogMetalTrace, "LightMetalReplay(ProgramConstructor) global_id: {} ", cmd->global_id());
     add_program_to_map(cmd->global_id(), std::make_shared<Program>());
 }
-
-// Removed: execute(EnqueueProgramCommand)
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateKernelCommand* cmd) {
     log_debug(
