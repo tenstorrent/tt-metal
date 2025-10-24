@@ -7,6 +7,7 @@ TTNN implementation of Depthwise Convolution for YOLO11 Pose Estimation
 DWConv is used in the cv3 (confidence) head of the pose model.
 """
 
+import ttnn
 from models.demos.yolov11.tt.common import Yolov11Conv2D
 
 
@@ -31,14 +32,17 @@ class TtnnDWConv:
         self.device = device
         self.is_detect = is_detect
 
+        # Create SiLU activation (same as TtnnConv)
+        activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
+
         # DWConv uses groups=in_channels
         # This is implemented as a regular Conv2d in TTNN
+        # Note: BatchNorm is already folded into conv weights during preprocessing
         self.conv = Yolov11Conv2D(
             parameter.conv,
             conv_pt.conv,
-            bn=parameter.bn if hasattr(parameter, "bn") else None,
             device=device,
-            activation="silu",  # DWConv uses SiLU activation
+            activation=activation,  # DWConv uses SiLU activation
             is_detect=is_detect,
         )
 

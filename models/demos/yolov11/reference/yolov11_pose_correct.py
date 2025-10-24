@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as f
 
 # Import backbone/neck components from original yolov11.py
-from yolov11 import C2PSA, DFL, SPPF, C3k2, Concat, Conv, make_anchors
+from models.demos.yolov11.reference.yolov11 import C2PSA, DFL, SPPF, C3k2, Concat, Conv, make_anchors
 
 
 class DWConv(nn.Module):
