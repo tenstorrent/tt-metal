@@ -512,6 +512,7 @@ on:
           - matmul.short.matmul_user_program_config_mcast_1d
           - matmul.short.matmul_user_program_config_mcast_2d
           - matmul.sparse.sparse_matmul
+          - matmul.sparse.batched_sparse_matmul
           - max_pool2d.full.max_pool2d_large_dims
           - max_pool2d.full.max_pool2d_params
           - max_pool2d.short.max_pool2d_short_sweep
@@ -562,13 +563,36 @@ on:
         description: "Upload sweep results to Superset?"
         type: boolean
         default: true
+      arch:
+        required: true
+        type: choice
+        options:
+          - wormhole_b0
+          - blackhole
+        default: "wormhole_b0"
+      runner-label:
+        description: "Single sweep only"
+        required: true
+        type: choice
+        options:
+          - N150
+          - N300
+          - P100a
+          - P150b
+          - n300-llmbox
+          - topology-6u
+          - BH-LLMBox
+          - BH-DeskBox
+          - BH-LoudBox
+        default: "N150"
+
   schedule:
     - cron: "0 4 * * 1,2,4,5" # This cron schedule runs the workflow at 4:00 AM UTC on Mon, Tue, Thu, Fri (nightly runs)
     - cron: "0 4 * * 3" # This cron schedule runs the workflow at 4:00 AM UTC on Wednesdays (comprehensive run)
     - cron: "0 5 * * 6" # This cron schedule runs the workflow at 5:00 AM UTC on Saturdays (comprehensive run)
 
 concurrency:
-  group: ttnn-sweeps-${{ github.ref }}
+  group: ttnn-sweeps-${{ github.ref }}-${{ github.event.inputs.arch }}-${{ github.event.inputs.runner-label }}
   cancel-in-progress: true
 
 jobs:
@@ -581,12 +605,12 @@ jobs:
       build-wheel: true
       version: "22.04"
   ttnn-generate-sweeps:
-    name: Generate sweeps vectors
+    name: Generate Sweep Vectors ${{ inputs.arch }} ${{ inputs.runner-label }}
     needs: build-artifact
     strategy:
       matrix:
         arch:
-          - wormhole_b0
+          - ${{ inputs.arch }}
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -607,10 +631,14 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     timeout-minutes: 30
-    runs-on: tt-ubuntu-2204-n150-stable
+    runs-on: >-
+      ${{
+        (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LLMBox' || inputs.runner-label == 'BH-DeskBox' || inputs.runner-label== 'BH-LoudBox' ) && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
+      }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -699,20 +727,14 @@ jobs:
       fail-fast: false
       matrix:
         test-group:
-          [
-            {
-              name: "wormhole-n150-sweeps",
-              arch: wormhole_b0,
-              runs-on: tt-ubuntu-2204-n150-stable,
-              tt-smi-cmd: "tt-smi -r"
-            },
-            # {
-            #   name: "Wormhole N300 Sweeps",
-            #   arch: wormhole_b0,
-            #   runs-on: tt-ubuntu-2204-n300-stable,
-            #   tt-smi-cmd: "tt-smi-metal -r 0"
-            # }
-          ]
+          - name: ttnn sweep tests ${{ inputs.arch }} ${{ inputs.runner-label }}
+            arch: ${{ inputs.arch }}
+            tt-smi-cmd: ${{ (inputs.runner-label == 'topology-6u' ) && 'tt-smi -glx_reset_auto' || 'tt-smi -r'}}
+            runs-on: >-
+              ${{
+                (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LLMBox' || inputs.runner-label == 'BH-DeskBox' || inputs.runner-label == 'BH-LoudBox' ) && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
+                || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
+              }}
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -729,7 +751,10 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
-      options: "--device /dev/tenstorrent"
+      options: >-
+        --device /dev/tenstorrent
+        --device /dev/ipmi0
+        --privileged
     defaults:
       run:
         shell: bash
@@ -738,7 +763,7 @@ jobs:
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -816,7 +841,7 @@ jobs:
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -888,7 +913,7 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

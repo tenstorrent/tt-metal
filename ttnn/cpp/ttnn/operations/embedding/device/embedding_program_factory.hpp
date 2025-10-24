@@ -25,7 +25,7 @@ struct CoreSplitResult {
     uint32_t units_per_core_group_2 = 0;
 };
 
-CoreSplitResult split_work_to_cores_aligned(
+inline CoreSplitResult split_work_to_cores_aligned(
     const CoreCoord grid_size, const uint32_t units_to_divide, const uint32_t alignment) {
     ZoneScoped;
 
@@ -73,7 +73,7 @@ CoreSplitResult split_work_to_cores_aligned(
 
 namespace ttnn::operations::embedding::detail {
 
-tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
+inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     const Tensor& a,
     const Tensor& weights,
     Tensor& output,
@@ -363,7 +363,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
+inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     const Tensor& a,
     const Tensor& weights,
     Tensor& output,
@@ -601,7 +601,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
+inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     const Tensor& a,
     const Tensor& weights,
     Tensor& output,
@@ -637,6 +637,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     uint32_t batch_size = a.logical_shape()[0];  // num rows
     uint32_t num_cols = a.logical_shape()[-1];
     uint32_t volume = num_cols * batch_size;
+    auto alignment = a.buffer()->alignment();
 
     // setup problem and grid size
 
@@ -663,7 +664,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     tt::DataFormat weights_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
 
     constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
-    uint32_t rounded_weight_page_size = round_up_to_mul32(weight_page_size);
+    uint32_t rounded_weight_page_size = tt::align(weight_page_size, alignment);
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(2 * rounded_weight_page_size, {{src0_cb_index, weights_cb_data_format}})
             .set_page_size(src0_cb_index, rounded_weight_page_size);
@@ -717,6 +718,9 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
         {enchantum::to_string(embeddings_type).data(), "1"},
         {enchantum::to_string(embeddings_index_type).data(), "1"}};
 
+    if (a.logical_shape()[-1] <= FACE_HEIGHT) {
+        embedding_defines["ONLY_ONE_FACE_COLUMN"] = "1";
+    }
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embedding_ind_tilized.cpp",
@@ -818,7 +822,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks embeddings_(
+inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_(
     const Tensor& a,
     const Tensor& weights,
     Tensor& output,

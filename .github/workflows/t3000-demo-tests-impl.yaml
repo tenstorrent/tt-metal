@@ -44,67 +44,53 @@ jobs:
         ]
 
     name: ${{ matrix.test-group.name }}
-    env:
-       ARCH_NAME: ${{ matrix.test-group.arch }}
     runs-on:
       - arch-wormhole_b0
       - config-t3000
       - pipeline-perf
       - ${{ inputs.extra-tag }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.test-group.arch }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
+        HF_HUB_CACHE: ${{ (matrix.test-group.arch == 'wormhole_b0' && '/mnt/MLPerf/huggingface/hub') || '' }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - uses: ./.github/actions/ensure-active-weka-mount
-      - name: ⬇️ Download Build
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
         timeout-minutes: 10
         with:
-          name: ${{ inputs.build-artifact-name }}
-      - name: Extract files
-        run: tar -xvf ttm_any.tar
-      - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
-        timeout-minutes: 10
-        with:
-          name: ${{ inputs.wheel-artifact-name }}
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Enable Performance mode
-        run: |
-          sudo cpupower frequency-set -g performance
-      - name: Run demo regression tests
-        uses: ./.github/actions/docker-run
-        timeout-minutes: ${{ matrix.test-group.timeout }}
-        env:
-          LOGURU_LEVEL: INFO
+        uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
-          docker_image: ${{ inputs.docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=${{ matrix.test-group.arch }}
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
-          install_wheel: true
-          run_args: |
-            source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_demo_tests.sh
-            ${{ matrix.test-group.cmd }}
+          governor: performance
+      - name: Run demo regression tests
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        shell: bash
+        run: |
+          source /work/tests/scripts/t3000/run_t3000_demo_tests.sh
+          ${{ matrix.test-group.cmd }}
 
       - name: Save environment data
         if: ${{ (matrix.test-group.name == 't3k_falcon7b_tests' || matrix.test-group.name == 't3k_falcon40b_tests' || matrix.test-group.name == 't3k_mixtral_tests' || matrix.test-group.name == 't3k_qwen25_tests' || matrix.test-group.name == 't3k_qwen3_tests' || matrix.test-group.name == 't3k_llama3_tests' || matrix.test-group.name == 't3k_llama3_70b_tests' || matrix.test-group.name == 't3k_llama3_vision_tests') && !cancelled() }}
-        uses: ./.github/actions/docker-run
-        env:
-          LOGURU_LEVEL: INFO
-        with:
-          docker_image: ${{ inputs.docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=${{ matrix.test-group.arch }}
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
-          install_wheel: true
-          run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+        shell: bash
+        run: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
 
       - name: Upload benchmark data
         if: ${{ (matrix.test-group.name == 't3k_falcon7b_tests' || matrix.test-group.name == 't3k_falcon40b_tests' || matrix.test-group.name == 't3k_mixtral_tests' || matrix.test-group.name == 't3k_qwen25_tests' || matrix.test-group.name == 't3k_qwen3_tests' || matrix.test-group.name == 't3k_llama3_tests' || matrix.test-group.name == 't3k_llama3_70b_tests' || matrix.test-group.name == 't3k_llama3_vision_tests') && !cancelled() }}
@@ -112,6 +98,7 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          path: /work
           username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
 
@@ -129,5 +116,6 @@ jobs:
           prefix: "test_reports_"
       - name: Disable Performance mode
         if: always()
-        run: |
-          sudo cpupower frequency-set -g ondemand
+        uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
+        with:
+          governor: ondemand

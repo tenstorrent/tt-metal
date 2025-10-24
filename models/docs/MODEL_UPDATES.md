@@ -4,6 +4,11 @@
 >
 > Please refer to the front-page [README](../../README.md) for the latest verified release for each model.
 
+## October 15, 2025
+
+### [DeepSeek R1 Distill Qwen 14B](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Added support for DeepSeek R1 Distill Qwen 14B to [TT-Transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers).
+
 ## September 29, 2025
 
 ### [Gemma 3](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)

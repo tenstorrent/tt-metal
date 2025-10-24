@@ -75,11 +75,11 @@ uint32_t find_closest_largest_divisor_with_num_padding_and_mult(uint32_t num, ui
 uint32_t get_input_channels_alignment(
     const TensorMemoryLayout input_tensor_memory_layout,
     Layout input_tensor_layout,
-    BufferType input_tensor_buffer_type,
+    bool sliced_op,
     bool is_mm_conv,
     const std::optional<MemoryConfig>& input_memory_config) {
     if (!is_mm_conv && input_tensor_memory_layout != TensorMemoryLayout::WIDTH_SHARDED &&
-        input_tensor_layout == Layout::ROW_MAJOR) {
+        (input_tensor_layout == Layout::ROW_MAJOR || sliced_op)) {
         if (input_memory_config.has_value() && input_memory_config->is_sharded()) {
             const uint32_t shard_width = input_memory_config->shard_spec()->shape[1];
             if (shard_width % tt::constants::TILE_WIDTH == 0) {
@@ -91,10 +91,6 @@ uint32_t get_input_channels_alignment(
             } else {
                 return tt::constants::TILE_WIDTH;
             }
-        } else if (input_tensor_buffer_type == BufferType::DRAM) {
-            // DRAM accesses needs 32 byte alignment, which corresponds to 16 elements for bfloat16 data type.
-            // This is due to a limitation of padded slice, which needs to be removed. #28689
-            return tt::tt_metal::hal::get_dram_alignment() / 2;
         } else {
             // The minimum valid value for input channels alignment is 8.
             // This requirement comes from the L1 alignment, which is 16 bytes.
@@ -392,7 +388,7 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
             } else {
                 act_block_h_ntiles =
                     find_closest_largest_divisor(padded_output_height_ntiles_per_core, act_block_h_override_ntiles);
-                log_info(
+                log_warning(
                     tt::LogOp,
                     "act_block_h_override {} is not a valid override for padded_output_height_ntiles_per_core {}, "
                     "instead {} was selected as closest valid option!",
@@ -504,7 +500,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     const std::optional<ParallelConfig>& input_tensor_parallel_config,
     std::optional<uint32_t> act_block_h_override) {
     const uint32_t input_channels_alignment = get_input_channels_alignment(
-        shard_layout, input_tensor_layout, input_tensor_buffer_type, is_mm_conv, std::nullopt);
+        shard_layout, input_tensor_layout, input_tensor_buffer_type == BufferType::DRAM, is_mm_conv, std::nullopt);
     ParallelConfig parallel_config;
     if (input_tensor_parallel_config.has_value()) {
         parallel_config = input_tensor_parallel_config.value();
@@ -577,7 +573,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
     const ttnn::MemoryConfig& input_memory_config = input_tensor_.memory_config();
     const tt::tt_metal::TensorMemoryLayout input_shard_scheme = input_memory_config.memory_layout();
     const uint32_t input_channels_alignment = get_input_channels_alignment(
-        input_shard_scheme, input_tensor_.layout(), BufferType::L1, is_mm_conv, input_memory_config);
+        input_shard_scheme, input_tensor_.layout(), false, is_mm_conv, input_memory_config);
 
     ParallelConfig input_tensor_parallel_config;
     if (!input_tensor_on_device) {
@@ -906,7 +902,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         }
 
         const uint32_t input_channels_alignment =
-            get_input_channels_alignment(shard_layout, input_layout, BufferType::L1, is_mm_conv, std::nullopt);
+            get_input_channels_alignment(shard_layout, input_layout, false, is_mm_conv, std::nullopt);
         const uint32_t in_channels_aligned = tt::round_up(in_channels, input_channels_alignment);
         const uint32_t output_channels_padded = tt::round_up(out_channels, tt::constants::TILE_WIDTH);
         // Note: These are not exact shapes for weights as prepare_conv_weights will pad the weights depending on the
@@ -1172,7 +1168,8 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
     auto compute_l1_usage_for_slice = [&](uint32_t input_slice_height,
                                           uint32_t input_slice_width,
                                           uint32_t output_slice_height,
-                                          uint32_t output_slice_width) {
+                                          uint32_t output_slice_width,
+                                          uint32_t num_slices) {
         log_trace(
             tt::LogOp,
             "Conv2D DRAM Auto Slice Max Input Size : {}x{}, Max Output Size : {}x{}",
@@ -1218,7 +1215,7 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
             params.mm_conv,
             device->compute_with_storage_grid_size(),
             params.input_layout,
-            BufferType::DRAM,
+            num_slices == 1 ? BufferType::L1 : BufferType::DRAM,
             std::nullopt,
             conv_config.act_block_h_override));
 
@@ -1254,11 +1251,7 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
             .input_hw = {params.input_height, params.input_width},
             .window_hw = {params.kernel_size[0], params.kernel_size[1]}};
         const uint32_t input_channels_alignment = get_input_channels_alignment(
-            conv_config.shard_layout.value(),
-            conv_config.output_layout,
-            BufferType::DRAM,
-            params.mm_conv,
-            std::nullopt);
+            conv_config.shard_layout.value(), conv_config.output_layout, num_slices > 1, params.mm_conv, std::nullopt);
         const uint32_t in_channels_padded = tt::round_up(
             params.in_channels,
             get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
@@ -1397,8 +1390,12 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
             input_slice_height_end,
             input_slice_width_end);
 
-        auto [this_slice_l1_usage, this_slice_input_size, this_slice_approx_max_halo_size] =
-            compute_l1_usage_for_slice(input_slice_height, input_slice_width, output_slice_height, output_slice_width);
+        auto [this_slice_l1_usage, this_slice_input_size, this_slice_approx_max_halo_size] = compute_l1_usage_for_slice(
+            input_slice_height,
+            input_slice_width,
+            output_slice_height,
+            output_slice_width,
+            dram_slice_config.num_slices);
 
         output_slice_dim_start += output_slice_size;
         slice_index++;
@@ -1555,6 +1552,27 @@ bool conv2d::determine_packer_l1_acc(bool packer_l1_acc, bool enable_bias, uint3
     return packer_l1_acc && ((enable_bias && in0_num_blocks_w > 1) || (in0_num_blocks_w > 2));
 }
 
+bool auto_enable_kernel_folding(
+    std::optional<bool> enable_folding_,
+    bool is_dram,
+    uint32_t input_height,
+    uint32_t input_width,
+    std::array<uint32_t, 2>& kernel_size,
+    std::array<uint32_t, 2>& stride,
+    std::array<uint32_t, 4>& padding_n4) {
+    if (!enable_folding_.has_value()) {
+        if (stride[0] == kernel_size[0] && stride[1] == kernel_size[1] && (input_height % stride[0] == 0) &&
+            (input_width % stride[1] == 0) &&
+            (padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0) && is_dram) {
+            log_debug(tt::LogOp, "Auto enabling kernel folding");
+            return true;
+        } else {
+            return false;
+        }
+    } else {
+        return enable_folding_.value();
+    }
+}
 Tensor fold_input_tensor_if_required(
     const ttnn::Tensor& input_tensor,
     MeshDevice* device,
@@ -1568,7 +1586,16 @@ Tensor fold_input_tensor_if_required(
     Conv2dConfig& conv_config) {
     // Conv DRAM would fold the input tensor, but conv_config.enable_kernel_stride_folding would stil be true as weights
     // also need to be folded.
-    if (conv_config.enable_kernel_stride_folding && (stride[0] > 1 || stride[1] > 1)) {
+    conv_config.enable_kernel_stride_folding = auto_enable_kernel_folding(
+        conv_config.enable_kernel_stride_folding,
+        input_tensor.memory_config().is_dram(),
+        input_height,
+        input_width,
+        kernel_size,
+        stride,
+        padding_n4);
+
+    if (conv_config.enable_kernel_stride_folding.value() && (stride[0] > 1 || stride[1] > 1)) {
         auto folding_result = compute_kernel_stride_folding_params(
             input_height, input_width, in_channels, kernel_size, stride, padding_n4, conv_config);
         auto folded_input_tensor = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4);
@@ -1583,6 +1610,7 @@ Tensor fold_input_tensor_if_required(
         in_channels = folding_result.in_channels;
         stride = folding_result.stride;
         kernel_size = folding_result.kernel_size;
+        padding_n4 = folding_result.padding_n4;  // Padding is zero after folding
         mm_conv = folding_result.mm_conv;
         return folded_input_tensor;
     } else {
@@ -1601,9 +1629,6 @@ ttnn::Tensor fold_tensor(
         !tensor.memory_config().is_l1(),
         "Conv2D kernel stride folding: Input tensor must not be in L1 memory for folding");
     TT_FATAL(
-        padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0,
-        "Conv2D kernel stride folding: Padding must be 0 for folding");
-    TT_FATAL(
         tensor.dtype() != tt::tt_metal::DataType::BFLOAT8_B,
         "Conv2D kernel stride folding: Currently doesn't support BFLOAT8_B");
     TT_FATAL(
@@ -1617,7 +1642,7 @@ ttnn::Tensor fold_tensor(
     }
 
     // Core folding operation
-    tensor_on_device = ttnn::fold(tensor_on_device, stride[0], stride[1], false, std::nullopt, 0, 0, 0);
+    tensor_on_device = ttnn::fold(tensor_on_device, stride[0], stride[1], false, std::nullopt, padding_n4);
 
     return tensor_on_device;
 }
@@ -1630,23 +1655,36 @@ KernelStrideFoldingResult compute_kernel_stride_folding_params(
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 4> padding_n4,
     const Conv2dConfig& conv_config) {
-    TT_FATAL(input_height % stride[0] == 0, "Input height must be divisible by stride for kernel stride folding.");
-    TT_FATAL(input_width % stride[1] == 0, "Input width must be divisible by stride for kernel stride folding.");
+    // Calculate padded dimensions first - this is what the folding operation will see
+    uint32_t padded_height = input_height + padding_n4[0] + padding_n4[1];
+    uint32_t padded_width = input_width + padding_n4[2] + padding_n4[3];
 
-    // Update dimensions for folded operation
-    input_height = input_height / stride[0];
-    input_width = input_width / stride[1];
-    in_channels = in_channels * stride[0] * stride[1];
+    TT_FATAL(
+        padded_height % stride[0] == 0,
+        "Padded input height ({}) must be divisible by stride ({}) for kernel stride folding.",
+        padded_height,
+        stride[0]);
+    TT_FATAL(
+        padded_width % stride[1] == 0,
+        "Padded input width ({}) must be divisible by stride ({}) for kernel stride folding.",
+        padded_width,
+        stride[1]);
+
+    // Update dimensions for folded operation based on padded dimensions
+    uint32_t folded_height = padded_height / stride[0];
+    uint32_t folded_width = padded_width / stride[1];
+    uint32_t folded_channels = in_channels * stride[0] * stride[1];
 
     auto kernel_h = tt::div_up(kernel_size[0], stride[0]);
     auto kernel_w = tt::div_up(kernel_size[1], stride[1]);
 
     return KernelStrideFoldingResult{
-        .input_height = input_height,
-        .input_width = input_width,
-        .in_channels = in_channels,
+        .input_height = folded_height,
+        .input_width = folded_width,
+        .in_channels = folded_channels,
         .stride = {1, 1},
         .kernel_size = {kernel_h, kernel_w},
+        .padding_n4 = {0, 0, 0, 0},  // Padding is zero after folding
         .mm_conv = (kernel_size[0] == stride[0] && kernel_size[1] == stride[1])};
 }
 

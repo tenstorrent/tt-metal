@@ -11,7 +11,7 @@
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include "trace/trace_buffer.hpp"
@@ -26,7 +26,7 @@ class Device : public IDevice {
 public:
     Device() = delete;
     Device(
-        chip_id_t device_id,
+        ChipId device_id,
         uint8_t num_hw_cqs,
         std::size_t l1_small_size,
         std::size_t trace_region_size,
@@ -47,9 +47,9 @@ public:
 
     tt::ARCH arch() const override;
 
-    chip_id_t id() const override { return id_; }
+    ChipId id() const override { return id_; }
     // For a single device, build id is the same as device id
-    chip_id_t build_id() const override { return id_; }
+    ChipId build_id() const override { return id_; }
 
     uint8_t num_hw_cqs() const override { return num_hw_cqs_; }
 
@@ -83,8 +83,8 @@ public:
     // `skip_reserved_tunnel_cores` is ignored on BH because there are no ethernet cores used for Fast Dispatch
     // tunneling
     bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores = false) const override;
-    std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
-    std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const override;
+    std::tuple<ChipId, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
+    std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
     uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) override;
 
@@ -201,8 +201,8 @@ private:
     CoreCoord dram_core_from_dram_channel(uint32_t dram_channel, NOC noc = NOC::NOC_0) const;
     CoreCoord virtual_core_from_physical_core(const CoreCoord& physical_coord) const;
 
-    chip_id_t id_;
-    std::vector<std::vector<chip_id_t>> tunnels_from_mmio_;
+    ChipId id_;
+    std::vector<std::vector<ChipId>> tunnels_from_mmio_;
 
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
 

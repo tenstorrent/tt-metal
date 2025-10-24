@@ -41,29 +41,41 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Set default release-type for cron job
+        id: set-release-type
+        run: |
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            echo "Cron job detected, setting default release-type to 'dev'"
+            echo "RELEASE_TYPE=dev" >> "$GITHUB_ENV"
+            echo "Using release-type: dev"
+          else
+            echo "RELEASE_TYPE=${{ inputs.release-type }}" >> "$GITHUB_ENV"
+            echo "Using release-type: ${{ inputs.release-type }}"
+          fi
       - name: Get is-release-candidate and tag-type
         id: get-is-release-candidate-and-tag-type
         run: |
-          if [[ "${{ inputs.release-type }}" != "" && "${{ inputs.release-type }}" != "null" ]]; then
-            if [[ "${{ inputs.release-type }}" != "dev" && "${{ inputs.release-type }}" != "rc" && "${{ inputs.release-type }}" != "prod" ]]; then
-              echo "Invalid release-type input: ${{ inputs.release-type }}. Must be one of 'dev', 'rc', or 'prod'."
+          if [[ "$RELEASE_TYPE" != "" && "$RELEASE_TYPE" != "null" ]]; then
+            if [[ "$RELEASE_TYPE" != "dev" && "$RELEASE_TYPE" != "rc" && "$RELEASE_TYPE" != "prod" ]]; then
+              echo "Invalid release-type: $RELEASE_TYPE. Must be one of 'dev', 'rc', or 'prod'."
               exit 1
             fi
-            echo "Using provided release-type: ${{ inputs.release-type }}"
-            if [[ "${{ inputs.release-type }}" == "prod" ]]; then
+            echo "Processing release-type: $RELEASE_TYPE"
+            if [[ "$RELEASE_TYPE" == "prod" ]]; then
               echo "is-release-candidate=false" >> "$GITHUB_OUTPUT"
               echo "tag-type=" >> "$GITHUB_OUTPUT"
-            elif [[ "${{ inputs.release-type }}" == "rc" ]]; then
+            elif [[ "$RELEASE_TYPE" == "rc" ]]; then
               echo "is-release-candidate=true" >> "$GITHUB_OUTPUT"
               echo "tag-type=rc" >> "$GITHUB_OUTPUT"
             else
               echo "is-release-candidate=true" >> "$GITHUB_OUTPUT"
               echo "tag-type=dev" >> "$GITHUB_OUTPUT"
             fi
-            exit 0
+          else
+            echo "ERROR: RELEASE_TYPE is empty or null - this should not happen!"
+            echo "This indicates a problem with the 'Set default release-type for cron job' step."
+            exit 1
           fi
-          echo "Invalid release-type input: ${{ inputs.release-type }}. Must be one of 'dev', 'rc', or 'prod'."
-          exit 1
 
       - name: Get should-create-release
         id: get-should-create-release
@@ -246,11 +258,56 @@ jobs:
           fetch-depth: 0
       - name: Fetch all tags
         run: git fetch --tags --force origin
-      - name: Get latest release version
+      - name: Get latest release candidate version
         id: get-latest-release
         run: |
-          latestReleaseVersion=$(curl -s https://api.github.com/repos/tenstorrent/tt-metal/releases/latest | jq -r .tag_name)
-          echo "Latest release version: $latestReleaseVersion"
+          # Get the latest release candidate (pre-release with -rc suffix)
+          # Sort by published_at in descending order to ensure we get the most recent
+          latestRCVersion=$(curl -s https://api.github.com/repos/tenstorrent/tt-metal/releases | jq -r 'sort_by(.published_at) | reverse | .[] | select(.prerelease == true and (.tag_name | contains("-rc"))) | .tag_name' | head -1)
+
+          # Get the latest production release
+          latestProdVersion=$(curl -s https://api.github.com/repos/tenstorrent/tt-metal/releases/latest | jq -r .tag_name)
+
+          echo "Latest RC version: $latestRCVersion"
+          echo "Latest production version: $latestProdVersion"
+
+          # Function to compare semantic versions
+          # Returns: 0 if v1 > v2, 1 if v1 < v2, 2 if v1 == v2
+          compare_versions() {
+            # Remove 'v' prefix and any suffix (like -rc1) for comparison
+            v1=$(echo "$1" | sed 's/^v//' | sed 's/-.*$//')
+            v2=$(echo "$2" | sed 's/^v//' | sed 's/-.*$//')
+
+            # Use sort -V to compare semantic versions
+            [ "$v1" = "$v2" ] && return 2
+            printf '%s\n%s\n' "$v1" "$v2" | sort -V -C 2>/dev/null && return 1 || return 0
+          }
+
+          # Determine which version to use based on release workflow logic
+          if [ -z "$latestRCVersion" ] || [ "$latestRCVersion" = "null" ]; then
+            echo "No release candidate found, using latest production release"
+            latestReleaseVersion="$latestProdVersion"
+          else
+            compare_versions "$latestRCVersion" "$latestProdVersion"
+            comparison_result=$?
+
+            case $comparison_result in
+              2) # Equal versions
+                echo "RC and production versions are equal ($latestRCVersion ≈ $latestProdVersion), using production release"
+                latestReleaseVersion="$latestProdVersion"
+                ;;
+              0) # RC > Production
+                echo "RC version ($latestRCVersion) is newer than production ($latestProdVersion), using RC"
+                latestReleaseVersion="$latestRCVersion"
+                ;;
+              1) # RC < Production
+                echo "Production version ($latestProdVersion) is newer than RC ($latestRCVersion), using production"
+                latestReleaseVersion="$latestProdVersion"
+                ;;
+            esac
+          fi
+
+          echo "Selected version for comparison: $latestReleaseVersion"
           echo "latest-release-version=$latestReleaseVersion" >> "$GITHUB_OUTPUT"
       - name: Check for new commits since latest release
         id: check-new-commits

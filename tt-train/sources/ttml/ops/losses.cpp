@@ -33,6 +33,12 @@ autograd::TensorPtr mse_loss(
 
 autograd::TensorPtr cross_entropy_loss(
     const autograd::TensorPtr& prediction, const autograd::TensorPtr& target, ReduceType reduce) {
+    if (reduce != ReduceType::NONE && reduce != ReduceType::MEAN) {
+        throw std::logic_error(fmt::format(
+            "Unsupported cross entropy reduction type, only NONE and MEAN are supported. Got: {}",
+            enchantum::to_string(reduce)));
+    }
+
     auto prediction_shape = prediction->get_shape();
     auto target_shape = target->get_shape();
 
