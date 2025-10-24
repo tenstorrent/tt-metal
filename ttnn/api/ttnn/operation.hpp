@@ -643,7 +643,6 @@ public:
     bool uses_custom_program_hash() const { return this->uses_custom_program_hash_impl_(); }
 
     Hash compute_program_hash(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors) const {
-        ZoneScoped;
         return this->compute_program_hash_impl_(this->type_erased_storage, input_tensors, optional_input_tensors);
     }
 

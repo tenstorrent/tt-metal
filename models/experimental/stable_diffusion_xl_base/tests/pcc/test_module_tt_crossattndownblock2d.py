@@ -34,6 +34,7 @@ def test_crossattndown(
     out_dim,
     down_block_id,
     pcc,
+    debug_mode,
     is_ci_env,
     reset_seeds,
 ):
@@ -59,6 +60,7 @@ def test_crossattndown(
         num_attn_heads,
         out_dim,
         down_block_id == 1,
+        debug_mode=debug_mode,
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_temb_tensor = torch_random(temb_shape, -0.1, 0.1, dtype=torch.float32)
