@@ -127,7 +127,7 @@ jobs:
             runner-label: config-t3000,
             arch: arch-wormhole_b0,
             mesh-device: T3K,
-            override-tt-config: "{\"fabric_config\": \"FABRIC_1D\", \"l1_small_size\": 768}",
+            override-tt-config: "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"worker_l1_size\": 1344544, \"trace_region_size\": 21448704, \"l1_small_size\": 24576}",
             tt-llama-text-ver: tt_transformers,
             multimodal: true,
             use-vllm-v1: true,
@@ -159,7 +159,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
+        - /mnt/MLPerf:/mnt/MLPerf:rw
       options: "--device /dev/tenstorrent"
     defaults:
       run:
