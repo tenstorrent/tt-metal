@@ -368,24 +368,6 @@ void Inspector::clear_all_core_info() {
     }
 }
 
-void Inspector::set_command_queue_event_info(const ChipId device_id, const uint8_t cq_id, const uint32_t event_id) {
-    if (!is_enabled()) {
-        return;
-    }
-    try {
-        auto* data = get_inspector_data();
-        std::lock_guard<std::mutex> lock(data->cq_to_event_by_device_mutex);
-
-        // resizing efficiency can be improved here. e.g. resize in powers of 2
-        if (data->cq_to_event_by_device[device_id].size() <= cq_id) {
-            data->cq_to_event_by_device[device_id].resize(cq_id + 1);
-        }
-        data->cq_to_event_by_device[device_id][cq_id] = event_id;
-    } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log command queue event info: {}", e.what());
-    }
-}
-
 inspector::RpcServer& Inspector::get_rpc_server() {
     if (is_enabled()) {
         try {

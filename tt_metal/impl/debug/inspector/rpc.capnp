@@ -104,6 +104,22 @@ struct CoreEntry {
   info @1 :CoreInfo;  # deviceId, servicingDeviceId, workType, cqId
 }
 
+# Simplified core type enum for grouping cores by their storage category
+# Maps to the three internal data structures: dispatch_core_info,
+# dispatch_s_core_info, prefetch_core_info
+enum CoreCategory {
+    prefetch @0;
+    dispatch @1;
+    dispatchS @2;
+    count @3; # Just for counting
+}
+
+# Struct to group core entries by category
+struct CoreEntriesByCategory {
+    category @0 :CoreCategory;
+    entries @1 :List(CoreEntry);
+}
+
 interface Inspector {
     # Get programs currently alive
     getPrograms @0 () -> (programs :List(ProgramData));
@@ -126,21 +142,6 @@ interface Inspector {
     # providing correct firmware locations for each device
     getAllBuildEnvs @5 () -> (buildEnvs :List(BuildEnvPerDevice));
 
-    # Get dispatch core Info
-    getDispatchCoreInfo @6 (key: VirtualCore) -> (info: CoreInfo);
-
-    # Get all active dispatch core information
-    getAllDispatchCoreInfos @7 () -> (entries :List(CoreEntry));
-
-    # Get dispatch_s core Info
-    getDispatchSCoreInfo @8 (key: VirtualCore) -> (info: CoreInfo);
-
-    # Get all active dispatch_s core information
-    getAllDispatchSCoreInfos @9 () -> (entries :List(CoreEntry));
-
-    # Get prefetch core Info
-    getPrefetchCoreInfo @10 (key: VirtualCore) -> (info: CoreInfo);
-
-    # Get all active prefetch core information
-    getAllPrefetchCoreInfos @11 () -> (entries :List(CoreEntry));
+    # Get all core Info
+    getAllDispatchCoreInfos @6 () -> (coresByCategory :List(CoreEntriesByCategory));
 }
