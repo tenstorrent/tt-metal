@@ -15,7 +15,7 @@
 #include "trace/trace_buffer.hpp"
 #include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
-#include "flatbuffer/base_types_from_flatbuffer.hpp"
+// #include "flatbuffer/base_types_from_flatbuffer.hpp"
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_from_flatbuffer.hpp"
 
@@ -333,10 +333,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::Command* comm
             execute(command->cmd_as_ProgramConstructorCommand());
             break;
         }
-        case ::tt::tt_metal::flatbuffer::CommandType::EnqueueProgramCommand: {
-            execute(command->cmd_as_EnqueueProgramCommand());
-            break;
-        }
+        // Removed: EnqueueProgramCommand
         case ::tt::tt_metal::flatbuffer::CommandType::CreateKernelCommand: {
             execute(command->cmd_as_CreateKernelCommand());
             break;
@@ -530,24 +527,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ProgramConstr
     add_program_to_map(cmd->global_id(), std::make_shared<Program>());
 }
 
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueProgramCommand* cmd) {
-    auto program = get_program_from_map(cmd->program_global_id());
-    TT_FATAL(
-        program,
-        "Attempted to EnqueueProgram() program w/ global_id: {} that was not previously created.",
-        cmd->program_global_id());
-
-    log_debug(
-        tt::LogMetalTrace,
-        "LightMetalReplay(EnqueueProgram) program_global_id: {} cq_global_id: {}",
-        cmd->program_global_id(),
-        cmd->cq_global_id());
-
-    // TODO (kmabee) - consider storing/getting CQ from global map instead.
-    // CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
-    // Issue #24955: Enable after Light-Metal rearchitecture
-    // EnqueueProgram(cq, *program, cmd->blocking());
-}
+// Removed: execute(EnqueueProgramCommand)
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateKernelCommand* cmd) {
     log_debug(
