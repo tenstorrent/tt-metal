@@ -548,14 +548,7 @@ def train():
                 total_steps,
             )
             val_losses.append(last_val_loss)
-        """
-        if training_config.save_every > 0 and (total_steps % training_config.save_every == 0):
-            ckpt_path = tt_serialization._save_model_npz(
-                tt_model, training_config.checkpoint_dir, step=total_steps
-            )
-            print(f"[Checkpoint] Saved model to {ckpt_path}")
-        """
-
+            
         with open("output.txt", "a") as f:
             f.write(
                 f"LR: {lr_now:.6f}, training_loss: {step_loss:.4f}, val_loss: {last_val_loss:.4f}, step: {total_steps}, epoch: 1\n"

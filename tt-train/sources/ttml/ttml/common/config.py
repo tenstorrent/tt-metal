@@ -60,6 +60,7 @@ class TrainingConfig:
         """
         tc = yaml_config.get("training_config", {})
         self.batch_size = int(tc.get("batch_size", 64))
+        self.validation_batch_size = int(tc.get("validation_batch_size", min(self.batch_size // 2, 1)))
         self.steps = int(tc.get("max_steps", 1000))
         self.epochs = int(tc.get("num_epochs", 1))
         self.eval_every = int(tc.get("eval_every", 200))
