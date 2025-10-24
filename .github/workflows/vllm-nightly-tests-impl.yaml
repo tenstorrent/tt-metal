@@ -300,8 +300,10 @@ jobs:
                       "text": "Describe this image in 50 words."
                     },
                     {
-                      "type": "image",
-                      "image": "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/cats.jpeg"
+                      "type": "image_url",
+                      "image_url": {
+                        "url": "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/cats.jpeg"
+                      }
                     }
                   ]
                 }
