@@ -11,7 +11,6 @@
 #include "fd_kernel.hpp"
 #include "mesh_graph.hpp"
 #include "impl/context/metal_context.hpp"
-#include "impl/debug/inspector/inspector.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
@@ -95,32 +94,7 @@ public:
         uint8_t cq_id,
         noc_selection_t noc_selection,
         bool h_variant,
-        bool d_variant) :
-        FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection) {
-        auto& core_manager = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager();  // Not thread safe
-        static_config_.is_h_variant = h_variant;
-        static_config_.is_d_variant = d_variant;
-        uint16_t channel =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
-
-        DispatchWorkerType type = PREFETCH;
-        if (h_variant && d_variant) {
-            this->logical_core_ = core_manager.prefetcher_core(device_id, channel, cq_id);
-            type = PREFETCH_HD;
-        } else if (h_variant) {
-            channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
-                servicing_device_id);
-            this->logical_core_ = core_manager.prefetcher_core(servicing_device_id, channel, cq_id);
-            type = PREFETCH_H;
-        } else if (d_variant) {
-            this->logical_core_ = core_manager.prefetcher_d_core(device_id, channel, cq_id);
-            type = PREFETCH_D;
-        }
-        this->kernel_type_ = FDKernelType::DISPATCH;
-        // Log prefetcher core info based on virtual core to inspector
-        auto virtual_core = this->GetVirtualCore();
-        tt::tt_metal::Inspector::set_prefetcher_core_info(virtual_core, type, cq_id, device_id, servicing_device_id);
-    }
+        bool d_variant);
 
     void CreateKernel() override;
 

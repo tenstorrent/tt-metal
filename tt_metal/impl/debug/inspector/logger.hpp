@@ -29,9 +29,6 @@ private:
     std::ofstream kernels_ostream;
     std::ofstream mesh_devices_ostream;
     std::ofstream mesh_workloads_ostream;
-    std::ofstream dispatch_core_ostream;
-    std::ofstream dispatch_s_core_ostream;
-    std::ofstream prefetcher_core_ostream;
     bool initialized;
     std::filesystem::path logging_path;
 
@@ -60,14 +57,8 @@ public:
     void log_mesh_workload_created(const MeshWorkloadData& mesh_workload_data) noexcept;
     void log_mesh_workload_destroyed(const MeshWorkloadData& mesh_workload_data) noexcept;
     void log_mesh_workload_add_program(const MeshWorkloadData& mesh_workload_data, const distributed::MeshCoordinateRange& device_range, std::size_t program_id) noexcept;
-    void log_mesh_workload_set_program_binary_status(const MeshWorkloadData& mesh_workload_data, std::size_t mesh_id, ProgramBinaryStatus status) noexcept;
-
-    void log_dispatch_core_info(const tt_cxy_pair& virtual_core, const CoreInfo& core_info) noexcept;
-    void log_dispatch_s_core_info(const tt_cxy_pair& virtual_core, const CoreInfo& core_info) noexcept;
-    void log_prefetcher_core_info(const tt_cxy_pair& virtual_core, const CoreInfo& core_info) noexcept;
-
-    void log_core_info_to_stream(
-        std::ostream& outstream, const tt_cxy_pair& virtual_core, const CoreInfo& core_info) noexcept;
+    void log_mesh_workload_set_program_binary_status(
+        const MeshWorkloadData& mesh_workload_data, std::size_t mesh_id, ProgramBinaryStatus status) noexcept;
 };
 
 }  // namespace tt::tt_metal::inspector
