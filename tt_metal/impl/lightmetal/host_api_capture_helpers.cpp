@@ -7,13 +7,11 @@
 #include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
-// #include "dispatch/system_memory_manager.hpp"
 
 #include <kernel_types.hpp>
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "command_generated.h"
 #include "lightmetal/lightmetal_capture.hpp"
-// #include "flatbuffer/base_types_to_flatbuffer.hpp"
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_to_flatbuffer.hpp"
 
@@ -285,8 +283,6 @@ void CaptureProgramConstructor(Program& program) {
     auto cmd = tt::tt_metal::flatbuffer::CreateProgramConstructorCommand(ctx.get_builder(), program_global_id);
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::ProgramConstructorCommand, cmd.Union());
 }
-
-// Removed: CaptureEnqueueProgram
 
 void CaptureCreateKernel(
     KernelHandle kernel_id,

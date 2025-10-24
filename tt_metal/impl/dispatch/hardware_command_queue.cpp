@@ -30,7 +30,6 @@
 #include "event/dispatch.hpp"
 #include "hal_types.hpp"
 #include <tt-logger/tt-logger.hpp>
-// #include "program/program_device_map.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "system_memory_manager.hpp"
 #include "trace/trace_node.hpp"
@@ -405,8 +404,6 @@ void HWCommandQueue::enqueue_write_to_core(
         this->finish(sub_device_ids);
     }
 }
-
-// Removed: HWCommandQueue::enqueue_program
 
 void HWCommandQueue::enqueue_record_event(
     const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids) {

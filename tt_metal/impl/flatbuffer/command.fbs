@@ -73,8 +73,6 @@ table ProgramConstructorCommand {
   global_id: uint32;
 }
 
-// Removed: EnqueueProgramCommand
-
 table CreateKernelCommand {
   global_id: uint32;          // Reference to Kernel
   program_global_id: uint32;  // Reference to Program
