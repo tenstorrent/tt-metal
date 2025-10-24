@@ -15,9 +15,6 @@ from tracy.process_model_log import (
 from termcolor import colored
 import json
 
-PREFILL_OP_START_INDEX = 0
-PREFILL_OP_END_INDEX = 35
-
 
 def merge_device_rows(df):
     block_by_device = defaultdict(list)
