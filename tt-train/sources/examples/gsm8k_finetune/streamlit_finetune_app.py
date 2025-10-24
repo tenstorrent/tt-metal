@@ -426,7 +426,7 @@ def main():
         # YAML output directory configuration
         yaml_output_dir = st.text_input(
             "Override YAML Directory",
-            value="/home/training-team/git/tt-metal/tt-train/sources/examples/gsm8k_finetune",
+            value=f"{os.environ['TT_METAL_HOME']}/tt-train/configs/",
             help="Directory where training_overrides.yaml will be saved",
         )
 
@@ -463,7 +463,7 @@ def main():
                     st.rerun()
                 else:
                     st.error(message)
-
+                    
         with col_stop:
             if st.button("Stop Training", use_container_width=True, disabled=not is_running):
                 success, message = stop_training()

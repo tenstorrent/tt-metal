@@ -350,10 +350,10 @@ def train():
     tokenizer = AutoTokenizer.from_pretrained("TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T")
     yaml_config = get_config(CONFIG)
 
-    training_overrides_path = '/home/training-team/git/tt-metal/tt-train/sources/examples/gsm8k_finetune/training_overrides.yaml'
-    if os.path.isfile(training_overrides_path):
+    override_config_path = f"{os.environ['TT_METAL_HOME']}/tt-train/configs/training_overrides.yaml"
+    if os.path.isfile(override_config_path):
         print("Applying training overrides...")
-        override_config = get_config(training_overrides_path)
+        override_config = get_config(override_config_path)
         def deep_update(a: dict, b: dict) -> dict:
             for k, v in b.items():
                 if (
