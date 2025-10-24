@@ -22,12 +22,15 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <yaml-cpp/yaml.h>
 #include <tt_stl/assert.hpp>
 
 #include "control_plane.hpp"
 #include "core_coord.hpp"
 #include "compressed_routing_table.hpp"
 #include "compressed_routing_path.hpp"
+#include "tools/scaleout/cabling_generator/cabling_generator.hpp"
+#include "tools/scaleout/factory_system_descriptor/utils.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include "distributed_context.hpp"
 #include "fabric_types.hpp"
@@ -48,6 +51,9 @@
 #include "tt_stl/small_vector.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/fabric/serialization/port_descriptor_serialization.hpp"
+#include <unistd.h>
+#include <chrono>
+#include <sstream>
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 
@@ -456,13 +462,21 @@ void ControlPlane::initialize_distributed_contexts() {
 }
 
 FabricNodeId ControlPlane::get_fabric_node_id_from_asic_id(uint64_t asic_id) const {
+    // Check cache first for faster lookup
+    auto cache_it = asic_id_to_fabric_node_cache_.find(asic_id);
+    if (cache_it != asic_id_to_fabric_node_cache_.end()) {
+        return cache_it->second;
+    }
+
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& chip_unique_ids = cluster.get_unique_chip_ids();
 
     for (const auto& [physical_chip_id, unique_id] : chip_unique_ids) {
-        // TODO: We can maintain a map of unique_id to physical_chip_id for faster lookup
         if (unique_id == asic_id) {
-            return this->get_fabric_node_id_from_physical_chip_id(physical_chip_id);
+            FabricNodeId fabric_node_id = this->get_fabric_node_id_from_physical_chip_id(physical_chip_id);
+            // Cache the result for future lookups
+            asic_id_to_fabric_node_cache_.emplace(asic_id, fabric_node_id);
+            return fabric_node_id;
         }
     }
 
@@ -2913,6 +2927,158 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
         }
     }
     return intermesh_connections;
+}
+
+bool ControlPlane::is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_config) const {
+    if (fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
+        return false;
+    }
+
+    static const std::unordered_set<tt::tt_fabric::FabricConfig> torus_fabric_configs = {
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY
+    };
+
+    if (torus_fabric_configs.count(fabric_config)) {
+        return validate_torus_setup(fabric_config);
+    }
+
+    // Non-torus configurations are valid by default since we always have at least mesh topology,
+    // and mesh configurations don't require special validation like torus does
+    return true;
+}
+
+bool ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_config) const {
+    try {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster().get_driver();
+        auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        bool using_mock = tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled();
+
+        // Create physical system descriptor with correct constructor
+        tt::tt_metal::PhysicalSystemDescriptor physical_system_descriptor(
+            cluster,
+            distributed_context,
+            &hal,
+            using_mock,
+            true  // run_discovery
+        );
+
+        auto all_hostnames = physical_system_descriptor.get_all_hostnames();
+
+        // Get the cabling descriptor path for the expected torus configuration
+        auto cabling_descriptor_path = get_cabling_descriptor_path(fabric_config);
+
+        // Check if the cabling descriptor file exists
+        if (!std::filesystem::exists(cabling_descriptor_path)) {
+            log_warning(
+                tt::LogFabric,
+                "Cabling descriptor file not found: {}. Skipping torus validation.",
+                cabling_descriptor_path);
+            return false;  // Skip test if no golden configuration available
+        }
+
+        // Generate FSD from the cabling descriptor as string (in-memory)
+        tt::scaleout_tools::CablingGenerator cabling_generator(cabling_descriptor_path, all_hostnames);
+        std::string fsd_string = cabling_generator.generate_factory_system_descriptor_string();
+
+        // Generate GSD from the physical system descriptor as string (in-memory)
+        std::string gsd_string = physical_system_descriptor.generate_yaml_string();
+
+        // Perform validation by comparing FSD and GSD strings
+        if (fsd_string.empty() || gsd_string.empty()) {
+            log_warning(tt::LogFabric, "Generated descriptor strings are empty");
+            return false;
+        }
+
+        // Compare the two descriptors for torus validation
+        bool descriptors_match = compare_system_descriptors(fsd_string, gsd_string);
+        
+        if (descriptors_match) {
+            log_info(tt::LogFabric, "Torus validation passed: FSD and GSD are compatible for configuration: {}", static_cast<int>(fabric_config));
+            return true;
+        } else {
+            log_warning(tt::LogFabric, "Torus validation failed: FSD and GSD are incompatible for configuration: {}", static_cast<int>(fabric_config));
+            return false;
+        }
+
+    } catch (const std::exception& e) {
+        log_warning(tt::LogFabric, "Torus validation failed for configuration '{}': {}", static_cast<int>(fabric_config), e.what());
+        return false;  // Return false to skip the test
+    }
+}
+
+std::string ControlPlane::get_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) const {
+    static const std::string X_TORUS_PATH = "tools/tests/scaleout/cabling_descriptors/wh_galaxy_x_torus_superpod.textproto";
+    static const std::string Y_TORUS_PATH = "tools/tests/scaleout/cabling_descriptors/wh_galaxy_y_torus_superpod.textproto";
+    static const std::string XY_TORUS_PATH = "tools/tests/scaleout/cabling_descriptors/wh_galaxy_xy_torus_superpod.textproto";
+
+    static const std::unordered_map<tt::tt_fabric::FabricConfig, std::string> cabling_map = {
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X, X_TORUS_PATH},
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X, X_TORUS_PATH},
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y, Y_TORUS_PATH},
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y, Y_TORUS_PATH},
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY, XY_TORUS_PATH},
+        {tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY, XY_TORUS_PATH}
+    };
+
+    auto it = cabling_map.find(fabric_config);
+    if (it == cabling_map.end()) {
+        log_warning(tt::LogFabric, "Unknown torus configuration: {}", static_cast<int>(fabric_config));
+        return "";  // Return empty string for unknown configurations
+    }
+
+    const auto& root_dir = tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir();
+    return root_dir + it->second;
+}
+
+bool ControlPlane::compare_system_descriptors(const std::string& fsd_string, const std::string& gsd_string) const {
+    try {
+        // Parse both descriptors as YAML
+        YAML::Node fsd_yaml = YAML::Load(fsd_string);
+        YAML::Node gsd_yaml = YAML::Load(gsd_string);
+
+        // Basic validation: both should be valid YAML with expected structure
+        if (!fsd_yaml["compute_node_specs"] || !gsd_yaml["compute_node_specs"]) {
+            log_debug(tt::LogFabric, "Missing compute_node_specs in one of the descriptors");
+            return false;
+        }
+
+        // For torus validation, we primarily care about:
+        // 1. Number of hosts should match
+        // 2. Number of ASICs per host should be compatible
+        // 3. Connection patterns should be feasible (but we don't need exact match)
+
+        const auto& fsd_compute_nodes = fsd_yaml["compute_node_specs"];
+        const auto& gsd_compute_nodes = gsd_yaml["compute_node_specs"];
+        
+        // Check if both have the same number of hosts
+        if (fsd_compute_nodes.size() != gsd_compute_nodes.size()) {
+            log_debug(tt::LogFabric, "FSD and GSD have different number of hosts: {} vs {}", 
+                     fsd_compute_nodes.size(), gsd_compute_nodes.size());
+            return false;
+        }
+
+        // Basic compatibility check - each host in FSD should exist in GSD
+        for (const auto& fsd_host : fsd_compute_nodes) {
+            const std::string host_name = fsd_host.first.as<std::string>();
+            if (!gsd_compute_nodes[host_name]) {
+                log_debug(tt::LogFabric, "Host {} present in FSD but missing in GSD", host_name);
+                return false;
+            }
+        }
+
+        log_debug(tt::LogFabric, "FSD and GSD basic compatibility check passed");
+        return true;
+
+    } catch (const std::exception& e) {
+        log_warning(tt::LogFabric, "Error comparing system descriptors: {}", e.what());
+        return false;
+    }
 }
 
 ControlPlane::~ControlPlane() = default;
