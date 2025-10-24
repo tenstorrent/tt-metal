@@ -181,7 +181,7 @@ int LinkFabricLite(
     link_oss << fmt::format("-T{} ", output_ld.string());  // Use preprocessed linker script
     link_oss << fmt::format("-Wl,-Map={}/lite_fabric.map ", out_dir.string());
     link_oss << fmt::format("-save-temps {}/lite_fabric.o ", out_dir.string());
-    link_oss << fmt::format("{}/runtime/hw/lib/blackhole/tmu-crt0.o ", root_dir.string());     // FIXME: hardcoded path
+    link_oss << fmt::format("{}/runtime/hw/lib/blackhole/tmu-crt0-no-gp.o ", root_dir.string());     // FIXME: hardcoded path
     link_oss << fmt::format("{}/runtime/hw/lib/blackhole/substitutes.o ", root_dir.string());  // FIXME: hardcoded path
     link_oss << fmt::format("-o {}", elf_out.string());
 

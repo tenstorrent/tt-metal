@@ -46,9 +46,6 @@ SECTIONS
     . = ALIGN(ABSOLUTE(.) + 0, 16);
     __fw_export_text_end = ABSOLUTE(.);
 
-    /* Set up global pointer for efficient access to data */
-    PROVIDE(__global_pointer$ = LITE_FABRIC_DATA_START + 0x7f0);
-
     /* Data section starts at local memory base */
     .data LITE_FABRIC_DATA_START :
     {
