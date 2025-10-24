@@ -173,6 +173,7 @@ target_sources(
             fabric/mesh_graph_descriptors/p150_x4_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/p300_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/single_galaxy_torus_x_graph_descriptor.yaml
@@ -189,6 +190,7 @@ target_sources(
             fabric/mesh_graph_descriptors/p150_x4_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/p300_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/single_galaxy_torus_x_graph_descriptor.textproto
