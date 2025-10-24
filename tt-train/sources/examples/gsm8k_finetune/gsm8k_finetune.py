@@ -309,42 +309,6 @@ def validate(
     tt_model.train()
     return np.mean(cur_val_losses)
 
-
-def generate_text_tinyllama(tokenizer, question, max_gen_tokens=100, temperature=0.7):
-    """Generate text using HuggingFace TinyLlama for comparison."""
-    # Load TinyLlama model with BF16 precision
-    tinyllama_model = AutoModelForCausalLM.from_pretrained(
-        "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T", torch_dtype=torch.bfloat16
-    )
-    tinyllama_model.eval()
-
-    # Tokenize input
-    inputs = tokenizer(question, return_tensors="pt")
-    input_ids = inputs["input_ids"]
-
-    # Generate text
-    print(f"\nTinyLlama Generation for: {question}")
-    print("=" * 50)
-    print(question, end="", flush=True)
-
-    with torch.no_grad():
-        generated_ids = tinyllama_model.generate(
-            input_ids,
-            max_new_tokens=max_gen_tokens,
-            do_sample=False,
-            temperature=0,
-            pad_token_id=tokenizer.eos_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-        )
-
-    # Decode only the generated part (excluding input)
-    generated_text = tokenizer.decode(generated_ids[0][input_ids.shape[1] :], skip_special_tokens=True)
-    print(generated_text)
-    print("=" * 50)
-
-    return generated_text
-
-
 def adjust_logits(logits, binary_mask, add_mask):
     masked_logits = binary_mask * logits
     masked_logits = masked_logits + add_mask
