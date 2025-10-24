@@ -383,6 +383,29 @@ run_t3000_sd35large_tests() {
 }
 
 
+run_t3000_wan22_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_wan22_tests"
+
+  # Run test_model for Wan2.2
+  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_rope.py -k "2x4"; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_attention_wan.py -k "2x4"; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "transformer_block and 2x4sp0tp1 or short_seq-2x4sp0tp1 or model_caching"; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "2x4 or 1x8 or test_autoencoder_kl_wan or test_wan_rmsnorm or test_wan_attention or test_wan_conv3d"; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_wan22_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+
 run_t3000_tests() {
   # Run ethernet tests
   run_t3000_ethernet_tests
