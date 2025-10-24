@@ -30,6 +30,13 @@ std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() con
             wrap_around_mesh[mesh_id] = false;
             continue;
         }
+
+        if (mesh_id == this->local_mesh_id_ && this->is_local_mesh_configured_as_switch_) {
+            // if the local mesh is configured as switch, we cannot have wrap around mesh
+            wrap_around_mesh[mesh_id] = false;
+            continue;
+        }
+
         // we can wrap around mesh if the corner chip (logical chip 0) has exactly 2 connections
         const uint32_t corner_chip_id = 0;
         uint32_t corner_chip_connections = 0;
@@ -116,10 +123,35 @@ std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> FabricContext::get_ed
         this->channel_buffer_size_bytes_, this->topology_, edm_options);
 }
 
+std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> FabricContext::get_switch_edm_config_options() {
+    auto edm_buffer_config = tt::tt_fabric::FabricRouterBufferConfig{
+        .enable_dateline_sender_extra_buffer_slots = false,
+        .enable_dateline_receiver_extra_buffer_slots = false,
+        .enable_dateline_upstream_sender_extra_buffer_slots = false,
+        .enable_dateline_upstream_receiver_extra_buffer_slots = false,
+        .enable_dateline_upstream_adjacent_sender_extra_buffer_slots = false,
+    };
+    auto edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
+        .edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default,
+        .edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short,
+        .edm_buffer_config = edm_buffer_config,
+        .fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED,
+        .direction = eth_chan_directions::EAST,  // direction doesn't matter for switch config
+    };
+
+    return std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
+        this->channel_buffer_size_bytes_, this->topology_, edm_options);
+}
+
 FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     TT_FATAL(
         fabric_config != tt::tt_fabric::FabricConfig::DISABLED,
         "Trying to initialize fabric context for disabled fabric config");
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    this->local_mesh_id_ = control_plane.get_user_physical_mesh_ids()[0];
+    this->is_local_mesh_configured_as_switch_ = control_plane.is_mesh_configured_as_switch(this->local_mesh_id_);
 
     this->fabric_config_ = fabric_config;
 
@@ -170,6 +202,11 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
             static_cast<eth_chan_directions>(direction));
     }
 
+    if (is_local_mesh_configured_as_switch_) {
+        // switch router config
+        this->switch_router_config_ = get_switch_edm_config_options();
+    }
+
     // Tensix config will be initialized later after routing tables are configured
     tensix_config_ = nullptr;
 
@@ -198,6 +235,11 @@ bool FabricContext::is_2D_routing_enabled() const { return this->is_2D_routing_e
 bool FabricContext::is_dynamic_routing_enabled() const { return this->is_dynamic_routing_enabled_; }
 
 bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions direction) const {
+    if (is_local_mesh_configured_as_switch_) {
+        // if the local mesh is configured as switch, we don't need deadlock avoidance
+        return false;
+    }
+
     if (topology_ == Topology::Ring) {
         return true;
     } else if (topology_ == Topology::Torus) {
@@ -227,6 +269,12 @@ tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_conf
     tt::tt_fabric::FabricEriscDatamoverAxis fabric_edm_axis,
     tt::tt_fabric::FabricTensixConfig fabric_tensix_config,
     eth_chan_directions direction) const {
+    if (is_local_mesh_configured_as_switch_) {
+        // if the local mesh is configured as switch, return switch router config
+        TT_FATAL(switch_router_config_ != nullptr, "Error, fabric switch router config is uninitialized");
+        return *switch_router_config_;
+    }
+
     auto axis_index = static_cast<std::size_t>(fabric_edm_axis);
     switch (fabric_tensix_config) {
         case tt::tt_fabric::FabricTensixConfig::DISABLED:

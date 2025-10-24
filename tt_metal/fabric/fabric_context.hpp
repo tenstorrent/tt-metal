@@ -78,7 +78,13 @@ private:
         tt::tt_fabric::FabricTensixConfig fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED,
         eth_chan_directions direction = eth_chan_directions::EAST);
 
+    std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> get_switch_edm_config_options();
+
     bool initialized_ = false;
+
+    MeshId local_mesh_id_{0};
+    bool is_local_mesh_configured_as_switch_ = false;
+
     tt::tt_fabric::FabricConfig fabric_config_{};
     tt::tt_fabric::Topology topology_{};
 
@@ -102,6 +108,8 @@ private:
 
     // Tensix config for fabric mux configuration (same for all devices)
     std::unique_ptr<tt::tt_fabric::FabricTensixDatamoverConfig> tensix_config_;
+
+    std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> switch_router_config_ = nullptr;
 
     // Using vectors. Use Device IDs as indices
     size_t num_devices = 0;
