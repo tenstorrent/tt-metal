@@ -15,16 +15,13 @@ Description:
 from dataclasses import dataclass
 import os
 
-from ttexalens.hw.tensix.wormhole.wormhole import WormholeDevice
-from ttexalens.hw.tensix.blackhole.blackhole import BlackholeDevice
 from inspector_data import run as get_inspector_data, InspectorData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from triage import triage_singleton, ScriptConfig, run_script, log_check
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.firmware import ELF
-from ttexalens.parse_elf import mem_access
 from ttexalens.context import Context
-from triage import TTTriageError, collection_serializer, triage_field, hex_serializer
+from triage import TTTriageError, triage_field, hex_serializer
 from run_checks import run as get_run_checks
 from run_checks import RunChecks
 
@@ -88,14 +85,14 @@ class DispatcherData:
             # Use build_env for initial firmware paths
             brisc_elf_path = os.path.join(build_env.firmwarePath, "brisc", "brisc.elf")
             idle_erisc_elf_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
-            active_erisc_elf_name = "erisc" if isinstance(run_checks.devices[0], WormholeDevice) else "active_erisc"
+            active_erisc_elf_name = "erisc" if run_checks.devices[0].is_wormhole() else "active_erisc"
             active_erisc_elf_path = os.path.join(
                 build_env.firmwarePath, active_erisc_elf_name, active_erisc_elf_name + ".elf"
             )
 
             # On blackhole we have 2 modes (1-ERISC and 2-ERISC)
             # By checking if the subordinate active erisc elf exists, we can determine in which mode we are
-            if isinstance(run_checks.devices[0], BlackholeDevice):
+            if run_checks.devices[0].is_blackhole():
                 self._is_2_erisc_mode = os.path.exists(
                     os.path.join(build_env.firmwarePath, "subordinate_active_erisc", "subordinate_active_erisc.elf")
                 )
@@ -145,11 +142,8 @@ class DispatcherData:
             )
 
         # Go message states are constant values in the firmware elf, so we cache them
-        def empty_mem_reader(addr: int, size_bytes: int, elements_to_read: int) -> list[int]:
-            return []
-
         def get_const_value(name) -> int:
-            value = mem_access(self._brisc_elf, name, empty_mem_reader)[3]
+            value = self._brisc_elf.get_constant(name)
             assert isinstance(value, int)
             return value
 
@@ -211,9 +205,10 @@ class DispatcherData:
         build_env = self._get_build_env_for_device(device_id)
         proc_name = risc_name.upper()
         proc_type = enum_values["ProcessorTypes"][proc_name]
+        mailboxes = fw_elf.read_global("mailboxes", loc_mem_reader)
 
         # Refer to tt_metal/api/tt-metalium/dev_msgs.h for struct kernel_config_msg_t
-        launch_msg_rd_ptr = mem_access(fw_elf, "mailboxes->launch_msg_rd_ptr", loc_mem_reader)[0][0]
+        launch_msg_rd_ptr = mailboxes.launch_msg_rd_ptr.value()
 
         log_check(
             launch_msg_rd_ptr < self._launch_msg_buffer_num_entries,
@@ -235,42 +230,24 @@ class DispatcherData:
         host_assigned_id = None
         try:
             # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
-            kernel_config_base = mem_access(
-                fw_elf,
-                f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.kernel_config_base[{programmable_core_type}]",
-                loc_mem_reader,
-            )[0][0]
-        except:
-            pass
-        try:
-            # Size 5 (NUM_PROCESSORS_PER_CORE_TYPE) - seems to be DM0,DM1,MATH0,MATH1,MATH2
-            kernel_text_offset = mem_access(
-                fw_elf,
-                f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.kernel_text_offset[{proc_type}]",
-                loc_mem_reader,
-            )[0][0]
-        except:
-            pass
-        try:
-            # enum dispatch_core_processor_classes
-            watcher_kernel_id = (
-                mem_access(
-                    fw_elf,
-                    f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.watcher_kernel_ids[{proc_type}]",
-                    loc_mem_reader,
-                )[0][0]
-                & 0xFFFF
+            kernel_config_base = (
+                mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_config_base[programmable_core_type].value()
             )
         except:
             pass
         try:
+            # Size 5 (NUM_PROCESSORS_PER_CORE_TYPE) - seems to be DM0,DM1,MATH0,MATH1,MATH2
+            kernel_text_offset = mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_text_offset[proc_type].value()
+        except:
+            pass
+        try:
+            # enum dispatch_core_processor_classes
+            watcher_kernel_id = mailboxes.launch[launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[proc_type].value()
+        except:
+            pass
+        try:
             watcher_previous_kernel_id = (
-                mem_access(
-                    fw_elf,
-                    f"mailboxes->launch[{previous_launch_msg_rd_ptr}].kernel_config.watcher_kernel_ids[{proc_type}]",
-                    loc_mem_reader,
-                )[0][0]
-                & 0xFFFF
+                mailboxes.launch[previous_launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[proc_type].value()
             )
         except:
             pass
@@ -283,27 +260,20 @@ class DispatcherData:
         except:
             pass
         try:
-            go_message_index = mem_access(fw_elf, f"mailboxes->go_message_index", loc_mem_reader)[0][0]
-            go_data = mem_access(fw_elf, f"mailboxes->go_messages[{go_message_index}]", loc_mem_reader)[0][0]
+            go_message_index = mailboxes.go_message_index.value()
+            go_data = mailboxes.go_messages[go_message_index].signal.value()
         except:
             pass
         try:
-            preload = (
-                mem_access(fw_elf, f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.preload", loc_mem_reader)[0][
-                    0
-                ]
-                != 0
-            )
+            preload = mailboxes.launch[launch_msg_rd_ptr].kernel_config.preload.value() != 0
         except:
             pass
         try:
-            host_assigned_id = mem_access(
-                fw_elf, f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.host_assigned_id", loc_mem_reader
-            )[0][0]
+            host_assigned_id = mailboxes.launch[launch_msg_rd_ptr].kernel_config.host_assigned_id.value()
         except:
             pass
         try:
-            waypoint_int = mem_access(fw_elf, f"mailboxes->watcher.debug_waypoint[{proc_type}]", loc_mem_reader)[0][0]
+            waypoint_int = mailboxes.watcher.debug_waypoint[proc_type].value()
             waypoint = waypoint_int.to_bytes(4, "little").rstrip(b"\x00").decode("utf-8", errors="replace")
         except:
             pass
@@ -353,19 +323,17 @@ class DispatcherData:
                 else:
                     kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
             kernel_path = os.path.realpath(kernel_path)
-            if proc_name == "NCRISC" and isinstance(location._device, WormholeDevice):
+            if proc_name == "NCRISC" and location._device.is_wormhole():
                 kernel_offset = 0xFFC00000
             # In wormhole we only use text offset to calculate the kernel offset for active ETH
-            elif location in location._device.active_eth_block_locations and isinstance(
-                location._device, WormholeDevice
-            ):
+            elif location in location._device.active_eth_block_locations and location._device.is_wormhole():
                 kernel_offset = kernel_text_offset
             else:
                 kernel_offset = kernel_config_base + kernel_text_offset
         else:
             kernel_path = None
             kernel_offset = None
-        go_state = (go_data >> 24) & 0xFF
+        go_state = go_data
         go_data_state = self._go_message_states.get(go_state, str(go_state))
 
         return DispatcherCoreData(
