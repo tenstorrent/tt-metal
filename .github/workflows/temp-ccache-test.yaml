@@ -85,7 +85,6 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: 45
         run: |
-          cp ./build/tt-train/3rd_party/wandb-cpp/libwandbcpp.so build/lib/
           cd /work/build/tt-train
           mkdir -p generated/test_reports
           ldd tests/ttml_tests || true
