@@ -517,21 +517,5 @@ TEST(MultiHost, TestBHQB4x4Fabric1DSanity) {
     }
 }
 
-TEST(MultiHost, TestClosetBoxTTSwitchControlPlaneInit) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
-        log_info(tt::LogTest, "This test is only for N300 2x2");
-        GTEST_SKIP();
-    }
-
-    auto& instance = tt::tt_metal::MetalContext::instance();
-
-    // Get the host name
-    auto host_rank = *instance.get_distributed_context_ptr()->rank();
-
-    // Savve the cluster descriptors
-    auto cluster_descriptor = instance.get_cluster().get_cluster_desc()->serialize_to_file(
-        "closet_box_cluster_desc_rank_" + std::to_string(host_rank) + ".yaml");
-}
-
 }  // namespace multi_host_tests
 }  // namespace tt::tt_fabric
