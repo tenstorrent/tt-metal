@@ -257,4 +257,10 @@ void TerminateLiteFabric(tt::Cluster& cluster, const SystemDescriptor& desc) {
     SetResetState(cluster, desc, true);
 }
 
+tt::umd::tt_version GetLiteFabricVersion(tt::Cluster& cluster, const SystemDescriptor& desc) {
+    std::vector<uint8_t> version_check(3);
+    cluster.read_core(version_check.data(), 3, desc.tunnels_from_mmio[0].mmio_cxy_virtual(), LITE_FABRIC_VERSION_ADDR);
+    return tt::umd::tt_version(version_check[0], version_check[1], version_check[2]);
+}
+
 }  // namespace lite_fabric

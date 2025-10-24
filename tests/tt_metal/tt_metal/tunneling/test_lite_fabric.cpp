@@ -19,20 +19,11 @@
 #include "context/metal_context.hpp"
 #include "distributed.hpp"
 #include "fabric_types.hpp"
-#include "llrt/hal.hpp"
-#include "tt_cluster.hpp"
+#include "hw/inc/lf_dev_mem_map.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 
 #include "tt_metal/lite_fabric/host_util.hpp"
 #include "tt_metal/lite_fabric/build.hpp"
-
-#define CHECK_TEST_REQS()                                                                       \
-    if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) { \
-        GTEST_SKIP() << "Blackhole only";                                                       \
-    }                                                                                           \
-    if (tt::tt_metal::GetNumAvailableDevices() < 2) {                                           \
-        GTEST_SKIP() << "At least 2 Devices are required";                                      \
-    }                                                                                           \
 
 struct FabricLiteTestConfig {
     bool standalone{false};
@@ -43,15 +34,28 @@ struct FabricLiteTestConfig {
 class FabricLite : public testing::TestWithParam<FabricLiteTestConfig> {
 protected:
     inline static lite_fabric::SystemDescriptor desc;
+    inline static tt::ARCH arch_;
+    inline static int num_devices_;
 
     // Instance variables instead of static ones for parameter-dependent resources
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
     bool fabric_configured_{false};
 
+    static bool ShouldSkip() {
+        return arch_ != tt::ARCH::BLACKHOLE || num_devices_ < 2;
+    }
+
     static void SetUpTestSuite() {
+        // Initialize static variables using UMD and save them. We can't use any remote UMD APIs on P300.
+        // This is because if UMD initializes lite fabric it may overwrite the newer version that this test could be using
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        num_devices_ = tt::tt_metal::GetNumAvailableDevices();
+
+        if (ShouldSkip()) {
+            return;
+        }
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         auto& hal = tt::tt_metal::MetalContext::instance().hal();
-        CHECK_TEST_REQS();
 
         desc = lite_fabric::GetSystemDescriptorFromMmio(cluster, 0);
 
@@ -59,13 +63,19 @@ protected:
     }
 
     static void TearDownTestSuite() {
+        if (ShouldSkip()) {
+            return;
+        }
+
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
         lite_fabric::TerminateLiteFabric(cluster, desc);
     }
 
     void SetUp() override {
-        CHECK_TEST_REQS();
+        if (ShouldSkip()) {
+            return;
+        }
 
         if (desc.tunnels_from_mmio.empty()) {
             GTEST_SKIP() << "No tunnels found";
@@ -145,3 +155,12 @@ TEST(FabricLiteBuild, BuildOnly) {
 }
 
 TEST_P(FabricLite, Init) { EXPECT_GT(desc.tunnels_from_mmio.size(), 0) << "No tunnels found"; }
+
+// Disabled because when UMD is opened, it is overwriting the newer lite fabric binary with the old one which doesn't have the version stamp.
+// Re-enable when UMD uplifts lite fabric.
+TEST_P(FabricLite, DISABLED_Version) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto version = lite_fabric::GetLiteFabricVersion(cluster, desc);
+    auto expected_version = tt::umd::tt_version(LITE_FABRIC_VERSION_MAJOR, LITE_FABRIC_VERSION_MINOR, LITE_FABRIC_VERSION_PATCH);
+    EXPECT_EQ(version, expected_version);
+}
