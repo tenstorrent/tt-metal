@@ -571,6 +571,7 @@ def main():
         if cache_dir is not None:
             # clip_model_location = os.path.join(cache_dir, "")
             clip_model_location = f"{cache_dir}/model"
+            assert os.path.exists(clip_model_location), f"Model file {clip_model_location} does not exist"
 
         # Load model weights (download if cache_dir was not set)
         model = CLIPModel.from_pretrained(clip_model_location)
