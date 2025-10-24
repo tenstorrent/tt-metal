@@ -275,10 +275,11 @@ Tensor create_tt_tensor_from_py_data(
 
 // Preprocess the python tensor, optionally performing dtype conversion.
 // TODO_NANOBIND: See if we can get rid of this in favor of ndarray
+template <typename... Ts>
 struct PreprocessedPyTensor {
     DataType data_type = DataType::INVALID;
     // nb::object contiguous_py_tensor;
-    nb::ndarray<> contiguous_py_tensor;
+    nb::ndarray<Ts...> contiguous_py_tensor;
     std::size_t num_elements = 0;
     std::size_t py_data_ptr = 0;
 };
@@ -428,8 +429,9 @@ PreprocessedPyTensor parse_py_tensor(const nb::handle& py_tensor, std::optional<
 }
 */
 
+template <typename... Ts>
 Tensor convert_python_tensor_to_tt_tensor(
-    nb::ndarray<> py_tensor,
+    nb::ndarray<Ts...> py_tensor,
     std::optional<DataType> optional_data_type,
     std::optional<Layout> optional_layout,
     const std::optional<Tile>& optional_tile,
@@ -1017,6 +1019,134 @@ void pytensor_module(nb::module_& mod) {
                         tt_device,
                         mem_config
                     )
+            )doc")
+        .def(
+            "__init__",
+            [](Tensor* t,
+               nb::ndarray<nb::pytorch> python_tensor,
+               std::optional<DataType> data_type,
+               std::optional<MeshDevice*> device,
+               std::optional<Layout> layout,
+               const std::optional<MemoryConfig>& mem_config,
+               const std::optional<Tile>& tile,
+               std::optional<ttnn::QueueId> cq_id,
+               std::optional<float> pad_value,
+               const distributed::TensorToMesh* mesh_mapper) {
+                new (t) Tensor(CMAKE_UNIQUE_NAMESPACE::convert_python_tensor_to_tt_tensor(
+                    python_tensor,
+                    data_type,
+                    layout,
+                    tile,
+                    mem_config.value_or(MemoryConfig{}),
+                    device.value_or(nullptr),
+                    cq_id,
+                    pad_value.value_or(0.0f),
+                    mesh_mapper));
+            },
+            nb::arg("tensor"),
+            nb::arg("data_type") = nb::none(),
+            nb::arg("device") = nb::none(),
+            nb::arg("layout").noconvert() = nb::none(),
+            nb::arg("mem_config").noconvert() = nb::none(),
+            nb::arg("tile").noconvert() = nb::none(),
+            nb::arg("cq_id") = nb::none(),
+            nb::arg("pad_value") = nb::none(),
+            nb::arg("mesh_mapper") = nullptr,
+            nb::rv_policy::move,
+            R"doc(
+                +--------------+--------------------------------+
+                | Argument     | Description                    |
+                +==============+================================+
+                | tensor       | Pytorch or Numpy Tensor        |
+                +--------------+--------------------------------+
+                | data_type    | TT Tensor data type (optional) |
+                +--------------+--------------------------------+
+                | device       | TT device ptr (optional)       |
+                +--------------+--------------------------------+
+                | layout       | TT layout (optional)           |
+                +--------------+--------------------------------+
+                | mem_config   | TT memory_config (optional)    |
+                +--------------+--------------------------------+
+                | tile         | TT Tile Spec (optional)        |
+                +--------------+--------------------------------+
+                | cq_id        | TT Command Queue ID (optional) |
+                +--------------+--------------------------------+
+                | pad_value    | Padding value (optional)       |
+                +--------------+--------------------------------+
+                | mesh_mapper  | TT-NN Mesh Mapper (optional)    |
+                +--------------+--------------------------------+
+
+                Example of creating a TT Tensor from numpy tensor:
+
+                .. code-block:: python
+
+                    device = ttnn.open_device(device_id=0)
+                    py_tensor = np.zeros((1, 1, 32, 32))
+                    ttnn.Tensor(py_tensor, ttnn.bfloat16, device, ttnn.TILE_LAYOUT)
+            )doc")
+        .def(
+            "__init__",
+            [](Tensor* t,
+               nb::ndarray<nb::numpy> python_tensor,
+               std::optional<DataType> data_type,
+               std::optional<MeshDevice*> device,
+               std::optional<Layout> layout,
+               const std::optional<MemoryConfig>& mem_config,
+               const std::optional<Tile>& tile,
+               std::optional<ttnn::QueueId> cq_id,
+               std::optional<float> pad_value,
+               const distributed::TensorToMesh* mesh_mapper) {
+                new (t) Tensor(CMAKE_UNIQUE_NAMESPACE::convert_python_tensor_to_tt_tensor(
+                    python_tensor,
+                    data_type,
+                    layout,
+                    tile,
+                    mem_config.value_or(MemoryConfig{}),
+                    device.value_or(nullptr),
+                    cq_id,
+                    pad_value.value_or(0.0f),
+                    mesh_mapper));
+            },
+            nb::arg("tensor"),
+            nb::arg("data_type") = nb::none(),
+            nb::arg("device") = nb::none(),
+            nb::arg("layout").noconvert() = nb::none(),
+            nb::arg("mem_config").noconvert() = nb::none(),
+            nb::arg("tile").noconvert() = nb::none(),
+            nb::arg("cq_id") = nb::none(),
+            nb::arg("pad_value") = nb::none(),
+            nb::arg("mesh_mapper") = nullptr,
+            nb::rv_policy::move,
+            R"doc(
+                +--------------+--------------------------------+
+                | Argument     | Description                    |
+                +==============+================================+
+                | tensor       | Pytorch or Numpy Tensor        |
+                +--------------+--------------------------------+
+                | data_type    | TT Tensor data type (optional) |
+                +--------------+--------------------------------+
+                | device       | TT device ptr (optional)       |
+                +--------------+--------------------------------+
+                | layout       | TT layout (optional)           |
+                +--------------+--------------------------------+
+                | mem_config   | TT memory_config (optional)    |
+                +--------------+--------------------------------+
+                | tile         | TT Tile Spec (optional)        |
+                +--------------+--------------------------------+
+                | cq_id        | TT Command Queue ID (optional) |
+                +--------------+--------------------------------+
+                | pad_value    | Padding value (optional)       |
+                +--------------+--------------------------------+
+                | mesh_mapper  | TT-NN Mesh Mapper (optional)    |
+                +--------------+--------------------------------+
+
+                Example of creating a TT Tensor from numpy tensor:
+
+                .. code-block:: python
+
+                    device = ttnn.open_device(device_id=0)
+                    py_tensor = np.zeros((1, 1, 32, 32))
+                    ttnn.Tensor(py_tensor, ttnn.bfloat16, device, ttnn.TILE_LAYOUT)
             )doc")
         .def(
             "__init__",
