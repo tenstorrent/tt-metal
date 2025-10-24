@@ -52,7 +52,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ema_multi_core(
 
     auto total_batches_per_core = total_tiles_per_core / tiles_per_channel;
 
-    // Premcompute the alpha and beta bits
+    // Precompute the alpha and beta bits
     // Used by the EMA SFPU instructions
     // ----------------------------------
     auto alpha_bits = std::bit_cast<uint32_t>(alpha);
