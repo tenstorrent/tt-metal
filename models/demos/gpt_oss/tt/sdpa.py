@@ -138,7 +138,7 @@ def sdpa(
     # Add attention sink logits for stable long-context attention
     tt_sink = ttnn.reshape(tt_sink, [nkv, nh // nkv, 1, 1])  # (nkv, nh // nkv, 1, 1)
     tt_sink_rep = ttnn.repeat(tt_sink, [1, 1, num_tokens, 1])  # (nkv, nh // nkv, num_tokens, 1)
-    tt_sink.deallocate(True)
+    # tt_sink.deallocate(True)
     tt_sink = tt_sink_rep
     # Concat sink as an extra attention position (dim=-1 is kv_len dimension)
     tt_qk_concat = ttnn.concat([tt_qk, tt_sink], dim=-1)  # (nkv, nh // nkv, num_tokens, kv_len + 1)

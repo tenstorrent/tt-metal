@@ -213,7 +213,7 @@ class Experts:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_tile=output_tile,
             program_config=program_config,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat8_b if seq_len > 1 else ttnn.bfloat16,
         )
 
         if seq_len > 1:
@@ -235,7 +235,7 @@ class Experts:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_tile=output_tile,
             program_config=program_config,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat8_b if seq_len > 1 else ttnn.bfloat16,
         )
         hidden_states_4D.deallocate(True)
         if seq_len > 1:
@@ -296,7 +296,7 @@ class Experts:
                 program_config=self.batched_sparse_matmul_program_config(
                     5, 6, down_in0.shape[2], self.down_proj.shape[-1]
                 ),
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat8_b if seq_len > 1 else ttnn.bfloat16,
             )
             down_in0.deallocate(True)
             next_states = ttnn.reshape(
@@ -321,8 +321,11 @@ class Experts:
             next_states.deallocate(True)
             next_states = next_states_allreduced
         # TP communication
-        next_states_16 = ttnn.typecast(next_states, ttnn.bfloat16)
-        ttnn.deallocate(next_states)
+        if next_states.dtype != ttnn.bfloat16:
+            next_states_16 = ttnn.typecast(next_states, ttnn.bfloat16)
+            ttnn.deallocate(next_states)
+        else:
+            next_states_16 = next_states
         next_states = self.mesh_config.allreduce(
             next_states_16,
             self.ccl_manager,
