@@ -7,7 +7,6 @@
 #include "optimizers/optimizer_base.hpp"
 namespace ttml::schedulers {
 
-// REVERT ME, FORCING CHANGED FILES DETECTION TO TRIIGER, FOR TEST IN CI
 LambdaScheduler::LambdaScheduler(optimizers::OptimizerBase *optimizer, std::function<float(int)> lr_lambda) :
     LRSchedulerBase(optimizer),
     m_lr_lambda(std::move(lr_lambda)),
