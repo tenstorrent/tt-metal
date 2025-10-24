@@ -692,57 +692,6 @@ void CmdlineParser::apply_overrides(std::vector<ParsedTestConfig>& test_configs)
     }
 }
 
-std::vector<ParsedTestConfig> CmdlineParser::generate_default_configs() {
-    log_info(LogTest, "No YAML config provided. Generating a default test configuration from command-line args.");
-
-    TestFabricSetup fabric_setup;
-    if (test_args::has_command_option(input_args_, "--topology")) {
-        std::string topology_str = test_args::get_command_option(input_args_, "--topology", "Linear");
-        fabric_setup.topology = detail::topology_mapper.from_string(topology_str, "Topology");
-    } else {
-        fabric_setup.topology = Topology::Linear;
-        log_info(LogTest, "No topology specified via --topology, defaulting to Linear.");
-    }
-
-    ParsedTestConfig default_test;
-
-    if (test_args::has_command_option(input_args_, "--pattern")) {
-        log_info(LogTest, "Generating a high-level pattern test from command line.");
-        std::string pattern_type = test_args::get_command_option(input_args_, "--pattern", "");
-        TT_FATAL(
-            detail::high_level_traffic_pattern_mapper.to_enum.find(pattern_type) !=
-                detail::high_level_traffic_pattern_mapper.to_enum.end(),
-            "Unsupported pattern type from command line: '{}'. Supported types are: {}",
-            pattern_type,
-            get_supported_high_level_patterns());
-
-        HighLevelPatternConfig hlp_config;
-        hlp_config.type = pattern_type;
-        hlp_config.iterations = test_args::get_command_option_uint32(input_args_, "--iterations", 1);
-
-        default_test.patterns = std::vector<HighLevelPatternConfig>{hlp_config};
-    } else {
-        log_info(LogTest, "Generating a simple unicast test from command line.");
-        std::string src_device_str = test_args::get_command_option(input_args_, "--src-device", "0");
-        std::string dst_device_str = test_args::get_command_option(input_args_, "--dst-device", "1");
-
-        ChipId src_device_id = std::stoul(src_device_str);
-        ChipId dst_device_id = std::stoul(dst_device_str);
-
-        ParsedTrafficPatternConfig pattern = {.destination = ParsedDestinationConfig{.device = dst_device_id}};
-        ParsedSenderConfig sender = {.device = src_device_id, .patterns = {pattern}};
-        default_test.senders = {sender};
-    }
-
-    default_test.name = "DefaultCommandLineTest";
-    default_test.fabric_setup = fabric_setup;
-    default_test.defaults = ParsedTrafficPatternConfig{};
-    default_test.defaults->ftype = ChipSendType::CHIP_UNICAST;
-    default_test.defaults->ntype = NocSendType::NOC_UNICAST_WRITE;
-
-    return {default_test};
-}
-
 std::optional<uint32_t> CmdlineParser::get_master_seed() {
     if (test_args::has_command_option(input_args_, "--master-seed")) {
         uint32_t master_seed = test_args::get_command_option_uint32(input_args_, "--master-seed", 0);
@@ -766,48 +715,17 @@ std::string CmdlineParser::get_built_tests_dump_file_name(const std::string& def
 bool CmdlineParser::has_help_option() { return test_args::has_command_option(input_args_, "--help"); }
 
 void CmdlineParser::print_help() {
-    log_info(LogTest, "Usage: test_tt_fabric [options]");
-    log_info(LogTest, "This test can be run in two modes:");
-    log_info(
-        LogTest,
-        "1. With a YAML configuration file (--test_config), which provides detailed control over traffic patterns.");
-    log_info(LogTest, "2. With command-line arguments for simpler, predefined test cases.");
+    log_info(LogTest, "Usage: test_tt_fabric --test_config <path> [options]");
+    log_info(LogTest, "[This test needs a yaml configuration file to run, see test_features.yaml for examples]");
     log_info(LogTest, "");
     log_info(LogTest, "General Options:");
     log_info(LogTest, "  --help                                       Print this help message.");
     log_info(
         LogTest,
-        "  --test_config <path>                         Path to the YAML test configuration file. See "
-        "test_features.yaml for examples.");
-    log_info(
-        LogTest,
         "  --master-seed <seed>                         Master seed for all random operations to ensure "
         "reproducibility.");
     log_info(LogTest, "");
-    log_info(LogTest, "Options for command-line mode (when --test_config is NOT used):");
-    log_info(LogTest, "  --topology <Linear|Ring|Mesh|Torus>          Specify the fabric topology. Default: Linear.");
-    log_info(
-        LogTest,
-        "  --pattern <type>                             Specify a high-level traffic pattern. If not provided, a "
-        "simple unicast test is run.");
-    log_info(
-        LogTest,
-        "                                               Supported types: {}",
-        get_supported_high_level_patterns());
-    log_info(
-        LogTest,
-        "  --src-device <id>                            Source device for simple unicast test. "
-        "Default: 0.");
-    log_info(
-        LogTest,
-        "  --dst-device <id>                            Destination device for simple unicast test. "
-        "Default: 1.");
-    log_info(
-        LogTest,
-        "  --iterations <N>                             Number of iterations for high-level patterns (e.g., for "
-        "different random pairings). Default: 1.");
-    log_info(LogTest, "");
-    log_info(LogTest, "Value Overrides (can be used with either mode):");
+    log_info(LogTest, "Value Overrides:");
     log_info(
         LogTest,
         "  --num-packets <N>                            Override the number of packets for all traffic "
