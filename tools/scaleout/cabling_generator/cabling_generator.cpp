@@ -484,22 +484,9 @@ void CablingGenerator::emit_factory_system_descriptor(const std::string& output_
     output_file.close();
 }
 
-// Method to generate factory system descriptor as string (uses shared helper)
-std::string CablingGenerator::generate_factory_system_descriptor_string() const {
-    auto fsd = build_factory_system_descriptor(deployment_hosts_, host_id_to_node_, chip_connections_);
-
-    std::string output_string;
-    google::protobuf::TextFormat::Printer printer;
-    printer.SetUseShortRepeatedPrimitives(true);
-    printer.SetUseUtf8StringEscaping(true);
-    printer.SetSingleLineMode(false);
-    printer.SetPrintMessageFieldsInIndexOrder(true);
-
-    if (!printer.PrintToString(fsd, &output_string)) {
-        throw std::runtime_error("Failed to generate textproto string");
-    }
-
-    return output_string;
+// Method to generate factory system descriptor as protobuf object (uses shared helper)
+tt::scaleout_tools::fsd::proto::FactorySystemDescriptor CablingGenerator::generate_factory_system_descriptor() const {
+    return build_factory_system_descriptor(deployment_hosts_, host_id_to_node_, chip_connections_);
 }
 
 void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bool loc_info) const {

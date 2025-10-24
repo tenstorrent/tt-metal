@@ -14,6 +14,9 @@
 #include <board/board.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
+// Include protobuf generated header
+#include "protobuf/factory_system_descriptor.pb.h"
+
 namespace tt::scaleout_tools {
 
 // Strong types to prevent mixing with other uint32_t values
@@ -106,8 +109,8 @@ public:
     // Method to emit factory system descriptor
     void emit_factory_system_descriptor(const std::string& output_path) const;
 
-    // Method to generate factory system descriptor as string
-    std::string generate_factory_system_descriptor_string() const;
+    // Method to generate factory system descriptor as protobuf object
+    tt::scaleout_tools::fsd::proto::FactorySystemDescriptor generate_factory_system_descriptor() const;
 
     // Method to emit cabling guide CSV
     void emit_cabling_guide_csv(const std::string& output_path, bool loc_info = true) const;

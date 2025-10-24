@@ -595,12 +595,8 @@ void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& pa
     }
 }
 
-std::string PhysicalSystemDescriptor::generate_yaml_string() const {
-    YAML::Node root = build_yaml_node();
-    
-    std::stringstream yaml_stream;
-    yaml_stream << root;
-    return yaml_stream.str();
+YAML::Node PhysicalSystemDescriptor::generate_yaml_node() const {
+    return build_yaml_node();
 }
 
 void PhysicalSystemDescriptor::emit_to_text_proto(const std::optional<std::string>& file_path) {

@@ -212,7 +212,7 @@ public:
 
     // Utility APIs for output/serialization
     void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt) const;
-    std::string generate_yaml_string() const;
+    YAML::Node generate_yaml_node() const;
     void emit_to_text_proto(const std::optional<std::string>& path_to_text_proto = std::nullopt);
 
     // Ethernet metrics API

@@ -24,6 +24,13 @@
 
 namespace tt::scaleout_tools {
 
+// Forward declaration of the shared implementation
+static void validate_fsd_against_gsd_impl(
+    const tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& generated_fsd,
+    const YAML::Node& discovered_gsd,
+    bool strict_validation,
+    bool assert_on_connection_mismatch);
+
 void validate_fsd_against_gsd(
     const std::string& fsd_filename,
     const std::string& gsd_filename,
@@ -43,10 +50,21 @@ void validate_fsd_against_gsd(
         throw std::runtime_error("Failed to parse FSD protobuf from file: " + fsd_filename);
     }
 
-    const auto& hosts = generated_fsd.hosts();
-
     // Read the discovered GSD (Global System Descriptor) - still using YAML
     YAML::Node discovered_gsd = YAML::LoadFile(gsd_filename);
+
+    // Call a shared validation function that does the actual work
+    validate_fsd_against_gsd_impl(generated_fsd, discovered_gsd, strict_validation, assert_on_connection_mismatch);
+}
+
+// Shared implementation that both public functions use  
+static void validate_fsd_against_gsd_impl(
+    const tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& generated_fsd,
+    const YAML::Node& discovered_gsd,
+    bool strict_validation,
+    bool assert_on_connection_mismatch) {
+    
+    const auto& hosts = generated_fsd.hosts();
 
     // Compare the FSD with the discovered GSD
     // First, compare hostnames from the hosts field
@@ -495,6 +513,24 @@ void validate_fsd_against_gsd(
                       << " connections checked)" << std::endl;
         }
     }
+}
+
+void validate_fsd_against_gsd(
+    const std::string& fsd_textproto_content,
+    const YAML::Node& gsd_yaml_node,
+    bool strict_validation,
+    bool assert_on_connection_mismatch) {
+    // Parse the FSD textproto content using protobuf
+    tt::scaleout_tools::fsd::proto::FactorySystemDescriptor generated_fsd;
+    if (!google::protobuf::TextFormat::ParseFromString(fsd_textproto_content, &generated_fsd)) {
+        throw std::runtime_error("Failed to parse FSD protobuf from textproto content");
+    }
+
+    // Use the provided GSD YAML node directly  
+    YAML::Node discovered_gsd = gsd_yaml_node;
+
+    // Call a shared validation function that does the actual work
+    validate_fsd_against_gsd_impl(generated_fsd, discovered_gsd, strict_validation, assert_on_connection_mismatch);
 }
 
 }  // namespace tt::scaleout_tools

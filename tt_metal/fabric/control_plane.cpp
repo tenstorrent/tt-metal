@@ -29,7 +29,6 @@
 #include "core_coord.hpp"
 #include "compressed_routing_table.hpp"
 #include "compressed_routing_path.hpp"
-#include "tools/scaleout/cabling_generator/cabling_generator.hpp"
 #include "tools/scaleout/factory_system_descriptor/utils.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include "distributed_context.hpp"
@@ -54,6 +53,8 @@
 #include <unistd.h>
 #include <chrono>
 #include <sstream>
+#include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
+#include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 
@@ -2954,63 +2955,49 @@ bool ControlPlane::is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_con
     return true;
 }
 
+std::string ControlPlane::read_textproto_file(const std::string& file_path) const {
+    std::ifstream file(file_path);
+    TT_ASSERT(file.is_open(), "Failed to open textproto file: {}", file_path);
+    
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
+}
+
+
+
 bool ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_config) const {
     try {
-        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster().get_driver();
-        auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
-        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-        bool using_mock = tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled();
-
-        // Create physical system descriptor with correct constructor
-        tt::tt_metal::PhysicalSystemDescriptor physical_system_descriptor(
-            cluster,
-            distributed_context,
-            &hal,
-            using_mock,
-            true  // run_discovery
-        );
-
-        auto all_hostnames = physical_system_descriptor.get_all_hostnames();
-
         // Get the cabling descriptor path for the expected torus configuration
         auto cabling_descriptor_path = get_cabling_descriptor_path(fabric_config);
 
         // Check if the cabling descriptor file exists
-        if (!std::filesystem::exists(cabling_descriptor_path)) {
-            log_warning(
-                tt::LogFabric,
-                "Cabling descriptor file not found: {}. Skipping torus validation.",
-                cabling_descriptor_path);
-            return false;  // Skip test if no golden configuration available
-        }
+        TT_ASSERT(std::filesystem::exists(cabling_descriptor_path), 
+                  "Cabling descriptor file not found: {}", cabling_descriptor_path);
 
-        // Generate FSD from the cabling descriptor as string (in-memory)
-        tt::scaleout_tools::CablingGenerator cabling_generator(cabling_descriptor_path, all_hostnames);
-        std::string fsd_string = cabling_generator.generate_factory_system_descriptor_string();
+        // Use existing physical_system_descriptor_ member instead of creating new one
+        TT_ASSERT(physical_system_descriptor_ != nullptr, "Physical system descriptor not initialized");
 
-        // Generate GSD from the physical system descriptor as string (in-memory)
-        std::string gsd_string = physical_system_descriptor.generate_yaml_string();
+        // Generate GSD YAML from the physical system descriptor
+        YAML::Node gsd_yaml = physical_system_descriptor_->generate_yaml_node();
 
-        // Perform validation by comparing FSD and GSD strings
-        if (fsd_string.empty() || gsd_string.empty()) {
-            log_warning(tt::LogFabric, "Generated descriptor strings are empty");
-            return false;
-        }
+        // Read FSD textproto content
+        std::string fsd_textproto_content = read_textproto_file(cabling_descriptor_path);
+        TT_ASSERT(!fsd_textproto_content.empty(), "FSD textproto content is empty");
 
-        // Compare the two descriptors for torus validation
-        bool descriptors_match = compare_system_descriptors(fsd_string, gsd_string);
+        // Use the existing validation infrastructure with in-memory content
+        tt::scaleout_tools::validate_fsd_against_gsd(
+            fsd_textproto_content,  // FSD textproto content
+            gsd_yaml,               // GSD YAML node
+            true,                   // strict_validation
+            true                    // assert_on_connection_mismatch - will throw on mismatch
+        );
         
-        if (descriptors_match) {
-            log_info(tt::LogFabric, "Torus validation passed: FSD and GSD are compatible for configuration: {}", static_cast<int>(fabric_config));
-            return true;
-        } else {
-            log_warning(tt::LogFabric, "Torus validation failed: FSD and GSD are incompatible for configuration: {}", static_cast<int>(fabric_config));
-            return false;
-        }
+        log_info(tt::LogFabric, "Torus validation passed for configuration: {}", static_cast<int>(fabric_config));
+        return true;
 
     } catch (const std::exception& e) {
-        log_warning(tt::LogFabric, "Torus validation failed for configuration '{}': {}", static_cast<int>(fabric_config), e.what());
-        return false;  // Return false to skip the test
+        TT_THROW("Torus validation failed for configuration '{}': {}", static_cast<int>(fabric_config), e.what());
     }
 }
 
@@ -3036,51 +3023,6 @@ std::string ControlPlane::get_cabling_descriptor_path(tt::tt_fabric::FabricConfi
 
     const auto& root_dir = tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir();
     return root_dir + it->second;
-}
-
-bool ControlPlane::compare_system_descriptors(const std::string& fsd_string, const std::string& gsd_string) const {
-    try {
-        // Parse both descriptors as YAML
-        YAML::Node fsd_yaml = YAML::Load(fsd_string);
-        YAML::Node gsd_yaml = YAML::Load(gsd_string);
-
-        // Basic validation: both should be valid YAML with expected structure
-        if (!fsd_yaml["compute_node_specs"] || !gsd_yaml["compute_node_specs"]) {
-            log_debug(tt::LogFabric, "Missing compute_node_specs in one of the descriptors");
-            return false;
-        }
-
-        // For torus validation, we primarily care about:
-        // 1. Number of hosts should match
-        // 2. Number of ASICs per host should be compatible
-        // 3. Connection patterns should be feasible (but we don't need exact match)
-
-        const auto& fsd_compute_nodes = fsd_yaml["compute_node_specs"];
-        const auto& gsd_compute_nodes = gsd_yaml["compute_node_specs"];
-        
-        // Check if both have the same number of hosts
-        if (fsd_compute_nodes.size() != gsd_compute_nodes.size()) {
-            log_debug(tt::LogFabric, "FSD and GSD have different number of hosts: {} vs {}", 
-                     fsd_compute_nodes.size(), gsd_compute_nodes.size());
-            return false;
-        }
-
-        // Basic compatibility check - each host in FSD should exist in GSD
-        for (const auto& fsd_host : fsd_compute_nodes) {
-            const std::string host_name = fsd_host.first.as<std::string>();
-            if (!gsd_compute_nodes[host_name]) {
-                log_debug(tt::LogFabric, "Host {} present in FSD but missing in GSD", host_name);
-                return false;
-            }
-        }
-
-        log_debug(tt::LogFabric, "FSD and GSD basic compatibility check passed");
-        return true;
-
-    } catch (const std::exception& e) {
-        log_warning(tt::LogFabric, "Error comparing system descriptors: {}", e.what());
-        return false;
-    }
 }
 
 ControlPlane::~ControlPlane() = default;

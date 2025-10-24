@@ -5,6 +5,7 @@
 #pragma once
 
 #include <string>
+#include <yaml-cpp/yaml.h>
 
 namespace tt::scaleout_tools {
 
@@ -20,6 +21,13 @@ namespace tt::scaleout_tools {
 void validate_fsd_against_gsd(
     const std::string& fsd_filename,
     const std::string& gsd_filename,
+    bool strict_validation = true,
+    bool assert_on_connection_mismatch = true);
+
+// Overloaded version that takes textproto content and YAML node directly
+void validate_fsd_against_gsd(
+    const std::string& fsd_textproto_content,
+    const YAML::Node& gsd_yaml_node,
     bool strict_validation = true,
     bool assert_on_connection_mismatch = true);
 
