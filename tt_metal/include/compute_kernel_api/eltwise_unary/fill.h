@@ -38,7 +38,7 @@ ALWI void fill_tile(uint32_t idst, float param0) { MATH((llk_math_eltwise_unary_
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | param0          | Value to fill tile with (unsigned integer)                                 | uint     |                                                       | True     |
+ * | param0          | Value to fill tile with (unsigned integer)                                 | uint32_t |                                                       | True     |
  */
 ALWI void fill_tile_int(uint32_t idst, uint param0) {
     MATH((llk_math_eltwise_unary_sfpu_fill_int<APPROX>(idst, param0)));
