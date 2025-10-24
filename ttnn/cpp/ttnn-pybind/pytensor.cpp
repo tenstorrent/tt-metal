@@ -42,7 +42,6 @@
 #include <tt-metalium/host_buffer.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
-#include "ttnn/experimental/jit/context.hpp"
 #include <tracy/Tracy.hpp>
 #pragma optimize("", off)
 using namespace tt::tt_metal;
@@ -1456,9 +1455,9 @@ void pytensor_module(py::module& m_tensor) {
             [](const Tensor& self, const ttnn::distributed::MeshToTensor* mesh_composer) -> py::object {
                 using namespace CMAKE_UNIQUE_NAMESPACE;
 
-                if (self.producer_node() != 0) {
-                    ttnn::experimental::jit::Context::instance().execute_node(self.producer_node());
-                }
+                // if (self.producer_node() != 0) {
+                //     ttnn::experimental::jit::Context::instance().execute_node(self.producer_node());
+                // }
 
                 auto buffer = mesh_composer ? convert_to_row_major_host_buffer(self, *mesh_composer)
                                             : convert_to_row_major_host_buffer(self, /*padded_output=*/false);
