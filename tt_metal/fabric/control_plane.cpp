@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <initializer_list>
 #include <iomanip>
 #include <limits>
@@ -2971,12 +2972,23 @@ bool ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
             return false;
         }
 
+        // Read the FSD textproto content from the cabling descriptor file
+        std::ifstream fsd_file(cabling_descriptor_path);
+        if (!fsd_file.is_open()) {
+            log_warning(tt::LogFabric, "Cannot open cabling descriptor file: {}", cabling_descriptor_path);
+            return false;
+        }
+        
+        std::string fsd_textproto_content((std::istreambuf_iterator<char>(fsd_file)),
+                                         std::istreambuf_iterator<char>());
+        fsd_file.close();
+
         // Generate GSD YAML from the current physical system descriptor
         YAML::Node gsd_yaml = physical_system_descriptor_->generate_yaml_node();
         
         // Use the existing validation infrastructure to validate against the cabling descriptor
         tt::scaleout_tools::validate_fsd_against_gsd(
-            cabling_descriptor_path,    // FSD file path (cabling descriptor)
+            fsd_textproto_content,      // FSD textproto content from cabling descriptor
             gsd_yaml,                   // GSD YAML from current system
             false,                      // strict_validation = false
             false                       // assert_on_connection_mismatch = false
