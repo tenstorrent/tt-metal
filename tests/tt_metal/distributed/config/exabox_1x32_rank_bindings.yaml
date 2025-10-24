@@ -1,0 +1,30 @@
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+  - rank: 1
+    mesh_id: 1
+    mesh_host_rank: 0
+  - rank: 2
+    mesh_id: 2
+    mesh_host_rank: 0
+  - rank: 3
+    mesh_id: 3
+    mesh_host_rank: 0
+  - rank: 4
+    mesh_id: 4
+    mesh_host_rank: 0
+  - rank: 5
+    mesh_id: 5
+    mesh_host_rank: 0
+  - rank: 6
+    mesh_id: 6
+    mesh_host_rank: 0
+  - rank: 7
+    mesh_id: 7
+    mesh_host_rank: 0
+  - rank: 8
+    mesh_id: 8
+    mesh_host_rank: 0
+
+mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_exabox_1x32_mesh_graph_descriptor.yaml"
