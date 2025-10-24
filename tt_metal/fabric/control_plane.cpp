@@ -32,7 +32,6 @@
 #include "compressed_routing_table.hpp"
 #include "compressed_routing_path.hpp"
 #include "tools/scaleout/factory_system_descriptor/utils.hpp"
-#include "tools/scaleout/cabling_generator/cabling_generator.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include "distributed_context.hpp"
 #include "fabric_types.hpp"
@@ -2966,42 +2965,40 @@ bool ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
     TT_ASSERT(physical_system_descriptor_ != nullptr, "Physical system descriptor not initialized");
 
     try {
-        // Get the cabling descriptor path for this torus configuration
-        std::string cabling_descriptor_path = get_cabling_descriptor_path(fabric_config);
-        if (cabling_descriptor_path.empty()) {
-            log_warning(tt::LogFabric, "No cabling descriptor available for torus configuration: {}", static_cast<int>(fabric_config));
-            return false;
-        }
-
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster().get_driver();
+        auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        bool using_mock = tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled();
+        // Create physical system descriptor with correct constructor
+        tt::tt_metal::PhysicalSystemDescriptor physical_system_descriptor(
+            cluster,
+            distributed_context,
+            &hal,
+            using_mock,
+            true  // run_discovery
+        );
+        auto all_hostnames = physical_system_descriptor.get_all_hostnames();
+        
+        auto cabling_descriptor_path = get_cabling_descriptor_path(fabric_config);
         // Check if the cabling descriptor file exists
         if (!std::filesystem::exists(cabling_descriptor_path)) {
-            log_warning(tt::LogFabric, "Cabling descriptor file not found: {}", cabling_descriptor_path);
-            return false;
+            log_warning(
+                tt::LogFabric,
+                "Cabling descriptor file not found: {}. Skipping torus validation.",
+                cabling_descriptor_path);
+            return false;  // Skip test if no golden configuration available
         }
-
-        // Get hostnames from the current physical system descriptor
-        auto all_hostnames = physical_system_descriptor_->get_all_hostnames();
-
-        // Generate FSD from the cabling descriptor using CablingGenerator
+        // Generate FSD from the cabling descriptor
         tt::scaleout_tools::CablingGenerator cabling_generator(cabling_descriptor_path, all_hostnames);
-        
-        // Generate the FSD protobuf object in memory
-        auto fsd_proto = cabling_generator.generate_factory_system_descriptor();
-        
-        // Convert the FSD protobuf to textproto string
-        std::string fsd_textproto_content;
-        if (!google::protobuf::TextFormat::PrintToString(fsd_proto, &fsd_textproto_content)) {
-            log_warning(tt::LogFabric, "Failed to convert FSD to textproto format");
-            return false;
-        }
 
         // Generate GSD YAML from the current physical system descriptor
         YAML::Node gsd_yaml = physical_system_descriptor_->generate_yaml_node();
         
-        // Use the existing validation infrastructure to validate against the cabling descriptor
+        // Use the existing validation infrastructure with filename and YAML node
+        // The function will internally handle the cabling descriptor format conversion
         tt::scaleout_tools::validate_fsd_against_gsd(
-            fsd_textproto_content,      // FSD textproto content from cabling generator
-            gsd_yaml,                   // GSD YAML from current system
+            cabling_descriptor_path,    // FSD file path (cabling descriptor) 
+            gsd_yaml,                   // GSD YAML node from current system
             false,                      // strict_validation = false
             false                       // assert_on_connection_mismatch = false
         );
