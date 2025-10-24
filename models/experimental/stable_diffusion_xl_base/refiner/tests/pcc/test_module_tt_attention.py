@@ -7,6 +7,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_attention import TtAttention
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
@@ -63,11 +64,12 @@ def test_attention(
     else:
         raise ValueError(f"Unknown block type: {block_type}")
 
+    model_config = RefinerModelOptimisations()
     tt_attention = TtAttention(
         device,
         state_dict,
         f"{block_type}.attentions.0.transformer_blocks.0.attn{attn_id}",
-        None,
+        model_config,
         query_dim,
         num_attn_heads,
         out_dim,
