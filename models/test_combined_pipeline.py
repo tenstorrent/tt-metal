@@ -12,7 +12,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtS
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 23000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 23000, "trace_region_size": 27082752}],
     indirect=True,
 )
 def test_refiner(mesh_device):
