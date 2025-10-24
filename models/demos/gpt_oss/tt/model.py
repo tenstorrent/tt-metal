@@ -6,7 +6,7 @@ from transformers.models.gpt_oss.modeling_gpt_oss import GptOssRotaryEmbedding
 
 import ttnn
 from models.demos.gpt_oss.config import MeshConfig
-from models.demos.gpt_oss.utils.general_utils import get_cache_file_name, get_decode_mask
+from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device
 
@@ -106,16 +106,8 @@ class Model:
         )
 
         # Initialize attention masks and rope embeddings storage for decode
-        sliding_mask = get_decode_mask(0, self.hf_config.sliding_window)
-        sliding_mask = sliding_mask.repeat(
-            1, self.mesh_config.shard_size(self.hf_config.num_attention_heads), 1, 1
-        ).transpose(1, 2)
-
-        tt_sliding_mask = ttnn.from_torch(
-            sliding_mask, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat4_b, device=self.mesh_device
-        )
-        self.device_decode_sliding_mask = {"full_attention": None, "sliding_attention": tt_sliding_mask}
         self._current_rope_mats = self._create_rope_embeddings(0, self.mesh_device)
+        self.device_decode_sliding_mask = True
 
     @classmethod
     def create_transformer_compatible(
@@ -216,16 +208,14 @@ class Model:
 
         # Use pre-prepared rope embeddings and attention masks
         rope_mats = self._current_rope_mats
-        attention_masks = self.device_decode_sliding_mask
 
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
-            layer_mask = attention_masks[decoder_layer.attention_type]
             layer_kv_cache = kv_cache[i] if kv_cache is not None else None
 
             hidden_states = decoder_layer(
                 hidden_states,
-                attention_mask=layer_mask,
+                attention_mask=None,
                 position_embeddings=rope_mats,
                 position_idx=current_pos,
                 page_table=page_table,
@@ -262,7 +252,6 @@ class Model:
             rope_mats = rot_mats_global
         else:
             rope_mats = self._create_rope_embeddings(seq_len, self.mesh_device)
-
         # Create attention masks
         mask = torch.triu(torch.full((1, 1, seq_len, seq_len), -float("inf")), diagonal=1)
         sliding_mask = mask + torch.tril(
@@ -279,6 +268,7 @@ class Model:
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
             layer_mask = attention_masks[decoder_layer.attention_type]
+
             layer_kv_cache = kv_cache[i] if kv_cache is not None else None
 
             hidden_states = decoder_layer(
@@ -359,15 +349,6 @@ class Model:
         updated_current_rope_mats = self._create_rope_embeddings(current_pos, None)
         ttnn.copy_host_to_device_tensor(updated_current_rope_mats[1], self._current_rope_mats[1])
         ttnn.copy_host_to_device_tensor(updated_current_rope_mats[2], self._current_rope_mats[2])
-
-        pos_idx = current_pos.item() if hasattr(current_pos, "item") else current_pos
-        sliding_mask = get_decode_mask(pos_idx, self.hf_config.sliding_window)
-        sliding_mask = sliding_mask.repeat(
-            1, self.mesh_config.shard_size(self.hf_config.num_attention_heads), 1, 1
-        ).transpose(1, 2)
-
-        tt_sliding_mask = ttnn.from_torch(sliding_mask, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat4_b, device=None)
-        ttnn.copy_host_to_device_tensor(tt_sliding_mask, self.device_decode_sliding_mask["sliding_attention"])
 
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
         """Prepare inputs for prefill mode"""

@@ -170,33 +170,8 @@ class Experts:
             sparsity = ttnn.repeat(self.prefill_sparsity, (1, 1, group_size, 1))
 
         if self.mesh_config.ep > 1 and seq_len == 1:
-            routing_weights_rm_torch = ttnn.to_torch(ttnn.get_device_tensors(sparsity)[0]).reshape(-1)
-            # find the indices of the non-zero values in routing_weights_rm_torch
-            non_zero_indices = torch.nonzero(routing_weights_rm_torch)
-            # create tnsirs which contain only 1 of the non-zero values
-            non_zero_indices = non_zero_indices.reshape(-1)
-            routing_weights_rm_torch_list = []
-            for i in range(non_zero_indices.shape[0]):
-                routing_weights_rm_torch_0 = torch.zeros_like(routing_weights_rm_torch)
-                routing_weights_rm_torch_0[non_zero_indices[i]] = routing_weights_rm_torch[non_zero_indices[i]]
-                routing_weights_rm_torch_list.append(routing_weights_rm_torch_0.reshape(1, 1, 1, self.num_experts))
-            routing_weights_rm_torch = torch.cat(routing_weights_rm_torch_list, dim=2)
-            sparsity = ttnn.from_torch(
-                routing_weights_rm_torch,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    dims=(-2, None), mesh_shape=self.mesh_device.shape, mesh_device=self.mesh_device
-                ),
-            )
-            routing_weights = ttnn.from_torch(
-                routing_weights_rm_torch.reshape(4, -1),
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    dims=(-2, None), mesh_shape=self.mesh_device.shape, mesh_device=self.mesh_device
-                ),
-            )
+            sparsity = ttnn.moe_routing_remap(ttnn.reshape(sparsity, (1, sparsity.shape[-1])), 4, 4, 0)
+            routing_weights = ttnn.tilize_with_zero_padding(sparsity, use_multicore=True)
 
         num_experts_per_tok = (
             (self.num_experts // self.mesh_config.ep) * group_size
@@ -213,7 +188,7 @@ class Experts:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_tile=output_tile,
             program_config=program_config,
-            dtype=ttnn.bfloat8_b if seq_len > 1 else ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
         )
 
         if seq_len > 1:
@@ -235,7 +210,7 @@ class Experts:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_tile=output_tile,
             program_config=program_config,
-            dtype=ttnn.bfloat8_b if seq_len > 1 else ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
         )
         hidden_states_4D.deallocate(True)
         if seq_len > 1:
@@ -248,8 +223,9 @@ class Experts:
         up.deallocate(True)
         up = up_clamped
 
-        gate = ttnn.mul(gate, self.alpha, output_tensor=gate)
-        gate_sigmoid = ttnn.sigmoid(gate)
+        gate_alpha = ttnn.mul(gate, self.alpha)
+        gate_sigmoid = ttnn.sigmoid(gate_alpha)
+        gate_alpha.deallocate(True)
         glu = ttnn.mul(gate, gate_sigmoid, output_tensor=gate)
         gate_sigmoid.deallocate(True)
         up = ttnn.add(up, 1, output_tensor=up)
@@ -296,7 +272,7 @@ class Experts:
                 program_config=self.batched_sparse_matmul_program_config(
                     5, 6, down_in0.shape[2], self.down_proj.shape[-1]
                 ),
-                dtype=ttnn.bfloat8_b if seq_len > 1 else ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
             )
             down_in0.deallocate(True)
             next_states = ttnn.reshape(

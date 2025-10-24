@@ -237,10 +237,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
 
     # Handle decode mode for TT model like original
     if seq_len == 1:  # decode
-        from models.demos.gpt_oss.utils.general_utils import get_decode_mask
-
-        sliding_window = 0  # No sliding window for this test
-        mask = get_decode_mask(position_ids[0].item(), sliding_window)
+        mask = None
 
     # Create position embeddings for reference model
     from transformers.models.gpt_oss.modeling_gpt_oss import GptOssRotaryEmbedding
@@ -272,13 +269,16 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
     )
 
     # Create TTNN mask
-    tt_mask = mask.repeat(1, config.num_attention_heads // setup["mesh_device"].shape[1], 1, 1).transpose(1, 2)
-    tt_mask = ttnn.from_torch(
-        tt_mask.transpose(1, 2) if seq_len > 1 else tt_mask,
-        device=setup["mesh_device"],
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-    )
+    if mask is not None:
+        tt_mask = mask.repeat(1, config.num_attention_heads // setup["mesh_device"].shape[1], 1, 1).transpose(1, 2)
+        tt_mask = ttnn.from_torch(
+            tt_mask.transpose(1, 2) if seq_len > 1 else tt_mask,
+            device=setup["mesh_device"],
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+        )
+    else:
+        tt_mask = None
 
     # Create TTNN tensors for component tests
     tt_hidden_states = ttnn.from_torch(

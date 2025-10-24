@@ -28,6 +28,10 @@ class Attention:
     ):
         self.layer_idx = layer_idx
         self.use_sliding_window = self.layer_idx % 2 == 0
+        if self.use_sliding_window:
+            self.sliding_window = hf_config.sliding_window
+        else:
+            self.sliding_window = None
         self.scaling = hf_config.head_dim**-0.5
         self.head_dim = hf_config.head_dim
         self.num_heads = hf_config.num_attention_heads
@@ -290,8 +294,7 @@ class Attention:
                     k_cache,
                     v_cache,
                     cur_pos_tensor=position_idx,
-                    is_causal=self.layer_idx % 2 != 0,
-                    attn_mask=mask if self.layer_idx % 2 == 0 else None,
+                    sliding_window_size=self.sliding_window,
                     attention_sink=self.decode_sinks,
                     page_table_tensor=page_table,
                     scale=self.scaling,
@@ -305,8 +308,7 @@ class Attention:
                     k_cache,
                     v_cache,
                     cur_pos_tensor=position_idx,
-                    is_causal=self.layer_idx % 2 != 0,
-                    attn_mask=mask if self.layer_idx % 2 == 0 else None,
+                    sliding_window_size=self.sliding_window,
                     attention_sink=self.decode_sinks,
                     scale=self.scaling,
                     program_config=self.sdpa_program_config,

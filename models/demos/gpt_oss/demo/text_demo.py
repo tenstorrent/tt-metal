@@ -162,7 +162,7 @@ def test_gpt_oss_demo(
     if data_parallel > num_devices or num_devices % data_parallel != 0:
         raise ValueError(f"Invalid number of DP groups: {data_parallel}, for {num_devices} devices")
 
-    enable_trace = False if mesh_config.ep > 1 else True  # ep > 1 currently has a fallback
+    enable_trace = True
 
     logger.info(f"Running GPT-OSS demo with tt_transformers generation pipeline")
 
