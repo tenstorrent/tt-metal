@@ -22,6 +22,9 @@ from dataclasses import dataclass, field
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional
 
+import ttnn
+
+from .auto_compose import to_torch_auto_compose
 from .metrics import DEFAULT_METRICS, compute_cosine_similarity, compute_max_abs_error, compute_mean_abs_error
 
 # ============================================================================
@@ -73,7 +76,7 @@ def device_validate_against(
     enabled: bool = True,
 ):
     """
-    Convenience wrapper for TTNN-on-device comparison.
+    Convenience wrapper for TTNN-on-device comparison. This is the most useful when the reference function is a TTNN-native function.
 
     - Assumes the reference function has the same signature as the implementation
       and returns `ttnn.Tensor` (match_signature=True)
@@ -94,8 +97,8 @@ def device_validate_against(
 def host_validate_against(
     reference_fn: Callable,
     *,
-    input_to_torch: Callable,
-    output_to_torch: Callable,
+    input_to_torch: Optional[Callable] = None,
+    output_to_torch: Optional[Callable] = None,
     metrics: Optional[Dict[str, Callable]] = None,
     tolerances: Optional[Dict[str, float]] = None,
     enabled: bool = True,
@@ -103,17 +106,47 @@ def host_validate_against(
     """
     Convenience wrapper for host/CPU comparison using torch.
 
-    - `input_to_torch(args, kwargs) -> (ref_args, ref_kwargs)` converts inputs for the
-      torch reference function
-    - `output_to_torch(output) -> torch.Tensor` converts impl's output to torch
+    - If not provided, inputs/outputs are automatically converted from TTNN to
+      PyTorch using topology-aware auto composition (see auto_compose.to_torch_auto_compose).
+      For host-sharded tensors, ensure a default device is set via `ttnn.SetDefaultDevice(...)`
+      or provide a custom `input_to_torch` that calls `to_torch_auto_compose(x, device=mesh_device)`.
+    - `input_to_torch(args, kwargs) -> (ref_args, ref_kwargs)` can be provided to
+      override default input mapping to the torch reference function
+    - `output_to_torch(output) -> torch.Tensor` can be provided to override default
+      impl-output conversion to torch
     - Reference function is expected to return `torch.Tensor`
     """
+
+    # Default converters: recursively convert any TTNN tensors to torch, auto-compose shards.
+    # Non-tensor objects are passed through unchanged.
+
+    def _to_torch_auto(x: Any) -> Any:
+        if isinstance(x, ttnn.Tensor):
+            # Use auto-compose; relies on tensor.device() or a globally-set default device
+            return to_torch_auto_compose(x)
+        return x
+
+    def _map_structure(obj: Any, fn: Callable[[Any], Any]) -> Any:
+        if isinstance(obj, (list, tuple)):
+            mapped = [_map_structure(x, fn) for x in obj]
+            return type(obj)(mapped)
+        if isinstance(obj, dict):
+            return {k: _map_structure(v, fn) for k, v in obj.items()}
+        return fn(obj)
+
+    def _default_input_map(args, kwargs):
+        ref_args = _map_structure(args, _to_torch_auto)
+        ref_kwargs = _map_structure(kwargs, _to_torch_auto)
+        return ref_args, ref_kwargs
+
+    def _default_output_map(output):
+        return _map_structure(output, _to_torch_auto)
 
     return __validate_against(
         reference_fn=reference_fn,
         match_signature=False,
-        input_map=input_to_torch,
-        output_map=output_to_torch,
+        input_map=input_to_torch or _default_input_map,
+        output_map=output_to_torch or _default_output_map,
         metrics=metrics,
         tolerances=tolerances,
         enabled=enabled,
