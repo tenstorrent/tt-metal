@@ -6,9 +6,7 @@
 
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/assert.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <vector>
 
 #include "metal/ops/common/program_utils.hpp"
 
@@ -37,24 +35,19 @@ constexpr auto kInputCbIndex = tt::CBIndex::c_0;
 constexpr auto kW1CbIndex = tt::CBIndex::c_1;
 constexpr auto kW2CbIndex = tt::CBIndex::c_2;
 constexpr auto kW3CbIndex = tt::CBIndex::c_3;
-// CBs with masks
-constexpr auto kMaskWCbIndex = tt::CBIndex::c_4;
-constexpr auto kMaskHWCbIndex = tt::CBIndex::c_5;
 // CBs with intermediate computations
-constexpr auto kXW1CbIndex = tt::CBIndex::c_6;       // keeps track of (X @ W1) [r, k]
-constexpr auto kXW3CbIndex = tt::CBIndex::c_7;       // keeps track of (X @ W3) [r, k]
-constexpr auto kMCbIndex = tt::CBIndex::c_8;         // keeps track of M[r, k]
-constexpr auto kYPartialCbIndex = tt::CBIndex::c_9;  // keeps track of partial Y[r, c]
+constexpr auto kXW1PartialCbIndex = tt::CBIndex::c_4;  // keeps track of partial (X @ W1) [r, k]
+constexpr auto kXW3PartialCbIndex = tt::CBIndex::c_5;  // keeps track of partial (X @ W3) [r, k]
+constexpr auto kXW1CbIndex = tt::CBIndex::c_6;         // keeps track of (X @ W1) [r, k]
+constexpr auto kXW3CbIndex = tt::CBIndex::c_7;         // keeps track of (X @ W3) [r, k]
+constexpr auto kMCbIndex = tt::CBIndex::c_8;           // keeps track of M[r, k]
+constexpr auto kYPartialCbIndex = tt::CBIndex::c_9;    // keeps track of partial Y[r, c]
 // CB with output data
 constexpr auto kYCbIndex = tt::CBIndex::c_10;  // keeps track of final Y[r, c]
-
-constexpr uint32_t kNumMaskWTiles = 1U;
-constexpr uint32_t kNumMaskHWTiles = 1U;
-constexpr uint32_t kNumXW1Tiles = 2U;  // Likely 1U is sufficient, but using 2U for double buffering
+constexpr uint32_t kNumXW1Tiles = 2U;
 constexpr uint32_t kNumXW3Tiles = 2U;
 
-const std::string kMaskWDefineKey = "DO_MASK_W";
-const std::string kMaskHWDefineKey = "DO_MASK_HW";
+const std::string kRowOfMFitsInL1DefineKey = "ROW_OF_M_FITS_IN_L1";
 
 }  // namespace
 
@@ -67,7 +60,9 @@ struct SwiGLUForwardKernels {
     tt::tt_metal::KernelHandle compute_group_2;
 };
 
-// this possibly could be moved to a common utils file
+// TODO(maciek): Consider refactoring this function to a common utils module with parameterized kernel handles and
+// buffer configurations, as different operations will have varying numbers and types of input/output buffers
+// and different kernel configurations (e.g., SwiGLU has 4 input buffers + 1 output, while other ops may differ)
 void assign_per_core_runtime_args(
     tt::tt_metal::Program& program,
     const SwiGLUForwardKernels& kernels,
@@ -113,7 +108,45 @@ void assign_per_core_runtime_args(
     }
 }
 
-// TODO: It would be good to setup a memory check, for the big matrices that might not fit into L1
+bool row_of_m_fits_in_l1_check(
+    const uint32_t hidden_Wt,
+    const uint32_t block_size,
+    const uint32_t bfloat16_single_tile_size_bytes,
+    ttnn::IDevice* device) {
+    const uint32_t twice_block_size = 2U * block_size;
+
+    // Get available L1 memory
+    const uint32_t available_L1_in_bytes =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+
+    // Calculate memory requirements for "M fits in L1" algorithm
+    // This algorithm caches full rows of XW1, XW3, and M in L1 for better performance
+    const uint32_t hidden_Wt_rounded_up = ((hidden_Wt + block_size - 1) / block_size) * block_size;
+
+    // Memory for input CBs (always needed regardless of algorithm)
+    const uint64_t input_memory = twice_block_size * bfloat16_single_tile_size_bytes;  // cb_input
+    const uint64_t w1_memory = twice_block_size * bfloat16_single_tile_size_bytes;     // cb_w1
+    const uint64_t w2_memory = twice_block_size * bfloat16_single_tile_size_bytes;     // cb_w2
+    const uint64_t w3_memory = twice_block_size * bfloat16_single_tile_size_bytes;     // cb_w3
+
+    // Memory for output CBs (always needed regardless of algorithm)
+    const uint64_t y_partial_memory = twice_block_size * bfloat16_single_tile_size_bytes;  // cb_y_partial
+    const uint64_t y_memory = twice_block_size * bfloat16_single_tile_size_bytes;          // cb_y
+
+    // Additional memory ONLY needed for "M fits in L1" algorithm
+    const uint64_t xw1_partial_memory = twice_block_size * bfloat16_single_tile_size_bytes;  // cb_xw1_partial
+    const uint64_t xw3_partial_memory = twice_block_size * bfloat16_single_tile_size_bytes;  // cb_xw3_partial
+    const uint64_t xw1_memory = hidden_Wt_rounded_up * bfloat16_single_tile_size_bytes;      // cb_xw1 (full row)
+    const uint64_t xw3_memory = hidden_Wt_rounded_up * bfloat16_single_tile_size_bytes;      // cb_xw3 (full row)
+    const uint64_t m_memory = hidden_Wt_rounded_up * bfloat16_single_tile_size_bytes;        // cb_m (full row)
+
+    // Total L1 memory required for "M fits in L1" algorithm
+    const uint64_t required_L1_in_bytes = input_memory + w1_memory + w2_memory + w3_memory + y_partial_memory +
+                                          y_memory + xw1_partial_memory + xw3_partial_memory + xw1_memory + xw3_memory +
+                                          m_memory;
+
+    return required_L1_in_bytes <= available_L1_in_bytes;
+}
 
 SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
@@ -130,8 +163,7 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
 
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.dtype());
 
-    uint32_t bfloat16_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
-    uint32_t float32_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float32);
+    uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
 
     auto padded_tensor_shape = input.padded_shape();
     auto padded_tensor_volume = input.physical_volume();
@@ -162,7 +194,6 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
 
     // Get number of free cores
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // Compile arguments
@@ -178,16 +209,20 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     // -------------------------------------------------------------------------
     const uint32_t twice_block_size = 2U * block_size;
 
-    // TODO(maciek): Optimize memory access to minimize DRAM reads and redundant computation.
-    // Key optimization ideas:
-    // 1. Cache M[r, :] in L1 memory if possible—this avoids recomputing M[r, :] for each matmul with W2.
-    // 2. Cache X[r, :] in L1 memory if possible—this avoids repeatedly streaming X[r, :] from DRAM for every M[r, :]
-    // computation. Leveraging L1 caching for these tiles could significantly improve performance by reducing DRAM
-    // bandwidth pressure. Currently, all data is streamed from DRAM in blocks, and M[r, :] is recomputed each time it
-    // is needed.
+    // Check if row of M fits in L1 to determine CB sizing strategy
+    const bool row_of_m_fits_in_l1 =
+        row_of_m_fits_in_l1_check(hidden_Wt, block_size, bfloat16_single_tile_size_bytes, device);
+
+    // CB sizing based on whether row of M fits in L1
+    const uint32_t num_tiles_xw1 = row_of_m_fits_in_l1 ? ((hidden_Wt + block_size - 1) / block_size) *
+                                                             block_size   // Round up to nearest block_size
+                                                       : kNumXW1Tiles;    // Use small buffer for slow algorithm
+    const uint32_t num_tiles_xw3 = row_of_m_fits_in_l1 ? num_tiles_xw1    // Same as XW1
+                                                       : kNumXW3Tiles;    // Use small buffer for slow algorithm
+    const uint32_t num_tiles_m = row_of_m_fits_in_l1 ? num_tiles_xw1      // Full row when fits in L1
+                                                     : twice_block_size;  // Just twice_block_size for slow algorithm
 
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
-    auto precise_data_format = tt::DataFormat::Float32;
 
     // NOTE(maciek):
     // - fp32 input/output CBs are possible, but here both are always bf16 to match pipeline formats.
@@ -203,16 +238,20 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
         program, all_cores, kW2CbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
     [[maybe_unused]] auto cb_w3 = create_circular_buffer(
         program, all_cores, kW3CbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    [[maybe_unused]] auto cb_mask_w = create_circular_buffer(
-        program, all_cores, kMaskWCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskWTiles);
-    [[maybe_unused]] auto cb_mask_hw = create_circular_buffer(
-        program, all_cores, kMaskHWCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskHWTiles);
+    // Partial CBs are only needed when row of M fits in L1
+    if (row_of_m_fits_in_l1) {
+        [[maybe_unused]] auto cb_x_w1_partial = create_circular_buffer(
+            program, all_cores, kXW1PartialCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+        [[maybe_unused]] auto cb_x_w3_partial = create_circular_buffer(
+            program, all_cores, kXW3PartialCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+    }
+    // XW1, XW3, and M CBs use conditional sizing
     [[maybe_unused]] auto cb_x_w1 = create_circular_buffer(
-        program, all_cores, kXW1CbIndex, data_format, bfloat16_single_tile_size_bytes, kNumXW1Tiles);
+        program, all_cores, kXW1CbIndex, data_format, bfloat16_single_tile_size_bytes, num_tiles_xw1);
     [[maybe_unused]] auto cb_x_w3 = create_circular_buffer(
-        program, all_cores, kXW3CbIndex, data_format, bfloat16_single_tile_size_bytes, kNumXW3Tiles);
+        program, all_cores, kXW3CbIndex, data_format, bfloat16_single_tile_size_bytes, num_tiles_xw3);
     [[maybe_unused]] auto cb_m = create_circular_buffer(
-        program, all_cores, kMCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+        program, all_cores, kMCbIndex, data_format, bfloat16_single_tile_size_bytes, num_tiles_m);
     [[maybe_unused]] auto cb_y_partial = create_circular_buffer(
         program, all_cores, kYPartialCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
     [[maybe_unused]] auto cb_y = create_circular_buffer(
@@ -252,24 +291,21 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
         enchantum::to_string(swiglu_buffer->buffer_type()));
 
     std::map<std::string, std::string> defines;
-    if (mask_w != 0) {
-        defines[kMaskWDefineKey] = "1";
-    }
-    if (mask_hw != 0) {
-        defines[kMaskHWDefineKey] = "1";
+    if (row_of_m_fits_in_l1) {
+        defines[kRowOfMFitsInL1DefineKey] = "1";
     }
 
     SwiGLUForwardKernels kernels;
-    std::vector<uint32_t> reader_compile_time_args{block_size, Wt, hidden_Wt, mask_w, mask_hw};
+    std::vector<uint32_t> reader_compile_time_args{block_size, Wt, hidden_Wt};
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(w1_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(w2_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(w3_buffer).append_to(reader_compile_time_args);
-    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, {}, kReaderKernelPath);
+    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
     tt::tt_metal::TensorAccessorArgs(swiglu_buffer).append_to(writer_compile_time_args);
-    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, {}, kWriterKernelPath);
+    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for swiglu_fw
@@ -280,13 +316,11 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
         num_rows_per_core_group_1,  // per_core_block_cnt
         block_size,                 // per_core_block_size
         Wt,                         // num_inner / TILE_W
-        hidden_Wt,                  // hidden_num_inner / TILE_W
-        mask_w,                     // mask_w
-        mask_hw                     // mask_hw
+        hidden_Wt                   // hidden_num_inner / TILE_W
     };
 
     kernels.compute_group_1 = create_compute_kernel(
-        program, core_group_1, compute_group_1_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+        program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
 
     // Group 2 (if present) compile-time arguments
     if (!core_group_2.ranges().empty()) {
@@ -294,14 +328,12 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
             num_rows_per_core_group_2,  // per_core_block_cnt
             block_size,                 // per_core_block_size
             Wt,                         // num_inner / TILE_W
-            hidden_Wt,                  // hidden_num_inner / TILE_W
-            mask_w,                     // mask_w
-            mask_hw                     // mask_hw
+            hidden_Wt                   // hidden_num_inner / TILE_W
 
         };
 
         kernels.compute_group_2 = create_compute_kernel(
-            program, core_group_2, compute_group_2_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+            program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
     }
     // -------------------------------------------------------------------------
     // 5) Assign runtime args for each core

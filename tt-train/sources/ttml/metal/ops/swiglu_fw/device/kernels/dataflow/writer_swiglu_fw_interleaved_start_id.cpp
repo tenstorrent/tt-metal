@@ -5,21 +5,19 @@
 #include <cmath>
 
 #include "dataflow_api.h"
-#include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
 
 // CBs with input data
 constexpr auto cb_input_idx = tt::CBIndex::c_0;  // X[r, p_block]
 constexpr auto cb_w1_idx = tt::CBIndex::c_1;     // W1[p_block, k]
 constexpr auto cb_w2_idx = tt::CBIndex::c_2;     // W2[k_block, c_block]
 constexpr auto cb_w3_idx = tt::CBIndex::c_3;     // W3[p_block, k]
-// CBs with masks
-constexpr auto cb_mask_w_idx = tt::CBIndex::c_4;   // Mask for input inner dimension
-constexpr auto cb_mask_hw_idx = tt::CBIndex::c_5;  // Mask for hidden inner dimension
 // CBs with intermediate computations
-constexpr auto cb_xw1_idx = tt::CBIndex::c_6;        // (X @ W1)[r, k_block]
-constexpr auto cb_xw3_idx = tt::CBIndex::c_7;        // (X @ W3)[r, k_block]
-constexpr auto cb_m_idx = tt::CBIndex::c_8;          // M[r, k_block]
-constexpr auto cb_y_partial_idx = tt::CBIndex::c_9;  // Partial Y[r, c_block] between k_blocks
+constexpr auto cb_xw1_partial_idx = tt::CBIndex::c_4;  // Partial (X @ W1)[r, k_block] between p_blocks
+constexpr auto cb_xw3_partial_idx = tt::CBIndex::c_5;  // Partial (X @ W3)[r, k_block] between p_blocks
+constexpr auto cb_xw1_idx = tt::CBIndex::c_6;          // (X @ W1)[r, k_block]
+constexpr auto cb_xw3_idx = tt::CBIndex::c_7;          // (X @ W3)[r, k_block]
+constexpr auto cb_m_idx = tt::CBIndex::c_8;            // M[r, k_block]
+constexpr auto cb_y_partial_idx = tt::CBIndex::c_9;    // Partial Y[r, c_block] between k_blocks
 // CB with output data
 constexpr auto cb_y_idx = tt::CBIndex::c_10;  // Final Y[r, c_block]
 
