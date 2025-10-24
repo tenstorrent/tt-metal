@@ -2965,19 +2965,7 @@ bool ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
     TT_ASSERT(physical_system_descriptor_ != nullptr, "Physical system descriptor not initialized");
 
     try {
-        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster().get_driver();
-        auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
-        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-        bool using_mock = tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled();
-        // Create physical system descriptor with correct constructor
-        tt::tt_metal::PhysicalSystemDescriptor physical_system_descriptor(
-            cluster,
-            distributed_context,
-            &hal,
-            using_mock,
-            true  // run_discovery
-        );
-        auto all_hostnames = physical_system_descriptor.get_all_hostnames();
+        auto all_hostnames = physical_system_descriptor_->get_all_hostnames();
         auto cabling_descriptor_path = get_cabling_descriptor_path(fabric_config);
         // Check if the cabling descriptor file exists
         if (!std::filesystem::exists(cabling_descriptor_path)) {
