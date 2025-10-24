@@ -40,7 +40,7 @@ jobs:
       do-scan: ${{ steps.compute-outputs.outputs.do-scan }}
     steps:
       - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
 
       - id: compute-outputs
         shell: bash
