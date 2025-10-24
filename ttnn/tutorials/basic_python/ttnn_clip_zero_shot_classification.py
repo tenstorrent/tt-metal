@@ -570,7 +570,7 @@ def main():
         cache_dir = os.getenv("TTNN_TUTORIALS_MODELS_CLIP_PATH")
         if cache_dir is not None:
             # clip_model_location = os.path.join(cache_dir, "")
-            clip_model_location = f"{cache_dir}/model"
+            clip_model_location = f"{cache_dir}"
 
             logger.info(f"Current directory files: {os.listdir(cache_dir)}")
             assert os.path.exists(cache_dir), f"Cache directory {cache_dir} does not exist"
@@ -587,7 +587,7 @@ def main():
         # If TTNN_TUTORIALS_MODELS_CLIP_PATH is set, use it as the cache directory to avoid requests to Hugging Face
         cache_dir = os.getenv("TTNN_TUTORIALS_MODELS_CLIP_PATH")
         if cache_dir is not None:
-            clip_tokenizer_location = f"{cache_dir}/tokenizer"
+            clip_tokenizer_location = f"{cache_dir}"
 
         tokenizer = CLIPTokenizer.from_pretrained(clip_tokenizer_location)
 
