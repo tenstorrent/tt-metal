@@ -13,6 +13,16 @@
 
 namespace tt::tt_fabric::bench {
 
+// API variants for addrgen overload testing
+enum class AddrgenApiVariant {
+    UnicastWrite,                  // fabric_unicast_noc_unicast_write
+    UnicastWriteWithState,         // fabric_unicast_noc_unicast_write_with_state
+    UnicastWriteSetState,          // fabric_unicast_noc_unicast_write_set_state + _with_state
+    FusedAtomicIncWrite,           // fabric_unicast_noc_fused_unicast_with_atomic_inc
+    FusedAtomicIncWriteWithState,  // fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state
+    FusedAtomicIncWriteSetState    // fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state + _with_state
+};
+
 using HelpersFixture = ::tt::tt_metal::MeshDeviceFixtureBase;
 
 // ---- Reusable defaults -------
@@ -43,6 +53,7 @@ struct PerfParams {
     tt::tt_metal::CoreCoord sender_core = kDefaultCore;
     tt::tt_metal::CoreCoord receiver_core = kDefaultCore;
     uint32_t trace_iters = kDefaultTraceIters;  // number of enqueues captured per trace
+    AddrgenApiVariant api_variant = AddrgenApiVariant::UnicastWrite;  // API variant to test
 };
 
 struct PerfStats {
