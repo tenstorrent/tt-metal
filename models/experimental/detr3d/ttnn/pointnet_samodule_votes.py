@@ -237,7 +237,6 @@ class TtnnPointnetSAModuleVotes(LightweightModule):
         normalize_xyz: bool = False,  # noramlize local XYZ with radius
         sample_uniformly: bool = False,
         ret_unique_cnt: bool = False,
-        module=None,
         parameters=None,
         device=None,
     ):
@@ -271,7 +270,7 @@ class TtnnPointnetSAModuleVotes(LightweightModule):
         if use_xyz and len(mlp_spec) > 0:
             mlp_spec[0] += 3
 
-        self.mlp_module = TtnnSharedMLP(module.mlp_module, parameters, device)
+        self.mlp_module = TtnnSharedMLP(parameters, device)
         self.gather_operation = GatherOperation()
         self.furthest_point_sample = FurthestPointSampling()
 

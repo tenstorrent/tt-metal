@@ -19,17 +19,6 @@ from torch.nn import MultiheadAttention
 from models.experimental.detr3d.reference.pointnet2_modules import SharedMLP
 
 
-class DotAccessibleDict(dict):
-    def __getattr__(self, key):
-        try:
-            return self[key]
-        except KeyError:
-            raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{key}'")
-
-    def __setattr__(self, key, value):
-        self[key] = value
-
-
 def load_partial_state(torch_model: torch.nn.Module, state_dict, layer_name: str = ""):
     partial_state_dict = {}
     layer_prefix = layer_name + "."

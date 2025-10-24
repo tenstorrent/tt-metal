@@ -10,17 +10,16 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.common.utility_functions import comp_pcc, comp_allclose
 
+from models.experimental.detr3d.common import load_torch_model_state
+from models.experimental.detr3d.ttnn.model_3detr import build_ttnn_3detr
 from models.experimental.detr3d.reference.model_3detr import build_3detr
 from models.experimental.detr3d.reference.model_config import Detr3dArgs
 from models.experimental.detr3d.reference.model_utils import SunrgbdDatasetConfig
-from models.experimental.detr3d.common import load_torch_model_state
-from models.experimental.detr3d.ttnn.model_3detr import build_ttnn_3detr
 from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
 
 
 class Tt3DetrArgs(Detr3dArgs):
     def __init__(self):
-        self.modules = None
         self.parameters = None
         self.device = None
 
@@ -68,7 +67,6 @@ def test_3detr_model(encoder_only, input_shape, device):
     )
 
     ttnn_args = Tt3DetrArgs()
-    ttnn_args.modules = ref_module
     ttnn_args.parameters = ref_module_parameters
     ttnn_args.device = device
 

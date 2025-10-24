@@ -14,17 +14,16 @@ class TtnnPositionEmbeddingCoordsSine(LightweightModule):
         self,
         normalize=False,
         pos_type="fourier",
+        parameters=None,
         device=None,
-        gauss_B=None,
     ):
         super().__init__()
         self.normalize = normalize
         self.device = device
         self.pos_type = pos_type
         if self.pos_type == "fourier":
-            assert gauss_B is not None
-            # define a gaussian matrix input_ch -> output_ch
-            self.gauss_B = ttnn.from_torch(gauss_B, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
+            assert parameters is not None
+            self.gauss_B = parameters.gauss_B
         else:
             raise ValueError(f"Unknown {self.pos_type}, only fourier is currently supported")
 

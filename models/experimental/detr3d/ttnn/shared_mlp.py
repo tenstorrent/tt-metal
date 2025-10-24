@@ -8,13 +8,13 @@ from models.experimental.detr3d.ttnn.utils import TtnnConv2D
 
 
 class TtnnSharedMLP(LightweightModule):
-    def __init__(self, module, parameters, device):
+    def __init__(self, parameters, device):
         super().__init__()
         self.device = device
         self.parameters = parameters
         shard_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
         self.conv1 = TtnnConv2D(
-            module.layer0.conv,
+            parameters.conv_args.layer0.conv,
             parameters.layer0.conv,
             device,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
@@ -24,7 +24,7 @@ class TtnnSharedMLP(LightweightModule):
             math_fidelity=ttnn.MathFidelity.HiFi2,
         )
         self.conv2 = TtnnConv2D(
-            module.layer1.conv,
+            parameters.conv_args.layer1.conv,
             parameters.layer1.conv,
             device,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
@@ -35,7 +35,7 @@ class TtnnSharedMLP(LightweightModule):
             math_fidelity=ttnn.MathFidelity.HiFi2,
         )
         self.conv3 = TtnnConv2D(
-            module.layer2.conv,
+            parameters.conv_args.layer2.conv,
             parameters.layer2.conv,
             device,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
