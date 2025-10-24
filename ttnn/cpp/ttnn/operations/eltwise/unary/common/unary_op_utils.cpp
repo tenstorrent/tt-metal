@@ -843,6 +843,8 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(VecMode::RC), static_cast<float>(false)});
     } else if (name == "sigmoid_approx") {
         return UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(VecMode::RC), static_cast<float>(true)});
+    } else if (name == "hardsigmoid") {
+        return UnaryWithParam(UnaryOpType::HARDSIGMOID);
     } else if (name == "sqrt") {
         return UnaryWithParam(UnaryOpType::SQRT);
     } else if (name == "rsqrt") {
@@ -885,6 +887,8 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::ALT_COMPLEX_ROTATE90);
     } else if (name == "hardmish") {
         return UnaryWithParam(UnaryOpType::HARDMISH, static_cast<float>(true));
+    } else if (name == "mish") {
+        return UnaryWithParam(UnaryOpType::MISH);
     }
     TT_THROW("Unknown unary op: {}", name);
 }
@@ -904,7 +908,9 @@ std::string unary_with_param_to_string(const UnaryWithParam& unary_op) {
                 return "sigmoid_approx";
             }
             return "sigmoid";
+        case UnaryOpType::HARDSIGMOID: return "hardsigmoid";
         case UnaryOpType::SQRT: return "sqrt";
+        case UnaryOpType::RSQRT: return "rsqrt";
         case UnaryOpType::EXP: return "exp";
         case UnaryOpType::RECIP: return "recip";
         case UnaryOpType::LOG: return "log";
@@ -914,12 +920,16 @@ std::string unary_with_param_to_string(const UnaryWithParam& unary_op) {
         case UnaryOpType::LOG10: return "log10";
         case UnaryOpType::SIN: return "sin";
         case UnaryOpType::COS: return "cos";
+        case UnaryOpType::COSH: return "cosh";
+        case UnaryOpType::SINH: return "sinh";
         case UnaryOpType::ABS: return "abs";
         case UnaryOpType::ABS_INT32: return "abs_int32";
         case UnaryOpType::SIGN: return "sign";
         case UnaryOpType::SQUARE: return "square";
         case UnaryOpType::SOFTPLUS: return "softplus";
+        case UnaryOpType::SELU: return "selu";
         case UnaryOpType::ALT_COMPLEX_ROTATE90: return "alt_complex_rotate90";
+        case UnaryOpType::MISH: return "mish";
         case UnaryOpType::HARDMISH: return "hardmish";
         default: TT_THROW("Unsupported unary op type: {}", static_cast<int>(unary_op.op_type));
     }
