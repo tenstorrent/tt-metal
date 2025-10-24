@@ -633,7 +633,7 @@ void bind_unary_operation_with_scalar_parameter(
         ttnn::pybind_overload_t{
             [](const unary_operation_t& self,
                const Tensor& input_tensor,
-               const std::variant<uint32_t, int32_t, float> parameter,
+               ScalarVariant parameter,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor) {
                 return self(input_tensor, parameter, memory_config, output_tensor);

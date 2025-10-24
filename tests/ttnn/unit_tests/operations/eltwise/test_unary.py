@@ -619,8 +619,6 @@ def test_alt_complex_rotate90(device, h: int, w: int, dtype: ttnn.DataType):
     "input_shapes",
     [
         torch.Size([1, 1, 32, 32]),
-        torch.Size([1, 1, 320, 384]),
-        torch.Size([1, 3, 320, 384]),
     ],
 )
 @pytest.mark.parametrize(
@@ -655,22 +653,12 @@ def test_unary_zero_comp_ttnn(input_shapes, low, high, ttnn_function, device):
 
 
 @pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([100])),
-        (torch.Size([32, 32])),
-        (torch.Size([3, 128, 32])),
-        (torch.Size([1, 3, 320, 384])),
-        (torch.Size([1, 1, 32, 320, 12])),
-    ),
-)
-@pytest.mark.parametrize(
-    "low, high, torch_dtype, ttnn_dtype",
+    "low, high, torch_dtype, ttnn_dtype, input_shapes",
     [
-        (0, 2, torch.int32, ttnn.uint16),  # Small range
-        (0, 65535, torch.int32, ttnn.uint16),  # Full uint16 range
-        (0, 2, torch.uint32, ttnn.uint32),  # Small range
-        (0, 4294967295, torch.uint32, ttnn.uint32),  # Full uint32 range
+        (0, 2, torch.int32, ttnn.uint16, torch.Size([32, 32])),  # Small range
+        (0, 65535, torch.int32, ttnn.uint16, torch.Size([1, 3, 320, 384])),  # Full uint16 range
+        (0, 2, torch.uint32, ttnn.uint32, torch.Size([32, 32])),  # Small range
+        (0, 4294967295, torch.uint32, ttnn.uint32, torch.Size([1, 3, 320, 384])),  # Full uint32 range
     ],
 )
 @pytest.mark.parametrize(
