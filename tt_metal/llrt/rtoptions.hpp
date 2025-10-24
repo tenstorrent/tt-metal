@@ -34,7 +34,6 @@ enum class EnvVarID {
     // ========================================
     // PATH CONFIGURATION
     // ========================================
-    TT_METAL_RUNTIME_ROOT,                    // Root directory of TT-Metal installation
     TT_METAL_CACHE,                           // Cache directory for compiled kernels
     TT_METAL_KERNEL_PATH,                     // Path to kernel source files
     TT_METAL_SIMULATOR,                       // Path to simulator executable

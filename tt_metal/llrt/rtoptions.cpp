@@ -36,6 +36,9 @@ const char* RunTimeDebugClassNames[RunTimeDebugClassCount] = {"N/A", "worker", "
 // Env variable to override the core grid configuration
 constexpr auto TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR = "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE";
 
+// Environment variable name for TT-Metal root directory
+constexpr auto TT_METAL_RUNTIME_ROOT_ENV_VAR = "TT_METAL_RUNTIME_ROOT";
+
 namespace {
 // Helper function to normalize directory paths using std::filesystem
 std::string normalize_path(const char* path, const std::string& subdir = "") {
@@ -58,12 +61,8 @@ RunTimeOptions::RunTimeOptions() :
     // Root directory handling from main (more robust)
     log_debug(tt::LogMetal, "initial root_dir: {}", this->root_dir);
 
-    // Root directory fallback system - handles TT_METAL_RUNTIME_ROOT with robust logic:
-    // 1. Try environment variable TT_METAL_RUNTIME_ROOT first
-    // 2. Fall back to API override (g_root_dir) if env var not set
-    // 3. Auto-detect by looking for tt_metal/ directory in current working directory
-    // 4. Fail with TT_FATAL if still empty (prevents "Root Directory is not set" error)
-    const char* root_dir_str = std::getenv("TT_METAL_RUNTIME_ROOT");
+    // TT_METAL_RUNTIME_ROOT handling with robust fallback system
+    const char* root_dir_str = std::getenv(TT_METAL_RUNTIME_ROOT_ENV_VAR);
     if (root_dir_str != nullptr) {
         this->root_dir = std::string(root_dir_str);
         log_debug(tt::LogMetal, "ENV override root_dir: {}", this->root_dir);
@@ -118,20 +117,7 @@ RunTimeOptions::RunTimeOptions() :
 
     test_mode_enabled = (getenv("TT_METAL_WATCHER_TEST_MODE") != nullptr);
 
-    TT_FATAL(
-        !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()),
-        "Cannot enable both debug printing and profiling");
-
     InitializeFromEnvVars();
-
-    // Profiler setup from main
-    profiler_enabled = false;
-    profile_dispatch_cores = false;
-    profiler_sync_enabled = false;
-    profiler_mid_run_dump = false;
-    profiler_buffer_usage_enabled = false;
-    profiler_trace_profiler = false;
-    profiler_trace_tracking = false;
 
     const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
 #if defined(TRACY_ENABLE)
@@ -179,6 +165,10 @@ RunTimeOptions::RunTimeOptions() :
         !(profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1'),
         "TT_METAL_DEVICE_PROFILER env var is set to 1. This requires a Tracy-enabled build of tt-metal.");
 #endif
+
+    TT_FATAL(
+        !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()),
+        "Cannot enable both debug printing and profiling");
 
     null_kernels = (std::getenv("TT_METAL_NULL_KERNELS") != nullptr);
 
@@ -275,18 +265,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // ========================================
         // PATH CONFIGURATION
         // ========================================
-
-        // TT_METAL_RUNTIME_ROOT
-        // Sets the root directory of the TT-Metal installation.
-        // Default: No default (must be set)
-        // Usage: export TT_METAL_RUNTIME_ROOT=/path/to/tt-metal
-        case EnvVarID::TT_METAL_RUNTIME_ROOT:
-            // Root directory of TT-Metal installation
-            // Default: empty (must be set)
-            // Usage: export TT_METAL_RUNTIME_ROOT=/path/to/tt-metal
-            // NOTE: This is handled by constructor's robust fallback logic (lines 62-78)
-            // This case exists for documentation purposes only
-            break;
 
         // TT_METAL_CACHE
         // Directory for caching compiled kernels and other build artifacts.
