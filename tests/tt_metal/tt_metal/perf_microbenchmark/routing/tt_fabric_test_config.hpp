@@ -286,7 +286,6 @@ public:
     std::optional<std::string> get_yaml_config_path();
     bool check_filter(ParsedTestConfig& test_config, bool fine_grained);
     void apply_overrides(std::vector<ParsedTestConfig>& test_configs);
-    std::vector<ParsedTestConfig> generate_default_configs();
     std::optional<uint32_t> get_master_seed();
     bool dump_built_tests();
     std::string get_built_tests_dump_file_name(const std::string& default_file_name);
