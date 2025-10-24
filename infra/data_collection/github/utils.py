@@ -352,10 +352,20 @@ def get_job_rows_from_github_info(workflow_outputs_dir, github_jobs_json, github
 def get_github_partial_benchmark_data_filenames():
     logger.info("We are assuming generated/benchmark_data exists from previous passing test")
 
-    current_utils_path = pathlib.Path(__file__)
-    benchmark_data_dir = current_utils_path.parent.parent.parent.parent / "generated/benchmark_data"
-    assert benchmark_data_dir.exists()
-    assert benchmark_data_dir.is_dir()
+    # Check if we're in a GitHub Actions container environment
+    github_workspace = os.getenv("GITHUB_WORKSPACE")
+    if os.getenv("GITHUB_ACTIONS") == "true" and github_workspace:
+        # In GitHub Actions, files are created in the workspace root, not in the container mount
+        benchmark_data_dir = pathlib.Path(github_workspace) / "generated/benchmark_data"
+        logger.info(f"Using GitHub Actions workspace path: {benchmark_data_dir}")
+    else:
+        # Fallback to relative path calculation
+        current_utils_path = pathlib.Path(__file__)
+        benchmark_data_dir = current_utils_path.parent.parent.parent.parent / "generated/benchmark_data"
+        logger.info(f"Using relative path calculation: {benchmark_data_dir}")
+
+    assert benchmark_data_dir.exists(), f"Benchmark data directory does not exist: {benchmark_data_dir}"
+    assert benchmark_data_dir.is_dir(), f"Benchmark data path is not a directory: {benchmark_data_dir}"
 
     benchmark_data_paths = list(benchmark_data_dir.glob("partial_run_*.pkl"))
     assert len(
