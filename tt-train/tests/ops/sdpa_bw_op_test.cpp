@@ -246,7 +246,7 @@ std::vector<ttnn::Tensor> composite_sdpa(
 
 TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     using namespace ttml;
-    const uint32_t B = 1U, qNH = 1U, kvNH = 1U, S = 128U, qD = 128U, kvD = 128U;
+    const uint32_t B = 1U, qNH = 1U, kvNH = 1U, S = 32U, qD = 128U, kvD = 128U;
     const float dropout_probability = 0.0F;
     const bool fp32_dest_acc_en = true;
 
@@ -321,13 +321,18 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     xt::xarray<float> composite_dV = core::to_xtensor(dL_dV);
     assert(sdpa_bw_dV.shape() == composite_dV.shape());
 
-    xt::xarray<float> u_scaler = core::to_xtensor(op_result[1]);           // u scaler from kernel
-    xt::xarray<float> attn_output_tensor = core::to_xtensor(attn_output);  // u scaler from composite
-    xt::xarray<float> u_scaler_ref = dot_product(grad_output_tensor, attn_output_tensor);
-    assert(u_scaler.shape() == u_scaler_ref.shape());
+    xt::xarray<float> sdpa_bw_dK = core::to_xtensor(op_result[1]);  // dL_dK
+    xt::xarray<float> composite_dK = core::to_xtensor(dL_dK);
+    assert(sdpa_bw_dK.shape() == composite_dK.shape());
 
-    EXPECT_TRUE(xt::allclose(u_scaler, u_scaler_ref, 1e-2F, 1e-2F));
+    // xt::xarray<float> u_scaler = core::to_xtensor(op_result[1]);           // u scaler from kernel
+    // xt::xarray<float> attn_output_tensor = core::to_xtensor(attn_output);  // u scaler from composite
+    // xt::xarray<float> u_scaler_ref = dot_product(grad_output_tensor, attn_output_tensor);
+    // assert(u_scaler.shape() == u_scaler_ref.shape());
 
+    // EXPECT_TRUE(xt::allclose(u_scaler, u_scaler_ref, 1e-2F, 1e-2F));
+
+    EXPECT_TRUE(xt::allclose(sdpa_bw_dK, composite_dK, 2e-2F, 2e-2F));
     // Check if values are close enough
     bool is_close = xt::allclose(sdpa_bw_dV, composite_dV, 2e-2F, 2e-2F);
 

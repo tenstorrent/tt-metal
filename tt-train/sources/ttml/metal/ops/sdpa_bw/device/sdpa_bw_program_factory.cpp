@@ -49,20 +49,22 @@ constexpr auto kReductionScalerCbIndex = tt::CBIndex::c_8;
 
 constexpr auto kPrevGradValueHolderCbIndex = tt::CBIndex::c_9;
 constexpr auto kCurGradValueHolderCbIndex = tt::CBIndex::c_10;
+constexpr auto kPrevGradKeyHolderCbIndex = tt::CBIndex::c_11;
+constexpr auto kCurGradKeyHolderCbIndex = tt::CBIndex::c_12;
 
-constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_11;
-constexpr auto kGradAttentionCbIndex = tt::CBIndex::c_12;
-constexpr auto kGradScoresCbIndex = tt::CBIndex::c_13;
-constexpr auto kTransposeWhCbIndex = tt::CBIndex::c_14;
-constexpr auto kUScalarRowCbIndex = tt::CBIndex::c_15;
+constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_13;
+constexpr auto kGradAttentionCbIndex = tt::CBIndex::c_14;
+constexpr auto kGradScoresCbIndex = tt::CBIndex::c_15;
+constexpr auto kTransposeWhCbIndex = tt::CBIndex::c_16;
+constexpr auto kUScalarRowCbIndex = tt::CBIndex::c_17;
 
-constexpr auto kGradQueryCbIndex = tt::CBIndex::c_16;
-constexpr auto kGradKeyCbIndex = tt::CBIndex::c_17;
-constexpr auto kGradValueCbIndex = tt::CBIndex::c_18;
-constexpr auto kSyncOutputWriterCbIndex = tt::CBIndex::c_19;
+constexpr auto kGradQueryCbIndex = tt::CBIndex::c_18;
+constexpr auto kGradKeyCbIndex = tt::CBIndex::c_19;
+constexpr auto kGradValueCbIndex = tt::CBIndex::c_20;
+constexpr auto kSyncOutputWriterCbIndex = tt::CBIndex::c_21;
 
 // [DEBUG]: Used for debug, should be removed later
-constexpr auto kMaskedIntermCbIndex = tt::CBIndex::c_20;
+constexpr auto kMaskedIntermCbIndex = tt::CBIndex::c_22;
 
 constexpr uint32_t kNumScalerTiles = 1U;
 constexpr uint32_t kSingleTileBuffer = 1U;
@@ -294,6 +296,12 @@ SDPABackwardProgramFactory::cached_program_t SDPABackwardProgramFactory::create(
 
     [[maybe_unused]] auto cb_cur_grad_value_holder = create_circular_buffer(
         program, all_cores, kCurGradValueHolderCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
+
+    [[maybe_unused]] auto cb_prev_grad_key_holder = create_circular_buffer(
+        program, all_cores, kPrevGradKeyHolderCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
+
+    [[maybe_unused]] auto cb_cur_grad_key_holder = create_circular_buffer(
+        program, all_cores, kCurGradKeyHolderCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
 
     // used to hold transpose value of attention weights, which is used in grad_V computation
     [[maybe_unused]] auto cb_transpose_wh = create_circular_buffer(

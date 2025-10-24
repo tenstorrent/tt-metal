@@ -19,10 +19,10 @@ void kernel_main() {
     uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
 
     // Circular buffer indices for gradients
-    constexpr uint32_t cb_grad_query = tt::CBIndex::c_16;          // Output: grad_Q
-    constexpr uint32_t cb_grad_key = tt::CBIndex::c_17;            // Output: grad_K
-    constexpr uint32_t cb_grad_value = tt::CBIndex::c_18;          // Output: grad_V
-    constexpr uint32_t cb_sync_output_writer = tt::CBIndex::c_19;  // Used to sync with output writer kernel
+    constexpr uint32_t cb_grad_query = tt::CBIndex::c_18;          // Output: grad_Q
+    constexpr uint32_t cb_grad_key = tt::CBIndex::c_19;            // Output: grad_K
+    constexpr uint32_t cb_grad_value = tt::CBIndex::c_20;          // Output: grad_V
+    constexpr uint32_t cb_sync_output_writer = tt::CBIndex::c_21;  // Used to sync with output writer kernel
 
     // Get compile-time arguments
     constexpr uint32_t qWt = get_compile_time_arg_val(0);              // query width in tiles
@@ -58,24 +58,6 @@ void kernel_main() {
 
         // -------- Grad Value: same shape as Value (B, vNH, S, vEmbd) --------
         uint32_t grad_v_row_base_tiles = ((batch_idx * num_of_groups + group_idx) * Ht + s_tile_idx) * kWt;
-
-        DPRINT << "Writer: r=" << r << ", batch_idx=" << batch_idx << ", group_idx=" << group_idx
-               << ", s_tile_idx=" << s_tile_idx << ", grad_v_row_base_tiles=" << grad_v_row_base_tiles << ENDL();
-
-        // -------- Grad Key: same shape as Key (B, kNH, S, kEmbd) --------
-        //[DEBUG]: I changed shape of grad_key to write in grad_key some temporary results which I need to caclulate
-        // real grad_key
-        // for (uint32_t h = 0; h < Ht; ++h) {
-        //     uint32_t grad_k_row_base_tiles = ((batch_idx * num_of_groups + group_idx) * Ht + s_tile_idx) * onetile;
-        //     cb_wait_front(cb_grad_key, onetile);
-        //     uint32_t l1_grad_k_read_addr = get_read_ptr(cb_grad_key);
-        //     noc_async_write_tile(h, grad_key_addr_generator, l1_grad_k_read_addr);
-        //     noc_async_write_barrier();
-        //     cb_pop_front(cb_grad_key, onetile);
-        // }
-
-        // cb_wait_front(cb_sync_output_writer, onetile);  // wait for signals that one row is done
-
         cb_wait_front(cb_grad_value, kWt);
         uint32_t l1_grad_v_read_addr = get_read_ptr(cb_grad_value);
         for (uint32_t col = 0; col < kWt; ++col) {
@@ -85,6 +67,26 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(cb_grad_value, kWt);
 
-        // cb_pop_front(cb_sync_output_writer, onetile);  // consume the signal
+        DPRINT << "Writer: r=" << r << ", batch_idx=" << batch_idx << ", group_idx=" << group_idx
+               << ", s_tile_idx=" << s_tile_idx << ", grad_v_row_base_tiles=" << grad_v_row_base_tiles << ENDL();
+
+        // -------- Grad Key: same shape as Key (B, kNH, S, kEmbd) --------
+        uint32_t grad_k_row_base_tiles = ((batch_idx * num_of_groups + group_idx) * Ht + s_tile_idx) * kWt;
+        cb_wait_front(cb_grad_key, kWt);
+        uint32_t l1_grad_k_read_addr = get_read_ptr(cb_grad_key);
+        for (uint32_t col = 0; col < kWt; ++col) {
+            noc_async_write_tile(grad_k_row_base_tiles + col, grad_key_addr_generator, l1_grad_k_read_addr);
+            l1_grad_k_read_addr += tile_bytes;
+        }
+        noc_async_write_barrier();
+        cb_pop_front(cb_grad_key, kWt);
+
+        // for (uint32_t h = 0; h < Ht; ++h) {
+        //     cb_wait_front(cb_grad_key, onetile);
+        //     uint32_t l1_grad_k_read_addr = get_read_ptr(cb_grad_key);
+        //     noc_async_write_tile(h, grad_key_addr_generator, l1_grad_k_read_addr);
+        //     noc_async_write_barrier();
+        //     cb_pop_front(cb_grad_key, onetile);
+        // }
     }
 }

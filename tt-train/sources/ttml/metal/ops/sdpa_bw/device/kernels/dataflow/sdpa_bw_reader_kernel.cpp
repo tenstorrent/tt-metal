@@ -57,7 +57,7 @@ void kernel_main() {
     constexpr uint32_t cb_reduction_scaler = tt::CBIndex::c_8;
 
     // [DEBUG]: Used for debug, should be removed later
-    constexpr auto cb_masked_interm = tt::CBIndex::c_20;
+    constexpr auto cb_masked_interm = tt::CBIndex::c_22;
 
     // Get compile-time arguments
     constexpr uint32_t qWt = get_compile_time_arg_val(0);              // query width in tiles

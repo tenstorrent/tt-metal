@@ -100,12 +100,8 @@ SDPABackwardDeviceOperation::spec_return_value_t SDPABackwardDeviceOperation::co
     if (tensor_args.preallocated_grad_key.has_value()) {
         output_specs.push_back(tensor_args.preallocated_grad_key->tensor_spec());
     } else {
-        //[DEBUG]: I changed shape of grad_key to write in grad_key some temporary results which I need to caclulate
-        // real grad_key
-        auto shape = tensor_args.key.logical_shape();
-        shape[3] = 1U;  // I put here scaler u need to fix it later
         output_specs.emplace_back(
-            shape,
+            tensor_args.key.logical_shape(),
             tt::tt_metal::TensorLayout(
                 tensor_args.key.dtype(), tt::tt_metal::Layout::TILE, tensor_args.key.memory_config()));
     }
