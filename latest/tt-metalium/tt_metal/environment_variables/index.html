@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Host APIs &mdash; TT-Metalium  documentation</title>
+  <title>Environment Variables &mdash; TT-Metalium  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/host_apis.html" />
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/environment_variables/index.html" />
   <!--[if lt IE 9]>
     <script src="../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -24,8 +24,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="Program" href="host_apis/program/program.html" />
-    <link rel="prev" title="APIs" href="index.html" /> 
+    <link rel="next" title="Tools" href="../../tools/index.html" />
+    <link rel="prev" title="Low Level Kernels" href="../apis/kernel_apis/sfpu/llk.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -61,20 +61,12 @@
 <li class="toctree-l1"><a class="reference internal" href="../programming_model/index.html">Programming Model</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/index.html">Programming Examples</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced_topics/index.html">Advanced Topics</a></li>
-<li class="toctree-l1 current"><a class="reference internal" href="index.html">APIs</a><ul class="current">
-<li class="toctree-l2 current"><a class="current reference internal" href="#">Host APIs</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="host_apis/program/program.html">Program</a></li>
-<li class="toctree-l3"><a class="reference internal" href="host_apis/buffers/buffers.html">Buffers</a></li>
-<li class="toctree-l3"><a class="reference internal" href="host_apis/device_management/device_management.html">Device Management</a></li>
-<li class="toctree-l3"><a class="reference internal" href="host_apis/kernels/kernels.html">Kernels</a></li>
-<li class="toctree-l3"><a class="reference internal" href="host_apis/runtime_args/runtime_args.html">Runtime Arguments</a></li>
-<li class="toctree-l3"><a class="reference internal" href="host_apis/profiler/profiler.html">Profiler</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../apis/index.html">APIs</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Environment Variables</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#tt-metal-home">TT_METAL_HOME</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#tt-metal-runtime-root">TT_METAL_RUNTIME_ROOT</a></li>
 </ul>
 </li>
-<li class="toctree-l2"><a class="reference internal" href="kernel_apis.html">Kernel APIs</a></li>
-</ul>
-</li>
-<li class="toctree-l1"><a class="reference internal" href="../environment_variables/index.html">Environment Variables</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../tools/index.html">Tools</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Resources</span></p>
@@ -97,10 +89,9 @@
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
-          <li class="breadcrumb-item"><a href="index.html">APIs</a></li>
-      <li class="breadcrumb-item active">Host APIs</li>
+      <li class="breadcrumb-item active">Environment Variables</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/tt_metal/apis/host_apis.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/tt_metal/environment_variables/index.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -108,46 +99,73 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="host-apis">
-<h1>Host APIs<a class="headerlink" href="#host-apis" title="Permalink to this heading"></a>
+  <section id="environment-variables">
+<span id="id1"></span><h1>Environment Variables<a class="headerlink" href="#environment-variables" title="Permalink to this heading"></a>
 </h1>
-<div class="toctree-wrapper compound">
-<ul>
-<li class="toctree-l1">
-<a class="reference internal" href="host_apis/program/program.html">Program</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="host_apis/program/CreateProgram.html">CreateProgram</a></li>
-</ul>
-</li>
-<li class="toctree-l1">
-<a class="reference internal" href="host_apis/buffers/buffers.html">Buffers</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="host_apis/buffers/CreateBuffer.html">CreateBuffer</a></li>
-<li class="toctree-l2"><a class="reference internal" href="host_apis/buffers/CircularBuffers.html">CircularBuffers</a></li>
-<li class="toctree-l2"><a class="reference internal" href="host_apis/buffers/CreateSemaphore.html">CreateSemaphore</a></li>
-<li class="toctree-l2"><a class="reference internal" href="host_apis/buffers/DeallocateBuffer.html">DeallocateBuffer</a></li>
-<li class="toctree-l2"><a class="reference internal" href="host_apis/buffers/AssignGlobalBufferToProgram.html">AssignGlobalBufferToProgram</a></li>
-</ul>
-</li>
-<li class="toctree-l1">
-<a class="reference internal" href="host_apis/device_management/device_management.html">Device Management</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="host_apis/device_management/CreateDevice.html">CreateDevice</a></li>
-<li class="toctree-l2"><a class="reference internal" href="host_apis/device_management/CloseDevice.html">CloseDevice</a></li>
-<li class="toctree-l2"><a class="reference internal" href="host_apis/device_management/QueryDevices.html">QueryDevices</a></li>
-</ul>
-</li>
-<li class="toctree-l1">
-<a class="reference internal" href="host_apis/kernels/kernels.html">Kernels</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="host_apis/kernels/CreateKernel.html">CreateKernel</a></li>
-<li class="toctree-l2"><a class="reference internal" href="host_apis/kernels/CreateKernelFromString.html">CreateKernelFromString</a></li>
-</ul>
-</li>
-<li class="toctree-l1"><a class="reference internal" href="host_apis/runtime_args/runtime_args.html">Runtime Arguments</a></li>
-<li class="toctree-l1">
-<a class="reference internal" href="host_apis/profiler/profiler.html">Profiler</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="host_apis/profiler/ReadMeshDeviceProfilerResults.html">ReadMeshDeviceProfilerResults</a></li>
-</ul>
-</li>
-</ul>
+<section id="tt-metal-home">
+<h2>TT_METAL_HOME<a class="headerlink" href="#tt-metal-home" title="Permalink to this heading"></a>
+</h2>
+<p><strong>Optional:</strong> Needed only for specific workflows.</p>
+<p><strong>Description:</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">TT_METAL_HOME</span></code> is an environment variable that points to the root directory of the tt-metal repository. It may be needed before running some tests, or scripts. It is not mandated by the metal runtime.</p>
+<p><strong>Usage:</strong></p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_HOME</span><span class="o">=</span>/path/to/your/tt-metal
+</pre></div>
 </div>
+<p><strong>When is it needed:</strong></p>
+<ul class="simple">
+<li><p><strong>Development:</strong> Used by test scripts and build tools to locate repository files</p></li>
+<li><p><strong>Documentation builds:</strong> Referenced when checking spelling and building docs</p></li>
+<li><p><strong>CMake builds:</strong> Used as a fallback when building tt-train standalone</p></li>
+</ul>
+</section>
+<section id="tt-metal-runtime-root">
+<h2>TT_METAL_RUNTIME_ROOT<a class="headerlink" href="#tt-metal-runtime-root" title="Permalink to this heading"></a>
+</h2>
+<p><strong>Required:</strong> Conditional (only for specific C++ application scenarios)</p>
+<p><strong>Description:</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">TT_METAL_RUNTIME_ROOT</span></code> serves as an override to tell <code class="docutils literal notranslate"><span class="pre">libtt_metal.so</span></code> where to look for artifacts - firmware blobs, etc.. that is needed during runtime.</p>
+<p><strong>When is it required:</strong></p>
+<p>This variable is <strong>only</strong> required when running a C++ application (not ttnn Python) <strong>AND</strong>:</p>
+<ul class="simple">
+<li><p>Not using the metalium prebuilt binary package</p></li>
+<li><p>Not running from a repository clone directory</p></li>
+</ul>
+<p><strong>Usage:</strong></p>
+<p>Set this variable to point to the directory containing runtime artifacts:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_RUNTIME_ROOT</span><span class="o">=</span>/path/to/runtime/artifacts
+</pre></div>
+</div>
+<p><strong>Background:</strong></p>
+<p>When running Python applications with ttnn, the runtime root is automatically determined by the package installation location. However, C++ applications that link against <code class="docutils literal notranslate"><span class="pre">libtt_metal.so</span></code> need to know where to find runtime files like kernel binaries and device firmware.</p>
+<p>The library uses the following fallback order to locate runtime artifacts:</p>
+<ol class="arabic simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">TT_METAL_RUNTIME_ROOT</span></code> environment variable (if set)</p></li>
+<li><p>Installation directory (for prebuilt packages)</p></li>
+<li><p>Repository root (for development builds)</p></li>
+</ol>
+<p><strong>Example scenarios:</strong></p>
+<ul>
+<li>
+<p><strong>Scenario 1 (No override needed):</strong> Running from repo clone</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>~/tt-metal
+./build/my_cpp_app<span class="w">  </span><span class="c1"># Uses repo root automatically</span>
+</pre></div>
+</div>
+</li>
+<li>
+<p><strong>Scenario 2 (Override required):</strong> Custom C++ application outside repo</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_RUNTIME_ROOT</span><span class="o">=</span>/opt/tt-metalium-runtime
+/usr/local/bin/my_cpp_app
+</pre></div>
+</div>
+</li>
+</ul>
+</section>
 </section>
 
 
@@ -155,8 +173,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="index.html" class="btn btn-neutral float-left" title="APIs" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="host_apis/program/program.html" class="btn btn-neutral float-right" title="Program" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="../apis/kernel_apis/sfpu/llk.html" class="btn btn-neutral float-left" title="Low Level Kernels" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../../tools/index.html" class="btn btn-neutral float-right" title="Tools" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
