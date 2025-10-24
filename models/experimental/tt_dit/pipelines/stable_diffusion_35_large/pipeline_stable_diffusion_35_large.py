@@ -313,8 +313,8 @@ class StableDiffusion3Pipeline:
         )
 
         # Load state dicts into new encoders
-        self._text_encoder_1.load_state_dict(text_encoder_1_state_dict)
-        self._text_encoder_2.load_state_dict(text_encoder_2_state_dict)
+        self._text_encoder_1.load_torch_state_dict(text_encoder_1_state_dict)
+        self._text_encoder_2.load_torch_state_dict(text_encoder_2_state_dict)
 
         if enable_t5_text_encoder:
             logger.info("creating TT-NN T5 text encoder...")
@@ -345,7 +345,7 @@ class StableDiffusion3Pipeline:
             )
 
             # Load state dict into new encoder
-            self._text_encoder_3.load_state_dict(torch_text_encoder_3_state_dict)
+            self._text_encoder_3.load_torch_state_dict(torch_text_encoder_3_state_dict)
         else:
             self._text_encoder_3 = None
 
