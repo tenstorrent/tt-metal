@@ -188,11 +188,11 @@ If no <code class="xref py py-attr docutils literal notranslate"><span class="pr
 <tbody>
 <tr class="row-even">
 <td><p>FLOAT32</p></td>
-<td><p>ROW_MAJOR</p></td>
+<td><p>ROW_MAJOR, TILE</p></td>
 </tr>
 <tr class="row-odd">
 <td><p>BFLOAT16</p></td>
-<td><p>ROW_MAJOR</p></td>
+<td><p>ROW_MAJOR, TILE</p></td>
 </tr>
 <tr class="row-even">
 <td><p>UINT32</p></td>
@@ -240,6 +240,8 @@ If no <code class="xref py py-attr docutils literal notranslate"><span class="pr
 <li><p>All input tensors must be on-device.</p></li>
 <li><p>Currently this op only supports dimension-specific reduction on the last dimension (i.e. <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> = -1).</p></li>
 <li><p>Sharding is not supported for this operation</p></li>
+<li><p>Reduction over all elements (when dim=None) is not supported with the TILE input tensor layout</p></li>
+<li><p>The (optional) preallocated output tensor must have ROW_MAJOR layout</p></li>
 </ul>
 </dd>
 </dl>
