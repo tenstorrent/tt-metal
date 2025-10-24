@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <unordered_map>
 #include <tt-metalium/core_coord.hpp>
@@ -307,9 +308,7 @@ void DeviceData::relevel(CoreRange range) {
     for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; y++) {
         for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; x++) {
             CoreCoord core = {x, y};
-            if (this->all_data[core][bank].data.size() > max) {
-                max = this->all_data[core][bank].data.size();
-            }
+            max = std::max(this->all_data[core][bank].data.size(), max);
         }
     }
 
@@ -1048,12 +1047,8 @@ inline void gen_rnd_dispatcher_packed_write_cmd(IDevice* device, std::vector<uin
     uint32_t xfer_size_bytes = xfer_size_words * sizeof(uint32_t);
     if (perf_test_g) {
         TT_ASSERT(max_xfer_size_bytes_g <= dispatch_buffer_page_size_g);
-        if (xfer_size_bytes > max_xfer_size_bytes_g) {
-            xfer_size_bytes = max_xfer_size_bytes_g;
-        }
-        if (xfer_size_bytes < min_xfer_size_bytes_g) {
-            xfer_size_bytes = min_xfer_size_bytes_g;
-        }
+        xfer_size_bytes = std::min(xfer_size_bytes, max_xfer_size_bytes_g);
+        xfer_size_bytes = std::max(xfer_size_bytes, min_xfer_size_bytes_g);
     }
 
     std::vector<CoreCoord> gets_data;
@@ -1103,12 +1098,8 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(
         uint32_t xfer_size_bytes = xfer_size_words * sizeof(uint32_t);
         if (perf_test_g) {
             TT_ASSERT(max_xfer_size_bytes_g <= dispatch_buffer_page_size_g);
-            if (xfer_size_bytes > max_xfer_size_bytes_g) {
-                xfer_size_bytes = max_xfer_size_bytes_g;
-            }
-            if (xfer_size_bytes < min_xfer_size_bytes_g) {
-                xfer_size_bytes = min_xfer_size_bytes_g;
-            }
+            xfer_size_bytes = std::min(xfer_size_bytes, max_xfer_size_bytes_g);
+            xfer_size_bytes = std::max(xfer_size_bytes, min_xfer_size_bytes_g);
         }
 
         if (xfer_size_bytes > space_available) {
