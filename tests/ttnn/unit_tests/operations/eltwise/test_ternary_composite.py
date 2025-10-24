@@ -43,6 +43,30 @@ def test_ternary_addcmul_ttnn(input_shapes, value, device):
     ),
 )
 @pytest.mark.parametrize("value", [1.0, 5.0, 10.0])
+def test_lazy_addcmul_ttnn(input_shapes, value, device):
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -80, 80, device)
+    in_data3, input_tensor3 = data_gen_with_range(input_shapes, -90, 90, device)
+
+    output_tensor = ttnn.materialize(
+        ttnn.lazy.add(input_tensor1, ttnn.lazy.mul(value, ttnn.lazy.mul(input_tensor2, input_tensor3)))
+    )
+    golden_fn = ttnn.get_golden_function(ttnn.addcmul)
+    golden_tensor = golden_fn(in_data1, in_data2, in_data3, value=value)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize("value", [1.0, 5.0, 10.0])
 def test_ternary_addcdiv_ttnn(input_shapes, value, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
     in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
