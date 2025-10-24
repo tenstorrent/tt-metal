@@ -70,4 +70,6 @@ void ResumeLiteFabric(
 
 void TerminateLiteFabric(tt::Cluster& cluster, const SystemDescriptor& desc);
 
+bool BinaryWritten(tt::Cluster& cluster, tt_cxy_pair virtual_core);
+
 }  // namespace lite_fabric

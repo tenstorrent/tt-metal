@@ -255,4 +255,12 @@ void TerminateLiteFabric(tt::Cluster& cluster, const SystemDescriptor& desc) {
     SetResetState(cluster, desc, true);
 }
 
+bool BinaryWritten(tt::Cluster& cluster, tt_cxy_pair virtual_core) {
+    uint32_t binary_written_addr =
+        LITE_FABRIC_CONFIG_START + offsetof(lite_fabric::FabricLiteMemoryMap, binary_written);
+    std::vector<uint32_t> readback{0};
+    cluster.read_core(readback, sizeof(uint32_t), virtual_core, binary_written_addr);
+    return readback[0] == lite_fabric::BinaryWritten::Written;
+}
+
 }  // namespace lite_fabric

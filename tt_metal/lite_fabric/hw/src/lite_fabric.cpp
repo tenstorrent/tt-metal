@@ -195,8 +195,11 @@ int main() {
             // Assume the connected core has the binary already
             // Ensure connected chip is out of reset
             lite_fabric::run_connected_dm1();
+        } else {
+            // This is the remote chip. Nothing to do.
         }
     } else {
+        // Do normal init
         *lite_fabric::on_mmio_chip = mem_map->config.is_mmio;
         lite_fabric::routing_init(&mem_map->config);
     }
