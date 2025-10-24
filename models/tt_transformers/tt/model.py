@@ -128,31 +128,6 @@ class Transformer(LightweightModule):
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
         )
 
-        if hasattr(self.args, "sliding_window") and self.args.sliding_window is not None:
-            # We are using sliding window attention in this model. We can create a custom attention mask to apply the sliding attention
-            # First we create the mask for all decode positions on host [bsz, n_heads_per_device, seq_len, seq_len]
-            self.decode_sliding_mask_mat = get_decode_mask(
-                self.args,
-                self.mesh_device,
-                paged_attention_config=paged_attention_config,
-            )
-            # Then we copy a slice for a single decode position for each user on to device [bsz, n_heads_per_device, 1, seq_len]
-            # We can update this tensor on host each iteration and copy to device to save storing the large square tensor on device
-            self.device_decode_sliding_mask = ttnn.as_tensor(
-                torch.concat(
-                    [self.decode_sliding_mask_mat[i, :, 0:1, :].unsqueeze(0) for i in range(self.args.max_batch_size)],
-                    axis=0,
-                ).transpose(1, 2),
-                dtype=ttnn.bfloat4_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-        else:
-            self.decode_sliding_mask_mat = None
-            self.device_decode_sliding_mask = None
-
     def process_logits_after_prefill_trace(self, logits, last_token_idx):
         get_last_token = (last_token_idx // 32) * 32
         logits = ttnn.slice(
