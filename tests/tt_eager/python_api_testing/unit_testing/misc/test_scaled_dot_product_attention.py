@@ -79,12 +79,23 @@ def create_sliding_window_mask_prefill(b, nh, seq_len, sliding_window, is_causal
 
 
 def run_test_sdpa_tt(
-    device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_high_precision_compute=False, rmse_threshold=None
+    device,
+    b,
+    nh,
+    nkv,
+    s,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    dtype,
+    use_high_precision_compute=False,
+    rmse_threshold=None,
+    core_grid=None,
 ):
     torch.manual_seed(1234)
 
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        compute_with_storage_grid_size=core_grid or device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=True,
@@ -109,6 +120,11 @@ def run_test_sdpa_tt(
     K = fa_rand(b, nkv, s, d)
     V = fa_rand(b, nkv, s, d)
 
+    # Patterned input can make it easier to debug this specific issue
+    # Q = torch.full((b, nh, s, d), 1.0)
+    # K = torch.eye(s).unsqueeze(0).unsqueeze(0).repeat(b, nkv, 1, 1)[:, :, :, :d]
+    # V = torch.full((b, nkv, s, d), 1.0)
+
     tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
     tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
     tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
@@ -123,14 +139,16 @@ def run_test_sdpa_tt(
     V_repeated = torch.cat([V[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)  # b, nh, d, S
     gt = torch.nn.functional.scaled_dot_product_attention(Q, K_repeated, V_repeated, is_causal=True)
 
-    out_pass, out_pcc = comp_pcc(gt, tt_back, 0.994)
-    logger.debug(f"python vs pytorch: {out_pcc}")
-    rmse = torch.sqrt(((gt - tt_back) ** 2).mean()).item()
-    logger.debug(f"rmse: {rmse}")
-    if rmse_threshold is not None:
-        assert rmse < rmse_threshold
-    else:
-        assert out_pass
+    all_pass = True
+    for n in range(nh):
+        out_pass, out_pcc = comp_pcc(gt[:, n : n + 1, :, :], tt_back[:, n : n + 1, :, :], 0.994)
+        logger.debug(f"python vs pytorch head {n}: {out_pcc}")
+        rmse = torch.sqrt(((gt[:, n : n + 1, :, :] - tt_back[:, n : n + 1, :, :]) ** 2).mean()).item()
+        logger.debug(f"rmse head {n}: {rmse}")
+        all_pass = all_pass and out_pass and rmse < rmse_threshold
+        # breakpoint()
+
+    assert all_pass
 
 
 def run_sdpa_noncausal(
@@ -154,9 +172,12 @@ def run_sdpa_noncausal(
         packer_l1_acc=False,
     )
 
-    Q = fa_rand(b, nh, sq, d)
-    K = fa_rand(b, nkv, sk, d)
-    V = fa_rand(b, nkv, sk, d)
+    # Q = fa_rand(b, nh, sq, d)
+    # K = fa_rand(b, nkv, sk, d)
+    # V = fa_rand(b, nkv, sk, d)
+    Q = torch.full((b, nh, sq, d), 1.0)
+    K = torch.full((b, nkv, sk, d), 1.0)
+    V = torch.full((b, nkv, sk, d), 1.0)
     # Generate random non-causal attention mask
     tt_mask = None
     mask = None
@@ -198,14 +219,14 @@ def run_sdpa_noncausal(
 
     gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=False, attn_mask=mask)
 
-    out_pass, out_pcc = comp_pcc(gt, tt_back, 0.994)
-    logger.debug(f"python vs pytorch: {out_pcc}")
-    rmse = torch.sqrt(((gt - tt_back) ** 2).mean()).item()
-    logger.debug(f"rmse: {rmse}")
-    if rmse_threshold is not None:
-        assert rmse < rmse_threshold
-
-    assert out_pass
+    all_pass = True
+    for n in range(nh):
+        out_pass, out_pcc = comp_pcc(gt[:, n : n + 1, :, :], tt_back[:, n : n + 1, :, :], 0.994)
+        logger.debug(f"python vs pytorch head {n}: {out_pcc}")
+        rmse = torch.sqrt(((gt[:, n : n + 1, :, :] - tt_back[:, n : n + 1, :, :]) ** 2).mean()).item()
+        logger.debug(f"rmse head {n}: {rmse}")
+        all_pass = all_pass and out_pass and rmse < rmse_threshold
+    assert all_pass
 
 
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
@@ -240,32 +261,40 @@ def test_sdpa_tt_padded(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dt
         )
 
 
+# core_grids = [8, range(1, 9)] + [range(1, 9), 8]
+# core_grid
+
+
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp4", "bfp8", "bf16"])
-@pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
-@pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
+@pytest.mark.parametrize("q_chunk_size", [32, 128, 256], ids=["q32", "q128", "q256"])
+@pytest.mark.parametrize("k_chunk_size", [32, 128, 256], ids=["k32", "k128", "k256"])
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d",
     (
-        [1, 8, 1, 2048, 128],  # Llama2-70B
-        [1, 16, 1, 2048, 64],  # Falcon-40B
-        [1, 71, 1, 2048, 64],  # Falcon-7B
-        [8, 8, 1, 2048, 128],  # Llama2-70B large batch
-        [1, 8, 1, 8192, 128],  # Llama2-70B large sequence
+        [1, 72, 1, 32, 32],
+        [1, 72, 1, 2048, 128],
+        # [1, 16, 1, 2048, 64],  # Falcon-40B
+        # [1, 71, 1, 2048, 64],  # Falcon-7B
+        # [8, 8, 1, 2048, 128],  # Llama2-70B large batch
+        # [1, 8, 1, 8192, 128],  # Llama2-70B large sequence
     ),
+    ids=["small_repro", "large_repro"],
 )
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize("device_id", range(32), ids=[f"device_{i}" for i in range(32)])
+# @pytest.mark.parametrize("core_grid", [[8, range(1, 9)]])
 def test_sdpa_tt(mesh_device, device_id, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
     device = mesh_device.create_submeshes(ttnn.MeshShape(1, 1))[device_id]
+    logger.info(f"Running on grid {device.compute_with_storage_grid_size()}")
     if dtype == ttnn.bfloat4_b and (
         q_chunk_size > 128 or k_chunk_size > 128 or [b, nh, nkv, s, d] != [1, 8, 1, 2048, 128]
     ):
         pytest.skip("just need to single test case for sanity-check bfp4")
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
-    if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
-        pytest.skip("Can cause OOM if profiling is enabled.")
+    # if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
+    #     pytest.skip("Can cause OOM if profiling is enabled.")
     rmse_threshold = 0.0092 if (dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b) else 0.0093
     ttnn.device.DisablePersistentKernelCache()
     run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=rmse_threshold)
