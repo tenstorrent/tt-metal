@@ -284,7 +284,7 @@ def test_sdpa_tt_padded(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dt
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize("device_id", range(32), ids=[f"device_{i}" for i in range(32)])
 # @pytest.mark.parametrize("core_grid", [[8, range(1, 9)]])
-def test_sdpa_tt(mesh_device, device_id, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
+def test_sdpa_tt(mesh_device, device_id, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, reset_seeds):
     device = mesh_device.create_submeshes(ttnn.MeshShape(1, 1))[device_id]
     logger.info(f"Running on grid {device.compute_with_storage_grid_size()}")
     if dtype == ttnn.bfloat4_b and (
