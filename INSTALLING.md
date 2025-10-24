@@ -186,8 +186,7 @@ All binaries support only Linux and distros with glibc 2.34 or newer.
 - First, set the following environment variables:
 
   ```
-  export TT_METAL_HOME=</path/to/your/tt-metal>
-  export PYTHONPATH="${TT_METAL_HOME}" # Same path
+  export PYTHONPATH=</path/to/your/tt-metal>
   ```
 
 - Then, try running a programming example:
