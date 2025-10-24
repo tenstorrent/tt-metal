@@ -5,7 +5,6 @@
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/debug/inspector/types.hpp"
 #include "impl/context/metal_context.hpp"
-#include <tt_stl/reflection.hpp>
 #include <iomanip>
 #include <chrono>
 
@@ -81,27 +80,6 @@ Logger::Logger(const std::filesystem::path& logging_path)
     if (!mesh_workloads_ostream.is_open()) {
         TT_INSPECTOR_THROW(
             "Failed to create inspector file: {}\n{}", (logging_path / "mesh_workloads_log.yaml").string(), additional_text);
-    }
-    dispatch_core_ostream.open(logging_path / "dispatch_core_log.yaml", std::ios::trunc);
-    if (!dispatch_core_ostream.is_open()) {
-        TT_INSPECTOR_THROW(
-            "Failed to create inspector file: {}\n{}",
-            (logging_path / "dispatch_core_log.yaml").string(),
-            additional_text);
-    }
-    dispatch_s_core_ostream.open(logging_path / "dispatch_s_core_log.yaml", std::ios::trunc);
-    if (!dispatch_s_core_ostream.is_open()) {
-        TT_INSPECTOR_THROW(
-            "Failed to create inspector file: {}\n{}",
-            (logging_path / "dispatch_s_core_log.yaml").string(),
-            additional_text);
-    }
-    prefetcher_core_ostream.open(logging_path / "prefetcher_core_log.yaml", std::ios::trunc);
-    if (!prefetcher_core_ostream.is_open()) {
-        TT_INSPECTOR_THROW(
-            "Failed to create inspector file: {}\n{}",
-            (logging_path / "prefetcher_core_log.yaml").string(),
-            additional_text);
     }
 
     initialized = true;
@@ -373,52 +351,4 @@ void Logger::log_mesh_workload_set_program_binary_status(const MeshWorkloadData&
     }
 }
 
-void Logger::log_dispatch_core_info(const tt_cxy_pair& virtual_core, const CoreInfo& core_info) noexcept {
-    if (!initialized) {
-        return;
-    }
-    try {
-        dispatch_core_ostream << "- dispatch_core_info:\n";
-        log_core_info_to_stream(dispatch_core_ostream, virtual_core, core_info);
-    } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log dispatch core info: {}", e.what());
-    }
-}
-
-void Logger::log_dispatch_s_core_info(const tt_cxy_pair& virtual_core, const CoreInfo& core_info) noexcept {
-    if (!initialized) {
-        return;
-    }
-    try {
-        dispatch_s_core_ostream << "- dispatch_s_core_info:\n";
-        log_core_info_to_stream(dispatch_s_core_ostream, virtual_core, core_info);
-    } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log dispatch_s core info: {}", e.what());
-    }
-}
-
-void Logger::log_prefetcher_core_info(const tt_cxy_pair& virtual_core, const CoreInfo& core_info) noexcept {
-    if (!initialized) {
-        return;
-    }
-    try {
-        prefetcher_core_ostream << "- prefetcher_core_info:\n";
-        log_core_info_to_stream(prefetcher_core_ostream, virtual_core, core_info);
-    } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log prefetcher core info: {}", e.what());
-    }
-}
-
-// Helper function to log core info to the given output stream
-void Logger::log_core_info_to_stream(
-    std::ostream& outstream, const tt_cxy_pair& virtual_core, const CoreInfo& core_info) noexcept {
-    outstream << "    virtual_core (chip, x, y): " << virtual_core.chip << ", " << virtual_core.x << ", "
-              << virtual_core.y << "\n";
-    outstream << "    device_id: " << core_info.device_id << "\n";
-    outstream << "    servicing_device_id: " << core_info.servicing_device_id << "\n";
-    outstream << "    worker_type: " << enchantum::to_string(core_info.worker_type) << "\n";
-    outstream << "    cq_id: " << static_cast<uint16_t>(core_info.cq_id) << "\n";
-    outstream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now()) << "\n";
-    outstream.flush();
-}
 }  // namespace tt::tt_metal::inspector

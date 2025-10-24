@@ -220,39 +220,45 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
 // Do an on-demand snapshot of the command queue event info
 // Populate the results with the dispatch core info and corresponding cq_id event info
 void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInfosResults::Builder results) {
-    // This populates the cq_to_event_by_device map with an on-demand snapshot
-    // of the command queue event info
-    this->rpc_all_command_queue_event_infos();
-    // Lock to protect core info, and the on-demand snapshot of the command queue event info
-    std::scoped_lock locks(
-        dispatch_core_info_mutex, dispatch_s_core_info_mutex, prefetcher_core_info_mutex, cq_to_event_by_device_mutex);
-    // Populate the results with the dispatch core info and corresponding cq_id event info
-    auto list = results.initCoresByCategory(this->NUM_CORE_CATEGORIES);
+    // This returns a map of command queue id to event id for all active devices
+    auto cq_to_event_by_device = DevicePool::instance().get_all_command_queue_event_infos();
+    // In a single lock, get the number of non-empty categories and initialize the results
+    std::scoped_lock locks(dispatch_core_info_mutex, dispatch_s_core_info_mutex, prefetcher_core_info_mutex);
+
+    // Get the number of non-empty categories
+    size_t non_empty_categories = 0;
+    if (!dispatch_core_info.empty()) {
+        non_empty_categories++;
+    }
+    if (!dispatch_s_core_info.empty()) {
+        non_empty_categories++;
+    }
+    if (!prefetcher_core_info.empty()) {
+        non_empty_categories++;
+    }
+
+    // Initialize the results with the number of non-empty categories
+    auto list = results.initCoresByCategory(non_empty_categories);
+
     size_t category_index = 0;
     // Populate the dispatch core info
     if (!dispatch_core_info.empty()) {
         auto category = list[category_index++];
-        this->populate_core_entries_by_category(category, rpc::CoreCategory::DISPATCH, dispatch_core_info);
+        Data::populate_core_entries_by_category(
+            category, rpc::CoreCategory::DISPATCH, dispatch_core_info, cq_to_event_by_device);
     }
     // Populate the dispatch_s core info
     if (!dispatch_s_core_info.empty()) {
         auto category = list[category_index++];
-        this->populate_core_entries_by_category(category, rpc::CoreCategory::DISPATCH_S, dispatch_s_core_info);
+        Data::populate_core_entries_by_category(
+            category, rpc::CoreCategory::DISPATCH_S, dispatch_s_core_info, cq_to_event_by_device);
     }
     // Populate the prefetcher core info
     if (!prefetcher_core_info.empty()) {
         auto category = list[category_index++];
-        this->populate_core_entries_by_category(category, rpc::CoreCategory::PREFETCH, prefetcher_core_info);
+        Data::populate_core_entries_by_category(
+            category, rpc::CoreCategory::PREFETCH, prefetcher_core_info, cq_to_event_by_device);
     }
-}
-
-// Get all command queue event infos for all active devices (on-demand snapshot)
-// The key is the device id and the value is a vector of event ids for each command queue
-void Data::rpc_all_command_queue_event_infos() {
-    // Get all command queue event infos for all active devices
-    auto map = DevicePool::instance().get_all_command_queue_event_infos();
-    std::lock_guard<std::mutex> lock(cq_to_event_by_device_mutex);
-    cq_to_event_by_device = std::move(map);
 }
 
 // Helper function to convert internal enum to Cap'n Proto enum
@@ -282,7 +288,8 @@ void Data::populate_core_info(rpc::CoreInfo::Builder& out, const CoreInfo& info,
 
 // Helper function to get the event id for a core
 // If not found, return std::numeric_limits<uint32_t>::max()
-uint32_t Data::get_event_id_for_core(const CoreInfo& info) const {
+uint32_t Data::get_event_id_for_core(
+    const CoreInfo& info, const std::unordered_map<ChipId, std::vector<uint32_t>>& cq_to_event_by_device) {
     auto device_it = cq_to_event_by_device.find(info.device_id);
     if (device_it != cq_to_event_by_device.end() && info.cq_id < device_it->second.size()) {
         return device_it->second[info.cq_id];
@@ -300,14 +307,15 @@ void Data::populate_core_entry(
     key.setY(k.y);
     // Populate the info
     auto out = entry.initInfo();
-    this->populate_core_info(out, info, event_id);
+    Data::populate_core_info(out, info, event_id);
 }
 
 // Helper function to populate the core entries by category
 void Data::populate_core_entries_by_category(
     rpc::CoreEntriesByCategory::Builder& category_builder,
     rpc::CoreCategory category_type,
-    const std::unordered_map<tt_cxy_pair, CoreInfo>& core_info) {
+    const std::unordered_map<tt_cxy_pair, CoreInfo>& core_info,
+    const std::unordered_map<ChipId, std::vector<uint32_t>>& cq_to_event_by_device) {
     // Set the category type
     category_builder.setCategory(category_type);
     // Initialize the entries
@@ -318,10 +326,10 @@ void Data::populate_core_entries_by_category(
         const tt_cxy_pair& k = kv.first;
         const auto& info = kv.second;
         // Get the event id for the core's command queue
-        uint32_t event_id = this->get_event_id_for_core(info);
+        uint32_t event_id = Data::get_event_id_for_core(info, cq_to_event_by_device);
         // Populate the core entry with the key, info, and event id
         auto entry = entries[i++];
-        this->populate_core_entry(entry, k, info, event_id);
+        Data::populate_core_entry(entry, k, info, event_id);
     }
 }
 

@@ -23,6 +23,7 @@
 #include "hal_types.hpp"
 #include "prefetch.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/debug/inspector/inspector.hpp"
 #include "rtoptions.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include "dispatch/system_memory_manager.hpp"
@@ -31,6 +32,45 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 
 using namespace tt::tt_metal;
+
+DispatchKernel::DispatchKernel(
+    int node_id,
+    ChipId device_id,
+    ChipId servicing_device_id,
+    uint8_t cq_id,
+    noc_selection_t noc_selection,
+    bool h_variant,
+    bool d_variant) :
+    FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection) {
+    auto& core_manager = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager();  // Not thread safe
+    TT_FATAL(
+        noc_selection.downstream_noc == tt::tt_metal::k_dispatch_downstream_noc,
+        "Invalid downstream NOC specified for Dispatcher kernel");
+    TT_FATAL(
+        noc_selection.upstream_noc != noc_selection.downstream_noc,
+        "Dispatcher kernel cannot have identical upstream and downstream NOCs.");
+    static_config_.is_h_variant = h_variant;
+    static_config_.is_d_variant = d_variant;
+    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
+
+    DispatchWorkerType type = DISPATCH;
+    if (h_variant && d_variant) {
+        this->logical_core_ = core_manager.dispatcher_core(device_id, channel, cq_id);
+        type = DISPATCH_HD;
+    } else if (h_variant) {
+        channel =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(servicing_device_id);
+        this->logical_core_ = core_manager.dispatcher_core(servicing_device_id, channel, cq_id);
+        type = DISPATCH_H;
+    } else if (d_variant) {
+        this->logical_core_ = core_manager.dispatcher_d_core(device_id, channel, cq_id);
+        type = DISPATCH_D;
+    }
+    this->kernel_type_ = FDKernelType::DISPATCH;
+    // Log dispatch core info based on virtual core to inspector
+    auto virtual_core = this->GetVirtualCore();
+    tt::tt_metal::Inspector::set_dispatch_core_info(virtual_core, type, cq_id, device_id, servicing_device_id);
+}
 
 void DispatchKernel::GenerateStaticConfigs() {
     uint16_t channel =
