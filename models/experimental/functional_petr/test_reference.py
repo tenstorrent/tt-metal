@@ -15,11 +15,6 @@ def test_reference():
     modified_batch_img_metas = torch.load(
         "models/experimental/functional_petr/resources/modified_input_batch_img_metas_sample1.pt", weights_only=False
     )
-    # print(f"Input type: {type(inputs)}")
-    # if isinstance(inputs, dict):
-    #     print(f"Input keys: {inputs.keys()}")
-    #     print(f"imgs shape: {inputs['imgs'].shape}")
-    #     print(f"imgs dimensions: {inputs['imgs'].ndim}")
     model = PETR(use_grid_mask=True)
     weights_state_dict = torch.load(
         "models/experimental/functional_petr/resources/petr_vovnet_gridmask_p4_800x320-e2191752.pth", weights_only=False
@@ -31,13 +26,6 @@ def test_reference():
     print("model::::", model)
     if output and len(output) > 0:
         print("Inference successful!")
-        # if "pts_bbox" in output[0]:
-        #     pts_bbox = output[0]["pts_bbox"]
-        #     print(f"  - Detected boxes: {pts_bbox.get('bboxes_3d', 'N/A')}")
-        #     if "scores_3d" in pts_bbox:
-        #         print(f"  - Scores shape: {pts_bbox['scores_3d'].shape}")
-        #     if "labels_3d" in pts_bbox:
-        #         print(f"  - Labels shape: {pts_bbox['labels_3d'].shape}")
     else:
         print("⚠ Warning: No detections or empty output")
 
