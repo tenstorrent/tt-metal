@@ -111,7 +111,10 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1):
+    def initialize_vllm_model(
+        cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations=None
+    ):
+        assert optimizations is None, "Custom optimizations are not supported for this model"
         optimizations, max_seq_len_native = get_platform_specific_optimizations(hf_config.name_or_path)
         if max_seq_len > max_seq_len_native:
             logger.warning(
@@ -138,7 +141,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             mesh_device,
             max_batch_size=model_args.max_batch_size,
             max_seq_len=model_args.max_seq_len,
-            optimizations=optimizations,
+            optimizations=DecodersPrecision.performance(config.vision_config.depth, ref_model_name),
         )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
         visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args)
