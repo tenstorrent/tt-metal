@@ -77,7 +77,6 @@ void MAIN {
     const uint32_t start_ht = get_arg_val<uint32_t>(4);
     const uint32_t mask_padded_data = get_arg_val<uint32_t>(5);
     const uint32_t cb_length_t = get_arg_val<uint32_t>(6);
-    const bool dest_fp_32 = get_arg_val<uint32_t>(6) == 1;
 
     // reserve one tile for zeros on cb_in2
     // We only do the reserve for the intermediates once and use pack_tile
@@ -108,7 +107,6 @@ void MAIN {
 #endif
 
     uint32_t num_cb_passes = 1 + ((Wt - 1) / cb_length_t);  // ceiling divide
-    uint32_t max_blk = dest_fp_32 ? 8 : 4;
 
     // First loop is to parse and find the sum
     uint32_t dst0 = 0;
@@ -131,7 +129,6 @@ void MAIN {
          */
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
             bool do_mask = mask_padded_data && (cur_pass == num_cb_passes - 1);
-            // uint32_t blk = std::gcd(max_blk, cb_length_t);
 #if FUSED_SCALE_MASK
             apply_fused_scale_mask(cb_in0, cb_fused_scale, cb_scale_mask, cb_length_t, blk);
             apply_fused_attn_mask(cb_scale_mask, cb_fused_attn, cb_x, cb_length_t, blk, do_mask);
@@ -168,7 +165,6 @@ void MAIN {
          */
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
             bool do_mask = mask_padded_data && (cur_pass == num_cb_passes - 1);
-            // uint32_t blk = std::gcd(max_blk, cb_length_t);
 #if FUSED_SCALE_MASK
             apply_fused_scale_mask(cb_in0, cb_fused_scale, cb_scale_mask, cb_length_t, blk);
             apply_fused_attn_mask(cb_scale_mask, cb_fused_attn, cb_x, cb_length_t, blk, do_mask);
@@ -238,7 +234,6 @@ void MAIN {
         cur_cb_length_t = cb_length_t;
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
             bool do_mask = mask_padded_data && (cur_pass == num_cb_passes - 1);
-            // uint32_t blk = std::gcd(max_blk, cb_length_t);
 #if FUSED_SCALE_MASK
             apply_fused_scale_mask(cb_in0, cb_fused_scale, cb_scale_mask, cb_length_t, blk);
             apply_fused_attn_mask(cb_scale_mask, cb_fused_attn, cb_x, cb_length_t, blk, do_mask);
