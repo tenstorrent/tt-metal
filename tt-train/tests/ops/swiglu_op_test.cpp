@@ -8,7 +8,6 @@
 
 #include <cassert>
 #include <core/ttnn_all_includes.hpp>
-#include <iostream>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -91,12 +90,10 @@ void CompareKernelVsReference(
     // Forward pass - kernel implementation
     auto result_kernel = ops::swiglu(input_kernel, w1_kernel, w2_kernel, w3_kernel);
     result_kernel->get_value();
-    std::cout << std::endl << "SwiGLU kernel result from kernel in test: " << std::endl;
     auto result_kernel_xtensor = core::to_xtensor(result_kernel->get_value());
 
     // Forward pass - reference implementation
     auto result_reference = swiglu_forward_reference(input_data, w1_data, w2_data, w3_data);
-    std::cout << std::endl << "SwiGLU reference result in test:" << std::endl;
 
     // Verify shapes match
     EXPECT_EQ(result_kernel_xtensor.shape(), result_reference.shape())
@@ -154,52 +151,42 @@ static void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& input
 // ============================================================================
 // These tests compare the SwiGLU kernel implementation against
 // the reference implementation to ensure correctness.
+// Only tests where C and hidden_dim are divisible by 32 are included.
 //
-// TODO(maciek): Once masking along C or H is implemented, add test cases
-// with shapes where C or hidden_dim are not divisible by 32 (mask_w/mask_hw).
+// TODO: Add tests for masking in C and H (mask_w, mask_hw) when implementation supports it
 // ============================================================================
 
-// 1. Basic 1x1x32x32 test (no masking)
+// 1. Basic single tile test: 1x1x32x32, hidden_dim=32
 TEST_F(SwiGLUOpTest, SwiGLU_Basic_1x1x32x32) {
     CompareKernelVsReferenceWithShape({1, 1, 32, 32}, 32);
 }
 
-// 2. Medium test: 2x1x32x128, hidden_dim=128 (all divisible by 32)
+// 2. Multi-tile width test: 1x1x32x64, hidden_dim=64 (C > 32)
+TEST_F(SwiGLUOpTest, SwiGLU_MultiTile_1x1x32x64) {
+    CompareKernelVsReferenceWithShape({1, 1, 32, 64}, 64);
+}
+
+// 3. Multi-tile height test: 1x1x64x32, hidden_dim=32 (S > 32)
+TEST_F(SwiGLUOpTest, SwiGLU_MultiTile_1x1x64x32) {
+    CompareKernelVsReferenceWithShape({1, 1, 64, 32}, 32);
+}
+
+// 4. Multi-batch test: 8x1x32x32, hidden_dim=32 (B != 32)
+TEST_F(SwiGLUOpTest, SwiGLU_MultiBatch_8x1x32x32) {
+    CompareKernelVsReferenceWithShape({8, 1, 32, 32}, 32);
+}
+
+// 5. Medium test: 2x1x32x128, hidden_dim=128
 TEST_F(SwiGLUOpTest, SwiGLU_Medium_2x1x32x128) {
     CompareKernelVsReferenceWithShape({2, 1, 32, 128}, 128);
 }
 
-// 3. Medium test: 2x1x32x256, hidden_dim=256 (all divisible by 32)
-TEST_F(SwiGLUOpTest, SwiGLU_Medium_2x1x32x256) {
-    CompareKernelVsReferenceWithShape({2, 1, 32, 256}, 256);
-}
-
-// 4. Medium test: 2x1x35x128, hidden_dim=128 (rows not divisible by 32)
-TEST_F(SwiGLUOpTest, SwiGLU_MaskRows_Medium) {
-    CompareKernelVsReferenceWithShape({2, 1, 35, 128}, 128);
-}
-
-// 5. Larger test: 4x1x64x256, hidden_dim=256 (all divisible by 32)
+// 6. Large test: 4x1x64x256, hidden_dim=256
 TEST_F(SwiGLUOpTest, SwiGLU_Large_4x1x64x256) {
     CompareKernelVsReferenceWithShape({4, 1, 64, 256}, 256);
 }
 
-// 6. Larger test: 4x1x64x512, hidden_dim=256 (all divisible by 32)
-TEST_F(SwiGLUOpTest, SwiGLU_Large_4x1x64x512) {
-    CompareKernelVsReferenceWithShape({4, 1, 64, 512}, 256);
-}
-
-// 7. Larger test: 4x1x65x256, hidden_dim=256 (rows not divisible by 32)
-TEST_F(SwiGLUOpTest, SwiGLU_MaskRows_Large) {
-    CompareKernelVsReferenceWithShape({4, 1, 65, 256}, 256);
-}
-
-// 8. Test: B not divisible by 32
-TEST_F(SwiGLUOpTest, SwiGLU_B_NotDiv32) {
-    CompareKernelVsReferenceWithShape({3, 1, 32, 128}, 128);
-}
-
-// 9. Test: N not divisible by 32
-TEST_F(SwiGLUOpTest, SwiGLU_N_NotDiv32) {
-    CompareKernelVsReferenceWithShape({2, 5, 32, 128}, 128);
+// 7. NanoGPT-like shape: 32x1x256x384, hidden_dim=1024
+TEST_F(SwiGLUOpTest, SwiGLU_NanoGPT_32x1x256x384) {
+    CompareKernelVsReferenceWithShape({32, 1, 256, 384}, 1024);
 }

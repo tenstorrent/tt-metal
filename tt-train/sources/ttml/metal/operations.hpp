@@ -41,7 +41,7 @@ constexpr auto silu_bw =
 
 constexpr auto sdpa_fw =
     ttnn::register_operation<"ttml::metal::sdpa_fw", ttml::metal::ops::sdpa_fw::SDPAForwardOperation>();
-    
+
 constexpr auto swiglu_fw =
     ttnn::register_operation<"ttml::metal::swiglu_fw", ttml::metal::ops::swiglu_fw::SwiGLUForwardOperation>();
 

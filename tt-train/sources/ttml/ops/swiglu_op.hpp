@@ -12,6 +12,7 @@ autograd::TensorPtr swiglu(
     const autograd::TensorPtr& tensor,
     const autograd::TensorPtr& w1,
     const autograd::TensorPtr& w2,
-    const autograd::TensorPtr& w3);
+    const autograd::TensorPtr& w3,
+    bool use_composite_fw = false);
 
 }  // namespace ttml::ops
