@@ -23,8 +23,10 @@ from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_word_from_device
 from ttexalens.elf import MemoryAccess
 
-
+# Dumping dispatch debug information is disabled by default
+# unless explicitly enabled with --run=dump_fast_dispatch
 script_config = ScriptConfig(
+    disabled=True,
     depends=["run_checks", "dispatcher_data", "elfs_cache", "inspector_data"],
 )
 
@@ -39,6 +41,7 @@ class DumpWaitGlobalsData:
     wait_stream_value: int | None = triage_field("wait_stream_value")
     cb_fence: int | None = triage_field("cb_fence")
     cmd_ptr: int | None = triage_field("cmd_ptr")
+    # Additional fields for dispatch cores
     last_event: int | None = triage_field("last_event")
     x: int | None = triage_field("x")
     y: int | None = triage_field("y")
@@ -197,6 +200,10 @@ def read_wait_globals(
 
     # Get virtual coordinate for this specific core
     virtual_coord = location.to("translated")
+    # This device._id might mismatch with the tt_cxy_pair::chip_id
+    # due to TT_METAL_VISIBLE_DEVICES env variable
+    # Avoid using UMD device id in tt-triage because of the mapping problem
+    # TODO: replace device._id with unique_id once its available
     chip_id = location._device._id
     x, y = virtual_coord
 

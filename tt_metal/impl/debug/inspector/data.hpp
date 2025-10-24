@@ -27,17 +27,18 @@ private:
         rpc::Inspector::GetKernelParams::Reader params, rpc::Inspector::GetKernelResults::Builder results);
     void rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builder results);
     void rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInfosResults::Builder results);
-    void rpc_all_command_queue_event_infos();
 
     static rpc::BinaryStatus convert_binary_status(ProgramBinaryStatus status);
-    void populate_core_info(rpc::CoreInfo::Builder& out, const CoreInfo& info, uint32_t event_id);
-    void populate_core_entry(
+    static void populate_core_info(rpc::CoreInfo::Builder& out, const CoreInfo& info, uint32_t event_id);
+    static void populate_core_entry(
         rpc::CoreEntry::Builder& entry, const tt_cxy_pair& k, const CoreInfo& info, uint32_t event_id);
-    uint32_t get_event_id_for_core(const CoreInfo& info) const;
-    void populate_core_entries_by_category(
+    static uint32_t get_event_id_for_core(
+        const CoreInfo& info, const std::unordered_map<ChipId, std::vector<uint32_t>>& cq_to_event_by_device);
+    static void populate_core_entries_by_category(
         rpc::CoreEntriesByCategory::Builder& category_builder,
         rpc::CoreCategory category_type,
-        const std::unordered_map<tt_cxy_pair, CoreInfo>& core_info);
+        const std::unordered_map<tt_cxy_pair, CoreInfo>& core_info,
+        const std::unordered_map<ChipId, std::vector<uint32_t>>& cq_to_event_by_device);
 
     inspector::Logger logger;
     RpcServerController rpc_server_controller;
@@ -50,8 +51,6 @@ private:
     std::mutex dispatch_s_core_info_mutex;
     // mutex to protect prefetcher core info
     std::mutex prefetcher_core_info_mutex;
-    // mutex to protect command queue event info
-    std::mutex cq_to_event_by_device_mutex;
     std::unordered_map<uint64_t, inspector::ProgramData> programs_data;
     std::unordered_map<int, uint64_t> kernel_id_to_program_id;
     std::unordered_map<int, inspector::MeshDeviceData> mesh_devices_data;
@@ -62,10 +61,6 @@ private:
     std::unordered_map<tt_cxy_pair, inspector::CoreInfo> dispatch_s_core_info;
     // store prefetcher core info by virtual core
     std::unordered_map<tt_cxy_pair, inspector::CoreInfo> prefetcher_core_info;
-    // store command queue event info by device and cq id
-    std::unordered_map<ChipId, std::vector<uint32_t>> cq_to_event_by_device;
-    // Number of core categories (prefetch, dispatch, dispatch_s)
-    static constexpr size_t NUM_CORE_CATEGORIES = static_cast<size_t>(rpc::CoreCategory::COUNT);
 
     // fw_compile_hash needs to be atomic because it is set in MetalContext::initialize()
     std::atomic<uint64_t> fw_compile_hash;
