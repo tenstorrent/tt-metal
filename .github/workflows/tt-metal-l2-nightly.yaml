@@ -46,7 +46,7 @@ on:
         type: boolean
         default: false
       additional_test_categories:
-        description: 'Additional test categories to run (comma-separated, e.g., eltwise,matmul)'
+        description: 'Additional test categories to run (comma-separated, e.g., eltwise,matmul,experimental)'
         required: false
         type: string
         default: ''
@@ -90,6 +90,7 @@ jobs:
       # Test group selection - default to all enabled for scheduled runs
       run_conv_tests: ${{ github.event_name == 'schedule' || inputs.run_conv_tests }}
       run_matmul_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',matmul,') }}
+      run_experimental_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',experimental,') }}
       run_pool_tests: ${{ github.event_name == 'schedule' || inputs.run_pool_tests }}
       run_sdxl_tests: ${{ github.event_name == 'schedule' || inputs.run_sdxl_tests }}
       run_train_tests: ${{ github.event_name == 'schedule' || inputs.run_train_tests }}
