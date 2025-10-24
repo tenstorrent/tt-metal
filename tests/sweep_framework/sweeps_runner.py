@@ -552,7 +552,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
 
         # Capture the original test vector data BEFORE any modifications
         original_vector_data = test_vector.copy()
-        result["start_time_ts"] = dt.datetime.now()
+        result["start_time_ts"] = dt.datetime.now(dt.timezone.utc)
         result["input_hash"] = vector_id
         validity = deserialize(test_vector["validity"]).split(".")[-1]
         if validity == VectorValidity.INVALID:
@@ -682,8 +682,8 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                 result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
                 result["e2e_perf"] = None
                 result["original_vector_data"] = original_vector_data
-                result["end_time_ts"] = dt.datetime.now()
-                result["timestamp"] = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
+                result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
                 result["host"] = get_hostname()
                 result["user"] = get_username()
 
@@ -698,13 +698,13 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                     for j in range(i + 1, len(test_vectors)):
                         remaining_vector = test_vectors[j]
                         skipped_result = dict()
-                        skipped_result["start_time_ts"] = dt.datetime.now()
+                        skipped_result["start_time_ts"] = dt.datetime.now(dt.timezone.utc)
                         skipped_result["original_vector_data"] = remaining_vector.copy()
                         skipped_result["status"] = TestStatus.NOT_RUN
                         skipped_result["exception"] = "SKIPPED DUE TO PREVIOUS TIMEOUT"
                         skipped_result["e2e_perf"] = None
-                        skipped_result["end_time_ts"] = dt.datetime.now()
-                        skipped_result["timestamp"] = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                        skipped_result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
+                        skipped_result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
                         skipped_result["host"] = get_hostname()
                         skipped_result["user"] = get_username()
                         results.append(skipped_result)
@@ -720,8 +720,8 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
 
         # Add the original test vector data to the result
         result["original_vector_data"] = original_vector_data
-        result["end_time_ts"] = dt.datetime.now()
-        result["timestamp"] = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
+        result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
         result["host"] = get_hostname()
         result["user"] = get_username()
 
@@ -790,7 +790,7 @@ def run_sweeps(
             "git_branch_name": get_git_branch(),
             "git_commit_sha": git_hash(),
             "github_pipeline_id": get_github_pipeline_id(),
-            "run_start_ts": dt.datetime.now(),
+            "run_start_ts": dt.datetime.now(dt.timezone.utc),
             "status": "success",
         }
         run_id = result_dest.initialize_run(run_metadata)
@@ -824,7 +824,7 @@ def run_sweeps(
                 suites = vector_source.get_available_suites(module_name)
 
             for suite in suites:
-                suite_start_time = dt.datetime.now()
+                suite_start_time = dt.datetime.now(dt.timezone.utc)
 
                 vectors = vector_source.load_vectors(module_name, suite, config.vector_id)
                 # Update summary counters
@@ -848,7 +848,7 @@ def run_sweeps(
                 )
                 total_invalid_vectors += invalid_vectors_count
 
-                suite_end_time = dt.datetime.now()
+                suite_end_time = dt.datetime.now(dt.timezone.utc)
                 logger.info(f"Completed tests for module {module_name}, suite {suite}.")
 
                 # Export results

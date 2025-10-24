@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Optional, Any
+from typing import Optional, Any
 import pathlib
 import json
 import datetime as dt
@@ -12,10 +12,22 @@ import os
 import math
 from elasticsearch import Elasticsearch
 from framework.database import generate_error_hash
-from framework.serialize import serialize, serialize_structured
-from framework.serialize import deserialize, deserialize_structured
+from framework.serialize import (
+    serialize,
+    serialize_structured,
+    deserialize,
+    deserialize_structured,
+    convert_enum_values_to_strings,
+)
 from framework.sweeps_logger import sweeps_logger as logger
-from infra.data_collection.pydantic_models import OpTest, PerfMetric, TestStatus, OpParam, OpRun, RunStatus
+from infra.data_collection.pydantic_models import (
+    OpTest,
+    PerfMetric,
+    TestStatus,
+    OpParam,
+    OpRun,
+    RunStatus,
+)
 from framework.upload_sftp import upload_run_sftp
 
 # Optional numpy import for numeric handling in hot paths
@@ -31,7 +43,7 @@ def _to_float(value: Any) -> Optional[float]:
         if value is None:
             return None
         return float(value)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -51,7 +63,7 @@ def _add_device_perf_from_dict(metrics: set, perf: dict, suffix: Optional[str] =
         _add_metric(metrics, _normalize_device_metric_name(k, suffix), v)
 
 
-def _add_e2e_metrics(metrics: set, raw: Dict[str, Any]) -> None:
+def _add_e2e_metrics(metrics: set, raw: dict[str, Any]) -> None:
     e2e_perf = raw.get("e2e_perf")
     if e2e_perf is not None:
         if isinstance(e2e_perf, dict):
@@ -65,7 +77,7 @@ def _add_e2e_metrics(metrics: set, raw: Dict[str, Any]) -> None:
     _add_metric(metrics, "e2e_perf_cached_ms", raw.get("e2e_perf_cached"))
 
 
-def _add_device_metrics(metrics: set, raw: Dict[str, Any]) -> None:
+def _add_device_metrics(metrics: set, raw: dict[str, Any]) -> None:
     device_perf_raw = raw.get("device_perf")
     if device_perf_raw is not None:
         if isinstance(device_perf_raw, dict) and ("cached" in device_perf_raw or "uncached" in device_perf_raw):
@@ -97,12 +109,12 @@ class ResultDestination(ABC):
     """Abstract base class for test result destinations"""
 
     @abstractmethod
-    def initialize_run(self, run_metadata: Dict[str, Any]) -> Optional[str]:
+    def initialize_run(self, run_metadata: dict[str, Any]) -> Optional[str]:
         """Initialize a new test run and return run_id if applicable"""
         pass
 
     @abstractmethod
-    def export_results(self, header_info: List[Dict], results: List[Dict], run_context: Dict[str, Any]) -> str:
+    def export_results(self, header_info: list[dict], results: list[dict], run_context: dict[str, Any]) -> str:
         """Export test results and return status"""
         pass
 
@@ -124,11 +136,11 @@ class ElasticResultDestination(ResultDestination):
         self.client = Elasticsearch(connection_string, basic_auth=(username, password))
         self.connection_string = connection_string
 
-    def initialize_run(self, run_metadata: Dict[str, Any]) -> Optional[str]:
+    def initialize_run(self, run_metadata: dict[str, Any]) -> Optional[str]:
         """No specific run initialization needed for Elasticsearch"""
         return None
 
-    def export_results(self, header_info: List[Dict], results: List[Dict], run_context: Dict[str, Any]) -> str:
+    def export_results(self, header_info: list[dict], results: list[dict], run_context: dict[str, Any]) -> str:
         """Export results to Elasticsearch"""
         if not results:
             return "success"
@@ -169,8 +181,8 @@ class ElasticResultDestination(ResultDestination):
             # Basic connection test - just try to get cluster info
             self.client.info()
             return True
-        except Exception as e:
-            logger.error(f"Elasticsearch connection validation failed: {e}")
+        except Exception:
+            logger.exception("Elasticsearch connection validation failed")
             return False
 
 
@@ -183,11 +195,11 @@ class FileResultDestination(ResultDestination):
         else:
             self.export_dir = export_dir
         # In-memory aggregation for building OpRun at finalize_run
-        self._run_metadata: Optional[Dict[str, Any]] = None
-        self._collected_tests: List[Dict[str, Any]] = []
+        self._run_metadata: Optional[dict[str, Any]] = None
+        self._collected_tests: list[dict[str, Any]] = []
         self._run_id: Optional[str] = None
 
-    def initialize_run(self, run_metadata: Dict[str, Any]) -> Optional[str]:
+    def initialize_run(self, run_metadata: dict[str, Any]) -> Optional[str]:
         """Prepare export directory and initialize run aggregation context."""
         if not self.export_dir.exists():
             self.export_dir.mkdir(parents=True)
@@ -199,7 +211,11 @@ class FileResultDestination(ResultDestination):
             # Use a short digest of run_contents to prevent overly long filenames
             run_contents = str(run_metadata.get("run_contents", "unknown"))
             digest = hashlib.sha256(run_contents.encode("utf-8")).hexdigest()[:12]
-            start_ts = run_metadata.get("start_time_ts") or run_metadata.get("run_start_ts") or dt.datetime.now()
+            start_ts = (
+                run_metadata.get("start_time_ts")
+                or run_metadata.get("run_start_ts")
+                or dt.datetime.now(dt.timezone.utc)
+            )
             ts_str = start_ts.strftime("%Y%m%d_%H%M%S")
             # Sanitize host to avoid path issues and keep the filename short
             safe_host = host.replace("/", "_")[:32]
@@ -212,7 +228,7 @@ class FileResultDestination(ResultDestination):
 
         return self._run_id
 
-    def export_results(self, header_info: List[Dict], results: List[Dict], run_context: Dict[str, Any]) -> str:
+    def export_results(self, header_info: list[dict], results: list[dict], run_context: dict[str, Any]) -> str:
         """Export results to JSON file using Pydantic validation (OpTest)."""
         if not results:
             return "success"
@@ -223,7 +239,7 @@ class FileResultDestination(ResultDestination):
             timestamp = run_start_time.strftime("%Y%m%d_%H%M%S")
         else:
             # Fallback to current time if run_start_time is not available
-            timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d_%H%M%S")
         # Keep filenames short and safe: use sweep short name + digest
         short_sweep = str(sweep_name).split(".")[0] if sweep_name else "sweep"
         name_digest = hashlib.sha256(str(sweep_name).encode("utf-8")).hexdigest()[:12] if sweep_name else "na"
@@ -270,7 +286,7 @@ class FileResultDestination(ResultDestination):
             except Exception:
                 return TestStatus("error")
 
-        def _collect_all_metrics(raw: Dict[str, Any]) -> Optional[set[PerfMetric]]:
+        def _collect_all_metrics(raw: dict[str, Any]) -> Optional[set[PerfMetric]]:
             """Collect both e2e performance and device performance metrics into PerfMetric set"""
             metrics: set[PerfMetric] = set()
 
@@ -320,7 +336,7 @@ class FileResultDestination(ResultDestination):
             normalized_vector = _normalize_original_vector_data(raw.get("original_vector_data")) or {}
             # Flatten nested structure into a single-level dict with dotted keys
             flattened_vector = _flatten_any_to_dotted(normalized_vector)
-            op_param_list: List[OpParam] = []
+            op_param_list: list[OpParam] = []
             for k, v in flattened_vector.items():
                 # Coerce to JSON-friendly primitives when needed, but preserve dict/list for JSON column
                 coerced_value = v
@@ -395,11 +411,19 @@ class FileResultDestination(ResultDestination):
             # Convert to JSON-ready dict and deeply flatten any nested types
             record_dict = record.model_dump(mode="json")
             record_dict = _flatten_serialized(record_dict)
+            # Ensure deterministic ordering of metrics for stable outputs
+            metrics = record_dict.get("metrics")
+            if isinstance(metrics, list):
+                try:
+                    record_dict["metrics"] = sorted(metrics, key=lambda m: m.get("metric_name", ""))
+                except Exception:
+                    # Best-effort: if structure is unexpected, leave as-is
+                    pass
             validated_records.append(record_dict)
 
         # Atomic write to avoid truncated/invalid JSON on interruptions
         tmp_path = export_path.with_suffix(export_path.suffix + ".tmp")
-        with open(tmp_path, "w") as file:
+        with open(tmp_path, "w", encoding="utf-8") as file:
             json.dump(validated_records, file, indent=2)
             try:
                 file.flush()
@@ -436,7 +460,7 @@ class FileResultDestination(ResultDestination):
         # Build OpRun record
         try:
             run_start_ts = self._run_metadata.get("run_start_ts")
-            run_end_ts = dt.datetime.now()
+            run_end_ts = dt.datetime.now(dt.timezone.utc)
             card_type = self._run_metadata.get("device") or self._run_metadata.get("card_type") or "unknown"
 
             oprun = OpRun(
@@ -463,12 +487,13 @@ class FileResultDestination(ResultDestination):
             run_dict = oprun.model_dump(mode="json")
 
             # Choose filename based on generated run_id when available
-            run_id_str = run_id or self._run_id or run_start_ts.strftime("%Y%m%d_%H%M%S")
+            ts_fallback = run_start_ts or dt.datetime.now(dt.timezone.utc)
+            run_id_str = run_id or self._run_id or ts_fallback.strftime("%Y%m%d_%H%M%S")
             run_path = self.export_dir / f"oprun_{run_id_str}.json"
 
             # Atomic write to avoid truncated/invalid JSON on interruptions
             tmp_path = run_path.with_suffix(run_path.suffix + ".tmp")
-            with open(tmp_path, "w") as file:
+            with open(tmp_path, "w", encoding="utf-8") as file:
                 json.dump(run_dict, file, indent=2)
                 try:
                     file.flush()
@@ -520,7 +545,7 @@ def _normalize_original_vector_data(original):
         if isinstance(obj, dict):
             # Convert enum integer fields to readable strings inside dicts
             try:
-                normalized[k] = convert_enum_values_to_strings(obj)  # type: ignore[name-defined]
+                normalized[k] = convert_enum_values_to_strings(obj)
             except Exception:
                 normalized[k] = obj
         elif isinstance(obj, (list, str, int, float, bool)) or obj is None:
@@ -554,13 +579,14 @@ def _flatten_serialized(value):
     return value
 
 
-def _flatten_any_to_dotted(value: Any) -> Dict[str, Any]:
+def _flatten_any_to_dotted(value: Any) -> dict[str, Any]:
     """
     Flatten an arbitrarily nested structure (dicts/lists/primitives) into a
-    single-level dict with dotted keys. List indices are included in the key path.
-    Example: {"a": {"b": [1, {"c": 2}]}} -> {"a.b.0": 1, "a.b.1.c": 2}
+    single-level dict with dotted keys for dict nesting. Lists are preserved
+    under their current key (no index flattening).
+    Example: {"a": {"b": [1, {"c": 2}]}} -> {"a.b": [1, {"c": 2}]}
     """
-    flat: Dict[str, Any] = {}
+    flat: dict[str, Any] = {}
 
     def _recurse(prefix: str, obj: Any):
         if isinstance(obj, dict):
@@ -594,8 +620,8 @@ class SupersetResultDestination(FileResultDestination):
         except Exception as e:
             logger.error(f"Superset: failed to determine oprun file path for upload: {e}")
             return
-        print(f"Superset: run_path: {run_path}")
-        print(f"Superset: run_id: {run_id}")
+        logger.info(f"Superset: run_path={run_path}")
+        logger.info(f"Superset: run_id={run_id}")
 
         # Upload via SFTP if environment/configuration is available
         try:
@@ -616,9 +642,7 @@ class ResultDestinationFactory:
 
     @staticmethod
     def create_destination(result_destination: str, **kwargs) -> ResultDestination:
-        if result_destination == "postgres":
-            return PostgresResultDestination()
-        elif result_destination == "elastic":
+        if result_destination == "elastic":
             required_args = ["connection_string", "username", "password"]
             for arg in required_args:
                 if arg not in kwargs:
