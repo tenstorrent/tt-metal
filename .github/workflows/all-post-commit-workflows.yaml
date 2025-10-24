@@ -34,6 +34,10 @@ on:
         default: false
         type: boolean
         description: "Re-run failed jobs (max 3)"
+      force-run-all:
+        default: false
+        type: boolean
+        description: "Force run all tests regardless of file changes"
   push:
     branches: ["main"]
 
@@ -86,7 +90,8 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/find-changed-files@blozano-apc-savior
       - id: set-test-metalium
         run: |
-          echo "test-metalium=${{ github.event_name == 'push' ||
+          echo "test-metalium=${{ github.event_name != 'workflow_dispatch' ||
+                                 (github.event_name == 'workflow_dispatch' && inputs.force-run-all) ||
                                  steps.find-changes.outputs['cmake-changed'] == 'true' ||
                                  steps.find-changes.outputs['submodule-changed'] == 'true' ||
                                  steps.find-changes.outputs['tt-metalium-changed'] == 'true' ||
@@ -98,11 +103,13 @@ jobs:
                               steps.find-changes.outputs['tt-nn-tests-changed'] == 'true' }}" >> "$GITHUB_OUTPUT"
       - id: set-test-tt-train
         run: |
-          echo "test-tt-train=${{ steps.set-test-metalium.outputs['test-ttnn'] == 'true' ||
+          echo "test-tt-train=${{ steps.set-test-ttnn.outputs['test-ttnn'] == 'true' ||
                                   steps.find-changes.outputs['tt-train-changed'] == 'true' }}" >> "$GITHUB_OUTPUT"
       - id: set-test-everything
         run: |
-          echo "test-everything=${{ github.event_name == 'push' || steps.find-changes.outputs['any-code-changed'] == 'true' }}" >> "$GITHUB_OUTPUT"
+          echo "test-everything=${{ github.event_name != 'workflow_dispatch' ||
+                                  (github.event_name == 'workflow_dispatch' && inputs.force-run-all) ||
+                                  steps.find-changes.outputs['any-code-changed'] == 'true' }}" >> "$GITHUB_OUTPUT"
 
   # Fabric Unit Tests
   fabric-unit-tests:
