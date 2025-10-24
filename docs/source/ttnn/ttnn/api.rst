@@ -517,6 +517,10 @@ CCL
    :nosignatures:
    :template: function.rst
 
+   ttnn.all_gather
+   ttnn.reduce_scatter
+   ttnn.all_reduce
+
 Embedding
 =========
 
