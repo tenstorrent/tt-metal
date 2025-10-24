@@ -22,7 +22,7 @@ namespace ttml::nanobind::util {
 // NumPy dtype.kind single-character code
 // See: https://numpy.org/doc/stable/reference/generated/numpy.dtype.kind.html
 namespace NumpyDtypeKind {
-constexpr char VOID = 'V';  // Void/structured (custom dtypes like ml_dtypes.bfloat16)
+constexpr auto VOID = "V";  // Void/structured (custom dtypes like ml_dtypes.bfloat16)
 }  // namespace NumpyDtypeKind
 
 namespace UnsupportedMessages {
@@ -225,6 +225,9 @@ nb::object make_numpy_tensor(
                 // Allocate buffer directly (single allocation, no temporary)
                 auto* numpy_data = new bfloat16[num_elements];
 
+                // Create capsule to manage memory
+                const nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<bfloat16*>(p); });
+
                 // Check if we can use fast memcpy (when types match) or need type conversion
                 using TensorDataType = typename std::decay_t<decltype(tensor_data)>::value_type;
                 if constexpr (std::is_same_v<TensorDataType, bfloat16>) {
@@ -234,9 +237,6 @@ nb::object make_numpy_tensor(
                     // Slow path: type conversion needed (e.g., float -> bfloat16)
                     std::copy(tensor_data.begin(), tensor_data.end(), numpy_data);
                 }
-
-                // Create capsule to manage memory
-                const nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<bfloat16*>(p); });
 
                 // Create ndarray from buffer with uint16 dtype (bfloat16 is 16-bit)
                 // This is zero-copy from C++ buffer to NumPy
@@ -252,6 +252,7 @@ nb::object make_numpy_tensor(
 
         const size_t num_elements = tensor_data.size();
         auto* numpy_data = new NumpyType[num_elements];
+        const nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<NumpyType*>(p); });
 
         // Check if we can use fast memcpy (when types match) or need type conversion
         using TensorDataType = typename std::decay_t<decltype(tensor_data)>::value_type;
@@ -262,8 +263,6 @@ nb::object make_numpy_tensor(
             // Slow path: type conversion needed (e.g., float -> int32_t, bfloat16 -> float)
             std::copy(tensor_data.begin(), tensor_data.end(), numpy_data);
         }
-
-        const nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<NumpyType*>(p); });
 
         // Cast to nb::object for uniform return type
         return nb::cast(nb::ndarray<nb::numpy>(
@@ -366,6 +365,12 @@ tt::tt_metal::Tensor make_metal_tensor(
         for (size_t dimension = 0; dimension < rank; ++dimension) {
             const auto dimension_size = numpy_data.shape(dimension);
             NB_COND_THROW(
+                (dimension_size > std::numeric_limits<uint32_t>::min()),
+                nb::exception_type::type_error,
+                "Invalid shape parameter for dimension {}: {} is too small",
+                dimension,
+                dimension_size);
+            NB_COND_THROW(
                 (dimension_size <= std::numeric_limits<uint32_t>::max()),
                 nb::exception_type::type_error,
                 "Invalid shape parameter for dimension {}: {} exceeds uint32_t maximum",
@@ -436,8 +441,8 @@ tt::tt_metal::Tensor make_metal_tensor(
 
     // Check dtype kind - custom dtypes have kind='V' (void/structured)
     nb::object kind_obj = dtype_obj.attr("kind");
-    std::string dtype_kind = nb::cast<std::string>(kind_obj);
-    bool is_custom_dtype = (dtype_kind.size() == 1 && dtype_kind[0] == NumpyDtypeKind::VOID);
+    const auto dtype_kind = nb::cast<std::string>(kind_obj);
+    const bool is_custom_dtype = (dtype_kind == NumpyDtypeKind::VOID);
 
     // Reject standard dtypes - they should use the fast path
     if (!is_custom_dtype) {
