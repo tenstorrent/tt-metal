@@ -155,7 +155,7 @@ jobs:
         FILE_SERVER_PID: "./server.pid"
         FILE_SERVER_LOG: "./output/vllm_server.log"
         FILE_BENCHMARK_LOG: "./output/vllm_benchmark.log"
-        FILE_MULTIMODAL_BENCHMARK_LOG: "./output/vllm_multimodal_benchmark.log"
+        FILE_MULTIMODAL_TEST_LOG: "./output/vllm_multimodal_test.log"
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -281,7 +281,7 @@ jobs:
             exit 1
           fi
 
-      - name: 🖼️ Run multimodal benchmark
+      - name: 🖼️ Run multimodal test
         if: ${{ matrix.test-group.multimodal }}
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         run: |
@@ -289,7 +289,7 @@ jobs:
             -H "Content-Type: application/json" \
             -H "X-User-ID: vllm_test" \
             -d '{
-              "model": ${{ matrix.test-group.model }},
+              "model": "${{ matrix.test-group.model }}",
               "messages": [
                 {
                   "role": "user",
@@ -313,13 +313,12 @@ jobs:
               "stream": false,
               "ignore_eos": false
           }' \
-          2>&1 | tee ${FILE_MULTIMODAL_BENCHMARK_LOG}
+          2>&1 | tee ${FILE_MULTIMODAL_TEST_LOG}
 
-          # If the backend fails, the benchmark will still complete successfully but with all-zero results.
-          # It will contain a warning message, though
-          expected_word="cat"
-          if grep -q -i "$expected_word" "${FILE_MULTIMODAL_BENCHMARK_LOG}"; then
-            echo "❌ Expected word \"$expected_word\" not found in the response"
+          # If the test fails, the response will not contain the expected word
+          status_ok="\"code\":200"
+          if ! grep -q -i "$status_ok" "${FILE_MULTIMODAL_TEST_LOG}"; then
+            echo "❌ Status OK ($status_ok) not found in the response"
             echo "Check out the server log in a step below."
             exit 1
           fi
