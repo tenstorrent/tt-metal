@@ -218,8 +218,8 @@ Tensor invoke_impl(
 
 Tensor WhereOperation::invoke(
     const Tensor& predicate,
-    const std::variant<float, Tensor>& value_true,
-    const std::variant<float, Tensor>& value_false,
+    const ScalarVariant& value_true,
+    const ScalarVariant& value_false,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
     return std::visit(

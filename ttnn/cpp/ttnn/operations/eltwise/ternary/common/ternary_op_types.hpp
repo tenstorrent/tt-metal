@@ -4,7 +4,13 @@
 
 #pragma once
 
+#include <variant>
+
 namespace ttnn::operations::ternary {
+
+// Type alias for scalar or tensor values
+// Supports float, int, and Tensor types
+using ScalarVariant = std::variant<float, int, Tensor>;
 
 // Ternary operation types
 enum class TernaryOpType {
