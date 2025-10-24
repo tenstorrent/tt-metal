@@ -4,7 +4,6 @@
 
 #include "hostdevcommon/kernel_structs.h"
 #include "optional"
-#include <algorithm>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
