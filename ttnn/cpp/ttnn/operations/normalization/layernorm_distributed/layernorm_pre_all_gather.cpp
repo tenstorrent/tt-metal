@@ -42,8 +42,7 @@ ttnn::Tensor ExecuteLayerNormPreAllGather::invoke(
                        .norm_type = LayerNormDistributedType::LAYERNORM,
                        .dtype = dtype,
                        .compute_kernel_config = kernel_config_val,
-                       .use_2d_core_grid = std::nullopt,
-                       .program_config = distributed_program_config},
+                       .program_config = program_config.value_or(LayerNormDefaultProgramConfig{})},
                    {input_tensor})
             .at(0);
     }
