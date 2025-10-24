@@ -197,12 +197,13 @@ def test_wan_transformer_block(
     # Run torch model
     logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
 
-    torch_spatial_out = torch_model(
-        hidden_states=spatial_input,
-        encoder_hidden_states=prompt_input,
-        temb=temb_input,
-        rotary_emb=[torch_rope_cos, torch_rope_sin],
-    )
+    with torch.no_grad():
+        torch_spatial_out = torch_model(
+            hidden_states=spatial_input,
+            encoder_hidden_states=prompt_input,
+            temb=temb_input,
+            rotary_emb=[torch_rope_cos, torch_rope_sin],
+        )
 
     logger.info(f"Checking spatial outputs")
     assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
@@ -360,14 +361,18 @@ def test_wan_transformer_model(
         timestep=timestep_input,
     )
 
+    del tt_model
+
     # Run torch model
     logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
-    torch_spatial_out = torch_model(
-        hidden_states=spatial_input,
-        encoder_hidden_states=prompt_input,
-        timestep=timestep_input,
-        return_dict=False,
-    )
+
+    with torch.no_grad():
+        torch_spatial_out = torch_model(
+            hidden_states=spatial_input,
+            encoder_hidden_states=prompt_input,
+            timestep=timestep_input,
+            return_dict=False,
+        )
     torch_spatial_out = torch_spatial_out[0]
 
     logger.info(f"Checking spatial outputs")
@@ -378,10 +383,12 @@ def test_wan_transformer_model(
     "mesh_device, sp_axis, tp_axis, num_links, device_params, topology",
     [
         [(2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear],
+        [(2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear],
         [(4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring],
     ],
     ids=[
         "2x4sp0tp1",
+        "2x4sp1tp0",
         "4x8sp1tp0",
     ],
     indirect=["mesh_device", "device_params"],
