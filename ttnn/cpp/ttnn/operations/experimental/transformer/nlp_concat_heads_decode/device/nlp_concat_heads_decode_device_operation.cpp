@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "nlp_concat_heads_decode_device_operation.hpp"
+#include <algorithm>
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::transformer {
@@ -48,9 +49,7 @@ std::vector<ttnn::TensorSpec> NLPConcatHeadsDecodeDeviceOperation::compute_outpu
     auto batch = input_shape[1];
     auto head_dim = input_shape[3];
     // pad batch to 32 if necessary
-    if (batch < 32) {
-        batch = 32;
-    }
+    batch = std::max<uint32_t>(batch, 32);
 
     auto hidden_dim = num_heads * head_dim;
 
