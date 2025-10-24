@@ -88,8 +88,8 @@ void MAIN {
     constexpr uint32_t dst2 = 2;  // Variance tile for Welford's
 
     // Get pointer to the reciprocal LUT
-    using recip_LUT_t = std::array<uint32_t, W>;
-    auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<recip_LUT_t>(cb_reciprocals, 0);
+    using recip_lut_t = std::array<uint32_t, W>;
+    auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<recip_lut_t>(cb_reciprocals, 0);
 
     auto cb_welford = cb_ping_pong(cb_welford_ping, cb_welford_pong);
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {

@@ -80,8 +80,8 @@ void MAIN {
     }
 
     // Get pointer to the reciprocal LUT
-    using recip_LUT_t = std::array<uint32_t, W>;
-    auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<recip_LUT_t>(cb_reciprocals, 0);
+    using recip_lut_t = std::array<uint32_t, W>;
+    auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<recip_lut_t>(cb_reciprocals, 0);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         if constexpr (fuse_pre_add) {
