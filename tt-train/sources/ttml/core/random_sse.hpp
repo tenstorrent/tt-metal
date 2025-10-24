@@ -29,6 +29,7 @@ namespace ttml::core::sse {
 // ============================================================================
 
 inline constexpr size_t simd_float_batch_size = 4;
+inline constexpr size_t simd_bf16_batch_size = 4;  // 4 bfloat16s generated at a time
 inline constexpr size_t cache_line_size_bytes = 64;
 inline constexpr size_t parallel_min_size = 4096;
 inline constexpr size_t thread_seed_shift_bits = 32;
@@ -37,6 +38,66 @@ inline constexpr uint64_t seed_mix_constant_1 = 0x0123456789abcdefULL;
 inline constexpr uint64_t seed_mix_constant_2 = 0xfedcba9876543210ULL;
 inline constexpr int float_mantissa_shift = 9;
 inline constexpr uint32_t float_exponent_bias = 0x3f800000;
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+// Convert float to bfloat16 by truncating to upper 16 bits
+inline bfloat16 float_to_bfloat16(float value) noexcept {
+    uint32_t float_bits = std::bit_cast<uint32_t>(value);
+    uint16_t bf16_bits = static_cast<uint16_t>(float_bits >> 16);
+    return std::bit_cast<bfloat16>(bf16_bits);
+}
+
+// Calculate cache-aligned chunk size for parallel processing
+template <typename T>
+inline size_t calculate_aligned_chunk_size(size_t total_size, size_t num_threads, size_t simd_batch_size) noexcept {
+    constexpr size_t elems_per_cache_line = cache_line_size_bytes / sizeof(T);
+    const size_t elems_per_line = (elems_per_cache_line / simd_batch_size) * simd_batch_size;
+
+    size_t chunk_size = total_size / num_threads;
+
+    if (chunk_size < elems_per_line) {
+        return elems_per_line;
+    }
+    return ((chunk_size + elems_per_line - 1) / elems_per_line) * elems_per_line;
+}
+
+// Create chunks for parallel processing
+template <typename T>
+inline auto create_chunks(std::span<T> output, size_t num_threads, size_t chunk_size) noexcept {
+    return std::views::iota(0u, num_threads) | std::views::transform([&](size_t i) {
+               const size_t offset = i * chunk_size;
+               const size_t size = std::min(chunk_size, output.size() - offset);
+               return std::span{output.data() + offset, size};
+           }) |
+           std::views::take_while([](auto chunk) { return !chunk.empty(); });
+}
+
+// Calculate thread-specific seed
+inline uint64_t calculate_thread_seed(uint32_t base_seed, size_t thread_id) noexcept {
+    return static_cast<uint64_t>(base_seed) + (static_cast<uint64_t>(thread_id) << thread_seed_shift_bits);
+}
+
+// Fill remainder elements using fallback RNG
+template <typename T, typename DistFactory>
+inline void fill_remainder_fallback(
+    std::span<T> output, size_t start_idx, uint32_t seed, DistFactory dist_factory) noexcept {
+    if (start_idx >= output.size()) {
+        return;
+    }
+    std::mt19937 fallback_rng{seed + static_cast<uint32_t>(start_idx)};
+    auto fallback_dist = dist_factory();
+    for (size_t i = start_idx; i < output.size(); ++i) {
+        if constexpr (std::same_as<T, bfloat16>) {
+            float val = fallback_dist(fallback_rng);
+            output[i] = float_to_bfloat16(val);
+        } else {
+            output[i] = fallback_dist(fallback_rng);
+        }
+    }
+}
 
 // ============================================================================
 // AES RNG
@@ -88,17 +149,6 @@ public:
         __m128i float_bits = _mm_or_si128(mantissa, _mm_set1_epi32(float_exponent_bias));
         __m128 result = _mm_castsi128_ps(float_bits);
         return _mm_sub_ps(result, _mm_set1_ps(1.0f));
-    }
-
-    [[nodiscard]]
-    __attribute__((target("aes,sse4.2"))) __m128d generate_double_x2() noexcept {
-        __m128i rand_int = generate_128bit();
-        // For double: 52-bit mantissa, shift right by 12 bits
-        __m128i mantissa = _mm_srli_epi64(rand_int, 12);
-        // Set exponent to 0x3FF0000000000000 (creates [1.0, 2.0) range)
-        __m128i double_bits = _mm_or_si128(mantissa, _mm_set1_epi64x(0x3FF0000000000000LL));
-        __m128d result = _mm_castsi128_pd(double_bits);
-        return _mm_sub_pd(result, _mm_set1_pd(1.0));
     }
 
     [[nodiscard]]
@@ -183,26 +233,15 @@ __attribute__((target("aes,sse4.2"))) void generate_uniform_simd_parallel(
         return;
     }
 
-    constexpr size_t elems_per_line = cache_line_size_bytes / sizeof(float);
-    size_t chunk_size = output.size() / num_threads;
-    if constexpr (elems_per_line > 1) {
-        chunk_size = ((chunk_size + elems_per_line - 1) / elems_per_line) * elems_per_line;
-    }
-
-    auto chunks = std::views::iota(0u, num_threads) | std::views::transform([&](size_t i) {
-                      const size_t offset = i * chunk_size;
-                      const size_t size = std::min(chunk_size, output.size() - offset);
-                      return std::span{output.data() + offset, size};
-                  }) |
-                  std::views::take_while([](auto chunk) { return !chunk.empty(); });
+    size_t chunk_size = calculate_aligned_chunk_size<float>(output.size(), num_threads, simd_float_batch_size);
+    auto chunks = create_chunks(output, num_threads, chunk_size);
 
     std::vector<std::jthread> threads;
     threads.reserve(num_threads);
 
     size_t thread_id = 0;
     for (auto chunk : chunks) {
-        const uint64_t thread_seed =
-            static_cast<uint64_t>(seed) + (static_cast<uint64_t>(thread_id++) << thread_seed_shift_bits);
+        uint64_t thread_seed = calculate_thread_seed(seed, thread_id++);
         threads.emplace_back([chunk, thread_seed, dist_factory]() {
             generate_uniform_simd(chunk, static_cast<uint32_t>(thread_seed), dist_factory);
         });
@@ -268,13 +307,7 @@ __attribute__((target("aes,sse4.2"))) void generate_normal_simd(
     }
 
     // Handle remainder (< 8 elements remaining)
-    if (i < output.size()) {
-        std::mt19937 fallback_rng{seed + static_cast<uint32_t>(i)};
-        auto fallback_dist = dist_factory();
-        for (; i < output.size(); ++i) {
-            output[i] = fallback_dist(fallback_rng);
-        }
-    }
+    fill_remainder_fallback(output, i, seed, dist_factory);
 }
 
 // Parallel SIMD generation for normal_distribution<float>
@@ -286,106 +319,17 @@ __attribute__((target("aes,sse4.2"))) void generate_normal_simd_parallel(
         return;
     }
 
-    constexpr size_t elems_per_line = cache_line_size_bytes / sizeof(float);
-    size_t chunk_size = output.size() / num_threads;
-    if constexpr (elems_per_line > 1) {
-        chunk_size = ((chunk_size + elems_per_line - 1) / elems_per_line) * elems_per_line;
-    }
-
-    auto chunks = std::views::iota(0u, num_threads) | std::views::transform([&](size_t i) {
-                      const size_t offset = i * chunk_size;
-                      const size_t size = std::min(chunk_size, output.size() - offset);
-                      return std::span{output.data() + offset, size};
-                  }) |
-                  std::views::take_while([](auto chunk) { return !chunk.empty(); });
+    size_t chunk_size = calculate_aligned_chunk_size<float>(output.size(), num_threads, simd_float_batch_size);
+    auto chunks = create_chunks(output, num_threads, chunk_size);
 
     std::vector<std::jthread> threads;
     threads.reserve(num_threads);
 
     size_t thread_id = 0;
     for (auto chunk : chunks) {
-        const uint64_t thread_seed =
-            static_cast<uint64_t>(seed) + (static_cast<uint64_t>(thread_id++) << thread_seed_shift_bits);
+        uint64_t thread_seed = calculate_thread_seed(seed, thread_id++);
         threads.emplace_back([chunk, thread_seed, dist_factory]() {
             generate_normal_simd(chunk, static_cast<uint32_t>(thread_seed), dist_factory);
-        });
-    }
-}
-
-// ============================================================================
-// Internal SIMD Generation (Double)
-// ============================================================================
-
-__attribute__((target("aes,sse4.2"))) void generate_uniform_simd_double(
-    std::span<double> output, uint32_t seed, auto dist_factory) {
-    constexpr size_t simd_double_batch_size = 2;  // 2 doubles per SSE register
-
-    using Dist = decltype(dist_factory());
-    static_assert(
-        std::same_as<Dist, std::uniform_real_distribution<double>>,
-        "generate_uniform_simd_double requires std::uniform_real_distribution<double>");
-
-    AesRng rng{seed};
-    auto dist = dist_factory();
-    auto params = dist.param();
-
-    const auto min = params.a();
-    const auto max = params.b();
-
-    const size_t num_batches = output.size() / simd_double_batch_size;
-    const size_t remainder = output.size() % simd_double_batch_size;
-
-    const auto range = max - min;
-    const __m128d range_vec = _mm_set1_pd(range);
-    const __m128d min_vec = _mm_set1_pd(min);
-
-    // Process full batches
-    for (size_t i = 0; i < num_batches; ++i) {
-        __m128d rand_01 = rng.generate_double_x2();
-        __m128d scaled = _mm_add_pd(_mm_mul_pd(rand_01, range_vec), min_vec);
-        _mm_storeu_pd(&output[i * simd_double_batch_size], scaled);
-    }
-
-    // Process remainder
-    if (remainder > 0) {
-        std::mt19937 fallback_rng{seed};
-        auto fallback_dist = dist_factory();
-        for (size_t i = num_batches * simd_double_batch_size; i < output.size(); ++i) {
-            output[i] = fallback_dist(fallback_rng);
-        }
-    }
-}
-
-__attribute__((target("aes,sse4.2"))) void generate_uniform_simd_parallel_double(
-    std::span<double> output, uint32_t seed, auto dist_factory, size_t num_threads) {
-    constexpr size_t simd_double_batch_size = 2;
-    constexpr size_t elems_per_cache_line = cache_line_size_bytes / sizeof(double);
-    constexpr size_t elems_per_line = (elems_per_cache_line / simd_double_batch_size) * simd_double_batch_size;
-
-    size_t chunk_size = output.size() / num_threads;
-
-    if (chunk_size < elems_per_line) {
-        chunk_size = elems_per_line;
-    } else {
-        chunk_size = ((chunk_size + elems_per_line - 1) / elems_per_line) * elems_per_line;
-    }
-
-    auto chunks = std::views::iota(0u, num_threads) | std::views::transform([&](size_t i) {
-                      const size_t offset = i * chunk_size;
-                      const size_t size = std::min(chunk_size, output.size() - offset);
-                      return std::span{output.data() + offset, size};
-                  }) |
-                  std::views::take_while([](auto chunk) { return !chunk.empty(); });
-
-    std::vector<std::jthread> threads;
-    threads.reserve(num_threads);
-
-    size_t thread_id = 0;
-    for (auto chunk : chunks) {
-        const uint64_t thread_seed =
-            static_cast<uint64_t>(seed) + (static_cast<uint64_t>(thread_id++) << thread_seed_shift_bits);
-        threads.emplace_back([chunk, thread_seed, dist_factory]() {
-            generate_uniform_simd_double(chunk, static_cast<uint32_t>(thread_seed), dist_factory);
         });
     }
 }
@@ -396,8 +340,6 @@ __attribute__((target("aes,sse4.2"))) void generate_uniform_simd_parallel_double
 
 __attribute__((target("aes,sse4.2"))) void generate_uniform_simd_bfloat16(
     std::span<bfloat16> output, uint32_t seed, auto dist_factory) {
-    constexpr size_t simd_bf16_batch_size = 4;  // 4 bfloat16s generated at a time
-
     using Dist = decltype(dist_factory());
     static_assert(
         std::same_as<Dist, std::uniform_real_distribution<float>>,
@@ -412,7 +354,6 @@ __attribute__((target("aes,sse4.2"))) void generate_uniform_simd_bfloat16(
     const float range = max - min;
 
     const size_t num_batches = output.size() / simd_bf16_batch_size;
-    const size_t remainder = output.size() % simd_bf16_batch_size;
 
     // Process full batches
     for (size_t i = 0; i < num_batches; ++i) {
@@ -422,54 +363,30 @@ __attribute__((target("aes,sse4.2"))) void generate_uniform_simd_bfloat16(
         for (size_t j = 0; j < simd_bf16_batch_size; ++j) {
             float val = static_cast<float>(bf16_values[j]);
             float scaled = val * range + min;
-            // Convert scaled float to bfloat16 by truncating to upper 16 bits
-            uint32_t float_bits = std::bit_cast<uint32_t>(scaled);
-            uint16_t bf16_bits = static_cast<uint16_t>(float_bits >> 16);
-            output[i * simd_bf16_batch_size + j] = std::bit_cast<bfloat16>(bf16_bits);
+            output[i * simd_bf16_batch_size + j] = float_to_bfloat16(scaled);
         }
     }
 
     // Process remainder
-    if (remainder > 0) {
-        std::mt19937 fallback_rng{seed};
-        auto fallback_dist = dist_factory();
-        for (size_t i = num_batches * simd_bf16_batch_size; i < output.size(); ++i) {
-            float val = fallback_dist(fallback_rng);
-            uint32_t float_bits = std::bit_cast<uint32_t>(val);
-            uint16_t bf16_bits = static_cast<uint16_t>(float_bits >> 16);
-            output[i] = std::bit_cast<bfloat16>(bf16_bits);
-        }
-    }
+    fill_remainder_fallback(output, num_batches * simd_bf16_batch_size, seed, dist_factory);
 }
 
 __attribute__((target("aes,sse4.2"))) void generate_uniform_simd_parallel_bfloat16(
     std::span<bfloat16> output, uint32_t seed, auto dist_factory, size_t num_threads) {
-    constexpr size_t simd_bf16_batch_size = 4;
-    constexpr size_t elems_per_cache_line = cache_line_size_bytes / sizeof(bfloat16);
-    constexpr size_t elems_per_line = (elems_per_cache_line / simd_bf16_batch_size) * simd_bf16_batch_size;
-
-    size_t chunk_size = output.size() / num_threads;
-
-    if (chunk_size < elems_per_line) {
-        chunk_size = elems_per_line;
-    } else {
-        chunk_size = ((chunk_size + elems_per_line - 1) / elems_per_line) * elems_per_line;
+    if (output.size() < parallel_min_size) [[unlikely]] {
+        generate_uniform_simd_bfloat16(output, seed, dist_factory);
+        return;
     }
 
-    auto chunks = std::views::iota(0u, num_threads) | std::views::transform([&](size_t i) {
-                      const size_t offset = i * chunk_size;
-                      const size_t size = std::min(chunk_size, output.size() - offset);
-                      return std::span{output.data() + offset, size};
-                  }) |
-                  std::views::take_while([](auto chunk) { return !chunk.empty(); });
+    size_t chunk_size = calculate_aligned_chunk_size<bfloat16>(output.size(), num_threads, simd_bf16_batch_size);
+    auto chunks = create_chunks(output, num_threads, chunk_size);
 
     std::vector<std::jthread> threads;
     threads.reserve(num_threads);
 
     size_t thread_id = 0;
     for (auto chunk : chunks) {
-        const uint64_t thread_seed =
-            static_cast<uint64_t>(seed) + (static_cast<uint64_t>(thread_id++) << thread_seed_shift_bits);
+        uint64_t thread_seed = calculate_thread_seed(seed, thread_id++);
         threads.emplace_back([chunk, thread_seed, dist_factory]() {
             generate_uniform_simd_bfloat16(chunk, static_cast<uint32_t>(thread_seed), dist_factory);
         });
@@ -492,13 +409,6 @@ inline void sequential_generate(std::span<T> seq, DistGenFunc dist_factory, uint
             generate_normal_simd(seq, seed, dist_factory);
         }
     }
-    // SIMD fast path for uniform_real_distribution<double>
-    else if constexpr (std::same_as<T, double>) {
-        using Dist = decltype(dist_factory());
-        if constexpr (std::same_as<Dist, std::uniform_real_distribution<double>>) {
-            generate_uniform_simd_double(seq, seed, dist_factory);
-        }
-    }
     // SIMD fast path for bfloat16 distributions
     else if constexpr (std::same_as<T, bfloat16>) {
         using Dist = decltype(dist_factory());
@@ -509,9 +419,7 @@ inline void sequential_generate(std::span<T> seq, DistGenFunc dist_factory, uint
             std::vector<float> temp(seq.size());
             generate_normal_simd(std::span<float>{temp}, seed, dist_factory);
             for (size_t i = 0; i < seq.size(); ++i) {
-                uint32_t float_bits = std::bit_cast<uint32_t>(temp[i]);
-                uint16_t bf16_bits = static_cast<uint16_t>(float_bits >> 16);
-                seq[i] = std::bit_cast<bfloat16>(bf16_bits);
+                seq[i] = float_to_bfloat16(temp[i]);
             }
         }
     }
@@ -533,13 +441,6 @@ inline void parallel_generate(
             generate_normal_simd_parallel(seq, dist_factory, seed, max_threads);
         }
     }
-    // SIMD fast path for uniform_real_distribution<double>
-    else if constexpr (std::same_as<T, double>) {
-        using Dist = decltype(dist_factory());
-        if constexpr (std::same_as<Dist, std::uniform_real_distribution<double>>) {
-            generate_uniform_simd_parallel_double(seq, seed, dist_factory, max_threads);
-        }
-    }
     // SIMD fast path for bfloat16 distributions
     else if constexpr (std::same_as<T, bfloat16>) {
         using Dist = decltype(dist_factory());
@@ -550,9 +451,7 @@ inline void parallel_generate(
             std::vector<float> temp(seq.size());
             generate_normal_simd_parallel(std::span<float>{temp}, dist_factory, seed, max_threads);
             for (size_t i = 0; i < seq.size(); ++i) {
-                uint32_t float_bits = std::bit_cast<uint32_t>(temp[i]);
-                uint16_t bf16_bits = static_cast<uint16_t>(float_bits >> 16);
-                seq[i] = std::bit_cast<bfloat16>(bf16_bits);
+                seq[i] = float_to_bfloat16(temp[i]);
             }
         }
     }
