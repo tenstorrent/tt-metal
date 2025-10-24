@@ -4,7 +4,6 @@
 
 #include "bank_manager.hpp"
 
-#include <algorithm>
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/allocator_state.hpp>
