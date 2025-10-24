@@ -222,10 +222,13 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
     // Make intramesh connectivity
     // NOTE: Not using MGD 2.0 Mesh graph because it currently does not support port direction
     this->intra_mesh_connectivity_.resize(mgd.all_meshes().size());
+    this->intra_mesh_policies_.resize(mgd.all_meshes().size());
 
     // This is to make sure emtpy elements are filled
     for (const auto& mesh : mgd.all_meshes()) {
         const auto& mesh_instance = mgd.get_instance(mesh);
+        const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(mesh_instance.desc);
+        this->intra_mesh_policies_[mesh_instance.local_id] = mesh_desc->channels().policy();
         this->intra_mesh_connectivity_[mesh_instance.local_id].resize(mesh_instance.sub_instances.size());
     }
 
@@ -473,6 +476,7 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
                 this->mesh_host_ranks_.emplace_back(MeshShape{1, 1}, MeshHostRankId{0});
             }
             mesh_edge_ports_to_chip_id_.resize(*mesh_id + 1);
+            this->intra_mesh_policies_.resize(*mesh_id + 1);
         }
         TT_FATAL(
             board_name_to_topology.find(mesh_board) != board_name_to_topology.end(),
@@ -546,6 +550,7 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         }
 
         this->inter_mesh_connectivity_[*mesh_id].resize(this->intra_mesh_connectivity_[*mesh_id].size());
+        this->intra_mesh_policies_[*mesh_id] = proto::Policy::RELAXED;
 
         // Print Mesh
         std::stringstream ss;

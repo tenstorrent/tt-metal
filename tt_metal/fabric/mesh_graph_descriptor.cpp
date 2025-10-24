@@ -161,7 +161,7 @@ void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto) {
     // Set the default for channel policy to strict if not specified
     for (auto& mesh : *proto.mutable_mesh_descriptors()) {
         if (mesh.has_channels() && !mesh.channels().has_policy()) {
-            mesh.mutable_channels()->set_policy(proto::Policy::STRICT);
+            mesh.mutable_channels()->set_policy(proto::Policy::RELAXED);
         }
     }
 

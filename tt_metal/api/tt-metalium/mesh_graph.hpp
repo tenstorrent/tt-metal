@@ -108,6 +108,10 @@ using RequestedIntermeshConnections = std::unordered_map<uint32_t, std::unordere
 using RequestedIntermeshPorts =
     std::unordered_map<uint32_t, std::unordered_map<uint32_t, std::vector<std::tuple<uint32_t, uint32_t, uint32_t>>>>;
 
+namespace proto {
+enum Policy : int;
+}
+
 class MeshGraph {
 public:
     explicit MeshGraph(const std::string& mesh_graph_desc_file_path);
@@ -161,6 +165,8 @@ public:
     // Load Inter-Mesh Connectivity into the Mesh Graph.
     void load_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections);
 
+    const std::vector<proto::Policy>& get_intra_mesh_policies() const { return intra_mesh_policies_; }
+
 private:
     void validate_mesh_id(MeshId mesh_id) const;
     std::unordered_map<ChipId, RouterEdge> get_valid_connections(
@@ -189,6 +195,7 @@ private:
     std::vector<std::unordered_map<port_id_t, ChipId, hash_pair>> mesh_edge_ports_to_chip_id_;
     RequestedIntermeshConnections requested_intermesh_connections_;
     RequestedIntermeshPorts requested_intermesh_ports_;
+    std::vector<proto::Policy> intra_mesh_policies_;
 };
 
 }  // namespace tt::tt_fabric
