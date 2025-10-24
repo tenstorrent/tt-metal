@@ -402,6 +402,11 @@ public:
     std::vector<TestConfig> build_tests(
         const std::vector<ParsedTestConfig>& raw_configs, CmdlineParser& cmdline_parser);
 
+    // Helper function to check if a test should be skipped based on:
+    // 1. topology and device count
+    // 2. architecture or cluster type
+    bool should_skip_test(const ParsedTestConfig& test_config) const;
+
 private:
     static constexpr uint32_t MIN_RING_TOPOLOGY_DEVICES = 4;
 
@@ -416,11 +421,6 @@ private:
     }
 
     uint32_t get_random_in_range(uint32_t min, uint32_t max);
-
-    // Helper function to check if a test should be skipped based on:
-    // 1. topology and device count
-    // 2. architecture or cluster type
-    bool should_skip_test(const ParsedTestConfig& test_config) const;
 
     // Convert ParsedTestConfig to TestConfig by resolving device identifiers
     TestConfig resolve_test_config(const ParsedTestConfig& parsed_test, uint32_t iteration_number);
