@@ -802,10 +802,6 @@ int main(int argc, char **argv) {
         }
     }
 
-    auto get_samples_count = [&config](uint32_t global_step) {
-        return global_step * config.batch_size * config.gradient_accumulation_steps;
-    };
-
     auto get_loss_value = [](const TensorPtr &loss) {
         auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
         // sum of loss xtensors
