@@ -280,7 +280,7 @@ struct ExecuteMaximum {
 
     static Tensor invoke(
         const Tensor& input_a,
-        std::variant<uint32_t, int32_t, float> value,
+        unary::ScalarVariant value,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
@@ -304,7 +304,7 @@ struct ExecuteMinimum {
 
     static Tensor invoke(
         const Tensor& input_a,
-        std::variant<uint32_t, int32_t, float> value,
+        unary::ScalarVariant value,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,

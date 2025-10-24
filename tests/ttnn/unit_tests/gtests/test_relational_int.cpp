@@ -44,100 +44,82 @@ static ttnn::Tensor make_int_tensor(ttnn::MeshDevice& device, uint32_t h, uint32
     return ttnn::fill(zero_tensor, fill_value);
 }
 
-TEST_P(RelationalUnaryFixture, EqUnaryMatchesExpected) {
-    auto p = GetParam();
-    auto& device = *device_;
+template <typename UnaryOp>
+void test_relational_unary_impl(
+    ttnn::MeshDevice& device,
+    const RelationalUnaryParam& p,
+    const UnaryOp& unary_op,
+    int32_t expected_value,
+    const char* op_name) {
     auto input_tensor = make_int_tensor(device, p.h, p.w, p.scalar_input);
-    auto output = ttnn::eq_unary(input_tensor, p.scalar_param);
+    auto output = unary_op(input_tensor, p.scalar_param);
 
-    int32_t expected_value = (p.scalar_input == p.scalar_param) ? 1 : 0;
-    std::array<uint32_t, 2> dims = {p.h, p.w};
-    ttnn::Shape shape(dims);
     auto expected = make_int_tensor(device, p.h, p.w, expected_value);
 
     auto expected_host = ttnn::from_device(expected);
     auto output_host = ttnn::from_device(output);
-    TT_FATAL(ttnn::allclose<int32_t>(expected_host, output_host), "eq_unary result mismatch");
+
+    TT_FATAL(ttnn::allclose<int32_t>(expected_host, output_host), "{} result mismatch", op_name);
+}
+
+TEST_P(RelationalUnaryFixture, EqUnaryMatchesExpected) {
+    auto p = GetParam();
+    test_relational_unary_impl(
+        *device_,
+        p,
+        [](const auto& t, auto s) { return ttnn::eq_unary(t, s); },
+        (p.scalar_input == p.scalar_param) ? 1 : 0,
+        "eq_unary");
 }
 
 TEST_P(RelationalUnaryFixture, NeUnaryMatchesExpected) {
     auto p = GetParam();
-    auto& device = *device_;
-    auto input_tensor = make_int_tensor(device, p.h, p.w, p.scalar_input);
-    auto output = ttnn::ne_unary(input_tensor, p.scalar_param);
-
-    int32_t expected_value = (p.scalar_input != p.scalar_param) ? 1 : 0;
-    std::array<uint32_t, 2> dims = {p.h, p.w};
-    ttnn::Shape shape(dims);
-    auto expected = make_int_tensor(device, p.h, p.w, expected_value);
-
-    auto expected_host = ttnn::from_device(expected);
-    auto output_host = ttnn::from_device(output);
-    TT_FATAL(ttnn::allclose<int32_t>(expected_host, output_host), "ne_unary result mismatch");
+    test_relational_unary_impl(
+        *device_,
+        p,
+        [](const auto& t, auto s) { return ttnn::ne_unary(t, s); },
+        (p.scalar_input != p.scalar_param) ? 1 : 0,
+        "ne_unary");
 }
 
 TEST_P(RelationalUnaryFixture, GtUnaryMatchesExpected) {
     auto p = GetParam();
-    auto& device = *device_;
-    auto input_tensor = make_int_tensor(device, p.h, p.w, p.scalar_input);
-    auto output = ttnn::gt_unary(input_tensor, p.scalar_param);
-
-    int32_t expected_value = (p.scalar_input > p.scalar_param) ? 1 : 0;
-    std::array<uint32_t, 2> dims = {p.h, p.w};
-    ttnn::Shape shape(dims);
-    auto expected = make_int_tensor(device, p.h, p.w, expected_value);
-
-    auto expected_host = ttnn::from_device(expected);
-    auto output_host = ttnn::from_device(output);
-    TT_FATAL(ttnn::allclose<int32_t>(expected_host, output_host), "gt_unary result mismatch");
+    test_relational_unary_impl(
+        *device_,
+        p,
+        [](const auto& t, auto s) { return ttnn::gt_unary(t, s); },
+        (p.scalar_input > p.scalar_param) ? 1 : 0,
+        "gt_unary");
 }
 
 TEST_P(RelationalUnaryFixture, LtUnaryMatchesExpected) {
     auto p = GetParam();
-    auto& device = *device_;
-    auto input_tensor = make_int_tensor(device, p.h, p.w, p.scalar_input);
-    auto output = ttnn::lt_unary(input_tensor, p.scalar_param);
-
-    int32_t expected_value = (p.scalar_input < p.scalar_param) ? 1 : 0;
-    std::array<uint32_t, 2> dims = {p.h, p.w};
-    ttnn::Shape shape(dims);
-    auto expected = make_int_tensor(device, p.h, p.w, expected_value);
-
-    auto expected_host = ttnn::from_device(expected);
-    auto output_host = ttnn::from_device(output);
-    TT_FATAL(ttnn::allclose<int32_t>(expected_host, output_host), "lt_unary result mismatch");
+    test_relational_unary_impl(
+        *device_,
+        p,
+        [](const auto& t, auto s) { return ttnn::lt_unary(t, s); },
+        (p.scalar_input < p.scalar_param) ? 1 : 0,
+        "lt_unary");
 }
 
 TEST_P(RelationalUnaryFixture, GeUnaryMatchesExpected) {
     auto p = GetParam();
-    auto& device = *device_;
-    auto input_tensor = make_int_tensor(device, p.h, p.w, p.scalar_input);
-    auto output = ttnn::ge_unary(input_tensor, p.scalar_param);
-
-    int32_t expected_value = (p.scalar_input >= p.scalar_param) ? 1 : 0;
-    std::array<uint32_t, 2> dims = {p.h, p.w};
-    ttnn::Shape shape(dims);
-    auto expected = make_int_tensor(device, p.h, p.w, expected_value);
-
-    auto expected_host = ttnn::from_device(expected);
-    auto output_host = ttnn::from_device(output);
-    TT_FATAL(ttnn::allclose<int32_t>(expected_host, output_host), "ge_unary result mismatch");
+    test_relational_unary_impl(
+        *device_,
+        p,
+        [](const auto& t, auto s) { return ttnn::ge_unary(t, s); },
+        (p.scalar_input >= p.scalar_param) ? 1 : 0,
+        "ge_unary");
 }
 
 TEST_P(RelationalUnaryFixture, LeUnaryMatchesExpected) {
     auto p = GetParam();
-    auto& device = *device_;
-    auto input_tensor = make_int_tensor(device, p.h, p.w, p.scalar_input);
-    auto output = ttnn::le_unary(input_tensor, p.scalar_param);
-
-    int32_t expected_value = (p.scalar_input <= p.scalar_param) ? 1 : 0;
-    std::array<uint32_t, 2> dims = {p.h, p.w};
-    ttnn::Shape shape(dims);
-    auto expected = make_int_tensor(device, p.h, p.w, expected_value);
-
-    auto expected_host = ttnn::from_device(expected);
-    auto output_host = ttnn::from_device(output);
-    TT_FATAL(ttnn::allclose<int32_t>(expected_host, output_host), "le_unary result mismatch");
+    test_relational_unary_impl(
+        *device_,
+        p,
+        [](const auto& t, auto s) { return ttnn::le_unary(t, s); },
+        (p.scalar_input <= p.scalar_param) ? 1 : 0,
+        "le_unary");
 }
 
 INSTANTIATE_TEST_SUITE_P(

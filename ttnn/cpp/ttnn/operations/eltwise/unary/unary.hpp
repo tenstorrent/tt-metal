@@ -58,11 +58,12 @@ struct ExecuteUnaryWithTwoFloatParameter {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+// Tensor - scalar variant with scalars of float/int32_t/uint32_t
 template <UnaryOpType unary_op_type>
-struct ExecuteUnaryWithVariantFloatIntParameter {
+struct ExecuteUnaryTSVariant {
     static Tensor invoke(
         const Tensor& input_tensor,
-        std::variant<uint32_t, int32_t, float> parameter,
+        ScalarVariant parameter,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
@@ -472,31 +473,25 @@ constexpr auto prelu_sfpu = ttnn::register_operation<"ttnn::prelu_sfpu", ttnn::o
 constexpr auto selu = ttnn::register_operation<"ttnn::selu", ttnn::operations::unary::Selu>();
 constexpr auto fill = ttnn::register_operation<
     "ttnn::fill",
-    ttnn::operations::unary::ExecuteUnaryWithVariantFloatIntParameter<ttnn::operations::unary::UnaryOpType::FILL>>();
+    ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::FILL>>();
 constexpr auto gt_unary = ttnn::register_operation<
     "ttnn::gt_unary",
-    ttnn::operations::unary::ExecuteUnaryWithVariantFloatIntParameter<
-        ttnn::operations::unary::UnaryOpType::UNARY_GT>>();
+    ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::UNARY_GT>>();
 constexpr auto lt_unary = ttnn::register_operation<
     "ttnn::lt_unary",
-    ttnn::operations::unary::ExecuteUnaryWithVariantFloatIntParameter<
-        ttnn::operations::unary::UnaryOpType::UNARY_LT>>();
+    ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::UNARY_LT>>();
 constexpr auto ne_unary = ttnn::register_operation<
     "ttnn::ne_unary",
-    ttnn::operations::unary::ExecuteUnaryWithVariantFloatIntParameter<
-        ttnn::operations::unary::UnaryOpType::UNARY_NE>>();
+    ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::UNARY_NE>>();
 constexpr auto eq_unary = ttnn::register_operation<
     "ttnn::eq_unary",
-    ttnn::operations::unary::ExecuteUnaryWithVariantFloatIntParameter<
-        ttnn::operations::unary::UnaryOpType::UNARY_EQ>>();
+    ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::UNARY_EQ>>();
 constexpr auto ge_unary = ttnn::register_operation<
     "ttnn::ge_unary",
-    ttnn::operations::unary::ExecuteUnaryWithVariantFloatIntParameter<
-        ttnn::operations::unary::UnaryOpType::UNARY_GE>>();
+    ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::UNARY_GE>>();
 constexpr auto le_unary = ttnn::register_operation<
     "ttnn::le_unary",
-    ttnn::operations::unary::ExecuteUnaryWithVariantFloatIntParameter<
-        ttnn::operations::unary::UnaryOpType::UNARY_LE>>();
+    ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::UNARY_LE>>();
 constexpr auto sigmoid_accurate =
     ttnn::register_operation<"ttnn::sigmoid_accurate", ttnn::operations::unary::Sigmoid_accurate>();
 constexpr auto log_sigmoid = ttnn::register_operation<"ttnn::log_sigmoid", ttnn::operations::unary::LogSigmoid>();

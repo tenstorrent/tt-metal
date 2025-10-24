@@ -26,7 +26,7 @@ inline void calculate_unary_ne(uint value) {
 
         sfpi::dst_reg[0] = v;
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
@@ -44,7 +44,7 @@ inline void calculate_unary_eq(uint value) {
 
         sfpi::dst_reg[0] = v;
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
@@ -62,7 +62,7 @@ inline void calculate_unary_gt(uint value) {
 
         sfpi::dst_reg[0] = v;
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
@@ -80,7 +80,7 @@ inline void calculate_unary_lt(uint value) {
 
         sfpi::dst_reg[0] = v;
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
@@ -98,7 +98,7 @@ inline void calculate_unary_ge(uint value) {
 
         sfpi::dst_reg[0] = v;
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
@@ -116,7 +116,7 @@ inline void calculate_unary_le(uint value) {
 
         sfpi::dst_reg[0] = v;
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
