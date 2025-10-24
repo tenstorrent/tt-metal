@@ -288,9 +288,7 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::compute_available_ad
 
         // First pass: clamp ranges in-place
         for (auto& r : ranges) {
-            if (r.first < address_limit) {
-                r.first = address_limit;
-            }
+            r.first = std::max(r.first, address_limit);
         }
 
         // Second pass: remove empty ranges (where r.second <= r.first)
