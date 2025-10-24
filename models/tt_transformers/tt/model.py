@@ -132,7 +132,7 @@ class Transformer(LightweightModule):
 
         # Initialize on-device sampling if supported
         # N150 does not support on-device sampling
-        # Sampling on device is supported only if each devuce has maximum logits size of 64*1024
+        # Sampling on device is supported only if each device has maximum logits size of 64*1024
         self._supports_on_device_sampling = (
             self.args.vocab_size // self.args.num_devices <= 64 * 1024 and self.mesh_device.shape != (1, 1)
         )
