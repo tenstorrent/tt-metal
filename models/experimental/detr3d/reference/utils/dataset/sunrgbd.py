@@ -1,5 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
 
+
 """
 Modified from https://github.com/facebookresearch/votenet
 Dataset for 3D object detection on SUN RGB-D (with support of vote supervision).
@@ -23,7 +24,9 @@ import numpy as np
 from torch.utils.data import Dataset
 import scipy.io as sio  # to load .mat files for depth points
 
-# Import from reference utils instead of source
+import models.experimental.detr3d.reference.utils.pc_util as pc_util
+from models.experimental.detr3d.reference.utils.random_cuboid import RandomCuboid
+from models.experimental.detr3d.reference.utils.pc_util import shift_scale_points, scale_points
 from models.experimental.detr3d.reference.utils.box_util import (
     flip_axis_to_camera_tensor,
     get_3d_box_batch_tensor,
@@ -120,14 +123,7 @@ class SunrgbdDatasetConfig(object):
         return boxes
 
     def my_compute_box_3d(self, center, size, heading_angle):
-        # Simple rotation matrix for Z-axis
-        R = np.array(
-            [
-                [np.cos(-heading_angle), -np.sin(-heading_angle), 0],
-                [np.sin(-heading_angle), np.cos(-heading_angle), 0],
-                [0, 0, 1],
-            ]
-        )
+        R = pc_util.rotz(-1 * heading_angle)
         l, w, h = size
         x_corners = [-l, l, l, -l, -l, l, l, -l]
         y_corners = [w, w, -w, -w, w, w, -w, -w]
@@ -182,18 +178,12 @@ class SunrgbdDetectionDataset(Dataset):
         self.use_color = use_color
         self.use_height = use_height
         self.use_random_cuboid = use_random_cuboid
-
-        # Simplified random cuboid for minimal dependencies
-        self.random_cuboid_augmentor = None
-        if use_random_cuboid:
-            # Create a minimal random cuboid implementation
-            self.random_cuboid_augmentor = MinimalRandomCuboid(
-                min_points=random_cuboid_min_points,
-                aspect=0.75,
-                min_crop=0.75,
-                max_crop=1.0,
-            )
-
+        self.random_cuboid_augmentor = RandomCuboid(
+            min_points=random_cuboid_min_points,
+            aspect=0.75,
+            min_crop=0.75,
+            max_crop=1.0,
+        )
         self.center_normalizing_range = [
             np.zeros((1, 3), dtype=np.float32),
             np.ones((1, 3), dtype=np.float32),
@@ -234,7 +224,7 @@ class SunrgbdDetectionDataset(Dataset):
 
             # Rotation along up-axis/Z-axis
             rot_angle = (np.random.random() * np.pi / 3) - np.pi / 6  # -30 ~ +30 degree
-            rot_mat = self._rotz(rot_angle)
+            rot_mat = pc_util.rotz(rot_angle)
 
             point_cloud[:, 0:3] = np.dot(point_cloud[:, 0:3], np.transpose(rot_mat))
             bboxes[:, 0:3] = np.dot(bboxes[:, 0:3], np.transpose(rot_mat))
@@ -263,7 +253,7 @@ class SunrgbdDetectionDataset(Dataset):
             if self.use_height:
                 point_cloud[:, -1] *= scale_ratio[0, 0]
 
-            if self.use_random_cuboid and self.random_cuboid_augmentor:
+            if self.use_random_cuboid:
                 point_cloud, bboxes, _ = self.random_cuboid_augmentor(point_cloud, bboxes)
 
         # ------------------------------- LABELS ------------------------------
@@ -308,20 +298,20 @@ class SunrgbdDetectionDataset(Dataset):
             )
             target_bboxes[i, :] = target_bbox
 
-        point_cloud, choices = self._random_sampling(point_cloud, self.num_points, return_choices=True)
+        point_cloud, choices = pc_util.random_sampling(point_cloud, self.num_points, return_choices=True)
 
         point_cloud_dims_min = point_cloud.min(axis=0)
         point_cloud_dims_max = point_cloud.max(axis=0)
 
         mult_factor = point_cloud_dims_max - point_cloud_dims_min
-        box_sizes_normalized = self._scale_points(
+        box_sizes_normalized = scale_points(
             raw_sizes.astype(np.float32)[None, ...],
             mult_factor=1.0 / mult_factor[None, ...],
         )
         box_sizes_normalized = box_sizes_normalized.squeeze(0)
 
         box_centers = target_bboxes.astype(np.float32)[:, 0:3]
-        box_centers_normalized = self._shift_scale_points(
+        box_centers_normalized = shift_scale_points(
             box_centers[None, ...],
             src_range=[
                 point_cloud_dims_min[None, ...],
@@ -362,119 +352,3 @@ class SunrgbdDetectionDataset(Dataset):
         ret_dict["point_cloud_dims_min"] = point_cloud_dims_min
         ret_dict["point_cloud_dims_max"] = point_cloud_dims_max
         return ret_dict
-
-    def _rotz(self, t):
-        """Rotation about the z-axis."""
-        c = np.cos(t)
-        s = np.sin(t)
-        return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
-
-    def _random_sampling(self, pc, num_sample, replace=None, return_choices=False):
-        """Input is NxC, output is num_samplexC"""
-        if replace is None:
-            replace = pc.shape[0] < num_sample
-        choices = np.random.choice(pc.shape[0], num_sample, replace=replace)
-        if return_choices:
-            return pc[choices], choices
-        else:
-            return pc[choices]
-
-    def _shift_scale_points(self, pred_xyz, src_range, dst_range=None):
-        """
-        pred_xyz: B x N x 3
-        src_range: [[B x 3], [B x 3]] - min and max XYZ coords
-        dst_range: [[B x 3], [B x 3]] - min and max XYZ coords
-        """
-        if dst_range is None:
-            dst_range = [
-                np.zeros((src_range[0].shape[0], 3)),
-                np.ones((src_range[0].shape[0], 3)),
-            ]
-
-        if pred_xyz.ndim == 4:
-            src_range = [x[:, None] for x in src_range]
-            dst_range = [x[:, None] for x in dst_range]
-
-        assert src_range[0].shape[0] == pred_xyz.shape[0]
-        assert dst_range[0].shape[0] == pred_xyz.shape[0]
-        assert src_range[0].shape[-1] == pred_xyz.shape[-1]
-        assert src_range[0].shape == src_range[1].shape
-        assert dst_range[0].shape == dst_range[1].shape
-        assert src_range[0].shape == dst_range[1].shape
-
-        src_diff = src_range[1][:, None, :] - src_range[0][:, None, :]
-        dst_diff = dst_range[1][:, None, :] - dst_range[0][:, None, :]
-        prop_xyz = (((pred_xyz - src_range[0][:, None, :]) * dst_diff) / src_diff) + dst_range[0][:, None, :]
-        return prop_xyz
-
-    def _scale_points(self, pred_xyz, mult_factor):
-        if pred_xyz.ndim == 4:
-            mult_factor = mult_factor[:, None]
-        scaled_xyz = pred_xyz * mult_factor[:, None, :]
-        return scaled_xyz
-
-
-class MinimalRandomCuboid(object):
-    """
-    Minimal implementation of RandomCuboid augmentation without external dependencies
-    """
-
-    def __init__(self, min_points, aspect=0.8, min_crop=0.5, max_crop=1.0):
-        self.aspect = aspect
-        self.min_crop = min_crop
-        self.max_crop = max_crop
-        self.min_points = min_points
-
-    def _check_aspect(self, crop_range, aspect_min):
-        xy_aspect = np.min(crop_range[:2]) / np.max(crop_range[:2])
-        xz_aspect = np.min(crop_range[[0, 2]]) / np.max(crop_range[[0, 2]])
-        yz_aspect = np.min(crop_range[1:]) / np.max(crop_range[1:])
-        return (xy_aspect >= aspect_min) or (xz_aspect >= aspect_min) or (yz_aspect >= aspect_min)
-
-    def __call__(self, point_cloud, target_boxes, per_point_labels=None):
-        range_xyz = np.max(point_cloud[:, 0:3], axis=0) - np.min(point_cloud[:, 0:3], axis=0)
-
-        for _ in range(100):
-            crop_range = self.min_crop + np.random.rand(3) * (self.max_crop - self.min_crop)
-            if not self._check_aspect(crop_range, self.aspect):
-                continue
-
-            sample_center = point_cloud[np.random.choice(len(point_cloud)), 0:3]
-
-            new_range = range_xyz * crop_range / 2.0
-
-            max_xyz = sample_center + new_range
-            min_xyz = sample_center - new_range
-
-            upper_idx = np.sum((point_cloud[:, 0:3] <= max_xyz).astype(np.int32), 1) == 3
-            lower_idx = np.sum((point_cloud[:, 0:3] >= min_xyz).astype(np.int32), 1) == 3
-
-            new_pointidx = (upper_idx) & (lower_idx)
-
-            if np.sum(new_pointidx) < self.min_points:
-                continue
-
-            new_point_cloud = point_cloud[new_pointidx, :]
-
-            # filtering policy
-            new_boxes = target_boxes
-            if target_boxes.sum() > 0:  # ground truth contains no bounding boxes. Common in SUNRGBD.
-                box_centers = target_boxes[:, 0:3]
-                new_pc_min_max = np.min(new_point_cloud[:, 0:3], axis=0), np.max(new_point_cloud[:, 0:3], axis=0)
-                keep_boxes = np.logical_and(
-                    np.all(box_centers >= new_pc_min_max[0], axis=1),
-                    np.all(box_centers <= new_pc_min_max[1], axis=1),
-                )
-                if keep_boxes.sum() == 0:
-                    # current data augmentation removes all boxes in the pointcloud. fail!
-                    continue
-                new_boxes = target_boxes[keep_boxes]
-            if per_point_labels is not None:
-                new_per_point_labels = [x[new_pointidx] for x in per_point_labels]
-            else:
-                new_per_point_labels = None
-            # if we are here, all conditions are met. return boxes
-            return new_point_cloud, new_boxes, new_per_point_labels
-
-        # fallback
-        return point_cloud, target_boxes, per_point_labels
