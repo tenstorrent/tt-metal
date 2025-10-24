@@ -227,6 +227,7 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
     for (const auto& mesh : mgd.all_meshes()) {
         const auto& mesh_instance = mgd.get_instance(mesh);
         const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(mesh_instance.desc);
+        this->intra_mesh_connectivity_[mesh_instance.local_id].resize(mesh_instance.sub_instances.size());
         this->intra_mesh_relaxed_policy_[MeshId(mesh_instance.local_id)] =
             (mesh_desc->channels().policy() == proto::Policy::RELAXED);
     }
