@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sliding_window.hpp"
+#include <algorithm>
 #include <cstdint>
 #include <vector>
 #include <tt_stl/assert.hpp>
@@ -1169,9 +1170,8 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
 
     uint32_t indices_length_per_core = sharded_input_top_left_indices[0].size();
     for (uint32_t core_idx = 1; core_idx < shard_boundaries.size(); core_idx++) {
-        if (sharded_input_top_left_indices[core_idx].size() > indices_length_per_core) {
-            indices_length_per_core = sharded_input_top_left_indices[core_idx].size();
-        }
+        indices_length_per_core =
+            std::max<std::size_t>(sharded_input_top_left_indices[core_idx].size(), indices_length_per_core);
     }
     if (pad_cores) {
         for (uint32_t core_idx = 0; core_idx < shard_boundaries.size(); core_idx++) {

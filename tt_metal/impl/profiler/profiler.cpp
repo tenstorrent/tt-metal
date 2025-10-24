@@ -1368,9 +1368,7 @@ void DeviceProfiler::readRiscProfilerResults(
 }
 
 void DeviceProfiler::updateFirstTimestamp(uint64_t timestamp) {
-    if (timestamp < smallest_timestamp) {
-        smallest_timestamp = timestamp;
-    }
+    smallest_timestamp = std::min(timestamp, smallest_timestamp);
 }
 
 tracy::MarkerDetails DeviceProfiler::getMarkerDetails(uint16_t timer_id) const {
