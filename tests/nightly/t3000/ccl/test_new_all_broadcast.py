@@ -233,6 +233,8 @@ def run_all_broadcast_impl(
 
 
 # Enumerate the post-commit cases explicitly
+# Testing diverse combinations of layout, dtype, and memory config to maintain coverage while reducing test time.
+# Not all permutations are tested; only representative cases are chosen to balance coverage and runtime.
 @pytest.mark.parametrize(
     "num_devices, num_links, output_shape, layout, input_dtype, mem_config",
     [
