@@ -594,6 +594,38 @@ Tensor ExecuteLCM::invoke(
         use_legacy);
 }
 
+Tensor pow_sanitation(
+    const Tensor& input,
+    const Tensor& exponent,
+    Tensor& result,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    float t_nan = std::nanf("");
+    result = ttnn::where(
+        ttnn::logical_and(
+            ttnn::eqz(input, memory_config), ttnn::lez(exponent, memory_config), std::nullopt, memory_config),
+        t_nan,
+        result,
+        memory_config,
+        optional_output_tensor);
+    return ttnn::where(
+        ttnn::ltz(input, memory_config),
+        ttnn::where(
+            ttnn::eq(ttnn::round(exponent, 0), exponent),
+            ttnn::where(
+                ttnn::operations::unary::is_odd(input, memory_config),
+                ttnn::neg(result, memory_config),
+                result,
+                memory_config,
+                optional_output_tensor),
+            t_nan,
+            memory_config,
+            optional_output_tensor),
+        result,
+        memory_config,
+        optional_output_tensor);
+}
+
 // power - floating point exponent
 Tensor ExecutePower::invoke(
     const Tensor& input_a,
@@ -645,7 +677,7 @@ Tensor ExecutePower::invoke(
     tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    return BinaryOperationSfpu<operations::binary::BinaryOpType::POWER>::invoke(
+    Tensor result = BinaryOperationSfpu<operations::binary::BinaryOpType::POWER>::invoke(
         input,
         exponent,
         std::nullopt,
@@ -655,6 +687,7 @@ Tensor ExecutePower::invoke(
         lhs_activations,
         rhs_activations,
         use_legacy);
+    return pow_sanitation(input, exponent, result, memory_config, optional_output_tensor);
 }
 
 // power - scalar input, tensor exponent
@@ -672,7 +705,7 @@ Tensor ExecutePower::invoke(
     // https://github.com/tenstorrent/pytorch2.0_ttnn/blob/main/docs/operations/aten.pow.Scalar.md
 
     Tensor input = ttnn::full_like(exponent, input_a);
-    return ExecutePower::invoke(
+    Tensor result = ExecutePower::invoke(
         input,
         exponent,
         std::nullopt,
@@ -682,6 +715,7 @@ Tensor ExecutePower::invoke(
         lhs_activations,
         rhs_activations,
         use_legacy);
+    return pow_sanitation(input, exponent, result, memory_config, optional_output_tensor);
 }
 
 Tensor ExecuteRsub::invoke(

@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_conversions.h"
+#include "sfpu/ckernel_sfpu_polyval.h"
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -98,44 +99,49 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
     sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));         // Note: z & 0x7f800000 in paper
     sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Note: z & 0x007fffff in paper
 
-    // Compute formula in Horner form
-    sfpi::vFloat d1 = sfpi::vFloat(0.40196114e-7);
-    sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(0xf94ee7) + zif, 0);
-    sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(0x560e) + zif, 0);
+    // 61f
+    //  Normalize mantissa field into a fractional value in [0,1)
+    sfpi::vFloat frac = sfpi::int32_to_float(zif, 0) * sfpi::vFloat(1.1920929e-7f);
 
-    d2 = d1 * d2;
-    zif = _float_to_int32_positive_(d2 * d3);
+    // Evaluate degree-6 polynomial coefficients using Horner’s rule
+    // Note: Unlike exp_21f, in exp_61f all polynomial coefficients are floating-point values.
+    // In exp_21f, the paper mixes integer and float constants to perform bit-level manipulation of the exponent and
+    // mantissa fields (using bit manipulation techniques - BMT) for exactness. In exp_61f, all coefficients are
+    // floating-point values derived from the Chebyshev polynomial approach, making the implementation simpler and
+    // purely mathematical without integer-based operations.
+    sfpi::vFloat poly = POLYVAL7<sfpi::vFloat>(
+        0.0002170391f, 0.001243946f, 0.0096788315f, 0.055483369f, 0.24022982f, 0.69314699f, 1.0000000018f, frac);
 
     // Restore exponent
-    zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(zif), 127U + zii));
+    zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(poly, 127U + zii));
 
     sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(zii);
 
-    // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
-    // Check valid base range
-    sfpi::vInt pow_int =
-        sfpi::float_to_int16(pow, 0);  // int16 should be plenty, since large powers will approach 0/Inf
-    sfpi::vFloat pow_rounded = sfpi::int32_to_float(pow_int, 0);
+    // // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
+    // // Check valid base range
+    // sfpi::vInt pow_int =
+    //     sfpi::float_to_int16(pow, 0);  // int16 should be plenty, since large powers will approach 0/Inf
+    // sfpi::vFloat pow_rounded = sfpi::int32_to_float(pow_int, 0);
 
-    // Division by 0 when base is 0 and pow is negative => set to NaN
-    v_if((absbase == 0.f) && pow < 0.f) {
-        y = sfpi::vConstFloatPrgm2;  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
-    }
-    v_endif;
+    // // Division by 0 when base is 0 and pow is negative => set to NaN
+    // v_if((absbase == 0.f) && pow < 0.f) {
+    //     y = sfpi::vConstFloatPrgm2;  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
+    // }
+    // v_endif;
 
-    v_if(base < 0.0f) {  // negative base
-        // If pow is odd integer then result is negative
-        // If power is even, then result is positive
-        // To get the sign bit of result, we can shift last bit of pow_int to the 1st bit
-        y = setsgn(y, pow_int << 31);
+    // v_if(base < 0.0f) {  // negative base
+    //     // If pow is odd integer then result is negative
+    //     // If power is even, then result is positive
+    //     // To get the sign bit of result, we can shift last bit of pow_int to the 1st bit
+    //     y = setsgn(y, pow_int << 31);
 
-        // Check for integer power, if it is not then overwrite result with NaN
-        v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
-            y = sfpi::vConstFloatPrgm2;
-        }
-        v_endif;
-    }
-    v_endif;
+    //     // Check for integer power, if it is not then overwrite result with NaN
+    //     v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
+    //         y = sfpi::vConstFloatPrgm2;
+    //     }
+    //     v_endif;
+    // }
+    // v_endif;
 
     if constexpr (!is_fp32_dest_acc_en) {
         // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
