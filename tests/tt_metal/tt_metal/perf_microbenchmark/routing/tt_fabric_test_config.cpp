@@ -129,6 +129,7 @@ ParsedTrafficPatternConfig YamlConfigParser::parse_traffic_pattern_config(const 
     if (pattern_yaml["mcast_start_hops"]) {
         config.mcast_start_hops = parse_scalar<uint32_t>(pattern_yaml["mcast_start_hops"]);
     }
+
     return config;
 }
 
@@ -141,6 +142,9 @@ ParsedSenderConfig YamlConfigParser::parse_sender_config(
     config.device = parse_device_identifier(sender_yaml["device"]);
     if (sender_yaml["core"]) {
         config.core = parse_core_coord(sender_yaml["core"]);
+    }
+    if (sender_yaml["link_id"]) {
+        config.link_id = parse_scalar<uint32_t>(sender_yaml["link_id"]);
     }
 
     const auto& patterns_yaml = sender_yaml["patterns"];
@@ -222,6 +226,10 @@ ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml
 
     if (test_yaml["sync"]) {
         test_config.global_sync = parse_scalar<bool>(test_yaml["sync"]);
+    }
+
+    if (test_yaml["enable_flow_control"]) {
+        test_config.enable_flow_control = parse_scalar<bool>(test_yaml["enable_flow_control"]);
     }
 
     return test_config;
@@ -815,6 +823,22 @@ void CmdlineParser::print_help() {
         "  --built-tests-dump-file <filename>           Specify the filename for the dumped tests. Default: "
         "built_tests.yaml.");
     log_info(LogTest, "  --filter <testname>           Specify a filter for the test suite");
+    log_info(LogTest, "");
+    log_info(LogTest, "Progress Monitoring Options:");
+    log_info(LogTest, "  --show-progress                              Enable real-time progress monitoring.");
+    log_info(LogTest, "  --progress-interval <seconds>                Poll interval (default: 2).");
+    log_info(LogTest, "  --hung-threshold <seconds>                   Hung detection threshold (default: 30).");
+}
+
+// Progress monitoring methods
+bool CmdlineParser::show_progress() { return test_args::has_command_option(input_args_, "--show-progress"); }
+
+uint32_t CmdlineParser::get_progress_interval() {
+    return test_args::get_command_option_uint32(input_args_, "--progress-interval", 2);
+}
+
+uint32_t CmdlineParser::get_hung_threshold() {
+    return test_args::get_command_option_uint32(input_args_, "--hung-threshold", 30);
 }
 
 // YamlConfigParser private helpers

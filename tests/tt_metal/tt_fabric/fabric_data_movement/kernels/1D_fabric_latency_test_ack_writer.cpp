@@ -6,6 +6,8 @@
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/fabric_routing_path_interface.h"
 #include "dataflow_api.h"
 
 #include <cstdint>

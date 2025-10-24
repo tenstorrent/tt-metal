@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <map>
+#include <set>
 #include <tt-metalium/host_api.hpp>
 #include "tt_fabric_test_common.hpp"
 #include "tt_fabric_test_interfaces.hpp"
@@ -103,7 +104,7 @@ private:
         uint32_t chunk_size = this->payload_chunk_size;
         TT_FATAL(
             chunk_size > 0 && chunk_size % l1_alignment_ == 0,
-            "Payload chunk_size must be positive and a multiple of alignment");
+            "Payload chunk_size must be positive and a multiple of L1 alignment");
 
         available_payload_chunks_.clear();
         for (uint32_t addr = payload_region_.start; addr + chunk_size <= payload_region_.end(); addr += chunk_size) {
@@ -172,6 +173,23 @@ public:
     std::array<CorePool, 2> core_pools_;                           // Indexed by CoreType
     std::unordered_map<CoreCoord, uint32_t> core_workload_;        // map core -> num_configs
     std::unordered_map<CoreCoord, CoreResources> core_resources_;  // map core -> its memory allocator
+
+    // Credit allocation for senders on this device
+    std::optional<DynamicMemoryRegion> credit_allocator_;
+
+    // Collect remaining pristine cores from all pools (for mux allocation)
+    std::vector<CoreCoord> collect_remaining_pristine_cores() const;
+
+    // Initialize credit allocator (lazy)
+    void initialize_credit_allocator(const SenderMemoryMap& sender_memory_map);
+
+    // Allocate credit chunk from this device's L1 credit region
+    // Returns the base address of the allocated chunk
+    // Throws if allocation would exceed region bounds
+    uint32_t allocate_credit_chunk(uint32_t num_receivers, const SenderMemoryMap& sender_memory_map);
+
+    // Reset credit allocator
+    void reset_credit_allocator();
 
 private:
     void reserve_core_internal(const CoreCoord& core, CoreType core_type);
@@ -299,6 +317,76 @@ inline void TestDeviceResources::refill_pool(CorePool& pool) {
     std::sort(pool.active_pool.begin(), pool.active_pool.end());
 }
 
+inline void TestDeviceResources::initialize_credit_allocator(const SenderMemoryMap& sender_memory_map) {
+    if (!credit_allocator_.has_value()) {
+        credit_allocator_.emplace(
+            sender_memory_map.get_credit_addresses_base(),
+            sender_memory_map.get_credit_addresses_size(),
+            SenderMemoryMap::CREDIT_ADDRESS_STRIDE);
+    }
+}
+
+inline uint32_t TestDeviceResources::allocate_credit_chunk(
+    uint32_t num_receivers, const SenderMemoryMap& sender_memory_map) {
+    // Lazy initialization
+    if (!credit_allocator_.has_value()) {
+        initialize_credit_allocator(sender_memory_map);
+    }
+
+    // Allocate from the per-device allocator
+    uint32_t chunk_base = credit_allocator_->allocate_chunk(num_receivers);
+
+    log_debug(
+        tt::LogTest,
+        "Device {} allocated credit chunk: base={:#x}, num_receivers={}",
+        node_id_,
+        chunk_base,
+        num_receivers);
+
+    return chunk_base;
+}
+
+inline void TestDeviceResources::reset_credit_allocator() {
+    if (credit_allocator_.has_value()) {
+        credit_allocator_->reset();
+        log_debug(tt::LogTest, "Reset credit allocator for device {}", node_id_);
+    }
+}
+
+inline std::vector<CoreCoord> TestDeviceResources::collect_remaining_pristine_cores() const {
+    std::vector<CoreCoord> remaining_cores;
+
+    // Collect from pristine_cores_ (if not yet moved to pools)
+    remaining_cores.insert(remaining_cores.end(), pristine_cores_.begin(), pristine_cores_.end());
+
+    // Collect from sender pool (cores that haven't been allocated yet)
+    const CorePool& sender_pool = core_pools_[SENDER_TYPE_IDX];
+    if (sender_pool.initialized) {
+        for (const auto& core : sender_pool.active_pool) {
+            auto it = core_workload_.find(core);
+            if (it == core_workload_.end()) {
+                // Core is in pool but has never been allocated
+                remaining_cores.push_back(core);
+            }
+        }
+    }
+
+    // Collect from receiver pool (cores that haven't been allocated yet)
+    const CorePool& receiver_pool = core_pools_[RECEIVER_TYPE_IDX];
+    if (receiver_pool.initialized) {
+        for (const auto& core : receiver_pool.active_pool) {
+            auto it = core_workload_.find(core);
+            if (it == core_workload_.end()) {
+                // Core is in pool but has never been allocated
+                remaining_cores.push_back(core);
+            }
+        }
+    }
+
+    // Pools are mutually exclusive, no duplicates possible
+    return remaining_cores;
+}
+
 inline CoreCoord TestDeviceResources::find_next_available_sync_core(CorePool& pool) {
     size_t current_pool_idx = pool.next_pool_idx;
     const CoreCoord& core = pool.active_pool[current_pool_idx];
@@ -385,6 +473,22 @@ inline void TestDeviceResources::reserve_core_internal(const CoreCoord& core, Co
 }
 
 // ======================================================================================
+// Credit Allocation Helpers
+// ======================================================================================
+
+/**
+ * Calculate credit configuration (100% initial, 20% batch)
+ * Simple policy: Give sender full buffer capacity, receiver returns in 20% batches
+ */
+inline static std::pair<uint32_t, uint32_t> calculate_credit_config(
+    uint32_t buffer_capacity_bytes, uint32_t packet_size_bytes, uint32_t num_packets) {
+    uint32_t buffer_capacity_packets = buffer_capacity_bytes / packet_size_bytes;
+    uint32_t initial_credits = std::min(buffer_capacity_packets, num_packets);
+    uint32_t batch_size = std::max(1u, initial_credits / 4);
+    return {initial_credits, batch_size};
+}
+
+// ======================================================================================
 // Global Allocator
 // ======================================================================================
 
@@ -400,6 +504,9 @@ public:
     void allocate_resources(TestConfig& test_config);
     void reset();
 
+    // Get pristine cores for a device (for local mux allocation)
+    std::vector<CoreCoord> get_pristine_cores_for_device(const FabricNodeId& node_id) const;
+
 private:
     TestDeviceResources& get_or_create_device_resources(const FabricNodeId& node_id);
 
@@ -410,6 +517,7 @@ private:
     const ReceiverMemoryMap& receiver_memory_map_;
     std::optional<CoreCoord> worker_grid_size_;
     std::unordered_map<FabricNodeId, std::unique_ptr<TestDeviceResources>> all_device_resources_;
+    bool enable_flow_control_ = false;  // Set during allocate_resources, used during device creation
 };
 
 inline GlobalAllocator::GlobalAllocator(
@@ -446,10 +554,14 @@ inline TestDeviceResources& GlobalAllocator::get_or_create_device_resources(cons
             policies_.receiver_config,
             receiver_memory_map_.payload_chunks,
             receiver_memory_map_.atomic_counters));
+
     return *inserted_it->second;
 }
 
 inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
+    // Store flow control flag for use during device creation
+    enable_flow_control_ = test_config.enable_flow_control;
+
     // PASS 0: Reserve sync cores for synchronization
     for (auto& sync_sender : test_config.global_sync_configs) {
         auto& device_resources = get_or_create_device_resources(sync_sender.device);
@@ -489,6 +601,8 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                 // We assume the pre-specified address is valid.
                 continue;
             }
+
+            uint32_t num_receivers_for_credits = 0;
 
             if (dest.hops.has_value()) {  // process based on hops
                 std::vector<FabricNodeId> dst_node_ids =
@@ -628,6 +742,8 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                         core_resources.reserve_atomic_counter(dest.atomic_inc_address.value());
                     }
                 }
+
+                num_receivers_for_credits = static_cast<uint32_t>(dst_node_ids.size());
             } else if (dest.device.has_value()) {  // process dest devices directly
                 auto& device_resources = get_or_create_device_resources(dest.device.value());
 
@@ -666,14 +782,54 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                 if (allocate_atomic_inc_address) {
                     dest.atomic_inc_address = core_resources.allocate_atomic_counter();
                 }
+
+                num_receivers_for_credits = 1;  // Direct-device = single receiver
+            }
+
+            if (enable_flow_control_) {
+                // Allocate credit chunk from sender device's L1
+                auto& sender_device_resources = get_or_create_device_resources(sender.device);
+                uint32_t credit_chunk_base =
+                    sender_device_resources.allocate_credit_chunk(num_receivers_for_credits, sender_memory_map_);
+
+                // Calculate credit configuration using simple policy
+                uint32_t buffer_capacity_bytes = policies_.default_payload_chunk_size;
+                uint32_t packet_size_bytes = pattern.size.value();
+                uint32_t num_packets = pattern.num_packets.value();
+                auto [initial_credits, batch_size] =
+                    calculate_credit_config(buffer_capacity_bytes, packet_size_bytes, num_packets);
+
+                // Populate sender credit info directly in pattern
+                pattern.sender_credit_info = SenderCreditInfo{
+                    .expected_receiver_count = num_receivers_for_credits,
+                    .credit_reception_address_base = credit_chunk_base,
+                    .initial_credits = initial_credits};
+                pattern.credit_return_batch_size = batch_size;
             }
         }
     }
 }
 
 inline void GlobalAllocator::reset() {
+    // Reset credit allocators before clearing device resources
+    for (auto& [node_id, device_resources_ptr] : all_device_resources_) {
+        device_resources_ptr->reset_credit_allocator();
+    }
+
     all_device_resources_.clear();
     worker_grid_size_ = std::nullopt;
+    enable_flow_control_ = false;
+}
+
+inline std::vector<CoreCoord> GlobalAllocator::get_pristine_cores_for_device(const FabricNodeId& node_id) const {
+    auto it = all_device_resources_.find(node_id);
+    if (it == all_device_resources_.end()) {
+        // Device not found in allocator (no workers allocated on this device)
+        // Return empty vector - no cores available for mux allocation
+        return {};
+    }
+    // Collect remaining pristine cores from all pools (after allocation is complete)
+    return it->second->collect_remaining_pristine_cores();
 }
 
 }  // namespace tt::tt_fabric::fabric_tests

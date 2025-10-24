@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <tt-metalium/mesh_graph.hpp>
+#include "tt_fabric_test_common_types.hpp"  // For SenderCreditInfo
 
 namespace tt::tt_fabric {
 namespace fabric_tests {
@@ -233,6 +234,7 @@ struct TrafficParameters {
     size_t num_packets;
     std::optional<uint32_t> atomic_inc_val;
     std::optional<uint32_t> mcast_start_hops;
+    bool enable_flow_control = false;
 
     // Global context
     uint32_t seed;
@@ -251,9 +253,27 @@ struct TestTrafficConfig {
     std::optional<CoreCoord> dst_logical_core;
     std::optional<uint32_t> target_address;
     std::optional<uint32_t> atomic_inc_address;
-    std::optional<uint32_t> link_id;  // Link ID for multi-link tests
+    uint32_t link_id = 0;  // Link ID for multi-link tests
+
+    // Credit info (copied from pattern if populated by allocator)
+    std::optional<SenderCreditInfo> sender_credit_info;
+    std::optional<uint32_t> credit_return_batch_size;
+
     // TODO: add later
     // mode - BW, latency etc
+};
+
+struct ReceiverCreditInfo {
+    FabricNodeId receiver_node_id;
+    FabricNodeId sender_node_id;
+    CoreCoord sender_logical_core;
+    uint32_t sender_noc_encoding;
+    uint32_t credit_return_address;
+
+    // Credit return batching configuration (similar to initial credit capacity)
+    // Instead of returning 1 credit per packet, batch them for efficiency
+    uint32_t credit_return_batch_size;
+    std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
 };
 
 struct TestTrafficSenderConfig {
@@ -267,7 +287,10 @@ struct TestTrafficSenderConfig {
     std::optional<size_t> atomic_inc_address;
     uint32_t dst_noc_encoding;  // TODO: decide if we should keep it here or not
     uint32_t payload_buffer_size;  // Add payload buffer size field
-    std::optional<uint32_t> link_id;  // Link ID for multi-link tests
+    uint32_t link_id = 0;          // Link ID for multi-link tests
+
+    // Credit flow info (when enable_flow_control is true)
+    std::optional<SenderCreditInfo> sender_credit_info;
 
     std::vector<uint32_t> get_args(bool is_sync_config = false) const;
 };
@@ -278,6 +301,10 @@ struct TestTrafficReceiverConfig {
     size_t target_address;
     std::optional<size_t> atomic_inc_address;
     uint32_t payload_buffer_size;  // Add payload buffer size field
+    uint32_t link_id = 0;          // Link ID derived from corresponding sender
+
+    // Credit flow info (when enable_flow_control is true)
+    std::optional<ReceiverCreditInfo> receiver_credit_info;
 
     std::vector<uint32_t> get_args() const;
 };
@@ -427,6 +454,20 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
         default: TT_FATAL(false, "Unsupported noc send type");
     }
 
+    if (!is_sync_config) {
+        bool credit_management_enabled = this->parameters.enable_flow_control;
+        args.push_back(credit_management_enabled ? 1u : 0u);  // credit_management_enabled
+
+        // Send sender credit info only if enabled (kernel exits early if disabled)
+        if (credit_management_enabled) {
+            TT_FATAL(
+                sender_credit_info.has_value(), "Sender credit info must be provided when flow control is enabled");
+            args.push_back(sender_credit_info->expected_receiver_count);
+            args.push_back(sender_credit_info->credit_reception_address_base);
+            args.push_back(sender_credit_info->initial_credits);
+        }
+    }
+
     return args;
 }
 
@@ -492,6 +533,52 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
             break;
         }
         default: TT_FATAL(false, "Unsupported noc send type");
+    }
+
+    bool has_credit_info = parameters.enable_flow_control;
+    args.push_back(has_credit_info ? 1u : 0u);  // credit_info_present flag
+
+    if (has_credit_info) {
+        TT_FATAL(
+            receiver_credit_info.has_value(), "Receiver credit info must be provided when flow control is enabled");
+        // Add chip-level unicast routing info based on fabric type
+        if (parameters.is_2D_routing_enabled) {
+            const auto& receiver_node = receiver_credit_info->receiver_node_id;
+            const auto& sender_node = receiver_credit_info->sender_node_id;
+            const auto& mesh_shape = parameters.mesh_shape;
+            const uint32_t EW_DIM = 1;
+
+            const auto unicast_fields = ChipUnicastFields2D(
+                receiver_node.chip_id,  // src = receiver's chip (credit packet source)
+                sender_node.chip_id,    // dst = sender's chip (credit packet destination)
+                *sender_node.mesh_id,
+                mesh_shape[EW_DIM]);
+            const auto unicast_args = unicast_fields.get_args();
+            args.insert(args.end(), unicast_args.begin(), unicast_args.end());
+        } else {
+            TT_FATAL(receiver_credit_info->hops.has_value(), "1D credit return hops must be provided");
+
+            uint32_t num_hops_1d = 0;
+            for (const auto& [_, hops_in_dir] : receiver_credit_info->hops.value()) {
+                if (hops_in_dir > 0) {
+                    num_hops_1d = hops_in_dir;
+                    break;
+                }
+            }
+            TT_FATAL(num_hops_1d > 0, "num_hops_1d must be > 0 for credit return");
+
+            const auto unicast_fields = ChipUnicastFields1D(num_hops_1d);
+            const auto unicast_args = unicast_fields.get_args();
+            args.insert(args.end(), unicast_args.begin(), unicast_args.end());
+        }
+
+        // Add NOC-level atomic_inc fields for credit return (always NOC_UNICAST_ATOMIC_INC)
+        // Receiver batches credits before returning (configurable batch size)
+        auto atomic_inc_fields = NocUnicastAtomicIncFields(
+            receiver_credit_info->credit_return_address, receiver_credit_info->sender_noc_encoding);
+        atomic_inc_fields.set_atomic_inc_val(receiver_credit_info->credit_return_batch_size);  // Batch credits
+        const auto atomic_inc_args = atomic_inc_fields.get_args<true>();  // true = include noc encoding
+        args.insert(args.end(), atomic_inc_args.begin(), atomic_inc_args.end());
     }
 
     return args;
