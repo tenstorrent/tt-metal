@@ -58,10 +58,15 @@ RunTimeOptions::RunTimeOptions() :
     profiler_mid_run_dump(false),
     profiler_buffer_usage_enabled(false),
     profiler_trace_profiler(false) {
-    // Root directory handling from main (more robust)
+// Default assume package install path
+#ifdef TT_METAL_INSTALL_ROOT
+    if (std::filesystem::is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT))) {
+        this->root_dir = std::filesystem::path(TT_METAL_INSTALL_ROOT).string();
+    }
     log_debug(tt::LogMetal, "initial root_dir: {}", this->root_dir);
+#endif
 
-    // TT_METAL_RUNTIME_ROOT handling with robust fallback system
+    // ENV Can Override
     const char* root_dir_str = std::getenv(TT_METAL_RUNTIME_ROOT_ENV_VAR);
     if (root_dir_str != nullptr) {
         this->root_dir = std::string(root_dir_str);
