@@ -25,6 +25,9 @@ runs:
       env:
         TRACY_NO_INVARIANT_CHECK: 1
     - run: |
+        pwd
+        ls -l
+        cd docker-job
         set -x
         git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
