@@ -33,7 +33,7 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t n
 uint32_t get_input_channels_alignment(
     TensorMemoryLayout input_tensor_memory_layout,
     Layout input_tensor_layout,
-    BufferType input_tensor_buffer_type,
+    bool sliced_op,
     bool is_mm_conv,
     const std::optional<MemoryConfig>& input_memory_config);
 
