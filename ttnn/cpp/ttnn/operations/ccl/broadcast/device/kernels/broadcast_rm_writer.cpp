@@ -17,7 +17,7 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 
 using address_t = uint32_t;
-using namespace tt::tt_fabric::linear::experimental;
+using namespace tt::tt_fabric::experimental::linear;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS

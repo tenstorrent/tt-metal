@@ -6,10 +6,10 @@
 
 #ifdef API_TYPE_Linear
 #include "tt_metal/fabric/hw/inc/linear/api.h"
-using namespace tt::tt_fabric::linear::experimental;
+using namespace tt::tt_fabric::experimental::linear;
 #elif defined(API_TYPE_Mesh)
 #include "tt_metal/fabric/hw/inc/mesh/api.h"
-using namespace tt::tt_fabric::mesh::experimental;
+using namespace tt::tt_fabric::experimental::mesh;
 #else
 #error "API_TYPE_Linear or API_TYPE_Mesh must be defined"
 #endif
