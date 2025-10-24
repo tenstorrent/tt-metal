@@ -57,7 +57,9 @@ class TtUNet2DConditionModel(LightweightModule):
         )
 
         self.down_blocks = []
-        self.down_blocks.append(TtDownBlock2D(device, state_dict, "down_blocks.0", model_config, debug_mode=debug_mode))
+        self.down_blocks.append(
+            TtDownBlock2D(device, state_dict, "down_blocks.0", model_config, has_downsample=True, debug_mode=debug_mode)
+        )
         self.down_blocks.append(
             TtCrossAttnDownBlock2D(
                 device,

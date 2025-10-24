@@ -7,7 +7,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_downblock2d import TtDownBlock2D
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
@@ -15,15 +15,16 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 
 
 @pytest.mark.parametrize(
-    "input_shape, temb_shape",
+    "input_shape, temb_shape, block_id, pcc",
     [
-        ((1, 320, 128, 128), (1, 1280)),
+        ((1, 384, 128, 128), (1, 1536), 0, 0.999),
+        ((1, 1536, 16, 16), (1, 1536), 3, 0.998),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_downblock2d(device, temb_shape, input_shape, debug_mode, is_ci_env, reset_seeds):
+def test_downblock2d(device, temb_shape, input_shape, block_id, pcc, debug_mode, is_ci_env, reset_seeds):
     unet = UNet2DConditionModel.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        "stabilityai/stable-diffusion-xl-refiner-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
         subfolder="unet",
@@ -32,11 +33,16 @@ def test_downblock2d(device, temb_shape, input_shape, debug_mode, is_ci_env, res
     unet.eval()
     state_dict = unet.state_dict()
 
-    torch_downblock = unet.down_blocks[0]
+    torch_downblock = unet.down_blocks[block_id]
 
-    model_config = ModelOptimisations()
+    model_config = RefinerModelOptimisations()
     tt_downblock = TtDownBlock2D(
-        device, state_dict, f"down_blocks.0", model_config=model_config, has_downsample=True, debug_mode=debug_mode
+        device,
+        state_dict,
+        f"down_blocks.{block_id}",
+        model_config=model_config,
+        has_downsample=(block_id != 3),
+        debug_mode=debug_mode,
     )
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
@@ -66,5 +72,5 @@ def test_downblock2d(device, temb_shape, input_shape, debug_mode, is_ci_env, res
     del unet, tt_downblock
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     logger.info(f"PCC is {pcc_message}")

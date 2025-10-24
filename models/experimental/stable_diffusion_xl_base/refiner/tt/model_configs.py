@@ -16,6 +16,18 @@ class RefinerModelOptimisations(ModelOptimisations):
     ):
         super().__init__(conv_act_dtype, conv_w_dtype, attention_weights_dtype, ff_weights_dtype)
 
+        self.conv_configs["ABH_32_ADB_WDB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=32,
+        )
+
     def get_matmul_config(self, matmul_path):
         return None
 
@@ -23,10 +35,31 @@ class RefinerModelOptimisations(ModelOptimisations):
         return None
 
     def get_conv_config(self, conv_path):
+        if "downsamplers" in conv_path:
+            if "down_blocks.0" in conv_path:
+                return self.conv_configs["ABH_256_ADB_WDB_BS"]
+            elif "down_blocks.1" in conv_path:
+                return self.conv_configs["ABH_128_ADB_WDB_BS"]
+            elif "down_blocks.2" in conv_path:
+                return self.conv_configs["ABH_32_ADB_WDB_BS"]
+        if "down_blocks.0" in conv_path:
+            return self.conv_configs["ABH_512_ADB_WDB_BS"]
+        if "down_blocks.1" in conv_path:
+            if "resnet_blocks.0" in conv_path and "conv1" in conv_path:
+                return self.conv_configs["ABH_256_ADB_WDB_BS"]
+            else:
+                return self.conv_configs["ABH_256_ADB_WDB_BS"]
+        if "down_blocks.2" in conv_path:
+            if "resnet_blocks.0" in conv_path and "conv1" in conv_path:
+                return self.conv_configs["ABH_128_ADB_WDB_BS"]
+            else:
+                return self.conv_configs["ABH_128_ADB_WDB_BS"]
+        if "down_blocks.3" in conv_path:
+            return self.conv_configs["ABH_32_ADB_WDB_BS"]
         return None
 
     def get_conv_compute_config(self, module_path):
-        return None
+        return self.compute_configs["CONV_HIFI2_NO_FP32_COMPUTE_CONFIG"]
 
     def get_conv_output_dtype(self):
         return self.conv_output_dtype
