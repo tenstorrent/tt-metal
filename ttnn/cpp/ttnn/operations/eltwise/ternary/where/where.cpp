@@ -220,7 +220,6 @@ Tensor WhereOperation::invoke(
     const std::variant<float, Tensor>& value_false,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    std::cout << "from invoke of variants" << std::endl;
     return std::visit(
         [&](const auto& true_val, const auto& false_val) {
             return invoke_impl(predicate, true_val, false_val, memory_config, output);

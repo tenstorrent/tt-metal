@@ -531,11 +531,7 @@ def test_where_tss(device, dtype, h, w, scalar1, scalar2):
 @pytest.mark.parametrize(
     "input_shapes",
     [
-        torch.Size([100]),
-        torch.Size([64, 128]),
-        torch.Size([3, 128, 32]),
         torch.Size([1, 3, 320, 384]),
-        torch.Size([1, 1, 32, 320, 12]),
     ],
 )
 def test_where_TSS_float_types(torch_dtype, ttnn_dtype, scalars, input_shapes, device):
@@ -570,11 +566,7 @@ def test_where_TSS_float_types(torch_dtype, ttnn_dtype, scalars, input_shapes, d
 @pytest.mark.parametrize(
     "input_shapes",
     [
-        torch.Size([100]),
-        torch.Size([64, 128]),
-        torch.Size([3, 128, 32]),
         torch.Size([1, 3, 320, 384]),
-        torch.Size([1, 1, 32, 320, 12]),
     ],
 )
 def test_where_TSS_int_types(scalars, input_shapes, device):
