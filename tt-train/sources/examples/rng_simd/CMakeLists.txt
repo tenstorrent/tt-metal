@@ -1,4 +1,4 @@
-project(linear_regression)
+project(rng_simd)
 
 set(SOURCES main.cpp)
 add_executable(rng_simd ${SOURCES})
