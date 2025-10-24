@@ -7,6 +7,7 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include <algorithm>
 #include <tt-metalium/work_split.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -58,9 +59,7 @@ std::vector<ttnn::TensorSpec> AllGatherConcat::compute_output_specs(const std::v
     auto head_dim = input_shape[3];
     // pad batch to 32 if necessary
     uint32_t batch_size = 32;
-    if (batch < batch_size) {
-        batch = batch_size;
-    }
+    batch = std::max(batch, batch_size);
     auto hidden_dim = num_heads * head_dim;
 
     Shape output_shape({sequence_length, 1, batch, hidden_dim});
