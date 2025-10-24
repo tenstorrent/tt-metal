@@ -14,6 +14,7 @@ from models.tt_cnn.tt.builder import (
     Conv2dConfiguration,
     HeightShardedStrategyConfiguration,
     HeightSliceStrategyConfiguration,
+    L1FullSliceStrategyConfiguration,
     MaxPool2dConfiguration,
     ShardedStrategyConfiguration,
     TtConv2d,
@@ -43,6 +44,7 @@ SLICE_CHANNEL_CONFIGS = [
 
 SLICE_CONFIGS = [
     {"type": "no_slice", "num_slices": 0},
+    {"type": "l1_full", "num_slices": 0},
     {"type": "height_slice", "num_slices": 2},
     {"type": "width_slice", "num_slices": 2},
     {"type": "channel_slice", "num_slices": 4},
@@ -656,6 +658,8 @@ def test_conv2d_slicing_strategies(input_size, channels, batch_size, slice_confi
     # Create slice strategy based on config
     if slice_config["type"] == "no_slice":
         slice_strategy = None
+    elif slice_config["type"] == "l1_full":
+        slice_strategy = L1FullSliceStrategyConfiguration()
     elif slice_config["type"] == "height_slice":
         slice_strategy = HeightSliceStrategyConfiguration(num_slices=slice_config["num_slices"])
     elif slice_config["type"] == "width_slice":
@@ -685,7 +689,7 @@ def test_conv2d_slicing_strategies(input_size, channels, batch_size, slice_confi
     assert hasattr(layer, "weight_slices"), "Layer should have weight_slices attribute"
 
     # For slicing tests, ensure input is on device with DRAM memory config
-    if slice_config["type"] != "no_slice":
+    if slice_config["type"] != "no_slice" and slice_config["type"] != "l1_full":
         ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     if slice_config["type"] == "channel_slice":
@@ -735,7 +739,7 @@ def test_maxpool2d_slicing_strategies(input_size, channels, batch_size, pool_con
     kernel_size, padding, ceil_mode = pool_config["kernel_size"], pool_config["padding"], pool_config["ceil_mode"]
 
     # Create slice strategy based on config
-    if slice_config["type"] == "no_slice":
+    if slice_config["type"] == "no_slice" or slice_config["type"] == "l1_full":
         slice_strategy = None
     elif slice_config["type"] == "channel_slice":
         slice_strategy = ChannelSliceStrategyConfiguration(num_slices=slice_config["num_slices"])
@@ -761,7 +765,7 @@ def test_maxpool2d_slicing_strategies(input_size, channels, batch_size, pool_con
     layer = TtMaxPool2d(configuration, device)
 
     # For slicing tests, ensure input is on device with DRAM memory config
-    if slice_config["type"] != "no_slice":
+    if slice_config["type"] != "no_slice" and slice_config["type"] != "l1_full":
         ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     else:
         ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)
@@ -805,7 +809,7 @@ def test_upsample_slicing_strategies(input_size, channels, batch_size, upsample_
     scale_factor, mode = upsample_config["scale_factor"], upsample_config["mode"]
 
     # Create slice strategy based on config
-    if slice_config["type"] == "no_slice":
+    if slice_config["type"] == "no_slice" or slice_config["type"] == "l1_full":
         slice_strategy = None
     elif slice_config["type"] == "channel_slice":
         slice_strategy = ChannelSliceStrategyConfiguration(num_slices=slice_config["num_slices"])
@@ -841,7 +845,7 @@ def test_upsample_slicing_strategies(input_size, channels, batch_size, upsample_
     layer = TtUpsample(configuration, device)
 
     # For slicing tests, ensure input is on device with DRAM memory config
-    if slice_config["type"] != "no_slice":
+    if slice_config["type"] != "no_slice" and slice_config["type"] != "l1_full":
         ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     else:
         ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)

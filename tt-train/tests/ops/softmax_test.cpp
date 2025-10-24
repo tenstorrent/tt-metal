@@ -119,7 +119,7 @@ TEST_F(SoftmaxTest, SoftmaxTest_Big_Batch) {
 
 TEST_F(SoftmaxTest, NIGHTLY_SoftmaxTest_Huge_Batch) {
     auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
-    if (board == BoardType::P100 || board == BoardType::P150) {
+    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
         GTEST_SKIP() << "Skipping on P100/P150 boards";
     }
     using namespace ttml;

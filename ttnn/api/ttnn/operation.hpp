@@ -158,9 +158,7 @@ struct OpPerformanceModelGeneral {
 
         float peak_dram_bw = (arch == ARCH::WORMHOLE_B0) ? 6 * 2 * 21.5 : 96.0;
 
-        float noc_l1_bisection_bw = (arch == ARCH::WORMHOLE_B0) ? 512.0 : 786.0;
-
-        auto tensor_ns = [peak_dram_bw, noc_l1_bisection_bw](const Tensor& t) {
+        auto tensor_ns = [peak_dram_bw](const Tensor& t) {
             int size_bytes = t.physical_volume() * t.element_size();
             if (t.memory_config().is_dram()) {
                 return size_bytes / peak_dram_bw / 1024 / 1024 / 1024 * 1000 * 1000 * 1000;
@@ -645,7 +643,6 @@ public:
     bool uses_custom_program_hash() const { return this->uses_custom_program_hash_impl_(); }
 
     Hash compute_program_hash(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors) const {
-        ZoneScoped;
         return this->compute_program_hash_impl_(this->type_erased_storage, input_tensors, optional_input_tensors);
     }
 

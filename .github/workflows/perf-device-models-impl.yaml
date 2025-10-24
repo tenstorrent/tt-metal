@@ -56,7 +56,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -107,6 +107,7 @@ jobs:
           commands: |
             pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/stable_diffusion/tests -m models_device_performance_bare_metal --timeout=600
             ${{ matrix.test-info.arch == 'wormhole_b0' && 'pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal' || '' }}
+            ${{ matrix.test-info.arch == 'wormhole_b0' && 'pytest models/experimental/stable_diffusion_xl_refiner/tests/test_sdxl_refiner_perf.py -m models_device_performance_bare_metal' || '' }}
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -149,14 +150,6 @@ jobs:
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
-      - name: roberta tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          device_perf_model_name: "roberta"
-          commands: |
-            pytest models/demos/roberta/tests/ -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: resnet50 tests
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
@@ -340,6 +333,26 @@ jobs:
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
+      - name: oft tests
+        env:
+          TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: "4,3"
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        with:
+          device_perf_model_name: "oft"
+          commands: |
+            pytest models/experimental/oft/tests/test_device_perf_oft.py -m models_device_performance_bare_metal --timeout=600
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible &&  matrix.test-info.job-blackhole-set1 }}
+
+      - name: panoptic_deeplab tests
+        env:
+          TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: "4,3"
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        with:
+          device_perf_model_name: "panoptic_deeplab"
+          commands: |
+            pytest models/experimental/panoptic_deeplab/tests/test_device_perf_pdl.py -m models_device_performance_bare_metal --timeout=600
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-blackhole-set1 }}
+
       - name: Merge test reports
         id: generate-device-perf-report
         if: ${{ !cancelled() }}
@@ -353,6 +366,20 @@ jobs:
           cat Models_Device_Perf_${{ matrix.test-info.test-type }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME CHECK
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+
+      - name: Save environment data
+        if: ${{ !cancelled() }}
+        run: python3 /work/.github/scripts/data_analysis/create_benchmark_with_environment_json.py
+
+      - name: Upload benchmark data
+        if: ${{ !cancelled() }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
 
       - name: Check device perf report exists
         id: check-device-perf-report

@@ -28,7 +28,7 @@ def create_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "prompts",
         type=str,
-        nargs="+",
+        nargs="*",
         help="Prompt text(s) (required for full-model mode; ignored with --random-weights). Can pass multiple prompts.",
     )
     p.add_argument(
@@ -177,8 +177,8 @@ def run_demo(
             token_acc = TokenAccuracy(str(reference_file), prompt_len=tf_prompt_len)
 
         gen = DeepseekGenerator(
-            mesh_device,
-            Path(model_path),
+            mesh_device=mesh_device,
+            model_path=Path(model_path),
             cache_dir=Path(cache_dir),
             tokenizer=tokenizer,
             random_weights=bool(random_weights),
@@ -250,8 +250,17 @@ def main() -> None:
     print("\n===== Generated =====\n")
 
     for i, gen_result in enumerate(results["generations"]):
+        prompt_text = ""
+        if args.prompts is not None and i < len(args.prompts):
+            prompt_text = args.prompts[i]
+        elif args.random_weights:
+            prompt_text = "[random-weights default prompt]"
+
         print("-" * 30)
-        print(f"Prompt[{i+1}]: {args.prompts[i]}")
+        if prompt_text:
+            print(f"Prompt[{i+1}]: {prompt_text}")
+        else:
+            print(f"Prompt[{i+1}]: [empty prompt]")
         print(f"Generation[{i+1}]:")
         if gen_result.get("text") is not None:
             print(gen_result["text"])  # type: ignore
