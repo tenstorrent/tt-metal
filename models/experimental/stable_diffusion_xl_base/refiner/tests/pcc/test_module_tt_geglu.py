@@ -8,6 +8,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_geglu import TtGEGLU
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
@@ -17,6 +18,7 @@ from functools import reduce
 @pytest.mark.parametrize(
     "input_shape, module_path, pcc",
     [
+        ((256, 1536), "mid_block.attentions.0.transformer_blocks.0.ff.net.0", 0.999),
         ((1024, 1536), "down_blocks.2.attentions.0.transformer_blocks.0.ff.net.0", 0.999),
         ((4096, 768), "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0", 0.999),
     ],
@@ -41,7 +43,8 @@ def test_geglu(device, input_shape, module_path, pcc, is_ci_env, reset_seeds):
 
     assert torch_geglu is not None, f"{module_path} is not a valid UNet module"
 
-    tt_geglu = TtGEGLU(device, state_dict, module_path)
+    model_config = RefinerModelOptimisations()
+    tt_geglu = TtGEGLU(device, state_dict, module_path, model_config)
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_output_tensor = torch_geglu(torch_input_tensor)
