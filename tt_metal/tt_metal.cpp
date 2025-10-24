@@ -1158,7 +1158,7 @@ const CircularBufferConfig& GetCircularBufferConfig(Program& program, CBHandle c
 }
 
 void UpdateCircularBufferTotalSize(Program& program, CBHandle cb_handle, uint32_t total_size) {
-    std::shared_ptr<CircularBuffer> circular_buffer = program.impl().get_circular_buffer(cb_handle);
+    std::shared_ptr<CircularBufferImpl> circular_buffer = program.impl().get_circular_buffer(cb_handle);
     if (not circular_buffer->globally_allocated()) {
         program.impl().invalidate_circular_buffer_allocation();
     }

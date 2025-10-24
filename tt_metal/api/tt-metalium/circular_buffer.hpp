@@ -26,14 +26,26 @@ namespace experimental {
 class GlobalCircularBuffer;
 }  // namespace experimental
 
+class CircularBufferImpl;
 class CircularBuffer {
 public:
-    CircularBuffer(const CoreRangeSet& core_range_set, const CircularBufferConfig& config);
-    CircularBuffer(
+    explicit CircularBuffer(CircularBufferImpl* impl);
+    CBHandle id() const;
+    const CoreRangeSet& core_ranges() const;
+    std::size_t size() const;
+    bool globally_allocated() const;
+
+    const std::unordered_set<uint8_t>& buffer_indices() const;
+};
+
+class CircularBufferImpl {
+public:
+    CircularBufferImpl(const CoreRangeSet& core_range_set, const CircularBufferConfig& config);
+    CircularBufferImpl(
         const CoreRangeSet& core_ranges,
         const CircularBufferConfig& config,
         const experimental::GlobalCircularBuffer& global_circular_buffer);
-    CircularBuffer(const CBDescriptor& descriptor);
+    CircularBufferImpl(const CBDescriptor& descriptor);
 
     CBHandle id() const { return id_; }
 
