@@ -273,8 +273,14 @@ class DispatcherData:
         except:
             pass
         try:
-            waypoint_int = mailboxes.watcher.debug_waypoint[proc_type].value()
-            waypoint = waypoint_int.to_bytes(4, "little").rstrip(b"\x00").decode("utf-8", errors="replace")
+            waypoint_var = mailboxes.watcher.debug_waypoint[proc_type].waypoint
+            waypoint = bytearray()
+            for i in range(len(waypoint_var)):
+                val = waypoint_var[i].value()
+                if val == 0:
+                    break
+                waypoint.append(val)
+            waypoint = waypoint.decode("utf-8", errors="replace")
         except:
             pass
 
