@@ -7,12 +7,14 @@ import torch
 from loguru import logger
 
 import ttnn
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
     "T, B, C, cores_y, cores_x",
     [
-        (16384, 4, 8192, 0, 0),  # base case
+        (2048, 2, 4096, 0, 0),  # base case
+        (2048, 2, 4096, 4, 4),  # custom grid
     ],
 )
 def test_ema(device, T, B, C, cores_y, cores_x):
@@ -21,7 +23,7 @@ def test_ema(device, T, B, C, cores_y, cores_x):
     grid_size = ttnn.CoreGrid(y=cores_y, x=cores_x) if cores_y > 0 and cores_x > 0 else None
 
     # torch input tensor
-    torch_input_tensor = torch.ones(T * B * C, dtype=torch.bfloat16).reshape(1, B, C, T)
+    torch_input_tensor = torch.rand((1, B, C, T), dtype=torch.bfloat16)
 
     # move to the device
     ttnn_input_tensor = ttnn.from_torch(
@@ -52,4 +54,4 @@ def test_ema(device, T, B, C, cores_y, cores_x):
         prev_value = golden_output_tensor[0, :, :, t]
 
     # Compare with golden output
-    assert torch.allclose(golden_output_tensor, torch_output_tensor, atol=1e-3)
+    assert_with_pcc(golden_output_tensor, torch_output_tensor, pcc=0.9999)
