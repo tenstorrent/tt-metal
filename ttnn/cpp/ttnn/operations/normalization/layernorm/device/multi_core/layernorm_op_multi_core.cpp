@@ -734,6 +734,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
     log_debug(tt::LogOp, "gamma_cb_data_format: {}", gamma_cb_data_format);
     log_debug(tt::LogOp, "beta_cb_data_format: {}", beta_cb_data_format);
+    log_debug(tt::LogOp, "reciprocal_cb_data_format: {}", reciprocal_cb_data_format);
     log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
     log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
@@ -1329,7 +1330,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t per_core_recip_lut_size = std::max(num_rows_per_all_to_all_worker, num_rows_per_all_to_all_worker_last);
     per_core_recip_lut_size *= row_wise ? tt::constants::TILE_WIDTH : tt::constants::TILE_HEIGHT;
     auto [recip_tensor, reciprocal_CB_size_bytes] = create_reciprocal_tensor_if_needed(
-        device, per_core_recip_lut_size, num_cores_all_to_all, all_to_all_cores, use_welford);
+        device, per_core_recip_lut_size, all_cores.num_cores(), all_cores, use_welford);
 
     // compute kernel compile time args
     bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
@@ -1564,11 +1565,11 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_transpose_config);
 
         // Reciprocal LUT
-        CircularBufferConfig c_recip_config =
+        CircularBufferConfig cb_recip_config =
             CircularBufferConfig(reciprocal_CB_size_bytes, {{tt::CBIndex::c_25, reciprocal_cb_data_format}})
                 .set_page_size(tt::CBIndex::c_25, reciprocal_CB_size_bytes)
                 .set_globally_allocated_address(*recip_tensor.value().buffer());
-        CreateCircularBuffer(program, all_cores, c_recip_config);
+        CreateCircularBuffer(program, all_cores, cb_recip_config);
     }
 
     CBHandle cb_stats = 0;
