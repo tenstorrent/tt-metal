@@ -357,6 +357,16 @@ def test_multimodal_demo_text(
         logger.info(f"Iteration {iter_num}")
         current_dialogs = trace_dialogs + dialogs
         for batch_idx in range(num_batches):
+            # Debug print at start of batch processing
+            try:
+                from ttexalens.tt_exalens_lib import read_words_from_device
+
+                read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
+                read_data = list(read_data)
+                print(f"Buffer at start of batch {batch_idx}: ", read_data)
+            except Exception as e:
+                print(f"Debug print failed at start of batch {batch_idx}: {e}")
+
             batch_dialogs = current_dialogs[batch_idx * max_batch_size : (batch_idx + 1) * max_batch_size]
             for dialog in batch_dialogs:
                 for msg in dialog:
@@ -367,6 +377,16 @@ def test_multimodal_demo_text(
                 prompt_encoder(dialog, processor) if HF_MODEL else prompt_encoder(dialog, tool_prompt_format=False)
                 for dialog in batch_dialogs
             ]
+
+            # Debug print after creating batch_model_input
+            try:
+                from ttexalens.tt_exalens_lib import read_words_from_device
+
+                read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
+                read_data = list(read_data)
+                print(f"Buffer after batch_model_input creation for batch {batch_idx}: ", read_data)
+            except Exception as e:
+                print(f"Debug print failed after batch_model_input for batch {batch_idx}: {e}")
 
             if HF_MODEL:
                 # Use the processor's tokenizer instead of model_args tokenizer to ensure consistency
@@ -393,8 +413,28 @@ def test_multimodal_demo_text(
             for i, seq in enumerate(prompt_tokens):
                 tokens[i, : len(seq)] = torch.tensor(seq, dtype=torch.long)
 
+            # Debug print after creating tokens tensor
+            try:
+                from ttexalens.tt_exalens_lib import read_words_from_device
+
+                read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
+                read_data = list(read_data)
+                print(f"Buffer after tokens tensor creation for batch {batch_idx}: ", read_data)
+            except Exception as e:
+                print(f"Debug print failed after tokens tensor for batch {batch_idx}: {e}")
+
             prefill_start = time.perf_counter()
             if batch_idx < num_trace_batches:  # Get compile time for first batch
+                # Debug print before calling generator.prefill_forward
+                try:
+                    from ttexalens.tt_exalens_lib import read_words_from_device
+
+                    read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
+                    read_data = list(read_data)
+                    print("read data before generator.prefill_forward in vision_demo: ", read_data)
+                except Exception as e:
+                    print(f"Debug print failed in vision_demo: {e}")
+
                 with profiler("compile_prefill", iteration=batch_idx):
                     (
                         batch_logits,
@@ -438,6 +478,17 @@ def test_multimodal_demo_text(
 
             with profiler(f"inference_decode", iteration=batch_idx):
                 for gen_idx in range(max_gen_len - 1):
+                    # Debug: Check buffer before decode
+                    try:
+                        from ttexalens.tt_exalens_lib import read_words_from_device
+
+                        debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
+                        print(
+                            f"[DEBUG] Buffer before decode gen_idx={gen_idx}, batch_idx={batch_idx}: {debug_data[:16]}"
+                        )
+                    except Exception as e:
+                        print(f"[DEBUG] Could not read buffer before decode: {e}")
+
                     if batch_idx == 0 and gen_idx == 0:  # First decode accounts for compile time
                         profiler.start(f"compile_decode", iteration=batch_idx)
 
@@ -456,11 +507,57 @@ def test_multimodal_demo_text(
                         enable_trace=enable_trace,
                     )
 
+                    # Debug: Check buffer immediately after generator.decode_forward
+                    try:
+                        from ttexalens.tt_exalens_lib import read_words_from_device
+
+                        debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
+                        print(
+                            f"[DEBUG] Buffer immediately after generator.decode_forward gen_idx={gen_idx}, batch_idx={batch_idx}: {debug_data[:16]}"
+                        )
+                    except Exception as e:
+                        print(f"[DEBUG] Could not read buffer immediately after generator.decode_forward: {e}")
+
                     next_tokens, next_texts = sampler(logits)
+
+                    # Debug: Check buffer after sampler
+                    try:
+                        from ttexalens.tt_exalens_lib import read_words_from_device
+
+                        debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
+                        print(
+                            f"[DEBUG] Buffer after sampler gen_idx={gen_idx}, batch_idx={batch_idx}: {debug_data[:16]}"
+                        )
+                    except Exception as e:
+                        print(f"[DEBUG] Could not read buffer after sampler: {e}")
+
                     # Update next token
                     tokens[torch.arange(max_batch_size), position_id + 1] = next_tokens
+
+                    # Debug: Check buffer after token update
+                    try:
+                        from ttexalens.tt_exalens_lib import read_words_from_device
+
+                        debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
+                        print(
+                            f"[DEBUG] Buffer after token update gen_idx={gen_idx}, batch_idx={batch_idx}: {debug_data[:16]}"
+                        )
+                    except Exception as e:
+                        print(f"[DEBUG] Could not read buffer after token update: {e}")
+
                     decode_end = time.perf_counter()
                     decode_times.append(decode_end - decode_start)
+
+                    # Debug: Check buffer after decode
+                    try:
+                        from ttexalens.tt_exalens_lib import read_words_from_device
+
+                        debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
+                        print(
+                            f"[DEBUG] Buffer after decode gen_idx={gen_idx}, batch_idx={batch_idx}: {debug_data[:16]}"
+                        )
+                    except Exception as e:
+                        print(f"[DEBUG] Could not read buffer after decode: {e}")
                     if batch_idx == 0 and gen_idx == 0:
                         profiler.end(f"compile_decode", iteration=batch_idx)
 
@@ -498,7 +595,27 @@ def test_multimodal_demo_text(
             decode_time_ms = sum(decode_times) / (gen_idx + 1) * 1000
             logger.info(f"Average decode time per token: {decode_time_ms:.2f} ms")
 
+            # Debug print at end of batch processing
+            try:
+                from ttexalens.tt_exalens_lib import read_words_from_device
+
+                read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
+                read_data = list(read_data)
+                print(f"Buffer at end of batch {batch_idx}: ", read_data)
+            except Exception as e:
+                print(f"Debug print failed at end of batch {batch_idx}: {e}")
+
             # ttnn.release_trace(generator.mesh_device, trace_id)
+
+        # Debug print at end of iteration (after all batches)
+        try:
+            from ttexalens.tt_exalens_lib import read_words_from_device
+
+            read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
+            read_data = list(read_data)
+            print(f"Buffer at end of iteration {iter_num}: ", read_data)
+        except Exception as e:
+            print(f"Debug print failed at end of iteration {iter_num}: {e}")
 
     # End profiling
     profiler.end("run")

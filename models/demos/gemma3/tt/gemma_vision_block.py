@@ -7,6 +7,7 @@ This is the Vision Tower Model for Gemma-3-4b-it.
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+from ttexalens.tt_exalens_lib import read_words_from_device
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -85,6 +86,9 @@ class TtSiglipGemmaVisionModel(LightweightModule):
             images, torch.Tensor
         ), "VisionEncoder input must be a torch tensor because of unfold in self.conv1"
 
+        read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
+        read_data = list(read_data)
+        print("read data start of TtSiglipGemmaVisionModel forward: ", read_data)
         bsz, in_channel, h, w = images.shape
 
         x = self.embeddings(images)
@@ -98,11 +102,19 @@ class TtSiglipGemmaVisionModel(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
+        read_data = list(read_data)
+        print("read data before encoder vision: ", read_data)
         x = self.encoder(
             x,
             mask=tt_mask,
         )
+        read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
+        read_data = list(read_data)
+        print("read data after encoder vision: ", read_data)
 
         x = self.ln_post(x)
-
+        read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
+        read_data = list(read_data)
+        print("read data end of TtSiglipGemmaVisionModel forward: ", read_data)
         return x

@@ -8,6 +8,8 @@ This involves vision followed by MultiModalProjector processing
 # SPDX-License-Identifier: Apache-2.0
 
 
+from ttexalens.tt_exalens_lib import read_words_from_device
+
 from models.common.lightweightmodule import LightweightModule
 from models.demos.gemma3.tt.gemma_vision_block import TtSiglipGemmaVisionModel
 from models.demos.gemma3.tt.multi_modal_projector import TtGemma3MultiModalProjector
@@ -63,7 +65,16 @@ class TtGemmaTransformerVision(LightweightModule):
         )
 
     def forward(self, images):
+        read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
+        read_data = list(read_data)
+        print("read data start of TtGemmaTransformerVision forward: ", read_data)
         vision_tokens = self.vision_encoder(images)[:, 0, :, :]
+        read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
+        read_data = list(read_data)
+        print("read data after vision encoder in TtGemmaTransformerVision forward: ", read_data)
 
         vision_tokens = self.mmp(vision_tokens)
+        read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
+        read_data = list(read_data)
+        print("read data after mmp in TtGemmaTransformerVision forward: ", read_data)
         return vision_tokens
