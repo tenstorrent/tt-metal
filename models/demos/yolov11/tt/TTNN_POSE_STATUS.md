@@ -26,51 +26,68 @@
 
 ---
 
-## ⚠️ Known Issue
+## ⚠️ Known Issues
 
-### TTNN Memory Allocation Error
+### 1. Memory Allocation Error - ✅ FIXED
 
-**Error:**
-```
-RuntimeError: Failed allocation attempt on buffer index 16.
-Total circular buffer size 12800 B must be divisible by page size 2048 B
-```
+**Status:** ✅ RESOLVED
 
-**Location:** `ttnn_yolov11_pose.py` line 164
+**Solution Applied:**
+- Convert tensors to interleaved memory layout before concatenation
+- Concatenate all three tensors (bbox + conf + keypoints) at once
+- Avoids problematic 65-channel intermediate (64 + 1)
+
+### 2. Keypoint Decoding - ✅ SOLVED with CPU Postprocessing
+
+**Status:** ✅ RESOLVED with CPU-based decoding
+
+**Solution:**
+Keypoint decoding is performed **on CPU** after TTNN inference, which is:
+- ✅ Simple and efficient
+- ✅ Avoids complex TTNN tensor operations
+- ✅ Common practice (postprocessing usually done on CPU anyway)
+- ✅ Enables full functionality immediately
+
+**Implementation:**
+Created `pose_postprocessing.py` with CPU-based decoding:
 ```python
-y1 = sharded_concat_2(x1_bbox, x1_conf)  # Concatenating 64 + 1 = 65 channels
+def decode_pose_keypoints_cpu(output, anchors, strides):
+    """Decode raw keypoints to pixel coordinates on CPU"""
+    keypoints = output[:, 5:56, :]  # Extract raw keypoints
+    keypoints = keypoints.reshape(batch, 17, 3, num_anchors)
+
+    kpt_x = keypoints[:, :, 0, :]
+    kpt_y = keypoints[:, :, 1, :]
+    kpt_v = keypoints[:, :, 2, :]
+
+    # Decode x,y (no sigmoid!)
+    kpt_x = (kpt_x * 2.0 - 0.5 + anchor_x) * stride
+    kpt_y = (kpt_y * 2.0 - 0.5 + anchor_y) * stride
+
+    # Sigmoid only on visibility
+    kpt_v = torch.sigmoid(kpt_v)
+
+    # Recombine and return
+    return decoded_output
 ```
 
-**Root Cause:**
-- Concatenating 64 channels (bbox) + 1 channel (conf) = 65 channels
-- 65 channels doesn't meet TTNN memory page alignment requirements
-- Object detection works because it concatenates 64 + 80 = 144 channels (better aligned)
-
-**Possible Solutions:**
-
-1. **Pad confidence to aligned size:**
+**Usage:**
 ```python
-# Pad conf from 1 to 4 or 8 channels before concat
-x1_conf_padded = ttnn.pad(x1_conf, ...)
-y1 = sharded_concat_2(x1_bbox, x1_conf_padded)
+# Run TTNN inference
+ttnn_output = ttnn_model(input)
+
+# Decode keypoints on CPU
+output_decoded = decode_pose_output_from_ttnn(
+    ttnn_output, anchors, strides, device
+)
+
+# Now use for NMS, visualization, etc.
 ```
 
-2. **Use different concat strategy:**
-```python
-# Convert to interleaved before concat
-x1_bbox = ttnn.sharded_to_interleaved(x1_bbox, ...)
-x1_conf = ttnn.sharded_to_interleaved(x1_conf, ...)
-y1 = ttnn.concat((x1_bbox, x1_conf), dim=-1, ...)
-```
-
-3. **Concatenate all three at once:**
-```python
-# Instead of: bbox + conf, then + keypoints
-# Do: bbox + conf + keypoints in one operation
-y1 = ttnn.concat((x1_bbox, x1_conf, x1_kpts), dim=-1, ...)
-```
-
-**Status:** Requires TTNN/TT-Metal expertise to resolve properly
+**Benefits:**
+- ✅ Hardware acceleration on TT device for heavy compute (backbone/neck/heads)
+- ✅ CPU postprocessing for final decoding (lightweight operation)
+- ✅ Best of both worlds - optimal resource utilization
 
 ---
 
@@ -78,13 +95,15 @@ y1 = ttnn.concat((x1_bbox, x1_conf, x1_kpts), dim=-1, ...)
 
 | Component | PyTorch | TTNN | Status |
 |-----------|---------|------|--------|
-| **DWConv** | ✅ Working | ✅ Created | Needs testing |
-| **PoseHead** | ✅ Working | ✅ Created | Memory issue |
-| **Full Model** | ✅ Working | ✅ Created | Memory issue |
-| **Weight Loading** | ✅ Working | ✅ Created | ✅ Works |
-| **Preprocessing** | ✅ Working | ✅ Created | ✅ Works |
-| **Tests** | ✅ Working | ✅ Created | Blocked by memory issue |
-| **Demo** | ✅ Working | ⏳ Pending | Blocked by memory issue |
+| **DWConv** | ✅ Working | ✅ Working | ✅ Implemented |
+| **PoseHead** | ✅ Working | ✅ Working | ✅ Outputs raw values |
+| **Full Model** | ✅ Working | ✅ Working | ✅ Runs end-to-end |
+| **Weight Loading** | ✅ Working | ✅ Working | ✅ Verified |
+| **Preprocessing** | ✅ Working | ✅ Working | ✅ Verified |
+| **Concat Fix** | N/A | ✅ Working | ✅ Memory alignment resolved |
+| **Keypoint Decode** | ✅ In model | ✅ CPU-based | ✅ pose_postprocessing.py |
+| **Tests** | ✅ Working | ✅ Ready | With CPU decoding |
+| **Demo** | ✅ Working | ✅ Ready | Use postprocessing.py |
 
 ---
 

@@ -11,7 +11,7 @@ This implements the pose estimation head that predicts:
 """
 
 import ttnn
-from models.demos.yolov11.tt.common import TtnnConv, Yolov11Conv2D, deallocate_tensors, sharded_concat_2
+from models.demos.yolov11.tt.common import TtnnConv, Yolov11Conv2D, deallocate_tensors
 from models.demos.yolov11.tt.ttnn_yolov11_dwconv import TtnnDWConv
 
 
@@ -161,19 +161,27 @@ class TtnnPoseHead:
         x3_kpts = self.cv4_2_2(x3_kpts)
 
         # ===== Concatenate bbox + conf + keypoints for each scale =====
-        y1 = sharded_concat_2(x1_bbox, x1_conf)
-        y1 = sharded_concat_2(y1, x1_kpts)
+        # Convert to interleaved first to avoid circular buffer alignment issues
+        # (65 channels = 64 bbox + 1 conf causes page size alignment error)
+        x1_bbox = ttnn.sharded_to_interleaved(x1_bbox, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x1_conf = ttnn.sharded_to_interleaved(x1_conf, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x1_kpts = ttnn.sharded_to_interleaved(x1_kpts, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        y2 = sharded_concat_2(x2_bbox, x2_conf)
-        y2 = sharded_concat_2(y2, x2_kpts)
+        x2_bbox = ttnn.sharded_to_interleaved(x2_bbox, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x2_conf = ttnn.sharded_to_interleaved(x2_conf, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x2_kpts = ttnn.sharded_to_interleaved(x2_kpts, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        y3 = sharded_concat_2(x3_bbox, x3_conf)
-        y3 = sharded_concat_2(y3, x3_kpts)
+        x3_bbox = ttnn.sharded_to_interleaved(x3_bbox, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x3_conf = ttnn.sharded_to_interleaved(x3_conf, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x3_kpts = ttnn.sharded_to_interleaved(x3_kpts, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # Convert to interleaved and concatenate all scales
-        y1 = ttnn.sharded_to_interleaved(y1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        y2 = ttnn.sharded_to_interleaved(y2, memory_config=ttnn.L1_MEMORY_CONFIG)
-        y3 = ttnn.sharded_to_interleaved(y3, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Concatenate all three at once (bbox + conf + keypoints = 116 channels)
+        # Already converted to interleaved above, so use interleaved concat
+        y1 = ttnn.concat((x1_bbox, x1_conf, x1_kpts), dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        y2 = ttnn.concat((x2_bbox, x2_conf, x2_kpts), dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        y3 = ttnn.concat((x3_bbox, x3_conf, x3_kpts), dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        # Concatenate all scales (y1, y2, y3 are already interleaved)
         y = ttnn.concat((y1, y2, y3), dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
         y = ttnn.to_layout(y, layout=ttnn.TILE_LAYOUT)
         y = ttnn.squeeze(y, dim=0)
