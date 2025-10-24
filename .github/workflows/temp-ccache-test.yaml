@@ -1,0 +1,115 @@
+name: "[temp] CCache test"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: Release
+      build-wheel: true
+      tracy: true
+      version: 22.04
+      skip-tt-train: false
+
+  tt-train-cpp-unit-tests:
+    needs: build-artifact
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        test-group: [
+          {name: tt-train, cmd: ctest -E NIGHTLY --no-tests=error --output-on-failure  --output-junit generated/test_reports/ctest_report.xml},
+        ]
+    name: ${{ matrix.test-group.name }} wormhole_b0 N150
+    # tt-train in N300 is timing out on CIv2-viommu: https://github.com/tenstorrent/tt-metal/issues/29443
+    runs-on: >-
+      tt-ubuntu-2204-N150-stable
+    container:
+      image: harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved!' }}
+      env:
+        TT_METAL_HOME: /work
+        TT_METAL_RUNTIME_ROOT: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        TEST_DATA_DIR: /work/data
+        ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
+        # CCACHE_REMOTE_ONLY: "true"
+        CCACHE_DIR: /tmp/ccache
+        TT_METAL_CCACHE_KERNEL_SUPPORT: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: Check Redis credentials
+        # Failing internal jobs draws attention immediately so we can fix them and make them fast.
+        # Forks will never have secrets; don't fail the job for them, they'll just run slower
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        run: |
+          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
+            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
+            exit 1
+          fi
+          # Conditionally set this here so that it remains unset on forks, otherwise it resolves an invalid URL and the job fails
+          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
+          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
+          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
+
+      - name: Create ccache tmpdir
+        run: |
+          mkdir -p /tmp/ccache
+
+      - name: Prepare ccache summary
+        run: |
+          # Zero out the stats so we can see how we did this build
+          # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
+          ccache -z
+
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          enable-watcher: false
+
+      - name: ${{ matrix.test-group.name }} tests
+        timeout-minutes: 45
+        run: |
+          cp ./build/tt-train/3rd_party/wandb-cpp/libwandbcpp.so build/lib/
+          cd /work/build/tt-train
+          mkdir -p generated/test_reports
+          ldd tests/ttml_tests || true
+          ${{ matrix.test-group.cmd }}
+
+      - name: Publish ccache summary
+        run: |
+          echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ccache -s >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U07ASPTGJTS # Denys
+
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: /work/build/tt-train/generated/test_reports/
+          prefix: "test_reports_"
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

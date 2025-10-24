@@ -130,7 +130,7 @@ class MoE(SharedStateAddOn, AbstractModule):
 
         # Construct the config
         return {
-            "device": MeshDeviceStub(mesh_device.shape),
+            "mesh_device": MeshDeviceStub(mesh_device.shape),
             "num_devices": mesh_device.get_num_devices(),
             "num_experts_per_device": num_experts_per_device,
             "hidden_size": hf_config.hidden_size,
@@ -177,6 +177,7 @@ class MoE(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
+        ttnn.synchronize_device(cfg["mesh_device"])
         # CCL runtime initialization in execution order
         ccl = cfg["ccl"]
 

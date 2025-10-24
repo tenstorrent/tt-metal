@@ -26,22 +26,24 @@ void kernel_main() {
     constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(15);
     constexpr uint32_t out_num_blocks_w = get_compile_time_arg_val(16);
 
+    constexpr bool fuse_bias = get_compile_time_arg_val(18);
+
 #ifdef SPLIT_READER
     constexpr uint32_t cb_id_act_second_reader = get_compile_time_arg_val(3);
     constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(4);
     constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(5);
     constexpr uint32_t window_outer = get_compile_time_arg_val(6);  // num_blocks_act_w
     constexpr bool sliced_inner_dim = window_outer > 1;             // Derived like block sharded reader
-    constexpr uint32_t act_block_num_tiles_split_last = get_compile_time_arg_val(18);  // This is what factory passes
-    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(19);
-    constexpr uint32_t weight_size_w = get_compile_time_arg_val(20);
-    constexpr uint32_t padded_conv_act_size_w = get_compile_time_arg_val(21);
-    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(22);
-    constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(23) == 1;
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(24);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(25);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(26);
-    constexpr uint32_t weight_size_h = get_compile_time_arg_val(27);  // Input filter window height
+    constexpr uint32_t act_block_num_tiles_split_last = get_compile_time_arg_val(19);  // This is what factory passes
+    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(20);
+    constexpr uint32_t weight_size_w = get_compile_time_arg_val(21);
+    constexpr uint32_t padded_conv_act_size_w = get_compile_time_arg_val(22);
+    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(23);
+    constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(24) == 1;
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(25);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(26);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(27);
+    constexpr uint32_t weight_size_h = get_compile_time_arg_val(28);  // Input filter window height
 #endif
 
     // mcast args
@@ -80,10 +82,8 @@ void kernel_main() {
     const uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
 
 #endif
-// read in bias if enabled (done only once for all batches)
-#ifdef FUSE_BIAS
+    // read in bias if enabled (done only once for all batches)
     bool load_bias = true;
-#endif
 
     // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.
     // Write out col major blocks in row major layout to output
@@ -144,23 +144,23 @@ void kernel_main() {
             // Update reader index for next iteration (split reader increment)
             start_reader_idx = reader_idx + static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
 #endif
-#ifdef FUSE_BIAS
-            if (load_bias) {
-                cb_reserve_back(bias_cb_id, bias_ntiles);
+            if constexpr (fuse_bias) {
+                if (load_bias) {
+                    cb_reserve_back(bias_cb_id, bias_ntiles);
 
-                // Set weights semaphore value to INVALID
-                noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, INVALID);
+                    // Set weights semaphore value to INVALID
+                    noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, INVALID);
 
-                // Atomic increment source core counter
-                noc_semaphore_inc(weights_mcast_sender_semaphore_noc_addr, 1);
+                    // Atomic increment source core counter
+                    noc_semaphore_inc(weights_mcast_sender_semaphore_noc_addr, 1);
 
-                // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
-                noc_semaphore_wait(weights_mcast_receiver_semaphore_addr_ptr, VALID);
+                    // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
+                    noc_semaphore_wait(weights_mcast_receiver_semaphore_addr_ptr, VALID);
 
-                cb_push_back(bias_cb_id, bias_ntiles);
-                load_bias = false;
+                    cb_push_back(bias_cb_id, bias_ntiles);
+                    load_bias = false;
+                }
             }
-#endif
 
         }  // out_num_blocks_h
     }  // out_num_blocks_w
