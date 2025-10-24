@@ -22,10 +22,19 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core
     std::optional<bool> use_2d_core_grid = std::nullopt,
     LayerNormDistributedDefaultProgramConfig program_config = LayerNormDistributedDefaultProgramConfig{});
 
+tt::tt_metal::operation::ProgramWithCallbacks layernorm_pre_allgather_welford_multi_core(
+    const Tensor& a,
+    Tensor& output,
+    LayerNormDistributedType norm_type,
+    DeviceComputeKernelConfig compute_kernel_config,
+    std::optional<bool> use_2d_core_grid = std::nullopt,
+    const bool use_welford = false);
+
 struct LayerNormPreAllGather {
     LayerNormDistributedType norm_type;
     const DataType dtype;
     const DeviceComputeKernelConfig compute_kernel_config;
+    LayerNormProgramConfig program_config;
     std::optional<bool> use_2d_core_grid;
     LayerNormDistributedDefaultProgramConfig program_config;
 
