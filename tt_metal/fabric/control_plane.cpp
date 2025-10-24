@@ -2978,7 +2978,6 @@ bool ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
             true  // run_discovery
         );
         auto all_hostnames = physical_system_descriptor.get_all_hostnames();
-        
         auto cabling_descriptor_path = get_cabling_descriptor_path(fabric_config);
         // Check if the cabling descriptor file exists
         if (!std::filesystem::exists(cabling_descriptor_path)) {
@@ -2988,20 +2987,21 @@ bool ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
                 cabling_descriptor_path);
             return false;  // Skip test if no golden configuration available
         }
-        // Generate FSD from the cabling descriptor
-        tt::scaleout_tools::CablingGenerator cabling_generator(cabling_descriptor_path, all_hostnames);
 
         // Generate GSD YAML from the current physical system descriptor
         YAML::Node gsd_yaml = physical_system_descriptor_->generate_yaml_node();
         
-        // Use the existing validation infrastructure with filename and YAML node
-        // The function will internally handle the cabling descriptor format conversion
-        tt::scaleout_tools::validate_fsd_against_gsd(
-            cabling_descriptor_path,    // FSD file path (cabling descriptor) 
+        // Use the new validation function that handles CablingGenerator internally
+        tt::scaleout_tools::validate_cabling_descriptor_against_gsd(
+            cabling_descriptor_path,    // Cabling descriptor path
+            all_hostnames,              // Hostnames vector
             gsd_yaml,                   // GSD YAML node from current system
             false,                      // strict_validation = false
             false                       // assert_on_connection_mismatch = false
         );
+        
+        log_info(tt::LogFabric, "Torus validation passed for configuration: {}", static_cast<int>(fabric_config));
+        return true;
         
         log_info(tt::LogFabric, "Torus validation passed for configuration: {}", static_cast<int>(fabric_config));
         return true;
