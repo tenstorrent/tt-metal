@@ -18,6 +18,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 from enum import Enum
 
 
+@pytest.mark.ignore
 class TestMode(Enum):
     VALIDATE = 0
     BENCHMARK = 1
