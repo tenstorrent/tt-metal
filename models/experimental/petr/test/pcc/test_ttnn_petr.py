@@ -5,13 +5,13 @@ import os
 import torch
 import pytest
 from loguru import logger
-import ttnn
+import urllib.request
 import tracy
+import ttnn
 from models.experimental.functional_petr.reference.petr import PETR
 from models.experimental.functional_petr.tt.ttnn_petr import ttnn_PETR
-
-from tests.ttnn.utils_for_testing import check_with_pcc, assert_with_pcc
 from models.experimental.functional_petr.tt.common import get_parameters
+from tests.ttnn.utils_for_testing import check_with_pcc, assert_with_pcc
 
 
 def prepare_inputs():
@@ -36,11 +36,9 @@ def prepare_torch_model():
     if not os.path.exists(resources_dir):
         os.makedirs(resources_dir)
     if not os.path.exists(weights_path):
-        import urllib.request
-
-        print(f"Downloading PETR weights from {weights_url} ...")
+        logger.info(f"Downloading PETR weights from {weights_url} ...")
         urllib.request.urlretrieve(weights_url, weights_path)
-        print(f"Weights downloaded to {weights_path}")
+        logger.info(f"Weights downloaded to {weights_path}")
 
     weights_state_dict = torch.load(weights_path, weights_only=False)["state_dict"]
     torch_model.load_state_dict(weights_state_dict)

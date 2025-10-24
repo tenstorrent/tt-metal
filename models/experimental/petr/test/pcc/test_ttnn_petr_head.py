@@ -10,7 +10,8 @@ from ttnn.model_preprocessing import (
     infer_ttnn_module_args,
 )
 from models.experimental.functional_petr.reference.petr_head import PETRHead
-from models.experimental.functional_petr.tt.ttnn_petr_head import ttnn_PETRHead, pos2posemb3d
+from models.experimental.functional_petr.tt.ttnn_petr_head import ttnn_PETRHead
+from models.experimental.functional_petr.reference.petr_head import pos2posemb3d
 from models.experimental.functional_petr.tt.common import create_custom_preprocessor_petr_head, move_to_device
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 

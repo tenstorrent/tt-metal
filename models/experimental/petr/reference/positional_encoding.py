@@ -1,9 +1,14 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import math
+# ------------------------------------------------------------------------
+# Copyright (c) 2022 megvii-model. All Rights Reserved.
+# ------------------------------------------------------------------------
+# Modified from mmdetection (https://github.com/open-mmlab/mmdetection)
+# Copyright (c) OpenMMLab. All rights reserved.
+# ------------------------------------------------------------------------
 
+import math
 import torch
 import torch.nn as nn
 

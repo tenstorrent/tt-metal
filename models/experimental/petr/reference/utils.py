@@ -1,14 +1,13 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
+
+# Copyright (c) OpenMMLab. All rights reserved.
 
 import numpy as np
 import torch
 from typing import Union
-
 from torch import Tensor
 from typing import Tuple, Union
-
 import numpy as np
 import torch
 from torch import Tensor

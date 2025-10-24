@@ -1,26 +1,25 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+# ------------------------------------------------------------------------
+# Copyright (c) 2022 megvii-model. All Rights Reserved.
+# ------------------------------------------------------------------------
+# Modified from DETR3D (https://github.com/WangYueFt/detr3d)
+# Copyright (c) 2021 Wang, Yue
+# ------------------------------------------------------------------------
+# Modified from mmdetection3d (https://github.com/open-mmlab/mmdetection3d)
+# Copyright (c) OpenMMLab. All rights reserved.
+# ------------------------------------------------------------------------
+
 import torch
-
-# from mmengine.structures import InstanceData
 from torch import nn
-
-# from mmdet3d.models.data_preprocessors.data_preprocessor import Det3DDataPreprocessor
 from models.experimental.functional_petr.reference.petr_head import PETRHead
 from models.experimental.functional_petr.reference.vovnetcp import VoVNetCP
 from models.experimental.functional_petr.reference.cp_fpn import CPFPN
-
-# from mmdet3d.models.detectors.mvx_two_stage import MVXTwoStageDetector
-# from mmdet3d.registry import MODELS
-# from mmdet3d.structures.ops import bbox3d2result
 from models.experimental.functional_petr.reference.utils import bbox3d2result
-
 from .grid_mask import GridMask
 
 
-# @MODELS.register_module()
 class PETR(nn.Module):
     """PETR."""
 
@@ -29,26 +28,7 @@ class PETR(nn.Module):
         use_grid_mask=False,
     ):
         super(PETR, self).__init__()
-        # super(PETR, self).__init__(
-        #     pts_voxel_layer,
-        #     pts_middle_encoder,
-        #     pts_fusion_layer,
-        #     img_backbone,
-        #     pts_backbone,
-        #     img_neck,
-        #     pts_neck,
-        #     pts_bbox_head,
-        #     img_roi_head,
-        #     img_rpn_head,
-        #     train_cfg,
-        #     test_cfg,
-        #     init_cfg,
-        #     data_preprocessor,
-        # )
         self.with_img_neck = True
-        # self.data_preprocessor = Det3DDataPreprocessor(
-        #     mean=[103.53, 116.28, 123.675], std=[57.375, 57.12, 58.395], bgr_to_rgb=False, pad_size_divisor=32
-        # )
         self.pts_bbox_head = PETRHead(
             num_classes=10,
             in_channels=256,

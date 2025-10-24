@@ -1,5 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -14,7 +13,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_SinePositionalEncoding3D(device):
     input = torch.randint(0, 2, (1, 6, 20, 50))
-    ttnn_input = ttnn.from_torch(input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_input = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     torch_model = SinePositionalEncoding3D(num_feats=128, normalize=True)
     ttnn_model = ttnn_SinePositionalEncoding3D(num_feats=128, normalize=True)

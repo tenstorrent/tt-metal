@@ -1,15 +1,22 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
+
+# ------------------------------------------------------------------------
+# Copyright (c) 2022 megvii-model. All Rights Reserved.
+# ------------------------------------------------------------------------
+# Modified from DETR3D (https://github.com/WangYueFt/detr3d)
+# Copyright (c) 2021 Wang, Yue
+# ------------------------------------------------------------------------
+# Copyright (c) Youngwan Lee (ETRI) All Rights Reserved.
+# Copyright 2021 Toyota Research Institute.  All rights reserved.
+# ------------------------------------------------------------------------
 
 import warnings
 from collections import OrderedDict
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as cp
-
 from torch.nn.modules.batchnorm import _BatchNorm
 
 

@@ -1,15 +1,22 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import math
+# ------------------------------------------------------------------------
+# Copyright (c) 2022 megvii-model. All Rights Reserved.
+# ------------------------------------------------------------------------
+# Modified from DETR3D (https://github.com/WangYueFt/detr3d)
+# Copyright (c) 2021 Wang, Yue
+# ------------------------------------------------------------------------
+# Modified from mmdetection3d (https://github.com/open-mmlab/mmdetection3d)
+# Copyright (c) OpenMMLab. All rights reserved.
+# ------------------------------------------------------------------------
 
+import math
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import Conv2d, Linear
-
 from models.experimental.functional_petr.reference.utils import inverse_sigmoid
 from models.experimental.functional_petr.reference.positional_encoding import SinePositionalEncoding3D
 from models.experimental.functional_petr.reference.petr_transformer import PETRTransformer

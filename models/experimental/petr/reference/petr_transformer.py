@@ -1,6 +1,15 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
+
+# ------------------------------------------------------------------------
+# Copyright (c) 2022 megvii-model. All Rights Reserved.
+# ------------------------------------------------------------------------
+# Modified from DETR3D (https://github.com/WangYueFt/detr3d)
+# Copyright (c) 2021 Wang, Yue
+# ------------------------------------------------------------------------
+# Modified from mmdetection3d (https://github.com/open-mmlab/mmdetection3d)
+# Copyright (c) OpenMMLab. All rights reserved.
+# ------------------------------------------------------------------------
 
 import torch
 import torch.nn as nn
@@ -31,11 +40,11 @@ class PETRMultiheadAttention(nn.Module):
         query,
         key=None,
         value=None,
-        identity=None,
         query_pos=None,
         key_pos=None,
-        attn_mask=None,
         key_padding_mask=None,
+        attn_mask=None,
+        identity=None,
         dropout_p=0.1,
         **kwargs,
     ):
@@ -107,6 +116,7 @@ class PETRMultiheadAttention(nn.Module):
         attn_output_weights = torch.nn.functional.softmax(attn_output_weights, dim=-1)
 
         attn_output = torch.bmm(attn_output_weights, value)
+
         attn_output = attn_output.transpose(0, 1).contiguous().view(tgt_len * bsz, embed_dim)
         attn_output = torch.nn.functional.linear(attn_output, self.attn.out_proj.weight, self.attn.out_proj.bias)
         attn_output = attn_output.view(tgt_len, bsz, attn_output.size(1))
