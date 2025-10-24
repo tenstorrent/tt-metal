@@ -2968,13 +2968,8 @@ bool ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
         auto all_hostnames = physical_system_descriptor_->get_all_hostnames();
         auto cabling_descriptor_path = get_cabling_descriptor_path(fabric_config);
         // Check if the cabling descriptor file exists
-        if (!std::filesystem::exists(cabling_descriptor_path)) {
-            log_warning(
-                tt::LogFabric,
-                "Cabling descriptor file not found: {}. Skipping torus validation.",
-                cabling_descriptor_path);
-            return false;  // Skip test if no golden configuration available
-        }
+        TT_ASSERT(std::filesystem::exists(cabling_descriptor_path), 
+                  "Cabling descriptor file not found: {}", cabling_descriptor_path);
 
         // Generate GSD YAML from the current physical system descriptor
         YAML::Node gsd_yaml = physical_system_descriptor_->generate_yaml_node();
