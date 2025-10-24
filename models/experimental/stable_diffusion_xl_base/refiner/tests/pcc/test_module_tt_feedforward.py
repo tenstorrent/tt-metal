@@ -8,20 +8,21 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_feedforward import TtFeedForward
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
 
 
 @pytest.mark.parametrize(
-    "input_shape, block_id, transformer_block_id, pcc",
+    "input_shape, block_id, transformer_block_id, pcc, block_type",
     [
-        ((1024, 1536), 2, 0, 0.999),
-        ((4096, 768), 1, 0, 0.999),
-        ((4096, 768), 1, 1, 0.999),
+        ((256, 1536), -1, 0, 0.999, "mid_block"),
+        ((1024, 1536), 2, 0, 0.999, "down_blocks"),
+        ((4096, 768), 1, 0, 0.999, "down_blocks"),
     ],
 )
-def test_feedforward(device, input_shape, block_id, transformer_block_id, pcc, is_ci_env, reset_seeds):
+def test_feedforward(device, input_shape, block_id, transformer_block_id, pcc, block_type, is_ci_env, reset_seeds):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-refiner-1.0",
         torch_dtype=torch.float32,
@@ -32,12 +33,18 @@ def test_feedforward(device, input_shape, block_id, transformer_block_id, pcc, i
     unet.eval()
     state_dict = unet.state_dict()
 
-    torch_ff = unet.down_blocks[block_id].attentions[0].transformer_blocks[transformer_block_id].ff
+    if block_type == "mid_block":
+        torch_ff = unet.mid_block.attentions[0].transformer_blocks[transformer_block_id].ff
+    else:
+        torch_ff = unet.down_blocks[block_id].attentions[0].transformer_blocks[transformer_block_id].ff
+        block_type = f"down_blocks.{block_id}"
 
+    model_config = RefinerModelOptimisations()
     tt_ff = TtFeedForward(
         device,
         state_dict,
-        f"down_blocks.{block_id}.attentions.0.transformer_blocks.{transformer_block_id}.ff",
+        f"{block_type}.attentions.0.transformer_blocks.{transformer_block_id}.ff",
+        model_config,
     )
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)

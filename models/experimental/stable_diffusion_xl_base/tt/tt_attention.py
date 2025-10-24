@@ -57,7 +57,7 @@ class TtAttention(LightweightModule):
             packer_l1_acc=True,
         )
 
-        attention_weights_dtype = model_config.attention_weights_dtype if model_config is not None else ttnn.bfloat16
+        attention_weights_dtype = model_config.attention_weights_dtype
 
         if self.is_self_attention == True:
             self.sdpa_program_config.q_chunk_size = 128
@@ -78,22 +78,21 @@ class TtAttention(LightweightModule):
             self.tt_k_weights, _ = prepare_linear_params(device, k_weights, None, attention_weights_dtype)
             self.tt_v_weights, _ = prepare_linear_params(device, v_weights, None, attention_weights_dtype)
 
-            if model_config is not None:
-                self.k_program_config = model_config.get_matmul_config(f"{module_path}.to_k")
-                self.v_program_config = model_config.get_matmul_config(f"{module_path}.to_v")
-                assert self.k_program_config is not None, "k_program_config should not be None"
-                assert self.v_program_config is not None, "v_program_config should not be None"
+            self.k_program_config = model_config.get_matmul_config(f"{module_path}.to_k")
+            self.v_program_config = model_config.get_matmul_config(f"{module_path}.to_v")
+            # assert self.k_program_config is not None, "k_program_config should not be None"
+            # assert self.v_program_config is not None, "v_program_config should not be None"
 
         self.tt_out_weights, self.tt_out_bias = prepare_linear_params(
             device, out_weights, out_bias, attention_weights_dtype
         )
-        if model_config is not None:
-            self.q_program_config = model_config.get_matmul_config(f"{module_path}.to_q")
-            self.q_compute_kernel_config = model_config.get_mm_compute_config(f"{module_path}.to_q")
 
-            self.dense_out_program_config = model_config.get_matmul_config(f"{module_path}.to_out")
-            self.default_compute_kernel_config = model_config.get_mm_compute_config(f"{module_path}.to_out")
-            assert self.dense_out_program_config is not None, "dense_out_program_config should not be None"
+        self.q_program_config = model_config.get_matmul_config(f"{module_path}.to_q")
+        self.q_compute_kernel_config = model_config.get_mm_compute_config(f"{module_path}.to_q")
+
+        self.dense_out_program_config = model_config.get_matmul_config(f"{module_path}.to_out")
+        self.default_compute_kernel_config = model_config.get_mm_compute_config(f"{module_path}.to_out")
+        # assert self.dense_out_program_config is not None, "dense_out_program_config should not be None"
 
     def forward(self, hidden_states, attention_mask, encoder_hidden_states=None):
         if encoder_hidden_states is None:
@@ -101,7 +100,7 @@ class TtAttention(LightweightModule):
         B = list(hidden_states.shape)[0]
 
         if self.is_self_attention:
-            if hasattr(self, "q_program_config"):
+            if self.q_program_config is not None:
                 if hidden_states.shape[-1] == 640:
                     memory_config = ttnn.create_sharded_memory_config(
                         shape=(1, 1, 512, 256),
@@ -124,10 +123,8 @@ class TtAttention(LightweightModule):
                 self.tt_qkv_weights,
                 memory_config=memory_config,
                 dtype=ttnn.bfloat16,
-                compute_kernel_config=self.q_compute_kernel_config
-                if hasattr(self, "q_compute_kernel_config")
-                else None,
-                program_config=self.q_program_config if hasattr(self, "q_program_config") else None,
+                compute_kernel_config=self.q_compute_kernel_config,
+                program_config=self.q_program_config,
             )
             qkv_fused = ttnn.sharded_to_interleaved(qkv_fused, ttnn.L1_MEMORY_CONFIG)
 
@@ -143,29 +140,23 @@ class TtAttention(LightweightModule):
             q_heads = ttnn.matmul(
                 hidden_states,
                 self.tt_q_weights,
-                program_config=self.dense_out_program_config if hasattr(self, "q_program_config") else None,
-                compute_kernel_config=self.q_compute_kernel_config
-                if hasattr(self, "q_compute_kernel_config")
-                else None,
+                program_config=self.dense_out_program_config,
+                compute_kernel_config=self.q_compute_kernel_config,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             k_heads = ttnn.matmul(
                 encoder_hidden_states,
                 self.tt_k_weights,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=self.default_compute_kernel_config
-                if hasattr(self, "default_compute_kernel_config")
-                else None,
-                program_config=self.k_program_config if hasattr(self, "k_program_config") else None,
+                compute_kernel_config=self.default_compute_kernel_config,
+                program_config=self.k_program_config,
             )
             v_heads = ttnn.matmul(
                 encoder_hidden_states,
                 self.tt_v_weights,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=self.default_compute_kernel_config
-                if hasattr(self, "default_compute_kernel_config")
-                else None,
-                program_config=self.v_program_config if hasattr(self, "v_program_config") else None,
+                compute_kernel_config=self.default_compute_kernel_config,
+                program_config=self.v_program_config,
             )
 
             q_heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -207,10 +198,8 @@ class TtAttention(LightweightModule):
             hidden_states,
             self.tt_out_weights,
             bias=self.tt_out_bias,
-            program_config=self.dense_out_program_config if hasattr(self, "dense_out_program_config") else None,
-            compute_kernel_config=self.default_compute_kernel_config
-            if hasattr(self, "default_compute_kernel_config")
-            else None,
+            program_config=self.dense_out_program_config,
+            compute_kernel_config=self.default_compute_kernel_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
