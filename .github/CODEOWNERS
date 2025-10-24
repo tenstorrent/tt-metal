@@ -308,7 +308,7 @@ models/demos/vit @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorr
 models/experimental/*yolo*/ @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/demos/yolo_eval @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
 models/demos/segformer @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/metalium-codeowners-large-changes
-models/perf/ @yieldthought @uaydonat @tenstorrent/metalium-codeowners-large-changes
+models/perf/ @yieldthought @esmalTT @skhorasganiTT @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/perf/benchmarking_utils.py @skhorasganiTT @williamlyTT @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/demos/utils/llm_demo_utils.py @skhorasganiTT @mtairum @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/experimental/oft @bjanjicTT @mbezuljTT @pavlepopovic
