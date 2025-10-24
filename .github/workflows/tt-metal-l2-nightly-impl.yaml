@@ -565,7 +565,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   ttnn-moreh-tests:
-    if: ${{ inputs.run_transformers_tests }}
+    if: ${{ inputs.run_moreh_tests }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
