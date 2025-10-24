@@ -33,18 +33,18 @@ if command -v docker &> /dev/null; then
     # WEBUI_AUTH=False enables auto-login (no password required)
     # OPENAI_API_BASE_URLS (plural) points to vLLM server(s)
     # No OPENAI_API_KEYS - connecting without authentication
-
+    HOST_IP=$(hostname -I | awk '{print $1}')
+    echo "Using host IP: ${HOST_IP}"
     docker run -d \
-        --name open-webui-vllm \
-        -p 3000:8080 \
-        --add-host=host.docker.internal:host-gateway \
-        -e OPENAI_API_BASE_URLS="http://host.docker.internal:8000/v1" \
-        -e WEBUI_AUTH=False \
-        -e ENABLE_SIGNUP=False \
-        -v open-webui:/app/backend/data \
-        --restart always \
-        ghcr.io/open-webui/open-webui:main
-
+            --name open-webui-vllm \
+            -p 3000:8080 \
+            --add-host=host.docker.internal:${HOST_IP} \
+            -e OPENAI_API_BASE_URLS="http://host.docker.internal:8000/v1" \
+            -e WEBUI_AUTH=False \
+            -e ENABLE_SIGNUP=False \
+            -v open-webui:/app/backend/data \
+            --restart always \
+            ghcr.io/open-webui/open-webui:main
     echo ""
     echo "✅ Open WebUI started successfully!"
     echo ""

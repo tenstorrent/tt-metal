@@ -69,6 +69,7 @@ const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std:
                  "p150_mesh_graph_descriptor.yaml"},  // TODO use quasar mesh
                 {tt::tt_metal::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.yaml"},
                 {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.yaml"},
+                {tt::tt_metal::ClusterType::P300_X2, "p300_x2_mesh_graph_descriptor.yaml"},
                 {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_mesh_graph_descriptor.yaml"},
             });
 
@@ -91,6 +92,7 @@ const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std:
                 {tt::tt_metal::ClusterType::SIMULATOR_QUASAR, "p150_mesh_graph_descriptor.textproto"},
                 {tt::tt_metal::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.textproto"},
                 {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::P300_X2, "p300_x2_mesh_graph_descriptor.textproto"},
                 {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_mesh_graph_descriptor.textproto"},
             });
 

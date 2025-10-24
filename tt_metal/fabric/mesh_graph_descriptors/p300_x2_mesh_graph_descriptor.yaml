@@ -1,0 +1,27 @@
+ChipSpec: {
+  arch: blackhole,
+  ethernet_ports: {
+    N: 2,
+    E: 2,
+    S: 2,
+    W: 2,
+  }
+}
+
+Board: [
+  { name: P300_X2,
+    type: Mesh,
+    topology: [2, 2]}
+]
+
+Mesh: [
+{
+  id: 0,
+  board: P300_X2,
+  device_topology: [2, 2],
+  host_topology: [1, 1],
+}
+]
+
+Graph: [
+]
