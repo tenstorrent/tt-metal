@@ -176,6 +176,7 @@ class BenchmarkData:
                 os.makedirs(parent_dir)
             with open(filename, "wb") as f:
                 f.write(pkl_data)
+            logger.info(f"Partial benchmark data PKL saved at location: {os.getcwd()}")
             logger.info(f"Run and measurement data saved to {filename}")
         else:
             logger.info("Skipping saving partial benchmark data PKL since not running in CI environment")
