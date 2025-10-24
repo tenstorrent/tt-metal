@@ -73,7 +73,7 @@ ttnn::Tensor EmbeddingOperation::invoke(
         embeddings = ttnn::reshape(embeddings, Shape({batch_size, sentence_size, hidden_embedding_dim}));
     }
     embeddings = ttnn::to_layout(embeddings, layout.value_or(weight_arg.layout()));
-    if (embeddings.layout() == ttnn::TILE_LAYOUT) {
+    if (embeddings.layout() == ttnn::TILE_LAYOUT && embeddings.dtype() != dtype.value_or(weight.dtype())) {
         embeddings = ttnn::typecast(embeddings, dtype.value_or(weight.dtype()));
     }
     return embeddings;
