@@ -367,28 +367,28 @@ public:
 
     void validate_results() {
         constexpr uint32_t MAX_CONCURRENT_DEVICES = 16;
-        
+
         // Convert map to vector for easier indexing
         std::vector<std::pair<MeshCoordinate, const TestDevice*>> devices;
         devices.reserve(test_devices_.size());
         for (const auto& [coord, device] : test_devices_) {
             devices.push_back({coord, &device});
         }
-        
+
         // Process in groups
         for (size_t i = 0; i < devices.size(); i += MAX_CONCURRENT_DEVICES) {
             size_t group_end = std::min(i + MAX_CONCURRENT_DEVICES, devices.size());
-            
+
             // Initiate reads for this group
             std::vector<TestDevice::ValidationReadOps> read_ops;
             read_ops.reserve(group_end - i);
             for (size_t j = i; j < group_end; ++j) {
                 read_ops.push_back(devices[j].second->initiate_results_readback());
             }
-            
+
             // Barrier
             fixture_->barrier_reads();
-            
+
             // Validate results
             for (size_t j = i; j < group_end; ++j) {
                 devices[j].second->validate_results_after_readback(read_ops[j - i]);
@@ -898,7 +898,7 @@ private:
         for (size_t group_start = 0; group_start < all_devices.size(); group_start += MAX_CONCURRENT_DEVICES) {
             size_t group_end = std::min(group_start + MAX_CONCURRENT_DEVICES, all_devices.size());
 
-            log_debug(tt::LogTest, "Processing device group {}-{} of {}", 
+            log_debug(tt::LogTest, "Processing device group {}-{} of {}",
                      group_start, group_end - 1, all_devices.size() - 1);
 
             // First loop: Initiate non-blocking reads for group

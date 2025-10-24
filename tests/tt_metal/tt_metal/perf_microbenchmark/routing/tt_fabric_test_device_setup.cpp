@@ -1111,51 +1111,51 @@ void TestDevice::validate_results() const {
 
 TestDevice::ValidationReadOps TestDevice::initiate_results_readback() const {
     ValidationReadOps ops;
-    
+
     // Get sender cores
     std::vector<CoreCoord> sender_cores;
     sender_cores.reserve(this->senders_.size());
     for (const auto& [core, _] : this->senders_) {
         sender_cores.push_back(core);
     }
-    
+
     if (!sender_cores.empty()) {
         ops.has_senders = true;
         // Cast to TestFixture to access the new methods
         auto fixture = dynamic_cast<const TestFixture*>(this->device_info_provider_.get());
         TT_FATAL(fixture != nullptr, "Failed to cast device_info_provider to TestFixture");
         ops.sender_op = fixture->initiate_read_buffer_from_cores(
-            this->coord_, 
+            this->coord_,
             sender_cores,
             this->sender_memory_map_->get_result_buffer_address(),
             this->sender_memory_map_->get_result_buffer_size());
     }
-    
+
     // Get receiver cores
     std::vector<CoreCoord> receiver_cores;
     receiver_cores.reserve(this->receivers_.size());
     for (const auto& [core, _] : this->receivers_) {
         receiver_cores.push_back(core);
     }
-    
+
     if (!receiver_cores.empty()) {
         ops.has_receivers = true;
         auto fixture = dynamic_cast<const TestFixture*>(this->device_info_provider_.get());
         TT_FATAL(fixture != nullptr, "Failed to cast device_info_provider to TestFixture");
         ops.receiver_op = fixture->initiate_read_buffer_from_cores(
-            this->coord_, 
+            this->coord_,
             receiver_cores,
             this->receiver_memory_map_->get_result_buffer_address(),
             this->receiver_memory_map_->get_result_buffer_size());
     }
-    
+
     return ops;
 }
 
 void TestDevice::validate_results_after_readback(const ValidationReadOps& ops) const {
     auto fixture = dynamic_cast<const TestFixture*>(this->device_info_provider_.get());
     TT_FATAL(fixture != nullptr, "Failed to cast device_info_provider to TestFixture");
-    
+
     // Validate senders
     if (ops.has_senders) {
         auto data = fixture->complete_read_buffer_from_cores(const_cast<TestFixture::ReadBufferOperation&>(ops.sender_op));
@@ -1164,7 +1164,7 @@ void TestDevice::validate_results_after_readback(const ValidationReadOps& ops) c
             TT_FATAL(pass, "Sender on device: {} core: {} failed", this->fabric_node_id_, core);
         }
     }
-    
+
     // Validate receivers
     if (ops.has_receivers) {
         auto data = fixture->complete_read_buffer_from_cores(const_cast<TestFixture::ReadBufferOperation&>(ops.receiver_op));

@@ -378,7 +378,7 @@ public:
         const std::vector<CoreCoord>& cores,
         uint32_t address,
         uint32_t size_bytes) const {
-        
+
         auto mesh_buffer = create_mesh_buffer_helper(cores, address, size_bytes);
 
         const auto& buffer_distribution_spec =
@@ -392,10 +392,10 @@ public:
 
         // Start non-blocking read
         tt::tt_metal::distributed::ReadShard(
-            mesh_device_->mesh_command_queue(), 
-            data, 
-            mesh_buffer, 
-            device_coord, 
+            mesh_device_->mesh_command_queue(),
+            data,
+            mesh_buffer,
+            device_coord,
             false  // blocking=false
         );
 
@@ -405,7 +405,7 @@ public:
     // Process results after barrier_reads() has been called
     std::unordered_map<CoreCoord, std::vector<uint32_t>> complete_read_buffer_from_cores(
         ReadBufferOperation& op) const {
-        
+
         // Process results (existing splice logic)
         std::unordered_map<CoreCoord, std::vector<uint32_t>> results;
         auto num_words_per_core = op.size_bytes / sizeof(uint32_t);
