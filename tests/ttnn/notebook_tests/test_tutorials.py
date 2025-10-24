@@ -29,9 +29,9 @@ LOCAL_BASE_DIRECTORY = "tutorials_data"
 TUTORIALS_DATA_PATHS = {
     "ttnn_simplecnn_inference": {LOCAL_SOURCE_PATH_KEY: "./data", EXTERNAL_SOURCE_PATH_KEY: "ttnn_simplecnn_inference"},
     "ttnn_clip_zero_shot_image_classification": {
-        LOCAL_SOURCE_PATH_KEY: "./ttnn_clip_zero_shot_image_classification/",
+        LOCAL_SOURCE_PATH_KEY: "./ttnn_clip_zero_shot_image_classification",
         EXTERNAL_SOURCE_PATH_KEY: "ttnn_clip_zero_shot_image_classification",
-        ENVIRONMENT_VARIABLE_MODEL: "TTNN_TUTORIALS_MODELS_CLIP_PATH",  # Send model path as environment variable (avoids hard-coding value in notebook)
+        ENVIRONMENT_VARIABLE_MODEL: "TTNN_TUTORIALS_MODELS_CLIP_PATH",  # Send model path as environment variable (avoids hard-coding values in notebook)
     }
     # NOTE: Add entries here for new tutorials that require external data
 }
