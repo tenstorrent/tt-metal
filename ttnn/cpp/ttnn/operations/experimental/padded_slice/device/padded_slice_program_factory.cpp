@@ -622,9 +622,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
                                     TILE_HEIGHT) *
                                    max_num_tiles_per_row;
         }
-        if (num_full_rows < 0) {
-            num_full_rows = 0;
-        }
+        num_full_rows = std::max(num_full_rows, 0);
         log_trace(
             tt::LogOp,
             "For Core {}, Input Start ID {}, End ID {}, Output Start Coord: {}, End Coord : {}, Input Start Coord: {}, "
