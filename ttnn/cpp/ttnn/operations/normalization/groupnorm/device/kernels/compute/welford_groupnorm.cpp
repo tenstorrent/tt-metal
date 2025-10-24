@@ -25,12 +25,11 @@
 
 namespace NAMESPACE {
 void MAIN {
-    constexpr uint32_t is_mcast_sender = get_named_compile_time_arg_val("is_mcast_sender");
     constexpr uint32_t do_gamma = get_named_compile_time_arg_val("do_gamma");
     constexpr uint32_t do_beta = get_named_compile_time_arg_val("do_beta");
     constexpr uint32_t num_cores_per_mcast_group = get_named_compile_time_arg_val("num_cores_per_mcast_group");
 
-    constexpr uint32_t num_batches = get_named_compile_time_arg_val("batch");
+    constexpr uint32_t batch = get_named_compile_time_arg_val("batch");
     constexpr uint32_t num_groups = get_named_compile_time_arg_val("group");
 
     constexpr uint32_t block_h = get_named_compile_time_arg_val("block_h");
@@ -41,7 +40,9 @@ void MAIN {
     constexpr uint32_t per_core_MN = get_named_compile_time_arg_val("per_core_MN");
 
     constexpr uint32_t single_tile_size_bytes = get_named_compile_time_arg_val("single_tile_size_bytes");
+
     constexpr uint32_t num_tiles_input_mask = get_named_compile_time_arg_val("num_tiles_input_mask");
+
     constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
 
     // These are numbers in absolute terms, on a per group, per batch without tiling
