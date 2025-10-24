@@ -129,7 +129,8 @@ jobs:
             mesh-device: T3K,
             override-tt-config: "{\"fabric_config\": \"FABRIC_1D\", \"l1_small_size\": 768}",
             tt-llama-text-ver: tt_transformers,
-            multimodal: false, # Disabled until the error seen in https://github.com/tenstorrent/tt-metal/actions/runs/18021096729/job/51279632451 is fixed
+            multimodal: true,
+            use-vllm-v1: true,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08BH66EXAL, # Radoica Draskic
           },
@@ -198,9 +199,9 @@ jobs:
         timeout-minutes: 1
         run: |
           if [ -n "${{ matrix.test-group.override-tt-config }}" ]; then
-            export OVERRIDE_TT_CONFIG=(--override-tt-config "$(printf "%s" '${{ matrix.test-group.override-tt-config }}')")
+            OVERRIDE_TT_CONFIG=(--override-tt-config "$(printf "%s" '${{ matrix.test-group.override-tt-config }}')")
           else
-            export OVERRIDE_TT_CONFIG=()
+            OVERRIDE_TT_CONFIG=()
           fi
 
           echo "Override config: ${OVERRIDE_TT_CONFIG[@]}"
@@ -215,12 +216,21 @@ jobs:
 
           # vLLM environment variables
           export VLLM_RPC_TIMEOUT=300000
+          USE_V1="${{ matrix.test-group.use-vllm-v1 }}"
+          if [[ "${USE_V1}" == "true" ]]; then
+            export VLLM_USE_V1=1
+          fi
 
-          python3 vllm/examples/server_example_tt.py \
-            --model ${{ matrix.test-group.model }} \
-            ${{ matrix.test-group.additional-args }} \
-            "${OVERRIDE_TT_CONFIG[@]}" \
-            > "${FILE_SERVER_LOG}" 2>&1 &
+          # Build the VLLM server arguments array
+          declare -a VLLM_SERVER_ARGS
+          VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
+          VLLM_SERVER_ARGS+=("${{ matrix.test-group.additional-args }}")
+          VLLM_SERVER_ARGS+=("${OVERRIDE_TT_CONFIG[@]}")
+          if [[ "${USE_V1}" == "true" ]]; then
+            VLLM_SERVER_ARGS+=("--num_scheduler_steps" "1")
+          fi
+
+          python3 vllm/examples/server_example_tt.py "${VLLM_SERVER_ARGS[@]}" > "${FILE_SERVER_LOG}" 2>&1 &
 
           # Store server's pid for cleanup
           echo $! > ${FILE_SERVER_PID}
