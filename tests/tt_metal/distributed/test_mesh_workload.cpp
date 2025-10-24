@@ -208,7 +208,7 @@ TEST_P(MeshWorkloadTestSuiteSubmeshFixture, QuiesceSubmeshesAllowsAlternatingWor
 
     int submesh_index = GetParam();
     ASSERT_TRUE(submesh_index == 0 || submesh_index == 1);
-    auto submesh = submeshes[submesh_index];
+    auto& submesh = submeshes[submesh_index];
 
     // Single-core no-op program for submesh
     Program submesh_program = CreateProgram();
