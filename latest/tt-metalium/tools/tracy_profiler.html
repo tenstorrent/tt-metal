@@ -165,9 +165,9 @@ ninja<span class="w"> </span>install
 <p>Mac users can install Tracy using Homebrew. Open a terminal and run:</p>
 <div class="highlight-bash notranslate">
 <div class="highlight"><pre><span></span>brew<span class="w"> </span>uninstall<span class="w"> </span>tracy<span class="w"> </span><span class="c1"># Remove any old version of Tracy</span>
-wget<span class="w"> </span>-P<span class="w"> </span>~/<span class="w"> </span>--no-check-certificate<span class="w"> </span>--no-cache<span class="w"> </span>--no-cookies<span class="w"> </span>https://raw.githubusercontent.com/tenstorrent-metal/tracy/master/tracy.rb
-brew<span class="w"> </span>install<span class="w"> </span>~/tracy.rb
-rm<span class="w"> </span>~/tracy.rb
+brew<span class="w"> </span>tap-new<span class="w"> </span><span class="nv">$USER</span>/tracy<span class="w"> </span><span class="c1"># Create a tap</span>
+wget<span class="w"> </span>-P<span class="w"> </span><span class="k">$(</span>brew<span class="w"> </span>--repository<span class="k">)</span>/Library/Taps/<span class="nv">$USER</span>/homebrew-tracy/Formula/<span class="w"> </span>--no-check-certificate<span class="w"> </span>--no-cache<span class="w"> </span>--no-cookies<span class="w"> </span>https://raw.githubusercontent.com/tenstorrent-metal/tracy/master/tracy.rb
+brew<span class="w"> </span>install<span class="w"> </span><span class="nv">$USER</span>/tracy/tracy<span class="w"> </span><span class="c1"># Install from the tap</span>
 </pre></div>
 </div>
 <p>After installation, start the Tracy GUI with:</p>
