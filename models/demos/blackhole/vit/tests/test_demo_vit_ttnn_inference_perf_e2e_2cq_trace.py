@@ -123,7 +123,7 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
 )
 @pytest.mark.parametrize("batch_size", [10])
 def test_vit(device, batch_size):
-    expected_samples_per_sec = 3600
+    expected_samples_per_sec = 3700
     torch.manual_seed(0)
 
     profiler.clear()

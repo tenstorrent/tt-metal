@@ -22,7 +22,7 @@ pytest --disable-warnings models/demos/blackhole/sentence_bert/tests/pcc/test_tt
 > **Note:** SentenceBERT uses BERT-base as its backbone model.
 
 #### Single Device (BS=8):
-- End-to-end performance with mean-pooling post-processing is 918 sentences per second (**On P150**)
+- End-to-end performance with mean-pooling post-processing is 929 sentences per second (**On P150**)
 ```
 pytest --disable-warnings models/demos/blackhole/sentence_bert/tests/perf/test_sentence_bert_e2e_performant.py::test_e2e_performant_sentencebert
 ```
