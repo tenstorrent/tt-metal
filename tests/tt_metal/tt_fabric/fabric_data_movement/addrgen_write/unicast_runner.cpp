@@ -113,7 +113,7 @@ inline void verify_payload_words(const std::vector<uint32_t>& rx, const std::vec
 }  // anonymous namespace
 
 // ----------------------------------- program -----------------------------------
-void run_addrgen_write_test(HelpersFixture* fixture, const AddrgenTestParams& p) {
+void run_unicast_write_test(HelpersFixture* fixture, const AddrgenTestParams& p) {
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
     namespace Dist = tt::tt_metal::distributed;
 
@@ -227,9 +227,13 @@ Notes:
          p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteWithState ||
          p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteSetState);
 
-    const std::string KDIR =
-        is_fused_atomic_inc ? "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/fused_atomic_inc/"
-                            : "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/unicast/";
+    // Determine if this is a scatter variant
+    const bool is_scatter =
+        (p.api_variant == AddrgenApiVariant::ScatterWrite ||
+         p.api_variant == AddrgenApiVariant::ScatterWriteWithState ||
+         p.api_variant == AddrgenApiVariant::ScatterWriteSetState);
+
+    const std::string KDIR = "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/";
 
     // Helper to select writer kernel based on API variant
     auto get_writer_kernel_path = [&KDIR](AddrgenApiVariant variant) -> std::string {
@@ -242,12 +246,21 @@ Notes:
                 return KDIR + "fused_atomic_inc_tx_writer_with_state_addrgen.cpp";
             case AddrgenApiVariant::FusedAtomicIncWriteSetState:
                 return KDIR + "fused_atomic_inc_tx_writer_set_state_addrgen.cpp";
+            case AddrgenApiVariant::ScatterWrite: return KDIR + "scatter_tx_writer_addrgen.cpp";
+            case AddrgenApiVariant::ScatterWriteWithState: return KDIR + "scatter_tx_writer_with_state_addrgen.cpp";
+            case AddrgenApiVariant::ScatterWriteSetState: return KDIR + "scatter_tx_writer_set_state_addrgen.cpp";
             default: TT_FATAL(false, "Unknown API variant"); return "";
         }
     };
 
-    const std::string receiver_kernel_name =
-        is_fused_atomic_inc ? "fused_atomic_inc_rx_addrgen.cpp" : "unicast_rx_addrgen.cpp";
+    std::string receiver_kernel_name;
+    if (is_fused_atomic_inc) {
+        receiver_kernel_name = "fused_atomic_inc_rx_addrgen.cpp";
+    } else if (is_scatter) {
+        receiver_kernel_name = "scatter_rx_addrgen.cpp";
+    } else {
+        receiver_kernel_name = "unicast_rx_addrgen.cpp";
+    }
 
     auto rx_wait_k = tt::tt_metal::CreateKernel(
         receiver_prog,
@@ -280,8 +293,14 @@ Notes:
     reader_cta.push_back(NUM_PAGES);
     reader_cta.push_back(p.page_size);
 
-    const std::string reader_kernel_name =
-        is_fused_atomic_inc ? "fused_atomic_inc_tx_reader_to_cb_addrgen.cpp" : "unicast_tx_reader_to_cb_addrgen.cpp";
+    std::string reader_kernel_name;
+    if (is_fused_atomic_inc) {
+        reader_kernel_name = "fused_atomic_inc_tx_reader_to_cb_addrgen.cpp";
+    } else if (is_scatter) {
+        reader_kernel_name = "scatter_tx_reader_to_cb_addrgen.cpp";
+    } else {
+        reader_kernel_name = "unicast_tx_reader_to_cb_addrgen.cpp";
+    }
 
     auto reader_k = tt::tt_metal::CreateKernel(
         sender_prog,
