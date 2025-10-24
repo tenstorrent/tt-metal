@@ -409,7 +409,7 @@ def main():
         with col2:
             warmup_steps = st.number_input("Warmup Steps", min_value=0, max_value=1000, value=20, step=10)
 
-            hold_steps = st.number_input("Hold Steps", min_value=0, max_value=10000, value=1000, step=10)
+            hold_steps = st.number_input("Hold Steps", min_value=0, max_value=10000, value=40, step=10)
 
         eval_every = st.number_input("Eval Every", min_value=10, max_value=1000, value=20, step=10)
         validation_batch_size = st.number_input("Validation Batch Size", min_value=1, max_value=64, value=32, step=1, help="Validation batch size per device")
