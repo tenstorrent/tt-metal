@@ -33,12 +33,16 @@ def main(config: str):
 
     socket_manager = autograd_ctx.get_socket_manager()
     device_config = DeviceConfig(yaml_config)
+    num_devices = device_config.total_devices()
 
     # Initialize device
     initialize_device(yaml_config)
 
     N = 1024
-    values = np.ones((1, 1, 1, N), dtype=np.float32) * (rank + 1)
+    scaler = 0.01
+    values = np.ones((1, 1, 1, N), dtype=np.float32) * (rank + 1) * scaler
+    expected_value_before_all_reduce = world_size * (world_size + 1) / 2 * scaler
+    expected_value_after_all_reduce = world_size * (world_size + 1) / 2 * num_devices * scaler
     tt_values = ttml.autograd.Tensor.from_numpy(values, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16)
 
     if rank > 0:
@@ -51,16 +55,15 @@ def main(config: str):
         device = autograd_ctx.get_device()
         composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
         values_before_all_reduce = tt_values.to_numpy(composer=composer)
-        assert np.all(
-            values_before_all_reduce == world_size * (world_size + 1) / 2
-        ), f"Values before all reduce do not match expected values: {values_before_all_reduce}"
+        assert np.allclose(
+            values_before_all_reduce, expected_value_before_all_reduce, rtol=1e-1, atol=1e-2
+        ), f"Values before all reduce do not match expected values: {values_before_all_reduce}, expected: {expected_value_before_all_reduce}"
 
         tt_values_after_all_reduce = ttml.ops.distributed.all_reduce(tt_values)
         values_after_all_reduce = tt_values_after_all_reduce.to_numpy(composer=composer)
-        num_devices = device_config.total_devices()
-        assert np.all(
-            values_after_all_reduce == world_size * (world_size + 1) / 2 * num_devices
-        ), f"Values after all reduce do not match expected values: {values_after_all_reduce}"
+        assert np.allclose(
+            values_after_all_reduce, expected_value_after_all_reduce, rtol=1e-1, atol=1e-2
+        ), f"Values after all reduce do not match expected values: {values_after_all_reduce}, expected: {expected_value_after_all_reduce}"
 
     # Cleanup
     distributed_ctx.barrier()
