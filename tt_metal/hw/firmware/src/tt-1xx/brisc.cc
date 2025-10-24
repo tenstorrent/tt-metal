@@ -79,8 +79,8 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
 // These arrays are used to store the logical to virtual coordinate mapping
 // Round up to nearest multiple of 4 to ensure uint32_t alignment for L1 to local copies
-uint8_t logical_col_to_virtual_col[((noc_size_x + 3) / 4) * 4] __attribute__((used));
-uint8_t logical_row_to_virtual_row[((noc_size_y + 3) / 4) * 4] __attribute__((used));
+uint8_t logical_col_to_virtual_col[round_up_to_mult_of_4(noc_size_x)] __attribute__((used));
+uint8_t logical_row_to_virtual_row[round_up_to_mult_of_4(noc_size_y)] __attribute__((used));
 
 #define MEM_MOVER_VIEW_IRAM_BASE_ADDR (0x4 << 12)
 
