@@ -44,7 +44,8 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
 std::pair<std::optional<Tensor>, uint32_t> create_reciprocal_tensor_if_needed(
-    IDevice* device, uint32_t W, uint32_t num_cores, const CoreRangeSet& cores, const bool use_welford) {
+    IDevice* device, uint32_t W, const CoreRangeSet& cores, const bool use_welford) {
+    const auto num_cores = cores.num_cores();
     std::optional<Tensor> recip_tensor = std::nullopt;
     uint32_t reciprocal_CB_size_bytes = 0;
     if (use_welford) {
@@ -220,7 +221,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     // Create the sharded reciprocal LUT tensor if using Welford
     auto [recip_tensor, reciprocal_CB_size_bytes] =
-        create_reciprocal_tensor_if_needed(device, W, num_cores, all_cores, use_welford);
+        create_reciprocal_tensor_if_needed(device, W, all_cores, use_welford);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -1329,8 +1330,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     // so we'll take the max of the padded and unpadded partial reduce widths.
     uint32_t per_core_recip_lut_size = std::max(num_rows_per_all_to_all_worker, num_rows_per_all_to_all_worker_last);
     per_core_recip_lut_size *= row_wise ? tt::constants::TILE_WIDTH : tt::constants::TILE_HEIGHT;
-    auto [recip_tensor, reciprocal_CB_size_bytes] = create_reciprocal_tensor_if_needed(
-        device, per_core_recip_lut_size, all_cores.num_cores(), all_cores, use_welford);
+    auto [recip_tensor, reciprocal_CB_size_bytes] =
+        create_reciprocal_tensor_if_needed(device, per_core_recip_lut_size, all_cores, use_welford);
 
     // compute kernel compile time args
     bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
