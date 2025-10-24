@@ -54,7 +54,7 @@ class RefinerModelOptimisations(ModelOptimisations):
                 return self.conv_configs["ABH_128_ADB_WDB_BS"]
             else:
                 return self.conv_configs["ABH_128_ADB_WDB_BS"]
-        if "down_blocks.3" in conv_path:
+        if "down_blocks.3" in conv_path or "mid_block" in conv_path:
             return self.conv_configs["ABH_32_ADB_WDB_BS"]
         return None
 
