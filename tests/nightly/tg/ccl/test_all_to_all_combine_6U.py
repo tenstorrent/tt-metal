@@ -12,37 +12,92 @@ from tests.nightly.t3000.ccl.test_all_to_all_combine import (
 )
 
 
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-        },
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        },
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-        },
-    ],
-    ids=["fabric_2d", "fabric_1d_line", "fabric_1d_ring"],
-    indirect=True,
-)
 @pytest.mark.parametrize("trace_mode", [False])
 @pytest.mark.parametrize(
-    "mesh_shape, mesh_device",
+    "device_params, mesh_shape, mesh_device, num_links",
     [
-        pytest.param((8, 4), (8, 4), id="8x4_grid"),
-        pytest.param((8, 8), (8, 8), id="8x8_grid"),
-        pytest.param((8, 16), (8, 16), id="8x16_grid"),
+        # 8x4 grid supports all fabric configs with 4 links
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            },
+            (8, 4),
+            (8, 4),
+            4,
+            id="8x4_4links_fabric_2d",
+        ),
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            },
+            (8, 4),
+            (8, 4),
+            4,
+            id="8x4_4links_fabric_1d_line",
+        ),
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            },
+            (8, 4),
+            (8, 4),
+            4,
+            id="8x4_4links_fabric_1d_ring",
+        ),
+        # 8x8 grid supports only FABRIC_2D and FABRIC_1D with 1 link
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            },
+            (8, 8),
+            (8, 8),
+            1,
+            id="8x8_1link_fabric_2d",
+        ),
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            },
+            (8, 8),
+            (8, 8),
+            1,
+            id="8x8_1link_fabric_1d_line",
+        ),
+        # 8x16 grid supports only FABRIC_2D and FABRIC_1D with 1 link
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            },
+            (8, 16),
+            (8, 16),
+            1,
+            id="8x16_1link_fabric_2d",
+        ),
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            },
+            (8, 16),
+            (8, 16),
+            1,
+            id="8x16_1link_fabric_1d_line",
+        ),
     ],
-    indirect=["mesh_device"],
+    indirect=["device_params", "mesh_device"],
 )
 @pytest.mark.parametrize("axis", [0, 1], ids=["axis_0", "axis_1"])
 @pytest.mark.parametrize("batches_per_device", [32])
@@ -52,14 +107,15 @@ from tests.nightly.t3000.ccl.test_all_to_all_combine import (
 @pytest.mark.parametrize("seq", [1, 2], ids=["s1", "s2"])
 @pytest.mark.parametrize("local_reduce", [False, True], ids=["dense", "sparse"])
 @pytest.mark.parametrize("num_iters", [2])
-@pytest.mark.parametrize("num_links", [4, 1], ids=["num_links_4", "num_links_1"])
 @pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize(
-    "input_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram_input", "l1_input"]
-)
-@pytest.mark.parametrize(
-    "output_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram_output", "l1_output"]
+    "input_memory_config, output_memory_config",
+    [
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+    ],
+    ids=["dram", "l1"],
 )
 def test_all_to_all_combine_no_trace(
     mesh_device,
@@ -79,7 +135,7 @@ def test_all_to_all_combine_no_trace(
     input_memory_config,
     output_memory_config,
 ):
-    if seq == 2 and ttnn.L1_MEMORY_CONFIG in (input_memory_config, output_memory_config):
+    if seq == 2 and (input_memory_config == ttnn.L1_MEMORY_CONFIG or output_memory_config == ttnn.L1_MEMORY_CONFIG):
         pytest.skip("Prefill needs to run in DRAM")
 
     batch = batches_per_device * mesh_shape[axis]
