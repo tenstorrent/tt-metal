@@ -335,10 +335,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
     if (skip_weights_mcast) {
         writer_mcast_sender_defines["SKIP_MCAST"] = "1";
     }
-    if (has_bias) {
-        writer_defines["FUSE_BIAS"] = "1";
-        writer_mcast_sender_defines["FUSE_BIAS"] = "1";
-    }
 
     bool pack_relu = fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU;
     if (fused_activation.has_value() && !pack_relu) {
@@ -496,7 +492,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
         input_num_cores,            // other_core_weight_height_blocks
         per_core_num_blocks_act_w,  // this_core_weight_height_blocks
         num_blocks_act_h_per_core,
-        get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index};
+        get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,
+        (uint32_t)has_bias};
 
     if (config_tensors_in_dram) {
         reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
