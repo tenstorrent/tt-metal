@@ -97,6 +97,7 @@ target_sources(
         core/tensor/tensor_utils.cpp
         core/tensor/types.cpp
         core/tensor/xtensor/partition.cpp
+        core/tensor/lazy_tensor.cpp
 )
 target_include_directories(
     ttnn_core

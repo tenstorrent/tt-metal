@@ -6,13 +6,21 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/experimental/jit/lazy_tensor.hpp"
 #include <vector>
 
 namespace ttnn::experimental::jit {
 
 struct IDeviceOperation {
     virtual void validate(const std::vector<Tensor>& input_tensors) const = 0;
+    // We need a lightweight version to validate lazy tensors
+    virtual void validate(const std::vector<LazyTensor>& input_tensors) const = 0;
+
     virtual std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const = 0;
+
+    // We need a lightweight version to compute output specs for lazy tensors
+    virtual std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<LazyTensor>& input_tensors) const = 0;
+
     virtual tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const = 0;
 

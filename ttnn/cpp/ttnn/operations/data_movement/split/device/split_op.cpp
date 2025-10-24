@@ -41,6 +41,14 @@ void SplitDeviceOperation::validate(const std::vector<Tensor>& input_tensors) co
     TT_FATAL(input_tensor.layout() == Layout::TILE, "Tensor needs to be in TILE Layout");
 }
 
+void SplitDeviceOperation::validate(const std::vector<ttnn::experimental::jit::LazyTensor>& input_tensors) const {}
+
+std::vector<ttnn::TensorSpec> SplitDeviceOperation::compute_output_specs(
+    const std::vector<ttnn::experimental::jit::LazyTensor>& input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    return {input_tensor.get_tensor_spec()};
+}
+
 std::vector<ttnn::TensorSpec> SplitDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
