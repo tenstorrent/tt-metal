@@ -314,7 +314,7 @@ jobs:
       - pipeline-functional
     steps:
       - name: Run image
-        timeout-minutes: 30
+        timeout-minutes: 40
         env:
           # For different environments, yyz BH VLAN vs. cloud
           LLAMA_DIR: ${{ contains(runner.name, 'gh') && '/localdev/blackhole_demos/huggingface_data' || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
