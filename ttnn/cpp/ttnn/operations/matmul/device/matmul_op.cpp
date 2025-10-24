@@ -68,9 +68,7 @@ uint32_t estimate_interm_tile_size(
     uint32_t result = tt::tile_size(tt::DataFormat::Float16_b);  // packer l1 acc
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output_dtype);
     uint32_t output_tile_size = tt::tile_size(output_data_format);
-    if (output_tile_size > result) {
-        result = output_tile_size;
-    }
+    result = std::max(output_tile_size, result);
     return result;
 }
 

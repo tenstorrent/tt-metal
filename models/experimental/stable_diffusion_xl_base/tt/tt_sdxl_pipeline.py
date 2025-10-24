@@ -122,6 +122,15 @@ class TtSDXLPipeline(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device),
         )
 
+        self.one_minus_guidance_rescale = ttnn.from_torch(
+            torch.Tensor([1.0 - self.pipeline_config.guidance_rescale]),
+            dtype=ttnn.bfloat16,
+            device=self.ttnn_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device),
+        )
+
         compute_grid_size = self.ttnn_device.compute_with_storage_grid_size()
         ccl_sub_device_crs = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
@@ -170,7 +179,14 @@ class TtSDXLPipeline(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device),
         )
+        host_one_minus_guidance_rescale = ttnn.from_torch(
+            torch.Tensor([1.0 - self.pipeline_config.guidance_rescale]),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device),
+        )
         ttnn.copy_host_to_device_tensor(host_guidance_rescale, self.guidance_rescale)
+        ttnn.copy_host_to_device_tensor(host_one_minus_guidance_rescale, self.one_minus_guidance_rescale)
 
     def set_crop_coords_top_left(self, crop_coords_top_left: tuple):
         self.pipeline_config.crop_coords_top_left = crop_coords_top_left
@@ -329,7 +345,8 @@ class TtSDXLPipeline(LightweightModule):
                 self.ag_semaphores,
                 capture_trace=False,
                 use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
-                guidance_rescale=self.pipeline_config.guidance_rescale,
+                guidance_rescale=self.guidance_rescale,
+                one_minus_guidance_rescale=self.one_minus_guidance_rescale,
             )
             ttnn.synchronize_device(self.ttnn_device)
             profiler.end("warmup_run")
@@ -592,7 +609,8 @@ class TtSDXLPipeline(LightweightModule):
             output_shape=self.output_shape,
             tid_vae=self.tid_vae if hasattr(self, "tid_vae") else None,
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
-            guidance_rescale=self.pipeline_config.guidance_rescale,
+            guidance_rescale=self.guidance_rescale,
+            one_minus_guidance_rescale=self.one_minus_guidance_rescale,
         )
         self._reset_num_inference_steps()
         return imgs
@@ -713,8 +731,7 @@ class TtSDXLPipeline(LightweightModule):
             )
             tt_time_ids_host = ttnn.squeeze(tt_time_ids_host, dim=0)
 
-            for host_tensor, device_tensor in zip(tt_time_ids_host, self.tt_time_ids_device):
-                ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
+            ttnn.copy_host_to_device_tensor(tt_time_ids_host, self.tt_time_ids_device)
 
     def __create_user_tensors(self, latents, all_prompt_embeds_torch, torch_add_text_embeds):
         # Instantiation of user host input tensors for the TT model.
@@ -771,7 +788,8 @@ class TtSDXLPipeline(LightweightModule):
             self.ag_semaphores,
             capture_trace=True,
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
-            guidance_rescale=self.pipeline_config.guidance_rescale,
+            guidance_rescale=self.guidance_rescale,
+            one_minus_guidance_rescale=self.one_minus_guidance_rescale,
         )
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("capture_model_trace")
