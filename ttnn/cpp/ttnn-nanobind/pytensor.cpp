@@ -275,10 +275,11 @@ Tensor create_tt_tensor_from_py_data(
 
 // Preprocess the python tensor, optionally performing dtype conversion.
 // TODO_NANOBIND: See if we can get rid of this in favor of ndarray
+template <typename... Ts>
 struct PreprocessedPyTensor {
     DataType data_type = DataType::INVALID;
     // nb::object contiguous_py_tensor;
-    nb::ndarray<> contiguous_py_tensor;
+    nb::ndarray<Ts...> contiguous_py_tensor;
     std::size_t num_elements = 0;
     std::size_t py_data_ptr = 0;
 };
@@ -428,8 +429,9 @@ PreprocessedPyTensor parse_py_tensor(const nb::handle& py_tensor, std::optional<
 }
 */
 
+template <typename... Ts>
 Tensor convert_python_tensor_to_tt_tensor(
-    nb::ndarray<> py_tensor,
+    nb::ndarray<Ts...> py_tensor,
     std::optional<DataType> optional_data_type,
     std::optional<Layout> optional_layout,
     const std::optional<Tile>& optional_tile,
