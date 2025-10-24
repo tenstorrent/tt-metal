@@ -6,6 +6,7 @@ import json
 import os
 import time
 from functools import partial
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F
@@ -26,6 +27,7 @@ from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.falcon7b_common.tt.model_config import get_model_config
 from models.demos.utils.llm_demo_utils import check_tokens_match, create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.tt_transformers.tt.common import get_hf_tt_cache_path
 
 END_OF_TEXT = 11
 SPACE = 204
@@ -118,8 +120,6 @@ def run_falcon_demo_kv(
     batch_size,
     max_seq_len,
     model_config_strs_prefill_decode,
-    model_location_generator,
-    get_tt_cache_path,
     mesh_device,  # can be ttnn.Device or ttnn.MeshDevice
     model_version="tiiuae/falcon-7b-instruct",
     num_layers=32,
@@ -173,21 +173,19 @@ def run_falcon_demo_kv(
     logger.info("Tokenizing inputs...")
     profiler.start(f"tokenizing_inputs")
 
-    tokenizer = AutoTokenizer.from_pretrained(model_version)
+    tokenizer = AutoTokenizer.from_pretrained(model_version, local_files_only=os.getenv("CI") == "true")
     prefill_ids, num_users, num_input_tokens = preprocess_and_validate_inputs(
         input_prompts, tokenizer, max_seq_len, perf_mode
     )
     profiler.end(f"tokenizing_inputs")
 
     model_config = get_model_config(model_config_strs_prefill_decode[0], nearest_32(num_input_tokens), batch_size)
-    tt_cache_path = get_tt_cache_path(
-        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
-    )
+    tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
     # State dict is needed for embeddings
     logger.info("Loading huggingface weights...")
     profiler.start(f"loading_weights")
-    hugging_face_reference_model, state_dict = load_hf_model(model_location_generator, model_version)
+    hugging_face_reference_model, state_dict = load_hf_model(model_version)
     configuration = hugging_face_reference_model.config
     logger.info("Loading weights finished!")
     profiler.end(f"loading_weights")
