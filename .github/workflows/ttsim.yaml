@@ -220,8 +220,8 @@ jobs:
             tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_llama_perf_sweep.py \
             tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_nightly.py \
             tests/nightly/t3000/ccl/test_send_recv_async.py \
-            tests/ttnn/unit_tests/operations/data_movement/test_moe_expert_token_remap_t3k.py \
-            tests/ttnn/unit_tests/operations/debug/test_apply_device_delay_t3000.py \
+            tests/nightly/t3000/ccl/test_moe_expert_token_remap.py \
+            tests/nightly/t3000/ccl/test_apply_device_delay.py \
             tests/ttnn/unit_tests/operations/eltwise/backward/complex_ops/test_backward_complex_add.py \
             tests/ttnn/unit_tests/operations/eltwise/backward/complex_ops/test_backward_complex_mul.py \
             tests/ttnn/unit_tests/operations/eltwise/backward/complex_ops/test_backward_conj.py \
@@ -264,7 +264,7 @@ jobs:
             tests/ttnn/unit_tests/operations/eltwise/test_sub.py \
             tests/ttnn/unit_tests/operations/eltwise/test_unary_uint16.py \
             tests/ttnn/unit_tests/operations/point_to_point/test_moe_p2p.py \
-            tests/ttnn/unit_tests/operations/point_to_point/test_point_to_point.py \
+            tests/nightly/t3000/ccl/test_point_to_point.py \
             tests/ttnn/unit_tests/operations/transformers/test_concatenate_heads.py \
             tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py \
             tests/ttnn/unit_tests/operations/debug/test_examples.py \
