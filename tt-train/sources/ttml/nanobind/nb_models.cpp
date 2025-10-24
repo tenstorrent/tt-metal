@@ -11,6 +11,7 @@
 #include <nanobind/stl/vector.h>
 
 #include "models/base_transformer.hpp"
+#include "models/bert.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/distributed/llama.hpp"
 #include "models/distributed/pipeline_parallel_llama.hpp"
@@ -34,6 +35,12 @@ void py_module_types(nb::module_& m, nb::module_& m_modules) {
     ttml::nanobind::util::export_enum<models::common::transformer::WeightTyingType>(m);
 
     nb::class_<models::BaseTransformer, ttml::modules::ModuleBase>(m, "BaseTransformer");
+
+    {
+        auto py_bert_module = m.def_submodule("bert");
+        nb::class_<models::bert::BertConfig>(py_bert_module, "BertConfig");
+        nb::class_<models::bert::Bert, models::BaseTransformer>(py_bert_module, "Bert");
+    }
 
     {
         auto py_gpt2_module = m.def_submodule("gpt2");
@@ -89,6 +96,43 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
         auto py_base_transformer =
             static_cast<nb::class_<models::BaseTransformer, ttml::modules::ModuleBase>>(m.attr("BaseTransformer"));
         py_base_transformer.def("load_from_safetensors", &models::BaseTransformer::load_from_safetensors);
+    }
+
+    {
+        auto py_bert_module = static_cast<nb::module_>(m.attr("bert"));
+        py_bert_module.def(
+            "create",
+            [](const models::bert::BertConfig& config) { return models::bert::create(config); },
+            "Create BERT model");
+
+        auto py_bert_config = static_cast<nb::class_<models::bert::BertConfig>>(py_bert_module.attr("BertConfig"));
+        py_bert_config.def(nb::init<>());
+        py_bert_config.def_rw("vocab_size", &models::bert::BertConfig::vocab_size, "Vocabulary size");
+        py_bert_config.def_rw(
+            "max_sequence_length", &models::bert::BertConfig::max_sequence_length, "Max sequence length");
+        py_bert_config.def_rw("embedding_dim", &models::bert::BertConfig::embedding_dim, "Embedding dimensions");
+        py_bert_config.def_rw("intermediate_size", &models::bert::BertConfig::intermediate_size, "Intermediate size");
+        py_bert_config.def_rw("num_heads", &models::bert::BertConfig::num_heads, "Number of heads");
+        py_bert_config.def_rw("num_blocks", &models::bert::BertConfig::num_blocks, "Number of blocks");
+        py_bert_config.def_rw("dropout_prob", &models::bert::BertConfig::dropout_prob, "Dropout probability");
+        py_bert_config.def_rw("layer_norm_eps", &models::bert::BertConfig::layer_norm_eps, "Layer norm epsilon");
+        py_bert_config.def_rw(
+            "use_token_type_embeddings",
+            &models::bert::BertConfig::use_token_type_embeddings,
+            "Use token type embeddings");
+        py_bert_config.def_rw("runner_type", &models::bert::BertConfig::runner_type, "Runner type");
+        py_bert_config.def_rw("use_pooler", &models::bert::BertConfig::use_pooler, "Use pooler");
+
+        auto py_bert =
+            static_cast<nb::class_<models::bert::Bert, models::BaseTransformer>>(py_bert_module.attr("Bert"));
+        py_bert.def(nb::init<const models::bert::BertConfig&>());
+        py_bert.def(
+            "load_model_from_safetensors",
+            [](models::bert::Bert& self, const std::filesystem::path& path) {
+                auto params = self.parameters();
+                models::bert::load_model_from_safetensors(path, params);
+            },
+            "Load model weights from safetensors file");
     }
 
     {
