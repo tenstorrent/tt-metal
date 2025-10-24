@@ -32,6 +32,7 @@
 #include "compressed_routing_table.hpp"
 #include "compressed_routing_path.hpp"
 #include "tools/scaleout/factory_system_descriptor/utils.hpp"
+#include "tools/scaleout/cabling_generator/cabling_generator.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include "distributed_context.hpp"
 #include "fabric_types.hpp"
@@ -2972,23 +2973,34 @@ bool ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
             return false;
         }
 
-        // Read the FSD textproto content from the cabling descriptor file
-        std::ifstream fsd_file(cabling_descriptor_path);
-        if (!fsd_file.is_open()) {
-            log_warning(tt::LogFabric, "Cannot open cabling descriptor file: {}", cabling_descriptor_path);
+        // Check if the cabling descriptor file exists
+        if (!std::filesystem::exists(cabling_descriptor_path)) {
+            log_warning(tt::LogFabric, "Cabling descriptor file not found: {}", cabling_descriptor_path);
             return false;
         }
+
+        // Get hostnames from the current physical system descriptor
+        auto all_hostnames = physical_system_descriptor_->get_all_hostnames();
+
+        // Generate FSD from the cabling descriptor using CablingGenerator
+        tt::scaleout_tools::CablingGenerator cabling_generator(cabling_descriptor_path, all_hostnames);
         
-        std::string fsd_textproto_content((std::istreambuf_iterator<char>(fsd_file)),
-                                         std::istreambuf_iterator<char>());
-        fsd_file.close();
+        // Generate the FSD protobuf object in memory
+        auto fsd_proto = cabling_generator.generate_factory_system_descriptor();
+        
+        // Convert the FSD protobuf to textproto string
+        std::string fsd_textproto_content;
+        if (!google::protobuf::TextFormat::PrintToString(fsd_proto, &fsd_textproto_content)) {
+            log_warning(tt::LogFabric, "Failed to convert FSD to textproto format");
+            return false;
+        }
 
         // Generate GSD YAML from the current physical system descriptor
         YAML::Node gsd_yaml = physical_system_descriptor_->generate_yaml_node();
         
         // Use the existing validation infrastructure to validate against the cabling descriptor
         tt::scaleout_tools::validate_fsd_against_gsd(
-            fsd_textproto_content,      // FSD textproto content from cabling descriptor
+            fsd_textproto_content,      // FSD textproto content from cabling generator
             gsd_yaml,                   // GSD YAML from current system
             false,                      // strict_validation = false
             false                       // assert_on_connection_mismatch = false
