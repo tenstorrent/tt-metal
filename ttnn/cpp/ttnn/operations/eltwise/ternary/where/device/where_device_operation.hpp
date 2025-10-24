@@ -62,6 +62,7 @@ struct WhereDeviceOperation {
             tt::tt_metal::KernelHandle writer_kernel_id{};
             tt::tt_metal::KernelHandle compute_kernel_id{};
             CoreCoord compute_with_storage_grid_size;
+            std::vector<tt::tt_metal::CBHandle> cb_handles{};  // For UpdateDynamicCircularBufferAddress in sharded mode
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
