@@ -168,7 +168,7 @@ class Generator:
         There is no support to pass them as a tensor, and then inside the trace read it as a number.
         # TODO: Support sliding window attention - This PR disabled tracing if a model uses sliding window attention, because this PR mainly covers models without sliding window attention. (for example,Llama-8B).
         """
-        if prefill_seq_len not in [128, 256, 512, 1024, 2048, 4096]:
+        if prefill_seq_len not in [128, 256, 512, 1024, 2048, 4096, 8192]:
             return False
         if prefill_seq_len > self.model_args[0].max_prefill_chunk_size:
             return False
