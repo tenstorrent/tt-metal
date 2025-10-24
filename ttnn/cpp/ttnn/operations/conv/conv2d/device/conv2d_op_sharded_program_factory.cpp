@@ -827,10 +827,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     if (skip_weights_mcast) {
         writer_mcast_sender_defines["SKIP_MCAST"] = "1";
     }
-    if (has_bias) {
-        writer_defines["FUSE_BIAS"] = "1";
-        writer_mcast_sender_defines["FUSE_BIAS"] = "1";
-    }
     bool pack_relu = fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU;
     if (fused_activation.has_value() && !pack_relu) {
         compute_defines.merge(ttnn::operations::unary::utils::get_defines(
@@ -879,7 +875,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
 
         num_blocks_act_h_per_core,
         num_blocks_weight_w_per_core,
-        out_conv_c_blocks};
+        out_conv_c_blocks,
+        (uint32_t)has_bias};
 
     if (enable_split_reader) {
         std::vector<uint32_t> split_reader_args = {
