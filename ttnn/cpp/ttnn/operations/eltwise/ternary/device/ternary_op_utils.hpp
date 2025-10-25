@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "where_device_operation.hpp"
+#include "ternary_device_operation.hpp"
 #include "ttnn/tensor/types.hpp"
 
 #include <map>
@@ -37,8 +37,8 @@ enum class KernelName {
     ComputeNoBcastTTS_TST,  // TTS, TST: no bcast, outer dim and row bcast cases
 };
 
-struct WhereKernelConfig {
-    WhereKernelConfig(WhereVariant where_variant, WhereBroadcastType broadcast_type);
+struct TernaryKernelConfig {
+    TernaryKernelConfig(TernaryOpType op_type, TernaryVariant ternary_variant, TernaryBroadcastType broadcast_type);
 
     KernelName reader_kernel;
     KernelName compute_kernel;
@@ -52,11 +52,14 @@ uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype);
 std::map<std::string, std::string> make_dataflow_defines(
     DataType dtype, DataType b_dtype, std::optional<DataType> c_dtype = std::nullopt);  // for binary & ternary variant
 
+// Get compute kernel defines based on operation type
+std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, DataType dtype);
+
 // TTT variant (tensor-tensor-tensor)
-WhereBroadcastType get_broadcast_type(
+TernaryBroadcastType get_broadcast_type(
     const ttnn::Shape& predicate_shape, const ttnn::Shape& value_true_shape, const ttnn::Shape& value_false_shape);
 
 // 2-tensor broadcast compatibility (used by both TTS and TST)
-WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const ttnn::Shape& tensor_shape);
+TernaryBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const ttnn::Shape& tensor_shape);
 
 }  // namespace ttnn::operations::ternary

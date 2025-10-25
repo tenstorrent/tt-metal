@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "where_utils.hpp"
+#include "ternary_op_utils.hpp"
 #include <tt_stl/assert.hpp>
 
 #include <fmt/core.h>
@@ -13,22 +13,21 @@ namespace ttnn::operations::ternary {
 
 // Composite key for kernel lookup
 struct KernelLookupKey {
-    WhereVariant variant;
-    WhereBroadcastType broadcast_type;
+    TernaryOpType op_type;
+    TernaryVariant variant;
+    TernaryBroadcastType broadcast_type;
 
     bool operator==(const KernelLookupKey& other) const {
-        return variant == other.variant && broadcast_type == other.broadcast_type;
+        return op_type == other.op_type && variant == other.variant && broadcast_type == other.broadcast_type;
     }
 };
 
 // Hash function for KernelLookupKey
 struct KernelLookupKeyHash {
     std::size_t operator()(const KernelLookupKey& key) const {
-        // Collision-free hash for enum combination
-        // WhereVariant (0-3) << 4 gives: 0, 16, 32, 48
-        // OR with WhereBroadcastType (0-7) gives unique keys 0-55
-        // No collisions possible since ranges are small and disjoint
-        return (static_cast<size_t>(key.variant) << 4) | static_cast<size_t>(key.broadcast_type);
+        // TernaryOpType (0-N) << 8 | TernaryVariant (0-3) << 4 | TernaryBroadcastType (0-7)
+        return (static_cast<size_t>(key.op_type) << 8) | (static_cast<size_t>(key.variant) << 4) |
+               static_cast<size_t>(key.broadcast_type);
     }
 };
 
@@ -39,56 +38,85 @@ struct KernelConfigEntry {
     KernelName writer_kernel;
 };
 
+// Common kernel configuration map for all ternary operations
+// WHERE and LERP will use the same kernel structure, just with different compute defines
 static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookupKeyHash> kernel_config_map = {
-    // TTT configurations
-    {{WhereVariant::TTT, WhereBroadcastType::COL_BCAST},
+    // TTT configurations for WHERE
+    {{TernaryOpType::WHERE, TernaryVariant::TTT, TernaryBroadcastType::COL_BCAST},
      {KernelName::ReaderColBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterColBcastTTT}},
-    {{WhereVariant::TTT, WhereBroadcastType::OUTER_BCAST},
+    {{TernaryOpType::WHERE, TernaryVariant::TTT, TernaryBroadcastType::OUTER_BCAST},
      {KernelName::ReaderOuterBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcast}},
-    {{WhereVariant::TTT, WhereBroadcastType::ROW_BCAST},
+    {{TernaryOpType::WHERE, TernaryVariant::TTT, TernaryBroadcastType::ROW_BCAST},
      {KernelName::ReaderRowBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcast}},
-    {{WhereVariant::TTT, WhereBroadcastType::SCALAR_BCAST},
+    {{TernaryOpType::WHERE, TernaryVariant::TTT, TernaryBroadcastType::SCALAR_BCAST},
      {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcast}},
-    {{WhereVariant::TTT, WhereBroadcastType::NONE},
+    {{TernaryOpType::WHERE, TernaryVariant::TTT, TernaryBroadcastType::NONE},
      {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcast}},
 
-    // TTS configurations
-    {{WhereVariant::TTS, WhereBroadcastType::COL_BCAST},
+    // TTS configurations for WHERE
+    {{TernaryOpType::WHERE, TernaryVariant::TTS, TernaryBroadcastType::COL_BCAST},
      {KernelName::ReaderColBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
-    {{WhereVariant::TTS, WhereBroadcastType::ROW_BCAST},
+    {{TernaryOpType::WHERE, TernaryVariant::TTS, TernaryBroadcastType::ROW_BCAST},
      {KernelName::ReaderRowBcastTTS, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
-    {{WhereVariant::TTS, WhereBroadcastType::OUTER_BCAST},
+    {{TernaryOpType::WHERE, TernaryVariant::TTS, TernaryBroadcastType::OUTER_BCAST},
      {KernelName::ReaderOuterBcastTTS, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
-    {{WhereVariant::TTS, WhereBroadcastType::SCALAR_A_BCAST},
+    {{TernaryOpType::WHERE, TernaryVariant::TTS, TernaryBroadcastType::SCALAR_A_BCAST},
      {KernelName::ReaderScalarBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
-    {{WhereVariant::TTS, WhereBroadcastType::SCALAR_B_BCAST},
+    {{TernaryOpType::WHERE, TernaryVariant::TTS, TernaryBroadcastType::SCALAR_B_BCAST},
      {KernelName::ReaderScalarBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
-    {{WhereVariant::TTS, WhereBroadcastType::NONE},
+    {{TernaryOpType::WHERE, TernaryVariant::TTS, TernaryBroadcastType::NONE},
      {KernelName::ReaderNoBcastTTS, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
 
-    // TST configurations
-    {{WhereVariant::TST, WhereBroadcastType::COL_BCAST},
+    // TST configurations for WHERE
+    {{TernaryOpType::WHERE, TernaryVariant::TST, TernaryBroadcastType::COL_BCAST},
      {KernelName::ReaderColBcastTST, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
-    {{WhereVariant::TST, WhereBroadcastType::ROW_BCAST},
+    {{TernaryOpType::WHERE, TernaryVariant::TST, TernaryBroadcastType::ROW_BCAST},
      {KernelName::ReaderRowBcastTST, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
-    {{WhereVariant::TST, WhereBroadcastType::OUTER_BCAST},
+    {{TernaryOpType::WHERE, TernaryVariant::TST, TernaryBroadcastType::OUTER_BCAST},
      {KernelName::ReaderOuterBcastTST, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
-    {{WhereVariant::TST, WhereBroadcastType::SCALAR_A_BCAST},
+    {{TernaryOpType::WHERE, TernaryVariant::TST, TernaryBroadcastType::SCALAR_A_BCAST},
      {KernelName::ReaderScalarBcastTST, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
-    {{WhereVariant::TST, WhereBroadcastType::SCALAR_B_BCAST},
+    {{TernaryOpType::WHERE, TernaryVariant::TST, TernaryBroadcastType::SCALAR_B_BCAST},
      {KernelName::ReaderScalarBcastTST, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
-    {{WhereVariant::TST, WhereBroadcastType::NONE},
+    {{TernaryOpType::WHERE, TernaryVariant::TST, TernaryBroadcastType::NONE},
      {KernelName::ReaderNoBcastTST, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+
+    // TTT configurations for LERP - same kernels, different compute operation
+    {{TernaryOpType::LERP, TernaryVariant::TTT, TernaryBroadcastType::COL_BCAST},
+     {KernelName::ReaderColBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterColBcastTTT}},
+    {{TernaryOpType::LERP, TernaryVariant::TTT, TernaryBroadcastType::OUTER_BCAST},
+     {KernelName::ReaderOuterBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcast}},
+    {{TernaryOpType::LERP, TernaryVariant::TTT, TernaryBroadcastType::ROW_BCAST},
+     {KernelName::ReaderRowBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcast}},
+    {{TernaryOpType::LERP, TernaryVariant::TTT, TernaryBroadcastType::SCALAR_BCAST},
+     {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcast}},
+    {{TernaryOpType::LERP, TernaryVariant::TTT, TernaryBroadcastType::NONE},
+     {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcast}},
+
+    // TTS configurations for LERP
+    {{TernaryOpType::LERP, TernaryVariant::TTS, TernaryBroadcastType::COL_BCAST},
+     {KernelName::ReaderColBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::LERP, TernaryVariant::TTS, TernaryBroadcastType::ROW_BCAST},
+     {KernelName::ReaderRowBcastTTS, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::LERP, TernaryVariant::TTS, TernaryBroadcastType::OUTER_BCAST},
+     {KernelName::ReaderOuterBcastTTS, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::LERP, TernaryVariant::TTS, TernaryBroadcastType::SCALAR_A_BCAST},
+     {KernelName::ReaderScalarBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::LERP, TernaryVariant::TTS, TernaryBroadcastType::SCALAR_B_BCAST},
+     {KernelName::ReaderScalarBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::LERP, TernaryVariant::TTS, TernaryBroadcastType::NONE},
+     {KernelName::ReaderNoBcastTTS, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
 };
 
-WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastType broadcast_type) {
+TernaryKernelConfig::TernaryKernelConfig(
+    TernaryOpType op_type, TernaryVariant ternary_variant, TernaryBroadcastType broadcast_type) {
     // Check for unsupported TSS variant
-    if (where_variant == WhereVariant::TSS) {
-        TT_FATAL(false, "TSS variant is yet to be moved into Where Device Operation");
+    if (ternary_variant == TernaryVariant::TSS) {
+        TT_FATAL(false, "TSS variant is yet to be moved into Ternary Device Operation");
     }
 
     // Find matching configuration using O(1) hash map lookup
-    KernelLookupKey key{where_variant, broadcast_type};
+    KernelLookupKey key{op_type, ternary_variant, broadcast_type};
     auto it = kernel_config_map.find(key);
     if (it != kernel_config_map.end()) {
         reader_kernel = it->second.reader_kernel;
@@ -97,11 +125,11 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
         return;
     }
 
-    TT_FATAL(false, "Invalid where variant or broadcast type combination");
+    TT_FATAL(false, "Invalid ternary operation type, variant or broadcast type combination");
 }
 
 std::string get_kernel_file_path(KernelName kernel_name) {
-    constexpr std::string_view root = "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels";
+    constexpr std::string_view root = "ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels";
     constexpr std::string_view dataflow = "{}/dataflow/{}";
     constexpr std::string_view compute = "{}/compute/{}";
 
@@ -114,44 +142,27 @@ std::string get_kernel_file_path(KernelName kernel_name) {
         case KernelName::ReaderOuterBcastTST: return fmt::format(dataflow, root, "tst_tts_reader_outer_bcast.cpp");
         case KernelName::ReaderScalarBcastTTS: return fmt::format(dataflow, root, "tst_tts_reader_scalar_bcast.cpp");
         case KernelName::ReaderScalarBcastTST: return fmt::format(dataflow, root, "tst_tts_reader_scalar_bcast.cpp");
-        case KernelName::ReaderScalarBcastTTT:
-            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
-                   "ternary_reader_scalar_ttt.cpp";
-        case KernelName::ReaderColBcastTTT:
-            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
-                   "ternary_reader_colbcast_ttt.cpp";
-        case KernelName::ReaderColBcastTTS:
-            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
-                   "tts_tst_reader_col_bcast.cpp";
-        case KernelName::ReaderColBcastTST:
-            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
-                   "tts_tst_reader_col_bcast.cpp";
-        case KernelName::ReaderRowBcastTTT:
-            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
-                   "ternary_reader_rowbcast_ttt.cpp";
+        case KernelName::ReaderScalarBcastTTT: return fmt::format(dataflow, root, "ternary_reader_scalar_ttt.cpp");
+        case KernelName::ReaderColBcastTTT: return fmt::format(dataflow, root, "ternary_reader_colbcast_ttt.cpp");
+        case KernelName::ReaderColBcastTTS: return fmt::format(dataflow, root, "tts_tst_reader_col_bcast.cpp");
+        case KernelName::ReaderColBcastTST: return fmt::format(dataflow, root, "tts_tst_reader_col_bcast.cpp");
+        case KernelName::ReaderRowBcastTTT: return fmt::format(dataflow, root, "ternary_reader_rowbcast_ttt.cpp");
         case KernelName::ReaderRowBcastTST:
-        case KernelName::ReaderRowBcastTTS:
-            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
-                   "tts_tst_reader_row_bcast.cpp";
+        case KernelName::ReaderRowBcastTTS: return fmt::format(dataflow, root, "tts_tst_reader_row_bcast.cpp");
 
         case KernelName::WriterNoBcast:
             return "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
                    "writer_unary_interleaved_start_id.cpp";
         case KernelName::WriterColBcastTTT:
-            // Use unary writer (simple and works with 3 args: dst_addr, num_tiles, start_id)
             return "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
                    "writer_unary_interleaved_start_id.cpp";
 
-        case KernelName::ComputeNoBcastTTT: return fmt::format(compute, root, "where_sfpu_no_bcast_ttt.cpp");
-        case KernelName::ComputeBcastTTT:
-            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/"
-                   "where_sfpu_col_scalar_bcast_ttt.cpp";
+        case KernelName::ComputeNoBcastTTT: return fmt::format(compute, root, "ternary_sfpu_no_bcast_ttt.cpp");
+        case KernelName::ComputeBcastTTT: return fmt::format(compute, root, "ternary_sfpu_col_scalar_bcast_ttt.cpp");
         case KernelName::ComputeBcastTTS_TST:
-            return fmt::format(compute, root, "where_sfpu_col_scalar_bcast_tts_tst.cpp");
-        case KernelName::ComputeNoBcastTTS_TST:
-            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/"
-                   "where_sfpu_no_bcast_tts_tst.cpp";
-        default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match
+            return fmt::format(compute, root, "ternary_sfpu_col_scalar_bcast_tts_tst.cpp");
+        case KernelName::ComputeNoBcastTTS_TST: return fmt::format(compute, root, "ternary_sfpu_no_bcast_tts_tst.cpp");
+        default: __builtin_unreachable();
     }
 }
 
@@ -238,13 +249,38 @@ std::map<std::string, std::string> make_dataflow_defines(
     return defines;
 }
 
+std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, DataType dtype) {
+    std::map<std::string, std::string> defines;
+
+    switch (op_type) {
+        case TernaryOpType::WHERE:
+            defines["TERNARY_OP_INIT"] = "where_tile_init";
+            if (dtype == DataType::FLOAT32) {
+                defines["TERNARY_OP_FUNC"] = "where_fp32_tile";
+            } else if (dtype == DataType::INT32) {
+                defines["TERNARY_OP_FUNC"] = "where_int32_tile";
+            } else {
+                defines["TERNARY_OP_FUNC"] = "where_tile";
+            }
+            break;
+        case TernaryOpType::LERP:
+            // LERP will use lerp_tile_init and lerp_tile functions (to be implemented)
+            defines["TERNARY_OP_INIT"] = "lerp_tile_init";
+            defines["TERNARY_OP_FUNC"] = "lerp_tile";
+            break;
+        default: TT_FATAL(false, "Unsupported ternary operation type");
+    }
+
+    return defines;
+}
+
 // 2-tensor broadcast compatibility (used by both TTS and TST variants)
 // For TTS: checks predicate vs true tensor (false is scalar)
 // For TST: checks predicate vs false tensor (true is scalar)
-WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const ttnn::Shape& tensor_shape) {
+TernaryBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const ttnn::Shape& tensor_shape) {
     // Check for exact match
     if (predicate_shape == tensor_shape) {
-        return WhereBroadcastType::NONE;
+        return TernaryBroadcastType::NONE;
     }
 
     bool same_width = (predicate_shape[-1] == tensor_shape[-1]);
@@ -261,7 +297,7 @@ WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const 
     // it's outer broadcast (broadcasting in dimensions beyond -2)
     if (same_height && same_width) {
         log_debug(tt::LogOp, "Detected OUTER_BCAST for 2-tensor case");
-        return WhereBroadcastType::OUTER_BCAST;
+        return TernaryBroadcastType::OUTER_BCAST;
     }
 
     // Multi-dimensional ROW and COL broadcast is not supported for now
@@ -281,14 +317,14 @@ WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const 
         bool b_col_bcast = (b_w == 1 && max_w > 1);
 
         if (b_row_bcast && b_col_bcast) {
-            return WhereBroadcastType::SCALAR_B_BCAST;
+            return TernaryBroadcastType::SCALAR_B_BCAST;
         }
 
         if (pred_row_bcast && pred_col_bcast) {
-            return WhereBroadcastType::SCALAR_A_BCAST;
+            return TernaryBroadcastType::SCALAR_A_BCAST;
         }
 
-        return WhereBroadcastType::INVALID_BCAST;
+        return TernaryBroadcastType::INVALID_BCAST;
     }
 
     // Get dimension sizes
@@ -307,7 +343,7 @@ WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const 
         if ((pred_col_broadcasted || tensor_col_broadcasted) && same_height) {
             // TTS and TST support column broadcast
             log_debug(tt::LogOp, "2-tensor case detected column broadcast");
-            return WhereBroadcastType::COL_BCAST;
+            return TernaryBroadcastType::COL_BCAST;
         }
     }
 
@@ -332,21 +368,21 @@ WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const 
         if ((pred_row_broadcasted || tensor_row_broadcasted) && same_width) {
             // TTS and TST now support row broadcast
             log_debug(tt::LogOp, "2-tensor row broadcast detected for TTS/TST");
-            return WhereBroadcastType::ROW_BCAST;
+            return TernaryBroadcastType::ROW_BCAST;
         }
     }
 
     // If we reach here, no valid broadcast pattern was found
-    return WhereBroadcastType::INVALID_BCAST;
+    return TernaryBroadcastType::INVALID_BCAST;
 }
 
-WhereBroadcastType get_broadcast_type(
+TernaryBroadcastType get_broadcast_type(
     const ttnn::Shape& predicate_shape, const ttnn::Shape& true_shape, const ttnn::Shape& false_shape) {
     // Check for column broadcast pattern:
     // Examples: (1,1,32,32), (1,1,32,1), (1,1,32,32) or (1,1,32,1), (1,1,32,1), (1,1,32,32)
     // Column broadcast means one or more tensors have last dimension = 1 while at least one has full width
     if ((predicate_shape == true_shape) && (predicate_shape == false_shape)) {
-        return WhereBroadcastType::NONE;
+        return TernaryBroadcastType::NONE;
     }
 
     bool same_width = (predicate_shape[-1] == true_shape[-1]) && (predicate_shape[-1] == false_shape[-1]);
@@ -354,7 +390,7 @@ WhereBroadcastType get_broadcast_type(
 
     // Check for outer broadcast: same height and width
     if (same_height && same_width) {
-        return WhereBroadcastType::OUTER_BCAST;
+        return TernaryBroadcastType::OUTER_BCAST;
     }
 
     // Multi-dimensional mixed ROW and COL broadcast (i.e., cases where both height and width require broadcasting in
@@ -390,10 +426,10 @@ WhereBroadcastType get_broadcast_type(
 
         if ((is_pred_scalar || is_pred_non_bcast) && (is_true_scalar || is_true_non_bcast) &&
             (is_false_scalar || is_false_non_bcast)) {
-            return WhereBroadcastType::SCALAR_BCAST;
+            return TernaryBroadcastType::SCALAR_BCAST;
         }
 
-        return WhereBroadcastType::INVALID_BCAST;
+        return TernaryBroadcastType::INVALID_BCAST;
     }
 
     // Get last dimension sizes
@@ -415,7 +451,7 @@ WhereBroadcastType get_broadcast_type(
         // Row broadcast case: at least one tensor is broadcasting in height and widths are same
         if ((pred_row_broadcasted || true_row_broadcasted || false_row_broadcasted) &&
             (pred_w == true_w && pred_w == false_w)) {
-            return WhereBroadcastType::ROW_BCAST;
+            return TernaryBroadcastType::ROW_BCAST;
         }
     }
 
@@ -429,11 +465,11 @@ WhereBroadcastType get_broadcast_type(
         // Column broadcast case: at least one tensor is broadcasting in width and heights are same
         if ((pred_col_broadcasted || true_col_broadcasted || false_col_broadcasted) &&
             (pred_h == true_h && pred_h == false_h)) {
-            return WhereBroadcastType::COL_BCAST;
+            return TernaryBroadcastType::COL_BCAST;
         }
     }
 
-    return WhereBroadcastType::INVALID_BCAST;
+    return TernaryBroadcastType::INVALID_BCAST;
 }
 
 }  // namespace ttnn::operations::ternary
