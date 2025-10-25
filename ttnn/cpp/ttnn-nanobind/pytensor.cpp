@@ -665,7 +665,8 @@ nb::object convert_tt_tensor_to_torch_tensor(const RowMajorHostBuffer& row_major
             return pytorch_empty(row_major_host_buffer.shape, nb::arg("dtype") = torch_dtype);
         }
         auto view = row_major_host_buffer.buffer.view_bytes();
-        nb::ndarray<const void, nb::shape<-1>, nb::c_contig, nb::device::cpu> array_view(view.data(), {view.size()});
+        nb::ndarray<const uint8_t, nb::shape<-1>, nb::c_contig, nb::device::cpu> array_view(
+            reinterpret_cast<const uint8_t*>(view.data()), {view.size()});
         return frombuffer(array_view, nb::arg("dtype") = torch_dtype);
     }();
 
