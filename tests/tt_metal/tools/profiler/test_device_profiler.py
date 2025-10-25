@@ -384,7 +384,7 @@ def test_dispatch_cores():
 
     verify_stats(
         run_device_profiler_test(
-            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices -k DispatchCoreType.WORKER",
+            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_mesh_device -k DispatchCoreType.WORKER",
             setupAutoExtract=True,
             doDispatchCores=True,
         ),
@@ -408,7 +408,10 @@ def test_dispatch_cores():
 # Eth dispatch will be deprecated
 @skip_for_blackhole()
 def test_ethernet_dispatch_cores():
-    REF_COUNT_DICT = {"Ethernet CQ Dispatch": [590, 840, 1430, 1660, 2320], "Ethernet CQ Prefetch": [572, 4030]}
+    REF_COUNT_DICT = {
+        "Ethernet CQ Dispatch": [590, 1080, 1430, 1660, 1994, 3285, 3769, 4237],
+        "Ethernet CQ Prefetch": [572, 1058, 4030],
+    }
     devicesData = run_device_profiler_test(
         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops -k DispatchCoreType.ETH",
         setupAutoExtract=True,
@@ -429,7 +432,7 @@ def test_ethernet_dispatch_cores():
                 ), f"Wrong ethernet dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
 
     devicesData = run_device_profiler_test(
-        testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices -k DispatchCoreType.ETH",
+        testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_mesh_device -k DispatchCoreType.ETH",
         setupAutoExtract=True,
         doDispatchCores=True,
     )
@@ -454,7 +457,7 @@ def test_profiler_host_device_sync():
     syncInfoFile = PROFILER_LOGS_DIR / PROFILER_HOST_DEVICE_SYNC_INFO
 
     deviceData = run_device_profiler_test(
-        testName=f"pytest {TRACY_TESTS_DIR}/test_profiler_sync.py::test_all_devices", doSync=True
+        testName=f"pytest {TRACY_TESTS_DIR}/test_profiler_sync.py::test_mesh_device", doSync=True
     )
     reportedFreq = deviceData["data"]["deviceInfo"]["freq"] * 1e6
     assert os.path.isfile(syncInfoFile)
