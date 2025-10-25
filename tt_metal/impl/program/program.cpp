@@ -10,6 +10,7 @@
 #include <enchantum/enchantum.hpp>
 #include <memory_reporter.hpp>
 #include "impl/buffers/semaphore.hpp"
+#include <ranges>
 #include <tt_align.hpp>
 #include <algorithm>
 #include <array>
@@ -1577,8 +1578,11 @@ std::span<const std::shared_ptr<CircularBufferImpl>> detail::ProgramImpl::circul
     return circular_buffers_;
 }
 
-std::span<const std::shared_ptr<CircularBufferImpl>> Program::circular_buffers() const {
-    return internal_->circular_buffers();
+std::vector<std::shared_ptr<CircularBuffer>> Program::circular_buffers() const {
+    std::ranges::transform_view res_view(impl().circular_buffers(), [](const auto& impl_ptr) {
+        return std::make_shared<CircularBuffer>(impl_ptr.get());
+    });
+    return {res_view.begin(), res_view.end()};
 }
 
 const std::vector<Semaphore>& detail::ProgramImpl::semaphores() const { return semaphores_; }
