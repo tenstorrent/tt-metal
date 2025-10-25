@@ -167,7 +167,7 @@ public:
     PhysicalSystemDescriptor& operator=(const PhysicalSystemDescriptor&) = delete;
     PhysicalSystemDescriptor& operator=(PhysicalSystemDescriptor&&) = delete;
 
-    void run_discovery(bool run_global_discovery = true);
+    void run_discovery(bool run_global_discovery = true, bool run_live_discovery = true);
     // ASIC Topology Query APIs
     std::vector<AsicID> get_asic_neighbors(AsicID asic_id) const;
     std::vector<EthConnection> get_eth_connections(AsicID src_asic_id, AsicID dst_asic_id) const;
@@ -214,7 +214,7 @@ public:
     void emit_to_text_proto(const std::optional<std::string>& path_to_text_proto = std::nullopt);
 
 private:
-    void run_local_discovery();
+    void run_local_discovery(bool run_live_discovery);
     void run_global_discovery();
     void clear();
     void merge(PhysicalSystemDescriptor&& other);
