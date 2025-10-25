@@ -315,7 +315,7 @@ def create_tt_qwen_model(
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
-            32,  # batch_size
+            1,  # batch_size
             4096,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
