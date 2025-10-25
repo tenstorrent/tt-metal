@@ -44,6 +44,10 @@ def load_reference_model(model_location_generator=None):
 
 
 def create_unet_preprocessor(device, mesh_mapper=None):
+    assert (
+        device.get_num_devices() == 1 or mesh_mapper is not None
+    ), f"Expected a mesh mapper for weight tensors if we are using multiple devices"
+
     def custom_preprocessor(model, name, ttnn_module_args):
         parameters = {}
         if isinstance(model, UNet):

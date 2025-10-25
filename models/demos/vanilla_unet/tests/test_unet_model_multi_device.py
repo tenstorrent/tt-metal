@@ -37,7 +37,9 @@ def test_vanilla_unet_model_multi_device(
     logger.info(f"Using {num_devices} devices for this test")
 
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: reference_model, custom_preprocessor=create_unet_preprocessor(mesh_device), device=None
+        initialize_model=lambda: reference_model,
+        custom_preprocessor=create_unet_preprocessor(mesh_device, mesh_mapper=weights_mesh_mapper),
+        device=None,
     )
     configs = create_unet_configs_from_parameters(
         parameters=parameters, input_height=input_height, input_width=input_width, batch_size=batch

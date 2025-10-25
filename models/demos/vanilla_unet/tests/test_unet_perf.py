@@ -177,6 +177,7 @@ def test_vanilla_unet_perf_e2e(
 
 
 @run_for_wormhole_b0()
+@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "device_params",
     [
