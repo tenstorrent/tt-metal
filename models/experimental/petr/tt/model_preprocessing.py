@@ -5,7 +5,7 @@
 import torch
 import ttnn
 from ttnn.model_preprocessing import infer_ttnn_module_args
-from models.experimental.functional_petr.reference.petr_transformer import PETRTransformer
+from models.experimental.petr.reference.petr_transformer import PETRTransformer
 
 
 def create_petr_transformer_input_tensors(

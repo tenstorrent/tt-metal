@@ -5,20 +5,14 @@ import torch
 import pytest
 import ttnn
 import tracy
-from models.experimental.functional_petr.reference.petr import PETR
-from models.experimental.functional_petr.tt.ttnn_petr import ttnn_PETR
+from models.experimental.petr.reference.petr import PETR
+from models.experimental.petr.tt.ttnn_petr import ttnn_PETR
 import os
-from models.experimental.functional_petr.tt.common import get_parameters
+from models.experimental.petr.tt.common import get_parameters, generate_petr_inputs
 
 
 def prepare_inputs():
-    inputs = torch.load(
-        "models/experimental/functional_petr/resources/golden_input_inputs_sample1.pt", weights_only=False
-    )
-    modified_batch_img_metas = torch.load(
-        "models/experimental/functional_petr/resources/modified_input_batch_img_metas_sample1.pt", weights_only=False
-    )
-
+    inputs, modified_batch_img_metas = generate_petr_inputs()
     inputs["imgs"] = inputs["imgs"][:, 0:1, :, :, :]
     for meta in modified_batch_img_metas:
         meta["cam2img"] = [meta["cam2img"][0]]

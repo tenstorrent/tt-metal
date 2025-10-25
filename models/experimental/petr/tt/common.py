@@ -12,10 +12,11 @@ from ttnn.model_preprocessing import (
     ParameterList,
     fold_batch_norm2d_into_conv2d,
 )
-
-from models.experimental.functional_petr.reference.petr_head import PETRHead
-from models.experimental.functional_petr.reference.cp_fpn import CPFPN
-from models.experimental.functional_petr.reference.vovnetcp import VoVNetCP, eSEModule, _OSA_module, _OSA_stage
+import numpy as np
+from pyquaternion import Quaternion
+from models.experimental.petr.reference.petr_head import PETRHead
+from models.experimental.petr.reference.cp_fpn import CPFPN
+from models.experimental.petr.reference.vovnetcp import VoVNetCP, eSEModule, _OSA_module, _OSA_stage
 from torch.nn import Conv2d, Linear
 
 from torch import nn
@@ -23,9 +24,9 @@ from ttnn.model_preprocessing import (
     preprocess_model_parameters,
     infer_ttnn_module_args,
 )
-from models.experimental.functional_petr.reference.petr_head import pos2posemb3d
-from models.experimental.functional_petr.reference.cp_fpn import CPFPN
-from models.experimental.functional_petr.reference.vovnetcp import VoVNetCP, eSEModule, _OSA_module, _OSA_stage
+from models.experimental.petr.reference.petr_head import pos2posemb3d
+from models.experimental.petr.reference.cp_fpn import CPFPN
+from models.experimental.petr.reference.vovnetcp import VoVNetCP, eSEModule, _OSA_module, _OSA_stage
 
 
 class Conv:
@@ -554,3 +555,126 @@ def get_parameters(torch_model, device):
     )
 
     return parameters, query_embedding_input
+
+
+def generate_petr_inputs():
+    torch.manual_seed(42)
+    np.random.seed(42)
+
+    B, num_cams, C, H, W = 1, 6, 3, 320, 800
+
+    # input data
+    inputs = dict()
+    inputs["imgs"] = torch.randn(B, num_cams, C, H, W, dtype=torch.float32)
+
+    # metadata for the input
+    scale_x = 800 / 1600
+    scale_y = 320 / 900
+
+    # intrinsics for the input used from the nuscenes mini dataset
+    intrinsics_original = [
+        [
+            [1266.417203046554, 0.0, 816.2670197447984],
+            [0.0, 1266.417203046554, 491.50706579294757],
+            [0.0, 0.0, 1.0],
+        ],  # FRONT
+        [
+            [1260.8474446004698, 0.0, 807.968244525554],
+            [0.0, 1260.8474446004698, 495.3344268742088],
+            [0.0, 0.0, 1.0],
+        ],  # FRONT_RIGHT
+        [
+            [1272.5979470598488, 0.0, 826.6154927353808],
+            [0.0, 1272.5979470598488, 479.75165386361925],
+            [0.0, 0.0, 1.0],
+        ],  # FRONT_LEFT
+        [
+            [809.2209905677063, 0.0, 829.2196003259838],
+            [0.0, 809.2209905677063, 481.77842384512485],
+            [0.0, 0.0, 1.0],
+        ],  # BACK
+        [
+            [1256.7414812095406, 0.0, 792.1125740759628],
+            [0.0, 1256.7414812095406, 492.7757465151356],
+            [0.0, 0.0, 1.0],
+        ],  # BACK_LEFT
+        [
+            [1259.5137405846733, 0.0, 807.2529053838625],
+            [0.0, 1259.5137405846733, 501.19579884916527],
+            [0.0, 0.0, 1.0],
+        ],  # BACK_RIGHT
+    ]
+
+    cam2img = []
+    for intrinsic in intrinsics_original:
+        K = np.array(intrinsic, dtype=np.float32)
+        # Scale for 800x320 resolution
+        K[0, 0] *= scale_x  # fx
+        K[1, 1] *= scale_y  # fy
+        K[0, 2] *= scale_x  # cx
+        K[1, 2] *= scale_y  # cy
+
+        # Convert to 4x4
+        K_4x4 = np.array(
+            [[K[0, 0], 0, K[0, 2], 0], [0, K[1, 1], K[1, 2], 0], [0, 0, 1, 0], [0, 0, 0, 1]], dtype=np.float32
+        )
+        cam2img.append(K_4x4)
+
+    # extrinsics for the input used from the nuscenes mini dataset
+    translations = [
+        [1.70079118954, 0.0159456324149, 1.51095763913],
+        [1.5508477543, -0.493404796419, 1.49574800619],
+        [1.52387798135, 0.494631336551, 1.50932822144],
+        [0.0283260309358, 0.00345136761476, 1.57910346144],
+        [1.03569100218, 0.484795032713, 1.59097014818],
+        [1.0148780988, -0.480568219723, 1.56239545128],
+    ]
+    # rotations for the input used from the nuscenes mini dataset
+    rotations_quat = [
+        [0.4998015430569128, -0.5030316162024876, 0.4997798114386805, -0.49737083824542755],
+        [0.2060347966337182, -0.2026940577919598, 0.6824507824531167, -0.6713610884174485],
+        [0.6757265034669446, -0.6736266522251881, 0.21214015046209478, -0.21122827103904068],
+        [0.5037872666382278, -0.49740249788611096, -0.4941850223835201, 0.5045496097725578],
+        [0.6924185592174665, -0.7031619420114925, -0.11648342771943819, 0.11203317912370753],
+        [0.12280980120078765, -0.132400842670559, -0.7004305821388234, 0.690496031265798],
+    ]
+
+    # Convert to lidar2cam
+    lidar2cam = []
+    for trans, rot_quat in zip(translations, rotations_quat):
+        # Quaternion to rotation matrix
+        q = Quaternion(rot_quat)
+        rot_matrix = q.rotation_matrix
+
+        # Build 4x4 transformation
+        T = np.eye(4, dtype=np.float32)
+        T[:3, :3] = rot_matrix.astype(np.float32)
+        T[:3, 3] = np.array(trans, dtype=np.float32)
+
+        lidar2cam.append(T)
+
+    lidar2cam = np.stack(lidar2cam)
+
+    # Compute lidar2img
+    lidar2img = [cam2img[i] @ lidar2cam[i] for i in range(num_cams)]
+
+    img_metas_dict = dict()
+    img_metas_dict["lidar2cam"] = lidar2cam
+    img_metas_dict["img_shape"] = (320, 800)
+    img_metas_dict["ori_shape"] = (900, 1600)
+    img_metas_dict["pad_shape"] = (320, 800)
+    img_metas_dict["input_shape"] = (320, 800)
+    img_metas_dict["scale_factor"] = np.array([scale_x, scale_y, scale_x, scale_y], dtype=np.float32)
+    img_metas_dict["box_type_3d"] = type("LiDARInstance3DBoxes", (), {})
+    img_metas_dict["cam2img"] = cam2img
+    img_metas_dict["lidar2img"] = lidar2img
+    img_metas_dict["flip"] = False
+    img_metas_dict["flip_direction"] = None
+    img_metas_dict["sample_idx"] = "ca9a282c9e77460f8360f564131a8af5"
+    img_metas_dict["scene_token"] = "cc8c0bf57f984915a77078b10eb33198"
+    img_metas_dict["timestamp"] = 1532402928147847
+    img_metas_dict["pc_range"] = np.array([-51.2, -51.2, -5.0, 51.2, 51.2, 3.0])
+
+    modified_batch_img_metas = [img_metas_dict]
+
+    return inputs, modified_batch_img_metas

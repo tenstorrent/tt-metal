@@ -4,13 +4,13 @@
 import torch
 import ttnn
 import pytest
-from models.experimental.functional_petr.reference.vovnetcp import (
+from models.experimental.petr.reference.vovnetcp import (
     VoVNetCP,
     Hsigmoid,
     eSEModule,
     _OSA_stage,
 )
-from models.experimental.functional_petr.tt.ttnn_vovnetcp import (
+from models.experimental.petr.tt.ttnn_vovnetcp import (
     ttnn_hsigmoid,
     ttnn_esemodule,
     ttnn_osa_stage,
@@ -19,7 +19,7 @@ from models.experimental.functional_petr.tt.ttnn_vovnetcp import (
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
 from loguru import logger
-from models.experimental.functional_petr.tt.common import (
+from models.experimental.petr.tt.common import (
     create_custom_preprocessor_vovnetcp,
     stem_parameters_preprocess,
 )

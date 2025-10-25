@@ -17,10 +17,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import Conv2d, Linear
-from models.experimental.functional_petr.reference.utils import inverse_sigmoid
-from models.experimental.functional_petr.reference.positional_encoding import SinePositionalEncoding3D
-from models.experimental.functional_petr.reference.petr_transformer import PETRTransformer
-from models.experimental.functional_petr.reference.nms_free_coder import NMSFreeCoder
+from models.experimental.petr.reference.utils import inverse_sigmoid
+from models.experimental.petr.reference.positional_encoding import SinePositionalEncoding3D
+from models.experimental.petr.reference.petr_transformer import PETRTransformer
+from models.experimental.petr.reference.nms_free_coder import NMSFreeCoder
 
 
 def pos2posemb3d(pos, num_pos_feats=128, temperature=10000):

@@ -15,11 +15,11 @@ from pathlib import Path
 
 # Import the TT-specific modules
 import os
-from models.experimental.functional_petr.reference.utils import LiDARInstance3DBoxes
-from models.experimental.functional_petr.reference.petr import PETR
-from models.experimental.functional_petr.tt.ttnn_petr import ttnn_PETR
+from models.experimental.petr.reference.utils import LiDARInstance3DBoxes
+from models.experimental.petr.reference.petr import PETR
+from models.experimental.petr.tt.ttnn_petr import ttnn_PETR
 
-from models.experimental.functional_petr.tt.common import get_parameters
+from models.experimental.petr.tt.common import get_parameters
 
 
 class MockDet3DDataPreprocessor:
@@ -174,14 +174,6 @@ def save_comparison_visualizations(torch_output, ttnn_output, camera_images, img
             # Add labels
             cv2.putText(comparison, "PyTorch (Green)", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
             cv2.putText(comparison, "TTNN (Blue)", (w + 30, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
-            # cv2.putText(comparison, f"PT: {len(torch_filtered_boxes)} boxes", (10, 60),
-            #            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            # cv2.putText(comparison, f"TT: {len(ttnn_filtered_boxes)} boxes", (w + 30, 60),
-            #            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-
-            # Save individual images
-            # cv2.imwrite(f"{output_dir}/pytorch_{cam_name}.jpg", torch_img)
-            # cv2.imwrite(f"{output_dir}/ttnn_{cam_name}.jpg", ttnn_img)
             cv2.imwrite(f"{output_dir}/comparison_{cam_name}.jpg", comparison)
 
             print(f"Saved: comparison_{cam_name}.jpg")

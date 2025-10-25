@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.functional_petr.tt.common import Conv, Conv_with_split
+from models.experimental.petr.tt.common import Conv, Conv_with_split
 import torch
 from torch.nn import functional as F
 

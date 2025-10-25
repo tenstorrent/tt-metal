@@ -13,10 +13,10 @@
 
 import torch
 from torch import nn
-from models.experimental.functional_petr.reference.petr_head import PETRHead
-from models.experimental.functional_petr.reference.vovnetcp import VoVNetCP
-from models.experimental.functional_petr.reference.cp_fpn import CPFPN
-from models.experimental.functional_petr.reference.utils import bbox3d2result
+from models.experimental.petr.reference.petr_head import PETRHead
+from models.experimental.petr.reference.vovnetcp import VoVNetCP
+from models.experimental.petr.reference.cp_fpn import CPFPN
+from models.experimental.petr.reference.utils import bbox3d2result
 from .grid_mask import GridMask
 
 

@@ -37,10 +37,8 @@ models/
 └── experimental/
     └── petr/
         ├── resources/
-        │   ├──
-        │   ├──
-        │   ├──
-        │   ├──
+        │   ├── sample_input  # sample input images taken from nuscenes mini dataset
+        │   ├── weight        # if not present will be downloaded
         │
         ├── reference/
         │   ├── cp_fpn.py
@@ -113,7 +111,7 @@ TODO - TO be filled
 ## Performance
 ## TODO
 ### Single Device (BS=1):
-- end-2-end perf is `` FPS
+- end-2-end perf is `2.1` FPS
 To run perf test:
 ```
 pytest models/experimental/petr/tests/perf/test_ttnn_perf.py

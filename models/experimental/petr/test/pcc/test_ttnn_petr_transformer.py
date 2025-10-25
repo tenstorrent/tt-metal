@@ -5,12 +5,12 @@
 import pytest
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
-from models.experimental.functional_petr.reference import petr_transformer
-from models.experimental.functional_petr.tt.model_preprocessing import (
+from models.experimental.petr.reference import petr_transformer
+from models.experimental.petr.tt.model_preprocessing import (
     create_petr_transformer_input_tensors,
     create_petr_transformer_model_parameters,
 )
-from models.experimental.functional_petr.tt import ttnn_petr_transformer
+from models.experimental.petr.tt import ttnn_petr_transformer
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
