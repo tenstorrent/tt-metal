@@ -16,6 +16,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation_concepts.hpp"
+#include <tt-metalium/tensor/core_ids.hpp>
 
 namespace ttnn::device_operation::mesh_device_operation_utils {
 
@@ -130,7 +131,7 @@ std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(const TensorArgs& t
 
 // Sets runtime ID for all programs in `workload`.
 inline void set_runtime_id(tt::tt_metal::distributed::MeshWorkload& workload) {
-    auto op_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
+    auto op_id = tt::tt_metal::CoreIDs::instance().fetch_and_increment_device_operation_id();
     for (auto& [_, program] : workload.get_programs()) {
         program.set_runtime_id(op_id);
     }
