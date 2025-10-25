@@ -1266,7 +1266,7 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
         uint32_t precise_max_halo_bytes =
             sliding_window::calculate_precise_halo_output_elems(slice_halo_config, shard_shape) * input_datum_size;
 
-        log_info(
+        log_debug(
             tt::LogOp,
             "Conv DRAM Auto slicing: num_slices = {}, input_shard_shape = {}, precise_max_halo_bytes = {}, conv size = "
             "{}",

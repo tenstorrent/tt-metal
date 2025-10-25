@@ -204,7 +204,6 @@ def run_conv2d_short_sweep(
             [output_layout, output_buffer_type, output_dtype],
         ] = input_specs
         is_forge_suite = True
-        print(input_specs)
     else:
         [
             batch_size,

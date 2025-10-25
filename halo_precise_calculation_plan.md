@@ -39,7 +39,7 @@ In `ttnn/cpp/ttnn/operations/sliding_window/halo/device/halo_device_operation.cp
 auto sliding_window_hash = config.get_hash();
 if (!HaloDeviceOperation::sliding_window_max_out_nsticks_per_core.contains(sliding_window_hash)) {
     auto op_trace_metadata = sliding_window::generate_op_trace_metadata(config);
-    auto shard_boundaries = sliding_window::generate_shard_boundaries(config, op_trace_metadata);
+    auto shard_boundaries = sliding_window::generate_shard_boundaries(config);
     HaloDeviceOperation::sliding_window_max_out_nsticks_per_core.emplace(
         sliding_window_hash, sliding_window::generate_max_out_nsticks_per_core(shard_boundaries));
 }
@@ -116,7 +116,7 @@ uint32_t calculate_precise_halo_output_elems(
     const std::array<uint32_t, 2>& shard_shape) {
     // Generate metadata for precise calculation
     auto op_trace_metadata = generate_op_trace_metadata(config);
-    auto shard_boundaries = generate_shard_boundaries(config, op_trace_metadata);
+    auto shard_boundaries = generate_shard_boundaries(config);
 
     // Get precise max sticks per core
     uint32_t max_out_nsticks_per_core = generate_max_out_nsticks_per_core(shard_boundaries);
