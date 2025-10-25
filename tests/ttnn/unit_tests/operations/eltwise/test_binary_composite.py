@@ -50,8 +50,8 @@ def test_binary_nextafter_ttnn(input_shapes, device):
 @pytest.mark.parametrize("rtol", [1.0, 5.0, 10.0])
 @pytest.mark.parametrize("equal_nan", [True, False])
 def test_binary_isclose_ttnn(input_shapes, atol, rtol, equal_nan, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device, seed=0)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device, seed=42)
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
 
     output_tensor = ttnn.isclose(input_tensor1, input_tensor2, rtol=rtol, atol=atol, equal_nan=equal_nan)
 
