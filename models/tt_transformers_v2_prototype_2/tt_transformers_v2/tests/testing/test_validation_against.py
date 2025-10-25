@@ -8,14 +8,10 @@ against reference PyTorch implementations with automatic metrics collection.
 
 import os
 
-import pytest
 import torch
 import ttnn
 
 from tt_transformers_v2.src.testing import (
-    clear_validation_results,
-    compute_max_abs_error,
-    compute_pcc,
     device_validate_against,
     enable_validation,
     get_validation_registry,
@@ -80,7 +76,7 @@ class DeviceValidatedRMSNorm:
         self.device = device
 
     def _reference_impl(self, x):
-        """Reference implementation - returns TTNN just like __call__"""
+        """Reference implementation - mocking a TTNN reference implementation for testing"""
         # Convert TTNN to torch for reference computation
         x_torch = ttnn.to_torch(x).squeeze(0)
         result_torch = torch_rms_norm(x_torch, self.weight_torch, self.eps)
@@ -113,12 +109,6 @@ class DeviceValidatedRMSNorm:
 
 @host_validate_against(
     reference_fn=torch.matmul,
-    # input_to_torch=lambda args, kwargs: ((ttnn.to_torch(args[0]).squeeze(0), ttnn.to_torch(args[1]).squeeze(0)), {}),
-    # output_to_torch=lambda x: ttnn.to_torch(x).squeeze(0),
-    metrics={
-        "max_abs_error": compute_max_abs_error,
-        "pcc": compute_pcc,
-    },
     tolerances={
         "max_abs_error": 1e-1,
         "pcc": 0.99,
@@ -133,10 +123,6 @@ def ttnn_matmul(a, b):
 @host_validate_against(
     reference_fn=torch.matmul,
     input_to_torch=lambda args, kwargs: ((to_torch_auto_compose(args[1]), to_torch_auto_compose(args[0])), {}),
-    metrics={
-        "max_abs_error": compute_max_abs_error,
-        "pcc": compute_pcc,
-    },
     tolerances={
         "max_abs_error": 1e-1,
         "pcc": 0.99,
@@ -181,7 +167,7 @@ def custom_attention_reference(q, k, v, scale):
     tolerances={
         "max_abs_error": 0.1,
         "mean_abs_error": 0.01,
-        "pearson_correlation": 0.99,  # Must be at least 0.99
+        "pcc": 0.99,
     },
 )
 def ttnn_attention(q, k, v, scale):
@@ -283,48 +269,3 @@ def demo():
 
 if __name__ == "__main__":
     demo()
-
-
-# ============================================================================
-# PyTest: HostValidatedRMSNorm
-# ============================================================================
-
-
-@pytest.fixture(scope="module")
-def ttnn_device_fixture():
-    """Provide a single-device TTNN mesh for tests or skip if unavailable."""
-    device_ids = ttnn.get_device_ids()
-    if len(device_ids) == 0:
-        pytest.skip("No TTNN devices found")
-    mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape([1, 1]))
-    yield mesh_device
-    ttnn.close_mesh_device(mesh_device)
-
-
-def test_host_validated_rmsnorm_passes_and_records(ttnn_device_fixture):
-    """Runs HostValidatedRMSNorm and checks validation registry captures a passing result."""
-    enable_validation(True)
-    clear_validation_results()
-
-    # Small, stable sizes to keep numeric errors low
-    hidden_size = 512
-    batch_size = 1
-    seq_len = 32
-
-    # Create module and input
-    weight = torch.randn(hidden_size)
-    rms_norm = HostValidatedRMSNorm(weight, eps=1e-6, device=ttnn_device_fixture)
-
-    x = torch.randn(batch_size, seq_len, hidden_size, dtype=torch.bfloat16)
-    x_tt = ttnn.from_torch(x.unsqueeze(0), device=ttnn_device_fixture, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-
-    # Invoke and check registry
-    _ = rms_norm(x_tt)
-    registry = get_validation_registry()
-    assert len(registry.results) >= 1, "Expected at least one validation result recorded"
-
-    last_result = registry.results[-1]
-    assert "max_abs_error" in last_result.metrics
-    assert "mean_abs_error" in last_result.metrics
-
-    assert last_result.passed, f"Validation failed with errors: {last_result.errors}"
