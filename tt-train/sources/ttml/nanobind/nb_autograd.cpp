@@ -5,6 +5,7 @@
 #include "nanobind/nb_autograd.hpp"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
@@ -92,7 +93,7 @@ void py_module(nb::module_& m) {
             nb::arg("other"));
         py_tensor.def_static(
             "from_numpy",
-            [](nb::ndarray<> numpy_tensor,
+            [](nb::ndarray<nb::numpy> numpy_tensor,
                tt::tt_metal::Layout layout,
                std::optional<tt::tt_metal::DataType> new_type,
                ttnn::distributed::TensorToMesh* mapper) {
@@ -103,6 +104,22 @@ void py_module(nb::module_& m) {
             nb::arg("new_type") = std::nullopt,
             nb::arg("mapper") = nullptr,
             "Construct a Tensor from a numpy tensor");
+
+        // Fallback: custom dtypes (like ml_dtypes.bfloat16)
+        py_tensor.def_static(
+            "from_numpy",
+            [](nb::object numpy_tensor_obj,
+               tt::tt_metal::Layout layout,
+               std::optional<tt::tt_metal::DataType> new_type,
+               ttnn::distributed::TensorToMesh* mapper) {
+                return create_tensor(
+                    ttml::nanobind::util::make_metal_tensor(numpy_tensor_obj, layout, new_type, mapper));
+            },
+            nb::arg("numpy_tensor"),
+            nb::arg("layout") = tt::tt_metal::Layout::TILE,
+            nb::arg("new_type") = std::nullopt,
+            nb::arg("mapper") = nullptr,
+            "Construct a Tensor from a numpy tensor with custom dtype");
         py_tensor.def(
             "to_numpy",
             [](const Tensor& tensor,
