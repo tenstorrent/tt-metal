@@ -162,7 +162,10 @@ PhysicalSystemDescriptor::PhysicalSystemDescriptor(
     cluster_(cluster),
     target_device_type_(target_device_type) {
     if (run_discovery) {
-        this->run_discovery();
+        // When constructing the PhysicalSystemDescriptor, we run local and global discovery.
+        // We do not run "live" discovery since the cluster descriptor is already populated
+        // with accurate state from UMD.
+        this->run_discovery(true, false);
     }
 }
 
@@ -233,9 +236,9 @@ void PhysicalSystemDescriptor::resolve_hostname_uniqueness() {
     }
 }
 
-void PhysicalSystemDescriptor::run_discovery(bool run_global_discovery) {
+void PhysicalSystemDescriptor::run_discovery(bool run_global_discovery, bool run_live_discovery) {
     this->resolve_hostname_uniqueness();
-    this->run_local_discovery();
+    this->run_local_discovery(run_live_discovery);
     if (run_global_discovery) {
         this->run_global_discovery();
     }
@@ -251,11 +254,15 @@ void PhysicalSystemDescriptor::clear() {
     exit_node_connection_table_.clear();
 }
 
-void PhysicalSystemDescriptor::run_local_discovery() {
+void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
     this->clear();
-    if (target_device_type_ != TargetDevice::Silicon) {
+
+    if (!run_live_discovery || target_device_type_ != TargetDevice::Silicon) {
         cluster_desc_ = std::make_unique<tt::umd::ClusterDescriptor>(*cluster_->get_cluster_description());
     } else {
+        // As part of live discovery, we create a new cluster descriptor to query the latest state from UMD.
+        // Otherwise, we use the existing cluster descriptor, which may be stale with respect to the state of
+        // the hardware.
         cluster_desc_ = tt::umd::Cluster::create_cluster_descriptor("", {}, umd::IODeviceType::PCIe);
     }
     const auto& chip_unique_ids = cluster_desc_->get_chip_unique_ids();
