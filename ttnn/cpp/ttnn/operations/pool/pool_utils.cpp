@@ -153,6 +153,31 @@ FactoryParameters get_factory_parameters(
     const uint32_t MAX_TILES_PER_REDUCTION = return_indices ? 1 : (is_avg_pool && is_large_kernel) ? 4 : 8;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
+    // DST Optimization Logic
+    DSTOptimizationMode dst_optimization_mode = determine_dst_optimization_mode(
+        in_ntiles_c,
+        0,     // L1 usage will be calculated later
+        false  // Don't force optimization yet
+    );
+
+    uint32_t positions_per_iteration = 1;
+    uint32_t dst_tiles_per_iteration = in_ntiles_c;
+
+    switch (dst_optimization_mode) {
+        case DSTOptimizationMode::SEQUENTIAL:
+            positions_per_iteration = 1;
+            dst_tiles_per_iteration = in_ntiles_c;
+            break;
+        case DSTOptimizationMode::DUAL_POSITION:
+            positions_per_iteration = 2;
+            dst_tiles_per_iteration = 2 * in_ntiles_c;
+            break;
+        case DSTOptimizationMode::QUAD_POSITION:
+            positions_per_iteration = 4;
+            dst_tiles_per_iteration = 4 * in_ntiles_c;
+            break;
+    }
+
     return FactoryParameters{
         .multi_buffering_factor = multi_buffering_factor,
         .split_reader = split_reader,
@@ -169,6 +194,13 @@ FactoryParameters get_factory_parameters(
         .MAX_TILES_PER_REDUCTION = MAX_TILES_PER_REDUCTION,
         .is_wide_reduction = is_wide_reduction,
         .num_tilized_rows = num_tilized_rows,
+
+        // DST Optimization fields
+        .dst_optimization_mode = dst_optimization_mode,
+        .l1_memory_constrained = false,  // Will be set later based on L1 usage
+        .actual_l1_usage_bytes = 0,      // Will be calculated later
+        .positions_per_iteration = positions_per_iteration,
+        .dst_tiles_per_iteration = dst_tiles_per_iteration,
     };
 }
 
@@ -503,6 +535,135 @@ void validate_input_params(
         effective_kernel_w,
         padded_input_h,
         padded_input_w);
+}
+
+// DST Optimization function implementations
+DSTOptimizationMode determine_dst_optimization_mode(
+    uint32_t channel_tiles, uint32_t estimated_l1_usage, bool force_optimization) {
+    if (force_optimization) {
+        // If forced, try for maximum optimization
+        if (channel_tiles == 2) {
+            return DSTOptimizationMode::QUAD_POSITION;  // 4 * 2 = 8 DST tiles
+        } else if (channel_tiles == 1) {
+            return DSTOptimizationMode::QUAD_POSITION;  // 4 * 1 = 4 DST tiles
+        }
+    }
+
+    // Conservative optimization based on channel tiles
+    // Only enable for specific controlled cases initially
+    if (channel_tiles == 2) {
+        // C=64 case: 2 channel tiles * 4 positions = 8 DST tiles (ideal)
+        return DSTOptimizationMode::QUAD_POSITION;
+    } else if (channel_tiles == 1) {
+        // C=32 case: 1 channel tile * 2 positions = 2 DST tiles (reasonable)
+        return DSTOptimizationMode::DUAL_POSITION;
+    } else if (channel_tiles >= 4) {
+        // C=128+ case: Would exceed 8 DST tile limit, fallback to sequential
+        return DSTOptimizationMode::SEQUENTIAL;
+    } else if (channel_tiles == 3) {
+        // C=96 case: 3 * 2 = 6 DST tiles (reasonable for dual position)
+        return DSTOptimizationMode::DUAL_POSITION;
+    }
+
+    // Default to sequential for safety
+    return DSTOptimizationMode::SEQUENTIAL;
+}
+
+uint32_t calculate_L1_usage_with_dst_optimization(
+    const Tensor& input,
+    uint32_t in_channels,
+    uint32_t pad_h,
+    uint32_t pad_w,
+    uint32_t ceil_pad_h,
+    uint32_t ceil_pad_w,
+    bool ceil_mode,
+    bool return_indices,
+    uint32_t kernel_h,
+    uint32_t kernel_w,
+    uint32_t out_h,
+    uint32_t out_w,
+    const MemoryConfig& in_memory_config,
+    const MemoryConfig& out_memory_config,
+    Pool2DType pool_type,
+    bool count_include_pad,
+    std::optional<int32_t> divisor_override,
+    const Layout& output_layout,
+    const DataType& output_dtype,
+    DSTOptimizationMode dst_mode) {
+    // Calculate base L1 usage (original calculation)
+    uint32_t base_usage = calculate_L1_usage(
+        input,
+        in_channels,
+        pad_h,
+        pad_w,
+        ceil_pad_h,
+        ceil_pad_w,
+        ceil_mode,
+        return_indices,
+        kernel_h,
+        kernel_w,
+        out_h,
+        out_w,
+        in_memory_config,
+        out_memory_config,
+        pool_type,
+        count_include_pad,
+        divisor_override,
+        output_layout,
+        output_dtype);
+
+    // Additional memory for DST optimization
+    uint32_t additional_usage = 0;
+
+    if (dst_mode != DSTOptimizationMode::SEQUENTIAL) {
+        // Estimate additional CB memory needed
+        uint32_t positions_multiplier = (dst_mode == DSTOptimizationMode::QUAD_POSITION) ? 4 : 2;
+
+        // Additional input CBs: positions_multiplier - 2 (we already have 2 CBs)
+        uint32_t extra_input_cbs = positions_multiplier - 2;
+
+        // Estimate CB page size (this is a rough calculation)
+        uint32_t estimated_cb_page_size = 32 * 32 * 2;  // 32x32 elements * 2 bytes (BF16)
+        uint32_t additional_cb_memory = extra_input_cbs * estimated_cb_page_size * 2;  // 2 pages per CB
+
+        // Output CB needs more memory for batched results
+        uint32_t additional_output_memory = estimated_cb_page_size * (positions_multiplier - 1);
+
+        additional_usage = additional_cb_memory + additional_output_memory;
+    }
+
+    return base_usage + additional_usage;
+}
+
+bool is_dst_optimization_viable(uint32_t channel_tiles, uint32_t l1_usage_bytes, DSTOptimizationMode proposed_mode) {
+    // Check DST tile limits based on hardware capabilities
+    uint32_t positions = 1;
+    switch (proposed_mode) {
+        case DSTOptimizationMode::SEQUENTIAL: positions = 1; break;
+        case DSTOptimizationMode::DUAL_POSITION: positions = 2; break;
+        case DSTOptimizationMode::QUAD_POSITION: positions = 4; break;
+    }
+
+    uint32_t total_dst_tiles = positions * channel_tiles;
+
+    // Hardware limit: 8 DST tiles for BFLOAT16, 4 for FP32
+    // For now, assume BFLOAT16 (most common case)
+    const uint32_t MAX_DST_TILES = 8;
+
+    if (total_dst_tiles > MAX_DST_TILES) {
+        return false;
+    }
+
+    // Check L1 memory constraints
+    // Leave 20% safety margin
+    const uint32_t l1_size = tt::tt_metal::hal::get_l1_size();
+    const uint32_t l1_limit = static_cast<uint32_t>(l1_size * 0.8);
+
+    if (l1_usage_bytes > l1_limit) {
+        return false;
+    }
+
+    return true;
 }
 
 }  // namespace ttnn::operations::pool

@@ -40,6 +40,13 @@ struct AvgPoolConfig {
     std::optional<int32_t> divisor_override;
 };
 
+// DST Optimization Strategy for Pool Operations
+enum class DSTOptimizationMode : uint32_t {
+    SEQUENTIAL = 0,     // Original sequential processing (2 DST tiles)
+    DUAL_POSITION = 1,  // 2-position parallel (4 DST tiles)
+    QUAD_POSITION = 2   // 4-position parallel (8 DST tiles)
+};
+
 struct FactoryParameters {
     uint32_t multi_buffering_factor;
     bool split_reader;
@@ -56,6 +63,13 @@ struct FactoryParameters {
     uint32_t MAX_TILES_PER_REDUCTION;
     bool is_wide_reduction;
     uint32_t num_tilized_rows;
+
+    // DST Optimization fields
+    DSTOptimizationMode dst_optimization_mode;
+    bool l1_memory_constrained;
+    uint32_t actual_l1_usage_bytes;
+    uint32_t positions_per_iteration;  // 1, 2, or 4
+    uint32_t dst_tiles_per_iteration;  // positions * channel_tiles
 };
 
 uint32_t get_bf16_pool_scalar(
@@ -107,6 +121,34 @@ FactoryParameters get_factory_parameters(
     Pool2DType pool_type,
     bool return_indices,
     const Layout& output_layout);
+
+// DST Optimization functions
+DSTOptimizationMode determine_dst_optimization_mode(
+    uint32_t channel_tiles, uint32_t estimated_l1_usage, bool force_optimization = false);
+
+uint32_t calculate_L1_usage_with_dst_optimization(
+    const Tensor& input,
+    uint32_t in_channels,
+    uint32_t pad_h,
+    uint32_t pad_w,
+    uint32_t ceil_pad_h,
+    uint32_t ceil_pad_w,
+    bool ceil_mode,
+    bool return_indices,
+    uint32_t kernel_h,
+    uint32_t kernel_w,
+    uint32_t out_h,
+    uint32_t out_w,
+    const MemoryConfig& in_memory_config,
+    const MemoryConfig& out_memory_config,
+    Pool2DType pool_type,
+    bool count_include_pad,
+    std::optional<int32_t> divisor_override,
+    const Layout& output_layout,
+    const DataType& output_dtype,
+    DSTOptimizationMode dst_mode);
+
+bool is_dst_optimization_viable(uint32_t channel_tiles, uint32_t l1_usage_bytes, DSTOptimizationMode proposed_mode);
 
 uint32_t calculate_L1_usage(
     const Tensor& input,
