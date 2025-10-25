@@ -18,11 +18,16 @@
 #include "tt_metal/lite_fabric/hw/inc/channel_util.hpp"
 #include "tt_metal/lite_fabric/hw/inc/header.hpp"
 #include "tt_metal/lite_fabric/hw/inc/types.hpp"
+#include "tt_metal/lite_fabric/hw/inc/lf_dev_mem_map.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
 #if !defined(tt_l1_ptr)
 #define tt_l1_ptr __attribute__((rvtt_l1_ptr))
 #endif
+
+__attribute__((section(".version"), used, retain))
+const volatile uint8_t lite_fabric_version[] =
+    {LITE_FABRIC_VERSION_MAJOR, LITE_FABRIC_VERSION_MINOR, LITE_FABRIC_VERSION_PATCH};
 
 /////////////////////
 // Metal globals -- Mainly to make it compile
