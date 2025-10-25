@@ -15,54 +15,6 @@
 namespace ttnn::operations::normalization::detail {
 namespace py = pybind11;
 
-py::object create_group_norm_input_mask(int64_t num_channel, int64_t num_groups, int64_t num_cores_across_channel) {
-    py::object torch = py::module_::import("torch");
-
-    int64_t out_num_groups, out_tile_height, out_mask_width;
-    std::vector<float> mask_vec = create_group_norm_input_mask_impl(
-        num_channel, num_groups, num_cores_across_channel,
-        out_num_groups, out_tile_height, out_mask_width);
-
-    auto total_size = out_num_groups * out_tile_height * out_mask_width;
-    if (mask_vec.size() != static_cast<size_t>(total_size)) {
-        throw std::runtime_error("Mask vector size mismatch.");
-    }
-
-    std::vector<int64_t> shape = {1, out_num_groups, out_tile_height, out_mask_width};
-
-    // create numpy array and fill it with data
-    py::array_t<float> arr(shape);
-    std::memcpy(arr.mutable_data(), mask_vec.data(), mask_vec.size() * sizeof(float));
-
-    // to torch tensor, zero copy and shared memory
-    py::object mask = torch.attr("from_numpy")(arr).attr("to")(torch.attr("bfloat16"));
-    return mask;
-}
-
-py::object create_group_norm_input_negative_mask(int64_t num_channel, int64_t num_groups, int64_t num_cores_across_channel) {
-    py::object torch = py::module_::import("torch");
-
-    int64_t out_num_groups, out_tile_height, out_mask_width;
-    std::vector<float> mask_vec = create_group_norm_input_mask_impl(
-        num_channel, num_groups, num_cores_across_channel,
-        out_num_groups, out_tile_height, out_mask_width, true);
-
-    auto total_size = out_num_groups * out_tile_height * out_mask_width;
-    if (mask_vec.size() != static_cast<size_t>(total_size)) {
-        throw std::runtime_error("Mask vector size mismatch.");
-    }
-
-    std::vector<int64_t> shape = {1, out_num_groups, out_tile_height, out_mask_width};
-
-    // create numpy array and fill it with data
-    py::array_t<float> arr(shape);
-    std::memcpy(arr.mutable_data(), mask_vec.data(), mask_vec.size() * sizeof(float));
-
-    // to torch tensor, zero copy and shared memory
-    py::object mask = torch.attr("from_numpy")(arr).attr("to")(torch.attr("bfloat16"));
-    return mask;
-}
-
 void bind_normalization_group_norm_operation(pybind11::module& module) {
     ttnn::bind_registered_operation(
         module,
@@ -215,16 +167,11 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
                     input_mask_tensor = ttnn.create_group_norm_input_mask(
                         num_channels=C,
                         num_groups=num_groups,
-                        num_cores_across_channel=1 # As explained in the Limitations, supply 1 for height sharded input tensors
+                        num_cores_across_channel=1, # As explained in the Limitations, supply 1 for height sharded input tensors
+                        data_type=ttnn.DataType.BFLOAT8_B,
                     )
 
-                    input_mask_tensor = ttnn.from_torch(
-                        input_mask_tensor,
-                        dtype=ttnn.DataType.BFLOAT8_B,
-                        layout=ttnn.TILE_LAYOUT,
-                        device=device,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    )
+                    input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
 
                     # Prepare gamma and beta for TTNN. Currently these are just 1D tensors of size [C], which isn't compatible with tile based processing
                     # First they will zero padded if needed (does not apply to this example)
@@ -323,28 +270,30 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
     auto ttnn_module = py::module_::import("ttnn");
     ttnn_module.def(
         "create_group_norm_input_mask",
-        [](int64_t num_channel, int64_t num_groups, int64_t num_cores_across_channel) {
-            return create_group_norm_input_mask(num_channel, num_groups, num_cores_across_channel);
+        [](int64_t num_channel, int64_t num_groups, int64_t num_cores_across_channel, DataType data_type) {
+            return create_group_norm_input_mask(num_channel, num_groups, num_cores_across_channel, data_type);
         },
         py::arg("num_channel"),
         py::arg("num_groups"),
         py::arg("num_cores_across_channel"),
+        py::arg("data_type"),
         R"doc(
             C++ implementation of create_group_norm_input_mask.
-            Returns a torch.Tensor of shape [1, num_groups, 32, 32*block_wt], dtype=torch.bfloat16.
+            Returns a ttnn.Tensor of shape [1, num_groups, 32, 32*block_wt], dtype=ttnn.DataType.BFLOAT16.
         )doc"
     );
     ttnn_module.def(
         "create_group_norm_input_negative_mask",
-        [](int64_t num_channel, int64_t num_groups, int64_t num_cores_across_channel) {
-            return create_group_norm_input_negative_mask(num_channel, num_groups, num_cores_across_channel);
+        [](int64_t num_channel, int64_t num_groups, int64_t num_cores_across_channel, DataType data_type) {
+            return create_group_norm_input_negative_mask(num_channel, num_groups, num_cores_across_channel, data_type);
         },
         py::arg("num_channel"),
         py::arg("num_groups"),
         py::arg("num_cores_across_channel"),
+        py::arg("data_type"),
         R"doc(
             C++ implementation of create_group_norm_input_negative_mask.
-            Returns a torch.Tensor of shape [1, num_groups, 32, 32*block_wt], dtype=torch.bfloat16.
+            Returns a ttnn.Tensor of shape [1, num_groups, 32, 32*block_wt], dtype=ttnn.DataType.BFLOAT16.
         )doc"
     );
 }

@@ -32,19 +32,8 @@ ttnn::Tensor get_mask_tensor(const ttnn::Tensor& input_tensor, const std::option
             }
             num_cores_across_channel = num_virtual_cols;
         }
-        int64_t out_num_groups, out_tile_height, out_mask_width;
-        std::vector<float> mask_vec = create_group_norm_input_mask_impl(
-            num_channel, num_groups, num_cores_across_channel,
-            out_num_groups, out_tile_height, out_mask_width);
-
-        // create ttnn::Tensor from mask_vec
-        const ttnn::Shape tensor_shape{1, out_num_groups, out_tile_height, out_mask_width};
-        const tt::tt_metal::TensorLayout tensor_layout(DataType::BFLOAT16, Layout::TILE, ttnn::DRAM_MEMORY_CONFIG);
-        const ttnn::TensorSpec tensor_spec(tensor_shape, tensor_layout);
-        mask = ttnn::Tensor::from_vector(
-            mask_vec,
-            tensor_spec,
-            input_tensor.device());
+        mask = create_group_norm_input_mask(num_channel, num_groups, num_cores_across_channel);
+        mask = mask.to_device(input_tensor.device());
     }
     return mask;
 }
