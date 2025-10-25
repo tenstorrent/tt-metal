@@ -82,6 +82,26 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_capture.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_capture_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/host_api_capture_helpers.cpp
+    #Tensor API
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/flatbuffer/tensor_flatbuffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/flatbuffer/tensor_spec_flatbuffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_buffer/functions.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/layout/alignment.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/layout/layout.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/layout/page_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/layout/tensor_layout.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/memory_config/memory_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/serialization.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/storage.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_attributes.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_impl.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_spec.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/types.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/unit_mesh/unit_mesh_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/xtensor/partition.cpp
 )
 
 # Include helper functions and generate headers from flatbuffer schemas
@@ -157,6 +177,7 @@ target_link_libraries(
     PUBLIC
         common
         Tracy::TracyClient
+        xtensor
     PRIVATE
         FlatBuffers::FlatBuffers
         range-v3::range-v3

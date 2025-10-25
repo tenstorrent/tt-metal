@@ -15,9 +15,9 @@
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn {
+using IDevice = tt::tt_metal::IDevice;
 namespace types {
 
-using IDevice = tt::tt_metal::IDevice;
 using Program = tt::tt_metal::Program;
 
 constexpr auto TILE_SIZE = 32;

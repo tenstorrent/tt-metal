@@ -7,6 +7,7 @@
 #include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/core.hpp"
+#include <tt-metalium/tensor/core_ids.hpp>
 #include <cxxabi.h>
 #include <memory>
 #include <string>
@@ -284,7 +285,7 @@ int GraphProcessor::add_tensor(const Tensor& t) {
             tt::LogAlways,
             "Tensor doesn't have tensor_id, generating new one. Ideally this should not happen. Please set tensor_id "
             "for this tensor ahead of time.");
-        tensor_id = ttnn::CoreIDs::instance().fetch_and_increment_tensor_id();
+        tensor_id = tt::tt_metal::CoreIDs::instance().fetch_and_increment_tensor_id();
     } else {
         tensor_id = t.tensor_id.value();
     }

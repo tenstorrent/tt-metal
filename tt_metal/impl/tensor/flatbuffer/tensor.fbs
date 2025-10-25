@@ -1,0 +1,31 @@
+include "tensor_spec.fbs";
+include "tensor_topology.fbs";
+include "mesh_shape.fbs";
+include "tt-metalium/serialized_descriptors/mesh_coordinate.fbs";
+
+namespace tt.tt_metal.flatbuffer;
+
+union TensorBuffer {
+    InlineFileStorage = 1,
+    // Reserved for future use to refer to external storage.
+}
+
+// Stores `TensorBuffer` in the same file as the `Tensor` "inline".
+struct InlineFileStorage {
+    offset: uint64;
+    size: uint64;
+}
+
+table TensorShard {
+    buffer: TensorBuffer;
+    mesh_coordinate: tt.tt_metal.distributed.flatbuffer.MeshCoordinate;
+}
+
+table Tensor {
+    tensor_spec: TensorSpec;
+    mesh_shape: MeshShape;
+    shards: [TensorShard];
+    tensor_topology: TensorTopology;
+}
+
+root_type Tensor;

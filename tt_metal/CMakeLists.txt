@@ -17,6 +17,19 @@ GENERATE_FBS_HEADER(
 )
 set(API_GENERATED_HEADERS ${FBS_GENERATED_HEADER_FILE})
 
+set(TENSOR_FLATBUFFER_SCHEMAS
+    ${CMAKE_CURRENT_SOURCE_DIR}/impl/tensor/flatbuffer/mesh_shape.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/impl/tensor/flatbuffer/tensor_spec.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/impl/tensor/flatbuffer/tensor_topology.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/impl/tensor/flatbuffer/tensor.fbs
+)
+
+set(TENSOR_FLATBUFFER_GENERATED_HEADERS)
+foreach(FBS_FILE ${TENSOR_FLATBUFFER_SCHEMAS})
+    GENERATE_FBS_HEADER(${FBS_FILE} TARGET TT::Metalium OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/api/tt-metalium/tensor/)
+    list(APPEND TENSOR_FLATBUFFER_GENERATED_HEADERS ${FBS_GENERATED_HEADER_FILE})
+endforeach()
+
 add_custom_target(
     metalium_GeneratedHeaders
     DEPENDS
@@ -106,6 +119,21 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/vector_aligned.hpp
     api/tt-metalium/work_split.hpp
 )
+
+#TODO: Use file by file include instead of globbing
+file(GLOB_RECURSE TENSOR_API_HEADERS api/tt-metalium/tensor/**/*.hpp)
+set(TT_METAL_PUBLIC_API
+    ${TT_METAL_PUBLIC_API}
+    ${TENSOR_API_HEADERS}
+)
+
+# Append tt_metal/api/tt-metalium/distributed
+file(GLOB_RECURSE DISTRIBUTED_API_HEADERS api/tt-metalium/distributed/*.hpp)
+set(TT_METAL_PUBLIC_API
+    ${TT_METAL_PUBLIC_API}
+    ${DISTRIBUTED_API_HEADERS}
+)
+
 target_sources(
     tt_metal
     PUBLIC
@@ -256,6 +284,7 @@ target_link_libraries(
         TT::STL
         tt-logger::tt-logger
         ${EXECINFO_LIB}
+        xtensor # ttnn/core/distributed/distributed_tensor depends on xtensor
     PRIVATE
         Metalium::Metal::Impl
         metal_common_libs
