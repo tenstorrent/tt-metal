@@ -1,0 +1,292 @@
+allocation_policies:
+    receiver:
+      max_configs_per_core: 4
+
+Tests:
+  # Linear tests
+  - name: "LinearMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+        iterations: 3
+
+  - name: "UnidirLinearMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      num_packets: 20000
+
+    patterns:
+      - type: unidirectional_linear
+        iterations: 3
+
+  - name: "SingleSenderLinearUnicastAllDevices"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 20000
+
+    patterns:
+      - type: one_to_all
+        iterations: 3
+
+  - name: "SingleSenderLinearMulticastAllDevices"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      num_packets: 20000
+
+    patterns:
+      - type: one_to_all
+        iterations: 3
+
+  - name: "PerimeterLinearUnicast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 20000
+
+    patterns:
+      - type: perimeter_linear
+        iterations: 3
+
+  - name: "NeighborExchangeLinearUnicast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 20000
+
+    patterns:
+      - type: neighbor_exchange
+        iterations: 3
+
+  # Ring tests
+  - name: "FullRingMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Ring
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      num_packets: 100000
+
+    patterns:
+      - type: full_ring
+        iterations: 3
+
+  - name: "FullRingUnicast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Ring
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 100000
+
+    patterns:
+      - type: full_ring
+        iterations: 3
+
+  - name: "HalfRingMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Ring
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      num_packets: 100000
+
+    patterns:
+      - type: half_ring
+        iterations: 3
+
+  # Mesh tests
+  - name: "MeshMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+        iterations: 3
+
+  - name: "UnidirMeshMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      num_packets: 20000
+
+    patterns:
+      - type: unidirectional_linear
+        iterations: 3
+
+  - name: "SingleSenderMeshUnicastAllDevices"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 20000
+
+    patterns:
+      - type: one_to_all
+        iterations: 3
+
+  - name: "SingleSenderMeshMulticastAllDevices"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      num_packets: 20000
+
+    patterns:
+      - type: one_to_all
+        iterations: 3
+
+  - name: "PerimeterMeshUnicast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 20000
+
+    patterns:
+      - type: perimeter_linear
+        iterations: 3
+
+  - name: "NeighborExchangeMeshUnicast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [16, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 20000
+
+    patterns:
+      - type: neighbor_exchange
+        iterations: 3

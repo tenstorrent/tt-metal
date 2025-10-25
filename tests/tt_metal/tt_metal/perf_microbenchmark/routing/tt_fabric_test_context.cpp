@@ -236,7 +236,6 @@ void TestContext::process_telemetry_for_golden() {
         telemetry_entries_.begin(), telemetry_entries_.end(), [](const TelemetryEntry& a, const TelemetryEntry& b) {
             return a.bw_gbps > b.bw_gbps;
         });
-
     if (telemetry_entries_.empty()) {
         measured_bw_min_ = std::numeric_limits<double>::max();
         measured_bw_avg_ = 0.0;
@@ -253,12 +252,7 @@ void TestContext::process_telemetry_for_golden() {
     auto max_coord = max_entry.coord;
     auto max_connected = max_entry.connected_coord;
 
-    double minimal_accepted_BW_GB_s = 0.08;
     for (const auto& entry : telemetry_entries_) {
-        if (entry.bw_gbps < minimal_accepted_BW_GB_s) {
-            continue;
-        }
-
         measured_bw_min_ = std::min(measured_bw_min_, entry.bw_gbps);
         measured_bw_max_ = std::max(measured_bw_max_, entry.bw_gbps);
         measured_bw_avg_ += entry.bw_gbps;
