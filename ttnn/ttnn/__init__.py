@@ -285,6 +285,7 @@ from ttnn.decorators import (
     get_fallback_function,
     query_registered_operations,
     register_cpp_operation,
+    register_jit_cpp_operation,
     register_post_operation_hook,
     register_pre_operation_hook,
     register_python_operation,
@@ -299,6 +300,11 @@ def auto_register_ttnn_cpp_operations(module):
             module_path, _, func_name = full_name.rpartition(".")
             target_module = create_module_if_not_exists(module_path)
             register_cpp_operation(target_module, func_name, attribute)
+        elif hasattr(attribute, "version") and attribute.version == "LAZY_JIT":
+            full_name = attribute.python_fully_qualified_name
+            module_path, _, func_name = full_name.rpartition(".")
+            target_module = create_module_if_not_exists(module_path)
+            register_jit_cpp_operation(target_module, func_name, attribute)
         elif isinstance(attribute, ModuleType):
             auto_register_ttnn_cpp_operations(attribute)
 
