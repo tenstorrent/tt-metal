@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 from typing import Any, Optional, Tuple, Dict
 
 from framework.sweeps_logger import sweeps_logger as logger
