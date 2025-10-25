@@ -132,3 +132,42 @@ def from_torch_fast(
         tensor = tensor.cpu()
 
     return tensor
+
+
+def preprocess_nchw_input_tensor(device, torch_input):
+    """
+    Pad (if needed) and reshape to [1,1,N*H*W,C] for downstream convolution
+    """
+
+    assert len(torch_input.shape) == 4, f"Expected input tensor to be rank 4 (was {len(torch_input.shape)})"
+
+    C = torch_input.shape[1]
+    HW = torch_input.shape[2] * torch_input.shape[3]
+
+    SHARD_WIDTH = 8
+
+    # pad to min shard width
+    torch_input = torch.nn.functional.pad(torch_input, (0, 0, 0, 0, 0, SHARD_WIDTH - C), mode="constant", value=0)
+    # convert to channel last
+    torch_input = torch_input.permute(0, 2, 3, 1)
+
+    core_range_set = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device.core_grid.x - 1, device.core_grid.y - 1))}
+    )
+    num_cores = device.core_grid.x * device.core_grid.y
+    shard_height = (1 * HW + num_cores - 1) // num_cores  # = 26215
+
+    sharded_memory_config = ttnn.create_sharded_memory_config_(
+        shape=(shard_height, SHARD_WIDTH),
+        core_grid=core_range_set,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    return ttnn.from_torch(
+        torch_input,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=sharded_memory_config,
+    )

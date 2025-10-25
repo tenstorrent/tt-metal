@@ -32,6 +32,8 @@ void kernel_main() {
     constexpr uint32_t out_num_blocks_w = get_compile_time_arg_val(16);
     constexpr uint32_t weight_block_height_num_outer_in = get_compile_time_arg_val(17);
 
+    constexpr bool fuse_bias = get_compile_time_arg_val(18);
+
 #ifdef SPLIT_READER
     constexpr bool split_reader_enabled = true;
     constexpr uint32_t cb_id_act_second_reader = get_compile_time_arg_val(3);
@@ -39,21 +41,21 @@ void kernel_main() {
     constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(5);
     constexpr uint32_t window_outer = get_compile_time_arg_val(6);  // num_blocks_act_w
     constexpr bool sliced_inner_dim = num_blocks_weight_h > 1;      // Derived like block sharded reader
-    constexpr uint32_t act_block_num_tiles_split_last = get_compile_time_arg_val(18);  // This is what factory passes
-    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(19);
-    constexpr uint32_t weight_size_w = get_compile_time_arg_val(20);
-    constexpr uint32_t padded_conv_act_size_w = get_compile_time_arg_val(21);
-    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(22);
-    constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(23) == 1;
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(24);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(25);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(26);
-    constexpr uint32_t weight_size_h = get_compile_time_arg_val(27);  // Input filter window height
+    constexpr uint32_t act_block_num_tiles_split_last = get_compile_time_arg_val(19);  // This is what factory passes
+    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(20);
+    constexpr uint32_t weight_size_w = get_compile_time_arg_val(21);
+    constexpr uint32_t padded_conv_act_size_w = get_compile_time_arg_val(22);
+    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(23);
+    constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(24) == 1;
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(25);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(26);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(27);
+    constexpr uint32_t weight_size_h = get_compile_time_arg_val(28);  // Input filter window height
 
-    constexpr uint32_t ct_arg_idx = 28;
+    constexpr uint32_t ct_arg_idx = 29;
 #else
     constexpr bool split_reader_enabled = false;
-    constexpr uint32_t ct_arg_idx = 18;
+    constexpr uint32_t ct_arg_idx = 19;
 #endif
 
     constexpr auto s_weight_args = TensorAccessorArgs<ct_arg_idx>();
@@ -124,13 +126,12 @@ void kernel_main() {
         weights_mcast_receiver_semaphore_addr);
 #endif
 
-// read in bias if enabled (done only once for all batches)
-#ifdef FUSE_BIAS
-    constexpr uint32_t bias_pagesize = get_tile_size(bias_cb_id);
+    // read in bias if enabled (done only once for all batches)
+    constexpr uint32_t bias_pagesize =
+        fuse_bias ? get_tile_size(bias_cb_id) : 0;  // dummy value in case bias is not enabled
     const auto s_bias = TensorAccessor(s_bias_args, bias_addr, bias_pagesize);
 
     bool load_bias = true;
-#endif
 
     constexpr uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
     const auto s_weight = TensorAccessor(s_weight_args, weight_addr_dram_base, weight_tile_nbytes);
@@ -246,60 +247,65 @@ void kernel_main() {
             // Update reader index for next iteration (split reader increment)
             start_reader_idx = reader_idx + static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
 #endif
-#ifdef FUSE_BIAS
-            if (load_bias) {
-                cb_reserve_back(bias_cb_id, bias_ntiles);
-                uint32_t bias_l1_addr = get_write_ptr(bias_cb_id);
+            if constexpr (fuse_bias) {
+                if (load_bias) {
+                    cb_reserve_back(bias_cb_id, bias_ntiles);
+                    uint32_t bias_l1_addr = get_write_ptr(bias_cb_id);
 
-                // mcast args
-                uint32_t bias_start_address = bias_l1_addr;
-                uint32_t bias_block_size_bytes = 0;
-                for (uint32_t bias_tile = bias_tile_offset; bias_tile < bias_tile_offset + bias_ntiles; ++bias_tile) {
-                    noc_async_read_tile(bias_tile, s_bias, bias_l1_addr);
-                    bias_l1_addr += bias_pagesize;
-                    bias_block_size_bytes += bias_pagesize;
-                }
-                noc_async_read_barrier();
+                    // mcast args
+                    uint32_t bias_start_address = bias_l1_addr;
+                    uint32_t bias_block_size_bytes = 0;
+                    for (uint32_t bias_tile = bias_tile_offset; bias_tile < bias_tile_offset + bias_ntiles;
+                         ++bias_tile) {
+                        noc_async_read_tile(bias_tile, s_bias, bias_l1_addr);
+                        bias_l1_addr += bias_pagesize;
+                        bias_block_size_bytes += bias_pagesize;
+                    }
+                    noc_async_read_barrier();
 
 // MCAST BIAS (shares some mcast args with weights)
 #ifndef SKIP_MCAST
-                // wait until all weights mcast destinations have atomically incremented the weights semaphore_addr
-                // (i.e. its value should be weights_mcast_num_dests), then reset the semaphore_addr value back to zero
-                // for the next block
-                noc_semaphore_wait(weights_mcast_sender_semaphore_addr_ptr, weights_mcast_num_dests);
-                noc_semaphore_set(weights_mcast_sender_semaphore_addr_ptr, 0);
+                    // wait until all weights mcast destinations have atomically incremented the weights semaphore_addr
+                    // (i.e. its value should be weights_mcast_num_dests), then reset the semaphore_addr value back to
+                    // zero for the next block
+                    noc_semaphore_wait(weights_mcast_sender_semaphore_addr_ptr, weights_mcast_num_dests);
+                    noc_semaphore_set(weights_mcast_sender_semaphore_addr_ptr, 0);
 
-                // Now we have the block in the CB address, we can mcast to dests!
-                uint64_t bias_multicast_data_addr = get_noc_multicast_addr(
-                    weights_mcast_dest_noc_start_x,
-                    weights_mcast_dest_noc_start_y,
-                    weights_mcast_dest_noc_end_x,
-                    weights_mcast_dest_noc_end_y,
-                    bias_start_address);
-                // num_dests must not include source, since we are NOT really doing a local copy!
-                noc_async_write_multicast(
-                    bias_start_address, bias_multicast_data_addr, bias_block_size_bytes, weights_mcast_num_cores, true);
+                    // Now we have the block in the CB address, we can mcast to dests!
+                    uint64_t bias_multicast_data_addr = get_noc_multicast_addr(
+                        weights_mcast_dest_noc_start_x,
+                        weights_mcast_dest_noc_start_y,
+                        weights_mcast_dest_noc_end_x,
+                        weights_mcast_dest_noc_end_y,
+                        bias_start_address);
+                    // num_dests must not include source, since we are NOT really doing a local copy!
+                    noc_async_write_multicast(
+                        bias_start_address,
+                        bias_multicast_data_addr,
+                        bias_block_size_bytes,
+                        weights_mcast_num_cores,
+                        true);
 
-                // Note: no need for write barrier, since these two multicasts are done on the same noc id and same vc
-                // even though cmd bufs are different Also, this only works because we are setting VCs statically (using
-                // NOC_CMD_STATIC_VC).
+                    // Note: no need for write barrier, since these two multicasts are done on the same noc id and same
+                    // vc even though cmd bufs are different Also, this only works because we are setting VCs statically
+                    // (using NOC_CMD_STATIC_VC).
 #ifdef ARCH_BLACKHOLE
-                // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and may not
-                // be sent in order they are issued
-                noc_async_writes_flushed();
+                    // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and may
+                    // not be sent in order they are issued
+                    noc_async_writes_flushed();
 #endif
-                // We should also multicast the flag to destinations
-                // num_dests must not include source, since we are NOT really doing a local copy!
-                noc_semaphore_set_multicast(
-                    weights_mcast_receiver_semaphore_addr,
-                    weights_mcast_receiver_semaphore_noc_addr,
-                    weights_mcast_num_cores);
+                    // We should also multicast the flag to destinations
+                    // num_dests must not include source, since we are NOT really doing a local copy!
+                    noc_semaphore_set_multicast(
+                        weights_mcast_receiver_semaphore_addr,
+                        weights_mcast_receiver_semaphore_noc_addr,
+                        weights_mcast_num_cores);
 #endif
 
-                cb_push_back(bias_cb_id, bias_ntiles);
-                load_bias = false;
+                    cb_push_back(bias_cb_id, bias_ntiles);
+                    load_bias = false;
+                }
             }
-#endif
 
         }  // out_num_blocks_h
 

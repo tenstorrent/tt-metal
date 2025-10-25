@@ -6,6 +6,8 @@
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/fabric_routing_path_interface.h"
 #include "dataflow_api.h"
 
 #include <cstdint>
@@ -58,12 +60,11 @@ void kernel_main() {
     if constexpr (enable_fused_payload_with_sync) {
         payload_packet_header->to_noc_fused_unicast_write_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                dest_payload_noc_addr, dest_semaphore_noc_addr, 1, std::numeric_limits<uint16_t>::max(), false},
+                dest_payload_noc_addr, dest_semaphore_noc_addr, 1, false},
             payload_size_bytes);
     } else {
         payload_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{dest_payload_noc_addr}, payload_size_bytes);
-        sem_inc_packet_header->to_noc_unicast_atomic_inc(
-            NocUnicastAtomicIncCommandHeader{dest_semaphore_noc_addr, 1, std::numeric_limits<uint16_t>::max()});
+        sem_inc_packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{dest_semaphore_noc_addr, 1});
     }
 
     auto send_seminc_packet = [&fabric_connection, sem_inc_packet_header]() {

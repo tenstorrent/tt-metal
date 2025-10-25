@@ -13,7 +13,6 @@ from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_ti
 from loguru import logger
 from tests.sweep_framework.sweep_utils.ccl_common import device_context, mesh_shape_iterator
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 45

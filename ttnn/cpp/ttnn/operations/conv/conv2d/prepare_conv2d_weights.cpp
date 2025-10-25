@@ -1009,7 +1009,7 @@ static Conv2dBlockConfig get_opt_block_config(
     const uint32_t in_channels_alignment = get_input_channels_alignment(
         conv_config.shard_layout.value(),
         input_layout,
-        input_memory_config.buffer_type(),
+        input_memory_config.buffer_type() == BufferType::DRAM,
         mm_conv,
         input_memory_config);
 
@@ -1171,11 +1171,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
                 .mm_conv = mm_conv},
             device);
         const uint32_t input_channels_alignment = get_input_channels_alignment(
-            TensorMemoryLayout::INTERLEAVED,
-            input_layout,
-            is_dram_conv ? BufferType::DRAM : BufferType::L1,
-            mm_conv,
-            input_memory_config);
+            TensorMemoryLayout::INTERLEAVED, input_layout, is_dram_conv, mm_conv, input_memory_config);
         if (mm_conv) {
             return Conv2dWeightsBiasPrepConfig(
                 input_channels_alignment,
@@ -1256,11 +1252,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     }
 
     uint32_t input_channels_alignment = get_input_channels_alignment(
-        conv_config.shard_layout.value(),
-        input_layout,
-        is_dram_conv ? BufferType::DRAM : BufferType::L1,
-        mm_conv,
-        input_memory_config);
+        conv_config.shard_layout.value(), input_layout, is_dram_conv, mm_conv, input_memory_config);
 
     ParallelConfig parallel_config;
     if (input_memory_config.shard_spec().has_value() && !conv_config.reshard_if_not_optimal) {
@@ -1324,11 +1316,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             has_bias);
 
         input_channels_alignment = get_input_channels_alignment(
-            conv_config.shard_layout.value(),
-            input_layout,
-            BufferType::L1,
-            mm_conv,
-            input_tensor_sharded_memory_config);
+            conv_config.shard_layout.value(), input_layout, false, mm_conv, input_tensor_sharded_memory_config);
     }
 
     ParallelConfig output_parallel_config = determine_output_parallel_config(

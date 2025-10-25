@@ -372,6 +372,8 @@ private:
 
     bool supports_dma_operations(ChipId chip_id, uint32_t sz_in_bytes) const;
 
+    void verify_eth_fw_capability() const;
+
     ARCH arch_{tt::ARCH::Invalid};
     TargetDevice target_type_{0};
 

@@ -11,6 +11,7 @@ from transformers import AutoConfig
 
 import ttnn
 from models.demos.deepseek_v3.tt.ccl import CCL
+from models.demos.deepseek_v3.utils.test_utils import load_state_dict
 from tests.scripts.common import get_updated_device_params
 
 RESET_WEIGHT_CACHE_OPTION = "--recalculate-weights"
@@ -80,6 +81,11 @@ def hf_config(model_path):
     """Load DeepSeek config for testing"""
     config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
     return config
+
+
+@pytest.fixture(scope="session")
+def state_dict(model_path):
+    return load_state_dict(model_path, "")
 
 
 @pytest.fixture(scope="session")

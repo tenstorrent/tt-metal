@@ -38,8 +38,11 @@ inputs:
   commits-path:
     description: 'Path to JSON array of commits on main (optional)'
     required: false
-  logs-index-path:
-    description: 'Path to JSON mapping run_id -> extracted logs dir (optional)'
+  gtest-logs-index-path:
+    description: 'Path to JSON mapping run_id -> extracted gtest logs dir (optional)'
+    required: false
+  other-logs-index-path:
+    description: 'Path to JSON mapping run_id -> extracted other logs dir (optional)'
     required: false
 
 outputs:

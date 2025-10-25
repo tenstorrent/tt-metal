@@ -702,8 +702,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     const tt::tt_metal::CBHandle cb_partials = get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).handle;
 
     std::string reader_kernel;
-    std::string compute_kernel =
-        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
+    std::string compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize.cpp";
     std::string writer_mcast_sender_kernel =
         "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
         "reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
@@ -828,18 +827,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     if (skip_weights_mcast) {
         writer_mcast_sender_defines["SKIP_MCAST"] = "1";
     }
-    if (has_bias) {
-        writer_defines["FUSE_BIAS"] = "1";
-        writer_mcast_sender_defines["FUSE_BIAS"] = "1";
-        compute_defines["FUSE_BIAS"] = "1";
-    }
-    if (fused_activation.has_value()) {
-        if (fused_activation.value().op_type == unary::UnaryOpType::RELU) {
-            compute_defines["PACK_RELU"] = "1";
-        } else {
-            compute_defines.merge(ttnn::operations::unary::utils::get_defines(
-                fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
-        }
+    bool pack_relu = fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU;
+    if (fused_activation.has_value() && !pack_relu) {
+        compute_defines.merge(ttnn::operations::unary::utils::get_defines(
+            fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
     }
 
     if (enable_split_reader) {
@@ -847,13 +838,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         reader_defines["SPLIT_READER"] = "1";
         writer_mcast_sender_defines["SPLIT_READER"] = "1";
         writer_defines["SPLIT_READER"] = "1";
-    }
-
-    if (packer_l1_acc_en) {
-        compute_defines["PACKER_L1_ACC"] = "1";
-    }
-    if (weight_block_w_ntiles <= 8) {
-        compute_defines["PACKER_UNTILIZE"] = "1";
     }
 
     if (enable_activation_reuse) {
@@ -891,7 +875,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
 
         num_blocks_act_h_per_core,
         num_blocks_weight_w_per_core,
-        out_conv_c_blocks};
+        out_conv_c_blocks,
+        (uint32_t)has_bias};
 
     if (enable_split_reader) {
         std::vector<uint32_t> split_reader_args = {
@@ -961,7 +946,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         get_cb_info_by_name(cb_info, Conv2dCb::TEMP_SUM).index,
         partials_cb_uses_output,
         conv_act_c_blocks,
-        check_skip_compute};
+        check_skip_compute,
+        pack_relu,
+        weight_block_w_ntiles <= 8,  // packer_untilize
+        packer_l1_acc_en,
+        has_bias};
 
     if (enable_activation_reuse) {
         compute_kernel_args.push_back(activation_reuse_config.image_width_tiles);

@@ -56,9 +56,6 @@ target_sources(
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_program.cpp
         all_reduce_async/device/all_reduce_async_op.cpp
         all_reduce_async/device/all_reduce_async_program_minimal_variants.cpp
-        reduce_scatter_async/device/reduce_scatter_async_op.cpp
-        reduce_scatter_async/device/reduce_scatter_async_program.cpp
-        reduce_scatter_async/reduce_scatter.cpp
         llama_reduce_scatter/llama_reduce_scatter.cpp
         llama_reduce_scatter/device/llama_reduce_scatter_device_operation.cpp
         llama_reduce_scatter/device/llama_reduce_scatter_program_factory.cpp
@@ -71,9 +68,6 @@ target_sources(
         all_gather_async/all_gather_async.cpp
         all_gather_async/device/all_gather_async_op.cpp
         all_gather_async/device/all_gather_async_program_minimal_variants.cpp
-        all_gather_command_processor_async/all_gather_command_processor_async.cpp
-        all_gather_command_processor_async/device/all_gather_command_processor_async_op.cpp
-        all_gather_command_processor_async/device/all_gather_command_processor_async_program.cpp
         llama_all_gather_matmul_async/llama_all_gather_matmul_async.cpp
         llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_op.cpp
         llama_all_gather_matmul_async/device/llama_all_gather_mm_async_program_factory.cpp

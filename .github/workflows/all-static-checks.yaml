@@ -15,7 +15,7 @@ jobs:
       docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
     steps:
       - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
   pre-commit:
     name: Run Pre-commit Hooks
     runs-on: ubuntu-latest
@@ -190,7 +190,7 @@ jobs:
         submodules: recursive
     - name: Look for changed CMake files
       id: find-changes
-      uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
+      uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
     - uses: lukka/get-cmake@b516803a3c5fac40e2e922349d15cdebdba01e60
       if: steps.find-changes.outputs.cmake-changed == 'true'
       with:
