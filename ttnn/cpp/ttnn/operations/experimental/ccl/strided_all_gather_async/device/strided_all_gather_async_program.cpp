@@ -412,10 +412,10 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                 uint32_t global_worker_count = num_links * num_workers_per_direction;
                 uint32_t base_pages_per_worker = single_batch_head_num_pages / global_worker_count;
                 uint32_t remainder = single_batch_head_num_pages % global_worker_count;
-                uint32_t tiles_per_core = base_pages_per_worker + global_worker_id < remainder ? 1 : 0;
+                uint32_t tiles_per_core = base_pages_per_worker + ((global_worker_id < remainder) ? 1 : 0);
 
                 uint32_t tiles_per_chunk_val = chunks_per_sync.value_or(0);
-                log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
+                log_trace(tt::LogOp, "DEBUG: tiles_per_chunk__val: {}", tiles_per_chunk_val);
 
                 uint32_t self_write_done_semaphore;
                 if (fuse_op) {

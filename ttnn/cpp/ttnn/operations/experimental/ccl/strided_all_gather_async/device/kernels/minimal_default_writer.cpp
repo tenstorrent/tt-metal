@@ -234,6 +234,7 @@ void kernel_main() {
                     out_ready_sem_noc_addr_in_pkt,
                     direction,
                     false);
+                slice_writes++;
             }
             global_tile_index = next_tile_to_write;
         }
