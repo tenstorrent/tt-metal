@@ -104,35 +104,26 @@ TEST_F(JitBuildDependencyTests, OutOfDateAfterDeletion) {
 
 TEST_F(JitBuildDependencyTests, DependencyHashesNotFound) {
     constexpr auto obj_file_name = "test.o";
-    std::filesystem::path hash_path = (out_dir_ / obj_file_name).replace_extension(".hash");
-
-    std::filesystem::remove(hash_path);
+    std::filesystem::remove_all(out_dir_);
 
     // Verify that dependencies are not up to date when hash file is missing
     EXPECT_FALSE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj_file_name));
 }
 
-TEST_F(JitBuildDependencyTests, InvalidHashFile) {
-    constexpr auto obj_file_name = "test.o";
-    const tt::jit_build::ParsedDependencies dependencies{
-        {obj_file_name, {"a.txt", "b.txt"}},
-    };
-    create_dependency_files_and_hash(dependencies, obj_file_name);
-
+TEST(JitBuildTests, InvalidHashFile) {
     // Corrupt the hash file
-    std::ofstream{(out_dir_ / obj_file_name).replace_extension(".hash")} << "corrupted content";
+    std::istringstream corrupted_hash_file("corrupted content");
 
     // Verify that dependencies are not up to date
-    EXPECT_FALSE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj_file_name));
-    // Make sure the below message is not lost if logger level is set to warning or above
-    log_warning(tt::LogBuildKernels, "The above warning about cannot read file is expected in this test.");
+    EXPECT_FALSE(tt::jit_build::dependencies_up_to_date(corrupted_hash_file));
+    // Make sure the below message is not lost if logger level is set to warning.
+    log_warning(tt::LogBuildKernels, "The above warning about malformed file is expected in this test.");
 }
 
-TEST_F(JitBuildDependencyTests, NoDependenciesFound) {
-    constexpr auto obj_file_name = "test.o";
+TEST(JitBuildTests, EmptyHashFile) {
     // Create an empty hash file
-    std::ofstream{(out_dir_ / obj_file_name).replace_extension(".hash")}.close();
+    std::istringstream empty_hash_file("");
 
     // Verify that dependencies are not up to date when no dependencies are found
-    EXPECT_FALSE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj_file_name));
+    EXPECT_FALSE(tt::jit_build::dependencies_up_to_date(empty_hash_file));
 }
