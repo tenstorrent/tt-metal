@@ -569,12 +569,7 @@ def main():
         # If TTNN_TUTORIALS_MODELS_CLIP_PATH is set, use it as the cache directory to avoid requests to Hugging Face
         cache_dir = os.getenv("TTNN_TUTORIALS_MODELS_CLIP_PATH")
         if cache_dir is not None:
-            # clip_model_location = os.path.join(cache_dir, "")
-            clip_model_location = f"{cache_dir}"
-
-            logger.info(f"Current directory files: {os.listdir(cache_dir)}")
-            assert os.path.exists(cache_dir), f"Cache directory {cache_dir} does not exist"
-            assert os.path.exists(clip_model_location), f"Model file {clip_model_location} does not exist"
+            clip_model_location = cache_dir
 
         # Load model weights (download if cache_dir was not set)
         model = CLIPModel.from_pretrained(clip_model_location)
@@ -587,7 +582,7 @@ def main():
         # If TTNN_TUTORIALS_MODELS_CLIP_PATH is set, use it as the cache directory to avoid requests to Hugging Face
         cache_dir = os.getenv("TTNN_TUTORIALS_MODELS_CLIP_PATH")
         if cache_dir is not None:
-            clip_tokenizer_location = f"{cache_dir}"
+            clip_tokenizer_location = cache_dir
 
         tokenizer = CLIPTokenizer.from_pretrained(clip_tokenizer_location)
 
