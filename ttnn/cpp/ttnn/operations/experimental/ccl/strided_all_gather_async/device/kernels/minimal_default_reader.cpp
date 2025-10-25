@@ -110,7 +110,12 @@ void kernel_main() {
                 num_tiles_to_write_per_packet,
                 ag_worker_cores,
                 input_tensor_addrgen,
-                input_tensor_page_size);
+                input_tensor_page_size,
+                output_tensor_addrgen,
+                input_tensor_Wt,
+                output_tensor_Wt,
+                my_chip_id,
+                false);
 
             // Receive this chunk from all other devices
             uint32_t sem_target = 0;
@@ -125,8 +130,6 @@ void kernel_main() {
                 if ((topology == Topology::Linear && writes_expected > 0) ||
                     (topology == Topology::Ring && ((slices_received + 1) < (writes_expected + 1)))) {
                     // read the next chunk out of memory, and put it in CB
-                    uint32_t slice_tile_end_id =
-                        output_tensor_Wt * (output_tensor_Ht - 1) + input_tensor_Wt * (actual_sender_chip_id + 1);
                     next_tile_to_read = read_chunk(
                         global_tile_index,
                         global_tile_id_start,
@@ -136,7 +139,12 @@ void kernel_main() {
                         num_tiles_to_write_per_packet,
                         ag_worker_cores,
                         input_tensor_addrgen,
-                        input_tensor_page_size);
+                        input_tensor_page_size,
+                        output_tensor_addrgen,
+                        input_tensor_Wt,
+                        output_tensor_Wt,
+                        actual_sender_chip_id,
+                        true);
                 }
                 slices_received++;
             }

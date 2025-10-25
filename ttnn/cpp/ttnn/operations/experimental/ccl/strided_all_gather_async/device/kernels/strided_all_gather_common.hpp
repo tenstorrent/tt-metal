@@ -18,29 +18,23 @@
 
 using namespace tt::tt_fabric::linear::experimental;
 
-FORCE_INLINE uint32_t
-get_next_tile_input(uint32_t local_tile_index, uint32_t input_start_tile_index, uint32_t ag_parallel_factor) {
-    // Imagine the input is already permuted (this has nothing to do with our all gather, it's just ordering the output
-    // of all gather such it will be ideal for matmul) We split up the work evenly amongst the all gather cores.
-    // Probably the best way is just to round robin through the input amongst the various all gather cores.  Ignore
-    // direction since you send the same thing forward and backward.  For now just send the whole thing in that order,
-    // we can add finer grain fidelity to correspond to the syncs for matmul.  Right now just sync once when we reach
-    // the end of the buffer.
-    return input_start_tile_index + local_tile_index * ag_parallel_factor;
-}
-
-FORCE_INLINE uint32_t get_next_tile_output(
+FORCE_INLINE uint32_t get_next_tile(
     uint32_t local_tile_index,
     uint32_t input_start_tile_index,
     uint32_t ag_parallel_factor,
     uint32_t input_tensor_Wt,
     uint32_t output_tensor_Wt,
-    uint32_t device_index) {
+    uint32_t device_index,
+    bool read_from_output) {
     uint32_t input_tile_index = input_start_tile_index + local_tile_index * ag_parallel_factor;
-    uint32_t input_row = input_tile_index / input_tensor_Wt;
-    uint32_t input_col = input_tile_index % input_tensor_Wt;
-    return input_row * output_tensor_Wt + device_index * input_tensor_Wt +
-           input_col;  // TODO should pass device_index*input_tensor_Wt to prevent recalculating them
+    if (read_from_output) {
+        uint32_t input_row = input_tile_index / input_tensor_Wt;
+        uint32_t input_col = input_tile_index % input_tensor_Wt;
+        return input_row * output_tensor_Wt + device_index * input_tensor_Wt +
+               input_col;  // TODO should pass device_index*input_tensor_Wt to prevent recalculating them
+    } else {
+        return input_tile_index;
+    }
 }
 
 FORCE_INLINE uint32_t
@@ -67,7 +61,12 @@ FORCE_INLINE uint32_t read_chunk(
     uint32_t max_tiles_per_packet,
     uint32_t ag_worker_cores,
     AddrGenType input_tensor_addrgen,
-    uint32_t input_tensor_page_size) {
+    uint32_t input_tensor_page_size,
+    AddrGenType output_tensor_addrgen,
+    uint32_t input_tensor_Wt,
+    uint32_t output_tensor_Wt,
+    uint32_t actual_sender_chip_id,
+    bool read_output) {
     uint32_t next_tile_to_read = global_tile_index;
     uint32_t tiles_left = tiles_per_core - next_tile_to_read;
     uint32_t tiles_in_curr_chunk = std::min(tiles_left, tiles_per_chunk);
@@ -81,9 +80,16 @@ FORCE_INLINE uint32_t read_chunk(
         cb_reserve_back(cb_output_id, max_tiles_per_packet);
         size_t l1_write_addr = get_write_ptr(cb_output_id);
         for (uint32_t j = 0; j < tiles_to_read_in_packet; ++j) {
-            uint32_t tile_id = get_next_tile_input(next_tile_to_read, global_tile_id_start, ag_worker_cores);
+            uint32_t tile_id = get_next_tile(
+                next_tile_to_read,
+                global_tile_id_start,
+                ag_worker_cores,
+                input_tensor_Wt,
+                output_tensor_Wt,
+                actual_sender_chip_id,
+                read_output);
 
-            uint64_t noc_read_addr = get_noc_addr(tile_id, input_tensor_addrgen);
+            uint64_t noc_read_addr = get_noc_addr(tile_id, read_output ? output_tensor_addrgen : input_tensor_addrgen);
             noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
 
             l1_write_addr += input_tensor_page_size;
@@ -110,7 +116,7 @@ FORCE_INLINE uint32_t write_chunk(
     uint32_t output_page_size,
     uint32_t input_tensor_Wt,
     uint32_t output_tensor_Wt,
-    uint32_t my_chip_id,
+    uint32_t actual_sender_chip_id,
     tt::tt_fabric::WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& mux_connection,
     volatile PACKET_HEADER_TYPE* pkt_scatter_hdr,
     volatile PACKET_HEADER_TYPE* pkt_unicast_hdr,
@@ -131,18 +137,25 @@ FORCE_INLINE uint32_t write_chunk(
         cb_wait_front(cb_output_id, max_tiles_per_packet);
         size_t l1_read_addr = get_read_ptr(cb_output_id);
 
-        uint32_t tile_one_id = get_next_tile_output(
-            next_tile_to_write, global_tile_id_start, ag_worker_cores, input_tensor_Wt, output_tensor_Wt, my_chip_id);
+        uint32_t tile_one_id = get_next_tile(
+            next_tile_to_write,
+            global_tile_id_start,
+            ag_worker_cores,
+            input_tensor_Wt,
+            output_tensor_Wt,
+            actual_sender_chip_id,
+            true);
         next_tile_to_write++;
         uint32_t tile_two_id = tile_one_id;
         if (tiles_to_write_in_packet == 2) {
-            tile_two_id = get_next_tile_output(
+            tile_two_id = get_next_tile(
                 next_tile_to_write,
                 global_tile_id_start,
                 ag_worker_cores,
                 input_tensor_Wt,
                 output_tensor_Wt,
-                my_chip_id);
+                actual_sender_chip_id,
+                true);
             next_tile_to_write++;
         }
         auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_one_id, 0);
