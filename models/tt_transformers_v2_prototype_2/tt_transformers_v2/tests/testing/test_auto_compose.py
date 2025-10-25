@@ -151,12 +151,14 @@ def test_device_sharded_1d(ttnn_mesh_device: ttnn.MeshDevice, layout) -> None:
     assert torch.equal(torch_auto, torch_in), "Auto-composer mismatch on device-sharded tensor"
 
 
+# todo)) need to test replicate 1d for both host and device sharded tensors
+
 # --------------------------------------------------------------------------------------
 # Additional coverage: shard various tensor dims on 1D meshes
 # --------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("dim", [0, 1, -1])
+@pytest.mark.parametrize("dim", [0, 1, 2, -1])
 def test_host_sharded_various_dims(ttnn_mesh_device: ttnn.MeshDevice, layout, dim: int) -> None:
     num_devices = ttnn_mesh_device.get_num_devices()
 
@@ -181,7 +183,7 @@ def test_host_sharded_various_dims(ttnn_mesh_device: ttnn.MeshDevice, layout, di
     assert torch.equal(torch_auto, torch_in)
 
 
-@pytest.mark.parametrize("dim", [0, 1, -1])
+@pytest.mark.parametrize("dim", [0, 1, 2, -1])
 def test_device_sharded_various_dims(ttnn_mesh_device: ttnn.MeshDevice, layout, dim: int) -> None:
     num_devices = ttnn_mesh_device.get_num_devices()
 
@@ -286,8 +288,9 @@ def test_host_sharded_2d_with_replicate(
     shard_dim = [d for d in dims_pair if d is not None][0]
     shard_axis = _pos_dim(shard_dim, rank)
     shape = [2, 3, 4, 5]
-    # Set size along sharded axis to corresponding mesh dim
-    shape[shard_axis] = mesh_shape[1 - replicate_axis]
+    # Set size along sharded axis rounded up to a multiple of the other mesh dim
+    other_mesh_dim = mesh_shape[1 - replicate_axis]
+    shape[shard_axis] = ((shape[shard_axis] + other_mesh_dim - 1) // other_mesh_dim) * other_mesh_dim
     torch_in = _make_arange_bf16(tuple(shape))
 
     mapper = ttnn.ShardTensor2dMesh(ttnn_mesh_device, mesh_shape=mesh_shape, dims=dims_pair)  # type: ignore[arg-type]
@@ -295,11 +298,12 @@ def test_host_sharded_2d_with_replicate(
 
     torch_auto = to_torch_auto_compose(tt_host, device=ttnn_mesh_device)
 
-    # Expected: auto-composer concatenates replicas along axis 0
-    repeat_factor = mesh_shape[replicate_axis]
-    expected = torch_in.repeat((repeat_factor, 1, 1, 1))
-    assert torch.equal(torch_auto, expected)
+    # Expected: auto-composer does not concatenates replicated dims
+    assert torch.equal(torch_auto, torch_in)
 
+
+# todo)) is it possible to refactor device/host test cases into a single function with a parameter for device/host?
+# todo)) add test for device sharded 2d with replicate
 
 # --------------------------------------------------------------------------------------
 # Tensor shape categories around hardware threshold (e.g., 32)

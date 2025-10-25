@@ -136,13 +136,18 @@ def _compose_nd_sharded(
     is how the C++ API works).
     """
     dims = []
-    for p in placements:
+    shape_override = []
+    for i, p in enumerate(placements):
         if isinstance(p, ttnn.PlacementShard):
             dims.append(p.dim)
+            shape_override.append(dist_shape[i])
         else:
-            # Replicated: use dim 0 as convention (result will stack replicas)
             assert isinstance(p, ttnn.PlacementReplicate)
+            # [INFO] steal from TensorDistribution2x4Test test case in test_distributed_tensor.cpp
+            # Replicated: use dim 0 as convention
             dims.append(0)
+            # Replicated: use shape 1 to skip concatenation
+            shape_override.append(1)
 
-    composer_cfg = ttnn.MeshComposerConfig(dims=dims, mesh_shape_override=ttnn.MeshShape(dist_shape))
+    composer_cfg = ttnn.MeshComposerConfig(dims=dims, mesh_shape_override=ttnn.MeshShape(shape_override))
     return ttnn.create_mesh_composer(device, composer_cfg)
