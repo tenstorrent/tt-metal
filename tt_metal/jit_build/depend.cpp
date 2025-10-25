@@ -3,11 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "depend.hpp"
+#include "jit_build_utils.hpp"
 
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <istream>
+#include <iterator>
 #include <tt-logger/tt-logger.hpp>
 
 namespace tt::jit_build {
@@ -59,19 +61,10 @@ ParsedDependencies parse_dependency_file(std::istream& file) {
 
 namespace {
 
-// Need a stable hash algorithm to hash file content.
-// std::hash is not stable across runs/implementations.
 uint64_t hash_file_content(std::istream& file) {
-    // https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function#FNV-1a_hash
-    static constexpr uint64_t FNV_PRIME = UINT64_C(0x100000001b3);
-    static constexpr uint64_t FNV_OFFSET = UINT64_C(0xcbf29ce484222325);
-    uint64_t hash = FNV_OFFSET;
-    char c;
-    while (file.get(c)) {
-        hash ^= static_cast<uint32_t>(c);
-        hash *= FNV_PRIME;
-    }
-    return hash;
+    utils::FNV1a hasher;
+    hasher.update(std::istream_iterator<char>(file), std::istream_iterator<char>());
+    return hasher.digest();
 }
 
 }  // namespace
