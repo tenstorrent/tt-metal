@@ -868,7 +868,7 @@ void dumpDeviceResultsToCSV(
     for (const auto& [core, device_markers_per_risc_map] : device_markers_per_core_risc_map) {
         for (const auto& [risc, device_markers] : device_markers_per_risc_map) {
             for (const tracy::TTDeviceMarker& marker : device_markers) {
-                std::string meta_data_str = "";
+                std::string meta_data_str;
                 if (!marker.meta_data.is_null()) {
                     meta_data_str = marker.meta_data.dump();
                     std::replace(meta_data_str.begin(), meta_data_str.end(), ',', ';');
@@ -1424,13 +1424,13 @@ void DeviceProfiler::readDeviceMarkerData(
 
 struct DispatchMetaData {
     // Dispatch command queue command type
-    std::string cmd_type = "";
+    std::string cmd_type;
 
     // Worker's runtime id
     uint32_t worker_runtime_id = 0;
 
     // dispatch command subtype.
-    std::string cmd_subtype = "";
+    std::string cmd_subtype;
 };
 
 void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& device_markers) {

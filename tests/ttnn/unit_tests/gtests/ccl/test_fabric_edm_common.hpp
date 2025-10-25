@@ -209,7 +209,7 @@ public:
         }
     }
 
-    MeshFabric1DFixture() : BaseFabricFixture() { this->SetupDevices(); }
+    MeshFabric1DFixture() { this->SetupDevices(); }
 
     MeshFabric1DFixture(tt::tt_fabric::FabricConfig fabric_config) : BaseFabricFixture(fabric_config) {
         this->SetupDevices();

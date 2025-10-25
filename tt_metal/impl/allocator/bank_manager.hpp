@@ -142,7 +142,7 @@ private:
      * Allocator-dependent members *
      *******************************/
     // Dependencies between allocators (also encodes number of allocators)
-    AllocatorDependencies allocator_dependencies_{};
+    AllocatorDependencies allocator_dependencies_;
 
     // Track allocations per allocator
     ttsl::SmallVector<std::unordered_set<DeviceAddr>> allocated_buffers_{};

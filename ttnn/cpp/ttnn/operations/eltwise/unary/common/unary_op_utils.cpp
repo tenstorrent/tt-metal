@@ -948,7 +948,7 @@ std::map<std::string, std::string> get_block_defines(
     const std::string& idst,
     std::optional<DataType> input_dtype) {
     std::map<std::string, std::string> block_defines;
-    std::string block_define = "";
+    std::string block_define;
     for (uint32_t i = 0; i < op_chain.size(); i++) {
         std::string init_def = fmt::format("SFPU_OP_CHAIN_{}_INIT_{}", block_id, i);
         std::string func_def = fmt::format("SFPU_OP_CHAIN_{}_FUNC_{}", block_id, i);

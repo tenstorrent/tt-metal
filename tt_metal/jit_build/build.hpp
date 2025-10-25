@@ -64,8 +64,8 @@ private:
     std::string out_kernel_root_;
 
     // Tools
-    std::string gpp_ = "";
-    std::string gpp_include_dir_ = "";
+    std::string gpp_;
+    std::string gpp_include_dir_;
 
     // Compilation options
     std::string cflags_;
