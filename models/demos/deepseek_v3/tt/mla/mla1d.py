@@ -838,19 +838,16 @@ class MLA1D(AbstractModule):
         # Q ready for FlashMLA
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
 
-        # FIXME: All-to-All here!! (tt_q)
-        # The following code does the following:
-        # [1, bsz, num_heads_local, kv_lora_rank + qk_rope_head_dim] -> [1, bsz_local, num_heads, kv_lora_rank + qk_rope_head_dim]
-        # Using the following algorithm: 1. AG on in_dim, 2. Scale by number of devices, 3. RS on out_dim
-        tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))  # [1, num_heads_local, bsz_local, kv_lora_rank + qk_rope_head_dim]
-        tt_q = ttnn.experimental.all_gather_async(
-            tt_q, **ccl.populate_all_gather_runtime_args(cfg["wq_a2a_ag_decode"])
-        )  # [1, num_heads, bsz_local, kv_lora_rank + qk_rope_head_dim]
-        tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))  # [1, bsz_local, num_heads, kv_lora_rank + qk_rope_head_dim]
-        tt_q = ttnn.experimental.reduce_scatter_minimal_async(
-            tt_q, **ccl.populate_reduce_scatter_runtime_args(cfg["wq_a2a_rs_decode"])
+        tt_q = ttnn.experimental.all_to_all_async_generic(
+            tt_q,
+            in_dim=2,
+            out_dim=1,
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+            subdevice_id=None,
+            cluster_axis=1,
         )
-        tt_q = tt_q * scale  # Scale the input tensor
 
         # KVPE Stuff
         tt_kv = ttnn.linear(x, **cfg["wkv_a"])
@@ -921,17 +918,16 @@ class MLA1D(AbstractModule):
         ttnn.deallocate(tt_q)
         attn_out = ttnn.to_memory_config(attn_out, **cfg["flash_mla_out_reshard"])
 
-        # FIXME: All-to-All here!! (attn_out)
-        # TODO: add deallocation of intermediate tensors
-        attn_out = ttnn.experimental.all_gather_async(
-            attn_out, **ccl.populate_all_gather_runtime_args(cfg["flash_mla_ag_decode"])
-        )  # [1, bsz, num_heads, kv_lora_rank]
-        attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, num_heads, bsz, kv_lora_rank]
-        attn_out = ttnn.experimental.reduce_scatter_minimal_async(
-            attn_out, **ccl.populate_reduce_scatter_runtime_args(cfg["flash_mla_rs_decode"])
-        )  # [1, num_heads_local, bsz, kv_lora_rank]
-        attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, bsz, num_heads_local, kv_lora_rank]
-        attn_out = attn_out * scale  # Scale the output tensor
+        attn_out = ttnn.experimental.all_to_all_async_generic(
+            attn_out,
+            in_dim=1,
+            out_dim=2,
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+            subdevice_id=None,
+            cluster_axis=1,
+        )
 
         # wkv_b2
         attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, num_heads_local, bsz, kv_lora_rank]
