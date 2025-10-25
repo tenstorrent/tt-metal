@@ -30,7 +30,6 @@ std::vector<uint8_t> serialize_link_metrics_to_bytes(const std::vector<::Etherne
         auto* proto_metrics = proto_link_status->mutable_ethernet_metrics();
         proto_metrics->set_retrain_count(link_metric.link_status.metrics.retrain_count);
         proto_metrics->set_crc_error_count(link_metric.link_status.metrics.crc_error_count);
-        proto_metrics->set_corrected_codeword_count(link_metric.link_status.metrics.corrected_codeword_count);
         proto_metrics->set_uncorrected_codeword_count(link_metric.link_status.metrics.uncorrected_codeword_count);
 
         // Serialize TrafficParams
@@ -81,7 +80,6 @@ std::vector<::EthernetLinkMetrics> deserialize_link_metrics_from_bytes(const std
         const auto& proto_metrics = proto_link_status.ethernet_metrics();
         link_metric.link_status.metrics.retrain_count = proto_metrics.retrain_count();
         link_metric.link_status.metrics.crc_error_count = proto_metrics.crc_error_count();
-        link_metric.link_status.metrics.corrected_codeword_count = proto_metrics.corrected_codeword_count();
         link_metric.link_status.metrics.uncorrected_codeword_count = proto_metrics.uncorrected_codeword_count();
 
         // Deserialize TrafficParams
@@ -96,94 +94,6 @@ std::vector<::EthernetLinkMetrics> deserialize_link_metrics_from_bytes(const std
     }
 
     return link_metrics;
-}
-
-std::vector<uint8_t> serialize_eth_chan_identifiers_to_bytes(const std::vector<::EthChannelIdentifier>& exit_nodes) {
-    EthChannelIdentifierList proto_list;
-
-    for (const auto& exit_node : exit_nodes) {
-        auto* proto_exit_node = proto_list.add_exit_nodes();
-        proto_exit_node->set_host(exit_node.host);
-        proto_exit_node->set_asic_id(*exit_node.asic_id);
-        proto_exit_node->set_tray_id(*exit_node.tray_id);
-        proto_exit_node->set_asic_location(*exit_node.asic_location);
-        proto_exit_node->set_channel(exit_node.channel);
-    }
-
-    // Serialize to bytes
-    size_t size = proto_list.ByteSizeLong();
-    std::vector<uint8_t> result(size);
-
-    if (!proto_list.SerializeToArray(result.data(), size)) {
-        throw std::runtime_error("Failed to serialize EthChannelIdentifierList to protobuf binary format");
-    }
-
-    return result;
-}
-
-std::vector<::EthChannelIdentifier> deserialize_eth_chan_identifiers_from_bytes(const std::vector<uint8_t>& data) {
-    EthChannelIdentifierList proto_list;
-
-    if (!proto_list.ParseFromArray(data.data(), data.size())) {
-        throw std::runtime_error("Failed to parse EthChannelIdentifierList from protobuf binary format");
-    }
-
-    std::vector<::EthChannelIdentifier> exit_nodes;
-    exit_nodes.reserve(proto_list.exit_nodes_size());
-
-    for (const auto& proto_exit_node : proto_list.exit_nodes()) {
-        ::EthChannelIdentifier exit_node;
-        exit_node.host = proto_exit_node.host();
-        exit_node.asic_id = tt::tt_metal::AsicID(proto_exit_node.asic_id());
-        exit_node.tray_id = tt::tt_metal::TrayID(proto_exit_node.tray_id());
-        exit_node.asic_location = tt::tt_metal::ASICLocation(proto_exit_node.asic_location());
-        exit_node.channel = static_cast<uint8_t>(proto_exit_node.channel());
-
-        exit_nodes.push_back(std::move(exit_node));
-    }
-
-    return exit_nodes;
-}
-
-std::vector<uint8_t> serialize_reset_pairs_to_bytes(const std::vector<::ResetPair>& reset_pairs) {
-    ResetPairList proto_list;
-
-    for (const auto& reset_pair : reset_pairs) {
-        auto* proto_reset_pair = proto_list.add_reset_pairs();
-        proto_reset_pair->set_src_rank(reset_pair.src_rank);
-        proto_reset_pair->set_dst_rank(reset_pair.dst_rank);
-    }
-
-    // Serialize to bytes
-    size_t size = proto_list.ByteSizeLong();
-    std::vector<uint8_t> result(size);
-
-    if (!proto_list.SerializeToArray(result.data(), size)) {
-        throw std::runtime_error("Failed to serialize ResetPairList to protobuf binary format");
-    }
-
-    return result;
-}
-
-std::vector<::ResetPair> deserialize_reset_pairs_from_bytes(const std::vector<uint8_t>& data) {
-    ResetPairList proto_list;
-
-    if (!proto_list.ParseFromArray(data.data(), data.size())) {
-        throw std::runtime_error("Failed to parse ResetPairList from protobuf binary format");
-    }
-
-    std::vector<::ResetPair> reset_pairs;
-    reset_pairs.reserve(proto_list.reset_pairs_size());
-
-    for (const auto& proto_reset_pair : proto_list.reset_pairs()) {
-        ::ResetPair reset_pair;
-        reset_pair.src_rank = proto_reset_pair.src_rank();
-        reset_pair.dst_rank = proto_reset_pair.dst_rank();
-
-        reset_pairs.push_back(reset_pair);
-    }
-
-    return reset_pairs;
 }
 
 }  // namespace tt::scaleout::validation
