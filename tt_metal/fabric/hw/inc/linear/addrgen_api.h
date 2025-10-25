@@ -109,7 +109,7 @@ FORCE_INLINE void to_noc_fused_unicast_write_atomic_inc(
 
     pkt_hdr->to_noc_fused_unicast_write_atomic_inc(
         NocUnicastAtomicIncFusedCommandHeader(
-            noc_address, atomic_inc_spec.noc_address, atomic_inc_spec.val, atomic_inc_spec.wrap, atomic_inc_spec.flush),
+            noc_address, atomic_inc_spec.noc_address, atomic_inc_spec.val, atomic_inc_spec.flush),
         page_size);
 
     validate_max_payload_size(page_size);

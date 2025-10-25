@@ -202,7 +202,6 @@ inline TrafficPatternType merge_patterns(const TrafficPatternType& base, const T
     merged.size = specific.size.has_value() ? specific.size : base.size;
     merged.num_packets = specific.num_packets.has_value() ? specific.num_packets : base.num_packets;
     merged.atomic_inc_val = specific.atomic_inc_val.has_value() ? specific.atomic_inc_val : base.atomic_inc_val;
-    merged.atomic_inc_wrap = specific.atomic_inc_wrap.has_value() ? specific.atomic_inc_wrap : base.atomic_inc_wrap;
     merged.mcast_start_hops = specific.mcast_start_hops.has_value() ? specific.mcast_start_hops : base.mcast_start_hops;
 
     // Special handling for nested destination
@@ -496,7 +495,6 @@ private:
         resolved_pattern.size = parsed_pattern.size;
         resolved_pattern.num_packets = parsed_pattern.num_packets;
         resolved_pattern.atomic_inc_val = parsed_pattern.atomic_inc_val;
-        resolved_pattern.atomic_inc_wrap = parsed_pattern.atomic_inc_wrap;
         resolved_pattern.mcast_start_hops = parsed_pattern.mcast_start_hops;
 
         if (parsed_pattern.destination.has_value()) {
@@ -730,10 +728,6 @@ private:
             TT_FATAL(
                 !pattern.atomic_inc_val.has_value(),
                 "Test '{}': 'atomic_inc_val' should not be specified for 'unicast_write' ntype.",
-                test.name);
-            TT_FATAL(
-                !pattern.atomic_inc_wrap.has_value(),
-                "Test '{}': 'atomic_inc_wrap' should not be specified for 'unicast_write' ntype.",
                 test.name);
         }
 
@@ -1130,7 +1124,6 @@ private:
         base_sync_pattern.size = 0;                                     // No payload, just sync signal
         base_sync_pattern.num_packets = 1;                              // Single sync signal
         base_sync_pattern.atomic_inc_val = 1;                           // Increment by 1
-        base_sync_pattern.atomic_inc_wrap = 0xFFFF;                     // Large wrap value
 
         // Topology-specific routing - get multi-directional hops first
         auto [multi_directional_hops, global_sync_val] =
@@ -1484,10 +1477,6 @@ private:
         if (config.atomic_inc_val) {
             out << YAML::Key << "atomic_inc_val";
             out << YAML::Value << config.atomic_inc_val.value();
-        }
-        if (config.atomic_inc_wrap) {
-            out << YAML::Key << "atomic_inc_wrap";
-            out << YAML::Value << config.atomic_inc_wrap.value();
         }
         if (config.mcast_start_hops) {
             out << YAML::Key << "mcast_start_hops";
