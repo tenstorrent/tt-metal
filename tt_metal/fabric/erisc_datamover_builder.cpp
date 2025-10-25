@@ -1221,6 +1221,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
     TT_FATAL(sender_channels_num_buffer != 0, "sender_channels_num_buffer should not be 0!");
 
     this->sender_channel_connection_liveness_check_disable_array[ds_edm] = true;
+    this->is_sender_channel_elastic_array[ds_edm] = false;
     return SenderWorkerAdapterSpec{
         this->my_noc_x,
         this->my_noc_y,

@@ -42,7 +42,11 @@ namespace tt::tt_fabric {
  * The consumer when issuing an acknowledgement, will increment the producer's free slots counter.
  */
 template <uint8_t EDM_NUM_BUFFER_SLOTS>
+// <<<<<<< HEAD
 struct RouterStaticSizedChannelWriterAdapter {
+// =======
+// struct RouterChannelWriterAdapter {
+// >>>>>>> 268a262fc3 (checkpoint)
     static constexpr bool ENABLE_STATEFUL_WRITE_CREDIT_TO_DOWNSTREAM_EDM =
 #if !defined(DEBUG_PRINT_ENABLED) and !defined(WATCHER_ENABLED)
         true;
@@ -57,7 +61,11 @@ struct RouterStaticSizedChannelWriterAdapter {
 
     // HACK: Need a way to properly set this up
 
+// <<<<<<< HEAD
     RouterStaticSizedChannelWriterAdapter() = default;
+// =======
+//     RouterChannelWriterAdapter() = default;
+// >>>>>>> 268a262fc3 (checkpoint)
 
     template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>
     FORCE_INLINE void init(
@@ -115,7 +123,11 @@ struct RouterStaticSizedChannelWriterAdapter {
     }
 
     template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>
+// <<<<<<< HEAD
     FORCE_INLINE RouterStaticSizedChannelWriterAdapter(
+// =======
+//     FORCE_INLINE RouterChannelWriterAdapter(
+// >>>>>>> 268a262fc3 (checkpoint)
         bool connected_to_persistent_fabric,
         uint8_t edm_worker_x,
         uint8_t edm_worker_y,
@@ -322,7 +334,6 @@ private:
 
         send_chunk_from_address_with_trid<stateful_api, vc1_has_different_downstream_dest>(
             source_address,
-            1,
             size_bytes,
             get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0) >> NOC_ADDR_COORD_SHIFT,
             this->edm_buffer_slot_addrs[this->get_buffer_slot_index()],
@@ -340,6 +351,10 @@ private:
 };
 
 template <uint8_t EDM_SENDER_CHANNEL_NUM_BUFFERS>
+// <<<<<<< HEAD
 using EdmToEdmSender = RouterStaticSizedChannelWriterAdapter<EDM_SENDER_CHANNEL_NUM_BUFFERS>;
+// =======
+// using EdmToEdmSender = RouterChannelWriterAdapter<EDM_SENDER_CHANNEL_NUM_BUFFERS>;
+// >>>>>>> 268a262fc3 (checkpoint)
 
 }  // namespace tt::tt_fabric

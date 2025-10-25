@@ -552,6 +552,9 @@ public:
 
     std::array<bool, builder_config::num_sender_channels> sender_channel_connection_liveness_check_disable_array = {};
 
+    std::array<bool, FabricEriscDatamoverConfig::num_sender_channels>
+        is_sender_channel_elastic_array = {};
+
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
     FabricEriscDatamoverContextSwitchType firmware_context_switch_type = default_firmware_context_switch_type;

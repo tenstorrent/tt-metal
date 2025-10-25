@@ -17,7 +17,6 @@ enum EDM_IO_BLOCKING_MODE { FLUSH_BLOCKING, BLOCKING, NON_BLOCKING };
 template <bool stateful_api, bool vc1_has_different_downstream_dest>
 FORCE_INLINE void send_chunk_from_address_with_trid(
     const uint32_t& local_l1_address,
-    const uint32_t& num_pages,
     const uint32_t& page_size,
     uint32_t remote_l1_write_addr_h,
     uint32_t remote_l1_write_addr_l,
@@ -32,12 +31,12 @@ FORCE_INLINE void send_chunk_from_address_with_trid(
 #endif
     if constexpr (stateful_api && !vc1_has_different_downstream_dest) {
         noc_async_write_one_packet_with_trid_with_state<update_counter, true>(
-            local_l1_address, remote_l1_write_addr_l, page_size * num_pages, trid, cmd_buf, noc);
+            local_l1_address, remote_l1_write_addr_l, page_size, trid, cmd_buf, noc);
     } else {
         noc_async_write_one_packet_with_trid<update_counter, true>(
             local_l1_address,
             get_noc_addr_helper(remote_l1_write_addr_h, remote_l1_write_addr_l),
-            page_size * num_pages,
+            page_size,
             trid,
             cmd_buf,
             noc);

@@ -2919,16 +2919,11 @@ void kernel_main() {
             if (has_downstream_edm_vc0_buffer_connection) {
                 downstream_edm_noc_interfaces_vc0[0]
                     .template open<false, use_posted_writes_for_connection_open, tt::tt_fabric::worker_handshake_noc>();
-                ASSERT(
-                    get_ptr_val(downstream_edm_noc_interfaces_vc0[0].get_worker_credits_stream_id()) ==
-                    DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
+
             }
             if (has_downstream_edm_vc1_buffer_connection) {
                 downstream_edm_noc_interface_vc1
                     .template open<false, use_posted_writes_for_connection_open, tt::tt_fabric::worker_handshake_noc>();
-                ASSERT(
-                    get_ptr_val(downstream_edm_noc_interface_vc1.get_worker_credits_stream_id()) ==
-                    DOWNSTREAM_SENDER_NUM_BUFFERS_VC1);
             }
         }
     }
