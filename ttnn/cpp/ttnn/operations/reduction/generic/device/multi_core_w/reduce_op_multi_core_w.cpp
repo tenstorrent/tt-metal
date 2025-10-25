@@ -22,7 +22,8 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     Tensor& output,
     ReduceOpMath reduce_op,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-    float scaler) {
+    float scaler,
+    bool do_negate) {
     const auto& shape = a.padded_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
 
@@ -79,6 +80,9 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reduce_defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::W);
+    if (do_negate) {
+        reduce_defines["DO_NEGATE"] = "1";
+    }
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"

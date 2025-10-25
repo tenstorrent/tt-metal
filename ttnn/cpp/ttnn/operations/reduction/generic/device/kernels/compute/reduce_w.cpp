@@ -10,6 +10,10 @@
 #include "compute_kernel_api/matmul.h"
 #endif
 
+#ifdef DO_NEGATE
+#include "compute_kernel_api/eltwise_unary/negative.h"
+#endif
+
 namespace NAMESPACE {
 
 void MAIN {
@@ -22,6 +26,9 @@ void MAIN {
     reduce_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
 #else
     mm_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
+#endif
+#ifdef DO_NEGATE
+    negative_tile_init();
 #endif
 
     cb_wait_front(tt::CBIndex::c_2, 1);  // scaler tile from the reader
@@ -44,6 +51,9 @@ void MAIN {
                 cb_pop_front(tt::CBIndex::c_0, onetile);
             }
 
+#ifdef DO_NEGATE
+            negative_tile(reduce_dst_idx);
+#endif
             cb_reserve_back(tt::CBIndex::c_3, onetile);
             pack_tile(reduce_dst_idx, tt::CBIndex::c_3);
             cb_push_back(tt::CBIndex::c_3, onetile);
