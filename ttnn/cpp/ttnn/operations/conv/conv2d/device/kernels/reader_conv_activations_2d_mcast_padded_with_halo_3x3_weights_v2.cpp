@@ -41,6 +41,8 @@ void kernel_main() {
     constexpr uint32_t cb_id_act_row_major_bfloat16 = get_compile_time_arg_val(25);
     constexpr uint32_t cb_l1_array = get_compile_time_arg_val(26);
 
+    constexpr bool split_reader_enabled = get_compile_time_arg_val(27);
+
     if constexpr (needs_act_block_zero_out) {
         zero_out_tiles<cb_id_act_row_major_bfloat16>();
     }
@@ -58,7 +60,7 @@ void kernel_main() {
 
     tt_l1_ptr uint32_t* act_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
-    load_config_tensor_if_in_dram<27, 28, 29, cb_reader_indices>(dram_config_reader_index);
+    load_config_tensor_if_in_dram<29, 30, 31, cb_reader_indices>(dram_config_reader_index);
 
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
@@ -236,10 +238,10 @@ void kernel_main() {
 #endif
         }
         start_reader_idx = reader_idx;
-#ifdef SPLIT_READER
-        // Increment reader index for the next number of segments (number of segments for other reader)
-        start_reader_idx += (static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1);
-#endif
+        if constexpr (split_reader_enabled) {
+            // Increment reader index for the next number of segments (number of segments for other reader)
+            start_reader_idx += (static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1);
+        }
     }
 
     noc_async_write_barrier();
