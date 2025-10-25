@@ -51,14 +51,14 @@ def assert_quality(
         f"RMSE/σ₁ = {relative_rmse_found * 100:.1f} %"
     )
 
-    if pcc is not None and pcc_found < pcc:
+    if pcc is not None and (math.isnan(pcc_found) or pcc_found < pcc):
         msg = f"PCC = {pcc_found * 100:.4f} % >= {pcc * 100:.4f} %"
         raise Exception(msg)  # noqa: TRY002
 
-    if ccc is not None and ccc_found < ccc:
+    if ccc is not None and (math.isnan(ccc_found) or ccc_found < ccc):
         msg = f"CCC = {ccc_found * 100:.4f} % >= {ccc * 100:.4f} %"
         raise Exception(msg)  # noqa: TRY002
 
-    if relative_rmse is not None and relative_rmse_found > relative_rmse:
+    if relative_rmse is not None and (math.isnan(relative_rmse_found) or relative_rmse_found > relative_rmse):
         msg = f"RMSE/σ₁ = {relative_rmse_found * 100:.1f} % <= {relative_rmse * 100:.1f} %"
         raise Exception(msg)  # noqa: TRY002
