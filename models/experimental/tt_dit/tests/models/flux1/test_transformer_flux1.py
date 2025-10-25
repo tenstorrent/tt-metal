@@ -51,15 +51,15 @@ def test_single_transformer_block(
     prompt_seq_len: int,
     spatial_seq_len: int,
     id: str,
+    model_location_generator,
     is_ci_env: bool,
 ) -> None:
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     sp_factor = tuple(submesh_device.shape)[sp_axis]
     tp_factor = tuple(submesh_device.shape)[tp_axis]
 
-    parent_torch_model = reference.FluxTransformer2DModel.from_pretrained(
-        "black-forest-labs/FLUX.1-dev", subfolder="transformer"
-    )
+    model_name = model_location_generator(f"black-forest-labs/FLUX.1-dev", model_subdir="transformer")
+    parent_torch_model = reference.FluxTransformer2DModel.from_pretrained(model_name, subfolder="transformer")
     torch_model = parent_torch_model.single_transformer_blocks[0]
     assert isinstance(torch_model, reference.models.transformers.transformer_flux.FluxSingleTransformerBlock)
     torch_model.eval()
