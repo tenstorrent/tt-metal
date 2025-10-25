@@ -494,6 +494,10 @@ static constexpr uint8_t forward_and_local_write_noc_vc = get_compile_time_arg_v
 // --------------------------------- ISSUE #26311 ------------------------------ //
 constexpr size_t CHUNK_N_PKTS = 0;
 constexpr std::array<bool, NUM_SENDER_CHANNELS> IS_ELASTIC_SENDER_CHANNEL =
+// <<<<<<< HEAD
     initialize_array<NUM_SENDER_CHANNELS, bool, false>();
+// =======
+//     initialize_array_with_value<bool, NUM_SENDER_CHANNELS>(false);
+// >>>>>>> ea2a074abe (INCREMENTAL: Generalize EdmToEdmSender type used by router)
 
 }  // namespace tt::tt_fabric
