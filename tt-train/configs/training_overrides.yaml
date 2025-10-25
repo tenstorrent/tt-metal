@@ -1,0 +1,18 @@
+training_config:
+  batch_size: 32
+  validation_batch_size: 6
+  max_steps: 60
+  gradient_accumulation_steps: 1
+  eval_every: 20
+  transformer_config:
+    max_sequence_length: 576
+
+scheduler_config:
+  warmup_steps: 20
+  hold_steps: 40
+  min_lr: 3.0e-05
+  max_lr: 0.0001
+
+device_config:
+  enable_ddp: True
+  mesh_shape: [1, 32]
