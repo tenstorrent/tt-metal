@@ -20,8 +20,8 @@ namespace unit_tests::dm::one_packet {
 // Test config, i.e. test parameters
 struct OnePacketConfig {
     uint32_t test_id = 0;
-    CoreCoord master_core_coord = CoreCoord();
-    CoreCoord subordinate_core_coord = CoreCoord();
+    CoreCoord master_core_coord;
+    CoreCoord subordinate_core_coord;
     uint32_t num_packets = 0;
     uint32_t packet_size_bytes = 0;
     bool read = true;

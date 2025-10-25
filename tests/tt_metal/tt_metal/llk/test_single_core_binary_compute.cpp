@@ -74,8 +74,8 @@ struct SingleCoreBinaryConfig {
     size_t input_dram_byte_address = 0;
     tt::DataFormat l1_input_data_format = tt::DataFormat::Invalid;
     tt::DataFormat l1_output_data_format = tt::DataFormat::Invalid;
-    CoreCoord core = {};
-    std::string binary_op = "";
+    CoreCoord core;
+    std::string binary_op;
     bool acc_to_dest = false;
     bool full_init = true;
     MathFidelity math_fidelity = MathFidelity::HiFi4;

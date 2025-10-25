@@ -314,7 +314,7 @@ struct FabricEriscDatamoverConfig {
 
     // Channel Allocations
     std::size_t max_l1_loading_size = 0;
-    std::vector<MemoryRegion> available_buffer_memory_regions = {};
+    std::vector<MemoryRegion> available_buffer_memory_regions;
 
     FabricEriscDatamoverConfig(
         std::size_t channel_buffer_size_bytes,
@@ -520,7 +520,7 @@ public:
     size_t handshake_address = 0;
     size_t channel_buffer_size = 0;
 
-    std::shared_ptr<tt::tt_fabric::ChannelConnectionWriterAdapter> receiver_channel_to_downstream_adapter = {};
+    std::shared_ptr<tt::tt_fabric::ChannelConnectionWriterAdapter> receiver_channel_to_downstream_adapter;
     std::array<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>, FabricEriscDatamoverConfig::max_downstream_edms> downstream_allocators = {};
 
     std::array<size_t, builder_config::num_receiver_channels> receiver_channels_num_buffers = {};

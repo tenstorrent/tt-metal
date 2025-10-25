@@ -120,7 +120,7 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
     log_info(tt::LogTest, "Logical -- Virtual Mapping");
     log_info(tt::LogTest, "[Logical <-> Virtual] Coordinates");
     for (int r = 0; r < logical_grid_size.y; r++) {
-        std::string output_row = "";
+        std::string output_row;
         for (int c = 0; c < logical_grid_size.x; c++) {
             const CoreCoord logical_coord(c, r);
             const auto noc_coord = mesh_device->worker_core_from_logical_core(logical_coord);
