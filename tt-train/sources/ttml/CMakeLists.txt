@@ -490,6 +490,11 @@ target_link_libraries(
         ttml
 )
 target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
+install(TARGETS _ttml LIBRARY DESTINATION ttml)
+
+# Install Python source files
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/ttml/ DESTINATION ttml FILES_MATCHING PATTERN "*.py")
+
 install(
     TARGETS
         _ttml
@@ -505,5 +510,5 @@ install(
         DESTINATION
         ${PROJECT_SOURCE_DIR}/tt-train/sources/ttml
         COMPONENT
-        tt_pybinds
+        ttml
 )
