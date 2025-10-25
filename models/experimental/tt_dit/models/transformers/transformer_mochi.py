@@ -746,6 +746,10 @@ class MochiTransformer3DModel:
         pH, pW = H // self.patch_size, W // self.patch_size
         logger.info(f"Postprocessing spatial output with shape {spatial_1BND.shape}")
 
+        assert (
+            self.mesh_device.shape[self.parallel_config.sequence_parallel.mesh_axis] > 1
+        ), "all_gather_async requires at least 1 device"
+
         # AllGather hanging for large seqlen
         # # Gather sequence-parallel output
         spatial_1BND = ttnn.experimental.all_gather_async(
