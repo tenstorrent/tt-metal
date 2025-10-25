@@ -660,7 +660,8 @@ def reset_default_device():
 
     device = ttnn.GetDefaultDevice()
     yield
-    ttnn.SetDefaultDevice(device)
+    if device is not None:
+        ttnn.SetDefaultDevice(device)
 
 
 def get_devices(request):

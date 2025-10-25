@@ -665,8 +665,8 @@ nb::object convert_tt_tensor_to_torch_tensor(const RowMajorHostBuffer& row_major
             return pytorch_empty(row_major_host_buffer.shape, nb::arg("dtype") = torch_dtype);
         }
         auto view = row_major_host_buffer.buffer.view_bytes();
-        nb::bytes buffer_bytes(reinterpret_cast<const char*>(view.data()), view.size());
-        return frombuffer(buffer_bytes, nb::arg("dtype") = torch_dtype);
+        nb::bytearray buffer_bytearray(reinterpret_cast<const char*>(view.data()), view.size());
+        return frombuffer(buffer_bytearray, nb::arg("dtype") = torch_dtype);
     }();
 
     tensor = tensor.attr("reshape")(row_major_host_buffer.shape);
@@ -704,8 +704,8 @@ nb::object convert_tt_tensor_to_numpy_tensor(const RowMajorHostBuffer& row_major
             return numpy_empty(row_major_host_buffer.shape, nb::arg("dtype") = np_dtype);
         }
         auto view = row_major_host_buffer.buffer.view_bytes();
-        nb::bytes buffer_bytes(reinterpret_cast<const char*>(view.data()), view.size());
-        return frombuffer(buffer_bytes, nb::arg("dtype") = np_dtype);
+        nb::bytearray buffer_bytearray(reinterpret_cast<const char*>(view.data()), view.size());
+        return frombuffer(buffer_bytearray, nb::arg("dtype") = np_dtype);
     }();
 
     tensor = tensor.attr("reshape")(row_major_host_buffer.shape);
