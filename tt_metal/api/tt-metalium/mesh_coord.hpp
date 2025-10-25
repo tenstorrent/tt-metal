@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,9 +10,8 @@
 #include <vector>
 
 #include <tt_stl/reflection.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/shape_base.hpp>
-#include <tt-metalium/utils.hpp>
 #include <tt-metalium/maybe_remote.hpp>
 
 namespace tt::tt_metal::distributed {
@@ -123,6 +122,12 @@ public:
     // Constructs an inclusive range that iterates between `start` and `end`.
     MeshCoordinateRange(const MeshCoordinate& start, const MeshCoordinate& end);
 
+    // Constructs an inclusive range that iterates between `start` and `end`,
+    // interpreting ranges with wraparound semantics based on the provided shape.
+    // When wraparound is enabled, a dimension where start > end is treated as
+    // wrapping from start..(shape[dim]-1) and then 0..end.
+    MeshCoordinateRange(const MeshCoordinate& start, const MeshCoordinate& end, const MeshShape& wraparound_shape);
+
     // Constructs a range that iterates over all coordinates in the mesh.
     explicit MeshCoordinateRange(const MeshShape& shape);
 
@@ -138,6 +143,12 @@ public:
 
     // Returns the shape of the coordinate range (dimensions).
     MeshShape shape() const;
+
+    // Returns the boundary mode of the range.
+    MeshCoordinate::BoundaryMode get_boundary_mode() const;
+
+    // Returns the wraparound shape if enabled.
+    const std::optional<MeshShape>& wraparound_shape() const { return wraparound_shape_; }
 
     // Returns true if the range contains the given coordinate.
     bool contains(const MeshCoordinate& coord) const;
@@ -174,6 +185,12 @@ public:
         // MeshCoordinate to wrap around the range end.
         MeshCoordinate current_coord_;
         size_t linear_index_ = 0;
+
+        // Local iteration state for wraparound ranges: per-dimension lengths and positions.
+        // When wraparound is active and start > end in a dimension, we iterate over a circular span
+        // of length: (shape[dim] - start) + (end + 1), mapping local positions to actual coords via modulo.
+        std::vector<uint32_t> lengths_;
+        std::vector<uint32_t> local_pos_;
     };
 
     Iterator begin() const;
@@ -182,6 +199,8 @@ public:
 private:
     MeshCoordinate start_;
     MeshCoordinate end_;
+    // If present, enables wraparound semantics with these per-dimension sizes.
+    std::optional<MeshShape> wraparound_shape_;
 };
 
 bool operator==(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs);
@@ -393,44 +412,17 @@ public:
      *
      * @param global_shape The global shape of the mesh
      */
-    explicit DistributedMeshContainer(const MeshShape& global_shape)
-        : MeshContainer<MaybeRemote<T>>(global_shape, MaybeRemote<T>::remote()) {}
+    explicit DistributedMeshContainer(const MeshShape& global_shape) :
+        MeshContainer<MaybeRemote<T>>(global_shape, MaybeRemote<T>::remote()) {}
 
     /**
-     * Populate the local region of the mesh with local values.
+     * Initialize a distributed mesh container with a vector of values.
      *
-     * This method iterates through the local coordinates as defined by the
-     * coordinate system and populates them with the provided local values.
-     *
-     * @param coord_sys The distributed coordinate system defining local/global mapping
-     * @param local_values The values to populate in the local region (must match local shape size)
+     * @param global_shape The global shape of the mesh
+     * @param values The values to populate in the container
      */
-    template <typename CoordSystem>
-    void populate_local_region(const CoordSystem& coord_sys, const std::vector<T>& local_values) {
-        TT_FATAL(
-            local_values.size() == this->shape().mesh_size(),
-            "Number of local values {} does not match mesh size {}",
-            local_values.size(),
-            this->shape().mesh_size());
-        size_t idx = 0;
-        for (const auto& local_coord : this->coord_range()) {
-            this->at(local_coord) = MaybeRemote<T>::local(local_values[idx++]);
-        }
-    }
-
-    /**
-     * Get all local values from the container.
-     *
-     * @return A vector containing only the local values
-     */
-    std::vector<T> get_local_values() const {
-        std::vector<T> local_values;
-        local_values.reserve(this->size());
-        for (const auto& it = this->begin(); it != this->end(); ++it) {
-            local_values.push_back(it->value());
-        }
-        return local_values;
-    }
+    explicit DistributedMeshContainer(const MeshShape& global_shape, std::vector<MaybeRemote<T>> values) :
+        MeshContainer<MaybeRemote<T>>(global_shape, std::move(values)) {}
 
     /**
      * Check if a global coordinate contains a local value.
@@ -438,9 +430,7 @@ public:
      * @param coord The global coordinate to check
      * @return true if the coordinate contains a local value, false if remote
      */
-    bool is_local_at(const MeshCoordinate& coord) const {
-        return this->at(coord).is_local();
-    }
+    bool is_local(const MeshCoordinate& coord) const { return this->at(coord).is_local(); }
 };
 
 template <typename T>
@@ -459,7 +449,7 @@ MeshContainer<T>::MeshContainer(const MeshShape& shape, std::vector<T> values) :
         shape.mesh_size() == values_.size(),
         "Shape and values size mismatch; shape: {}, values: {}",
         shape,
-        values.size());
+        values_.size());
 }
 
 template <typename T>

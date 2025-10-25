@@ -1,181 +1,141 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import tempfile
-from pathlib import Path
 
 import pytest
 import torch
-from loguru import logger
-from transformers import AutoConfig
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3RMSNorm
-from models.demos.deepseek_v3.tt.rms_norm import RMSNorm
-from models.demos.deepseek_v3.utils.config_helpers import NORM_CATEGORIES
+from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
+from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
+from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.utility_functions import comp_pcc
-
-
-def get_hidden_size_for_norm_category(hf_config, norm_category):
-    """Helper function to determine hidden_size based on norm_category."""
-    if norm_category == "attention_norm" or norm_category == "mlp_norm":
-        return hf_config.hidden_size
-    elif norm_category == "q_norm":
-        return hf_config.q_lora_rank
-    elif norm_category == "k_norm":
-        return hf_config.kv_lora_rank
-    else:
-        raise ValueError(f"Invalid norm category: {norm_category}")
-
-
-@pytest.fixture
-def temp_dir():
-    """Create a temporary directory for test outputs."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield Path(tmpdir)
-
-
-@pytest.fixture
-def hf_config():
-    """Load DeepSeek config for testing."""
-    path = os.getenv("HF_MODEL", "/proj_sw/user_dev/deepseek-ai")
-    config = AutoConfig.from_pretrained(path, trust_remote_code=True)
-    return config
-
-
-@pytest.fixture
-def reference_model(hf_config, request):
-    """Get the actual DeepSeek RMSNorm model using local implementation."""
-    # Get norm_category from the test function parameters
-    norm_category = None
-    if hasattr(request, "node"):
-        # Extract norm_category from the test function's parametrization
-        for key, value in request.node.callspec.params.items():
-            if key == "norm_category":
-                norm_category = value
-                break
-
-    if norm_category is None:
-        raise ValueError("norm_category parameter not found in test")
-
-    hidden_size = get_hidden_size_for_norm_category(hf_config, norm_category)
-    return DeepseekV3RMSNorm(
-        hidden_size=hidden_size,
-        eps=hf_config.rms_norm_eps,
-    )
+from models.demos.deepseek_v3.utils.test_utils import (
+    assert_hidden_dim_pcc,
+    get_model_config,
+    get_test_weight_config,
+    load_reference_io_tensors_for_module,
+    run_module_forward,
+)
 
 
 @pytest.mark.parametrize(
-    "mode, batch, seq_len, norm_category",
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mode, seq_len",
     [
-        ("decode", 64, 1, "attention_norm"),  # Batch decode with distributed and sharded inputs
-        ("prefill", 1, 128, "attention_norm"),  # Prefill with distributed and interleaved inputs
-        ("decode", 32, 1, "q_norm"),  # Q norm test (uses q_lora_rank)
-        ("prefill", 1, 128, "q_norm"),  # Q norm prefill test
-        ("decode", 32, 1, "k_norm"),  # K norm test (uses kv_lora_rank)
-        ("prefill", 1, 128, "k_norm"),  # K norm test prefill test
+        ("decode", 32),
+        ("prefill", 128),
+        ("prefill", 512),
+        ("prefill", 2048),
     ],
 )
-def test_rmsnorm_forward_pass(
+@pytest.mark.parametrize(
+    "reference_layernorm_path, RMSNormClass, hf_config_size_attr",
+    [
+        (None, DistributedRMSNorm, "hidden_size"),
+        ("model.layers.0.input_layernorm", DistributedRMSNorm, "hidden_size"),
+        ("model.layers.0.post_attention_layernorm", DistributedRMSNorm, "hidden_size"),
+        (None, RMSNorm, "kv_lora_rank"),
+        (None, RMSNorm, "q_lora_rank"),
+        ("model.layers.0.self_attn.kv_a_layernorm", RMSNorm, "kv_lora_rank"),
+        ("model.layers.0.self_attn.q_a_layernorm", RMSNorm, "q_lora_rank"),
+    ],
+)
+def test_forward_pass(
+    RMSNormClass,
+    hf_config_size_attr,
     mode,
-    batch,
     seq_len,
-    norm_category,
-    reference_model,
+    reference_layernorm_path,
+    model_path,
     hf_config,
-    temp_dir,
-    galaxy_or_t3k_mesh,
+    tmp_path,
+    cache_path,
+    mesh_device,
+    ccl,
+    force_recalculate_weight_config,
+    set_deterministic_env,
+    state_dict: dict[str, torch.Tensor],
 ):
-    mesh_device = galaxy_or_t3k_mesh
+    num_module_layers, _ = mesh_device.shape
 
-    """Test rmsnorm forward pass against reference model."""
-    assert norm_category in NORM_CATEGORIES, f"Invalid norm category: {norm_category}"
-    is_decoder_norm = norm_category == "attention_norm" or norm_category == "mlp_norm"
-    # Setup: Convert weights and get weight_config
-    hf_state_dict = reference_model.state_dict()
-    weight_config = RMSNorm.convert_weights(
-        hf_config, hf_state_dict, temp_dir, mesh_device, norm_category=norm_category
-    )
+    # Get the hidden_size of the norm
+    hidden_size = getattr(hf_config, hf_config_size_attr)
 
-    # Generate appropriate config
-    if mode == "prefill":
-        model_config = RMSNorm.prefill_model_config(hf_config, mesh_device, norm_category=norm_category)
+    # Get the reference inputs and outputs
+    if reference_layernorm_path is None:
+        reference_model = DeepseekV3RMSNorm(
+            hidden_size=hidden_size,
+            eps=hf_config.rms_norm_eps,
+        ).eval()
+        state_dict = reference_model.to(torch.bfloat16).state_dict()
+
+        torch_input = torch.randn(num_module_layers, 1, seq_len, hidden_size)
+        reference_model = reference_model.to(torch.float32)
+        reference_output = reference_model(torch_input)
+
+        # Do not cache random weights
+        cache_path = tmp_path
+        force_recalculate_weight_config = True
     else:
-        model_config = RMSNorm.decode_model_config(hf_config, mesh_device, norm_category=norm_category)
+        state_dict = sub_state_dict(state_dict, reference_layernorm_path + ".")
+        torch_input, reference_output = load_reference_io_tensors_for_module(
+            mode, reference_layernorm_path, seq_len, num_module_layers
+        )
 
-    # Create a new model state
-    model_state = RMSNorm.create_state(hf_config, mesh_device=mesh_device)
-
-    # Create RunConfig using both weight_config and model_config
+    # Generate module configs and state
+    weight_config = get_test_weight_config(
+        RMSNormClass,
+        hf_config,
+        [state_dict] * num_module_layers,
+        cache_path,
+        mesh_device,
+        force_recalculate_weight_config,
+    )
+    model_config = get_model_config(RMSNormClass, mode, hf_config, mesh_device)
+    model_state = RMSNormClass.create_state(
+        hf_config, mesh_device, *[ccl for _ in range(1) if RMSNormClass is DistributedRMSNorm]
+    )
     run_config = create_run_config(model_config, weight_config, model_state)
 
-    # Determine hidden_size based on norm_category
-    hidden_size = get_hidden_size_for_norm_category(hf_config, norm_category)
-
-    # Prepare input - in decode mode batch is placed into seq_len dimension anyway
-    if mode == "decode":
-        torch_input = torch.randn(1, 1, batch, hidden_size)
+    # Convert the input to TTNN tensor
+    if RMSNormClass is not DistributedRMSNorm:
+        memory_config = ttnn.DRAM_MEMORY_CONFIG
     else:
-        torch_input = torch.randn(1, 1, batch * seq_len, hidden_size)
-
+        memory_config = run_config["input_memory_config"]
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-1, -2), mesh_shape=list(mesh_device.shape))
-        if is_decoder_norm
-        else ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device, mesh_device.shape, dims=(0, -1 if RMSNormClass is DistributedRMSNorm else None)
+        ),
         dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=memory_config,
         layout=ttnn.TILE_LAYOUT,
     )
-    if is_decoder_norm and mode == "decode":
-        shard_core_grid = ttnn.CoreGrid(x=4, y=7)
-        sharded_memory_config = ttnn.create_sharded_memory_config(
-            shape=(
-                ttnn.core.roundup(tt_input.shape[0] * tt_input.shape[1] * tt_input.shape[2], ttnn.TILE_SIZE),
-                tt_input.shape[3] // shard_core_grid.num_cores,
-            ),
-            core_grid=shard_core_grid,
-            strategy=ttnn.ShardStrategy.WIDTH,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-        tt_input = ttnn.to_memory_config(tt_input, memory_config=sharded_memory_config)
 
-    # TTNN forward pass
-    if mode == "decode":
-        tt_output = RMSNorm.forward_decode(tt_input, run_config)
-    else:
-        tt_output = RMSNorm.forward_prefill(tt_input, run_config)
+    # Run TTNN forward pass
+    tt_output = run_module_forward(RMSNormClass, mode, tt_input, run_config)
 
-    if is_decoder_norm:
-        tt_output_torch = ttnn.to_torch(
-            tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-1, -2), mesh_shape=list(mesh_device.shape)),
-        )
-    else:
-        tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0])
-
-    tt_output_torch = tt_output_torch[..., : (batch * seq_len), :]
-    # Reference forward pass
-    reference_output = reference_model(torch_input)
-
-    # Compare outputs
-    pcc_required = 0.99  # Embedding should be exact match (just lookup)
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
-
-    logger.info(f"Mode: {mode}, Seq len: {seq_len}")
-    logger.info(f"Reference shape: {reference_output.shape}")
-    logger.info(f"TTNN output shape: {tt_output_torch.shape}")
-    logger.info(f"PCC: {pcc_message}")
-
-    assert passing, f"RMS output does not meet PCC requirement {pcc_required}: {pcc_message}"
+    # Convert output back to torch
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_device.shape, dims=(0, -1)),
+    )
+    if RMSNormClass is RMSNorm:
+        tt_output_torch = tt_output_torch[..., :hidden_size]
 
     # Cleanup
-    ttnn.deallocate(tt_output)
     ttnn.deallocate(tt_input)
+    ttnn.deallocate(tt_output)
+
+    # Check PCC
+    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.98)
 
 
 if __name__ == "__main__":

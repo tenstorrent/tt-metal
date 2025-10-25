@@ -3,11 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "buffer_distribution_spec.hpp"
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 
 #include <tt-metalium/math.hpp>
 
 #include <algorithm>
+#include <utility>
 
 namespace tt::tt_metal {
 
@@ -23,8 +24,8 @@ struct PageMappingIntermData {
     const uint32_t* shard_shape = nullptr;
     const uint64_t shard_volume = 0;
     const uint32_t* shard_grid = nullptr;
-    const uint32_t* tensor_strides = nullptr;
-    const uint32_t* shard_strides = nullptr;
+    const uint64_t* tensor_strides = nullptr;
+    const uint64_t* shard_strides = nullptr;
 
     uint32_t* actual_shard_size = nullptr;
     size_t core_id = 0;
@@ -59,7 +60,7 @@ void iterate_over_shards(PageMappingIntermData& params, size_t dim, size_t src_o
     params.actual_shard_size[dim] = shard_size;
 
     for (size_t i = 0; i < params.shard_grid[dim] - 1; i++) {
-        iterate_over_shards(params, dim + 1, src_offset + i * params.shard_shape[dim] * params.tensor_strides[dim]);
+        iterate_over_shards(params, dim + 1, src_offset + (i * params.shard_shape[dim] * params.tensor_strides[dim]));
     }
 
     // Last shard may be partial, so we need to handle it separately
@@ -68,7 +69,7 @@ void iterate_over_shards(PageMappingIntermData& params, size_t dim, size_t src_o
     iterate_over_shards(
         params,
         dim + 1,
-        src_offset + (params.shard_grid[dim] - 1) * params.shard_shape[dim] * params.tensor_strides[dim]);
+        src_offset + ((params.shard_grid[dim] - 1) * params.shard_shape[dim] * params.tensor_strides[dim]));
 }
 
 tt::tt_metal::Shape convert_shape_to_pages(tt::tt_metal::Shape shape, const tt::tt_metal::Shape2D& page_shape) {
@@ -140,22 +141,21 @@ BufferDistributionSpec BufferDistributionSpec::from_shard_spec(
     tt::tt_metal::Shape tensor_shape,
     tt::tt_metal::Shape shard_shape,
     tt::tt_metal::Shape2D page_shape,
-    CoreRangeSet core_range_set,
+    const CoreRangeSet& core_range_set,
     ShardOrientation shard_orientation,
     ShardDistributionStrategy shard_distribution_strategy) {
-    auto tensor_shape_in_pages = CMAKE_UNIQUE_NAMESPACE::convert_shape_to_pages(tensor_shape, page_shape);
-    auto shard_shape_in_pages = CMAKE_UNIQUE_NAMESPACE::convert_shape_to_pages(shard_shape, page_shape);
+    auto tensor_shape_in_pages = CMAKE_UNIQUE_NAMESPACE::convert_shape_to_pages(std::move(tensor_shape), page_shape);
+    auto shard_shape_in_pages = CMAKE_UNIQUE_NAMESPACE::convert_shape_to_pages(std::move(shard_shape), page_shape);
     return BufferDistributionSpec(
         tensor_shape_in_pages, shard_shape_in_pages, core_range_set, shard_orientation, shard_distribution_strategy);
 }
 
 BufferDistributionSpec::BufferDistributionSpec(
-    tt::tt_metal::Shape tensor_shape_in_pages,
-    tt::tt_metal::Shape shard_shape_in_pages,
-    CoreRangeSet core_range_set,
+    const tt::tt_metal::Shape& tensor_shape_in_pages,
+    const tt::tt_metal::Shape& shard_shape_in_pages,
+    const CoreRangeSet& core_range_set,
     ShardOrientation shard_orientation,
-    ShardDistributionStrategy shard_distribution_strategy) :
-    shard_orientation_(shard_orientation) {
+    ShardDistributionStrategy shard_distribution_strategy) {
     TT_FATAL(tensor_shape_in_pages.rank() >= 1, "Tensor rank must be at least 1!");
     TT_FATAL(shard_shape_in_pages.rank() >= 1, "Shard rank must be at least 1!");
     TT_FATAL(shard_shape_in_pages.volume() != 0, "Shard shape must have non zero volume!");
@@ -165,8 +165,24 @@ BufferDistributionSpec::BufferDistributionSpec(
         CMAKE_UNIQUE_NAMESPACE::squeeze_shape_ranks(tensor_shape_in_pages, shard_shape_in_pages);
 
     if (tensor_shape_in_pages_.volume() != 0) {
-        TT_FATAL(cores_.size() != 0, "Can't distribute non zero volume tensor over an empty set of cores");
+        TT_FATAL(!cores_.empty(), "Can't distribute non zero volume tensor over an empty set of cores");
     }
+
+    init_precomputed_data();
+}
+
+BufferDistributionSpec::BufferDistributionSpec(
+    const Shape& tensor_shape_in_pages, const Shape& shard_shape_in_pages, std::vector<CoreCoord> cores) :
+    cores_(std::move(cores)) {
+    TT_FATAL(tensor_shape_in_pages.rank() >= 1, "Tensor rank must be at least 1!");
+    TT_FATAL(shard_shape_in_pages.rank() >= 1, "Shard rank must be at least 1!");
+    TT_FATAL(shard_shape_in_pages.volume() != 0, "Shard shape must have non zero volume!");
+    if (tensor_shape_in_pages_.volume() != 0) {
+        TT_FATAL(!cores_.empty(), "Can't distribute non zero volume tensor over an empty set of cores");
+    }
+
+    std::tie(tensor_shape_in_pages_, shard_shape_in_pages_) =
+        CMAKE_UNIQUE_NAMESPACE::squeeze_shape_ranks(tensor_shape_in_pages, shard_shape_in_pages);
 
     init_precomputed_data();
 }
@@ -188,7 +204,9 @@ std::vector<CoreCoord> BufferDistributionSpec::compute_core_list(
     auto core_grid = core_range_set.ranges()[0];
 
     uint32_t num_shards_along_width = std::max(div_up(tensor_shape_in_pages[-1], shard_shape_in_pages[-1]), 1u);
-    uint32_t num_shards_along_height = std::max(div_up(tensor_shape_in_pages[-2], shard_shape_in_pages[-2]), 1u);
+    uint64_t tensor_volume = tensor_shape_in_pages.volume();
+    uint32_t tensor_height = tensor_volume == 0 ? 0 : tensor_volume / tensor_shape_in_pages[-1];
+    uint32_t num_shards_along_height = std::max(div_up(tensor_height, shard_shape_in_pages[-2]), 1u);
     if (shard_orientation != ShardOrientation::ROW_MAJOR) {
         std::swap(num_shards_along_width, num_shards_along_height);
     }
@@ -212,7 +230,7 @@ size_t BufferDistributionSpec::num_shards() const { return num_shards_; }
 size_t BufferDistributionSpec::num_cores_with_data() const { return std::min(num_cores(), num_shards()); }
 
 size_t BufferDistributionSpec::max_num_shards_per_core() const {
-    if (cores_.size() == 0) {
+    if (cores_.empty()) {
         return 0;
     }
     return (num_shards() + cores_.size() - 1) / cores_.size();
@@ -221,7 +239,7 @@ size_t BufferDistributionSpec::max_num_shards_per_core() const {
 size_t BufferDistributionSpec::max_num_dev_pages_per_core() const { return max_num_shards_per_core() * shard_volume_; }
 
 size_t BufferDistributionSpec::num_shards_per_core(size_t core_idx) const {
-    return num_shards() / num_cores() + (core_idx < num_shards() % num_cores() ? 1 : 0);
+    return (num_shards() / num_cores()) + (core_idx < num_shards() % num_cores() ? 1 : 0);
 }
 
 size_t BufferDistributionSpec::num_dev_pages_per_core(size_t core_idx) const {
@@ -272,7 +290,7 @@ void BufferDistributionSpec::init_precomputed_data() {
                 .cores_with_data = std::move(cores_with_data),
                 .cores_in_group_1 = CoreRangeSet(cores_with_more_shards),
                 .cores_in_group_2 = CoreRangeSet(cores_with_less_shards),
-                .num_shards_per_core_in_group_1 = num_shards() / num_cores() + 1,
+                .num_shards_per_core_in_group_1 = (num_shards() / num_cores()) + 1,
                 .num_shards_per_core_in_group_2 = num_shards() / num_cores(),
             };
         }
@@ -308,8 +326,8 @@ UncompressedBufferPageMapping compute_page_mapping(
         shard_grid[i] = (tensor_shape[i] + shard_shape[i] - 1) / shard_shape[i];
     }
 
-    tt::stl::SmallVector<uint32_t> tensor_strides = tt::tt_metal::compute_strides(tensor_shape);
-    tt::stl::SmallVector<uint32_t> shard_strides = tt::tt_metal::compute_strides(shard_shape);
+    tt::stl::SmallVector<uint64_t> tensor_strides = tt::tt_metal::compute_strides(tensor_shape);
+    tt::stl::SmallVector<uint64_t> shard_strides = tt::tt_metal::compute_strides(shard_shape);
     tt::stl::SmallVector<uint32_t> actual_shard_size(tensor_shape.rank());
 
     CMAKE_UNIQUE_NAMESPACE::PageMappingIntermData params{

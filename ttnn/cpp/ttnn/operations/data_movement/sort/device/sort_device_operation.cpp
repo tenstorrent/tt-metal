@@ -47,26 +47,13 @@ SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_facto
 
 void SortDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    return validate_on_program_cache_miss(attributes, tensor_args);
+    validate_on_program_cache_miss(attributes, tensor_args);
 }
 
 void SortDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // Validate shapes of input and output tensors
     const auto input_tensor_shape = tensor_args.input_tensor.padded_shape();
-    const uint32_t Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
-
-    const auto input_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
-    const auto input_data_format_size_bytes = tt::datum_size(input_data_format);
-
-    const uint32_t input_tensor_tile_size = tt::constants::TILE_HW * input_data_format_size_bytes;
-    const uint32_t value_tensor_tile_size = tt::constants::TILE_HW * input_data_format_size_bytes;
-    const uint32_t index_tensor_tile_size = tt::constants::TILE_HW * sizeof(uint16_t);
-    const uint32_t row_memory_size_bytes =
-        (input_tensor_tile_size + value_tensor_tile_size + index_tensor_tile_size) * Wt;
-
-    const auto device = tensor_args.input_tensor.device();
-    const auto l1_mem_size_bytes = device->l1_size_per_core();
 
     TT_FATAL(
         tensor_args.input_tensor.buffer() != nullptr,

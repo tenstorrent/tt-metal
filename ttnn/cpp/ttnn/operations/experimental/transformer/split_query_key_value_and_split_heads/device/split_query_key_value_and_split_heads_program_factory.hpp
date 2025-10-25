@@ -4,7 +4,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::transformer::detail {
@@ -13,13 +13,13 @@ using namespace tt::constants;
 using namespace tt;
 using namespace tt_metal;
 
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads(
+inline tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads(
     const Tensor& a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
     const auto& ashape = a.padded_shape();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     TT_ASSERT(in0_buffer->size() % single_tile_size == 0);
 
@@ -83,20 +83,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
 
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = q_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)in0_is_dram,
-
         // READER COMPILE TIME ARGS
         (std::uint32_t)block_size,             // block_size
         (std::uint32_t)num_blocks_per_tensor,  // out_num_blocks_per_tensor
     };
-    std::vector<uint32_t> writer_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)out_is_dram,
+    tt::tt_metal::TensorAccessorArgs(in0_buffer).append_to(reader_compile_time_args);
 
+    std::vector<uint32_t> writer_compile_time_args = {
         // WRITER COMPILE TIME ARGS
         (std::uint32_t)block_size_is_one,
         (std::uint32_t)block_size,                    // block_size
@@ -106,6 +100,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
         (std::uint32_t)out_h_tiles,                   // out_h_tiles
         (std::uint32_t)out_HtWt,                      // out_HtWt
     };
+    tt::tt_metal::TensorAccessorArgs(q_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(k_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(v_buffer).append_to(writer_compile_time_args);
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -161,11 +158,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
                 (core_idx_x + core_idx_y * num_cores_c) * per_core_tiles,  // in0_tensor_tile_id
             };
             std::vector<uint32_t> writer_runtime_args = {
-                (std::uint32_t)q_buffer->address(),                 // q_tensor_addr
-                (std::uint32_t)k_buffer->address(),                 // k_tensor_addr
-                (std::uint32_t)v_buffer->address(),                 // v_tensor_addr
-                core_idx_x * out_w_tiles + core_idx_y * out_CHtWt,  // out_tensor_tile_id
-                core_idx_x + core_idx_y * out_CHtWt,                // out_tensor_tile_id_with_transpose
+                (std::uint32_t)q_buffer->address(),                     // q_tensor_addr
+                (std::uint32_t)k_buffer->address(),                     // k_tensor_addr
+                (std::uint32_t)v_buffer->address(),                     // v_tensor_addr
+                (core_idx_x * out_w_tiles) + (core_idx_y * out_CHtWt),  // out_tensor_tile_id
+                core_idx_x + (core_idx_y * out_CHtWt),                  // out_tensor_tile_id_with_transpose
             };
 
             tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
@@ -208,10 +205,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
     return {std::move(program), override_runtime_args_callback};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads_sharded(
+inline tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads_sharded(
     const Tensor& a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      TM Parameters Setup

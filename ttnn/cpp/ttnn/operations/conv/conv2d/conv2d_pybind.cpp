@@ -22,6 +22,8 @@
 #include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/constants.hpp>
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 namespace ttnn::operations::conv::conv2d {
 
@@ -37,7 +39,7 @@ void py_bind_conv2d(py::module& module) {
         :param ttnn.Tensor input_tensor:  The input tensor. This must be in the format [N, H, W, C]. It can be on host or device.
         :param ttnn.Tensor weight_tensor: The weight tensor. The weights can be passed in the same format as PyTorch, [out_channels, in_channels, kernel_height, kernel_width]. The op w
         :param ttnn.Tensor, None bias_tensor:   Optional bias tensor. Default: None
-        :param ttnn.IDevice device:  The device to use.
+        :param ttnn.MeshDevice device:  The device to use.
         :param int in_channels:  Number of input channels.
         :param int out_channels:  Number of output channels.
         :param int batch_size:  Batch size.
@@ -52,6 +54,7 @@ void py_bind_conv2d(py::module& module) {
         :param ttnn.Conv2dConfig, None conv_config: Configuration for convolution. Default: None
         :param ttnn.DeviceComputeKernelConfig, None compute_config: Configuration for compute kernel. Default: None
         :param ttnn.MemoryConfig, None memory_config: Output Tensor's Memory Configuration. Default: None
+        :param ttnn.Conv2dSliceConfig, None slice_config: Configuration for slicing the input & output tensors when they are in DRAM. If this is set to None, and the input is in DRAM, DRAM Slicing will be automatically enabled. Default: None
         :param bool return_output_dim:  If true, the op also returns the height and width of the output tensor in [N, H, W, C] format,
         :param bool return_weights_and_bias:  If true, the op also returns the preprocessed weight and bias on device .
 
@@ -62,78 +65,6 @@ void py_bind_conv2d(py::module& module) {
         :rtype: [ttnn.Tensor, Tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and it's height and width, if return_weights_and_bias = True
         :rtype: [ttnn.Tensor, Tuple[int, int], Tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and it's height and width, if return_output_dim = True and return_weights_and_bias = True
         )doc",
-        ttnn::pybind_overload_t{
-            [](const decltype(ttnn::conv2d)& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& weight_tensor,
-               ttnn::IDevice* device,
-               uint32_t in_channels,
-               uint32_t out_channels,
-               uint32_t batch_size,
-               uint32_t input_height,
-               uint32_t input_width,
-               std::array<uint32_t, 2> kernel_size,
-               std::array<uint32_t, 2> stride,
-               std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
-               std::array<uint32_t, 2> dilation,
-               uint32_t groups,
-               const std::optional<const DataType>& dtype,
-               std::optional<const ttnn::Tensor> bias_tensor,
-               const std::optional<const Conv2dConfig>& conv_config,
-               const std::optional<const DeviceComputeKernelConfig>& compute_config,
-               const std::optional<const MemoryConfig>& memory_config,
-               const std::optional<const Conv2dSliceConfig>& slice_config_,
-               bool return_output_dim,
-               bool return_weights_and_bias,
-               QueueId queue_id) -> ResultWithOptions {
-                return self(
-                    queue_id,
-                    input_tensor,
-                    weight_tensor,
-                    device,
-                    in_channels,
-                    out_channels,
-                    batch_size,
-                    input_height,
-                    input_width,
-                    kernel_size,
-                    stride,
-                    padding,
-                    dilation,
-                    groups,
-                    dtype,
-                    bias_tensor,
-                    conv_config,
-                    compute_config,
-                    memory_config,
-                    slice_config_,
-                    return_output_dim,
-                    return_weights_and_bias);
-            },
-            py::kw_only(),
-            py::arg("input_tensor"),
-            py::arg("weight_tensor"),
-            py::arg("device"),
-            py::arg("in_channels"),
-            py::arg("out_channels"),
-            py::arg("batch_size"),
-            py::arg("input_height"),
-            py::arg("input_width"),
-            py::arg("kernel_size"),
-            py::arg("stride") = std::array<uint32_t, 2>{1, 1},
-            py::arg("padding") = std::array<uint32_t, 2>{0, 0},
-            py::arg("dilation") = std::array<uint32_t, 2>{1, 1},
-            py::arg("groups") = 1,
-            py::arg("dtype") = std::nullopt,
-            py::arg("bias_tensor") = std::nullopt,
-            py::arg("conv_config") = std::nullopt,
-            py::arg("compute_config") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("slice_config") = std::nullopt,
-            py::arg("return_output_dim") = false,
-            py::arg("return_weights_and_bias") = false,
-            py::arg("queue_id") = DefaultQueueId},
-
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::conv2d)& self,
                const ttnn::Tensor& input_tensor,
@@ -156,10 +87,8 @@ void py_bind_conv2d(py::module& module) {
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<const Conv2dSliceConfig>& slice_config_,
                bool return_output_dim,
-               bool return_weights_and_bias,
-               QueueId queue_id) -> ResultWithOptions {
+               bool return_weights_and_bias) -> ResultWithOptions {
                 return self(
-                    queue_id,
                     input_tensor,
                     weight_tensor,
                     device,
@@ -203,38 +132,10 @@ void py_bind_conv2d(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("slice_config") = std::nullopt,
             py::arg("return_output_dim") = false,
-            py::arg("return_weights_and_bias") = false,
-            py::arg("queue_id") = DefaultQueueId});
-
+            py::arg("return_weights_and_bias") = false});
     module.def(
         "prepare_conv_weights",
-        prepare_conv_weights<ttnn::IDevice>,
-        py::kw_only(),
-        py::arg("weight_tensor"),
-        py::arg("input_memory_config"),
-        py::arg("input_layout"),
-        py::arg("weights_format"),
-        py::arg("in_channels"),
-        py::arg("out_channels"),
-        py::arg("batch_size"),
-        py::arg("input_height"),
-        py::arg("input_width"),
-        py::arg("kernel_size"),
-        py::arg("stride"),
-        py::arg("padding"),
-        py::arg("dilation"),
-        py::arg("has_bias"),
-        py::arg("groups"),
-        py::arg("device"),
-        py::arg("input_dtype"),
-        py::arg("output_dtype") = std::nullopt,
-        py::arg("conv_config") = std::nullopt,
-        py::arg("compute_config") = std::nullopt,
-        py::arg("slice_config") = std::nullopt);
-
-    module.def(
-        "prepare_conv_weights",
-        prepare_conv_weights<ttnn::MeshDevice>,
+        prepare_conv_weights,
         py::kw_only(),
         py::arg("weight_tensor"),
         py::arg("input_memory_config"),
@@ -260,7 +161,7 @@ void py_bind_conv2d(py::module& module) {
 
     module.def(
         "prepare_conv_bias",
-        prepare_conv_bias<ttnn::IDevice>,
+        prepare_conv_bias,
         py::kw_only(),
         py::arg("bias_tensor"),
         py::arg("input_memory_config"),
@@ -279,30 +180,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("input_dtype"),
         py::arg("output_dtype") = std::nullopt,
         py::arg("conv_config") = std::nullopt,
-        py::arg("compute_config") = std::nullopt);
-
-    module.def(
-        "prepare_conv_bias",
-        prepare_conv_bias<ttnn::MeshDevice>,
-        py::kw_only(),
-        py::arg("bias_tensor"),
-        py::arg("input_memory_config"),
-        py::arg("input_layout"),
-        py::arg("in_channels"),
-        py::arg("out_channels"),
-        py::arg("batch_size"),
-        py::arg("input_height"),
-        py::arg("input_width"),
-        py::arg("kernel_size"),
-        py::arg("stride"),
-        py::arg("padding"),
-        py::arg("dilation"),
-        py::arg("groups"),
-        py::arg("device"),
-        py::arg("input_dtype"),
-        py::arg("output_dtype") = std::nullopt,
-        py::arg("conv_config") = std::nullopt,
-        py::arg("compute_config") = std::nullopt);
+        py::arg("compute_config") = std::nullopt,
+        py::arg("slice_config") = std::nullopt);
 
     module.def(
         "convert_conv_weight_tensor_to_tiled_layout",
@@ -318,6 +197,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("conv_weight_tensor").noconvert(),
         py::arg("in1_block_h"),
         py::arg("in1_block_w"),
+        py::arg("enable_activation_reuse") = false,
         py::arg("output_dtype").noconvert() = std::nullopt);
 
     module.def(
@@ -335,6 +215,7 @@ void py_bind_conv2d(py::module& module) {
            uint32_t output_height,
            uint32_t output_width,
            uint32_t output_channels,
+           uint32_t input_channels_alignment,
            const CoreCoord& compute_grid_size,
            tt::tt_metal::ShardOrientation block_shard_orientation,
            bool enable_channels_padding,
@@ -347,6 +228,7 @@ void py_bind_conv2d(py::module& module) {
                 output_height,
                 output_width,
                 output_channels,
+                input_channels_alignment,
                 compute_grid_size,
                 block_shard_orientation,
                 enable_channels_padding,
@@ -359,6 +241,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("output_height"),
         py::arg("output_width"),
         py::arg("output_channels"),
+        py::arg("input_channels_alignment"),
         py::arg("compute_grid_size"),
         py::arg("block_shard_orientation"),
         py::arg("enable_channels_padding"),
@@ -386,6 +269,8 @@ void py_bind_conv2d(py::module& module) {
         py::kw_only(),
         py::arg("slice_type"),
         py::arg("num_slices"));
+    py_conv_slice_config.def(py::init<Conv2dSliceConfig::SliceType>(), py::kw_only(), py::arg("slice_type"));
+    py_conv_slice_config.def("__repr__", [](const Conv2dSliceConfig& config) { return fmt::format("{}", config); });
     py_conv_slice_config.def_readwrite(
         "slice_type",
         &Conv2dSliceConfig::slice_type,
@@ -404,8 +289,9 @@ void py_bind_conv2d(py::module& module) {
         | If the size of the slice dimension is not divisible by num_slices, then the last slice will be smaller than the rest.
         )doc");
     py::enum_<Conv2dSliceConfig::SliceType>(py_conv_slice_config, "SliceTypeEnum")
-        .value("SliceHeight", Conv2dSliceConfig::SliceType::HEIGHT)
-        .value("SliceWidth", Conv2dSliceConfig::SliceType::WIDTH);
+        .value("L1Full", Conv2dSliceConfig::SliceType::L1_FULL)
+        .value("DRAMSliceHeight", Conv2dSliceConfig::SliceType::DRAM_HEIGHT)
+        .value("DRAMSliceWidth", Conv2dSliceConfig::SliceType::DRAM_WIDTH);
 
     auto py_conv_config = py::class_<Conv2dConfig>(
         module,
@@ -416,7 +302,8 @@ void py_bind_conv2d(py::module& module) {
     py_conv_config.def(
         py::init<
             std::optional<DataType>,
-            std::string,
+            std::optional<ttnn::operations::unary::UnaryWithParam>,
+            bool,
             bool,
             bool,
             uint32_t,
@@ -431,13 +318,15 @@ void py_bind_conv2d(py::module& module) {
             bool,
             bool,
             bool,
+            std::optional<bool>,
             bool,
-            bool>(),
+            std::optional<bool>>(),
         py::kw_only(),
         py::arg("weights_dtype") = std::nullopt,
-        py::arg("activation") = "",
+        py::arg("activation") = std::nullopt,
         py::arg("deallocate_activation") = false,
         py::arg("reallocate_halo_output") = true,
+        py::arg("config_tensors_in_dram") = false,
         py::arg("act_block_h_override") = 0,
         py::arg("act_block_w_div") = 1,
         py::arg("reshard_if_not_optimal") = false,
@@ -448,10 +337,11 @@ void py_bind_conv2d(py::module& module) {
         py::arg("output_layout") = Layout::TILE,
         py::arg("enable_act_double_buffer") = false,
         py::arg("enable_weights_double_buffer") = false,
-        py::arg("enable_split_reader") = false,
-        py::arg("enable_subblock_padding") = false,
+        py::arg("full_inner_dim") = false,
         py::arg("in_place") = false,
-        py::arg("enable_kernel_stride_folding") = false);
+        py::arg("enable_kernel_stride_folding") = std::nullopt,
+        py::arg("enable_activation_reuse") = false,
+        py::arg("force_split_reader") = std::nullopt);
     py_conv_config.def_readwrite("weights_dtype", &Conv2dConfig::weights_dtype, R"doc(
         Optional argument which specifies the data type of the preprocessed weights & bias tensor if the Conv2D op is responsible for preparing the weights.
         Supports ttnn.bfloat16 and ttnn.bfloat8_b.
@@ -461,10 +351,11 @@ void py_bind_conv2d(py::module& module) {
     py_conv_config.def_readwrite(
         "activation",
         &Conv2dConfig::activation,
-        R"doc(A string that selects the fused activation function to be applied on the output.
-        Empty string means no activation function.
-        Supported activation function strings are:
-        relu, silu, mish, sigmoid, sigmoid_approx, tanh, log, softplus, gelu, sqrt
+        R"doc(Fused activation function to be applied on the output.
+        None means no activation function.
+        Use ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU) for ReLU activation.
+        Supported activation functions include:
+        RELU, SILU, GELU, SIGMOID, TANH, etc.
     )doc");
     py_conv_config.def_readwrite("deallocate_activation", &Conv2dConfig::deallocate_activation, R"doc(
         Boolean that indicates whether the activation tensor should be deallocated after the conv op is done.
@@ -474,7 +365,10 @@ void py_bind_conv2d(py::module& module) {
     py_conv_config.def_readwrite("reallocate_halo_output", &Conv2dConfig::reallocate_halo_output, R"doc(
         reallocate_halo_output is a boolean that indicates whether the halo output tensor should be moved to reduce memory fragmentation, before the conv micro-op is called.
         This is ideally used with deallocate_activation = true, when facing OOM issues in the conv micro-op.
-
+    )doc");
+    py_conv_config.def_readwrite("config_tensors_in_dram", &Conv2dConfig::config_tensors_in_dram, R"doc(
+        Boolean that determines where config tensors should be stored. Setting it to true stores them in DRAM. False stores them in L1_SMALL.
+        Config tensors are used by Conv2D, Pooling and other 2D ops to store how data should be loaded, instead of computing on device RISC-cores.
     )doc");
     py_conv_config.def_readwrite("act_block_h_override", &Conv2dConfig::act_block_h_override, R"doc(
             Controls the size of the activation block height.
@@ -531,12 +425,12 @@ void py_bind_conv2d(py::module& module) {
             Doubles the size of the Weights Circular Buffer to allow for double buffering, preventing stalls of the weights reader kernel.
             This improves performance, but increases the memory usage of the weights tensor.
         )doc");
-    py_conv_config.def_readwrite("enable_split_reader", &Conv2dConfig::enable_split_reader, R"doc(
-            This uses both the reader & writer cores to carry out the activation reader operation.
-            This is useful when the input tensor is large, and the activation reader is a bottleneck.
-            This is only supported for Height Sharded Conv2D.
+    py_conv_config.def_readwrite("full_inner_dim", &Conv2dConfig::full_inner_dim, R"doc(
+            Applies only to block sharded layout.
+            By default inner dim of activation matrix will be sliced by kernel_h.
+            If L1 constraints allowed it we can use full inner dim.
+            This will increase perf, but it will take more L1 space.
         )doc");
-    py_conv_config.def_readwrite("enable_subblock_padding", &Conv2dConfig::enable_subblock_padding);
     py_conv_config.def_readwrite("in_place", &Conv2dConfig::in_place, R"doc(
             Enables support for in_place halo.
             This re-uses the input tensor as the output for halo, overwriting the input tensor.
@@ -555,56 +449,45 @@ void py_bind_conv2d(py::module& module) {
 
         * Input tensor (NHWC format):
           - From: (N, H, W, IC)
-          - To: (N, H/stride[0], W/stride[1], IC * kernel[0] * kernel[1])
+          - To: (N, H / stride[0], W / stride[1], IC * stride[0] * stride[1])
 
         * Weight tensor:
           - From: (OC, IC, kernel[0], kernel[1])
-          - To: (1, 1, IC * kernel[0] * kernel[1], OC)
+          - To: (1, 1, IC * (kernel[0] + pad_h) * (kernel[1] + pad_w), OC)
+          Note: The zero padding applied to the weight tensor is implicit and not passed by the user via the padding argument,
+          where pad_h = kernel[0] % stride[0] and pad_w = kernel[1] % stride[1].
 
         Note: This optimization is currently only applied when all of the following conditions are met:
-        1. The stride dimensions exactly match the kernel dimensions (stride[0] == kernel[0] and stride[1] == kernel[1])
-        2. The input tensor is stored in DRAM memory
+        1. The input tensor is stored in DRAM memory.
+        2. The input tensor's height and width are divisible by the stride dimensions.
+        3. Stride values are equal to or less than the kernel dimensions.
+        4. Input tensor's padding must be zero.
+        5. Input tensor data type is not BFLOAT8_B.
 
         ===============================================================
         )doc");
+    py_conv_config.def_readwrite("enable_activation_reuse", &Conv2dConfig::enable_activation_reuse, R"doc(
+        ===================== EXPERIMENTAL FEATURE ======================
+
+        Enables reusing data between consecutive image rows.
+        It can be enabled for height sharding only and boosts image2column performance,
+        so its meant to be used for reader-bound convolutions.
+
+        ===============================================================
+    )doc");
+
+    py_conv_config.def_readwrite("force_split_reader", &Conv2dConfig::force_split_reader, R"doc(
+        ===================== EXPERIMENTAL FEATURE ======================
+
+        This uses both the reader & writer cores to carry out the activation reader operation.
+        This is useful when the input tensor is large, and the activation reader is a bottleneck.
+        This is only supported for Height Sharded Conv2D.
+        Setting this overrides the split reader heuristic.
+
+        ===============================================================
+    )doc");
 
     py_conv_config.def("__repr__", [](const Conv2dConfig& config) { return fmt::format("{}", config); });
-
-    py::class_<OptimizedConvParallelizationConfig>(module, "OptimizedConvParallelizationConfig")
-        .def(
-            py::init<CoreCoord, uint32_t, uint32_t, uint32_t, uint32_t>(),
-            py::kw_only(),
-            py::arg("grid_size"),
-            py::arg("num_cores_nhw") = 1,
-            py::arg("num_cores_c") = 1,
-            py::arg("per_core_out_matrix_height_ntiles").noconvert(),
-            py::arg("per_core_out_matrix_width_ntiles").noconvert())
-        .def_property_readonly("grid_size", [](const OptimizedConvParallelizationConfig& c) { return c.grid_size; })
-        .def_property_readonly(
-            "num_cores_nhw", [](const OptimizedConvParallelizationConfig& c) { return c.num_cores_nhw; })
-        .def_property_readonly(
-            "per_core_out_matrix_height_ntiles",
-            [](const OptimizedConvParallelizationConfig& c) { return c.per_core_out_matrix_height_ntile; })
-        .def_property_readonly("per_core_out_matrix_width_ntiles", [](const OptimizedConvParallelizationConfig& c) {
-            return c.per_core_out_matrix_width_ntile;
-        });
-
-    py::class_<OptimizedConvBlockConfig>(module, "OptimizedConvBlockConfig")
-        .def(
-            py::init<uint32_t, uint32_t, uint32_t, uint32_t>(),
-            py::kw_only(),
-            py::arg("act_block_h_ntiles").noconvert(),
-            py::arg("act_block_w_ntiles").noconvert(),
-            py::arg("out_subblock_h_ntiles").noconvert(),
-            py::arg("out_subblock_w_ntiles").noconvert())
-        .def_property_readonly(
-            "act_block_h_ntiles", [](const OptimizedConvBlockConfig& c) { return c.act_block_h_ntiles; })
-        .def_property_readonly(
-            "act_block_w_ntiles", [](const OptimizedConvBlockConfig& c) { return c.act_block_w_ntiles; })
-        .def_property_readonly(
-            "out_subblock_h_ntiles", [](const OptimizedConvBlockConfig& c) { return c.out_subblock_h_ntiles; })
-        .def_property_readonly(
-            "out_subblock_w_ntiles", [](const OptimizedConvBlockConfig& c) { return c.out_subblock_w_ntiles; });
 }
 
 }  // namespace ttnn::operations::conv::conv2d

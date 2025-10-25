@@ -1,0 +1,32 @@
+# This file is evaluated during packaging and has access to CPACK_BUILD_CONFIG which contains
+# the actual configuration that was built (Debug, Release, ASan, TSan, etc.) even if a
+# multi-config generator was used.
+
+string(TOLOWER "${CPACK_BUILD_CONFIG}" BUILD_CONFIG_LOWER)
+if(NOT BUILD_CONFIG_LOWER)
+    # Multi-config generators should have CPACK_BUILD_CONFIG set, but single-config
+    # generators we need to read CMAKE_BUILD_TYPE from the CMake pass.
+    string(TOLOWER "@CMAKE_BUILD_TYPE@" BUILD_CONFIG_LOWER)
+endif()
+
+if(BUILD_CONFIG_LOWER STREQUAL "asan" OR BUILD_CONFIG_LOWER STREQUAL "tsan" OR BUILD_CONFIG_LOWER STREQUAL "asancoverage")
+    set(CPACK_DEBIAN_DEBUGINFO_PACKAGE FALSE)
+else()
+    # TODO: When we stop packaging SFPI ourselves, then just set CPACK_DEBIAN_DEBUGINFO_PACKAGE instead of itemizing each.
+    #       If the firmware/toolchain files play nice.
+    set(CPACK_DEBIAN_METALIUM-VALIDATION_DEBUGINFO_PACKAGE TRUE)
+    set(CPACK_DEBIAN_METALIUM-DEV_DEBUGINFO_PACKAGE TRUE)
+    set(CPACK_DEBIAN_METALIUM-EXAMPLES_DEBUGINFO_PACKAGE TRUE)
+    # These binaries have no build-id
+    set(CPACK_DEBIAN_JIT-BUILD_DEBUGINFO_PACKAGE FALSE)
+    # There are some device binaries that will to be excluded from stripping before we can enable this.
+    set(CPACK_DEBIAN_METALIUM_DEBUGINFO_PACKAGE FALSE)
+endif()
+
+# Configure package version with build config suffix
+# A release build is assumed and this draws attention if it's anything else.
+set(CPACK_DEBIAN_PACKAGE_VERSION "@VERSION_DEB@")
+if(NOT BUILD_CONFIG_LOWER STREQUAL "release")
+    set(CPACK_DEBIAN_PACKAGE_VERSION "@VERSION_DEB@~${BUILD_CONFIG_LOWER}")
+endif()
+message(STATUS "Package version: ${CPACK_DEBIAN_PACKAGE_VERSION}")

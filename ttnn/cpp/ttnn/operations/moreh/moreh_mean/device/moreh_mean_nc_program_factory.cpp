@@ -7,6 +7,7 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include "moreh_mean_device_operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -28,17 +29,13 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
         init_device_compute_kernel_config(input.device()->arch(), operation_attributes.compute_kernel_config);
 
     auto device = input.device();
-    auto kernel_config_val =
-        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
     const auto cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     const auto& input_shape = input.padded_shape();
-    const auto& input_shape_without_padding = input.logical_shape();
 
     const auto Ht = input_shape[-2] / constants::TILE_HEIGHT;
     const auto Wt = input_shape[-1] / constants::TILE_WIDTH;
@@ -75,9 +72,6 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::DataFormat data_format = datatype_to_dataformat_converter(input.dtype());
-
-    auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
     CreateCircularBuffer(
         program,
         all_cores,
@@ -95,6 +89,8 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args;
     std::vector<uint32_t> writer_compile_time_args;
+    TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
     const auto reader_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/reader_moreh_mean_nc.cpp";
     const auto writer_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/writer_moreh_mean_nc.cpp";
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
@@ -109,7 +105,7 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
     const std::vector<uint32_t> compute_args_group_2{units_per_core_group_2};
 
     if (fp32_dest_acc_en) {
-        compute_defines["FP32_DEST_ACC_EN"] = 1;
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     auto compute_kernel_ids = CreateComputeKernel(
@@ -152,15 +148,10 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
              units_per_core,
              input_tile_stride,
              tile_offset,
-             static_cast<uint32_t>(is_dram(input)),
              HtWt,
              inner_size});
 
-        SetRuntimeArgs(
-            program,
-            writer_kernel_id,
-            core,
-            {output.buffer()->address(), units_per_core, tile_offset, static_cast<uint32_t>(is_dram(output))});
+        SetRuntimeArgs(program, writer_kernel_id, core, {output.buffer()->address(), units_per_core, tile_offset});
 
         tile_offset += units_per_core;
     }
@@ -181,7 +172,7 @@ void MorehMeanOperation::MorehMeanNCFactory::override_runtime_arguments(
     auto src_buffer_address = tensor_args.input.buffer()->address();
     auto dst_buffer_address = tensor_return_value.buffer()->address();
 
-    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
+    for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
 
         {

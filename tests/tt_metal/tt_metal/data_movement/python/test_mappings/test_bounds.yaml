@@ -1,0 +1,297 @@
+# DIRECTED IDEAL TESTS
+
+"DRAM Directed Ideal":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 22
+    riscv_0:
+      bandwidth: 21
+  blackhole:
+    riscv_1:
+      bandwidth: 33
+    riscv_0:
+      bandwidth: 34
+
+"One to One Directed Ideal":
+  wormhole_b0:
+    riscv_0:
+      bandwidth: 30
+  blackhole:
+    riscv_0:
+      bandwidth: 59
+
+"One from One Directed Ideal":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 28
+  blackhole:
+    riscv_1:
+      bandwidth: 59
+
+"One to All Unicast Directed Ideal":
+  wormhole_b0:
+    riscv_0:
+      bandwidth: 31
+  blackhole:
+    riscv_0:
+      bandwidth: 62
+
+"One to All Multicast Directed Ideal":
+  wormhole_b0:
+    riscv_0:
+      bandwidth: 14
+  blackhole:
+    riscv_0:
+      bandwidth: 24
+
+"One to All Multicast Linked Directed Ideal":
+  wormhole_b0:
+    riscv_0:
+      bandwidth: 22
+  blackhole:
+    riscv_0:
+      bandwidth: 39
+
+"One from All Directed Ideal":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 30
+  blackhole:
+    riscv_1:
+      bandwidth: 60
+
+"DRAM Interleaved Page Directed Ideal":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 30
+    riscv_0:
+      bandwidth: 26
+  blackhole:
+    riscv_1:
+      bandwidth: 60
+    riscv_0:
+      bandwidth: 58
+
+"L1 Interleaved Page Directed Ideal":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 31
+    riscv_0:
+      bandwidth: 31
+  blackhole:
+    riscv_1:
+      bandwidth: 61
+    riscv_0:
+      bandwidth: 62
+
+"One Packet Read Directed Ideal":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 28
+  blackhole:
+    riscv_1:
+      bandwidth: 61
+
+"One Packet Write Directed Ideal":
+  wormhole_b0:
+    riscv_0:
+      bandwidth: 30
+  blackhole:
+    riscv_0:
+      bandwidth: 61
+
+"Multi Interleaved Directed Ideal":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 1
+    riscv_0:
+      bandwidth: 1
+  blackhole:
+    riscv_1:
+      bandwidth: 0.6
+    riscv_0:
+      bandwidth: 0.6
+
+"Multi Interleaved Read Directed Ideal":
+  wormhole_b0:
+    riscv_0:
+      bandwidth: 1.9
+  blackhole:
+    riscv_0:
+      bandwidth: 1.5
+
+"Multi Interleaved Write Directed Ideal":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 1.7
+  blackhole:
+    riscv_1:
+      bandwidth: 1.2
+
+"Multi Interleaved 2x2 Directed Ideal":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 7.9
+    riscv_0:
+      bandwidth: 8.1
+  blackhole:
+    riscv_1:
+      bandwidth: 13
+    riscv_0:
+      bandwidth: 13
+
+"Multi Interleaved 2x2 Read Directed Ideal":
+  wormhole_b0:
+    riscv_0:
+      bandwidth: 13.8
+  blackhole:
+    riscv_0:
+      bandwidth: 26
+
+"Multi Interleaved 2x2 Write Directed Ideal":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 16
+  blackhole:
+    riscv_1:
+      bandwidth: 22
+
+"Multi Interleaved 6x6 Directed Ideal":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 1.8
+    riscv_0:
+      bandwidth: 1.9
+  blackhole:
+    riscv_1:
+      bandwidth: 1.8
+    riscv_0:
+      bandwidth: 1.8
+
+"Multi Interleaved 6x6 Read Directed Ideal":
+  wormhole_b0:
+    riscv_0:
+      bandwidth: 3.2
+  blackhole:
+    riscv_0:
+      bandwidth: 4.6
+
+"Multi Interleaved 6x6 Write Directed Ideal":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 2.9
+  blackhole:
+    riscv_1:
+      bandwidth: 3.5
+
+# OTHER TESTS
+
+"Reshard Hardcoded Small":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 3
+  blackhole:
+    riscv_1:
+      bandwidth: 7
+
+"Reshard Hardcoded Medium":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 15
+  blackhole:
+    riscv_1:
+      bandwidth: 30
+
+"Reshard Hardcoded Many Cores":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 10
+  blackhole:
+    riscv_1:
+      bandwidth: 25
+
+"Reshard Hardcoded 2 Cores to Many Cores":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 3
+  blackhole:
+    riscv_1:
+      bandwidth: 7
+
+"Conv Act with halo 3x3":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 3
+  blackhole:
+    riscv_1:
+      bandwidth: 6
+
+"Conv Act with halo 3x3 Small":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 0.3
+  blackhole:
+    riscv_1:
+      bandwidth: 0.6
+
+"Conv Halo Gather":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 10
+  blackhole:
+    riscv_1:
+      bandwidth: 20
+
+"Deinterleave Single Core":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 1.7
+  blackhole:
+    riscv_1:
+      bandwidth: 1.7
+
+"Deinterleave Multi Core":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 2
+  blackhole:
+    riscv_1:
+      bandwidth: 2
+
+"Loopback Directed Ideal":
+  wormhole_b0:
+    riscv_0:
+      bandwidth: 28
+  blackhole:
+    riscv_0:
+      bandwidth: 60
+
+"I2S - DRAM Sharded Row Major Writer":
+  wormhole_b0:
+    riscv_0:
+      bandwidth: 4
+
+"I2S - DRAM Sharded Tile Writer":
+  wormhole_b0:
+    riscv_0:
+      bandwidth: 16
+
+"I2S - DRAM Interleaved Tile Reader":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 10
+
+"I2S - L1 Interleaved Tile Reader":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 13
+
+"I2S - DRAM Interleaved Row Major Reader":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 10.5
+
+"I2S - L1 Interleaved Row Major Reader":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 10.5

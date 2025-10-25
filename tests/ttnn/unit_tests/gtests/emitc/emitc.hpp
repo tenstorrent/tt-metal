@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
@@ -11,9 +11,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
-#include "ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/conv/conv_transpose2d/conv_transpose2d.hpp"
@@ -70,7 +68,7 @@ private:
 // Wrapper to abstract const-eval logic out of runtime funcs to keep them
 // cleaner.  Invokes constEvalFunc iff outputs is empty.
 inline void constEvalFuncWrapper(
-    std::function<std::vector<ttnn::Tensor>(std::vector<ttnn::Tensor>)> constEvalFunc,
+    const std::function<std::vector<ttnn::Tensor>(std::vector<ttnn::Tensor>)>& constEvalFunc,
     const std::vector<ttnn::Tensor>& inputs,
     std::vector<ttnn::Tensor>* outputs) {
     if (outputs->empty()) {

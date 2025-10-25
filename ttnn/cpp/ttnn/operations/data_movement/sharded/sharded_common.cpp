@@ -33,11 +33,10 @@ compute_width_sharding_reshard_segments(
     const std::vector<CoreCoord>& local_cores,
     const std::vector<CoreCoord>& remote_cores,
     const tt::tt_metal::BufferType& remote_buffer_type,
-    const CoreType& remote_core_type,
+    const tt::CoreType& remote_core_type,
     tt::tt_metal::IDevice* device,
     uint32_t element_size) {
     const uint32_t num_local_shards = local_cores.size();
-    const uint32_t num_remote_shards = remote_cores.size();
 
     const uint32_t local_shard_height = local_shard_shape[0];
     const uint32_t local_shard_width = local_shard_shape[1];
@@ -63,7 +62,6 @@ compute_width_sharding_reshard_segments(
     uint32_t remote_shard_offset = 0;
     uint32_t current_remote_core_idx = 0;
     for (uint32_t current_local_core_idx = 0; current_local_core_idx < local_cores.size(); current_local_core_idx++) {
-        const auto& core = local_cores[current_local_core_idx];
         WidthShardingReshardSegmentForSingleCore core_args;
         while (local_shard_offset < local_shard_width) {
             const uint32_t remaining_input = local_shard_width - local_shard_offset;

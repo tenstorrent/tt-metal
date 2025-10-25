@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 
-from models.utility_functions import pad_by_zero, torch2tt_tensor, comp_pcc, is_grayskull
+from models.common.utility_functions import pad_by_zero, torch2tt_tensor, comp_pcc, is_grayskull
 
 
 def ref_layernorm(x, gamma, beta, eps):

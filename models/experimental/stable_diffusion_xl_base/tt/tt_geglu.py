@@ -1,14 +1,14 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 import ttnn
 
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
 
 
-class TtGEGLU(nn.Module):
+class TtGEGLU(LightweightModule):
     def __init__(self, device, state_dict, module_path, model_config):
         super().__init__()
 

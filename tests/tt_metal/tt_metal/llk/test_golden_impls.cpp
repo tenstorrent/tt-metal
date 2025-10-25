@@ -10,7 +10,7 @@
 #include <limits>
 #include <set>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include "test_golden_impls.hpp"
 #include "tests/tt_metal/test_utils/packing.hpp"
 
@@ -21,9 +21,7 @@ namespace unit_tests::compute {
 std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t>& src_vec, const GoldenConfig& config) {
     vector<uint32_t> dst_vec;
 
-    int num_rows = config.num_tiles_r_dim * config.face_r_dim * (config.num_faces > 2 ? 2 : 1);
     // Due to each element being 32 bits, for bfloat16 thats 2 elements
-    int num_cols = (config.num_tiles_c_dim * config.face_c_dim * (config.num_faces >= 2 ? 2 : 1)) / 2;
 
     int num_tile_rows = config.num_tiles_r_dim;
     int num_tile_cols = config.num_tiles_c_dim;
@@ -50,7 +48,7 @@ std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t>& src_ve
                 for (int j = 0; j < num_tile_cols; j++) {  // num columns top two faces
                     // Left face row copy
                     for (int k = 0; k < num_c_dim; k++) {
-                        int idx = physical_start_for_tile_row + i * num_c_dim + k + j * tile_size;
+                        int idx = physical_start_for_tile_row + (i * num_c_dim) + k + (j * tile_size);
                         TT_FATAL(ind.find(idx) == ind.end(), "{}", t);
                         ind.insert(idx);
                         dst_vec.push_back(src_vec.at(idx));
@@ -59,7 +57,7 @@ std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t>& src_ve
                     if (config.num_faces > 1) {
                         // Right face row copy
                         for (int k = 0; k < num_c_dim; k++) {
-                            int idx = physical_start_for_tile_row + i * num_c_dim + k + face_size + j * tile_size;
+                            int idx = physical_start_for_tile_row + (i * num_c_dim) + k + face_size + (j * tile_size);
                             TT_FATAL(ind.find(idx) == ind.end(), "{}", t);
                             ind.insert(idx);
                             dst_vec.push_back(src_vec.at(idx));
@@ -84,14 +82,14 @@ std::vector<uint32_t> gold_standard_tilize(const std::vector<uint32_t>& src_vec,
     int num_cols = (config.num_tiles_c_dim * config.face_c_dim * (config.num_faces >= 2 ? 2 : 1)) / 2;
     for (int x = 0; x < num_rows; x += 32) {
         for (int y = 0; y < num_cols; y += 16) {
-            int start = x * num_cols + y;
+            int start = (x * num_cols) + y;
 
             // Top faces
             for (int j = 0; j < 2; j++) {
-                int start_ = start + 8 * j;
+                int start_ = start + (8 * j);
                 for (int k = 0; k < 16; k++) {
                     for (int i = 0; i < 8; i++) {
-                        int idx = start_ + num_cols * k + i;
+                        int idx = start_ + (num_cols * k) + i;
                         dst_vec.push_back(src_vec.at(idx));
                     }
                 }
@@ -101,10 +99,10 @@ std::vector<uint32_t> gold_standard_tilize(const std::vector<uint32_t>& src_vec,
                 // Bottom faces
                 start += 16 * num_cols;
                 for (int j = 0; j < 2; j++) {
-                    int start_ = start + 8 * j;
+                    int start_ = start + (8 * j);
                     for (int k = 0; k < 16; k++) {
                         for (int i = 0; i < 8; i++) {
-                            int idx = start_ + num_cols * k + i;
+                            int idx = start_ + (num_cols * k) + i;
                             dst_vec.push_back(src_vec.at(idx));
                         }
                     }
@@ -168,13 +166,13 @@ std::vector<uint16_t> gold_reduce_h(
                 for (int h = 0; h < shape[2]; h++) {
                     auto offs = addr.offs(n, c, h, w);
                     if (red_type == 2) {
-                        sum = fmaxf(bfloat16(src_vec[offs]).to_float(), sum);
+                        sum = fmaxf(static_cast<float>(std::bit_cast<bfloat16>(src_vec[offs])), sum);
                     } else {
-                        sum += bfloat16(src_vec[offs]).to_float();
+                        sum += static_cast<float>(std::bit_cast<bfloat16>(src_vec[offs]));
                     }
                 }
                 auto dest_offs = addr_dst.offs(n, c, 0, w);
-                reduced[dest_offs] = bfloat16(sum * scaler).to_uint16();
+                reduced[dest_offs] = std::bit_cast<uint16_t>(bfloat16(sum * scaler));
             }
         }
     }
@@ -201,13 +199,13 @@ std::vector<uint16_t> gold_reduce_w(
                 for (int w = 0; w < shape[3]; w++) {
                     auto offs = addr.offs(n, c, h, w);
                     if (red_type == 2) {
-                        sum = fmaxf(bfloat16(src_vec[offs]).to_float(), sum);
+                        sum = fmaxf(static_cast<float>(std::bit_cast<bfloat16>(src_vec[offs])), sum);
                     } else {
-                        sum += bfloat16(src_vec[offs]).to_float();
+                        sum += static_cast<float>(std::bit_cast<bfloat16>(src_vec[offs]));
                     }
                 }
                 auto dest_offs = addr_dst.offs(n, c, h, 0);
-                reduced[dest_offs] = bfloat16(sum * scaler).to_uint16();
+                reduced[dest_offs] = std::bit_cast<uint16_t>(bfloat16(sum * scaler));
             }
         }
     }
@@ -238,14 +236,14 @@ std::vector<uint16_t> gold_reduce_hw(
                 for (int w = 0; w < shape[3]; w++) {
                     auto offs = addr.offs(n, c, h, w);
                     if (red_type == 2) {
-                        sum = fmaxf(bfloat16(src_vec[offs]).to_float(), sum);
+                        sum = fmaxf(static_cast<float>(std::bit_cast<bfloat16>(src_vec[offs])), sum);
                     } else {
-                        sum += bfloat16(src_vec[offs]).to_float();
+                        sum += static_cast<float>(std::bit_cast<bfloat16>(src_vec[offs]));
                     }
                 }
             }
             auto dest_offs = addr_dst.offs(n, c, 0, 0);
-            reduced[dest_offs] = bfloat16(sum * scaler).to_uint16();
+            reduced[dest_offs] = std::bit_cast<uint16_t>(bfloat16(sum * scaler));
         }
     }
 
@@ -265,7 +263,7 @@ std::vector<uint32_t> gold_standard_tilize_w_elwadd(
         unpacked_tilize_src0_vec.end(),
         unpacked_src1_vec.begin(),
         result_vec.begin(),
-        [&](const bfloat16& lhs, const bfloat16& rhs) { return (lhs.to_float() + rhs.to_float()); });
+        [&](const bfloat16& lhs, const bfloat16& rhs) { return (static_cast<float>(lhs) + static_cast<float>(rhs)); });
 
     return tt::test_utils::pack_vector<uint32_t, bfloat16>(result_vec);
 }

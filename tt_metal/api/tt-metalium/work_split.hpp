@@ -49,5 +49,10 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(
     const CoreRangeSet& core_grid, uint32_t units_to_divide, bool row_wise = false);
 
+// Splits up work in chunks of `multiple` . Not the most efficient distribution but useful for an even distribution
+// of the batch dimension
+std::tuple<std::vector<uint32_t>, CoreRangeSet> split_work_to_cores_even_multiples(
+    const CoreCoord& core_grid, uint32_t units_to_divide, uint32_t multiple, bool row_wise = false);
+
 }  // namespace tt_metal
 }  // namespace tt

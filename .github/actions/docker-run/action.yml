@@ -34,6 +34,11 @@ inputs:
     type: boolean
     required: false
     default: false
+  forward_civ2_proxy_env_vars:
+    description: "Forward the CIV2 proxy environment variables to the container."
+    type: boolean
+    required: false
+    default: false
 runs:
   using: "composite"
   steps:
@@ -52,6 +57,14 @@ runs:
       run: |
         echo "RUNNER_UID=$(id -u)" >> $GITHUB_ENV
         echo "RUNNER_GID=$(id -g)" >> $GITHUB_ENV
+        if [ "${{ inputs.forward_civ2_proxy_env_vars }}" == "true" ]; then
+          echo "CIV2_HTTP_PROXY=$HTTP_PROXY" >> $GITHUB_ENV
+          echo "CIV2_http_proxy=$http_proxy" >> $GITHUB_ENV
+          echo "CIV2_HTTPS_PROXY=$HTTPS_PROXY" >> $GITHUB_ENV
+          echo "CIV2_https_proxy=$https_proxy" >> $GITHUB_ENV
+          echo "CIV2_NO_PROXY=$NO_PROXY" >> $GITHUB_ENV
+          echo "CIV2_no_proxy=$no_proxy" >> $GITHUB_ENV
+        fi
     - name: Docker login
       uses: docker/login-action@v3
       with:
@@ -62,7 +75,7 @@ runs:
       shell: bash
       run: |
         docker pull ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
-    - uses: tenstorrent/docker-run-action@v5
+    - uses: tenstorrent/docker-run-action@v6
       with:
         shell: bash
         username: ${{ inputs.docker_username }}
@@ -100,6 +113,12 @@ runs:
           -e GITHUB_RUN_ID=${{ github.run_id }}
           -e GITHUB_TRIGGERING_ACTOR=${{ github.github_triggering_actor }}
           -e RUNNER_NAME=${{ runner.name }}
+          ${{ (inputs.forward_civ2_proxy_env_vars && format('-e HTTP_PROXY={0}', env.CIV2_HTTP_PROXY)) || '' }}
+          ${{ (inputs.forward_civ2_proxy_env_vars && format('-e http_proxy={0}', env.CIV2_http_proxy)) || '' }}
+          ${{ (inputs.forward_civ2_proxy_env_vars && format('-e HTTPS_PROXY={0}', env.CIV2_HTTPS_PROXY)) || '' }}
+          ${{ (inputs.forward_civ2_proxy_env_vars && format('-e https_proxy={0}', env.CIV2_https_proxy)) || '' }}
+          ${{ (inputs.forward_civ2_proxy_env_vars && format('-e NO_PROXY={0}', env.CIV2_NO_PROXY)) || '' }}
+          ${{ (inputs.forward_civ2_proxy_env_vars && format('-e no_proxy={0}', env.CIV2_no_proxy)) || '' }}
           ${{ inputs.device }}
           -w ${{ github.workspace }}
         run: |

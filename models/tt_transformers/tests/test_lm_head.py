@@ -9,13 +9,13 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "seq_len",
     (32,),
@@ -33,10 +33,11 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
     dtype = ttnn.bfloat8_b
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len, cache_hf=True)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -50,13 +51,16 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
     reference_model = model_args.reference_lm_head()
     reference_model.load_state_dict(partial_state_dict)
 
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = LMHead(
         args=model_args,
         mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
         dtype=dtype,
         state_dict=state_dict,
         state_dict_prefix=state_dict_prefix,
         weight_cache_path=model_args.weight_cache_path(dtype),
+        max_columns_per_device=model_args.max_columns_per_device_lm_head,
     )
 
     torch_input = torch.randn(1, 1, seq_len, model_args.dim)

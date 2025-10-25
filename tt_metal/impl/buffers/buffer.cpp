@@ -1,14 +1,14 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <allocator.hpp>
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <buffer.hpp>
 #include <buffer_types.hpp>
 #include <device.hpp>
 #include <graph_tracking.hpp>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <math.hpp>
 #include <nlohmann/json.hpp>
 #include <tt_stl/reflection.hpp>
@@ -27,7 +27,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_align.hpp"
-#include "util.hpp"
+#include <tt-metalium/allocator.hpp>
 
 namespace tt::tt_metal {
 namespace {
@@ -37,11 +37,11 @@ namespace {
 std::unordered_map<int, std::string> global_mempool_names;
 std::mutex global_mempool_names_mutex;
 
-static const char* get_buffer_location_name(BufferType buffer_type, int device_id) {
+const char* get_buffer_location_name(BufferType buffer_type, int device_id) {
     std::scoped_lock<std::mutex> lock(global_mempool_names_mutex);
     int name_combo = (int)buffer_type * 1000 + device_id;
     if (global_mempool_names.find(name_combo) == global_mempool_names.end()) {
-        std::string global_mempool_name = fmt::format("Device {} {}", device_id, magic_enum::enum_name(buffer_type));
+        std::string global_mempool_name = fmt::format("Device {} {}", device_id, enchantum::to_string(buffer_type));
         global_mempool_names.emplace(name_combo, global_mempool_name);
     }
     return global_mempool_names[name_combo].c_str();
@@ -127,7 +127,7 @@ std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uint32_t, 
                     break;
                 }
                 for (j = j_offset; j < (shard_in_pages[1] + j_offset) and (j < (tensor2d_size[1])); j++) {
-                    uint32_t host_page = i * tensor2d_size[1] + j;
+                    uint32_t host_page = (i * tensor2d_size[1]) + j;
                     ret_vec[shard_idx].push_back(host_page);
                 }
             }
@@ -197,7 +197,7 @@ UncompressedBufferPageMapping generate_buffer_page_mapping(const Buffer& buffer)
         return buffer_page_mapping;
     }
 
-    if (!buffer.has_shard_spec()) {
+    if (buffer.buffer_distribution_spec().has_value()) {
         return buffer.buffer_distribution_spec()->compute_page_mapping();
     }
 
@@ -233,7 +233,7 @@ UncompressedBufferPageMapping generate_buffer_page_mapping(const Buffer& buffer)
             for (uint32_t shard_page_y = 0; shard_page_y < shape_in_pages[1]; shard_page_y++) {
                 if (shard_page_x < shard_shape[core_index][0] && shard_page_y < shard_shape[core_index][1]) {
                     uint32_t host_page = core_host_page_indices[core_index][valid_shard_page];
-                    size_t core_page_idx = shard_page_x * shape_in_pages[1] + shard_page_y;
+                    size_t core_page_idx = (shard_page_x * shape_in_pages[1]) + shard_page_y;
                     buffer_page_mapping.core_host_page_indices[core_index][core_page_idx] = host_page;
                     valid_shard_page++;
                 }
@@ -512,11 +512,11 @@ bool Buffer::is_valid_partial_region(const BufferRegion& region) const {
     return this->is_valid_region(region) && (region.offset > 0 || region.size != this->size());
 }
 
-DeviceAddr Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
-    uint32_t num_banks = allocator_->get_num_banks(buffer_type_);
+DeviceAddr Buffer::page_address(DeviceAddr bank_id, DeviceAddr page_index) const {
+    DeviceAddr num_banks = static_cast<DeviceAddr>(allocator_->get_num_banks(buffer_type_));
     TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
-    int pages_offset_within_bank = (int)page_index / num_banks;
-    auto offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
+    DeviceAddr pages_offset_within_bank = page_index / num_banks;
+    auto offset = (round_up(this->page_size(), static_cast<DeviceAddr>(this->alignment())) * pages_offset_within_bank);
     return translate_page_address(offset, bank_id);
 }
 
@@ -528,7 +528,7 @@ DeviceAddr Buffer::aligned_size() const { return this->num_dev_pages() * this->a
 DeviceAddr Buffer::aligned_size_per_bank() const {
     uint32_t num_banks =
         is_sharded(this->buffer_layout_) ? this->num_cores().value() : allocator_->get_num_banks(this->buffer_type());
-    return tt::tt_metal::detail::SizeBytesPerBank(
+    return tt::tt_metal::detail::calculate_bank_size_spread(
         this->aligned_size(), this->aligned_page_size(), num_banks, this->alignment());
 }
 
@@ -548,13 +548,13 @@ std::optional<uint32_t> Buffer::num_cores() const {
     if (!is_sharded(this->buffer_layout_)) {
         return std::nullopt;
     }
-    if (shard_spec_.has_value()) {
-        return shard_spec_->tensor_shard_spec.grid.num_cores();
+    if (buffer_distribution_spec_.has_value()) {
+        return buffer_distribution_spec_.value().num_cores_with_data();
     }
-    return buffer_distribution_spec_.value().num_cores();
+    return shard_spec_->tensor_shard_spec.grid.num_cores();
 }
 
-DeviceAddr Buffer::translate_page_address(uint64_t offset, uint32_t bank_id) const {
+DeviceAddr Buffer::translate_page_address(DeviceAddr offset, uint32_t bank_id) const {
     DeviceAddr base_page_address = this->address() + allocator_->get_bank_offset(buffer_type_, bank_id);
     return base_page_address + offset;
 }
@@ -589,30 +589,17 @@ std::array<uint32_t, 2> ShardSpecBuffer::shape_in_pages() const {
 
 DeviceAddr ShardSpecBuffer::num_pages() const {
     auto shape_in_pages_ = this->shape_in_pages();
-    return shape_in_pages_[0] * shape_in_pages_[1];
+    return static_cast<DeviceAddr>(shape_in_pages_[0]) * static_cast<DeviceAddr>(shape_in_pages_[1]);
 }
 
 }  // namespace tt::tt_metal
 
 namespace ttsl::json {
 tt::tt_metal::ShardSpec from_json_t<tt::tt_metal::ShardSpec>::operator()(const nlohmann::json& json_object) const {
-    const auto& shard_mode = from_json<tt::tt_metal::ShardMode>(json_object.at("mode"));
-    const auto& physical_shard_shape =
-        from_json<std::optional<std::array<uint32_t, 2>>>(json_object.at("physical_shard_shape"));
-    if (physical_shard_shape.has_value()) {
-        TT_FATAL(
-            shard_mode == tt::tt_metal::ShardMode::LOGICAL,
-            "Physical shard shape can only be provided in logical sharding mode!");
-        return tt::tt_metal::ShardSpec{
-            from_json<CoreRangeSet>(json_object.at("grid")),
-            from_json<std::array<uint32_t, 2>>(json_object.at("shape")),
-            physical_shard_shape.value(),
-            from_json<tt::tt_metal::ShardOrientation>(json_object.at("orientation"))};
-    }
     return tt::tt_metal::ShardSpec{
         from_json<CoreRangeSet>(json_object.at("grid")),
         from_json<std::array<uint32_t, 2>>(json_object.at("shape")),
         from_json<tt::tt_metal::ShardOrientation>(json_object.at("orientation")),
-        shard_mode};
+    };
 }
 }  // namespace ttsl::json

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,8 +6,10 @@ from math import log
 import torch
 import ttnn
 
+from models.common.lightweightmodule import LightweightModule
 
-class TtTimesteps:
+
+class TtTimesteps(LightweightModule):
     def __init__(self, device, num_channels, flip_sin_to_cos, downscale_freq_shift, scale):
         super().__init__()
 

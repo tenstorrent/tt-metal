@@ -26,7 +26,7 @@ def prepare_conv_weights_func(
     device,
     groups,
     is_owned,
-    slice_config=None,
+    slice_config=ttnn.Conv2dL1FullSliceConfig,
     weights_dtype=None,
     torch_weights_dtype=None,
     enable_kernel_stride_folding=False,
@@ -72,11 +72,11 @@ def prepare_conv_weights_func(
     conv_config = ttnn.Conv2dConfig(
         weights_dtype=weights_dtype,
         enable_act_double_buffer=False,
-        enable_split_reader=False,
-        enable_subblock_padding=False,
         enable_kernel_stride_folding=enable_kernel_stride_folding,
     )
     compute_config = ttnn.init_device_compute_kernel_config(device.arch())
+    if slice_config:
+        compute_config.throttle_level = ttnn.ThrottleLevel(3)
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
 
@@ -106,12 +106,13 @@ def prepare_conv_weights_func(
         "slice_config": slice_config,
     }
 
+    input_memory_config = ttnn.DRAM_MEMORY_CONFIG
     tt_input_tensor = ttnn.to_device(tt_input_tensor, device)
 
     tt_weight_tensor_formatted = ttnn.prepare_conv_weights(
         weight_tensor=tt_weight_tensor,
         weights_format="OIHW",
-        input_memory_config=ttnn.L1_MEMORY_CONFIG,
+        input_memory_config=input_memory_config,
         has_bias=has_bias,
         **conv_kwargs,
         input_dtype=ttnn.bfloat16,
@@ -119,14 +120,13 @@ def prepare_conv_weights_func(
     tt_bias_tensor_formatted = (
         ttnn.prepare_conv_bias(
             bias_tensor=tt_bias_tensor,
-            input_memory_config=tt_input_tensor.memory_config(),
+            input_memory_config=input_memory_config,
             **conv_kwargs,
             input_dtype=ttnn.bfloat16,
         )
         if has_bias
         else None
     )
-
     tt_weight_tensor_formatted = ttnn.to_device(tt_weight_tensor_formatted, device)
     tt_bias_tensor_formatted = ttnn.to_device(tt_bias_tensor_formatted, device) if has_bias else None
     (k := next(iter(conv_kwargs)), conv_kwargs.pop(k))  ##removing 1st element from dict
@@ -349,8 +349,6 @@ def test_prepare_bias(
     conv_config = ttnn.Conv2dConfig(
         weights_dtype=ttnn.bfloat16,
         enable_act_double_buffer=False,
-        enable_split_reader=False,
-        enable_subblock_padding=False,
     )
     compute_config = ttnn.init_device_compute_kernel_config(device.arch())
     if config_override and "act_block_h" in config_override:
@@ -386,7 +384,7 @@ def test_prepare_bias(
     tt_bias_tensor_formatted = (
         ttnn.prepare_conv_bias(
             bias_tensor=tt_bias_tensor,
-            input_memory_config=tt_input_tensor.memory_config(),
+            input_memory_config=ttnn.L1_MEMORY_CONFIG,
             **conv_kwargs,
             input_dtype=ttnn.bfloat16,
         )
@@ -417,8 +415,8 @@ def test_prepare_bias(
     assert passing
 
 
-SliceHeight = ttnn.Conv2dSliceHeight
-SliceWidth = ttnn.Conv2dSliceWidth
+SliceHeight = ttnn.Conv2dDRAMSliceHeight
+SliceWidth = ttnn.Conv2dDRAMSliceWidth
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -428,7 +426,7 @@ SliceWidth = ttnn.Conv2dSliceWidth
     (
         (2, 64,   64,   384,   64,    SliceHeight,   6, (4, 4), (2, 2), (1, 1), (1, 1),  0,       ),
         (1, 32,   32,   1024,  1024,  SliceWidth,    4, (5, 5), (1, 1), (0, 0), (1, 1),  32,      ),
-        (1, 64,   128,  992,   992,   SliceWidth,   64, (2, 2), (1, 1), (0, 0), (1, 1),  32 * 4,  ),
+        (1, 64,   128,  992,   992,   SliceWidth,   64, (2, 2), (1, 1), (0, 0), (1, 1),  32 * 2,  ),
     )
     # fmt: on
 )

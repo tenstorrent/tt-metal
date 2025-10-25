@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -96,24 +96,11 @@ ShardOrientation from_flatbuffer(flatbuffer::ShardOrientation orientation) {
     TT_THROW("Unsupported ShardOrientation from flatbuffer.");
 }
 
-ShardMode from_flatbuffer(flatbuffer::ShardMode mode) {
-    switch (mode) {
-        case flatbuffer::ShardMode::Physical: return ShardMode::PHYSICAL;
-        case flatbuffer::ShardMode::Logical: return ShardMode::LOGICAL;
-    }
-    TT_THROW("Unsupported ShardMode from flatbuffer.");
-}
-
 ShardSpec from_flatbuffer(const flatbuffer::ShardSpec* spec) {
     CoreRangeSet grid = from_flatbuffer(spec->grid());
     std::array<uint32_t, 2> shape = {spec->shape_h(), spec->shape_w()};
     ShardOrientation orientation = from_flatbuffer(spec->orientation());
-    ShardMode mode = from_flatbuffer(spec->shard_mode());
-    if (const auto* fb_shard_shape = spec->physical_shard_shape()) {
-        std::array<uint32_t, 2> physical_shard_shape = {fb_shard_shape->height(), fb_shard_shape->width()};
-        return ShardSpec(grid, shape, physical_shard_shape, orientation);
-    }
-    return ShardSpec(grid, shape, orientation, mode);
+    return ShardSpec(grid, shape, orientation);
 }
 
 std::optional<ShardSpecBuffer> from_flatbuffer(const flatbuffer::ShardSpecBuffer* fb_shard_spec) {
@@ -125,6 +112,25 @@ std::optional<ShardSpecBuffer> from_flatbuffer(const flatbuffer::ShardSpecBuffer
         from_flatbuffer(fb_shard_spec->tensor_shard_spec()),
         {fb_shard_spec->page_shape_h(), fb_shard_spec->page_shape_w()},
         {fb_shard_spec->tensor2d_shape_in_pages_h(), fb_shard_spec->tensor2d_shape_in_pages_w()}};
+}
+
+std::optional<BufferDistributionSpec> from_flatbuffer(const flatbuffer::BufferDistributionSpec* fb_dist_spec) {
+    if (!fb_dist_spec) {
+        return std::nullopt;
+    }
+
+    std::vector<CoreCoord> cores;
+    cores.reserve(fb_dist_spec->cores()->size());
+    for (auto entry : *fb_dist_spec->cores()) {
+        cores.push_back(CoreCoord(entry->x(), entry->y()));
+    }
+
+    return BufferDistributionSpec(
+        Shape(tt::stl::SmallVector<uint32_t>(
+            fb_dist_spec->tensor_shape_in_pages()->cbegin(), fb_dist_spec->tensor_shape_in_pages()->cend())),
+        Shape(tt::stl::SmallVector<uint32_t>(
+            fb_dist_spec->shard_shape_in_pages()->cbegin(), fb_dist_spec->shard_shape_in_pages()->cend())),
+        std::move(cores));
 }
 
 }  // namespace tt::tt_metal

@@ -1,10 +1,12 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rmsnorm_bw_device_operation.hpp"
 
 #include "rmsnorm_bw_program_factory.hpp"
+
+#include <enchantum/enchantum.hpp>
 
 namespace ttml::metal::ops::rmsnorm_bw::device {
 
@@ -21,11 +23,6 @@ void RMSNormBackwardDeviceOperation::validate_on_program_cache_hit(
 void RMSNormBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
-        TT_FATAL(
-            tensor.device()->arch() == tt::ARCH::WORMHOLE_B0,
-            "RMSNormBackward operation is only supported on Wormhole. Device arch: {}. Tensor name {}",
-            magic_enum::enum_name(tensor.device()->arch()),
-            name);
 
         TT_FATAL(
             tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,

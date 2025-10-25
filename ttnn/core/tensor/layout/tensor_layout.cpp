@@ -45,9 +45,6 @@ Alignment legacyShapeToAlignment(
             legacy_padded_shape);
         if (page_config.get_layout() == Layout::ROW_MAJOR) {
             const auto& shard_spec = memory_config.shard_spec().value();
-            if (shard_spec.physical_shard_shape.has_value()) {
-                return Alignment{shard_spec.physical_shard_shape.value()[1]};
-            }
             return Alignment{shard_spec.shape[1]};
         }
         return Alignment{};
@@ -96,7 +93,7 @@ void validate_alignment(const TensorLayout& tensor_layout) {
 
     const auto& page_config = tensor_layout.get_page_config();
     const auto& dtype = tensor_layout.get_data_type();
-    return page_config.validate_alignment(alignment, dtype, memory_config);
+    page_config.validate_alignment(alignment, dtype, memory_config);
 }
 
 void validate_shard_spec(const TensorLayout& tensor_layout) {
@@ -126,10 +123,6 @@ void validate_shard_spec(const TensorLayout& tensor_layout) {
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-TensorLayout::TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config) :
-    TensorLayout(dtype, page_config, memory_config, {}) {}
-
-// Private
 TensorLayout::TensorLayout(
     DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment) :
     dtype_(dtype), page_config_(page_config), memory_config_(memory_config), alignment_(alignment) {
@@ -204,18 +197,6 @@ BufferShardingArgs TensorLayout::compute_buffer_sharding_args(const ttnn::Shape&
         const auto width_in_pages = physical_size.width() / page_shape.width();
         const auto height_in_pages = physical_size.height() / page_shape.height();
         const std::array<uint32_t, 2> tensor2d_shape_in_pages{height_in_pages, width_in_pages};
-
-        switch (shard_spec->mode) {
-            case ShardMode::PHYSICAL: break;
-            case ShardMode::LOGICAL: {
-                const auto& physical_shard_shape = get_physical_shard_shape();
-                shard_spec->shape =
-                    std::array<uint32_t, 2>{physical_shard_shape.height(), physical_shard_shape.width()};
-                break;
-            }
-            default: TT_THROW("Unsupported shard mode {} in compute_distribution_spec!", shard_spec->mode);
-        }
-
         shard_spec_buffer = ShardSpecBuffer(*shard_spec, std::array<uint32_t, 2>(page_shape), tensor2d_shape_in_pages);
     }
 
@@ -275,9 +256,6 @@ size_t TensorLayout::compute_consumed_memory_bytes_per_bank(
         num_pages_per_bank = div_up(num_pages, num_banks);
     } else if (const auto& shard_spec = memory_config_.shard_spec()) {
         Shape2D shard_shape = Shape2D(shard_spec->shape);
-        if (shard_spec->physical_shard_shape.has_value()) {
-            shard_shape = shard_spec->physical_shard_shape.value();
-        }
         num_pages_per_bank =
             div_up(shard_shape.height(), page_shape.height()) * div_up(shard_shape.width(), page_shape.width());
     } else {
@@ -316,35 +294,7 @@ Shape2D TensorLayout::get_physical_shard_shape() const {
         memory_config_.shard_spec().has_value(),
         "Shard spec must have value for TensorLayout::get_physical_shard_shape!");
     const auto& shard_spec = memory_config_.shard_spec().value();
-
-    auto compute_physical_shard_shape_for_logical_mode = [&]() -> Shape2D {
-        // TODO: If physical_shard_shape is provided, alignment_ == physical_shard_shape is guaranteed (should we store
-        // physical_shard_shape instead?)
-        if (shard_spec.physical_shard_shape.has_value()) {
-            const auto& physical_shard_shape = shard_spec.physical_shard_shape.value();
-            TT_FATAL(
-                physical_shard_shape[0] == alignment_[-2] and physical_shard_shape[1] == alignment_[-1],
-                "Alignment {} must be same as physical shard shape {} provided in shard spec!",
-                alignment_,
-                physical_shard_shape);
-            return physical_shard_shape;
-        }
-
-        const auto& logical_shard_shape = Shape2D(shard_spec.shape);
-        // TODO: Alignment is guaranteed to be rank 2 or less if tensor is sharded (remove validate?)
-        const int alignment_rank = static_cast<int>(alignment_.size());
-        TT_FATAL(
-            alignment_rank <= 2, "Alignment {} must be rank 2 or less to compute physical shard shape", alignment_);
-        auto physical_shard_height = CMAKE_UNIQUE_NAMESPACE::round_up(logical_shard_shape.height(), alignment_[-2]);
-        auto physical_shard_width = CMAKE_UNIQUE_NAMESPACE::round_up(logical_shard_shape.width(), alignment_[-1]);
-        return Shape2D{physical_shard_height, physical_shard_width};
-    };
-
-    switch (shard_spec.mode) {
-        case ShardMode::PHYSICAL: return shard_spec.shape; break;
-        case ShardMode::LOGICAL: return compute_physical_shard_shape_for_logical_mode(); break;
-        default: TT_THROW("Unsupported shard mode {} in get_physical_shard_shape!", shard_spec.mode);
-    }
+    return shard_spec.shape;
 }
 
 Shape2D TensorLayout::compute_logical_2d_shape(const ttnn::Shape& shape) const {
@@ -366,45 +316,6 @@ Shape2D TensorLayout::compute_physical_shape(const ttnn::Shape& shape) const {
     size_t width = 1;
     size_t height = 1;
 
-    // LOGICAL SHARDING
-    if (memory_config_.shard_spec().has_value() and memory_config_.shard_spec().value().mode == ShardMode::LOGICAL) {
-        // Iterate dims in reverse order
-        for (int i = -1; i >= -rank; --i) {
-            auto& dim = i == -1 ? width : height;
-            dim *= shape[i];
-        }
-
-        const auto& logical_shard_shape = get_logical_shard_shape();
-        const auto& physical_shard_shape = get_physical_shard_shape();
-
-        auto get_physical_size =
-            [](auto original_size, auto logical_shard_size, auto physical_shard_size, auto alignment) -> uint32_t {
-            if (logical_shard_size == 0) {
-                return 0;
-            }
-            // If we always pad to full shards, then return:
-            // auto num_shards = tt::div_up(original_size, logical_shard_size);
-            // return (uint32_t) physical_shard_size * num_shards;
-
-            // If we pad all shards except last shard up to physical size and last one only up to nearest alignment,
-            // then return this: NOTE: This matches existing physical sharding where physical host data can be sharded
-            // with partial shards
-            auto num_full_shards = original_size / logical_shard_size;
-            auto last_physical_shard_size =
-                CMAKE_UNIQUE_NAMESPACE::round_up(original_size % logical_shard_size, alignment);
-            return (physical_shard_size * num_full_shards + last_physical_shard_size);
-        };
-
-        auto physical_height =
-            get_physical_size(height, logical_shard_shape.height(), physical_shard_shape.height(), alignment_[-2]);
-        auto physical_width =
-            get_physical_size(width, logical_shard_shape.width(), physical_shard_shape.width(), alignment_[-1]);
-
-        Shape2D size{physical_height, physical_width};
-        return size;
-    }
-
-    // INTERLEAVED or deprecated PHYSICAL SHARDING
     const int max_rank = std::max(rank, alignment_rank);
 
     // Iterate dims in reverse order and ensure alignment

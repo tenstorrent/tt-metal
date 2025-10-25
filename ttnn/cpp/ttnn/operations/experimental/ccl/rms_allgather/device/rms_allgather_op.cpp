@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -47,11 +47,14 @@ void RMSAllGather::validate(
         input_tensors.size() == 1 and optional_input_tensors.size() <= 4, "Must have between 1 to 4 input tensors");
     auto& a = input_tensors.at(0);
     TT_FATAL(a.padded_shape().rank() == 4, "Input shape must be rank 4");
+    TT_FATAL(
+        (tt::tt_metal::hal::get_arch_name() != "blackhole") || (a.memory_config().buffer_type() != BufferType::DRAM),
+        "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
+        "by the fabric api");
     uint32_t input_width = a.tensor_spec().tile().get_tile_shape()[1];
     uint32_t input_height = a.tensor_spec().tile().get_tile_shape()[0];
     const auto& b = optional_input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(1);
-    const auto& stats = optional_input_tensors.at(2);
     TT_FATAL(
         this->output_mem_config.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
         "Minimal version requires row major sharding orientation");
@@ -145,9 +148,7 @@ void RMSAllGather::validate(
                 uint32_t Mt = M / input_height;
                 uint32_t Kt = K / input_width;
                 // block
-                uint32_t block_w = program_config.block_w * input_width;
                 const auto shard_spec = a.shard_spec().value();
-                uint32_t num_subblocks_w = program_config.block_w / program_config.subblock_w;
                 // check dims
                 TT_FATAL(
                     program_config.block_w % program_config.subblock_w == 0,
@@ -162,7 +163,6 @@ void RMSAllGather::validate(
 
                 TT_FATAL(M == input_height, "Minimal version assumes (1,1,TILE_HEIGHT,N) shape");
                 TT_FATAL(program_config.block_h == 1, "Minimal version assumes block_h is 1");
-                bool row_wise = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
                 TT_FATAL(
                     tt::div_up(Kt, shard_spec.num_cores()) == program_config.block_w,
                     "block_w must equal to K / num_cores.");
@@ -203,7 +203,7 @@ std::vector<TensorSpec> RMSAllGather::compute_output_specs(const std::vector<Ten
 
                 auto mem_config = this->output_mem_config;
                 if (!mem_config.shard_spec().has_value()) {
-                    mem_config = mem_config.with_shard_spec(input_tensor.shard_spec().value());
+                    mem_config = mem_config.with_shard_spec(input_tensor.shard_spec());
                 }
 
                 return {ttnn::TensorSpec(
@@ -254,7 +254,7 @@ tt::tt_metal::operation::ProgramWithCallbacks RMSAllGather::create_program_at(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    ttnn::MeshDevice* mesh_device = input_tensors.at(0).mesh_device();
+    ttnn::MeshDevice* mesh_device = input_tensors.at(0).device();
     const auto target_device = mesh_device->get_device(mesh_coord);
     const auto mesh_view = mesh_device->get_view();
     TT_FATAL(

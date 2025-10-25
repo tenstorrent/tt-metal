@@ -31,13 +31,6 @@ template <typename ccl_operation_t>
 void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
     // namespace py = pybind11;
 
-    py::class_<GlobalSemaphoreArg>(module, "GlobalSemaphoreArg")
-        .def(py::init<const GlobalSemaphore&>())
-        .def(py::init<const std::vector<GlobalSemaphore>&>());
-
-    py::implicitly_convertible<GlobalSemaphore, GlobalSemaphoreArg>();
-    py::implicitly_convertible<std::vector<GlobalSemaphore>, GlobalSemaphoreArg>();
-
     bind_registered_operation(
         module,
         operation,
@@ -51,7 +44,8 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const ttnn::ccl::Topology topology,
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               bool use_optimal_ccl_for_llama) -> ttnn::Tensor {
+               bool use_optimal_ccl_for_llama,
+               const std::optional<GlobalSemaphore>& barrier_semaphore) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     dim,
@@ -60,7 +54,9 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                     memory_config,
                     topology,
                     subdevice_id,
-                    use_optimal_ccl_for_llama);
+                    use_optimal_ccl_for_llama,
+                    barrier_semaphore,
+                    false);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
@@ -70,12 +66,14 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
             py::arg("memory_config") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Ring,
             py::arg("subdevice_id") = std::nullopt,
-            py::arg("use_optimal_ccl_for_llama") = false},
+            py::arg("use_optimal_ccl_for_llama") = false,
+            py::arg("barrier_semaphore") = std::nullopt},
 
+        // ring
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               ttnn::Tensor& persistent_output_buffer,
+               const std::optional<ttnn::Tensor>& persistent_output_buffer,
                const int32_t dim,
                const GlobalSemaphoreArg& multi_device_global_semaphore,
                const uint32_t num_links,
@@ -83,7 +81,11 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                const ttnn::ccl::Topology topology,
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
                std::optional<uint32_t> cluster_axis,
-               bool use_optimal_ccl_for_llama) -> ttnn::Tensor {
+               bool use_optimal_ccl_for_llama,
+               const std::optional<GlobalSemaphore>& barrier_semaphore,
+               std::optional<uint32_t> chunks_per_sync,
+               std::optional<uint32_t> num_workers_per_link,
+               std::optional<uint32_t> num_buffers_per_channel) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     persistent_output_buffer,
@@ -94,7 +96,12 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                     topology,
                     subdevice_id,
                     cluster_axis,
-                    use_optimal_ccl_for_llama);
+                    use_optimal_ccl_for_llama,
+                    barrier_semaphore,
+                    chunks_per_sync,
+                    num_workers_per_link,
+                    num_buffers_per_channel,
+                    false);
             },
             py::arg("input_tensor"),
             py::arg("persistent_output_buffer"),
@@ -106,8 +113,13 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
             py::arg("topology") = ttnn::ccl::Topology::Ring,
             py::arg("subdevice_id") = std::nullopt,
             py::arg("cluster_axis") = std::nullopt,
-            py::arg("use_optimal_ccl_for_llama") = false},
+            py::arg("use_optimal_ccl_for_llama") = false,
+            py::arg("barrier_semaphore") = std::nullopt,
+            py::arg("chunks_per_sync") = std::nullopt,
+            py::arg("num_workers_per_link") = std::nullopt,
+            py::arg("num_buffers_per_channel") = std::nullopt},
 
+        // line
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
@@ -120,7 +132,8 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                const std::optional<size_t> num_preferred_links,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               bool use_optimal_ccl_for_llama) -> ttnn::Tensor {
+               bool use_optimal_ccl_for_llama,
+               const std::optional<GlobalSemaphore>& barrier_semaphore) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     dim,
@@ -132,7 +145,9 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                     memory_config,             // = std::nullopt,
                     num_preferred_links,       // = std::nullopt,
                     subdevice_id,
-                    use_optimal_ccl_for_llama);  // = std::nullopt
+                    use_optimal_ccl_for_llama,
+                    barrier_semaphore,
+                    false);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
@@ -145,17 +160,27 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
             py::arg("num_links") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("subdevice_id") = std::nullopt,
-            py::arg("use_optimal_ccl_for_llama") = false});
+            py::arg("use_optimal_ccl_for_llama") = false,
+            py::arg("barrier_semaphore") = std::nullopt});
 }
 
 }  // namespace
 
 void py_bind_all_gather_async(pybind11::module& module) {
+    namespace py = pybind11;
+
+    // Define GlobalSemaphoreArg once, outside the template
+    py::class_<GlobalSemaphoreArg>(module, "GlobalSemaphoreArg")
+        .def(py::init<const GlobalSemaphore&>())
+        .def(py::init<const std::vector<GlobalSemaphore>&>());
+
+    py::implicitly_convertible<GlobalSemaphore, GlobalSemaphoreArg>();
+    py::implicitly_convertible<std::vector<GlobalSemaphore>, GlobalSemaphoreArg>();
+
     bind_all_gather_async(
         module,
         ttnn::experimental::all_gather_async,
         R"doc(
-
         Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
 
         Args:
@@ -170,15 +195,14 @@ void py_bind_all_gather_async(pybind11::module& module) {
         Keyword Args:
             num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
-            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
+            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring` for overloads without `cluster_axis`; the cluster-axis overload requires an explicit value.
 
         Returns:
             ttnn.Tensor: the output tensor.
 
         Example:
             >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
-            >>> physical_device_ids = ttnn.get_t3k_physical_device_ids_ring()
-            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), physical_device_ids=physical_device_ids[:8])
+            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
             >>> ttnn_tensor = ttnn.from_torch(
                             full_tensor,
                             dtype=input_dtype,
@@ -188,6 +212,34 @@ void py_bind_all_gather_async(pybind11::module& module) {
                             mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
             >>> ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
             >>> output = ttnn.all_gather(ttnn_tensor, dim=0, topology=ttnn.Topology.Ring)
+
+        )doc");
+
+    bind_all_gather_async(
+        module,
+        ttnn::experimental::all_gather_async_reversed,
+        R"doc(
+
+        Performs a reversed all-gather operation on multi-device :attr:`input_tensor` across all devices.
+        This is identical to all_gather_async but with reversed device ordering in the output.
+
+        Args:
+            input_tensor (ttnn.Tensor): multi-device tensor.
+            dim (int): Dimension to perform operation.
+            cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-all-gather operation on.
+            mesh_device (MeshDevice): Device mesh to perform the line-all-gather operation on.
+        * cluster_axis and mesh_device parameters are applicable only for Linear Topology.
+
+        Keyword Args:
+            num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
+            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
+
+        Returns:
+            ttnn.Tensor: the all-gathered tensor with reversed device ordering.
+
+        Note:
+            The tensor width must be divisible by 32*num_devices when using this reversed API.
 
         )doc");
 }

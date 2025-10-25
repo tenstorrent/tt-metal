@@ -7,6 +7,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
 namespace ttnn {
 namespace operations::experimental::ccl {
@@ -14,15 +15,19 @@ namespace operations::experimental::ccl {
 struct ExecuteReduceScatterMinimalAsync {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        ttnn::Tensor& persistent_intermediate_buffer,
-        ttnn::Tensor& persistent_output_buffer,
+        const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
         int32_t dim,
         const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+        const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
         uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<ttnn::MemoryConfig>& intermediate_memory_config = std::nullopt,
         ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
-        std::optional<uint32_t> cluster_axis = std::nullopt);
+        std::optional<uint32_t> cluster_axis = std::nullopt,
+        std::optional<uint32_t> chunks_per_sync = std::nullopt,
+        std::optional<uint32_t> num_workers_per_link = std::nullopt,
+        std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
 };
 
 }  // namespace operations::experimental::ccl

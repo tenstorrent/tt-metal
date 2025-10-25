@@ -11,6 +11,7 @@
 #include "ttnn/tensor/tensor.hpp"
 
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace tt::constants;
@@ -19,7 +20,7 @@ using namespace tt::tt_metal;
 namespace {
 
 uint32_t find_greatest_common_page_size(std::vector<uint32_t>& stick_sizes, uint32_t alignment) {
-    TT_FATAL(stick_sizes.size() > 0, "Need at least one stick size to find page size");
+    TT_FATAL(!stick_sizes.empty(), "Need at least one stick size to find page size");
     uint32_t page_size = tt::align(stick_sizes[0], alignment);
     for (size_t idx = 1; idx < stick_sizes.size(); idx++) {
         const uint32_t padded_stick_size = tt::align(stick_sizes[idx], alignment);
@@ -126,13 +127,13 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
         [&create_circular_buffer](
             uint32_t idx, const Tensor& input_tensor, uint32_t total_num_tiles) -> tt::tt_metal::CBHandle {
         const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-        const auto tile_size = tt::tt_metal::detail::TileSize(data_format);
+        const auto tile_size = tt::tile_size(data_format);
         return create_circular_buffer(idx, total_num_tiles, tile_size, data_format, input_tensor.buffer());
     };
 
     TT_FATAL(input_tensors.at(0).dtype() == input_tensors.at(1).dtype(), "Input tensor data types must match");
     const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
-    const auto tile_size = tt::tt_metal::detail::TileSize(data_format);
+    const auto tile_size = tt::tile_size(data_format);
 
     const uint32_t num_input_tensors = input_tensors.size();
     std::vector<CBHandle> cb_inputs(num_input_tensors);
@@ -146,29 +147,29 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
     const auto total_num_output_tiles = get_total_num_tiles_per_shard(num_tiles_for_output_shard);
     const CBHandle cb_output = create_cb_from_tensor(cb_output_id, output, total_num_output_tiles);
 
-    const auto bf16_data_format = tt::tt_metal::datatype_to_dataformat_converter(DataType::BFLOAT16);
-    const auto bf16_tile_size = tt::tt_metal::detail::TileSize(bf16_data_format);
+    auto cb_data_format = data_format;
+    auto cb_tile_size = tile_size;
+    bool bf8 = input_tensors[0].dtype() == DataType::BFLOAT8_B;
+    if (bf8) {
+        cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(DataType::BFLOAT16);
+        cb_tile_size = tt::tile_size(cb_data_format);
+    }
 
     const auto in0_total_tiles_width = std::get<1>(num_tiles_for_each_input_shard[0]);
     const uint32_t cb_input0_transpose_id = cb_inputs.size() + 1;
-    CBHandle cb_input0_transpose = create_circular_buffer(
-        cb_input0_transpose_id, in0_total_tiles_width, bf16_tile_size, bf16_data_format, nullptr);
+    create_circular_buffer(cb_input0_transpose_id, in0_total_tiles_width, cb_tile_size, cb_data_format, nullptr);
 
     const auto in1_total_tiles_width = std::get<1>(num_tiles_for_each_input_shard[1]);
     const uint32_t cb_input1_transpose_id = cb_inputs.size() + 2;
-    CBHandle cb_input1_transpose = create_circular_buffer(
-        cb_input1_transpose_id, in1_total_tiles_width, bf16_tile_size, bf16_data_format, nullptr);
+    create_circular_buffer(cb_input1_transpose_id, in1_total_tiles_width, cb_tile_size, cb_data_format, nullptr);
 
     const auto out_total_tiles_width = in0_total_tiles_width + in1_total_tiles_width;
     const uint32_t cb_concat_id = cb_inputs.size() + 3;
-    CBHandle cb_concat =
-        create_circular_buffer(cb_concat_id, out_total_tiles_width, bf16_tile_size, bf16_data_format, nullptr);
+    create_circular_buffer(cb_concat_id, out_total_tiles_width, cb_tile_size, cb_data_format, nullptr);
 
     const uint32_t cb_output_transpose_id = cb_inputs.size() + 4;
-    CBHandle cb_output_transpose =
-        create_circular_buffer(cb_output_transpose_id, out_total_tiles_width, tile_size, data_format, nullptr);
+    create_circular_buffer(cb_output_transpose_id, out_total_tiles_width, tile_size, data_format, nullptr);
 
-    const bool is_rm_shard_orientation = output.shard_spec()->orientation == ShardOrientation::ROW_MAJOR;
     std::vector<uint32_t> compile_time_args_0 = {
         0,
         1,
@@ -184,13 +185,17 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
         tile_size,
         groups,
     };
-    tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
+    std::map<std::string, std::string> reader_defines;
+    if (bf8) {
+        reader_defines["BF8"] = "1";
+    }
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
         "reader_height_sharded_width_concat_two_tensors_tiled.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(compile_time_args_0));
-    tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
+        tt_metal::ReaderDataMovementConfig(compile_time_args_0, std::move(reader_defines)));
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
         "writer_height_sharded_width_concat_two_tensors_tiled.cpp",
@@ -200,7 +205,10 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
     // TODO: Skip the tile transpose in compute kernel if the following condition is true:
     // >> (input_tensors[0].padded_shape()[-1] / groups % TILE_WIDTH == 0
     // >> && input_tensors[1].padded_shape()[-1] / groups % TILE_WIDTH == 0)
-    tt_metal::KernelHandle compute_kernel_id = tt_metal::CreateKernel(
+    constexpr uint32_t MAX_1_BYTE_TILES_PER_BATCH = 16;
+    uint32_t BatchSize = MAX_1_BYTE_TILES_PER_BATCH / input_tensors[0].element_size();
+    compile_time_args_0.push_back(BatchSize);
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/compute/"
         "height_sharded_width_concat_two_tensors.cpp",
@@ -256,12 +264,6 @@ tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_height_multi
         "Input channels must both be evenly divisible by groups");
 
     tt_metal::Program program = tt_metal::CreateProgram();
-
-    tt_metal::IDevice* device = output.device();
-
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     uint32_t num_output_rows = output.padded_shape()[-2];
     uint32_t num_input_tensors = input_tensors.size();
@@ -377,39 +379,39 @@ tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_height_multi
         const auto [first, last] = split(cores, cores.size() - 1);
         const auto first_cores = cores_to_corerangeset(first);
         const auto last_cores = cores_to_corerangeset(last);
-        tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
             "reader_height_sharded_width_concat_two_tensors.cpp",
             first_cores,
             tt_metal::ReaderDataMovementConfig(compile_time_args_0));
-        tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
             "reader_height_sharded_width_concat_two_tensors.cpp",
             first_cores,
             tt_metal::WriterDataMovementConfig(compile_time_args_1));
 
-        tt_metal::KernelHandle unary_reader_kernel_last_id = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
             "reader_height_sharded_width_concat_two_tensors.cpp",
             last_cores,
             tt_metal::ReaderDataMovementConfig(compile_time_args_0_last));
-        tt_metal::KernelHandle unary_writer_kernel_last_id = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
             "reader_height_sharded_width_concat_two_tensors.cpp",
             last_cores,
             tt_metal::WriterDataMovementConfig(compile_time_args_1_last));
     } else {
-        tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
             "reader_height_sharded_width_concat_two_tensors.cpp",
             all_cores,
             tt_metal::ReaderDataMovementConfig(compile_time_args_0));
-        tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
             "reader_height_sharded_width_concat_two_tensors.cpp",
@@ -448,7 +450,6 @@ tt_metal::operation::ProgramWithCallbacks s2s_concat_multi_core(
     const bool is_height_concat = dim == 2;
 
     tt_metal::Program program = tt_metal::CreateProgram();
-    tt_metal::IDevice* device = output.device();
 
     const uint32_t num_input_tensors = input_tensors.size();
     const uint32_t cb_dst_id = 16;
@@ -474,7 +475,7 @@ tt_metal::operation::ProgramWithCallbacks s2s_concat_multi_core(
         elements_per_page_width = page_size / element_size;
         elements_per_page_height = 1;
     } else {
-        page_size = tt_metal::detail::TileSize(cb_data_format);
+        page_size = tt::tile_size(cb_data_format);
         elements_per_page_width = TILE_WIDTH;
         elements_per_page_height = TILE_HEIGHT;
     }
@@ -530,7 +531,7 @@ tt_metal::operation::ProgramWithCallbacks s2s_concat_multi_core(
         runtime_args_0.push_back(0);
         runtime_args_1.push_back(input_num_pages_per_stick[input_id]);
         runtime_args_1.push_back(input_num_sticks[input_id] - input_num_sticks_per_risc);
-        runtime_args_1.push_back(input_write_offsets[input_id] + output_stride * input_num_sticks_per_risc);
+        runtime_args_1.push_back(input_write_offsets[input_id] + (output_stride * input_num_sticks_per_risc));
         runtime_args_1.push_back(page_size * input_num_pages_per_stick[input_id] * input_num_sticks_per_risc);
     }
 
@@ -567,11 +568,6 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
     const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    tt_metal::IDevice* device = output.device();
-
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
     // CoreRangeSet all_cores({CoreRange(CoreCoord(0,0), compute_with_storage_grid_size)});
 
     uint32_t num_output_rows = output.padded_shape()[-1];
@@ -601,9 +597,9 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
         cb_ids[input_id] = input_id;
     }
 
-    bool dst_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {num_input_tensors};
-    std::vector<uint32_t> writer_compile_time_args = {num_input_tensors, std::uint32_t(dst_is_dram)};
+    std::vector<uint32_t> writer_compile_time_args = {num_input_tensors, input_unit_size};
+    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -637,7 +633,6 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
             output.buffer()->address(),
             core_id,
             curr_num_output_rows,
-            input_unit_size,
             num_input_tensors * input_shard_spec.shape[0],
             input_shard_spec.shape[0]};
         for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
@@ -743,7 +738,7 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         single_page_size = tt::align(output.element_size() * output.padded_shape()[-1], common_align_len);
     } else {
         num_output_pages = output.physical_volume() / TILE_HW;
-        single_page_size = tt_metal::detail::TileSize(cb_data_format);
+        single_page_size = tt::tile_size(cb_data_format);
     }
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -762,15 +757,13 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(num_input_pages * single_page_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_page_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t num_dims = output.padded_shape().rank();
 
     std::vector<uint32_t> src_addr(num_input_tensors);
-    std::vector<bool> is_dram(num_input_tensors);
     std::vector<uint32_t> num_pages_per_block(num_input_tensors);
     std::vector<uint32_t> page_id_per_tensor(num_input_tensors);
-    // Only used for RM
     std::vector<uint32_t> page_size_per_tensor(num_input_tensors);
 
     uint32_t num_accum_pages = 1;
@@ -806,7 +799,6 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
             auto buffer = input_tensors[i].buffer();
             src_addr[i] = buffer->address();
-            is_dram[i] = buffer->buffer_type() == tt_metal::BufferType::DRAM;
             page_size_per_tensor[i] = buffer->page_size();
             if (dim == num_dims - 1) {
                 num_pages_per_block[i] = num_accum_pages;
@@ -823,7 +815,7 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
             auto buffer = input_tensors[i].buffer();
             src_addr[i] = buffer->address();
-            is_dram[i] = buffer->buffer_type() == tt_metal::BufferType::DRAM;
+            page_size_per_tensor[i] = buffer->page_size();
             uint32_t dim_pages = input_tensors[i].padded_shape()[dim] / scale_factor;
             num_pages_per_block[i] = num_accum_pages * dim_pages;
             num_output_pages_per_block += num_accum_pages * dim_pages;
@@ -831,22 +823,20 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     }
     std::vector<uint32_t> common_reader_kernel_args = {0, 0, 0};
     common_reader_kernel_args.insert(common_reader_kernel_args.end(), src_addr.begin(), src_addr.end());
-    common_reader_kernel_args.insert(common_reader_kernel_args.end(), is_dram.begin(), is_dram.end());
     common_reader_kernel_args.insert(
         common_reader_kernel_args.end(), num_pages_per_block.begin(), num_pages_per_block.end());
-    if (rm_layout) {
-        common_reader_kernel_args.insert(
-            common_reader_kernel_args.end(), page_size_per_tensor.begin(), page_size_per_tensor.end());
-    }
 
     // Reader compile-time args
     // Data is 32 byte aligned
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {
-        // interleaved accessor args
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)num_input_tensors,
     };
+    reader_compile_time_args.insert(
+        reader_compile_time_args.end(), page_size_per_tensor.begin(), page_size_per_tensor.end());
+    for (uint32_t i = 0; i < num_input_tensors; ++i) {
+        TensorAccessorArgs(*input_tensors[i].buffer()).append_to(reader_compile_time_args);
+    }
 
     std::map<std::string, std::string> concat_defines;
 
@@ -854,11 +844,13 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         concat_defines["WIDTH_CONCAT"] = "1";
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
-                                                      (std::uint32_t)src0_cb_index,
-                                                      (std::uint32_t)dst_is_dram,
-                                                      0,
-                                                      0};
+    std::vector<uint32_t> writer_compile_time_args;
+    if (rm_layout) {
+        writer_compile_time_args = {(std::uint32_t)src0_cb_index, dst_buffer->page_size()};
+    } else {
+        writer_compile_time_args = {(std::uint32_t)src0_cb_index};
+    }
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // Tilized reader
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(

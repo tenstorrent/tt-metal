@@ -7,10 +7,10 @@ from typing import TYPE_CHECKING
 import pytest
 import torch
 import ttnn
-import os
 from ..reference import SD3Transformer2DModel
 from ..tt.fun_timestep_embedding import TtCombinedTimestepTextProjEmbeddingsParameters, sd_combined_timestep_embed
 from ..tt.utils import assert_quality, to_torch
+from ..tt.parallel_config import StableDiffusionParallelManager
 
 if TYPE_CHECKING:
     from ..reference.timestep_embedding import CombinedTimestepTextProjEmbeddings
@@ -24,11 +24,7 @@ if TYPE_CHECKING:
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [(1, 8)],
     indirect=True,
 )
 def test_timestep_embedding(
@@ -37,6 +33,7 @@ def test_timestep_embedding(
     model_name,
     batch_size: int,
 ) -> None:
+    parallel_manager = StableDiffusionParallelManager(mesh_device, 1, 1, 1, 1, 1, ttnn.Topology.Linear)
     dtype = torch.bfloat16
 
     parent_torch_model = SD3Transformer2DModel.from_pretrained(
@@ -46,7 +43,12 @@ def test_timestep_embedding(
     torch_model.eval()
 
     parameters = TtCombinedTimestepTextProjEmbeddingsParameters.from_torch(
-        torch_model.state_dict(), device=mesh_device, dtype=ttnn.bfloat8_b, guidance_cond=batch_size
+        torch_model.state_dict(),
+        device=mesh_device,
+        dtype=ttnn.bfloat8_b,
+        guidance_cond=batch_size,
+        hidden_dim_padding=0,
+        parallel_config=parallel_manager.dit_parallel_config,
     )
 
     torch.manual_seed(0)

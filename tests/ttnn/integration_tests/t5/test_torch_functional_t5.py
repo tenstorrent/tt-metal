@@ -6,9 +6,10 @@ import pytest
 
 import torch
 import transformers
+from transformers.cache_utils import EncoderDecoderCache
 
 from models.demos.grayskull.t5.reference import torch_functional_t5 as functional_t5
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -113,10 +114,12 @@ def test_t5_attention(model_name, batch_size, sequence_size):
     torch.manual_seed(0)
 
     config = transformers.T5Config.from_pretrained(model_name)
-    model = transformers.models.t5.modeling_t5.T5Attention(config).eval()
+    model = transformers.models.t5.modeling_t5.T5Attention(config, layer_idx=0).eval()
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.float32)
-    torch_output, *_ = model(torch_hidden_states)
+    past_key_value = EncoderDecoderCache.from_legacy_cache(None)
+    cache_position = torch.arange(sequence_size)
+    torch_output, *_ = model(torch_hidden_states, past_key_value=past_key_value, cache_position=cache_position)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -136,10 +139,12 @@ def test_t5_layer_self_attention(model_name, batch_size, sequence_size):
     torch.manual_seed(0)
 
     config = transformers.T5Config.from_pretrained(model_name)
-    model = transformers.models.t5.modeling_t5.T5LayerSelfAttention(config).eval()
+    model = transformers.models.t5.modeling_t5.T5LayerSelfAttention(config, layer_idx=0).eval()
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.float32)
-    torch_output, *_ = model(torch_hidden_states)
+    past_key_value = EncoderDecoderCache.from_legacy_cache(None)
+    cache_position = torch.arange(sequence_size)
+    torch_output, *_ = model(torch_hidden_states, past_key_value=past_key_value, cache_position=cache_position)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -161,11 +166,19 @@ def test_t5_layer_cross_attention(model_name, batch_size, sequence_size):
     torch.manual_seed(0)
 
     config = transformers.T5Config.from_pretrained(model_name)
-    model = transformers.models.t5.modeling_t5.T5LayerCrossAttention(config).eval()
+    model = transformers.models.t5.modeling_t5.T5LayerCrossAttention(config, layer_idx=0).eval()
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.float32)
     torch_key_value_states = torch_random((batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.float32)
-    torch_output, *_ = model(torch_hidden_states, torch_key_value_states)
+    past_key_value = EncoderDecoderCache.from_legacy_cache(None)
+    cache_position = torch.arange(sequence_size)
+    torch_output, *_ = model(
+        torch_hidden_states,
+        torch_key_value_states,
+        past_key_value=past_key_value,
+        query_length=sequence_size,
+        cache_position=cache_position,
+    )
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -187,10 +200,12 @@ def test_t5_block_encoder(model_name, batch_size, sequence_size):
     torch.manual_seed(0)
 
     config = transformers.T5Config.from_pretrained(model_name)
-    model = transformers.models.t5.modeling_t5.T5Block(config).eval()
+    model = transformers.models.t5.modeling_t5.T5Block(config, layer_idx=0).eval()
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.float32)
-    torch_output, *_ = model(torch_hidden_states)
+    past_key_value = EncoderDecoderCache.from_legacy_cache(None)
+    cache_position = torch.arange(sequence_size)
+    torch_output, *_ = model(torch_hidden_states, past_key_value=past_key_value, cache_position=cache_position)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -211,13 +226,20 @@ def test_t5_block_decoder(model_name, batch_size, sequence_size):
 
     config = transformers.T5Config.from_pretrained(model_name)
     config.is_decoder = True
-    model = transformers.models.t5.modeling_t5.T5Block(config).eval()
+    model = transformers.models.t5.modeling_t5.T5Block(config, layer_idx=0).eval()
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.float32)
     torch_encoder_hidden_states = torch_random(
         (batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.float32
     )
-    torch_output, *_ = model(torch_hidden_states, encoder_hidden_states=torch_encoder_hidden_states)
+    past_key_value = EncoderDecoderCache.from_legacy_cache(None)
+    cache_position = torch.arange(sequence_size)
+    torch_output, *_ = model(
+        torch_hidden_states,
+        encoder_hidden_states=torch_encoder_hidden_states,
+        past_key_value=past_key_value,
+        cache_position=cache_position,
+    )
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,

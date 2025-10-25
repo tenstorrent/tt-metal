@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Dispatch Kernel (subordinate)
-// Required to asynchronously send go signals to workers, upon recieving a program
+// Required to asynchronously send go signals to workers, upon receiving a program
 // completion signal. This allows program dispatch (for subsequent programs) to overlap
 // with worker execution (for current program), leading to a lower dispatch latency.
 // - Handles the following commands:
@@ -41,6 +41,9 @@ constexpr uint32_t virtualize_unicast_cores = VIRTUALIZE_UNICAST_CORES;
 constexpr uint32_t num_virtual_unicast_cores = NUM_VIRTUAL_UNICAST_CORES;
 constexpr uint32_t num_physical_unicast_cores = NUM_PHYSICAL_UNICAST_CORES;
 
+constexpr uint32_t worker_mcast_grid = WORKER_MCAST_GRID;
+constexpr uint32_t num_worker_cores_to_mcast = NUM_WORKER_CORES_TO_MCAST;
+
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t dispatch_d_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
@@ -51,6 +54,12 @@ constexpr uint32_t cb_end = cb_base + cb_size;
 static uint32_t num_pages_acquired = 0;
 static uint32_t num_mcasts_sent[max_num_worker_sems] = {0};
 static uint32_t cmd_ptr;
+
+extern "C" {
+// These variables are used by triage to help report dispatcher state.
+volatile uint32_t last_wait_count = 0;
+volatile uint32_t last_wait_stream = 0;
+}
 
 // When dispatch_d and dispatch_s run on separate cores, dispatch_s gets the go signal update from workers.
 // dispatch_s is responsible for sending the latest worker completion count to dispatch_d.
@@ -133,11 +142,15 @@ uint32_t stream_wrap_gt(uint32_t a, uint32_t b) {
 }
 
 FORCE_INLINE
-void wait_for_workers(volatile CQDispatchCmd tt_l1_ptr* cmd) {
+void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
+    WAYPOINT("WCW");
+    last_wait_count = wait_count;
+    last_wait_stream = wait_stream;
     volatile uint32_t* worker_sem =
-        (volatile uint32_t*)STREAM_REG_ADDR(cmd->mcast.wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
-    while (stream_wrap_gt(cmd->mcast.wait_count, *worker_sem)) {
+        (volatile uint32_t*)STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+    while (stream_wrap_gt(wait_count, *worker_sem)) {
     }
+    WAYPOINT("WCD");
 }
 
 template <bool flush_write = false>
@@ -197,6 +210,7 @@ void process_go_signal_mcast_cmd() {
     volatile tt_l1_ptr uint32_t* sync_sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dispatch_s_sync_sem_base_addr + sync_index * L1_ALIGNMENT);
 
+    WAYPOINT("DCW");
     // Wait for notification from dispatch_d, signalling that it's safe to send the go signal
     uint32_t& mcasts_sent = num_mcasts_sent[sync_index];
     while (wrap_ge(mcasts_sent, *sync_sem_addr)) {
@@ -212,33 +226,35 @@ void process_go_signal_mcast_cmd() {
     // can guarantee that copying the go signal does not corrupt any other command fields, which is true (see
     // CQDispatchGoSignalMcastCmd).
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage = (volatile uint32_t tt_l1_ptr*)cmd_ptr;
-    *aligned_go_signal_storage = cmd->mcast.go_signal;
+    uint32_t go_signal_value = cmd->mcast.go_signal;
     uint8_t go_signal_noc_data_idx = cmd->mcast.noc_data_start_index;
+    uint32_t multicast_go_offset = cmd->mcast.multicast_go_offset;
+    uint32_t num_unicasts = cmd->mcast.num_unicast_txns;
+    uint32_t wait_count = cmd->mcast.wait_count;
+    uint32_t wait_stream = cmd->mcast.wait_stream;
 
-    if (cmd->mcast.num_mcast_txns > 0) {
+    if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
         // Setup registers before waiting for workers so only the NOC_CMD_CTRL register needs to be touched after.
         uint64_t dst_noc_addr_multicast =
-            get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], mcast_go_signal_addr);
-        uint32_t num_dests = go_signal_noc_data[go_signal_noc_data_idx++];
+            get_noc_addr_helper(worker_mcast_grid, mcast_go_signal_addr + sizeof(uint32_t) * multicast_go_offset);
+        uint32_t num_dests = num_worker_cores_to_mcast;
+        // Ensure the offset with respect to L1_ALIGNMENT is the same for the source and destination.
+        uint32_t storage_offset = multicast_go_offset % (L1_ALIGNMENT / sizeof(uint32_t));
+        aligned_go_signal_storage[storage_offset] = go_signal_value;
+
         cq_noc_async_write_init_state<CQ_NOC_SNDL, true>(
-            (uint32_t)aligned_go_signal_storage, dst_noc_addr_multicast, sizeof(uint32_t));
+            (uint32_t)&aligned_go_signal_storage[storage_offset], dst_noc_addr_multicast, sizeof(uint32_t));
+
         noc_nonposted_writes_acked[noc_index] += num_dests;
 
-        wait_for_workers(cmd);
+        wait_for_workers(wait_count, wait_stream);
         cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0);
-        // Send GO signal to remaining destinations. Only the destination NOC needs to be modified.
-        for (uint32_t i = 1, num_mcasts = cmd->mcast.num_mcast_txns; i < num_mcasts; ++i) {
-            uint64_t dst = get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], mcast_go_signal_addr);
-            uint32_t num_dests = go_signal_noc_data[go_signal_noc_data_idx++];
-            cq_noc_async_write_with_state<CQ_NOC_sNdl>(0, dst, 0);
-            noc_nonposted_writes_acked[noc_index] += num_dests;
-        }
-        noc_nonposted_writes_num_issued[noc_index] += cmd->mcast.num_mcast_txns;
+        noc_nonposted_writes_num_issued[noc_index] += 1;
     } else {
-        wait_for_workers(cmd);
+        wait_for_workers(wait_count, wait_stream);
     }
 
-    uint32_t num_unicasts = cmd->mcast.num_unicast_txns;
+    *aligned_go_signal_storage = go_signal_value;
     if constexpr (virtualize_unicast_cores) {
         // Issue #19729: Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
         // This chip is virtualizing cores the go signal is unicasted to
@@ -315,6 +331,7 @@ void set_go_signal_noc_data() {
 }
 
 void kernel_main() {
+    set_l1_data_cache<true>();
     DPRINT << "dispatch_s : start" << ENDL();
     // Initialize customized command buffers.
     dispatch_s_wr_reg_cmd_buf_init();
@@ -371,4 +388,5 @@ void kernel_main() {
     noc_async_full_barrier();
 #endif
     DPRINT << "dispatch_s : done" << ENDL();
+    set_l1_data_cache<false>();
 }

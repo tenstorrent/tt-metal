@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -17,10 +17,13 @@ from models.demos.yolov4.reference.downsample5 import DownSample5
 from models.demos.yolov4.reference.head import Head
 from models.demos.yolov4.reference.neck import Neck
 from models.demos.yolov4.reference.yolov4 import Yolov4
+from models.tt_cnn.tt.builder import Conv2dConfiguration
 
 YOLOV4_BOXES_PCC = 0.99
 YOLOV4_CONFS_PCC = 0.9
 YOLOV4_BOXES_PCC_BLACKHOLE = 0.96
+
+YOLOV4_L1_SMALL_SIZE = 10960
 
 
 def load_image(image_path, resolution):
@@ -43,10 +46,10 @@ def image_to_tensor(image):
 
 
 def load_torch_model(model_location_generator, module=None):
-    if model_location_generator == None:
+    if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
         model_path = "models"
     else:
-        model_path = model_location_generator("models", model_subdir="Yolo")
+        model_path = model_location_generator("vision-models/yolov4", model_subdir="", download_if_ci_v2=True)
 
     if model_path == "models":
         if not os.path.exists("models/demos/yolov4/tests/pcc/yolov4.pth"):  # check if yolov4.th is availble
@@ -55,7 +58,7 @@ def load_torch_model(model_location_generator, module=None):
             )  # execute the yolov4_weights_download.sh file
         weights_pth = "models/demos/yolov4/tests/pcc/yolov4.pth"
     else:
-        weights_pth = str(model_path / "yolov4.pth")
+        weights_pth = os.path.join(model_path, "yolov4.pth")
 
     torch_dict = torch.load(weights_pth)
     state_dict = torch_dict
@@ -128,13 +131,46 @@ def get_model_result(ttnn_output_tensor, resolution, mesh_composer=None):
     return [result_boxes.to(torch.float16), result_confs.to(torch.float16)]
 
 
-def get_mesh_mappers(device):
-    if device.get_num_devices() > 1:
-        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
-        weights_mesh_mapper = None
-        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+def create_sharding_strategy(conv2d_args):
+    """Create appropriate sharding strategy from conv2d_args"""
+    from models.tt_cnn.tt.builder import (
+        AutoShardedStrategyConfiguration,
+        BlockShardedStrategyConfiguration,
+        HeightShardedStrategyConfiguration,
+        WidthShardedStrategyConfiguration,
+    )
+
+    shard_layout = getattr(conv2d_args, "shard_layout", None)
+    if shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        return HeightShardedStrategyConfiguration(
+            reshard_if_not_optimal=getattr(conv2d_args, "reshard_if_not_optimal", False),
+            act_block_h_override=getattr(conv2d_args, "act_block_h", 0) or 0,
+        )
+    elif shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        return BlockShardedStrategyConfiguration(
+            reshard_if_not_optimal=getattr(conv2d_args, "reshard_if_not_optimal", False),
+        )
+    elif shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        return WidthShardedStrategyConfiguration(
+            reshard_if_not_optimal=getattr(conv2d_args, "reshard_if_not_optimal", False),
+        )
     else:
-        inputs_mesh_mapper = None
-        weights_mesh_mapper = None
-        output_mesh_composer = None
-    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
+        return AutoShardedStrategyConfiguration()
+
+
+def create_conv2d_config(conv_args, weight, bias, activation=None):
+    """Helper to create Conv2dConfiguration with proper sharding parameters"""
+    return Conv2dConfiguration.from_model_args(
+        conv_args,
+        weight,
+        bias,
+        weights_dtype=ttnn.bfloat8_b,
+        sharding_strategy=create_sharding_strategy(conv_args),
+        deallocate_activation=getattr(conv_args, "deallocate_activation", False),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+        enable_act_double_buffer=True,
+        output_layout=ttnn.TILE_LAYOUT,
+        activation=activation,
+    )

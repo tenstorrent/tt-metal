@@ -8,15 +8,16 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc
+from models.tt_transformers.tests.test_utils import get_ref_model_dype
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import PagedAttentionConfig, precompute_freqs
 from models.tt_transformers.tt.decoder import TransformerBlock
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.model_config import CheckpointType, ModelArgs
 from models.tt_transformers.tt.rope import RotarySetup
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -49,6 +50,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     "max_seq_len",
     (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_decoder_inference(
     max_seq_len,
     batch_size,
@@ -60,7 +62,7 @@ def test_decoder_inference(
 ):
     dtype = ttnn.bfloat8_b
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
@@ -84,9 +86,21 @@ def test_decoder_inference(
         model_args.head_dim,
         model_args.max_seq_len,
         model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
+        model_args.rope_scaling,
     )
+
+    if model_args.rope_theta_local is not None:
+        rope_setup_local = RotarySetup(
+            mesh_device,
+            model_args.max_batch_size,
+            model_args.head_dim,
+            model_args.max_seq_len,
+            model_args.rope_theta_local,
+            None,
+        )
+    else:
+        rope_setup_local = None
+
     transformation_mats = rope_setup.get_both_trans_mats()
 
     # Prepare page table for paged attention
@@ -118,9 +132,11 @@ def test_decoder_inference(
         )
 
     # Initialize TT model
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = TransformerBlock(
         args=model_args,
         mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
         dtype=dtype,
         state_dict=state_dict,
         layer_num=0,
@@ -131,14 +147,17 @@ def test_decoder_inference(
 
     seqlen = 1
 
-    cos, sin = precompute_freqs(
-        model_args.head_dim,
-        model_args.max_seq_len * 2,
-        model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
-    )
-    freqs_cis = torch.complex(cos, sin)
+    if model_args.checkpoint_type == CheckpointType.Meta:
+        cos, sin = precompute_freqs(
+            model_args.head_dim,
+            model_args.max_seq_len * 2,
+            model_args.rope_theta,
+            model_args.rope_scaling.factor if model_args.rope_scaling else None,
+            model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
+        )
+        freqs_cis = torch.complex(cos, sin)
+    else:
+        freqs_cis = None
 
     # Initial positions
     current_pos = torch.tensor([generation_start_pos for _ in range(batch_size)])
@@ -156,7 +175,12 @@ def test_decoder_inference(
         logger.info(f"[Decoder] Generating token {i}")
 
         # input = torch.randn(1, 32, 4096)
-        pt_decode_input = (torch.rand(batch_size, seqlen, model_args.dim) * 2) - 1
+        pt_decode_input = (
+            torch.rand(
+                batch_size, seqlen, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
+            )
+            * 2
+        ) - 1
         tt_decode_input = pt_decode_input.clone()
 
         decode_input = model_args.prepare_residual_tensor_decode(
@@ -167,12 +191,13 @@ def test_decoder_inference(
 
         # Get cos/sin matrices for the current position of each user
         rot_mats = rope_setup.get_rot_mats(current_pos)
-
+        rot_mats_local = None if rope_setup_local is None else rope_setup_local.get_rot_mats(current_pos)
         # Run TT model
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
-            rot_mats=rot_mats,
+            rot_mats_global=rot_mats,
+            rot_mats_local=rot_mats_local,
             mode="decode",
             page_table=page_table_tt,
         )
@@ -183,7 +208,7 @@ def test_decoder_inference(
 
         tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
         # In this test all users have the same position
-        freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
+        freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0) if freqs_cis is not None else None
 
         # Reference model
         ref_output = reference_model(pt_decode_input, current_pos[0], freqs_cis_i, mask=None)
@@ -200,7 +225,7 @@ def test_decoder_inference(
             all_tests_pass = False
 
         # Increment position
-        current_pos = torch.tensor([generation_start_pos + i for _ in range(batch_size)])
+        current_pos = torch.tensor([generation_start_pos + i + 1 for _ in range(batch_size)])
         current_pos_tensor = ttnn.from_torch(
             current_pos,
             device=mesh_device,

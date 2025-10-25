@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -96,6 +96,7 @@ def split_conv_and_run(
         "groups": 1,
         "device": device,
         "conv_config": conv_config,
+        "slice_config": ttnn.Conv2dL1FullSliceConfig,
     }
 
     outputs = []
@@ -130,6 +131,8 @@ def split_conv_and_run(
                     device_bias.append(bias)
             else:
                 in_channel_slice_output = results
+
+            in_channel_slice_output = ttnn.move(in_channel_slice_output)
 
             if in_channel_slice_id == 0:
                 if in_channel_slice_output.memory_config() != ttnn.DRAM_MEMORY_CONFIG:

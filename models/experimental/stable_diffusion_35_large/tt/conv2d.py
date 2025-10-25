@@ -135,9 +135,9 @@ class TtConv2d:
                 conv_config=conv_config,
                 memory_config=memory_config,
                 slice_config=(
-                    ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dSliceWidth, num_slices=slice_count)
+                    ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=slice_count)
                     if slice_count > 1
-                    else None
+                    else ttnn.Conv2dL1FullSliceConfig,
                 ),
                 dtype=ttnn.bfloat16,
             )

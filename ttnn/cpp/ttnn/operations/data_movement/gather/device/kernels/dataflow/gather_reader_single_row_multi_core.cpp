@@ -63,6 +63,7 @@ void kernel_main() {
     constexpr uint32_t total_number_of_cores = get_compile_time_arg_val(7);
     constexpr uint32_t compute_with_storage_grid_size_x = get_compile_time_arg_val(8);
     constexpr uint32_t compute_with_storage_grid_size_y = get_compile_time_arg_val(9);
+    constexpr auto input_index_tensor_args = TensorAccessorArgs<10>();
 
     constexpr uint32_t one_tile = 1;
     const uint32_t TILE_WIDTH_MASK = tile_width - 1;
@@ -70,10 +71,8 @@ void kernel_main() {
     // Index tensor config
     constexpr uint32_t input_index_tensor_tile_size_bytes = get_tile_size(input_index_tensor_cb_index);
     constexpr DataFormat input_index_tensor_data_format = get_dataformat(input_index_tensor_cb_index);
-    const InterleavedAddrGenFast<input_index_tensor_is_dram> input_index_tensor_dram = {
-        .bank_base_address = input_index_tensor_buffer_addr,
-        .page_size = input_index_tensor_tile_size_bytes,
-        .data_format = input_index_tensor_data_format};
+    const auto input_index_tensor_dram =
+        TensorAccessor(input_index_tensor_args, input_index_tensor_buffer_addr, input_index_tensor_tile_size_bytes);
 
     // Dataformats size
     constexpr uint32_t input_tensor_data_format_size =
@@ -122,11 +121,7 @@ void kernel_main() {
                                 // Calculate local index
                                 const uint32_t tile_idx = global_index >> __builtin_ctz(tile_width);
 
-                                ASSERT(
-                                    tile_idx <= Wt_input,
-                                    "Index out of range. Index: {}, Max index: {}",
-                                    global_index,
-                                    Wt_input * tile_width);
+                                ASSERT(tile_idx <= Wt_input);
 
                                 if (tile_idx != wi) {
                                     // Index not in current input tile, skip

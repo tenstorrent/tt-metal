@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import pickle
 
 from infra.data_collection.pydantic_models import BenchmarkMeasurement, PartialBenchmarkRun
 
@@ -23,13 +24,13 @@ if __name__ == "__main__":
         measurements=measurements,
     )
 
-    json_data = partial_benchmark_run.model_dump_json()
+    pkl_data = pickle.dumps(partial_benchmark_run)
 
     current_data_analysis_path = Path(__file__)
     benchmark_data_dir = current_data_analysis_path.parent.parent.parent.parent / "generated/benchmark_data"
     assert benchmark_data_dir.exists()
     assert benchmark_data_dir.is_dir()
 
-    output_path = os.path.join(benchmark_data_dir, f"partial_run_{run_start_ts}.json")
-    with open(output_path, "w") as f:
-        f.write(json_data)
+    output_path = os.path.join(benchmark_data_dir, f"partial_run_{run_start_ts}.pkl")
+    with open(output_path, "wb") as f:
+        f.write(pkl_data)

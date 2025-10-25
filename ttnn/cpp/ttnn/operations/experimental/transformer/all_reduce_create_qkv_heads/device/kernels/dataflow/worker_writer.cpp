@@ -6,7 +6,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
-#include "cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_ccl_common.hpp"
+#include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <cstdint>
 #include <utility>
@@ -138,9 +138,7 @@ void kernel_main() {
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
     pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-        out_ready_sem_noc_addr_in_pkt,
-        static_cast<uint16_t>(1),  // increment 1
-        32});
+        out_ready_sem_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
     // Write the mcast packet (forward)
     if (fabric_connection.has_forward_connection()) {
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();

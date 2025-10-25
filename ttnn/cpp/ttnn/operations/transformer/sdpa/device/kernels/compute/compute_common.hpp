@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,6 +13,7 @@
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/eltwise_unary/softplus.h"
 #include "compute_kernel_api/eltwise_unary/negative.h"
+#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
@@ -374,17 +375,27 @@ void log_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
 
 void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     // out_cb = sigmoid(in0_cb - in1_cb)
+    /**
+     * sigmoid(x) is accurately implemented as 1 / (1 + exp(-x))
+     * This function manually implements the composite, accurate sigmoid.
+     *
+     * Each input tile has only the first column containing valid data, so VectorMode::C is a useful optimization.
+     */
 
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
     sub_tiles_init(in0_cb, in1_cb);
-    sigmoid_tile_init();
+    exp_tile_init<false, false>();
+    // recip_tile_init<false>(); // Can omit this because accurate exp_tile_init performs reduce_tile_init
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
-        sigmoid_tile(0);
+        exp_tile<false, false, true /*SCALE_EN*/>(0, (int)VectorMode::C, (uint16_t)0xBF80 /*bf16(-1.0) scale*/);
+        // add_unary_tile(0, 0x3F800000); // Call the LLK directly to get access to VectorMode argument
+        MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, ADD_UNARY>(0, 0x3F800000, (int)VectorMode::C)));
+        recip_tile<false>(0, (int)VectorMode::C);
         pack_tile(0, out_cb);
         release_dst();
     }
@@ -393,28 +404,29 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
 
 void logsigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     // out_cb = logsigmoid(in0_cb - in1_cb)
-
-    // Implemented as softplus. logsigmoid(x) = -softplus(-x)
+    // Implemented as softplus for numerical stability. logsigmoid(x) = -softplus(-x)
 
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
     sub_tiles_init(in0_cb, in1_cb);
+    softplus_tile_init();
+    constexpr uint32_t const_1_fp32 = 0x3F800000;
+    constexpr uint32_t const_20_fp32 = 0x41A00000;
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
-        // Remove negate by swapping inputs
+        // Negate input to softplus by swapping inputs to sub
         sub_tiles(in1_cb, in0_cb, i, i, 0);
-        // negative_tile_init();
-        // negative_tile(0);
-        softplus_tile_init();
-        softplus_tile(0, 0x3F800000, 0x3F800000, 0x41A00000);  // beta, beta_reciprocal, threshold
-        negative_tile_init();
+        // softplus_tile(0, 0x3F800000, 0x3F800000, 0x41A00000);  // beta, beta_reciprocal, threshold
+        MATH((llk_math_eltwise_unary_sfpu_softplus<APPROX>(
+            0,
+            const_1_fp32 /*beta*/,
+            const_1_fp32 /*beta_reciprocal*/,
+            const_20_fp32 /*threshold*/,
+            (int)VectorMode::C)));
+        // Negate the output of softplus
         negative_tile(0);
-        // sigmoid_tile_init();
-        // sigmoid_tile(0);
-        // log_tile_init();
-        // log_tile(0);
         pack_tile(0, out_cb);
         release_dst();
     }

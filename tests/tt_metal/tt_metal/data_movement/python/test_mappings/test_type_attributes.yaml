@@ -1,0 +1,10 @@
+multicast_schemes:
+  attributes:
+    "NoC Index": "noc_index"
+    "Multicast Scheme Type": "multicast_scheme_number"
+    "Subordinate Grid Size X": "sub_grid_size_x"
+    "Subordinate Grid Size Y": "sub_grid_size_y"
+virtual_channels:
+  attributes:
+    "Number of Virtual Channels": "num_virtual_channels"
+    "NoC Index": "noc_index"

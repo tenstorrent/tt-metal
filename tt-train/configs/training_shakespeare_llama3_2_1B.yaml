@@ -1,7 +1,7 @@
 training_config:
   project_name: "tt_train_nano_gpt" # not really nanogpt, but want to use the same wandb project name for now
   model_type: "llama"
-  model_path: "data/llama3_2_1B_exported.msgpack"
+  #model_path: "data/llama3_2_1B_exported.msgpack"
   seed: 5489
   model_save_interval: 1
   batch_size: 1
@@ -11,7 +11,7 @@ training_config:
   weight_decay: 0.01
   use_moreh_adamw: true
   use_kahan_summation: false
-  use_clip_grad_norm: true
+  use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
   tokenizer_path: "data/tinyllama-tokenizer.json" # using tinyllama tokenizer because the real Meta tokenizer is gated on HF.
   tokenizer_type: "bpe"
@@ -22,6 +22,7 @@ training_config:
     intermediate_dim: 8192
     dropout_prob: 0.0
     num_blocks: 16
+    weight_tying: "enabled"
     vocab_size: 32000 # not using Meta vocab size (128256), see comment about tokenizer choice above.
     max_sequence_length: 2048
     runner_type: memory_efficient
@@ -32,6 +33,10 @@ training_config:
         high_freq_factor: 4.0
         low_freq_factor: 1.0
         original_context_length: 8192
+# if you want to run as eval with weighgts from hugging face:
+# 1. Download weights from hugging face
+# 2. nano_gpt --safetensors /path/to/meta-llama/Llama3.2-1B/  -c configs/training_shakespeare_llama3.2_1B.yaml --eval 1
+
 eval_config:
   repetition_penalty: 1.0
   temperature: 0.7

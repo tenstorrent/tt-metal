@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -47,7 +47,7 @@ int main() {
     auto* device = &ttml::autograd::ctx().get_device();
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [&num_features, &num_targets, device](std::vector<DatasetSample>&& samples) {
+        [device](std::vector<DatasetSample>&& samples) {
             const uint32_t batch_size = samples.size();
             std::vector<float> data;
             std::vector<float> targets;
@@ -85,9 +85,7 @@ int main() {
             auto loss = ttml::ops::mse_loss(output, targets);
             fmt::print("Loss shape: {}\n", loss->get_value().logical_shape());
             auto mesh_shape = device->shape();
-            ttml::core::MeshToXTensorVariant<float> identity_composer =
-                ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-            auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), identity_composer);
+            auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
             float loss_float_0 = loss_xtensors[0](0);
             float loss_float_1 = loss_xtensors[1](0);
             fmt::print("Step: {} Loss: {} {}\n", training_step++, loss_float_0, loss_float_1);

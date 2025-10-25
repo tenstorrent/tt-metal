@@ -5,6 +5,7 @@
 #include "sharded_to_interleaved_partial_op.hpp"
 
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
 
@@ -12,6 +13,7 @@ namespace ttnn::operations::data_movement {
 
 void ShardedToInterleavedPartialDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
+    const auto& output_tensor = input_tensors.at(1);
     auto shard_spec = input_tensor.shard_spec().value();
 
     // Validate output tensor
@@ -22,7 +24,7 @@ void ShardedToInterleavedPartialDeviceOperation::validate(const std::vector<Tens
         num_slices);
     TT_FATAL(input_tensor.layout() == Layout::TILE, "Currently, only tile layout is supported for partial I->S");
     TT_FATAL(
-        (input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) % num_slices == 0,
+        (output_tensor.physical_volume() / output_tensor.padded_shape()[-1]) % num_slices == 0,
         "Total height of a tensor must be divisible by num_slices!");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
@@ -45,6 +47,18 @@ std::vector<ttnn::TensorSpec> ShardedToInterleavedPartialDeviceOperation::comput
     const std::vector<Tensor>& input_tensors) const {
     // Don't create anything, we already passed in output tensor
     return {};
+}
+tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
+ShardedToInterleavedPartialDeviceOperation::create_op_performance_model(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& output_tensor = input_tensors.at(1);
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
+        input_tensors, output_tensors, ideal_dev_clock_cycles);
+    return result;
 }
 
 operation::ProgramWithCallbacks ShardedToInterleavedPartialDeviceOperation::create_program(

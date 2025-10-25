@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,13 +10,16 @@ from loguru import logger
 from tqdm import tqdm
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
+from models.demos.yolov4.common import YOLOV4_L1_SMALL_SIZE
 from models.demos.yolov4.runner.performant_runner import YOLOv4PerformantRunner
-from models.utility_functions import run_for_wormhole_b0
 
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 40960, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": YOLOV4_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype",

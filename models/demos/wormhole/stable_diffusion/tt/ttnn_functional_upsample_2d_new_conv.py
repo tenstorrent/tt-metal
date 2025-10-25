@@ -6,6 +6,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import reshard_for_output_channels_divisibility
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upsample_nearest_2d import upsample_nearest2d
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     get_default_compute_config,
@@ -79,9 +80,10 @@ class upsample2d:
         # tt_out = self.conv(tt_out)
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat8_b,
-            activation="",
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             reshard_if_not_optimal=False,  # Reshard has error : 1616 Bytes unique+common runtime args targeting kernel reshard_reader on (x=0,y=0) are too large. Cannot be written as they will run into memory region reserved for result. Max allowable size is 1024 Bytes
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
         compute_config = get_default_compute_config(self.device)
         if self.conv_config_override and "act_block_h" in self.conv_config_override:
@@ -100,34 +102,17 @@ class upsample2d:
             "groups": 1,
             "device": self.device,
             "conv_config": conv_config,
+            "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }
-        if not ttnn.is_tensor_storage_on_device(self.conv_weight_tensor):
-            self.conv_weight_tensor = ttnn.prepare_conv_weights(
-                weight_tensor=self.conv_weight_tensor,
-                weights_format="OIHW",
-                input_layout=tt_out.get_layout(),
-                input_memory_config=tt_out.memory_config(),
-                has_bias=True,
-                **conv_kwargs,
-                input_dtype=ttnn.bfloat8_b,
-            )
-            self.conv_bias_tensor = ttnn.prepare_conv_bias(
-                bias_tensor=self.conv_bias_tensor,
-                input_memory_config=tt_out.memory_config(),
-                input_layout=tt_out.get_layout(),
-                **conv_kwargs,
-                input_dtype=ttnn.bfloat8_b,
-            )
 
-            self.conv_weight_tensor = ttnn.to_device(self.conv_weight_tensor, self.device)
-            self.conv_bias_tensor = ttnn.to_device(self.conv_bias_tensor, self.device)
-
-        tt_out = ttnn.conv2d(
+        tt_out, [self.conv_weight_tensor, self.conv_bias_tensor] = ttnn.conv2d(
             input_tensor=tt_out,
             weight_tensor=self.conv_weight_tensor,
             bias_tensor=self.conv_bias_tensor,
             **conv_kwargs,
             compute_config=compute_config,
             dtype=ttnn.bfloat8_b,
+            return_weights_and_bias=True,
         )
+        tt_out = reshard_for_output_channels_divisibility(tt_out, self.conv_out_channels)
         return tt_out

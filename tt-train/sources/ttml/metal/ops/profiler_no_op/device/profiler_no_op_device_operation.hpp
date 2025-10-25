@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,10 +13,10 @@
 namespace ttml::metal::ops::profiler_no_op::device {
 
 struct ProfilerNoopOperation {
-    using operation_attributes_t = operation_attributes_t;
-    using tensor_args_t = tensor_args_t;
-    using spec_return_value_t = spec_return_value_t;
-    using tensor_return_value_t = tensor_return_value_t;
+    using operation_attributes_t = ttml::metal::ops::profiler_no_op::device::operation_attributes_t;
+    using tensor_args_t = ttml::metal::ops::profiler_no_op::device::tensor_args_t;
+    using spec_return_value_t = ttml::metal::ops::profiler_no_op::device::spec_return_value_t;
+    using tensor_return_value_t = ttml::metal::ops::profiler_no_op::device::tensor_return_value_t;
     using program_factory_t = std::variant<ProfilerNoopProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
@@ -32,7 +32,9 @@ struct ProfilerNoopOperation {
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& input_tensor, const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
+        const ttnn::Tensor& input_tensor,
+        const std::string& identifier,
+        const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 };
 
 }  // namespace ttml::metal::ops::profiler_no_op::device

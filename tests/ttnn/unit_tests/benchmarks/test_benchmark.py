@@ -47,13 +47,13 @@ import csv
 import pytest
 import torch
 import ttnn
-from models.utility_functions import is_grayskull, profiler, is_wormhole_b0, is_blackhole
+from models.common.utility_functions import is_grayskull, profiler, is_wormhole_b0, is_blackhole
 from pathlib import Path
 import os
 import numpy as np
-from tt_metal.tools.profiler.process_device_log import import_log_run_stats
-import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG, rm
+from tracy.process_device_log import import_log_run_stats
+import tracy.device_post_proc_config as device_post_proc_config
+from tracy.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG, rm
 
 profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
 
@@ -368,6 +368,7 @@ def test_matmul_2d_host_perf(
                         math_approx_mode=True,
                         fp32_dest_acc_en=False,
                         packer_l1_acc=True,
+                        throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
                     )
 
                 if out_sharded:
@@ -405,8 +406,8 @@ def test_matmul_2d_host_perf(
                     )
 
                 if calc_device_utilization:
-                    # Clear profiler log and dump profiler data after warmup iterations
-                    ttnn.DumpDeviceProfiler(device)
+                    # Clear profiler log and read profiler data after warmup iterations
+                    ttnn.ReadDeviceProfiler(device)
                     rm(profiler_log_path)
 
                 # Synchronize device to ensure all warmup iterations are completed and device is in clean state
@@ -446,8 +447,8 @@ def test_matmul_2d_host_perf(
                     profiler.end(f"run")
 
                 if calc_device_utilization:
-                    # Dump and read profiler log data
-                    ttnn.DumpDeviceProfiler(device)
+                    # Read profiler log data
+                    ttnn.ReadDeviceProfiler(device)
                     profiler_data = get_profiler_data()
                     trisc1_kernel_duration = profiler_data["trisc1_kernel_duration"]
 
@@ -654,8 +655,8 @@ def test_matmul_2d_host_perf_out_of_box(
                     output_t = in0_t @ in1_t
 
                 if calc_device_utilization:
-                    # Clear profiler log and dump profiler data after warmup iterations
-                    ttnn.DumpDeviceProfiler(device)
+                    # Clear profiler log and read profiler data after warmup iterations
+                    ttnn.ReadDeviceProfiler(device)
                     rm(profiler_log_path)
 
                 # Synchronize device to ensure all warmup iterations are completed and device is in clean state
@@ -679,8 +680,8 @@ def test_matmul_2d_host_perf_out_of_box(
                     profiler.end(f"run")
 
                 if calc_device_utilization:
-                    # Dump and read profiler log data
-                    ttnn.DumpDeviceProfiler(device)
+                    # Read profiler log data
+                    ttnn.ReadDeviceProfiler(device)
                     profiler_data = get_profiler_data()
                     trisc1_kernel_duration = profiler_data["trisc1_kernel_duration"]
 

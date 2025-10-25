@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -44,4 +44,18 @@ def pytest_addoption(parser):
         default=False,
         type=bool,
         help="Whether to compute top1 and top5 exact token matching accuracy",
+    )
+    parser.addoption(
+        "--stress_test",
+        action="store",
+        default=False,
+        type=bool,
+        help="Run stress test (same decode iteration over a large number of iterations",
+    )
+    parser.addoption(
+        "--enable_trace",
+        action="store",
+        default=None,
+        type=bool,
+        help="Whether to enable tracing",
     )

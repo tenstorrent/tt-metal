@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -58,30 +58,30 @@ void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& inp
     TT_FATAL(this->joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", this->joint_strategy);
 
     // Validate all tensors have the same dtype
-    const auto dtype = input_tensor_q.get_dtype();
+    const auto dtype = input_tensor_q.dtype();
     for (const auto& tensor : sdpa_input_tensors) {
         TT_FATAL(
-            tensor.get_dtype() == dtype,
+            tensor.dtype() == dtype,
             "All tensors must have the same dtype. Expected {}, got {}",
             dtype,
-            tensor.get_dtype());
+            tensor.dtype());
     }
 
     // Get shapes
-    const auto& q_shape = input_tensor_q.get_logical_shape();
-    const auto& k_shape = persistent_output_buffer_k.get_logical_shape();
-    const auto& v_shape = persistent_output_buffer_v.get_logical_shape();
-    const auto& joint_q_shape = joint_tensor_q.get_logical_shape();
-    const auto& joint_k_shape = joint_tensor_k.get_logical_shape();
-    const auto& joint_v_shape = joint_tensor_v.get_logical_shape();
+    const auto& q_shape = input_tensor_q.logical_shape();
+    const auto& k_shape = persistent_output_buffer_k.logical_shape();
+    const auto& v_shape = persistent_output_buffer_v.logical_shape();
+    const auto& joint_q_shape = joint_tensor_q.logical_shape();
+    const auto& joint_k_shape = joint_tensor_k.logical_shape();
+    const auto& joint_v_shape = joint_tensor_v.logical_shape();
 
     // Validate storage types and buffers
     for (auto& tensor : sdpa_input_tensors) {
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to Joint SDPA need to be on device");
         TT_FATAL(tensor.buffer() != nullptr, "Operands to Joint SDPA need to be allocated in buffers on device");
-        TT_FATAL(tensor.get_layout() == Layout::TILE, "Inputs to Joint SDPA must be tilized");
+        TT_FATAL(tensor.layout() == Layout::TILE, "Inputs to Joint SDPA must be tilized");
         TT_FATAL(
-            tensor.get_dtype() == DataType::BFLOAT16 || tensor.get_dtype() == DataType::BFLOAT8_B,
+            tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B,
             "Inputs to Joint SDPA must be BF16 or BF8");
         TT_FATAL(
             tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
@@ -199,8 +199,8 @@ void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& inp
 
     // Validate padding: Only the sequence dimension may be padded
     auto validate_padding = [](const Tensor& tensor) {
-        const auto& logical_shape = tensor.get_logical_shape();
-        const auto& padded_shape = tensor.get_padded_shape();
+        const auto& logical_shape = tensor.logical_shape();
+        const auto& padded_shape = tensor.padded_shape();
         TT_FATAL(logical_shape[0] == padded_shape[0], "Padding is not supported on the batch dimension");
         TT_FATAL(logical_shape[1] == padded_shape[1], "Padding is not supported on the num_heads dimension");
         TT_FATAL(logical_shape[3] == padded_shape[3], "Padding is not supported on the head_dim dimension");
@@ -223,17 +223,16 @@ std::vector<TensorSpec> RingJointScaledDotProductAttention::compute_output_specs
     const std::vector<Tensor>& input_tensors) const {
     auto& input = input_tensors.at(0);
     auto& joint_input = input_tensors.at(3);
-    auto lse_shape = input.get_logical_shape();
+    auto lse_shape = input.logical_shape();
     lse_shape[3] = 1;
-    lse_shape[2] = input.get_padded_shape()[2] + joint_input.get_padded_shape()[2];
+    lse_shape[2] = input.padded_shape()[2] + joint_input.padded_shape()[2];
 
     return {
+        TensorSpec(input.logical_shape(), TensorLayout(input.dtype(), PageConfig(Layout::TILE), output_mem_config)),
         TensorSpec(
-            input.get_logical_shape(), TensorLayout(input.get_dtype(), PageConfig(Layout::TILE), output_mem_config)),
-        TensorSpec(
-            joint_input.get_logical_shape(),
-            TensorLayout(joint_input.get_dtype(), PageConfig(Layout::TILE), output_mem_config)),
-        TensorSpec(lse_shape, TensorLayout(input.get_dtype(), PageConfig(Layout::TILE), output_mem_config))};
+            joint_input.logical_shape(),
+            TensorLayout(joint_input.dtype(), PageConfig(Layout::TILE), output_mem_config)),
+        TensorSpec(lse_shape, TensorLayout(input.dtype(), PageConfig(Layout::TILE), output_mem_config))};
 }
 
 operation::MeshWorkloadWithCallbacks RingJointScaledDotProductAttention::create_mesh_workload(
@@ -265,12 +264,12 @@ tt::tt_metal::operation::Hash RingJointScaledDotProductAttention::compute_progra
 operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
-    auto mesh_device = input_tensors[0].mesh_device();
+    auto mesh_device = input_tensors[0].device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
     std::vector<IDevice*> devices_to_use = {};
     // User specified the cluster-axis. Derive devices based on the current coordinate
     // and the cluster-axis.
-    const auto& mesh_view = input_tensors[0].mesh_device()->get_view();
+    const auto& mesh_view = input_tensors[0].device()->get_view();
     devices_to_use = (this->all_gather_struct.cluster_axis.value() == 0) ? mesh_view.get_devices_on_column(coord[1])
                                                                          : mesh_view.get_devices_on_row(coord[0]);
 
@@ -309,7 +308,7 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
 
     auto scale = this->scale;
     if (not scale.has_value()) {
-        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.get_logical_shape()[-1]));
+        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1]));
     }
 
     std::size_t q_chunk_size = this->get_q_chunk_size();

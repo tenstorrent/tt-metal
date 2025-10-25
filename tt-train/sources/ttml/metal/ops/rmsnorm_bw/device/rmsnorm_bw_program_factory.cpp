@@ -1,10 +1,12 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rmsnorm_bw_program_factory.hpp"
 
 #include <cstdint>
+#include <enchantum/enchantum.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/ops/common/program_utils.hpp"
 
@@ -37,22 +39,22 @@ constexpr auto kGammaCbIndex = tt::CBIndex::c_3;
 constexpr auto kRmsACbIndex = tt::CBIndex::c_4;
 constexpr auto kDLoutCbIndex = tt::CBIndex::c_5;
 constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_6;
+constexpr auto kZeroCbIndex = tt::CBIndex::c_7;
 // CBs with output data
-constexpr auto kDLdaCbIndex = tt::CBIndex::c_7;
-constexpr auto kDLdgammaComponentsCbIndex = tt::CBIndex::c_8;
+constexpr auto kDLdaCbIndex = tt::CBIndex::c_8;
+constexpr auto kDLdgammaComponentsCbIndex = tt::CBIndex::c_9;
 // CBs with intermediate computations
-constexpr auto kRecipRmsACbIndex = tt::CBIndex::c_9;
-constexpr auto kScaleCbIndex = tt::CBIndex::c_10;
-constexpr auto kScaleBcastedCbIndex = tt::CBIndex::c_11;
+constexpr auto kRecipRmsACbIndex = tt::CBIndex::c_10;
+constexpr auto kScaleCbIndex = tt::CBIndex::c_11;
 
-// Some of the below constants are set to 2U because we might need to push a new value before poping the old one.
+// Some of the below constants are set to 2U because we might need to push a new value before popping the old one.
 constexpr uint32_t kNumMaskTiles = 1U;
 constexpr uint32_t kNumScalerTiles = 1U;
 constexpr uint32_t kNumRmsATiles = 2U;
 constexpr uint32_t kNumMatMulReduceTiles = 1U;
 constexpr uint32_t kNumRecipRmsATiles = 1U;
 constexpr uint32_t kNumScaleTiles = 2U;
-constexpr uint32_t kNumScaleBcastedTiles = 1U;
+constexpr uint32_t kNumZeroTiles = 1U;
 
 const std::string kMaskWDefineKey = "DO_MASK_W";
 const std::string kEverythingFitsInL1DefineKey = "EVERYTHING_FITS_IN_L1";
@@ -67,59 +69,6 @@ struct RMSNormBackwardKernels {
     tt::tt_metal::KernelHandle compute_group_1;
     tt::tt_metal::KernelHandle compute_group_2;
 };
-
-tt::tt_metal::CBHandle create_circular_buffer(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    uint32_t cb_index,
-    tt::DataFormat data_format,
-    uint32_t single_tile_size,
-    uint32_t num_tiles) {
-    tt::tt_metal::CircularBufferConfig cb_config =
-        tt::tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{cb_index, data_format}})
-            .set_page_size(cb_index, single_tile_size);
-
-    auto cb_handle = CreateCircularBuffer(program, core_ranges, cb_config);
-    return cb_handle;
-}
-
-tt::tt_metal::KernelHandle create_reader_kernel(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    const std::vector<uint32_t>& compile_time_args,
-    const std::map<std::string, std::string>& defines,
-    const std::string& kernel_path) {
-    return tt::tt_metal::CreateKernel(
-        program, kernel_path, core_ranges, tt::tt_metal::ReaderDataMovementConfig(compile_time_args, defines));
-}
-
-tt::tt_metal::KernelHandle create_writer_kernel(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    const std::vector<uint32_t>& compile_time_args,
-    const std::map<std::string, std::string>& defines,
-    const std::string& kernel_path) {
-    return tt::tt_metal::CreateKernel(
-        program, kernel_path, core_ranges, tt::tt_metal::WriterDataMovementConfig(compile_time_args, defines));
-}
-
-tt::tt_metal::KernelHandle create_compute_kernel(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    const std::vector<uint32_t>& compile_time_args,
-    const std::map<std::string, std::string>& defines,
-    const std::string& kernel_path) {
-    return tt::tt_metal::CreateKernel(
-        program,
-        kernel_path,
-        core_ranges,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = true,
-            .math_approx_mode = false,
-            .compile_args = compile_time_args,
-            .defines = defines});
-}
 
 void assign_per_core_runtime_args(
     tt::tt_metal::Program& program,
@@ -192,19 +141,19 @@ bool fits_in_l1_check(
     const uint64_t rms_a_memory = kNumRmsATiles * bfloat16_single_tile_size_bytes;
     const uint64_t dL_dout_memory = Wt * bfloat16_single_tile_size_bytes;
     const uint64_t matmul_reduce_memory = kNumMatMulReduceTiles * bfloat16_single_tile_size_bytes;
+    const uint64_t zero_memory = kNumZeroTiles * bfloat16_single_tile_size_bytes;
     // Memory for output tensors
     const uint64_t dL_da_memory = twice_block_size * bfloat16_single_tile_size_bytes;
     const uint64_t dL_dgamma_components_memory = Wt * bfloat16_single_tile_size_bytes;
     // Memory for intermediate computations
     const uint64_t recip_rms_a_bcasted_memory = kNumRecipRmsATiles * bfloat16_single_tile_size_bytes;
     const uint64_t scale_memory = kNumScaleTiles * float32_single_tile_size_bytes;
-    const uint64_t scale_bcasted_memory = kNumScaleBcastedTiles * float32_single_tile_size_bytes;
 
     // Total L1 memory required
     const uint64_t required_L1_in_bytes = input_memory + mask_memory + scaler_memory + gamma_memory + rms_a_memory +
                                           dL_dout_memory + matmul_reduce_memory + dL_da_memory +
                                           dL_dgamma_components_memory + recip_rms_a_bcasted_memory + scale_memory +
-                                          scale_bcasted_memory;
+                                          zero_memory;
 
     return required_L1_in_bytes <= available_L1_in_bytes;
 }
@@ -219,13 +168,32 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     const auto& rms = tensor_args.rms;
     const auto& dLdout = tensor_args.dL_dout;
 
+    // Check input shape is [B, N, S, C]
+    const auto& input_shape = input.logical_shape();
+    TT_FATAL(input_shape.rank() == 4, "Input tensor must be 4D [B, N, S, C], got shape {}", input_shape);
+
+    // Check gamma shape is [1, 1, 1, C]
+    const auto& gamma_shape = gamma.logical_shape();
+    TT_FATAL(gamma_shape.rank() == 4, "Gamma tensor must be 4D [1, 1, 1, C], got shape {}", gamma_shape);
+    TT_FATAL(
+        gamma_shape[0] == 1 && gamma_shape[1] == 1 && gamma_shape[2] == 1,
+        "Gamma tensor must have shape [1, 1, 1, C], got shape {}",
+        gamma_shape);
+
+    // Check C matches between input and gamma
+    TT_FATAL(
+        input_shape[3] == gamma_shape[3],
+        "Gamma last dim (C) must match input last dim (C): input C={}, gamma C={}",
+        input_shape[3],
+        gamma_shape[3]);
+
     auto* device = input.device();
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.dtype());
 
-    uint32_t bfloat16_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
-    uint32_t float32_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float32);
+    uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
 
     auto padded_tensor_shape = input.padded_shape();
     auto padded_tensor_volume = input.physical_volume();
@@ -246,7 +214,6 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
 
     // Get number of free cores
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // Compile arguments
@@ -271,35 +238,30 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
     auto precise_data_format = tt::DataFormat::Float32;
 
-    auto cb_input = create_circular_buffer(
+    [[maybe_unused]] auto cb_input = create_circular_buffer(
         program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
-    auto cb_mask_w = create_circular_buffer(
+    [[maybe_unused]] auto cb_mask_w = create_circular_buffer(
         program, all_cores, kMaskWCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
-    auto cb_scaler = create_circular_buffer(
+    [[maybe_unused]] auto cb_scaler = create_circular_buffer(
         program, all_cores, kScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
-    auto cb_gamma = create_circular_buffer(
+    [[maybe_unused]] auto cb_gamma = create_circular_buffer(
         program, all_cores, kGammaCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
-    auto cb_rms_a = create_circular_buffer(
+    [[maybe_unused]] auto cb_rms_a = create_circular_buffer(
         program, all_cores, kRmsACbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRmsATiles);
-    auto cb_dLdout = create_circular_buffer(
+    [[maybe_unused]] auto cb_dLdout = create_circular_buffer(
         program, all_cores, kDLoutCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
-    auto cb_mat_mul_reduce = create_circular_buffer(
+    [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
         program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMatMulReduceTiles);
-    auto cb_dL_da = create_circular_buffer(
+    [[maybe_unused]] auto cb_zero = create_circular_buffer(
+        program, all_cores, kZeroCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumZeroTiles);
+    [[maybe_unused]] auto cb_dL_da = create_circular_buffer(
         program, all_cores, kDLdaCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
-    auto cb_dL_dgamma_components = create_circular_buffer(
+    [[maybe_unused]] auto cb_dL_dgamma_components = create_circular_buffer(
         program, all_cores, kDLdgammaComponentsCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
-    auto cb_recip_rms_a_bcasted = create_circular_buffer(
+    [[maybe_unused]] auto cb_recip_rms_a_bcasted = create_circular_buffer(
         program, all_cores, kRecipRmsACbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRecipRmsATiles);
-    auto cb_scale = create_circular_buffer(
+    [[maybe_unused]] auto cb_scale = create_circular_buffer(
         program, all_cores, kScaleCbIndex, precise_data_format, float32_single_tile_size_bytes, kNumScaleTiles);
-    auto cb_scale_bcasted = create_circular_buffer(
-        program,
-        all_cores,
-        kScaleBcastedCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        kNumScaleBcastedTiles);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -308,37 +270,37 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     TT_FATAL(
         input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
         "Input buffer must be in DRAM. Input buffer of type {}",
-        magic_enum::enum_name(input_buffer->buffer_type()));
+        enchantum::to_string(input_buffer->buffer_type()));
 
     auto* gamma_buffer = gamma.buffer();
     TT_FATAL(
         gamma_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
         "Gamma buffer must be in DRAM. Gamma buffer of type {}",
-        magic_enum::enum_name(gamma_buffer->buffer_type()));
+        enchantum::to_string(gamma_buffer->buffer_type()));
 
     auto* rms_buffer = rms.buffer();
     TT_FATAL(
         rms_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
         "RMS buffer must be in DRAM. RMS buffer of type {}",
-        magic_enum::enum_name(rms_buffer->buffer_type()));
+        enchantum::to_string(rms_buffer->buffer_type()));
 
     auto* dLdout_buffer = dLdout.buffer();
     TT_FATAL(
         dLdout_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
         "dL_dout buffer must be in DRAM. dL_dout buffer of type {}",
-        magic_enum::enum_name(dLdout_buffer->buffer_type()));
+        enchantum::to_string(dLdout_buffer->buffer_type()));
 
     auto* dL_da_buffer = output[0].buffer();
     TT_FATAL(
         dL_da_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
         "dL_da buffer must be in DRAM. dL_da buffer of type {}",
-        magic_enum::enum_name(dL_da_buffer->buffer_type()));
+        enchantum::to_string(dL_da_buffer->buffer_type()));
 
     auto* dL_dgamma_components_buffer = output[1].buffer();
     TT_FATAL(
         dL_dgamma_components_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
         "dL_dgamma buffer must be in DRAM. dL_dgamma buffer of type {}",
-        magic_enum::enum_name(dL_dgamma_components_buffer->buffer_type()));
+        enchantum::to_string(dL_dgamma_components_buffer->buffer_type()));
 
     std::map<std::string, std::string> defines;
     if (mask_w != 0) {
@@ -349,18 +311,17 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     }
 
     RMSNormBackwardKernels kernels;
-    kernels.reader =
-        create_reader_kernel(program, all_cores, {packed_scaler, block_size, mask_w, Wt}, defines, kReaderKernelPath);
+    std::vector<uint32_t> reader_compile_time_args{packed_scaler, block_size, mask_w, Wt};
+    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(gamma_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(rms_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dLdout_buffer).append_to(reader_compile_time_args);
+    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
-    kernels.writer = create_writer_kernel(
-        program,
-        all_cores,
-        {
-            block_size,
-            Wt,
-        },
-        defines,
-        kWriterKernelPath);
+    std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
+    tt::tt_metal::TensorAccessorArgs(dL_da_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dL_dgamma_components_buffer).append_to(writer_compile_time_args);
+    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for cross_entropy_bw
@@ -374,8 +335,8 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
         Wt                          // num_inner / TILE_W
     };
 
-    kernels.compute_group_1 =
-        create_compute_kernel(program, core_group_1, compute_group_1_args, defines, kComputeKernelPath);
+    kernels.compute_group_1 = create_compute_kernel(
+        program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
 
     // Group 2 (if present) compile-time arguments
     if (!core_group_2.ranges().empty()) {
@@ -386,8 +347,8 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
             Wt                          // num_inner / TILE_W
         };
 
-        kernels.compute_group_2 =
-            create_compute_kernel(program, core_group_2, compute_group_2_args, defines, kComputeKernelPath);
+        kernels.compute_group_2 = create_compute_kernel(
+            program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
     }
     // -------------------------------------------------------------------------
     // 5) Assign runtime args for each core
@@ -432,10 +393,6 @@ void RMSNormBackwardProgramFactory::override_runtime_arguments(
     auto& shared_variables = cached_program.shared_variables;
     auto& rmsnorm_bw_reader_kernel_id = shared_variables.rmsnorm_bw_reader_kernel_id;
     auto& rmsnorm_bw_writer_kernel_id = shared_variables.rmsnorm_bw_writer_kernel_id;
-    auto& rmsnorm_bw_kernel_group_1_id = shared_variables.rmsnorm_bw_kernel_group_1_id;
-    auto& rmsnorm_bw_kernel_group_2_id = shared_variables.rmsnorm_bw_kernel_group_2_id;
-    auto& core_group_1 = shared_variables.core_group_1;
-    auto& core_group_2 = shared_variables.core_group_2;
 
     uint32_t num_cores = shared_variables.num_cores;
     uint32_t num_cores_y = shared_variables.num_cores_y;

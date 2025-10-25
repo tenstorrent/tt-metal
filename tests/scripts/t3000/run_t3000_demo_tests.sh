@@ -1,6 +1,8 @@
 #!/bin/bash
 set -eo pipefail
 
+TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache
+
 run_t3000_falcon40b_tests() {
   # Record the start time
   fail=0
@@ -9,10 +11,10 @@ run_t3000_falcon40b_tests() {
   echo "LOG_METAL: Running run_t3000_falcon40b_tests"
 
   # Falcon40B prefill 60 layer end to end with 10 loops; we need 8x8 grid size
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/ci/test_falcon_end_to_end_60_layer_t3000_prefill_10_loops.py --timeout=720 ; fail+=$?
+  pytest -n auto models/demos/t3000/falcon40b/tests/ci/test_falcon_end_to_end_60_layer_t3000_prefill_10_loops.py --timeout=720 ; fail+=$?
 
   # Falcon40B end to end demo (prefill + decode)
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/test_demo.py ; fail+=$?
+  pytest -n auto models/demos/t3000/falcon40b/tests/test_demo.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -30,10 +32,11 @@ run_t3000_llama3_70b_tests() {
 
   echo "LOG_METAL: Running run_t3000_llama3_70b_tests"
 
-  LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 1800 -k "not performance-ci-stress-1"; fail+=$?
+  llama70b=meta-llama/Llama-3.1-70B-Instruct
+  tt_cache_llama70b=$TT_CACHE_HOME/$llama70b
 
-  # Output verification demo for old llama3-70b codebase, to be removed once old codebase is deleted
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-device_params0-short_context-check_enabled-greedy-tt-70b-T3000-80L-decode_only-trace_mode_off-text_completion-llama3] --timeout=900 ; fail+=$?
+  HF_MODEL=$llama70b TT_CACHE_PATH=$tt_cache_llama70b pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 1800 -k "not performance-ci-stress-1"; fail+=$?
+
 
   # Record the end time
   end_time=$(date +%s)
@@ -51,20 +54,20 @@ run_t3000_llama3_tests() {
 
   echo "LOG_METAL: Running run_t3000_llama3_tests"
 
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   # Llama3.1-8B
-  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct
+  llama8b=meta-llama/Llama-3.1-8B-Instruct
   # Llama3.2-1B
-  llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct
+  llama1b=meta-llama/Llama-3.2-1B-Instruct
   # Llama3.2-3B
-  llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct
+  llama3b=meta-llama/Llama-3.2-3B-Instruct
   # Llama3.2-11B
-  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct
+  llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
 
   # Run all Llama3 tests for 8B, 1B, and 3B weights
-  for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
-    echo "LOG_METAL: Llama3 tests for $llama_dir completed"
+  for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
+    tt_cache=$TT_CACHE_HOME/$hf_model
+    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
+    echo "LOG_METAL: Llama3 tests for $hf_model completed"
   done
 
   # Record the end time
@@ -81,18 +84,51 @@ run_t3000_qwen25_tests() {
   fail=0
   start_time=$(date +%s)
 
-  echo "LOG_METAL: Running run_t3000_qwen25_tests"
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
-  qwen25_7b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-7B-Instruct
-  qwen25_72b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-72B-Instruct
+  export PYTEST_ADDOPTS="--tb=short"
 
-  MESH_DEVICE=N300 HF_MODEL=$qwen25_7b WH_ARCH_YAML=$wh_arch_yaml pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 600; fail+=$?
-  HF_MODEL=$qwen25_72b WH_ARCH_YAML=$wh_arch_yaml pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 1800; fail+=$?
+  echo "LOG_METAL: Running run_t3000_qwen25_tests"
+  qwen25_7b=Qwen/Qwen2.5-7B-Instruct
+  tt_cache_7b=$TT_CACHE_HOME/$qwen25_7b
+  qwen25_72b=Qwen/Qwen2.5-72B-Instruct
+  tt_cache_72b=$TT_CACHE_HOME/$qwen25_72b
+  qwen25_coder_32b=Qwen/Qwen2.5-Coder-32B
+  tt_cache_coder_32b=$TT_CACHE_HOME/$qwen25_coder_32b
+
+  MESH_DEVICE=N300 HF_MODEL=$qwen25_7b TT_CACHE_PATH=$tt_cache_7b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 600 || fail+=$?
+  HF_MODEL=$qwen25_72b TT_CACHE_PATH=$tt_cache_72b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 1800 || fail+=$?
+  pip install -r models/tt_transformers/requirements.txt
+  HF_MODEL=$qwen25_coder_32b TT_CACHE_PATH=$tt_cache_coder_32b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 1800 || fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_t3000_qwen25_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_qwen25_vl_tests() {
+  fail=0
+
+  # install qwen25_vl requirements
+  pip install -r models/demos/qwen25_vl/requirements.txt
+
+  # export PYTEST_ADDOPTS for concise pytest output
+  export PYTEST_ADDOPTS="--tb=short"
+
+  # Qwen2.5-VL-32B
+  qwen25_vl_32b=Qwen/Qwen2.5-VL-32B-Instruct
+  tt_cache_32b=$TT_CACHE_HOME/$qwen25_vl_32b
+  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/qwen25_vl/demo/demo.py --timeout 600 || fail=1
+
+  # Qwen2.5-VL-72B
+  qwen25_vl_72b=Qwen/Qwen2.5-VL-72B-Instruct
+  tt_cache_72b=$TT_CACHE_HOME/$qwen25_vl_72b
+  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_72b TT_CACHE_PATH=$tt_cache_72b pytest models/demos/qwen25_vl/demo/demo.py --timeout 900 || fail=1
+
+  echo "LOG_METAL: Tests for Qwen2.5-VL-32B and Qwen2.5-VL-72B on T3K completed"
+
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -108,10 +144,10 @@ run_t3000_qwen3_tests() {
   pip install -r models/tt_transformers/requirements.txt
 
   echo "LOG_METAL: Running run_t3000_qwen3_tests"
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
-  qwen32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-32B
+  qwen32b=Qwen/Qwen3-32B
+  tt_cache_qwen32b=$TT_CACHE_HOME/$qwen32b
 
-  HF_MODEL=$qwen32b WH_ARCH_YAML=$wh_arch_yaml pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1800; fail+=$?
+  HF_MODEL=$qwen32b TT_CACHE_PATH=$tt_cache_qwen32b pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1800 || fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -129,14 +165,15 @@ run_t3000_llama3_vision_tests() {
 
   echo "LOG_METAL: Running run_t3000_llama3_vision_tests"
 
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   # Llama3.2-11B
-  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct
+  llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
+  tt_cache_llama11b=$TT_CACHE_HOME/$llama11b
   n300=N300
   t3k=T3K
 
   for mesh_device in "$n300" "$t3k"; do
-    MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace or batch4-trace-with-text-prompts" --timeout 600; fail+=$?
+    MESH_DEVICE=$mesh_device HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b \
+    pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "not batch1-notrace" --timeout 900; fail+=$?
     echo "LOG_METAL: Llama3 vision tests for $mesh_device completed"
   done
 
@@ -153,15 +190,16 @@ run_t3000_llama3_90b_vision_tests() {
   # Record the start time
   fail=0
   start_time=$(date +%s)
-
   echo "LOG_METAL: Running run_t3000_llama3_90b_vision_tests"
 
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
+  export PYTEST_ADDOPTS="--tb=short"
+
   # Llama3.2-90B
-  llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct
+  llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
+  tt_cache_llama90b=$TT_CACHE_HOME/$llama90b
   mesh_device=T3K
 
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-notrace" --timeout 1200; fail+=$?
+  MESH_DEVICE=$mesh_device HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace" --timeout 1000 || fail=1
   echo "LOG_METAL: Llama3.2-90B vision tests for $mesh_device completed"
 
   # Record the end time
@@ -181,7 +219,7 @@ run_t3000_falcon7b_tests(){
   echo "LOG_METAL: Running run_t3000_falcon7b_tests"
 
   # Falcon7B demo (perf verification for 128/1024/2048 seq lens and output token verification)
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/t3000/falcon7b/input_data_t3000.json' models/demos/t3000/falcon7b/demo_t3000.py ; fail+=$?
+  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/t3000/falcon7b/input_data_t3000.json' models/demos/t3000/falcon7b/demo_t3000.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -196,10 +234,9 @@ run_t3000_mistral_tests() {
 
   echo "LOG_METAL: Running run_t3000_mistral_demo_tests"
 
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
-  tt_cache_path="/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
-  hf_model="/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db"
-  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py --timeout 10800 -k "not performance-ci-stress-1"
+  hf_model="mistralai/Mistral-7B-Instruct-v0.3"
+  tt_cache_path=$TT_CACHE_HOME/$hf_model
+  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py --timeout 10800 -k "not performance-ci-stress-1"
 
 }
 
@@ -208,11 +245,15 @@ run_t3000_mixtral_tests() {
   fail=0
   start_time=$(date +%s)
 
-  echo "LOG_METAL: Running run_t3000_mixtral8x7b_tests"
+  echo "LOG_METAL: Running run_t3000_tt-transformer_mixtral8x7b_tests"
 
   # mixtral8x7b 8 chip demo test - 100 token generation with general weights (env flags set inside the test)
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo.py --timeout=720 ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo_with_prefill.py --timeout=720 ; fail+=$?
+  # pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo.py --timeout=720 ; fail+=$?
+  # pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo_with_prefill.py --timeout=720 ; fail+=$?
+  mixtral8x7=mistralai/Mixtral-8x7B-v0.1
+  tt_cache_path=$TT_CACHE_HOME/$mixtral8x7
+
+  CI=true TT_CACHE_PATH=$tt_cache_path HF_MODEL=$mixtral8x7 pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout=3600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -231,12 +272,31 @@ run_t3000_resnet50_tests() {
   echo "LOG_METAL: Running run_t3000_resnet50_tests"
 
   # resnet50 8 chip demo test - 100 token generation with general weights (env flags set inside the test)
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/resnet50/demo/demo.py --timeout=720 ; fail+=$?
+  pytest -n auto models/demos/ttnn_resnet/tests/test_demo.py --timeout=720 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_t3000_resnet50_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_sentence_bert_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_sentence_bert_tests"
+
+  # Sentence BERT demo test
+  pytest -n auto models/demos/t3000/sentence_bert/demo/demo.py --timeout=600 ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_sentence_bert_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -250,11 +310,8 @@ run_t3000_sd35large_tests() {
 
   echo "LOG_METAL: Running run_t3000_sd35large_tests"
 
-  # Run test_model (decode and prefill) for llama3 70B
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
-  mesh_device=T3K
-  sd35large=/mnt/MLPerf/tt_dnn-models/StableDiffusion_35_Large/
-  NO_PROMPT=1 MESH_DEVICE=$mesh_device SD35L_DIR=$sd35large WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/experimental/stable_diffusion_35_large/demo.py  --timeout 600 ; fail+=$?
+  #Cache path
+  NO_PROMPT=1 pytest -n auto models/experimental/tt_dit/tests/models/test_pipeline_sd35.py -k "2x4cfg1sp0tp1" --timeout 600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -272,14 +329,13 @@ run_t3000_llama3_load_checkpoints_tests() {
 
   echo "LOG_METAL: Running run_t3000_load_checkpoints_tests"
 
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   # Llama3.1-70B weights
   llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/original_weights/
   # Llama3.2-90B weights
   llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct
 
   for llama_dir in "$llama70b" "$llama90b"; do
-    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_load_checkpoints.py --timeout=1800; fail+=$?
+    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/tests/test_load_checkpoints.py --timeout=1800; fail+=$?
     echo "LOG_METAL: Llama3 load checkpoints tests for $llama_dir completed"
   done
 
@@ -290,6 +346,22 @@ run_t3000_llama3_load_checkpoints_tests() {
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
+}
+
+run_t3000_gemma3_tests() {
+  # Record the start time
+  start_time=$(date +%s)
+  gemma27b=google/gemma-3-27b-it
+  tt_cache_gemma27b=$TT_CACHE_HOME/$gemma27b
+
+  HF_MODEL=$gemma27b TT_CACHE_PATH=$tt_cache_gemma27b pytest models/demos/gemma3/demo/text_demo.py -k "performance and ci-1"
+  echo "LOG_METAL: Gemma3 27B tests completed (text only)"
+  HF_MODEL=$gemma27b TT_CACHE_PATH=$tt_cache_gemma27b pytest models/demos/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
+  echo "LOG_METAL: Gemma3 27B tests completed (text and vision)"
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_gemma3_tests $duration seconds to complete"
 }
 
 run_t3000_tests() {
@@ -323,6 +395,9 @@ run_t3000_tests() {
   # Run resnet50 tests
   run_t3000_resnet50_tests
 
+  # Run sentence bert tests
+  run_t3000_sentence_bert_tests
+
   # Run qwen25 tests
   run_t3000_qwen25_tests
 
@@ -331,6 +406,9 @@ run_t3000_tests() {
 
   # Run sd35_large tests
   run_t3000_sd35large_tests
+
+  # Run gemma3 tests
+  run_t3000_gemma3_tests
 }
 
 fail=0

@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
 // Stand-alone example demonstrating usage of native multi-device TT-Metalium APIs
@@ -33,10 +34,10 @@ int main() {
 
     // Instantiate a MeshWorkload and attach the example program. We'll broadcast
     // this program by enqueueing it across all devices in our 2x4 mesh.
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
     auto target_devices = MeshCoordinateRange(mesh_device->shape());
 
-    AddProgramToMeshWorkload(mesh_workload, std::move(example_program), target_devices);
+    mesh_workload.add_program(target_devices, std::move(example_program));
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
 
     // Synchronize the mesh command queue to ensure the workload has completed.

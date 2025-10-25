@@ -23,11 +23,6 @@ enum ShardOrientation : ubyte {
     ColMajor = 1,
 }
 
-enum ShardMode : ubyte {
-    Physical,
-    Logical,
-}
-
 table ShardShape {
     height: uint32;
     width: uint32;
@@ -38,8 +33,6 @@ table ShardSpec {
     shape_h: uint32;
     shape_w: uint32;
     orientation: ShardOrientation;
-    shard_mode: ShardMode;
-    physical_shard_shape: ShardShape;
 }
 
 table ShardSpecBuffer {
@@ -48,6 +41,12 @@ table ShardSpecBuffer {
   page_shape_w: uint32;
   tensor2d_shape_in_pages_h: uint32;
   tensor2d_shape_in_pages_w: uint32;
+}
+
+table BufferDistributionSpec {
+  tensor_shape_in_pages: [uint32];
+  shard_shape_in_pages: [uint32];
+  cores: [CoreCoord];
 }
 
 struct CBConfigPageSize {

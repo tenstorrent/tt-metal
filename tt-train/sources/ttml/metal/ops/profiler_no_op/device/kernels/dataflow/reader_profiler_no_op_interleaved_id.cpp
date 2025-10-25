@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,27 +24,12 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
     const uint32_t tile_bytes = get_tile_size(cb_dataflow_idx);
-    const DataFormat data_format = get_dataformat(cb_dataflow_idx);
-
-    const InterleavedAddrGenFast</* is_dram */ true> input_address_generator = {
-        .bank_base_address = input_address, .page_size = tile_bytes, .data_format = data_format};
 
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
-        // calculate the address of the first tile in the row
-        // start_row is the number of rows already processed in other cores
-        uint32_t idx = (start_row + i) * Wt;  // (take already processed rows + current row)*Wt(number of tiles in row)
-
-        // read input buffer by blocks
         for (uint32_t j = 0; j < Wt; j += block_size) {
-            cb_reserve_back(cb_dataflow_idx, block_size);
-            uint32_t l1_write_addr = get_write_ptr(cb_dataflow_idx);
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
-                l1_write_addr += tile_bytes;
+            for (uint32_t b = 0; b < block_size; ++b) {
+                generate_tile_with_bfloat16_value(cb_dataflow_idx, j);
             }
-
-            noc_async_read_barrier();
-            cb_push_back(cb_dataflow_idx, block_size);
         }
     }
 }

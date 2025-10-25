@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@
 
 namespace ttml::modules {
 
-class SingleHeadAttention : public ttml::autograd::ModuleBase {
+class SingleHeadAttention : public ttml::modules::ModuleBase {
     std::shared_ptr<LinearLayer> q_linear;
     std::shared_ptr<LinearLayer> k_linear;
     std::shared_ptr<LinearLayer> v_linear;

@@ -12,18 +12,14 @@ void kernel_main() {
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_sticks = get_arg_val<uint32_t>(1);
-    const uint32_t stick_size = get_arg_val<uint32_t>(2);
-    const uint32_t num_tiles_per_core = get_arg_val<uint32_t>(3);
-    const uint32_t tile_width_size = get_arg_val<uint32_t>(4);
-    const uint32_t start_stick_id = get_arg_val<uint32_t>(5);
-    uint32_t offset_within_stick = get_arg_val<uint32_t>(6);
+    const uint32_t num_tiles_per_core = get_arg_val<uint32_t>(2);
+    const uint32_t tile_width_size = get_arg_val<uint32_t>(3);
+    const uint32_t start_stick_id = get_arg_val<uint32_t>(4);
+    uint32_t offset_within_stick = get_arg_val<uint32_t>(5);
 
-    constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool stick_size_is_power_of_two = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);
-
-    const auto s = get_interleaved_addr_gen<dst_is_dram, stick_size_is_power_of_two>(
-        dst_addr, stick_size, log_base_2_of_page_size);
+    constexpr uint32_t stick_size = get_compile_time_arg_val(0);
+    constexpr auto dst_args = TensorAccessorArgs<1>();
+    const auto s = TensorAccessor(dst_args, dst_addr, stick_size);
 
     uint64_t base_dst_noc_addr[tile_height];
 

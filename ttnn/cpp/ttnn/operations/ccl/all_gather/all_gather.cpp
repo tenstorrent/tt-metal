@@ -1,61 +1,53 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/ccl/all_gather/all_gather.hpp"
-#include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
-#include "ttnn/distributed/types.hpp"
+#include "ttnn/common/queue_id.hpp"
+
+#include <tt-metalium/constants.hpp>
+
+#include "all_gather.hpp"
+#include "device/all_gather_device_operation.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/fabric.hpp>
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
 namespace ttnn::operations::ccl {
 
-ttnn::Tensor ExecuteAllGather::invoke(const ttnn::Tensor& input_tensor,
-    const int32_t dim,
-    const uint32_t num_links,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<size_t> num_workers,
-    const std::optional<size_t> num_buffers_per_channel,
-    const ttnn::ccl::Topology topology) {
-    return ttnn::operations::ccl::all_gather(
-        input_tensor, dim, num_links, memory_config, num_workers, num_buffers_per_channel, topology);
-}
-
-std::vector<ttnn::Tensor> ExecuteAllGather::invoke(const std::vector<ttnn::Tensor>& input_tensors,
-    const int32_t dim,
-    const uint32_t num_links,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<size_t> num_workers,
-    const std::optional<size_t> num_buffers_per_channel,
-    const ttnn::ccl::Topology topology) {
-    return ttnn::operations::ccl::all_gather(
-        input_tensors, dim, num_links, memory_config, num_workers, num_buffers_per_channel, topology);
-}
-
 ttnn::Tensor ExecuteAllGather::invoke(
     const ttnn::Tensor& input_tensor,
-    const int32_t dim,
-    const uint32_t cluster_axis,
-    const MeshDevice& mesh_device,
-    const uint32_t num_links,
+    int32_t dim,
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<size_t> num_workers,
-    const std::optional<size_t> num_buffers_per_channel,
-    const ttnn::ccl::Topology topology) {
-    return ttnn::operations::ccl::all_gather(
-        input_tensor, dim, cluster_axis, mesh_device, num_links, memory_config, num_workers, num_buffers_per_channel, topology);
-}
+    const std::optional<ttnn::Tensor>& optional_output_tensor,
+    std::optional<uint32_t> num_links,
+    std::optional<tt::tt_fabric::Topology> topology) {
+    auto mesh_device = input_tensor.device();
+    uint32_t normalized_dim = input_tensor.logical_shape().get_normalized_index(dim);
+    tt::tt_fabric::Topology topology_ = topology.value_or(
+        ::ttnn::ccl::get_usable_topology(input_tensor, tt::tt_fabric::get_fabric_topology(), cluster_axis));
+    auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
+    uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, cluster_axis));
 
-std::vector<ttnn::Tensor> ExecuteAllGather::invoke(
-    const std::vector<ttnn::Tensor>& input_tensors,
-    const int32_t dim,
-    const uint32_t cluster_axis,
-    const MeshDevice& mesh_device,
-    const uint32_t num_links,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<size_t> num_workers,
-    const std::optional<size_t> num_buffers_per_channel,
-    const ttnn::ccl::Topology topology) {
-    return ttnn::operations::ccl::all_gather(
-        input_tensors, dim, cluster_axis, mesh_device, num_links, memory_config, num_workers, num_buffers_per_channel, topology);
+    if (composite_common::use_composite_all_gather(input_tensor, dim, memory_config)) {
+        return composite_common::composite_all_gather(
+            input_tensor, dim, num_links_, memory_config_, subdevice_id, cluster_axis);
+    }
+
+    return ttnn::prim::all_gather(
+        input_tensor,
+        normalized_dim,
+        cluster_axis,
+        subdevice_id,
+        memory_config_,
+        optional_output_tensor,
+        num_links_,
+        topology_);
 }
 
 }  // namespace ttnn::operations::ccl

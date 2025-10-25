@@ -23,6 +23,7 @@ void kernel_main() {
     constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(12);
     constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
     uint32_t reduce_second_stage_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
+    constexpr bool rms_norm = get_compile_time_arg_val(15) == 1;
 
     const bool is_last_all_to_all_worker = get_arg_val<uint32_t>(0);
     const uint32_t all_to_all_tile_offset_bytes = get_arg_val<uint32_t>(1);
@@ -121,9 +122,9 @@ void kernel_main() {
                                              const uint32_t cb_external,
                                              const uint32_t cb_reduce_first_stage) __attribute__((always_inline)) {
         uint32_t num_tiles_per_partial_result = 2;
-#ifdef RMSNORM
-        num_tiles_per_partial_result = 1;
-#endif
+        if constexpr (rms_norm) {
+            num_tiles_per_partial_result = 1;
+        }
         // global reduce
         // wait for local data ready
         cb_wait_front(cb_partial, num_tiles_per_partial_result * block_h);  // two tiles * block_h
@@ -193,4 +194,5 @@ void kernel_main() {
         }
     };
     global_reduce_receiver(cb_ex_partial2, cb_ex_external2, cb_ex2);
+    noc_async_atomic_barrier();
 }

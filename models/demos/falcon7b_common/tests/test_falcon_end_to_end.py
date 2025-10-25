@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 import torch
@@ -9,6 +11,13 @@ from loguru import logger
 from sklearn.metrics import top_k_accuracy_score
 
 import ttnn
+from models.common.utility_functions import (
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    is_e75,
+    profiler,
+    tt_tensors_to_torch_tensors,
+)
 from models.demos.falcon7b_common.tests.test_utils import (
     concat_device_out_layer_present,
     get_num_devices,
@@ -20,13 +29,7 @@ from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
 # TODO: Remove this?
 from models.demos.falcon7b_common.tt.falcon_common import PytorchFalconCausalLM
 from models.demos.falcon7b_common.tt.model_config import get_model_config
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    is_e75,
-    profiler,
-    tt_tensors_to_torch_tensors,
-)
+from models.tt_transformers.tt.common import get_hf_tt_cache_path
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
@@ -61,13 +64,12 @@ def run_test_FalconCausalLM_end_to_end(
     v_cache_pcc,
     model_config,
     tt_cache_path,
-    model_location_generator,
 ):
     num_devices = get_num_devices(mesh_device)
     global_batch = batch * num_devices
 
     profiler.start("hugging_face_model_setup")
-    hugging_face_reference_model, state_dict = load_hf_model(model_location_generator, model_version)
+    hugging_face_reference_model, state_dict = load_hf_model(model_version)
     configuration = hugging_face_reference_model.config
     pytorch_FalconCausalLM = PytorchFalconCausalLM(hugging_face_reference_model, num_layers)
     profiler.end("hugging_face_model_setup")
@@ -334,16 +336,12 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     expected_k_cache_pcc,
     expected_v_cache_pcc,
     model_version,
-    model_location_generator,
-    get_tt_cache_path,
 ):
     if is_e75(mesh_device) and batch == 32:
         pytest.skip("Falcon batch 32 is unsupported on E75")
 
     model_config = get_model_config(model_config_str, seq_len, batch)
-    tt_cache_path = get_tt_cache_path(
-        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
-    )
+    tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
     disable_persistent_kernel_cache()
 
@@ -360,5 +358,4 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
         expected_v_cache_pcc,
         model_config,
         tt_cache_path,
-        model_location_generator,
     )

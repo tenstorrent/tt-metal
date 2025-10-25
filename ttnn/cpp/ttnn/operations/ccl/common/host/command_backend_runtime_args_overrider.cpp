@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
 
 #include <tt-metalium/runtime_args_data.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 
 namespace ttnn::ccl {
 size_t tensor_address_runtime_args_overrider::add_tensor() {

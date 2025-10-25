@@ -1,5 +1,5 @@
 
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@
 #include <tt_stl/overloaded.hpp>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "device.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -83,7 +83,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
     const DeviceAddr device_local_size = std::visit(
         tt::stl::overloaded{
             [](const ReplicatedBufferConfig& c) { return c.size; },
-            [mesh_device](const ShardedBufferConfig& config) {
+            [](const ShardedBufferConfig& config) {
                 const auto [shard_height, shard_width] = config.physical_shard_shape();
                 return config.compute_datum_size_bytes() * shard_height * shard_width;
             }},
@@ -129,7 +129,11 @@ void MeshBuffer::initialize_device_buffers() {
     };
 
     for (auto& [coord, device_buffer] : buffers_) {
-        device_buffer = init_device_buffer_at_address(coord);
+        if (auto mesh_device = mesh_device_.lock(); mesh_device != nullptr) {
+            if (mesh_device->is_local(coord)) {
+                device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(init_device_buffer_at_address(coord));
+            }
+        }
     }
 }
 
@@ -167,10 +171,17 @@ MeshDevice* MeshBuffer::device() const {
 }
 
 Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {
-    return buffers_.at(device_coord).get();
+    return buffers_.at(device_coord).value().get();
 }
 
-Buffer* MeshBuffer::get_reference_buffer() const { return buffers_.values().front().get(); }
+Buffer* MeshBuffer::get_reference_buffer() const {
+    for (const auto& buffer : buffers_.values()) {
+        if (buffer.is_local()) {
+            return buffer.value().get();
+        }
+    }
+    TT_THROW("MeshBuffer: Tried to get reference buffer, but no local buffer found");
+}
 
 Buffer* MeshBuffer::get_backing_buffer() const {
     if (auto owned_state = std::get_if<OwnedBufferState>(&state_)) {
@@ -194,7 +205,8 @@ MeshBufferLayout MeshBuffer::global_layout() const {
 
 const ShardedBufferConfig& MeshBuffer::global_shard_spec() const {
     TT_FATAL(
-        global_layout() == MeshBufferLayout::SHARDED, "Can only query the global shard spec for a sharded MeshBuffer");
+        (global_layout() == MeshBufferLayout::SHARDED),
+        "Can only query the global shard spec for a sharded MeshBuffer");
     return std::get<ShardedBufferConfig>(config_);
 }
 

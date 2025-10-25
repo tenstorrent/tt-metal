@@ -15,7 +15,7 @@ from tests.ttnn.utils_for_testing import (
     start_measuring_time,
     stop_measuring_time,
 )
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -48,6 +48,8 @@ def mesh_device_fixture():
         device_name = "grayskull"
     elif ttnn.device.is_wormhole_b0(device):
         device_name = "wormhole_b0"
+    elif ttnn.device.is_blackhole(device):
+        device_name = "blackhole"
     yield device, device_name
 
     ttnn.close_device(device)
@@ -61,8 +63,6 @@ def run_conv2d_full_sweep(
     output_layout,
     has_bias,
     enable_act_double_buffer,
-    enable_split_reader,
-    enable_subblock_padding,
     activations_dtype,
     weights_dtype,
     math_fidelity,
@@ -125,8 +125,6 @@ def run_conv2d_full_sweep(
         override_sharding_config=override_sharding_config,
         output_layout=output_layout,
         enable_act_double_buffer=enable_act_double_buffer,
-        enable_split_reader=enable_split_reader,
-        enable_subblock_padding=enable_subblock_padding,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -274,8 +272,7 @@ def run_conv2d_short_sweep(
             tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, weights_dtype)
         output_layout = ttnn.Layout(output_layout)
         output_dtype = ttnn.DataType(output_dtype)
-        if stride_h == kernel_height and stride_w == kernel_width and stride_h >= 16 and pad_h == 0 and pad_w == 0:
-            conv_config.enable_kernel_stride_folding = True
+
         conv_output_dtype = output_dtype
         conv_config.weights_dtype = weights_dtype
         conv_config.output_layout = output_layout
@@ -285,7 +282,6 @@ def run_conv2d_short_sweep(
             tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16)
 
         tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, device=device)
-
     start_time = start_measuring_time()
     [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
@@ -317,9 +313,14 @@ def run_conv2d_short_sweep(
     torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, torch_output_tensor.shape[-1])
     torch_output_tensor = torch_output_tensor[:, :, :, :output_channels]
 
-    torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
+    torch_out_golden_tensor = torch.permute(torch_out_golden_tensor, (0, 2, 3, 1))
 
-    return [check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=0.985), e2e_perf]
+    return [
+        *check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=0.985),
+        e2e_perf,
+        torch_output_tensor,
+        torch_out_golden_tensor,
+    ]
 
 
 def run_conv1d_short_sweep(

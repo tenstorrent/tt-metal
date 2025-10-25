@@ -11,21 +11,18 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
-#include <tt-metalium/semaphore.hpp>
+#include "impl/buffers/semaphore.hpp"
 #include <tt-metalium/tt_metal.hpp>
-#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
 #include <exception>
 #include <map>
 #include <memory>
-#include <utility>
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -36,12 +33,16 @@
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/kernels/kernel_impl.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/xy_pair.hpp>
+
+// Access to internal API: ProgramImpl::get_sem_base_addr, get_sem_size, num_kernels, get_kernel
+#include "impl/program/program_impl.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -58,11 +59,11 @@ void check_program_is_mapped_to_correct_cores(
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 auto logical_core = CoreCoord{x, y};
-                for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-                    auto kernel = tt_metal::detail::GetKernel(program, kernel_id);
+                for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
+                    auto kernel = program.impl().get_kernel(kernel_id);
                     TT_FATAL(kernel->is_on_logical_core(logical_core), "Error");
                     // Check that compute kernel compile time args are mapped to the correct cores
-                    if (kernel->processor() == tt::RISCV::COMPUTE) {
+                    if (kernel->get_kernel_processor_class() == tt_metal::HalProcessorClassType::COMPUTE) {
                         auto kernel_compile_time_args = kernel->compile_time_args();
                         TT_FATAL(kernel_compile_time_args == compute_kernel_args, "Error");
                     }
@@ -70,7 +71,7 @@ void check_program_is_mapped_to_correct_cores(
                 for (const auto& cb : program.circular_buffers()) {
                     TT_FATAL(cb->is_on_logical_core(logical_core), "Error");
                 }
-                for (const auto& semaphore : program.semaphores()) {
+                for (const auto& semaphore : program.impl().semaphores()) {
                     TT_FATAL(semaphore.initialized_on_logical_core(logical_core), "Error");
                 }
             }
@@ -88,11 +89,12 @@ void check_semaphores_are_initialized(
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 auto logical_core = CoreCoord{x, y};
                 std::vector<uint32_t> res;
+                auto sem_base_addr = program.impl().get_sem_base_addr(device, logical_core, CoreType::WORKER);
                 tt_metal::detail::ReadFromDeviceL1(
                     device,
                     logical_core,
-                    program.get_sem_base_addr(device, logical_core, CoreType::WORKER),
-                    program.get_sem_size(device, logical_core, CoreType::WORKER),
+                    sem_base_addr,
+                    program.impl().get_sem_size(device, logical_core, CoreType::WORKER),
                     res);
                 std::vector<uint32_t> filtered_res;
                 static uint32_t num_u32_to_skip =
@@ -148,7 +150,7 @@ bool test_program_specified_with_core_range_set(
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core_range_set, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, core_range_set, cb_src0_config);
 
     uint32_t ouput_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = 1;
@@ -156,7 +158,7 @@ bool test_program_specified_with_core_range_set(
         tt_metal::CircularBufferConfig(
             num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, core_range_set, cb_output_config);
+    tt_metal::CreateCircularBuffer(program, core_range_set, cb_output_config);
 
     auto unary_reader_kernel = tt_metal::CreateKernel(
         program,
@@ -177,7 +179,7 @@ bool test_program_specified_with_core_range_set(
         uint(num_tiles)  // per_core_tile_cnt
     };
 
-    auto eltwise_unary_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp",
         core_range_set,
@@ -199,12 +201,10 @@ bool test_program_specified_with_core_range_set(
     tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
     // Reader kernel on all cores reads from same location in DRAM
-    const std::array reader_rt_args = {
-        src_dram_buffer->address(), uint(0), num_tiles};
+    const std::array reader_rt_args = {src_dram_buffer->address(), uint(0), num_tiles};
     for (const auto& [core, dst_l1_buffer] : core_to_l1_buffer) {
         tt_metal::SetRuntimeArgs(program, unary_reader_kernel, core, reader_rt_args);
 
-        auto bank_id = 0;
         auto l1_dst_noc_xy = device->virtual_core_from_logical_core(
             dst_l1_buffer->allocator()->get_logical_core_from_bank_id(0), CoreType::WORKER);
 

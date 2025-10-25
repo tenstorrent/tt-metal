@@ -12,7 +12,6 @@
 namespace ttnn::operations::experimental::matmul {
 
 ttnn::Tensor AttnMatmulOperation::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const CoreCoord& compute_with_storage_grid_size,
@@ -34,33 +33,12 @@ ttnn::Tensor AttnMatmulOperation::invoke(
                    kernel_config_val},
                {input_tensor_a, input_tensor_b},
                {},
-               {std::move(optional_output_tensor)},
-               queue_id)
+               {std::move(optional_output_tensor)})
         .at(0);
-}
-
-ttnn::Tensor AttnMatmulOperation::invoke(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const CoreCoord& compute_with_storage_grid_size,
-    std::optional<const DataType> dtype,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
-    return invoke(
-        ttnn::DefaultQueueId,
-        input_tensor_a,
-        input_tensor_b,
-        compute_with_storage_grid_size,
-        dtype,
-        compute_kernel_config,
-        memory_config,
-        std::move(optional_output_tensor));
 }
 
 // TODO: Should we support option to read directly from cache (with optional transpose_hw)?
 ttnn::Tensor AttnMatmulFromCacheOperation::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const uint32_t num_tokens,
@@ -89,32 +67,8 @@ ttnn::Tensor AttnMatmulFromCacheOperation::invoke(
                    kernel_config_val},
                {input_tensor_a, input_tensor_b},
                {},
-               {std::move(optional_output_tensor)},
-               queue_id)
+               {std::move(optional_output_tensor)})
         .at(0);
 }
 
-ttnn::Tensor AttnMatmulFromCacheOperation::invoke(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const uint32_t num_tokens,
-    const bool transpose_hw,
-    const CoreCoord& compute_with_storage_grid_size,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<const DataType> dtype,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    std::optional<Tensor> optional_output_tensor) {
-    return invoke(
-        ttnn::DefaultQueueId,
-        input_tensor_a,
-        input_tensor_b,
-        num_tokens,
-        transpose_hw,
-        compute_with_storage_grid_size,
-        memory_config,
-        dtype,
-        compute_kernel_config,
-        std::move(optional_output_tensor));
-}
-
-};  // namespace ttnn::operations::experimental::matmul
+}  // namespace ttnn::operations::experimental::matmul

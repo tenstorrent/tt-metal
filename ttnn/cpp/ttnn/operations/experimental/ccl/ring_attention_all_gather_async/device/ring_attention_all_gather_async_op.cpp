@@ -14,27 +14,26 @@ namespace ttnn {
 void RingAttentionAllGatherAsync::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_FATAL(
-        input_tensors.size() > 0, "Error, Input tensor size should be greater than 0 but has {}", input_tensors.size());
+        !input_tensors.empty(), "Error, Input tensor size should be greater than 0 but has {}", input_tensors.size());
 
     const auto& first_input_tensor = input_tensors[0];
-    const auto& layout = first_input_tensor.get_layout();
-    const auto& dtype = first_input_tensor.get_dtype();
+    const auto& dtype = first_input_tensor.dtype();
     const auto& memory_config = first_input_tensor.memory_config();
-    const auto& input_shape = first_input_tensor.get_logical_shape();
+    const auto& input_shape = first_input_tensor.logical_shape();
 
     // Validate all input tensors
     for (size_t i = 0; i < input_tensors.size(); ++i) {
         const auto& input_tensor = input_tensors[i];
 
-        TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Input tensor {} must be tiled", i);
+        TT_FATAL(input_tensor.layout() == Layout::TILE, "Input tensor {} must be tiled", i);
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor {} must be on device", i);
         TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor {} must be allocated in buffers on device", i);
 
         TT_FATAL(
-            input_tensor.get_dtype() == dtype,
+            input_tensor.dtype() == dtype,
             "All input tensors must have the same dtype. Input tensor {} has dtype {} but expected {}",
             i,
-            input_tensor.get_dtype(),
+            input_tensor.dtype(),
             dtype);
 
         TT_FATAL(
@@ -43,7 +42,7 @@ void RingAttentionAllGatherAsync::validate_with_output_tensors(
             i);
 
         TT_FATAL(
-            input_tensor.get_logical_shape() == input_shape,
+            input_tensor.logical_shape() == input_shape,
             "All input tensors must have the same shape. Input tensor {} has different shape",
             i);
     }
@@ -56,7 +55,7 @@ void RingAttentionAllGatherAsync::validate_with_output_tensors(
         memory_config.memory_layout());
 
     // Validate output tensors if provided
-    if (output_tensors.size() > 0) {
+    if (!output_tensors.empty()) {
         TT_FATAL(
             output_tensors.size() == input_tensors.size(),
             "Number of output tensors ({}) must match number of input tensors ({})",
@@ -67,14 +66,14 @@ void RingAttentionAllGatherAsync::validate_with_output_tensors(
             if (output_tensors[i].has_value()) {
                 const auto& output_tensor = output_tensors[i].value();
 
-                TT_FATAL(output_tensor.get_layout() == Layout::TILE, "Output tensor {} must be tiled", i);
+                TT_FATAL(output_tensor.layout() == Layout::TILE, "Output tensor {} must be tiled", i);
                 TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Output tensor {} must be on device", i);
 
                 TT_FATAL(
-                    output_tensor.get_dtype() == dtype,
+                    output_tensor.dtype() == dtype,
                     "Output tensor {} dtype should match input tensors but has {}",
                     i,
-                    output_tensor.get_dtype());
+                    output_tensor.dtype());
 
                 TT_FATAL(
                     output_tensor.memory_config() == this->output_mem_config,
@@ -82,7 +81,7 @@ void RingAttentionAllGatherAsync::validate_with_output_tensors(
                     i);
 
                 // Check output tensor shape
-                auto output_shape = output_tensor.get_logical_shape();
+                auto output_shape = output_tensor.logical_shape();
                 auto expected_output_shape = input_shape;
                 expected_output_shape[this->dim] *= this->ring_size;
 
@@ -100,13 +99,13 @@ void RingAttentionAllGatherAsync::validate_with_output_tensors(
 std::vector<ttnn::TensorSpec> RingAttentionAllGatherAsync::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    auto shape = input_tensor.get_logical_shape();
+    auto shape = input_tensor.logical_shape();
     shape[this->dim] *= this->ring_size;
     std::vector<ttnn::TensorSpec> output_specs;
+    output_specs.reserve(input_tensors.size());
     for (uint32_t i = 0; i < input_tensors.size(); i++) {
         output_specs.push_back(TensorSpec(
-            shape,
-            TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config)));
+            shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config)));
     }
     return output_specs;
 }
@@ -129,12 +128,12 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks RingAttentionAllGatherAsync::
 tt::tt_metal::operation::ProgramWithCallbacks RingAttentionAllGatherAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
-    auto mesh_device = input_tensors[0].mesh_device();
+    auto mesh_device = input_tensors[0].device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
     std::vector<IDevice*> devices_to_use = {};
     // User specified the cluster-axis. Derive devices based on the current coordinate
     // and the cluster-axis.
-    const auto& mesh_view = input_tensors[0].mesh_device()->get_view();
+    const auto& mesh_view = input_tensors[0].device()->get_view();
     devices_to_use = (this->cluster_axis.value() == 0) ? mesh_view.get_devices_on_column(coord[1])
                                                        : mesh_view.get_devices_on_row(coord[0]);
 
@@ -175,9 +174,9 @@ tt::tt_metal::operation::ProgramWithCallbacks RingAttentionAllGatherAsync::creat
 tt::tt_metal::operation::Hash RingAttentionAllGatherAsync::compute_program_hash(
     const std::vector<Tensor>& input_tensors) const {
     log_trace(tt::LogOp, "compute_program_hash is called");
-    auto input_shape = input_tensors[0].get_padded_shape();
-    auto input_memory_layout = input_tensors[0].get_layout();
-    auto input_dtype = input_tensors[0].get_dtype();
+    auto input_shape = input_tensors[0].padded_shape();
+    auto input_memory_layout = input_tensors[0].layout();
+    auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
 
     return tt::tt_metal::operation::hash_operation<RingAttentionAllGatherAsync>(
@@ -187,7 +186,11 @@ tt::tt_metal::operation::Hash RingAttentionAllGatherAsync::compute_program_hash(
         this->output_mem_config,
         this->topology,
         this->cluster_axis,
-        this->sub_device_id,
+        this->sub_device_id.has_value(),
+        this->sub_device_id.has_value()
+            ? input_tensors[0].device()->worker_cores(
+                  tt::tt_metal::HalProgrammableCoreType::TENSIX, this->sub_device_id.value())
+            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         input_shape,
         input_memory_layout,
         input_dtype,
@@ -216,7 +219,7 @@ std::vector<Tensor> ring_attention_all_gather_async_impl(
         mesh_view.is_mesh_2d(),
         "all-gather invoked with cluster_axis API withou 2D mesh, which is currently unsupported");
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-    int32_t rank = input_tensors[0].get_logical_shape().rank();
+    int32_t rank = input_tensors[0].logical_shape().rank();
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
 
     TT_FATAL(
@@ -227,6 +230,7 @@ std::vector<Tensor> ring_attention_all_gather_async_impl(
         dim);
 
     std::vector<std::optional<Tensor>> optional_output_tensors;
+    optional_output_tensors.reserve(persistent_output_buffer.size());
     for (size_t i = 0; i < persistent_output_buffer.size(); ++i) {
         optional_output_tensors.push_back(persistent_output_buffer[i]);
     }

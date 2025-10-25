@@ -9,14 +9,13 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 from models.tt_transformers.tt.common import PagedAttentionConfig, create_tt_model
 from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model_config import DecodersPrecision
-from models.utility_functions import comp_pcc, skip_for_grayskull
+from models.tt_transformers.tt.model_config import CheckpointType, DecodersPrecision
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.timeout(900)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
@@ -69,6 +68,7 @@ from models.utility_functions import comp_pcc, skip_for_grayskull
     (1, None),
     ids=["1layer", "all_layers"],
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_model_inference(
     paged_attention,
     page_params,
@@ -92,6 +92,10 @@ def test_model_inference(
             pytest.skip("CI test only runs up to 8192 seq_len to avoid out of ram issues for ref model")
         if num_layers != 1 and seq_len != 4096:
             pytest.skip("CI only runs full model for 4k seq len to reduce CI pipeline load")
+
+        hf_model_env = os.getenv("HF_MODEL", "")
+        if ("Llama" in hf_model_env) and ("Vision" in hf_model_env) and (num_layers is None):
+            pytest.skip("Skipping Llama Vision full model test: no CrossAttention functionality in this test.")
 
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     dtype = ttnn.bfloat8_b
@@ -122,7 +126,12 @@ def test_model_inference(
         num_layers=num_layers,
     )
 
-    if model_args.base_model_name.startswith("Mistral-") or model_args.base_model_name.startswith("Qwen3-"):
+    if (
+        model_args.base_model_name.startswith("Mistral-")
+        or model_args.base_model_name.startswith("Qwen3-")
+        or model_args.base_model_name.startswith("Phi-3-mini-")
+        or model_args.base_model_name.startswith("phi-4")
+    ):
         # TODO: Per layer KV cache fetching is not implemented for all models
         # See issue https://github.com/tenstorrent/tt-metal/issues/19806"
         cache_pcc = False
@@ -132,7 +141,10 @@ def test_model_inference(
     # This sets the minimum PCC for each iteration based on optimization mode
     # TODO: See issue https://github.com/tenstorrent/tt-metal/issues/19806
     perf_out_pcc_map = {"Mistral-7B-Instruct-v0.3": 0.73}
-    acc_out_pcc_map = {"Mistral-7B-Instruct-v0.3": 0.75}
+    acc_out_pcc_map = {
+        "Mistral-7B-Instruct-v0.3": 0.75,
+        "Phi-3-mini-128k-instruct": 0.89,
+    }
     kv_cache_pcc_map = {"Mistral-7B-Instruct-v0.3": 0.75}
 
     if num_layers == 1:
@@ -150,8 +162,9 @@ def test_model_inference(
         default_expec_kv_cache_pcc = 0.88
         expec_kv_cache_pcc = kv_cache_pcc_map.get(model_args.model_name, default_expec_kv_cache_pcc)
 
+    processor = model_args.processor
     tokenizer = model_args.tokenizer
-    generator = Generator([tt_model], [model_args], mesh_device, tokenizer=tokenizer)
+    generator = Generator([tt_model], [model_args], mesh_device, processor=processor, tokenizer=tokenizer)
     logger.info("Finished loading TT model.")
 
     # Create page table if paged attention is enabled
@@ -236,14 +249,26 @@ def test_model_inference(
         # Compare KV caches
         if cache_pcc:
             for i in range(model_args.n_layers):
-                pytorch_layer_present = [
-                    reference_model.layers[i]
-                    .attention.cache_k.clone()
-                    .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
-                    reference_model.layers[i]
-                    .attention.cache_v.clone()
-                    .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
-                ]
+                if model_args.checkpoint_type == CheckpointType.Meta:
+                    pytorch_layer_present = [
+                        reference_model.layers[i]
+                        .attention.cache_k.clone()
+                        .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
+                        reference_model.layers[i]
+                        .attention.cache_v.clone()
+                        .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
+                    ]
+                elif model_args.checkpoint_type == CheckpointType.HuggingFace:
+                    pytorch_layer_present = [
+                        reference_model.cache_k[i]
+                        .clone()
+                        .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
+                        reference_model.cache_v[i]
+                        .clone()
+                        .permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
+                    ]
+                else:
+                    raise ValueError(f"Unknown checkpoint type: {model_args.checkpoint_type}")
 
                 tt_layer_present = []
                 if paged_attention:

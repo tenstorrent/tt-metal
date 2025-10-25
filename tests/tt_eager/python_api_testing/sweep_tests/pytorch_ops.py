@@ -90,13 +90,13 @@ def sum(x, *args, dim, **kwargs):
 
 
 def where(x, y, z, *args, **kwargs):
-    return torch.where(x > 0, y, z)
+    return torch.where(x.bool(), y, z)
 
 
 def where_scalar(x, *args, **kwargs):
     y = kwargs.pop("scalar_true")
     z = kwargs.pop("scalar_false")
-    return torch.where(x > 0, y, z)
+    return torch.where(x.bool(), y, z)
 
 
 def where_bw(x, y, z, w, *args, **kwargs):
@@ -357,6 +357,10 @@ def add1(x, *args, **kwargs):
 
 def mish(x, *args, **kwargs):
     return x * torch.tanh(softplus(x, beta=1.0, threshold=20.0))
+
+
+def hardmish(x, *args, **kwargs):
+    return x * (x + 2.8).clamp(0.0, 5.0) / 5
 
 
 def recip(x, *args, **kwargs):

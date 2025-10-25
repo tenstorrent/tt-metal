@@ -6,26 +6,28 @@ import json
 import os
 import time
 from functools import partial
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F
 from loguru import logger
 from tqdm import tqdm
 from transformers import AutoTokenizer
-from transformers.generation.utils import top_k_top_p_filtering
 
 import ttnn
-from models.demos.falcon7b_common.tests.test_utils import get_num_devices, initialize_kv_cache, load_hf_model
-from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
-from models.demos.falcon7b_common.tt.model_config import get_model_config
-from models.demos.utils.llm_demo_utils import check_tokens_match, create_benchmark_data, verify_perf
-from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.utility_functions import (
+from models.common.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     nearest_32,
     tt_tensors_to_torch_tensors,
 )
+from models.common.utils import top_k_top_p_filtering
+from models.demos.falcon7b_common.tests.test_utils import get_num_devices, initialize_kv_cache, load_hf_model
+from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
+from models.demos.falcon7b_common.tt.model_config import get_model_config
+from models.demos.utils.llm_demo_utils import check_tokens_match, create_benchmark_data, verify_perf
+from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.tt_transformers.tt.common import get_hf_tt_cache_path
 
 END_OF_TEXT = 11
 SPACE = 204
@@ -118,8 +120,6 @@ def run_falcon_demo_kv(
     batch_size,
     max_seq_len,
     model_config_strs_prefill_decode,
-    model_location_generator,
-    get_tt_cache_path,
     mesh_device,  # can be ttnn.Device or ttnn.MeshDevice
     model_version="tiiuae/falcon-7b-instruct",
     num_layers=32,
@@ -130,6 +130,7 @@ def run_falcon_demo_kv(
     save_generated_text_path=None,  # If provided, save generated text to this path (e.g. set to expected_greedy_output_path to update expected output)
     json_perf_targets={},  # Optional perf targets for CSV output
     is_ci_env=False,  # Whether is running in CI environment
+    galaxy_type=None,  # "4U" or "6U" when running on WH-Galaxy
 ):
     profiler = BenchmarkProfiler()
     profiler.start("run")
@@ -172,21 +173,19 @@ def run_falcon_demo_kv(
     logger.info("Tokenizing inputs...")
     profiler.start(f"tokenizing_inputs")
 
-    tokenizer = AutoTokenizer.from_pretrained(model_version)
+    tokenizer = AutoTokenizer.from_pretrained(model_version, local_files_only=os.getenv("CI") == "true")
     prefill_ids, num_users, num_input_tokens = preprocess_and_validate_inputs(
         input_prompts, tokenizer, max_seq_len, perf_mode
     )
     profiler.end(f"tokenizing_inputs")
 
     model_config = get_model_config(model_config_strs_prefill_decode[0], nearest_32(num_input_tokens), batch_size)
-    tt_cache_path = get_tt_cache_path(
-        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
-    )
+    tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
     # State dict is needed for embeddings
     logger.info("Loading huggingface weights...")
     profiler.start(f"loading_weights")
-    hugging_face_reference_model, state_dict = load_hf_model(model_location_generator, model_version)
+    hugging_face_reference_model, state_dict = load_hf_model(model_version)
     configuration = hugging_face_reference_model.config
     logger.info("Loading weights finished!")
     profiler.end(f"loading_weights")
@@ -537,9 +536,12 @@ def run_falcon_demo_kv(
 
     # Save benchmark data (will only save if running in CI environment)
     benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, json_perf_targets)
+    run_type = f"demo_perf_{num_devices}chip" if perf_mode else f"demo_generate_{num_devices}chip"
+    if galaxy_type:
+        run_type += f"_{galaxy_type}"
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"demo_perf_{num_devices}chip" if perf_mode else f"demo_generate_{num_devices}chip",
+        run_type=run_type,
         ml_model_name=model_version,
         ml_model_type="llm",
         num_layers=num_layers,

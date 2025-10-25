@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,10 +10,10 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 
 namespace ttnn::operations::experimental::ternary {
 
@@ -27,26 +27,25 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
     using namespace tt::constants;
 
     TT_FATAL(
-        args.condition_tensor.get_dtype() == args.true_value_tensor.get_dtype(),
+        args.condition_tensor.dtype() == args.true_value_tensor.dtype(),
         "Mismatched data types: 'condition_tensor' and 'true_values_tensor' must have the same dtype.");
 
     TT_FATAL(
-        args.condition_tensor.get_dtype() == args.false_value_tensor.get_dtype(),
+        args.condition_tensor.dtype() == args.false_value_tensor.dtype(),
         "Mismatched data types: 'condition_tensor' and 'false_values_tensor' must have the same dtype.");
 
     TT_FATAL(
-        args.condition_tensor.get_dtype() == output.get_dtype(),
+        args.condition_tensor.dtype() == output.dtype(),
         "Mismatched data types: 'condition_tensor' and 'output' tensor must have the same dtype.");
 
     TT_FATAL(
-        args.condition_tensor.get_dtype() == DataType::BFLOAT16 ||
-            args.condition_tensor.get_dtype() == DataType::FLOAT32 ||
-            args.condition_tensor.get_dtype() == DataType::BFLOAT8_B,
+        args.condition_tensor.dtype() == DataType::BFLOAT16 || args.condition_tensor.dtype() == DataType::FLOAT32 ||
+            args.condition_tensor.dtype() == DataType::BFLOAT8_B,
         "Invalid data type: expected BFLOAT16 or FLOAT32 or BFLOAT8_B for 'condition_tensor'.");
 
     Program program{};
     const auto& all_device_cores = operation_attributes.worker_grid;
-    auto dtype = tt_metal::datatype_to_dataformat_converter(args.condition_tensor.get_dtype());
+    auto dtype = tt_metal::datatype_to_dataformat_converter(args.condition_tensor.dtype());
 
     auto createCircularBuffer = [&program, &all_device_cores, dtype = dtype](
                                     tt::CBIndex cb_idx, uint32_t tile_size, uint32_t num_input_tiles = 1) {
@@ -55,7 +54,7 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
         return tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_config);
     };
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(dtype);
+    uint32_t single_tile_size = tt::tile_size(dtype);
     /* Use L1 circular buffers to set input and output buffers that the compute engine will use */
     auto condition_cb = tt::CBIndex::c_0;
     auto true_values_cb = tt::CBIndex::c_1;
@@ -74,31 +73,31 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
     CBHandle cb_output = createCircularBuffer(output_cb_index, single_tile_size, num_output_tiles);
 
     CompileTimeReaderKernelArgs reader_compile_time_args = {
-        .condition_cb = condition_cb,
-        .true_tensor_cb = true_values_cb,
-        .false_tensor_cb = false_values_cb,
-        .is_cond_tensor_in_dram = args.condition_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM,
-        .is_true_tensor_in_dram = args.true_value_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM,
-        .is_false_tensor_in_dram = args.false_value_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM};
+        .condition_cb = condition_cb, .true_tensor_cb = true_values_cb, .false_tensor_cb = false_values_cb};
 
     /* Specify data movement kernels for reading/writing data to/from DRAM */
     std::map<std::string, std::string> reader_defines;
+    std::vector<uint32_t> reader_compile_time_vec = ttnn::kernel_utils::to_vector(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(args.condition_tensor.buffer()).append_to(reader_compile_time_vec);
+    tt::tt_metal::TensorAccessorArgs(args.true_value_tensor.buffer()).append_to(reader_compile_time_vec);
+    tt::tt_metal::TensorAccessorArgs(args.false_value_tensor.buffer()).append_to(reader_compile_time_vec);
     KernelHandle reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/where/device/kernels/dataflow/elemwise_reader_kernel.cpp",
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig(ttnn::kernel_utils::to_vector(reader_compile_time_args), reader_defines));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_vec, reader_defines));
 
     tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-    CompileTimeWriterKernelArgs writer_compile_time_args = {
-        .cb_dst = output_cb_index, .is_dst_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM};
+    CompileTimeWriterKernelArgs writer_compile_time_args = {.cb_dst = output_cb_index};
     std::map<std::string, std::string> writer_defines;
+    std::vector<uint32_t> writer_compile_time_vec = ttnn::kernel_utils::to_vector(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_vec);
     KernelHandle writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/where/device/kernels/dataflow/elemwise_writer_kernel.cpp",
         all_device_cores,
-        tt_metal::WriterDataMovementConfig(ttnn::kernel_utils::to_vector(writer_compile_time_args), writer_defines));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_vec, writer_defines));
 
     /* Use the add_tiles operation in the compute kernel */
     KernelHandle compute_kernel_id = CreateKernel(

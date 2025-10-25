@@ -11,6 +11,7 @@
 
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -20,49 +21,37 @@ namespace ccl {
 struct ExecuteAllReduceAsync {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const GlobalSemaphore& from_remote_multi_device_global_semaphore,
-        const GlobalSemaphore& to_remote_multi_device_global_semaphore,
-        const GlobalSemaphore& gather_multi_device_global_semaphore,
+        uint32_t num_devices,
+        const std::vector<GlobalSemaphore>& barrier_semaphores,
+        const std::vector<GlobalSemaphore>& rs_global_semaphores,
+        const std::vector<GlobalSemaphore>& ag_global_semaphores,
         ttnn::operations::reduction::ReduceType math_op,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
-        std::optional<size_t> num_links = std::nullopt,
-        std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt = std::nullopt);
-    static std::vector<ttnn::Tensor> invoke(
-        const std::vector<ttnn::Tensor>& input_tensors,
-        const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
-        const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
-        const global_semaphore::MultiDeviceGlobalSemaphore& gather_multi_device_global_semaphore,
-        ttnn::operations::reduction::ReduceType math_op,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
-        std::optional<size_t> num_links = std::nullopt,
+        std::optional<size_t> num_preferred_links = std::nullopt,
         std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt = std::nullopt);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        uint32_t cluster_axis,
+        std::optional<std::uint32_t> cluster_axis,
         const MeshDevice& mesh_device,
-        const GlobalSemaphore& from_remote_multi_device_global_semaphore,
-        const GlobalSemaphore& to_remote_multi_device_global_semaphore,
-        const GlobalSemaphore& gather_multi_device_global_semaphore,
+        const std::optional<std::vector<GlobalSemaphore>>& barrier_semaphores,
+        const std::optional<std::vector<GlobalSemaphore>>& rs_global_semaphores,
+        const std::optional<std::vector<GlobalSemaphore>>& ag_global_semaphores,
         ttnn::operations::reduction::ReduceType math_op,
         const std::optional<ttnn::MemoryConfig>& memory_config,
-        ttnn::ccl::Topology topology,
+        std::optional<ttnn::ccl::Topology> topology,
         std::optional<size_t> num_preferred_links,
         std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt);
-    static std::vector<ttnn::Tensor> invoke(
-        const std::vector<ttnn::Tensor>& input_tensors,
+
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& input_tensor,
         uint32_t cluster_axis,
-        const MeshDevice& mesh_device,
-        const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
-        const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
-        const global_semaphore::MultiDeviceGlobalSemaphore& gather_multi_device_global_semaphore,
         ttnn::operations::reduction::ReduceType math_op,
-        const std::optional<ttnn::MemoryConfig>& memory_config,
-        ttnn::ccl::Topology topology,
-        std::optional<size_t> num_preferred_links,
-        std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt);
+        std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+        std::optional<size_t> num_preferred_links = std::nullopt,
+        std::optional<ttnn::ccl::Topology> topology = std::nullopt);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
@@ -77,6 +66,7 @@ struct ExecuteAllReduceAsync {
         std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
         bool use_noc1_only,
         bool use_optimal_ccl_for_llama);
+
     static std::vector<ttnn::Tensor> invoke(
         const std::vector<ttnn::Tensor>& input_tensors,
         ttnn::Tensor& buffer_tensor,

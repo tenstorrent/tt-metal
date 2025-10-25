@@ -2,14 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.tt_resnetblock2d import TtResnetBlock2D
 from models.experimental.stable_diffusion_xl_base.tt.tt_downsample2d import TtDownsample2D
 
 
-class TtDownBlock2D(nn.Module):
-    def __init__(self, device, state_dict, module_path, model_config):
+class TtDownBlock2D(LightweightModule):
+    def __init__(self, device, state_dict, module_path, model_config, debug_mode=False):
         super().__init__()
 
         num_layers = 2
@@ -17,7 +17,9 @@ class TtDownBlock2D(nn.Module):
 
         for i in range(num_layers):
             self.resnets.append(
-                TtResnetBlock2D(device, state_dict, f"{module_path}.resnets.{i}", model_config=model_config)
+                TtResnetBlock2D(
+                    device, state_dict, f"{module_path}.resnets.{i}", model_config=model_config, debug_mode=debug_mode
+                )
             )
 
         self.downsamplers = TtDownsample2D(
@@ -29,6 +31,7 @@ class TtDownBlock2D(nn.Module):
             (1, 1),
             1,
             model_config=model_config,
+            debug_mode=debug_mode,
         )
 
     def forward(self, hidden_states, input_shape, temb):

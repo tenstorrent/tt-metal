@@ -8,10 +8,11 @@ from tqdm import tqdm
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
-from models.tt_transformers.tt.embedding import Embedding
+from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
 from models.tt_transformers.tt.rope import RotarySetup
@@ -27,6 +28,8 @@ class Transformer(LightweightModule):
         weight_cache_path,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        attention_class=None,
+        rope_setup_class=None,
     ):
         super().__init__()
         self.args = args
@@ -39,29 +42,48 @@ class Transformer(LightweightModule):
         self.grid_size = self.args.max_grid_size
         state_dict_prefix = args.get_state_dict_prefix("", None)
 
-        self.embd = Embedding(
-            mesh_device=mesh_device,
-            args=args,
-            weight_cache_path=args.weight_cache_path(dtype),
-            state_dict=state_dict,
-            dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
+        self.tt_ccl = TT_CCL(self.mesh_device)
+
+        embd_kwargs = {
+            "mesh_device": mesh_device,
+            "args": args,
+            "weight_cache_path": args.weight_cache_path(dtype),
+            "state_dict": state_dict,
+            "dtype": ttnn.bfloat16,  # Row major layout requires bfloat16
+        }
+        if self.args.embed_scale is not None:
+            embd_cls = ScaledEmbedding
+            embd_kwargs["embed_scale"] = self.args.embed_scale
+        else:
+            embd_cls = Embedding
+        self.embd = embd_cls(**embd_kwargs)
+
+        ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else RotarySetup
+        self.rope_setup = ActualRopeSetupClass(
+            device=mesh_device,
+            batch_size=args.max_batch_size,
+            head_dim=args.head_dim,
+            max_seq_len=args.max_seq_len,
+            rope_theta=args.rope_theta,
+            rope_scaling=args.rope_scaling,
         )
 
-        self.rope_setup = RotarySetup(
-            mesh_device,
-            args.max_batch_size,
-            args.head_dim,
-            args.max_seq_len,
-            args.rope_theta,
-            args.rope_scaling_factor,
-            args.orig_context_len,
-        )
+        if args.rope_theta_local:
+            self.rope_local_setup = RotarySetup(
+                mesh_device,
+                args.max_batch_size,
+                args.head_dim,
+                args.max_seq_len,
+                args.rope_theta_local,
+            )
+
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
         self.layers = [
             TransformerBlock(
                 args=args,
                 mesh_device=mesh_device,
+                tt_ccl=self.tt_ccl,
                 dtype=dtype,
                 state_dict=state_dict,
                 weight_cache_path=weight_cache_path,
@@ -69,6 +91,7 @@ class Transformer(LightweightModule):
                 transformation_mats=self.trans_mats_dict,
                 paged_attention_config=paged_attention_config,
                 use_paged_kv_cache=use_paged_kv_cache,
+                attention_class=attention_class,
             )
             for i in tqdm(range(self.n_layers))
         ]
@@ -87,14 +110,17 @@ class Transformer(LightweightModule):
                 sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
                 sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
+                tt_ccl=self.tt_ccl,
             ),
             args,
+            self.tt_ccl,
             args.is_galaxy,
         )
 
         self.lm_head = LMHead(
             args=args,
             mesh_device=mesh_device,
+            tt_ccl=self.tt_ccl,
             dtype=dtype,
             state_dict=state_dict,
             state_dict_prefix=state_dict_prefix,
@@ -109,6 +135,7 @@ class Transformer(LightweightModule):
         TODO: Debate whether this function is responsible for padding
         """
 
+        assert tokens.dim() == 2, "tokens must be a 2D tensor"
         tokens = tokens.reshape(1, 1, 1, -1)
         S = tokens.shape[-1]
         tokens = ttnn.from_torch(
@@ -125,10 +152,19 @@ class Transformer(LightweightModule):
         assert (
             self.rope_setup.cos_matrix.shape[2] >= start_pos + S
         ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
-        tt_rot_mats_prefill = [
+
+        tt_rot_mats_prefill_global = [
             self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
             self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
         ]
+
+        if hasattr(self, "rope_local_setup"):
+            tt_rot_mats_prefill_local = [
+                self.rope_local_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
+                self.rope_local_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
+            ]
+        else:
+            tt_rot_mats_prefill_local = None
 
         if page_table is not None:
             tt_page_table = ttnn.from_torch(
@@ -152,7 +188,7 @@ class Transformer(LightweightModule):
         else:
             tt_chunk_page_table = None
 
-        return tokens_embd, tt_rot_mats_prefill, tt_page_table, tt_chunk_page_table
+        return tokens_embd, tt_rot_mats_prefill_global, tt_rot_mats_prefill_local, tt_page_table, tt_chunk_page_table
 
     def prepare_inputs_decode(self, *inputs):
         """
@@ -163,8 +199,7 @@ class Transformer(LightweightModule):
         """
         host_inputs = self.prepare_decode_inputs_host(*inputs)
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)  # Helper function
-        transformed_device_inputs = self.transform_decode_inputs_device(*device_inputs)
-        return transformed_device_inputs
+        return device_inputs
 
     def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
         """
@@ -173,7 +208,9 @@ class Transformer(LightweightModule):
         """
         B = tokens.shape[0]
         assert current_pos.shape[0] == B, "Batch size mismatch"
-        assert B == self.args.max_batch_size, "Batch size must be equal to max_batch_size"
+        assert (
+            B == self.args.max_batch_size
+        ), f"Batch size {B} must be equal to max_batch_size {self.args.max_batch_size}"
 
         # Necessary padding to be full tile sized when on device
         tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens)), "constant", 0)
@@ -189,6 +226,7 @@ class Transformer(LightweightModule):
             current_pos, torch.tensor(0, dtype=torch.int64)
         )  # Ensure position indices are non-negative
         rope_idxs = self.rope_setup.get_rot_idxs(rot_current_pos, on_host=True)
+
         current_pos_tt = ttnn.from_torch(
             current_pos,
             device=None,
@@ -213,52 +251,51 @@ class Transformer(LightweightModule):
             )
         return tokens, current_pos_tt, rope_idxs, page_table
 
-    def transform_decode_inputs_device(self, tokens, current_pos, rope_idxs, page_table=None):
+    def _transform_decode_inputs_device(self, tokens):
         """
         Inputs are ttnn tensors on device. This function applies any on-device
         transformations which should happen before forward decode.
         For example: tilize, reshape, shard.
         Return transformed device tensors
 
-        Get rope sin/cos
         Embed tokens
         """
-        tt_rot_mats = self.rope_setup.get_rot_mats(rope_idxs)
         tt_tokens = self.embd(tokens)
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         tt_tokens = ttnn.to_memory_config(
             tt_tokens,
             self.args.model_config["DECODE_RESIDUAL_MEMCFG"],
         )
-        return tt_tokens, current_pos, tt_rot_mats, page_table
+        return tt_tokens
+
+    def concat_host_output(self, tt_out):
+        """
+        Concatenate the output of the devices into a single host tensor.
+        """
+        torch_out_tensors = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(tt_out)]
+        if self.args.is_galaxy:
+            row_dim, col_dim = (3, 1)
+        else:
+            row_dim, col_dim = (1, -1)
+
+        rows, cols = self.args.cluster_shape
+        mesh_shape = [torch_out_tensors[i : i + cols] for i in range(0, len(torch_out_tensors), cols)]
+        row_concatenated = [torch.cat(row, dim=col_dim) for row in mesh_shape]
+        return torch.cat(row_concatenated, dim=row_dim)
 
     def process_output_prefill(self, tt_out, last_token_idx):
         """
         Input is ttnn device tensor of logits. Output is torch logits tensor.
         NOTE: In this model, prefill always uses get_last_token
         """
-        logits = ttnn.to_torch(
-            tt_out,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                self.mesh_device, dims=(3, 1) if self.args.is_galaxy else (1, -1), mesh_shape=self.args.cluster_shape
-            ),
-        )[0, 0, last_token_idx, : self.vocab_size]
-        return logits
+        return self.concat_host_output(tt_out.cpu())[0, 0, last_token_idx, : self.vocab_size]
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False):
         """
-        Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
+        Input is ttnn host tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
         if is_tokens:
-            tt_out = ttnn.to_torch(
-                tt_out,  # tt_out.cpu(blocking=True, cq_id=1),
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    self.mesh_device,
-                    dims=(3, 1) if self.args.is_galaxy else (1, -1),
-                    mesh_shape=self.args.cluster_shape,
-                ),
-            )[0, 0, 0, :B]
-            return tt_out
+            return self.concat_host_output(tt_out)[0, 0, :B, 0]
 
         if self.args.num_devices > 1:
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
@@ -270,8 +307,9 @@ class Transformer(LightweightModule):
     def ttnn_prefill_forward(
         self,
         x,
-        rot_mats,
-        user_id,
+        rot_mats_global=None,
+        rot_mats_local=None,
+        user_id=0,
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
@@ -285,7 +323,8 @@ class Transformer(LightweightModule):
         return self.forward(
             x,
             current_pos=None,
-            rot_mats=rot_mats,
+            rot_mats_global=rot_mats_global,
+            rot_mats_local=rot_mats_local,
             user_id=user_id,
             mode="prefill",
             page_table=page_table,
@@ -295,11 +334,15 @@ class Transformer(LightweightModule):
             kv_cache=kv_cache,
         )
 
+    def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
+        ttnn.plus_one(current_pos, skip_negative_entries=True)
+        ttnn.plus_one(rot_mat_idxs)
+
     def ttnn_decode_forward(
         self,
         x,
         current_pos,
-        rot_mats,
+        rot_mat_idxs=None,
         page_table=None,
         kv_cache=None,
         argmax_on_device=False,
@@ -308,10 +351,14 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs)
+        rot_mats_local = self.rope_local_setup.get_rot_mats(rot_mat_idxs) if hasattr(self, "rope_local_setup") else None
+        x_embed = self._transform_decode_inputs_device(x)
         tt_logits = self.forward(
-            x,
+            x_embed,
             current_pos,
-            rot_mats=rot_mats,
+            rot_mats_global=rot_mats_global,
+            rot_mats_local=rot_mats_local,
             mode="decode",
             page_table=page_table,
             kv_cache=kv_cache,
@@ -319,30 +366,36 @@ class Transformer(LightweightModule):
 
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:
-            if self.args.is_galaxy:
-                tt_logits = ttnn.all_gather(
-                    tt_logits,
-                    dim=3,
-                    num_links=2,
-                    cluster_axis=0,
-                    mesh_device=self.mesh_device,
-                    topology=self.args.ccl_topology(),
-                )
-            else:
-                tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, topology=self.args.ccl_topology())
+            cluster_axis = 0 if self.args.is_galaxy else None
+            num_links = 2 if self.args.is_galaxy else 1
+            tt_logits = ttnn.experimental.all_gather_async(
+                tt_logits,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+                num_links=num_links,
+                memory_config=tt_logits.memory_config(),
+                cluster_axis=cluster_axis,
+                topology=self.args.ccl_topology(),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
+
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
         if argmax_on_device:
-            tt_logits = ttnn.argmax(  # TODO Add multicore support to batch > 1
-                tt_logits,
-                dim=3,
-                keepdim=True,
-                use_multicore=False if self.args.max_batch_size > 1 else True,  # ,output_tensor=tokens
-            )
-        else:
+            tt_logits = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
+
+            # Update device tensors for the next iteration
+            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
+
+            # Update input tokens with sampled tokens for the next iteration
+            ttnn.copy(tt_logits.reshape(x.shape), x)
+        elif not self.args.is_galaxy:
             # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
-            if not self.args.is_galaxy:
-                tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
+            tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
 
         return tt_logits
 
@@ -350,7 +403,8 @@ class Transformer(LightweightModule):
         self,
         x: ttnn.Tensor,
         current_pos,
-        rot_mats=None,
+        rot_mats_global=None,
+        rot_mats_local=None,
         user_id=0,
         mode="decode",
         page_table=None,
@@ -372,10 +426,11 @@ class Transformer(LightweightModule):
             x = layer(
                 x,
                 current_pos,
-                rot_mats,
-                user_id,
-                mode,
-                page_table,
+                rot_mats_global=rot_mats_global,
+                rot_mats_local=rot_mats_local,
+                user_id=user_id,
+                mode=mode,
+                page_table=page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
@@ -397,6 +452,6 @@ class Transformer(LightweightModule):
         x = self.lm_head(x)
 
         if mode == "prefill":
-            x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-            x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return x

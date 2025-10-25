@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "moreh_sum_device_operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -26,7 +27,6 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
     auto program = Program();
 
     const auto cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    const auto single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
     const auto& input_shape = input.padded_shape();
     const auto [Wt, Ht, inner_tile_size, reduce_tile_size] =
@@ -82,10 +82,12 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(is_dram(input))};
+    std::vector<uint32_t> reader_compile_time_args = {};
+    TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
     std::map<std::string, std::string> reader_defines;
     reader_defines["USE_FPU"] = "1";
-    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(is_dram(output))};
+    std::vector<uint32_t> writer_compile_time_args = {};
+    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/reader_moreh_sum_nc.cpp";
     const auto writer_kernel_file =
@@ -110,7 +112,7 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
         compute_kernel_file =
             "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/moreh_sum_nc_gs.cpp";
     }
-    const auto compute_kernel_1_id = CreateComputeKernel(
+    CreateComputeKernel(
         program,
         compute_kernel_file,
         {core_group_1, num_cols_per_core_group_1, compute_args_group_1},

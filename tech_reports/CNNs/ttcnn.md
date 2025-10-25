@@ -119,7 +119,6 @@ Following are the conv2d operation configuration parameters:
 * `output_layout = ttnn.TILE_LAYOUT` _optional_ `ttnn.Layout` to specify whether the output tensor be in `TILE` or `ROW_MAJOR` layout.
 * `enable_act_double_buffer = False` _optional_ bool to enable activation double buffering.
 * `enable_weights_double_buffer = False` _optional_ bool to enable weights double buffering when using block sharding.
-* `enable_split_reader = False` _optional_ bool to two concurrent reader kernels instead of one.
 
 #### Compute Config
 
@@ -205,7 +204,6 @@ To achieve higher performance it is advisable to use the following optional argu
 * `reallocate_halo_output = True` The `conv2d` operation executes a _haloing_ step before computing the convolutions to optimize memory accesses. This option will reallocate the output of this step in order to reduce memory fragmentation to avoid memory fitting issues.
 * `enable_act_double_buffer = True` If enough memory is available, enabling double buffering of the input activations will result in a better performance.
 * `enable_weights_double_buffer = false` If enough memory is available, enabling weights double buffering can improve performance when using block sharding.
-* `enable_split_reader = True` By default, a single reader kernel is used to read in activations from the input shard. Enabling this option will use two concurrent reader kernels, potentially improving overall performance.
 
 ##### Output post-processing
 

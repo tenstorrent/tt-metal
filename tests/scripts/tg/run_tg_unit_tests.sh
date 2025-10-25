@@ -12,12 +12,37 @@ run_tg_llama3.3-70b_tests() {
   llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
 
   # Force ERISC IRAM so it's enabled for all tests to keep erisc wrapper kernels consistent
-  LLAMA_DIR=$llama70b TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/tests/unit_tests ; fail+=$?
+  LLAMA_DIR=$llama70b TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/tests/unit_tests ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_tg_llama3.3-70b_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_tg_gpt_oss_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_tg_gpt_oss_tests"
+  pip install -r models/demos/gpt_oss/requirements.txt
+
+  # GPT-OSS weights for 20B and 120B
+  gpt_oss_20b=/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-20B/
+  gpt_oss_120b=/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-120B/
+
+  for gpt_oss_dir in "$gpt_oss_20b" "$gpt_oss_120b"; do
+    HF_MODEL=$gpt_oss_dir pytest -n auto models/demos/gpt_oss/tests/unit --timeout 600; fail+=$?
+  done
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_tg_gpt_oss_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -48,7 +73,7 @@ run_tg_prefetcher_tests() {
 
   echo "LOG_METAL: Running run_tg_prefetcher_tests"
 
-  pytest tests/ttnn/unit_tests/operations/test_prefetcher_TG.py --timeout 600; fail+=$?
+  pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_TG.py --timeout 600; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -63,9 +88,10 @@ run_tg_tests() {
   if [[ "$1" == "unit" ]]; then
     echo "LOG_METAL: running run_tg_unit_tests"
     TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCard*Fixture.*"
+    # TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCard*Fixture.*" #See issue #29677
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device --gtest_filter="GalaxyFixture.*:TGFixture.*"
     ./build/test/tt_metal/unit_tests_device --gtest_filter="GalaxyFixture.*:TGFixture.*"
-    TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MultiCommandQueueMultiDevice*Fixture.*"
+    TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshMultiCQMultiDevice*Fixture.*"
 
   elif [[ "$1" == "fabric" ]]; then
     echo "LOG_FABRIC: running run_tg_fabric_tests"
@@ -75,47 +101,19 @@ run_tg_tests() {
     #       TG + push mode + fast dispatch has bug at tt::tt_metal::detail::CreateDevices(ids)
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric*MuxFixture.*"
-    TESTS=(
-        # Unicast tests
-        "1 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16"
-        "2 --fabric_command 64 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16"
-        "3 --fabric_command 65 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16"
-        # Unicast tests for push router
-        "4 --fabric_command 1 --board_type glx32 --data_kb_per_tx 100 --push_router"
-        "5 --fabric_command 64 --board_type glx32 --data_kb_per_tx 100 --push_router"
-        "6 --fabric_command 65 --board_type glx32 --data_kb_per_tx 100 --push_router"
-        # Line Mcast tests
-        "7 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --e_depth 7"
-        "8 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --w_depth 7"
-        "9 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --n_depth 3"
-        "10 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --s_depth 3"
-        # Line Mcast tests for push router - Async Write
-        "11 --fabric_command 1 --board_type glx32 --data_kb_per_tx 100 --e_depth 7 --push_router"
-        "12 --fabric_command 1 --board_type glx32 --data_kb_per_tx 100 --w_depth 7 --push_router"
-        "13 --fabric_command 1 --board_type glx32 --data_kb_per_tx 100 --n_depth 3 --push_router"
-        "14 --fabric_command 1 --board_type glx32 --data_kb_per_tx 100 --s_depth 3 --push_router"
-        # Line Mcast tests for push router Atomic Increment
-        "15 --fabric_command 64 --board_type glx32 --data_kb_per_tx 100 --e_depth 7 --push_router"
-        "16 --fabric_command 64 --board_type glx32 --data_kb_per_tx 100 --w_depth 7 --push_router"
-        "17 --fabric_command 64 --board_type glx32 --data_kb_per_tx 100 --n_depth 3 --push_router"
-        "18 --fabric_command 64 --board_type glx32 --data_kb_per_tx 100 --s_depth 3 --push_router"
-        # Line Mcast tests for push router Async Write + Atomic Increment
-        "19 --fabric_command 65 --board_type glx32 --data_kb_per_tx 100 --e_depth 7 --push_router"
-        "20 --fabric_command 65 --board_type glx32 --data_kb_per_tx 100 --w_depth 7 --push_router"
-        "21 --fabric_command 65 --board_type glx32 --data_kb_per_tx 100 --n_depth 3 --push_router"
-        "22 --fabric_command 65 --board_type glx32 --data_kb_per_tx 100 --s_depth 3 --push_router"
 
-    )
-    for TEST in "${TESTS[@]}"; do
-        # Extract test name and arguments
-        read -r TEST_NUMBER TEST_ARGS <<< "$TEST"
-        echo "LOG_FABRIC: Test $TEST_NUMBER: $TEST_ARGS"
-        # Execute the test command with extracted arguments
-        TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_sanity $TEST_ARGS
-    done
+    # MGD 2.0 Tests
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*TG*
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric*MuxFixture.*"
 
   elif [[ "$1" == "llama3-70b" ]]; then
     run_tg_llama3.3-70b_tests
+
+  elif [[ "$1" == "gpt-oss" ]]; then
+    run_tg_gpt_oss_tests
 
   elif [[ "$1" == "prefetcher" ]]; then
     run_tg_prefetcher_tests

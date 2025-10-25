@@ -35,9 +35,11 @@ void bind_matmul_reduce_scatter_async(pybind11::module& module, const ccl_operat
                const uint32_t dim,
                const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
                const CoreCoord reduce_scatter_core_grid_offset,
+               const std::optional<GlobalSemaphore>& barrier_semaphore,
                const std::optional<const Tensor>& bias,
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config_rs,
+               const std::optional<ttnn::MemoryConfig>& intermediate_memory_config_rs,
                const ttnn::ccl::Topology topology,
                std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
                const std::optional<ttnn::MemoryConfig>& memory_config_mm,
@@ -56,9 +58,11 @@ void bind_matmul_reduce_scatter_async(pybind11::module& module, const ccl_operat
                     dim,
                     multi_device_global_semaphore,
                     reduce_scatter_core_grid_offset,
+                    barrier_semaphore,
                     bias,
                     num_links,
                     memory_config_rs,
+                    intermediate_memory_config_rs,
                     topology,
                     sub_device_id,
                     memory_config_mm,
@@ -78,9 +82,11 @@ void bind_matmul_reduce_scatter_async(pybind11::module& module, const ccl_operat
             py::arg("multi_device_global_semaphore"),
             py::arg("reduce_scatter_core_grid_offset"),
             py::kw_only(),
+            py::arg("barrier_semaphore") = std::nullopt,
             py::arg("bias") = std::nullopt,
             py::arg("num_links") = 1,
             py::arg("memory_config_rs") = std::nullopt,
+            py::arg("intermediate_memory_config_rs") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Ring,
             py::arg("subdevice_id") = std::nullopt,
             py::arg("memory_config_mm") = std::nullopt,
@@ -112,6 +118,7 @@ void py_bind_matmul_reduce_scatter_async(pybind11::module& module) {
         Keyword Args:
             * :attr:`bias` (ttnn.Tensor): the bias tensor to be added. If specified, needs to be on the device. Defaults to `None`.
             * :attr:`num_links` (int): Number of links to use for the all-gather operation.
+            * :attr:`topology` (ttnn.Topology): Communication topology for the reduce-scatter phase. Defaults to `ttnn.Topology.Ring`.
             * :attr:`memory_config_rs` (Optional[ttnn.MemoryConfig]): Memory configuration for the Reduce Scatter operation.
             * :attr:`memory_config_mm` (Optional[ttnn.MemoryConfig]): Memory configuration for the Matmul operation.
             * :attr:`transpose_a` (bool)

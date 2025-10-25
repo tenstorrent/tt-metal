@@ -6,7 +6,6 @@
 
 #include <tt-metalium/shape2d.hpp>
 
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/alignment.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -23,7 +22,11 @@ using Strides = std::vector<size_t>;
 // shape) And provides information required to physically lay out the tensor in memory
 class TensorLayout {
 public:
-    TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config);
+    TensorLayout(
+        DataType dtype,
+        const PageConfig& page_config,
+        const MemoryConfig& memory_config,
+        const Alignment& alignment = {});
 
     // static method makes it easy to find and remove all of its usages in the codebase - thats why it is not a
     // constructor
@@ -71,7 +74,7 @@ public:
     // Returns logical shard shape from shard spec shape
     Shape2D get_logical_shard_shape() const;
 
-    // Returns physical shard shape based on ShardMode, shard shape, and alignment
+    // Returns physical shard shape based on shard shape and alignment
     Shape2D get_physical_shard_shape() const;
 
     Shape2D compute_page_shape(const Shape2D& physical_size) const;
@@ -93,10 +96,6 @@ public:
         DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
 
 private:
-    // Private to not expose alignment parameter to the public API
-    TensorLayout(
-        DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
-
     void initialize_alignment();
 
     DataType dtype_ = DataType::BFLOAT16;

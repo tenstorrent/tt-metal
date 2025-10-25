@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from models.utility_functions import nearest_32
+from models.common.utility_functions import nearest_32
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 from models.experimental.grok.tt.grok_common import LightweightModule
 
@@ -308,7 +308,8 @@ class TtGrokAttention(LightweightModule):
         # Output matmul
         ###
         # All gather
-        dense_outputs_11BH_gathered = ttnn.all_gather(attn_output_11BH, dim=3, num_links=1)
+        # dense_outputs_11BH_gathered = ttnn.all_gather(attn_output_11BH, dim=3, num_links=1)
+        assert False, "Legacy ccl call removed until new implementation is done"
 
         # return the sum of the outputs
         dense_outputs_11BH = ttnn.matmul(

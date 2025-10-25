@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <string>
-
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "upsample_op.hpp"
@@ -12,7 +10,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/math.hpp>
 // #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
@@ -56,8 +53,8 @@ Tensor HaloTensorCreation(const Tensor& input) {
     Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
     input_tensor = ttnn::reshape(input_tensor, new_shape);
 
-    auto halo_output = ttnn::halo(
-        DefaultQueueId, input_tensor, sliding_window_config, 0, false, false, input_tensor.memory_config(), false);
+    auto halo_output =
+        ttnn::halo(input_tensor, sliding_window_config, 0, false, false, input_tensor.memory_config(), false);
 
     return halo_output;
 }
@@ -215,8 +212,8 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     // computation needed for the bilinear kernel. Passing them as an argument.
     float scale_h_inv = 1.0f / (float)scale_factor_h;
     float scale_w_inv = 1.0f / (float)scale_factor_w;
-    float y_index = (float)(0.5f) * (float)scale_h_inv + 0.5f;
-    float x_index_compute = (float)(0.5f) * (float)scale_w_inv - 0.5f;
+    float y_index = ((float)(0.5f) * (float)scale_h_inv) + 0.5f;
+    float x_index_compute = ((float)(0.5f) * (float)scale_w_inv) - 0.5f;
 
     uint32_t scale_h_inv_u32 = *reinterpret_cast<uint32_t*>(&scale_h_inv);
     uint32_t scale_w_inv_u32 = *reinterpret_cast<uint32_t*>(&scale_w_inv);
@@ -288,10 +285,13 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
         .compile_args = compute_compile_time_args,
         .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
 
-    auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
+    CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
+
+    uint32_t batch_size = input.padded_shape()[0];
+    uint32_t in_h = input.padded_shape()[1];
 
     // runtime args
-    uint32_t reader_nargs = 10;
+    uint32_t reader_nargs = 8;
     std::vector<uint32_t> reader_rt_args(reader_nargs);
     reader_rt_args[0] = input_stick_nbytes;
     reader_rt_args[1] = input_nsticks_per_core / in_w;
@@ -299,19 +299,23 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     reader_rt_args[3] = scale_factor_w;
     reader_rt_args[4] = in_w;
     reader_rt_args[5] = out_w;
-    reader_rt_args[6] = 0;  // set for each core below
+    reader_rt_args[6] =
+        0;  // denotes the position (index) of the first row of the input shard in its corresponding batch
+            // Note: the first row of the input shard corresponds to the second row (index 1) in the halo shard
+    reader_rt_args[7] = in_h;
 
-    uint32_t start_input_stick_id = 0;
+    uint32_t num_rows_per_core = div_up(batch_size * in_h, ncores_nhw);
+
+    uint32_t start_input_row_in_image_id = 0;
 
     if (input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         for (int32_t core = 0; core < ncores_nhw; ++core) {
             CoreCoord core_coord(core % ncores_x, core / ncores_x);  // logical
-            reader_rt_args[6] = start_input_stick_id;
-            reader_rt_args[8] = (core == 0) ? 1 : 0;
-            reader_rt_args[9] = (core == ncores_nhw - 1) ? 1 : 0;
+            reader_rt_args[6] = start_input_row_in_image_id;
             SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
             SetRuntimeArgs(program, writer_kernel, core_coord, reader_rt_args);
-            start_input_stick_id += input_nsticks_per_core;
+            start_input_row_in_image_id += num_rows_per_core;
+            start_input_row_in_image_id %= in_h;
         }
     } else {
         TT_FATAL(false, "Unsupported memory layout");

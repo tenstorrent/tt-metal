@@ -31,6 +31,23 @@ Tests:
             destination:
               device: [0, 1]
 
+  - name: "TestPacketSizesLinear"
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            num_packets: 100
+            destination:
+              device: [0, 1]
+
   - name: "AllToAllUnicastWriteLinear"
     sync: true
     fabric_setup:
@@ -43,7 +60,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: all_to_all_unicast
+      - type: all_to_all
 
   - name: "AllToAllUnicastTestNocSendTypesLinear"
     sync: true
@@ -59,7 +76,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: all_to_all_unicast
+      - type: all_to_all
 
   - name: "AllToAllMulticastLinear"
     sync: true
@@ -73,7 +90,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: all_to_all_multicast
+      - type: all_to_all
 
   - name: "UnidirectionalMulticastLinear"
     sync: true
@@ -87,7 +104,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: unidirectional_linear_multicast
+      - type: unidirectional_linear
 
   - name: "FullDevicePairingLinear"
     sync: true
@@ -103,6 +120,40 @@ Tests:
     patterns:
       - type: full_device_random_pairing
         iterations: 5
+
+  - name: AllToAllTestPacketSizesLinear
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all
+
+  - name: "FlowControlAllToAllLinear"
+    sync: true
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [1024, 2048, 4096]
+
+    defaults:
+      num_packets: 10000
+
+    patterns:
+      - type: all_to_all
 
   - name: "SimpleUnicastMesh"
     fabric_setup:
@@ -145,7 +196,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: all_to_all_unicast
+      - type: all_to_all
 
   - name: "AllToAllUnicastTestNocSendTypesMesh"
     fabric_setup:
@@ -160,7 +211,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: all_to_all_unicast
+      - type: all_to_all
 
   - name: "FullDevicePairingMesh"
     fabric_setup:
@@ -175,6 +226,23 @@ Tests:
     patterns:
       - type: full_device_random_pairing
         iterations: 5
+
+  - name: "FlowControlAllToAllMeshLowLatency"
+    sync: true
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [1024, 2048, 4096]
+
+    defaults:
+      num_packets: 10000
+
+    patterns:
+      - type: all_to_all
 
   - name: "SimpleUnicastMeshDynamic"
     fabric_setup:
@@ -220,7 +288,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: all_to_all_unicast
+      - type: all_to_all
 
   - name: "AllToAllUnicastTestNocSendTypesMeshDynamic"
     fabric_setup:
@@ -236,7 +304,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: all_to_all_unicast
+      - type: all_to_all
 
   - name: "FullDevicePairingMeshDynamic"
     fabric_setup:
@@ -252,3 +320,167 @@ Tests:
     patterns:
       - type: full_device_random_pairing
         iterations: 5
+
+  - name: TestPacketSizesMesh
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            num_packets: 100
+            destination:
+              device: [0, 1]
+
+  - name: AllToAllUnicastTestPacketSizesMesh
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all
+
+  - name: TestPacketSizesMeshDynamic
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            num_packets: 100
+            destination:
+              device: [0, 1]
+
+  - name: AllToAllUnicastTestPacketSizesMeshDynamic
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all
+
+  - name: "FlowControlAllToAllMeshDynamic"
+    sync: true
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [1024, 2048, 4096]
+
+    defaults:
+      num_packets: 10000
+
+    patterns:
+      - type: all_to_all
+
+  - name: AllToOneUnicastMesh
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: all_to_one
+
+  - name: AllToOneRandomUnicastMesh
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: all_to_one_random
+        iterations: 10
+
+  - name: "FabricMuxSimpleUnicastWriteLinear"
+    skip: [GALAXY, BLACKHOLE_GALAXY]
+    fabric_setup:
+      topology: Linear
+      fabric_tensix_config: Mux
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 1024
+            num_packets: 100
+            destination:
+              device: [0, 1]
+
+  - name: "FabricMuxAllToAllUnicastMesh"
+    skip: [GALAXY, BLACKHOLE_GALAXY]
+    fabric_setup:
+      topology: Mesh
+      fabric_tensix_config: Mux
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all
+
+  - name: "FabricMuxAllToAllUnicastMeshDynamic"
+    skip: [GALAXY, BLACKHOLE_GALAXY]
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+      fabric_tensix_config: Mux
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all

@@ -23,7 +23,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -37,7 +37,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -95,14 +95,14 @@ int main(int argc, char** argv) {
             tt_metal::CircularBufferConfig(
                 num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src0_cb_index, single_tile_size);
-        auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         uint32_t src1_cb_index = 1;
         tt_metal::CircularBufferConfig cb_src1_config =
             tt_metal::CircularBufferConfig(
                 num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src1_cb_index, single_tile_size);
-        auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
         uint32_t ouput_cb_index = tt::CBIndex::c_16;
         uint32_t num_output_tiles = 1;
@@ -110,7 +110,7 @@ int main(int argc, char** argv) {
             tt_metal::CircularBufferConfig(
                 num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(ouput_cb_index, single_tile_size);
-        auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         auto mm_reader_kernel = tt_metal::CreateKernel(
             program,
@@ -136,7 +136,7 @@ int main(int argc, char** argv) {
             1   // out_block_tile_cnt
         };
 
-        auto mm_kernel = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/matmul.cpp",
             core,

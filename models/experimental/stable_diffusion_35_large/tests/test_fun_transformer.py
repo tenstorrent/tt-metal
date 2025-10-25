@@ -2,36 +2,63 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 
 import pytest
 import torch
 import ttnn
+import math
 
 from ..reference.transformer import SD3Transformer2DModel
 from ..tt.fun_transformer import sd_transformer, TtSD3Transformer2DModelParameters
 from ..tt.utils import assert_quality
-from ..tt.parallel_config import create_dit_parallel_config, ParallelConfig
+from ..tt.parallel_config import StableDiffusionParallelManager
 
 TILE_SIZE = 32
 
 
 @pytest.mark.parametrize(
-    "mesh_device",
+    (
+        "model_name",
+        "batch_size",
+        "prompt_sequence_length",
+        "spatial_sequence_length",
+        "height",
+        "width",
+    ),
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        ("large", 1, 352, 4096, 1024, 1024),
     ],
-    indirect=True,
 )
 @pytest.mark.parametrize(
-    ("model_name", "batch_size", "prompt_sequence_length", "spatial_sequence_length", "height", "width"),
+    (
+        "mesh_device",
+        "cfg",
+        "sp",
+        "tp",
+        "topology",
+        "num_links",
+    ),
     [
-        ("large", 2, 333, 4096, 1024, 1024),
+        [(2, 4), (2, 0), (1, 0), (4, 1), ttnn.Topology.Linear, 1],
+        [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
+        [(8, 4), (2, 0), (4, 0), (4, 1), ttnn.Topology.Linear, 3],
+        [(8, 4), (2, 1), (8, 0), (2, 1), ttnn.Topology.Linear, 3],
+        [(8, 4), (2, 1), (2, 1), (8, 0), ttnn.Topology.Linear, 3],
     ],
+    ids=[
+        "t3k_cfg2_sp1_tp4",
+        "t3k_cfg2_sp2_tp2",
+        "tg_cfg2_sp4_tp4",
+        "tg_cfg2_sp8_tp2",
+        "tg_cfg2_sp2_tp8",
+    ],
+    indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192, "trace_region_size": 15157248}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192, "trace_region_size": 15157248}],
+    indirect=True,
+)
 def test_transformer(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -41,34 +68,50 @@ def test_transformer(
     spatial_sequence_length: int,
     height: int,
     width: int,
+    cfg: int,
+    sp: int,
+    tp: int,
+    topology: ttnn.Topology,
+    num_links: int,
 ) -> None:
-    mesh_shape = tuple(mesh_device.shape)
-    cfg_parallel = ParallelConfig(mesh_shape=mesh_shape, factor=1, mesh_axis=0)
-    tensor_parallel = ParallelConfig(mesh_shape=(mesh_shape[0], 1), factor=mesh_shape[1], mesh_axis=1)
-    dit_parallel_config = create_dit_parallel_config(
-        mesh_shape=mesh_shape, cfg_parallel=cfg_parallel, tensor_parallel=tensor_parallel
+    cfg_factor, cfg_axis = cfg
+    sp_factor, sp_axis = sp
+    tp_factor, tp_axis = tp
+    parallel_manager = StableDiffusionParallelManager(
+        mesh_device,
+        cfg_factor,
+        sp_factor,
+        tp_factor,
+        sp_factor,
+        tp_factor,
+        topology,
+        cfg_axis=cfg_axis,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
     )
+    submesh = parallel_manager.submesh_devices[0]
     torch_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat16
 
     torch_model = SD3Transformer2DModel.from_pretrained(
-        f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="transformer", torch_dtype=torch_dtype
+        f"stabilityai/stable-diffusion-3.5-{model_name}",
+        subfolder="transformer",
+        torch_dtype=torch_dtype,
+        local_files_only=True,
     )
-    torch_model.eval()
-    if model_name == "medium":
-        embedding_dim = 1536
-    else:
-        embedding_dim = 2432
+    embedding_dim = 1536 if model_name == "medium" else 2432
 
-    num_devices = mesh_device.get_num_devices()
-    ## heads padding for T3K TP
-    pad_embedding_dim = False
-    if os.environ["MESH_DEVICE"] == "T3K" and embedding_dim == 2432:
-        pad_embedding_dim = True
-        hidden_dim_padding = (
-            ((embedding_dim // num_devices // TILE_SIZE) + 1) * TILE_SIZE
-        ) * num_devices - embedding_dim
-        num_heads = 40
+    torch_model.eval()
+
+    ## heads padding
+    assert not embedding_dim % torch_model.config.num_attention_heads, "Embedding_dim % num_heads != 0"
+    pad_embedding_dim = ((torch_model.config.num_attention_heads) % tp_factor) != 0
+    hidden_dim_padding = 0
+    if pad_embedding_dim:
+        head_size = embedding_dim // torch_model.config.num_attention_heads
+        num_heads = math.ceil(torch_model.config.num_attention_heads / tp_factor) * tp_factor
+        hidden_dim_padding = (num_heads * head_size) - embedding_dim
     else:
         num_heads = torch_model.config.num_attention_heads
 
@@ -82,10 +125,12 @@ def test_transformer(
         unpadded_num_heads=torch_model.config.num_attention_heads,
         embedding_dim=embedding_dim,
         hidden_dim_padding=hidden_dim_padding,
-        device=mesh_device,
+        device=submesh,
         dtype=ttnn_dtype,
         guidance_cond=guidance_cond,
-        parallel_config=dit_parallel_config,
+        parallel_config=parallel_manager.dit_parallel_config,
+        height=height // 8,
+        width=width // 8,
     )
 
     torch.manual_seed(0)
@@ -102,45 +147,59 @@ def test_transformer(
             timestep=timestep,
         )
 
+    seq_parallel_shard_dim = 1  # 1 is height
+    spatial_dims = [None, None]
+    spatial_dims[parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis] = seq_parallel_shard_dim
     tt_spatial = ttnn.from_torch(
         spatial.permute([0, 2, 3, 1]),  # BCYX -> BYXC
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            submesh,
+            parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
+            dims=spatial_dims,
+        ),
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn_dtype,
     )
     tt_prompt = ttnn.from_torch(
         prompt,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            submesh, parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape, dims=[None, None]
+        ),
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn_dtype,
     )
     tt_pooled_projection = ttnn.from_torch(
         pooled_projection,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            submesh, parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape, dims=[None, None]
+        ),
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
     )
     tt_timestep = ttnn.from_torch(
         timestep.unsqueeze(1),
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            submesh, parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape, dims=[None, None]
+        ),
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.float32,
     )
+
     tt_output = sd_transformer(
         spatial=tt_spatial,
         prompt=tt_prompt,
         pooled_projection=tt_pooled_projection,
         timestep=tt_timestep,
         parameters=parameters,
-        parallel_config=dit_parallel_config,
+        parallel_manager=parallel_manager,
         num_heads=num_heads,
         N=spatial_sequence_length,
         L=prompt_sequence_length,
+        cfg_index=0,
     )
 
-    torch_output = torch.unsqueeze(torch_output, 1)
-    assert_quality(torch_output, tt_output, pcc=0.997, mse=0.06, shard_dim=0, num_devices=mesh_device.get_num_devices())
+    assert_quality(torch_output, tt_output, pcc=0.997, mse=0.06, shard_dim=0, num_devices=submesh.get_num_devices())

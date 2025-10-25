@@ -4,7 +4,7 @@
 
 #pragma once
 
-enum SfpuType {
+enum class SfpuType {
     tanh,
     hardtanh,
     gelu,
@@ -36,6 +36,8 @@ enum SfpuType {
     max,
     sine,
     cosine,
+    cosh,
+    sinh,
     tan,
     relu_max,
     relu_min,
@@ -79,6 +81,11 @@ enum SfpuType {
     sub_int32,
     sub_uint16,
     mul_uint16,
+    mul_int32,
+    lt,
+    gt,
+    ge,
+    le,
     topk_local_sort,
     topk_merge,
     topk_rebuild,
@@ -99,6 +106,7 @@ enum SfpuType {
     right_shift,
     floor,
     trunc,
+    frac,
     left_shift,
     remainder,
     fmod,
@@ -112,4 +120,15 @@ enum SfpuType {
     cpy_values,
     gcd,
     lcm,
+    softshrink,
+    hardsigmoid,
+    threshold,
+    where,
+    softsign,
+    celu,
+    max_pool_with_indices,
+    selu,
+    rpow,
+    cbrt,  // cube root
+    hardmish,
 };

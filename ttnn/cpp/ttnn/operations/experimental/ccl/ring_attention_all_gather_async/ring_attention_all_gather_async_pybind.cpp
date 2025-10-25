@@ -67,7 +67,6 @@ void py_bind_ring_attention_all_gather_async(pybind11::module& module) {
         module,
         ttnn::experimental::ring_attention_all_gather_async,
         R"doc(
-
         Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
 
         Args:
@@ -82,15 +81,14 @@ void py_bind_ring_attention_all_gather_async(pybind11::module& module) {
         Keyword Args:
             num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
-            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
+            topology (ttnn.Topology): The topology configuration to run the operation in. Valid options are Ring and Linear; callers must supply the desired value.
 
         Returns:
             ttnn.Tensor: the output tensor.
 
         Example:
             >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
-            >>> physical_device_ids = ttnn.get_t3k_physical_device_ids_ring()
-            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), physical_device_ids=physical_device_ids[:8])
+            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
             >>> ttnn_tensor = ttnn.from_torch(
                             full_tensor,
                             dtype=input_dtype,

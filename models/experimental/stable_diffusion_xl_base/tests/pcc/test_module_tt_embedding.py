@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
@@ -9,16 +9,19 @@ import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_embedding import TtTimestepEmbedding
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 
 @pytest.mark.parametrize("input_shape, module_path", [((1, 320), "time_embedding"), ((1, 2816), "add_embedding")])
 @pytest.mark.parametrize("linear_weights_dtype", [ttnn.bfloat16])
-def test_embedding(device, input_shape, module_path, reset_seeds, linear_weights_dtype):
+def test_embedding(device, input_shape, module_path, is_ci_env, reset_seeds, linear_weights_dtype):
     unet = UNet2DConditionModel.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+        subfolder="unet",
+        local_files_only=is_ci_env,
     )
-    # unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
 

@@ -6,8 +6,8 @@ The following set of commands will generate perf reports for ``resnet`` as an ex
 ..  code-block:: sh
 
     cd $TT_METAL_HOME
-    build_metal.sh --enable-profiler
-    ./tt_metal/tools/profiler/profile_this.py -n resnet -c "pytest models/demos/resnet/tests/test_perf_resnet.py::test_perf_bare_metal[20-0.0185-25]"
+    build_metal.sh
+    ./tools/tracy/profile_this.py -n resnet -c "pytest models/demos/resnet/tests/test_perf_resnet.py::test_perf_bare_metal[20-0.0185-25]"
 
 After the commands finish, the location of the generated csv will be printed on console similar to the image below:
 
@@ -31,8 +31,8 @@ Instructions on using the performance report with `TT-NN Visualizer <https://git
   the same pytest run. Only the host times for the second run of the layer should be analyzed as the first run was populating the cache and will have much higher times for host side.
 
 - The first 1000 ops for each device is automatically collected by pytest fixtures at the end of your test.
-  If your test has more than 1000 ops, ``ttl.device.DumpDeviceProfiler(device)`` should be called at every n number of layers that total to less than 1000 ops in order to avoid dropping profiling data of new ops.
-  For example for resnet with around 120 ops for a single inference layer, if the test calls the layer more than 8 times, ``ttl.device.DumpDeviceProfiler(device)`` should be called at least every eighth layer run.
+  If your test has more than 1000 ops, ``ttl.device.ReadDeviceProfiler(device)`` should be called at every n number of layers that total to less than 1000 ops in order to avoid dropping profiling data of new ops.
+  For example for resnet with around 120 ops for a single inference layer, if the test calls the layer more than 8 times, ``ttl.device.ReadDeviceProfiler(device)`` should be called at least every eighth layer run.
   If profiling data is dropped, you will receive warning messages in the execution log mentioning which RISC of what core of what device dropped profiling data. Note that dispatch
   cores fill up their profiling buffers faster and if only those cores are giving warnings your OP analysis is not affected.
 

@@ -26,17 +26,19 @@ void kernel_main() {
     constexpr uint32_t index_tensor_peer_cb_index = get_compile_time_arg_val(7);
     constexpr uint32_t physical_core_lookup_table_cb_index = get_compile_time_arg_val(8);
 
-    constexpr bool input_tensor_is_dram = get_compile_time_arg_val(9) == 1;
-    constexpr bool index_tensor_output_is_dram = get_compile_time_arg_val(10) == 1;
-    constexpr bool physical_core_lookup_table_is_dram = get_compile_time_arg_val(11) == 1;
-    constexpr uint32_t Ht = get_compile_time_arg_val(12);
-    constexpr uint32_t Wt = get_compile_time_arg_val(13);
-    constexpr uint32_t number_of_tiles_per_core = get_compile_time_arg_val(14);
-    constexpr uint32_t number_of_cores_used = get_compile_time_arg_val(15);
-    constexpr bool ascending = get_compile_time_arg_val(16) == 1;
+    constexpr uint32_t Ht = get_compile_time_arg_val(9);
+    constexpr uint32_t Wt = get_compile_time_arg_val(10);
+    constexpr uint32_t number_of_tiles_per_core = get_compile_time_arg_val(11);
+    constexpr uint32_t number_of_cores_used = get_compile_time_arg_val(12);
+    constexpr bool ascending = get_compile_time_arg_val(13) == 1;
 
-    const uint32_t sem_exchange_addr = get_semaphore(get_compile_time_arg_val(17));
-    const uint32_t sem_barrier_addr = get_semaphore(get_compile_time_arg_val(18));
+    const uint32_t sem_exchange_addr = get_semaphore(get_compile_time_arg_val(14));
+    const uint32_t sem_barrier_addr = get_semaphore(get_compile_time_arg_val(15));
+
+    constexpr auto input_tensor_args = TensorAccessorArgs<16>();
+    constexpr auto index_tensor_output_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
+    constexpr auto physical_core_lookup_table_args =
+        TensorAccessorArgs<index_tensor_output_args.next_compile_time_args_offset()>();
 
     // Constants
     constexpr uint32_t one_tile = 1;
@@ -48,27 +50,20 @@ void kernel_main() {
 
     // Input tensor config
     constexpr uint32_t input_tensor_tile_size_bytes = get_tile_size(input_tensor_cb_index);
-    constexpr DataFormat input_tensor_data_format = get_dataformat(input_tensor_cb_index);
-    const InterleavedAddrGenFast<input_tensor_is_dram> input_tensor_accessor = {
-        .bank_base_address = input_tensor_buffer_addr,
-        .page_size = input_tensor_tile_size_bytes,
-        .data_format = input_tensor_data_format};
+    const auto input_tensor_accessor =
+        TensorAccessor(input_tensor_args, input_tensor_buffer_addr, input_tensor_tile_size_bytes);
 
     // Index tensor config
     const uint32_t index_tensor_output_tile_size_bytes = get_tile_size(index_tensor_output_cb_index);
-    const DataFormat index_tensor_output_data_format = get_dataformat(index_tensor_output_cb_index);
-    const InterleavedAddrGenFast<index_tensor_output_is_dram> index_tensor_output_accessor = {
-        .bank_base_address = index_tensor_buffer_addr,
-        .page_size = index_tensor_output_tile_size_bytes,
-        .data_format = index_tensor_output_data_format};
+    const auto index_tensor_output_accessor =
+        TensorAccessor(index_tensor_output_args, index_tensor_buffer_addr, index_tensor_output_tile_size_bytes);
 
     // Physical core lookup table config
     constexpr uint32_t physical_core_lookup_table_tile_size_bytes = get_tile_size(physical_core_lookup_table_cb_index);
-    constexpr DataFormat physical_core_lookup_table_data_format = get_dataformat(physical_core_lookup_table_cb_index);
-    const InterleavedAddrGenFast<physical_core_lookup_table_is_dram> physical_core_lookup_table_accessor = {
-        .bank_base_address = physical_core_lookup_table_buffer_addr,
-        .page_size = physical_core_lookup_table_tile_size_bytes,
-        .data_format = physical_core_lookup_table_data_format};
+    const auto physical_core_lookup_table_accessor = TensorAccessor(
+        physical_core_lookup_table_args,
+        physical_core_lookup_table_buffer_addr,
+        physical_core_lookup_table_tile_size_bytes);
 
     // Read lookup table for physical core IDs
     cb_reserve_back(physical_core_lookup_table_cb_index, one_tile);

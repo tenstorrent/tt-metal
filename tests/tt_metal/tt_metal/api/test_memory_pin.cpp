@@ -12,8 +12,6 @@
 namespace tt::tt_metal {
 namespace {
 
-using ::testing::Eq;
-
 TEST(MemoryPinTest, Lifecycle) {
     int inc_count = 0;
     int dec_count = 0;
@@ -27,14 +25,17 @@ TEST(MemoryPinTest, Lifecycle) {
 }
 
 TEST(MemoryPinTest, EmptyPin) {
-    MemoryPin pin;
-    EXPECT_EQ(pin, nullptr);
+    {
+        MemoryPin pin;
+        EXPECT_EQ(pin, nullptr);
+    }
 
-    int inc_count = 0;
-    int dec_count = 0;
-    pin = MemoryPin([&]() { inc_count++; }, [&]() { dec_count++; });
-
-    EXPECT_NE(pin, nullptr);
+    {
+        int inc_count = 0;
+        int dec_count = 0;
+        auto pin = MemoryPin([&]() { inc_count++; }, [&]() { dec_count++; });
+        EXPECT_NE(pin, nullptr);
+    }
 }
 
 TEST(MemoryPinTest, FromSharedPtr) {

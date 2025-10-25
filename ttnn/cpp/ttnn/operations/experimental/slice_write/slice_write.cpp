@@ -1,14 +1,13 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "slice_write.hpp"
 #include "device/slice_write_op.hpp"
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "tt-metalium/constants.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation.hpp"
@@ -18,32 +17,22 @@
 
 namespace ttnn::operations::experimental {
 
-// Specialization for uint32_t and N=4
-template <>
-ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
-    QueueId queue_id,
+ttnn::Tensor SliceWriteOperation::invoke(
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& output_tensor,
-    const std::array<uint32_t, 4>& begins,
-    const std::array<uint32_t, 4>& ends,
-    const std::array<uint32_t, 4>& step) {
+    ttnn::Tensor& output_tensor,
+    const ttnn::SmallVector<uint32_t>& begins,
+    const ttnn::SmallVector<uint32_t>& ends,
+    const ttnn::SmallVector<uint32_t>& step) {
     const auto& logical_input_shape = input_tensor.logical_shape();
     const auto& padded_input_shape = input_tensor.padded_shape();
     const auto& padded_output_shape = output_tensor.padded_shape();
 
-    TT_FATAL(padded_input_shape.rank() == 4, "Input tensor must have rank 4");
-    TT_FATAL(padded_output_shape.rank() == 4, "Output tensor must have rank 4");
+    bool no_step = std::all_of(step.begin(), step.end(), [](uint32_t s) { return s == 1; });
 
-    bool no_step = step[0] == 1 && step[1] == 1 && step[2] == 1 && step[3] == 1;
-    bool starts_zero = begins[0] == 0 && begins[1] == 0 && begins[2] == 0 && begins[3] == 0;
-    bool ends_max = ends[0] == padded_output_shape[0] && ends[1] == padded_output_shape[1] &&
-                    ends[2] == padded_output_shape[2] && ends[3] == padded_output_shape[3];
-
-    TT_FATAL(no_step, "Slice Write does not support strides");
-
-    bool rm_only = !no_step && input_tensor.layout() == Layout::TILE;
+    bool rm_only_not_sharded = (input_tensor.layout() == Layout::TILE || output_tensor.layout() == Layout::TILE) &&
+                               !(input_tensor.is_sharded() || output_tensor.is_sharded() && !no_step);
     ttnn::Tensor input = input_tensor;
-    if (rm_only) {
+    if (rm_only_not_sharded) {
         input = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR);
     }
 
@@ -51,23 +40,28 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     const bool tiled = input.layout() == Layout::TILE;
     bool on_device = input.storage_type() == StorageType::DEVICE;
 
-    std::array<uint32_t, 4> actual_shape_vec;
-    std::array<uint32_t, 4> padded_shape_vec;
-    const std::array<uint32_t, 4> padded_ends =
-        tiled ? std::array<uint32_t, 4>(
-                    {ends[0],
-                     ends[1],
-                     std::max(tt::round_up(ends[2], tt::constants::TILE_HEIGHT), tt::constants::TILE_HEIGHT),
-                     std::max(tt::round_up(ends[3], tt::constants::TILE_WIDTH), tt::constants::TILE_WIDTH)})
-              : ends;
+    ttnn::SmallVector<uint32_t> padded_ends = ends;
+    if (tiled && ends.size() >= 2) {
+        // Only pad the last two dimensions for tiled layout
+        size_t rank = ends.size();
+        padded_ends[rank - 2] =
+            std::max(tt::round_up(ends[rank - 2], tt::constants::TILE_HEIGHT), tt::constants::TILE_HEIGHT);
+        padded_ends[rank - 1] =
+            std::max(tt::round_up(ends[rank - 1], tt::constants::TILE_WIDTH), tt::constants::TILE_WIDTH);
+    }
+    ttnn::SmallVector<uint32_t> actual_shape_vec;
+    ttnn::SmallVector<uint32_t> padded_shape_vec;
+    actual_shape_vec.reserve(ends.size());
+    padded_shape_vec.reserve(ends.size());
+
     bool empty = false;
-    for (int i = 0; i < 4; ++i) {
+    for (size_t i = 0; i < ends.size(); ++i) {
         TT_FATAL(ends[i] >= begins[i], "End {} must be greater than or equal to start {}", ends[i], begins[i]);
         uint32_t offset = step[i] - begins[i] - 1;
         uint32_t dim_size = (ends[i] + offset) / step[i];
         empty |= dim_size == 0;
-        actual_shape_vec[i] = dim_size;
-        padded_shape_vec[i] = std::max((padded_ends[i] + offset) / step[i], 1u);
+        actual_shape_vec.push_back(dim_size);
+        padded_shape_vec.push_back(std::max((padded_ends[i] + offset) / step[i], 1u));
     }
     ttnn::Shape actual_shape(actual_shape_vec);
     ttnn::Shape padded_shape(padded_shape_vec);
@@ -79,11 +73,9 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
 
     // Sharding is only 2D.
     if (input.is_sharded() && logical_input_shape[0] == 1 && logical_input_shape[1] == 1) {
-        uint32_t calc_nhw_volume = actual_shape[0] * actual_shape[1] * actual_shape[2];
         auto shard_spec = input_tensor.shard_spec().value();
 
         auto input_cores = shard_spec.grid;
-        auto input_shard_shape = shard_spec.shape;
         bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
         bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
         auto total_cores = shard_spec.grid;
@@ -96,11 +88,8 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
             }
         }
 
-        uint32_t input_nhw_volume = shard_spec.shape[0] * num_cores_nhw;
-        uint32_t calc_nhw_volume_padded =
-            tt::round_up(tt::div_up(calc_nhw_volume, num_cores_nhw), tt::constants::TILE_HEIGHT) * num_cores_nhw;
     } else {
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < input.logical_shape().rank(); i++) {
             TT_FATAL(
                 actual_shape[i] == input.logical_shape()[i],
                 "Size of the slice being written {} should match the size of the input tensor {} at dim {}. Got {}, "
@@ -130,18 +119,25 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
             in_place_unpad &= begins[3] == 0 && ends[3] == padded_output_shape[3];
             if (in_place_unpad) {
                 log_info(tt::LogOp, "In-place unpad optimization via copy");
-                ttnn::copy(DefaultQueueId, input_tensor, output_tensor);
+                ttnn::copy(input_tensor, output_tensor);
                 return output_tensor;
             }
         }
         log_debug(tt::LogOp, "Invoking SliceWriteDeviceOperation");
 
+        // If the operation has stride and output is tiled, convert output to RM
+        auto original_output_layout = output_tensor.layout();
+        if (rm_only_not_sharded) {
+            output_tensor = ttnn::to_layout(output_tensor, Layout::ROW_MAJOR);
+        }
         (void)tt::tt_metal::operation::run(
             SliceWriteDeviceOperation{ttnn::Shape(begins), ttnn::Shape(padded_ends), ttnn::Shape(step)},
             {input},
             {},
-            {output_tensor},
-            queue_id)[0];
+            {output_tensor})[0];
+        if (rm_only_not_sharded) {
+            output_tensor = ttnn::to_layout(output_tensor, original_output_layout);
+        }
         return output_tensor;
     }
 

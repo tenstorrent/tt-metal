@@ -6,9 +6,8 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/run_operation.hpp"
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "ttnn/tensor/tensor_accessor_args.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::experimental::reduction::detail {
 
@@ -66,9 +65,9 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    const auto single_tile_size = tt::tile_size(cb_data_format);
     const auto cb_1_data_format = datatype_to_dataformat_converter(DataType::BFLOAT16);
-    const auto cb_1_tile_size = tt_metal::detail::TileSize(cb_1_data_format);
+    const auto cb_1_tile_size = tt::tile_size(cb_1_data_format);
 
     const auto& input_shape = input.padded_shape();
     const auto [Wt, Ht, inner_tile_size, reduce_tile_size] =
@@ -102,7 +101,6 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     // When dim=0, nd sharded, tile sizes are the same, the shards are compatible
     // with the kernel accesses, tensor shape is divisible by shard shape, and
     // number of shards is larger than core count, divide the work by shards.
-    uint32_t input_shard_size = 1;
     uint32_t output_shard_size = 1;
     auto input_tile = input.tensor_spec().tile().get_tile_shape();
     auto output_tile = output.tensor_spec().tile().get_tile_shape();
@@ -150,32 +148,32 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     tt_metal::CircularBufferConfig cb_scr0_config =
         tt_metal::CircularBufferConfig(in0_t * single_tile_size, {{CBIndex::c_0, cb_data_format}})
             .set_page_size(CBIndex::c_0, single_tile_size);
-    auto cb_scr0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_scr0_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_scr0_config);
 
     tt_metal::CircularBufferConfig cb_scr1_config =
         tt_metal::CircularBufferConfig(in1_t * cb_1_tile_size, {{CBIndex::c_1, cb_1_data_format}})
             .set_page_size(CBIndex::c_1, cb_1_tile_size);
-    auto cb_scr1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_scr1_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_scr1_config);
 
     tt_metal::CircularBufferConfig cb_intermed0_config =
         tt_metal::CircularBufferConfig(
             intermed0_t * intermed_cb_single_tile_size, {{CBIndex::c_24, intermed_cb_data_format}})
             .set_page_size(CBIndex::c_24, intermed_cb_single_tile_size);
-    auto cb_intermed0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
 
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(out0_t * single_tile_size, {{CBIndex::c_16, cb_data_format}})
             .set_page_size(CBIndex::c_16, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args = {input_granularity, shard_factor, num_cores_to_be_used};
-    TensorAccessorArgs(*input.buffer()).append_args(reader_compile_time_args);
+    TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {shard_factor, num_cores_to_be_used};
-    TensorAccessorArgs(*output.buffer()).append_args(writer_compile_time_args);
+    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reader_reduce_nc.cpp";
@@ -199,7 +197,7 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     }
     const auto compute_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc.cpp";
-    const auto compute_kernel_1_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         compute_kernel_file,
         core_group_1,

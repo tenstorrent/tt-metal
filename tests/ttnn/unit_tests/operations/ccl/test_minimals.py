@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,13 +7,16 @@ import pytest
 from loguru import logger
 import ttnn
 import os
+from tracy import signpost
 
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
-from models.demos.llama3_subdevices.tt.model_config import (
+from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
+
+
+from conftest import is_6u
+from models.demos.llama3_70b_galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.utility_functions import skip_for_grayskull
 
 from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.rms_test import (
     run_rms_trace,
@@ -35,45 +38,79 @@ def run_allgather_only_with_trace(
     dim,
     num_links,
     output_mem_config,
-    multi_device_global_semaphore,
+    ccl_semaphore_handles,
+    barrier_semaphore_handles,
+    use_barrier,
     num_iter=20,
+    warmup_iters=20,
     subdevice_id=None,
+    profiler=BenchmarkProfiler(),
 ):
     # Compile Run
     logger.info("Compiling model")
     tt_out_tensor = ttnn.experimental.all_gather_async(
         input_tensor_mesh,
         dim,
-        multi_device_global_semaphore=multi_device_global_semaphore,
+        multi_device_global_semaphore=[ccl_semaphore_handles[0], ccl_semaphore_handles[1]],
         num_links=num_links,
         memory_config=output_mem_config,
         topology=all_gather_topology,
         subdevice_id=subdevice_id,
+        barrier_semaphore=barrier_semaphore_handles[0] if use_barrier else None,
     )
     ttnn.synchronize_device(mesh_device)
 
     # Capture trace
     logger.info("Capturing trace")
+    if warmup_iters > 0:
+        trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        for i in range(warmup_iters):
+            tt_out_tensor = ttnn.experimental.all_gather_async(
+                input_tensor_mesh,
+                dim,
+                multi_device_global_semaphore=[ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
+                num_links=num_links,
+                memory_config=output_mem_config,
+                topology=all_gather_topology,
+                subdevice_id=subdevice_id,
+                barrier_semaphore=barrier_semaphore_handles[i % 2] if use_barrier else None,
+            )
+            tt_out_tensor.deallocate(True)
+        ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for i in range(num_iter):
         tt_out_tensor = ttnn.experimental.all_gather_async(
             input_tensor_mesh,
             dim,
-            multi_device_global_semaphore=multi_device_global_semaphore,
+            multi_device_global_semaphore=[ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
             num_links=num_links,
             memory_config=output_mem_config,
             topology=all_gather_topology,
             subdevice_id=subdevice_id,
+            barrier_semaphore=barrier_semaphore_handles[i % 2] if use_barrier else None,
         )
+        if i != num_iter - 1:
+            tt_out_tensor.deallocate(True)
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
 
     # Run the op
     logger.info("Starting Trace perf test...")
+
+    profiler.start("rms-trace-warmup")
+    if warmup_iters > 0:
+        ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
+        ttnn.release_trace(mesh_device, trace_id_warmup)
+    profiler.end("rms-trace-warmup")
+
+    signpost("start")
+    profiler.start("rms-trace")
     ttnn.execute_trace(mesh_device, trace_id, blocking=False)
     ttnn.release_trace(mesh_device, trace_id)
-    ttnn.synchronize_device(mesh_device)
-
+    profiler.end("rms-trace")
+    signpost("stop")
+    time_taken = profiler.get_duration("rms-trace") - profiler.get_duration("rms-trace-warmup")
     return tt_out_tensor
 
 
@@ -94,6 +131,8 @@ def run_all_gather_impl(
     output_shard_shape=None,
     output_shard_grid=None,
     tensor_mem_layout=None,
+    warmup_iters=2,
+    use_barrier=False,
 ):
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
@@ -114,7 +153,13 @@ def run_all_gather_impl(
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
+    ccl_semaphore_handles = [
+        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters * 2)
+    ]
+    if use_barrier:
+        barrier_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
+    else:
+        barrier_semaphore_handles = None
 
     ### For sharded all gather only
     if bool(input_shard_shape) != bool(input_shard_grid) and bool(tensor_mem_layout) != bool(input_shard_grid):
@@ -162,7 +207,7 @@ def run_all_gather_impl(
     input_tensor_mesh_list = []
     output_tensor_goldens_list = []
 
-    for i in range(num_iters):
+    if trace_mode:
         output_tensor = torch.rand(output_shape).bfloat16()
         output_tensor_goldens_list.append(output_tensor)
         input_tensor_mesh = ttnn.from_torch(
@@ -180,6 +225,25 @@ def run_all_gather_impl(
         )
 
         input_tensor_mesh_list.append(input_tensor_mesh)
+    else:
+        for i in range(num_iters):
+            output_tensor = torch.rand(output_shape).bfloat16()
+            output_tensor_goldens_list.append(output_tensor)
+            input_tensor_mesh = ttnn.from_torch(
+                output_tensor,
+                device=mesh_device,
+                layout=layout,
+                dtype=input_dtype,
+                memory_config=input_mem_config,
+                mesh_mapper=ttnn.create_mesh_mapper(
+                    mesh_device,
+                    ttnn.MeshMapperConfig(
+                        [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, num_devices)
+                    ),
+                ),
+            )
+
+            input_tensor_mesh_list.append(input_tensor_mesh)
 
     tt_out_tensor_list = []
     if trace_mode:
@@ -190,8 +254,11 @@ def run_all_gather_impl(
             dim,
             num_links,
             output_mem_config,
-            multi_device_global_semaphore=ccl_semaphore_handles[0],
+            ccl_semaphore_handles=ccl_semaphore_handles,
+            barrier_semaphore_handles=barrier_semaphore_handles,
+            use_barrier=use_barrier,
             num_iter=num_iters,
+            warmup_iters=warmup_iters,
             subdevice_id=worker_sub_device_id,
         )
         tt_out_tensor_list.append(tt_out_tensor)
@@ -200,11 +267,12 @@ def run_all_gather_impl(
             tt_out_tensor = ttnn.experimental.all_gather_async(
                 input_tensor_mesh_list[i],
                 dim,
-                multi_device_global_semaphore=ccl_semaphore_handles[i],
+                multi_device_global_semaphore=[ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
                 num_links=num_links,
                 memory_config=output_mem_config,
                 topology=all_gather_topology,
                 subdevice_id=worker_sub_device_id,
+                barrier_semaphore=barrier_semaphore_handles[i % 2] if use_barrier else None,
             )
             tt_out_tensor_list.append(tt_out_tensor)
 
@@ -239,8 +307,8 @@ def run_all_gather_impl(
 
 
 # Enumerate the post-commit cases explicitly
-@pytest.mark.skipif(is_RING_6U, reason="This test is not for 6U devices")
-@skip_for_grayskull("Requires eth connected devices to run")
+@skip_for_blackhole("This is a wormhole test")
+@pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
 @pytest.mark.parametrize(
     "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
     [
@@ -303,6 +371,7 @@ def run_all_gather_impl(
     ],
 )
 @pytest.mark.parametrize("num_iters", [8])
+@pytest.mark.parametrize("use_barrier", [True, False])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_gather_only(
     t3k_mesh_device,
@@ -319,6 +388,7 @@ def test_all_gather_only(
     output_shard_shape,
     output_shard_grid,
     tensor_mem_layout,
+    use_barrier,
 ):
     run_all_gather_impl(
         t3k_mesh_device,
@@ -336,12 +406,93 @@ def test_all_gather_only(
         output_shard_shape=output_shard_shape,
         output_shard_grid=output_shard_grid,
         tensor_mem_layout=tensor_mem_layout,
+        use_barrier=use_barrier,
     )
 
 
 # Enumerate the post-commit cases explicitly
-@pytest.mark.skipif(is_RING_6U, reason="This test is not for 6U devices")
-@skip_for_grayskull("Requires eth connected devices to run")
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize(
+    "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
+    [
+        (
+            4,
+            [1, 1, 4096, 2048],
+            3,
+            ttnn.TILE_LAYOUT,
+            (64, 512),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+            (64, 2048),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [3])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.uint32,
+    ],
+)
+@pytest.mark.parametrize("warmup_iters, num_iters", [(10, 20)])
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 23887872,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
+def test_bh_trace_ag(
+    bh_1d_mesh_device,
+    num_devices,
+    output_shape,
+    dim,
+    num_links,
+    trace_mode,
+    input_dtype,
+    layout,
+    warmup_iters,
+    num_iters,
+    function_level_defaults,
+    input_shard_shape,
+    input_shard_grid,
+    output_shard_shape,
+    output_shard_grid,
+    tensor_mem_layout,
+):
+    if bh_1d_mesh_device.shape[0] != num_devices:
+        pytest.skip("Ring configuration requires the entire row or column so it loops around")
+    profiler = BenchmarkProfiler()
+    run_all_gather_impl(
+        bh_1d_mesh_device,
+        num_devices,
+        output_shape,
+        dim,
+        num_links,
+        input_dtype,
+        layout,
+        function_level_defaults,
+        input_shard_shape,
+        input_shard_grid,
+        use_barrier=True,
+        all_gather_topology=ttnn.Topology.Ring,
+        num_iters=num_iters,
+        output_shard_shape=output_shard_shape,
+        output_shard_grid=output_shard_grid,
+        tensor_mem_layout=tensor_mem_layout,
+        warmup_iters=warmup_iters,
+        trace_mode=trace_mode,
+    )
+
+
+# Enumerate the post-commit cases explicitly
+@skip_for_blackhole("This is a wormhole test")
+@pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
 @pytest.mark.parametrize(
     "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
     [
@@ -415,8 +566,8 @@ def test_tg_trace_rms_fuse(
 
 
 # Enumerate the post-commit cases explicitly
-@pytest.mark.skipif(not is_RING_6U, reason="This test is only for 6U devices")
-@skip_for_grayskull("Requires eth connected devices to run")
+@skip_for_blackhole("This is a wormhole test")
+@pytest.mark.skipif(not is_6u(), reason="This test is only for 6U devices")
 @pytest.mark.parametrize(
     "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
     [
@@ -424,7 +575,7 @@ def test_tg_trace_rms_fuse(
         (
             4,
             8192,
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 7))}),
             ttnn.CoreRangeSet(
                 [
                     ttnn.CoreRange(
@@ -461,7 +612,6 @@ def test_6u_trace_rms_fuse(
     num_links,
     num_iters,
     warmup_iters,
-    use_program_cache,
     function_level_defaults,
     input_shard_grid,
     output_shard_grid,
@@ -476,7 +626,6 @@ def test_6u_trace_rms_fuse(
         num_devices,
         elements_per_batch,
         num_links,
-        use_program_cache,
         function_level_defaults,
         input_shard_grid,
         output_shard_grid,
@@ -492,8 +641,8 @@ def test_6u_trace_rms_fuse(
 
 
 # Enumerate the post-commit cases explicitly
-@pytest.mark.skipif(is_RING_6U, reason="This test is not for 6U devices")
-@skip_for_grayskull("Requires eth connected devices to run")
+@skip_for_blackhole("This is a wormhole test")
+@pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
 @pytest.mark.parametrize(
     "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
     [
@@ -568,8 +717,8 @@ def test_rms_fuse(
     )
 
 
-@pytest.mark.skipif(is_RING_6U, reason="This test is not for 6U devices")
-@skip_for_grayskull("Requires eth connected devices to run")
+@skip_for_blackhole("This is a wormhole test")
+@pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
 @pytest.mark.parametrize(
     "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
     [
@@ -682,7 +831,7 @@ def test_concat_fuse(
     )
 
 
-@pytest.mark.skipif(not is_RING_6U, reason="This test is only for 6U devices")
+@skip_for_blackhole("This is a wormhole test")
 @pytest.mark.skipif(not is_6u(), reason="skip when not 6u")
 @pytest.mark.parametrize(
     "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",

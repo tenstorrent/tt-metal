@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -71,7 +71,6 @@ bool compare_tensors(const tt::tt_metal::Tensor& tensor1, const tt::tt_metal::Te
 
 TEST_F(TensorFileTest, SerializeDeserializeNamedParameters) {
     ttml::serialization::MsgPackFile serializer;
-    auto* device = &ttml::autograd::ctx().get_device();
     auto model_params = ttml::modules::MultiLayerPerceptronParameters{
         .input_features = 128, .hidden_features = {256}, .output_features = 10};
     ttml::modules::MultiLayerPerceptron mlp_to_write(model_params);

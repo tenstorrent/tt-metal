@@ -7,6 +7,7 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include <algorithm>
 #include <tt-metalium/work_split.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -15,13 +16,15 @@ namespace ttnn {
 
 void AllGatherConcat::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    const auto& layout = input_tensors[0].layout();
-    const auto& dtype = input_tensors[0].dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
     const auto input_core_ranges = input_tensor.buffer()->shard_spec().grid().ranges();
     const auto& padded_input_shape = input_tensor.padded_shape();
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
-
+    TT_FATAL(
+        (tt::tt_metal::hal::get_arch_name() != "blackhole") ||
+            (input_tensor.memory_config().buffer_type() != BufferType::DRAM),
+        "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
+        "by the fabric api");
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_gather need to be allocated in buffers on device!");
     TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0 but has {}", this->num_links);
@@ -56,9 +59,7 @@ std::vector<ttnn::TensorSpec> AllGatherConcat::compute_output_specs(const std::v
     auto head_dim = input_shape[3];
     // pad batch to 32 if necessary
     uint32_t batch_size = 32;
-    if (batch < batch_size) {
-        batch = batch_size;
-    }
+    batch = std::max(batch, batch_size);
     auto hidden_dim = num_heads * head_dim;
 
     Shape output_shape({sequence_length, 1, batch, hidden_dim});
@@ -84,7 +85,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program_at
     log_debug(tt::LogOp, "DEBUG: create_program is called");
 
     const auto& input_tensor = input_tensors[0];
-    auto mesh_device = input_tensor.mesh_device();
+    auto mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
@@ -112,7 +113,6 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program_at
     }
 
     log_trace(tt::LogOp, "Detected all gather specialized shape. all_gather_concat_llama_sharded is called");
-    CoreCoord compute_with_storage_grid_size = input_tensors[0].device()->compute_with_storage_grid_size();
     return all_gather_concat_llama_sharded(
         input_tensors[0],
         input_tensors[1],

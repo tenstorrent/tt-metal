@@ -10,18 +10,18 @@
 #include <string>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "fmt/base.h"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "metal_soc_descriptor.h"
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 
 void memset_l1(tt::stl::Span<const uint32_t> mem_vec, uint32_t chip_id, uint32_t start_addr) {
     // Utility function that writes a memory vector to L1 for all cores at a specific start address.
     const metal_SocDescriptor& sdesc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(chip_id);
-    for (auto& worker_core : sdesc.get_cores(CoreType::TENSIX, CoordSystem::PHYSICAL)) {
-        tt::llrt::write_hex_vec_to_core(chip_id, worker_core, mem_vec, start_addr);
+    for (auto& worker_core : sdesc.get_cores(tt::CoreType::TENSIX, tt::CoordSystem::NOC0)) {
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(chip_id, worker_core, mem_vec, start_addr);
     }
 }
 

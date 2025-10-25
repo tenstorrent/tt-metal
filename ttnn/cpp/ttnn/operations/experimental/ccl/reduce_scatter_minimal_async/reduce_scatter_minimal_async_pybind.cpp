@@ -28,38 +28,50 @@ void bind_reduce_scatter_minimal_async(pybind11::module& module, const ccl_opera
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               ttnn::Tensor& persistent_intermediate_buffer,
-               ttnn::Tensor& persistent_output_buffer,
+               const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
                const int32_t dim,
                const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+               const std::optional<GlobalSemaphore>& barrier_semaphore,
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::MemoryConfig>& intermediate_memory_config,
                const ttnn::ccl::Topology topology,
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               std::optional<uint32_t> cluster_axis) -> ttnn::Tensor {
+               std::optional<uint32_t> cluster_axis,
+               std::optional<uint32_t> chunks_per_sync,
+               std::optional<uint32_t> num_workers_per_link,
+               std::optional<uint32_t> num_buffers_per_channel) -> ttnn::Tensor {
                 return self(
                     input_tensor,
-                    persistent_intermediate_buffer,
-                    persistent_output_buffer,
+                    persistent_output_buffers,
                     dim,
                     multi_device_global_semaphore,
+                    barrier_semaphore,
                     num_links,
                     memory_config,
+                    intermediate_memory_config,
                     topology,
                     subdevice_id,
-                    cluster_axis);
+                    cluster_axis,
+                    chunks_per_sync,
+                    num_workers_per_link,
+                    num_buffers_per_channel);
             },
             py::arg("input_tensor"),
-            py::arg("persistent_intermediate_buffer"),
-            py::arg("persistent_output_buffer"),
+            py::arg("persistent_output_buffers") = std::nullopt,
             py::arg("dim"),
             py::arg("multi_device_global_semaphore"),
             py::kw_only(),
+            py::arg("barrier_semaphore") = std::nullopt,
             py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
+            py::arg("intermediate_memory_config") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Ring,
             py::arg("subdevice_id") = std::nullopt,
-            py::arg("cluster_axis") = std::nullopt});
+            py::arg("cluster_axis") = std::nullopt,
+            py::arg("chunks_per_sync") = std::nullopt,
+            py::arg("num_workers_per_link") = std::nullopt,
+            py::arg("num_buffers_per_channel") = std::nullopt});
 }
 
 }  // namespace detail
@@ -69,7 +81,6 @@ void py_bind_reduce_scatter_minimal_async(pybind11::module& module) {
         module,
         ttnn::experimental::reduce_scatter_minimal_async,
         R"doc(
-
         Performs an reduce-scatter operation on multi-device :attr:`input_tensor` across all devices.
 
         Args:

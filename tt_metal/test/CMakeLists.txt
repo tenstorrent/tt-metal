@@ -8,8 +8,11 @@ target_link_libraries(
     tt-metalium-validation-smoke
     PRIVATE
         TT::SystemHealth::Smoke
+        TT::Metalium::Test::Fabric::Smoke
+        TT::Metalium::Test::API
         TT::Metalium::Test::Device::Smoke
         TT::Metalium::Test::Dispatch::Smoke
+        TT::Metalium::Test::SFPI
         TT::Metalium::Test::STL::Smoke
 )
 
@@ -22,4 +25,12 @@ target_link_libraries(tt-metalium-validation-basic PRIVATE TT::Metalium::Test::D
 
 install(TARGETS tt-metalium-validation-basic RUNTIME COMPONENT metalium-validation)
 
-install(FILES lsan.supp DESTINATION ${CMAKE_INSTALL_DATADIR}/tt-metalium CONFIGURATIONS ASan COMPONENT metalium-runtime)
+install(
+    FILES
+        lsan.supp
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/tt-metalium
+    CONFIGURATIONS
+        ASan
+        ASanCoverage
+    COMPONENT metalium-runtime
+)

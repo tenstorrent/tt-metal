@@ -255,7 +255,7 @@ class MeshDevice {
    Allocator lock_step_allocator_;
    std::array<MeshCommandQueue, NUM_DISPATCH_INTERFACES> physical_dispatch_interface_;
    MeshConfig virtual_mesh_config_;
-   std::vector<chip_id_t> ordered_physical_device_ids_ = {};
+   std::vector<ChipId> ordered_physical_device_ids_ = {};
    uint8_t num_virtual_cqs_ = 1;
 
    // ==== These functions are called when MeshDevice is constructed ====
@@ -337,7 +337,7 @@ In a single-device context, a DeviceHandle to a Device can be requested as follo
 ```cpp
 // Creation API for Device
 DeviceHandle CreateDevice(
-   chip_id_t device_id,
+   ChipId device_id,
    const uint8_t num_hw_cqs,
    const size_t l1_small_size,
    const size_t trace_region_size,
@@ -381,7 +381,7 @@ In a single-device context, a CommandQueueHandle is associated with a CQ tied to
 
 **All APIs discussed in this section will be required for V1.**
 
-This section introduces the MeshBuffer and the MeshAllocator, through which memory management mechanisms exposed by TT-Metallium are extended to a distributed address space across a DRAM and SRAM banks in a Virtual Mesh.
+This section introduces the MeshBuffer and the MeshAllocator, through which memory management mechanisms exposed by TT-Metalium are extended to a distributed address space across a DRAM and SRAM banks in a Virtual Mesh.
 
 ### 3.3.1 Background: Device Buffer and Single-Device Allocator
 
@@ -658,7 +658,7 @@ As mentioned previously, Host APIs to configure individual program attributes in
 
 ```cpp
 // Creates an empty MeshWorkload object
-MeshWorkloadHandle CreateMeshWorkload();
+MeshWorkload MeshWorkload();
 
 // Wrapper around mesh_workload.add_program. By default, the added program runs on the
 // entire Virtual Mesh.
@@ -719,7 +719,7 @@ MeshWorkload Matmul::create_mesh_workload(
     auto mesh = input_tensors.at(0).mesh();
 
     // Create an empty MeshWorkload
-    MeshWorkloadHandle dp_matmul_workload = distributed::CreateMeshWorkload();
+    MeshWorkloadHandle dp_matmul_workload = distributed::MeshWorkload();
 
     // Create a matmul program configured for a single device
     auto program_with_callbacks = this->create_program(
@@ -771,7 +771,7 @@ distributed::MeshWorkload AllGather::create_mesh_workload(
     const std::vector<MeshTensor>& input_tensors,
     std::vector<MeshTensor>& output_tensors) const {
 
-    MeshWorkloadHandle all_gather_workload = distributed::CreateMeshWorkload();
+    MeshWorkloadHandle all_gather_workload = distributed::MeshWorkload();
 
     auto program_with_callbacks = this->create_program(input_tensors, output_tensors);
 
@@ -806,7 +806,7 @@ distributed::MeshWorkload CombinedWorkload::create_mesh_workload(
     std::vector<MeshTensor>& output_tensors) const {
 
     // Create an empty MeshWorkload
-    MeshWorkloadHandle combined_workload = distributed::CreateMeshWorkload();
+    MeshWorkloadHandle combined_workload = distributed::MeshWorkload();
 
     // Populate the MeshWorkload with a unary and binary operation, each runs on a
     // different grid
@@ -1174,13 +1174,13 @@ EnqueueWriteBuffer(device_0_cq_1_handle, mul_src_1, random_data_1);
 // Record that inputs were written
 EnqueueRecordEvent(device_0_cq_1_handle, device_0_write_event);
 // Wait until inputs were written
-EnqueueWaitForEvent(device_0_cq_0_handle, device_0_write_event);
+device_0_cq_0_handle.enqueue_wait_for_event(device_0_write_event);
 // Run compute
 EnqueueProgram(device_0_cq_0_handle, mul_program);
 // Record that compute was run and is completed
 EnqueueRecordEvent(device_0_cq_0_handle, device_0_compute_event);
 // Wait until compute has completed
-EnqueueWaitForEvent(device_0_cq_1_handle, device_0_compute_event);
+device_0_cq_1_handle.enqueue_wait_for_event(device_0_compute_event);
 // Read outputs
 EnqueueReadBuffer(device_0_cq_1_handle, mul_dst, mul_readback_data);
 
@@ -1627,20 +1627,20 @@ public:
 The functions listed below allow a MeshTrace to be captured, binarized and run/replayed on a MeshDevice post binarization. These are exposed through the MeshDevice class, which maintains an internal state of the live MeshTraces, existing in its distributed DRAM address space. The main APIs exposed for the MeshTrace feature are wrappers around these functions.
 
 ```cpp
-// Maps to BeginMeshTraceCapture
-uint32_t MeshDevice::begin_trace_capture(CommandQueueHandle cq_handle);
+// Maps to BeginTraceCapture
+void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
 
-// Maps to EndMeshTraceCapture
-void MeshDevice::end_trace(CommandQueueHandle cq_handle, const uint32_t tid);
 
-// Maps to EnqueueMeshTrace
-void MeshDevice::replay_trace(CommandQueueHandle cq_handle, const uint32_t tid, const bool blocking);
+void MeshDevice::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
 
-// Maps to ReleaseTrace
-void MeshDevice::release_trace(const uint32_t tid);
+
+void MeshDevice::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
+
+
+void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id);
 
 // Get the underlying MeshTrace metadata corresponding to an ID.
-std::shared_ptr<MeshTraceBuffer> MeshDevice::get_trace(const uint32_t tid);
+std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& trace_id);
 ```
 
 ### 3.12.2 MeshTrace Capture and Execution
@@ -2320,10 +2320,10 @@ std::unordered_set<CoreCoord> Device::get_inactive_ethernet_cores() const;
 bool Device::is_inactive_ethernet_core(CoreCoord logical_core) const;
 
 // Get the chip and coords of the ethernet core connected to the input.
-std::tuple<chip_id_t, CoreCoord> Device::get_connected_ethernet_core(CoreCoord eth_core) const;
+std::tuple<ChipId, CoreCoord> Device::get_connected_ethernet_core(CoreCoord eth_core) const;
 
 // Get the ethernet sockets on this device that are connected to the input chip_id
-std::vector<CoreCoord> Device::get_ethernet_sockets(chip_id_t connected_chip_id) const;
+std::vector<CoreCoord> Device::get_ethernet_sockets(ChipId connected_chip_id) const;
 
 // Check if the device is accessible over MMIO.
 bool Device::is_mmio_capable() const;
@@ -2331,37 +2331,37 @@ bool Device::is_mmio_capable() const;
 // ======== These APIs use tt_cluster directly. Not exposed through Device ========
 
 // Get the SOC descriptor for this chip
-const metal_SocDescriptor& tt_cluster::get_soc_desc(chip_id_t chip) const;
+const metal_SocDescriptor& tt_cluster::get_soc_desc(ChipId chip) const;
 
 // Get harvesting information for this chip
-uint32_t tt_cluster::get_harvesting_mask(chip_id_t chip) const;
+uint32_t tt_cluster::get_harvesting_mask(ChipId chip) const;
 
 // Get the clock frequency for this chip
-int tt_cluster::get_device_aiclk(const chip_id_t& chip_id) const;
+int tt_cluster::get_device_aiclk(const ChipId& chip_id) const;
 
 // Get the MMIO mapped chip connected to the input device id
-chip_id_t tt_cluster::get_associated_mmio_device(chip_id_t device_id) const;
+ChipId tt_cluster::get_associated_mmio_device(ChipId device_id) const;
 
 // Get the assigned Host Memory channel for this device
-uint16_t tt_cluster::get_assigned_channel_for_device(chip_id_t device_id) const;
+uint16_t tt_cluster::get_assigned_channel_for_device(ChipId device_id) const;
 
 // Get the number of host channels for this device
-uint32_t tt_cluster::get_num_host_channels(chip_id_t device_id) const;
+uint32_t tt_cluster::get_num_host_channels(ChipId device_id) const;
 
 // Get the host channel size for this device
-uint32_t tt_cluster::get_host_channel_size(chip_id_t device_id, uint32_t channel) const;
+uint32_t tt_cluster::get_host_channel_size(ChipId device_id, uint32_t channel) const;
 
 // Get the architecture for this cluster
 ARCH tt_cluster::arch();
 
 // Get the product type for this device
-BoardType tt_cluster::get_board_type(chip_id_t chip_id) const;
+BoardType tt_cluster::get_board_type(ChipId chip_id) const;
 
 // Check if the cluster is a galaxy system
 bool tt_cluster::is_galaxy_cluster() const;
 
 // Get chip id to ethernet coord map
-unordered_map<chip_id_t, eth_coord_t> tt_cluster::get_user_chip_ethernet_coordinates() const;
+unordered_map<ChipId, EthCoord> tt_cluster::get_user_chip_ethernet_coordinates() const;
 
 // Get the number of devices in the Physical Cluster
 size_t tt_cluster::number_of_devices();

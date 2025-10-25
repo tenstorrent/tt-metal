@@ -24,7 +24,7 @@ from models.experimental.grok.tt.grok_common import (
 from models.experimental.grok.tt.grok_model import TtTransformer
 from models.experimental.grok.tt.model_config import TtModelArgs
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import profiler
+from models.common.utility_functions import profiler
 from transformers import AutoTokenizer
 
 
@@ -98,7 +98,7 @@ def test_grok_model_perf(
     profiler.print(units="ms")
     compile_and_iter_time = profiler.get("model_run_for_inference_0")
 
-    ttnn.DumpDeviceProfiler(t3k_mesh_device)
+    ttnn.ReadDeviceProfiler(t3k_mesh_device)
 
     if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
         signpost("Model perf run")

@@ -16,7 +16,7 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/distributed/distributed_tensor_config.hpp"
+#include "ttnn/distributed/tensor_topology.hpp"
 #include <tt-metalium/host_buffer.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -27,6 +27,9 @@
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt_stl/reflection.hpp>
+#include <tt_stl/optional_reference.hpp>
+#include "ttnn/tensor/memory_config/memory_config.hpp"
+#include "ttnn/tensor/layout/layout.hpp"
 #include "types.hpp"
 
 namespace tt {
@@ -61,8 +64,8 @@ public:
     Tensor& operator=(Tensor&& other) noexcept;
     ~Tensor();
 
-    // Constructs a tensor with `Storage` and `TensorSpec`.
-    [[nodiscard]] Tensor(Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config);
+    // Constructs a tensor with `Storage`, `TensorSpec`, and `TensorTopology`.
+    [[nodiscard]] Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
 
     // Constructors of `Tensor` that take physical data encoded in `HostBuffer`.
     // The encoded data type and physical size of the data must match the specified tensor physical shape and data type.
@@ -91,7 +94,7 @@ public:
         tt::stl::Span<const T> buffer,
         const TensorSpec& spec,
         distributed::MeshDevice* device = nullptr,
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId,
+        std::optional<ttnn::QueueId> cq_id = std::nullopt,
         T pad_value = 0);
 
     // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
@@ -134,7 +137,7 @@ public:
         const std::vector<T>& buffer,
         const TensorSpec& spec,
         distributed::MeshDevice* device = nullptr,
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId,
+        std::optional<ttnn::QueueId> cq_id = std::nullopt,
         T pad_value = 0) {
         return from_span(tt::stl::Span<const T>(buffer), spec, device, cq_id, pad_value);
     }
@@ -146,7 +149,7 @@ public:
         std::vector<T>&& buffer,
         const TensorSpec& spec,
         distributed::MeshDevice* device = nullptr,
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId,
+        std::optional<ttnn::QueueId> cq_id = std::nullopt,
         T pad_value = 0);
 
     // Converts a `Tensor` to a `std::vector<T>`.
@@ -155,24 +158,22 @@ public:
     //
     // If the tensor resides on a device, it will be brough back to host.
     template <typename T>
-    [[nodiscard]] std::vector<T> to_vector(ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
+    [[nodiscard]] std::vector<T> to_vector(std::optional<ttnn::QueueId> cq_id = std::nullopt) const;
 
-    [[nodiscard]] Tensor to_device(
-        IDevice* target_device,
-        const MemoryConfig& mem_config = MemoryConfig{},
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
+    template <typename T>
+    [[nodiscard]] T item(std::optional<ttnn::QueueId> cq_id = std::nullopt) const;
 
     [[nodiscard]] Tensor to_device(
         distributed::MeshDevice* mesh_device,
-        const MemoryConfig& mem_config = MemoryConfig{},
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
+        ttsl::optional_reference<const MemoryConfig> mem_config = std::nullopt,
+        std::optional<ttnn::QueueId> cq_id = std::nullopt) const;
 
     [[nodiscard]] Tensor to_layout(Layout target_layout) const;
 
     [[nodiscard]] Tensor pad(
         const ttnn::Shape& output_padded_shape, const ttnn::Shape& input_tensor_start, float pad_value) const;
 
-    [[nodiscard]] Tensor cpu(bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
+    [[nodiscard]] Tensor cpu(bool blocking = true, std::optional<ttnn::QueueId> cq_id = std::nullopt) const;
 
     [[nodiscard]] Tensor unpad(const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) const;
 
@@ -195,22 +196,11 @@ public:
     // ======================================================================================
     [[nodiscard]] Tensor reshape(const ttnn::Shape& new_shape) const;
     [[nodiscard]] Tensor reshape(const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape) const;
+
+    Tensor with_tensor_topology(TensorTopology tensor_topology) const;
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
-    // TODO: #22090 - Remove the following getters, after giving clients enough time to migrate.
-    [[deprecated("Use storage() instead")]] const Storage& get_storage() const;
-    [[deprecated("Use storage() instead")]] Storage& get_storage();
-    [[deprecated("Use dtype() instead")]] DataType get_dtype() const;
-    [[deprecated("Use layout() instead")]] Layout get_layout() const;
-    [[deprecated("Use logical_shape() instead")]] const ttnn::Shape& get_logical_shape() const;
-    [[deprecated("Use padded_shape() instead")]] const ttnn::Shape& get_padded_shape() const;
-    [[deprecated("Use tensor_spec() instead")]] const TensorSpec& get_tensor_spec() const;
-    [[deprecated("Use logical_volume() instead")]] uint64_t get_logical_volume() const;
-    [[deprecated("Use physical_volume() instead")]] uint32_t volume() const;
-    [[deprecated("Use distributed_tensor_config() instead")]] const DistributedTensorConfig&
-    get_distributed_tensor_config() const;
-
     const Storage& storage() const;
     Storage& storage();
     DataType dtype() const;
@@ -220,8 +210,10 @@ public:
     const TensorSpec& tensor_spec() const;
     uint64_t logical_volume() const;
     uint64_t physical_volume() const;
-    const DistributedTensorConfig& distributed_tensor_config() const;
     const MemoryConfig& memory_config() const;
+
+    // Multi-device topology configuration - tracks how tensor is distributed across mesh devices
+    const TensorTopology& tensor_topology() const;
 
     // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
     const std::optional<ShardSpec>& shard_spec() const;
@@ -255,12 +247,9 @@ public:
     // Throws if the tensor is not allocated on a device.
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const;
 
-    // TODO: #21099 - Remove the overload `mesh_device()`, and instead use `device()`.
-    distributed::MeshDevice* mesh_device() const;
-
     // Returns the device the tensor is allocated on.
     // Throws if the tensor is not allocated on a device.
-    IDevice* device() const;
+    distributed::MeshDevice* device() const;
 
     bool is_sharded() const;
 
@@ -274,7 +263,7 @@ public:
     }
 
 private:
-    void init(Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config);
+    void init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     void deallocate_impl(bool force);
 };
 
@@ -291,28 +280,18 @@ Tensor create_device_tensor(
 
 // The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors
 void memcpy(
-    CommandQueue& queue,
-    void* dst,
-    const Tensor& src,
-    const std::optional<BufferRegion>& region = std::nullopt,
-    bool blocking = true);
-void memcpy(
     distributed::MeshCommandQueue& queue,
     void* dst,
     const Tensor& src,
     const std::optional<BufferRegion>& region = std::nullopt,
     bool blocking = true);
 
-void memcpy(
-    CommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
 void memcpy(
     distributed::MeshCommandQueue& queue,
     Tensor& dst,
     const void* src,
     const std::optional<BufferRegion>& region = std::nullopt);
 
-void memcpy(
-    CommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 void memcpy(
     distributed::MeshCommandQueue& queue,
     Tensor& dst,
@@ -334,7 +313,8 @@ Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::Mes
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
 
 // Writes tensor from `src` to `dst`; supports only host-to-device and device-to-host transfers.
-void write_tensor(const Tensor& src, Tensor& dst, bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
+void write_tensor(
+    const Tensor& src, Tensor& dst, bool blocking = true, std::optional<ttnn::QueueId> cq_id = std::nullopt);
 
 Tensor set_tensor_id(const Tensor& tensor);
 

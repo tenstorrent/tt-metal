@@ -6,7 +6,7 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <stdint.h>
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -35,21 +35,22 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/semaphore.hpp>
+#include "impl/buffers/semaphore.hpp"
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/math.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"
+#include <tt-metalium/sub_device.hpp>
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;
 constexpr uint32_t MIN_KERNEL_SIZE_BYTES = 32;  // overhead
 constexpr uint32_t DEFAULT_KERNEL_SIZE_K = 1;
 constexpr uint32_t MAX_CBS = 32;
-constexpr uint32_t MAX_ARGS = 255;
+constexpr uint32_t MAX_ARGS = 341;
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // Test dispatch program performance
@@ -76,6 +77,7 @@ struct TestInfo {
     uint32_t n_sems{0};
     uint32_t n_kgs{1};
     uint32_t n_cb_gs{1};
+    uint32_t n_subdevice_ranges{1};
     bool brisc_enabled{true};
     bool ncrisc_enabled{true};
     bool trisc_enabled{true};
@@ -87,6 +89,8 @@ struct TestInfo {
     bool dispatch_from_eth{false};
     bool use_all_cores{false};
     bool load_prefetcher{false};
+    // Use the entire leftmost column of cores.
+    bool use_left_cores{false};
 };
 
 std::tuple<uint32_t, uint32_t> get_core_count() {
@@ -130,6 +134,7 @@ void init(const std::vector<std::string>& input_args, TestInfo& info) {
             LogTest, " -ca: number of common runtime args multicast to all cores (default {}, max {})", 0, MAX_ARGS);
         log_info(LogTest, "  -S: number of semaphores (default {}, max {})", 0, NUM_SEMAPHORES);
         log_info(LogTest, " -kg: number of kernel groups (default 1)");
+        log_info(LogTest, " -sd: number of subdevices core ranges (default 1)");
         log_info(LogTest, "  -g: use a 4 byte global variable (additional spans");
         log_info(LogTest, " -rs: run \"slow\" kernels for exactly <n> cycles (default 0)");
         log_info(LogTest, " -rf: run \"fast\" kernels for exactly <n> cycles (default 0)");
@@ -167,6 +172,7 @@ void init(const std::vector<std::string>& input_args, TestInfo& info) {
     info.n_common_args = test_args::get_command_option_uint32(input_args, "-ca", 0);
     info.n_sems = test_args::get_command_option_uint32(input_args, "-S", 0);
     info.n_kgs = test_args::get_command_option_uint32(input_args, "-kg", 1);
+    info.n_subdevice_ranges = test_args::get_command_option_uint32(input_args, "-sd", 1);
     info.use_global = test_args::has_command_option(input_args, "-g");
     info.time_just_finish = test_args::has_command_option(input_args, "-f");
     info.fast_kernel_cycles = test_args::get_command_option_uint32(input_args, "-rf", 0);
@@ -220,13 +226,42 @@ void init(const std::vector<std::string>& input_args, TestInfo& info) {
 }
 
 void set_runtime_args(
-    tt_metal::Program& program, tt_metal::KernelHandle kernel_id, vector<uint32_t>& args, CoreRange kg) {
-    for (int core_idx_y = kg.start_coord.y; core_idx_y <= kg.end_coord.y; core_idx_y++) {
-        for (int core_idx_x = kg.start_coord.x; core_idx_x <= kg.end_coord.x; core_idx_x++) {
-            CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
-            tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
+    tt_metal::Program& program, tt_metal::KernelHandle kernel_id, vector<uint32_t>& args, const CoreRangeSet& kgset) {
+    for (auto& kg : kgset.ranges()) {
+        for (int core_idx_y = kg.start_coord.y; core_idx_y <= kg.end_coord.y; core_idx_y++) {
+            for (int core_idx_x = kg.start_coord.x; core_idx_x <= kg.end_coord.x; core_idx_x++) {
+                CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
+                tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
+            }
         }
     }
+}
+tt_metal::CoreRangeSet get_subdevice_core_range_set(const TestInfo& info, CoreRange all_core_range) {
+    std::set<CoreRange> core_range_set;
+    uint32_t total_core_x = all_core_range.end_coord.x - all_core_range.start_coord.x + 1;
+    if (info.n_subdevice_ranges > all_core_range.end_coord.x + 1) {
+        log_fatal(tt::LogTest, "Too many subdevice ranges for Worker core width");
+    }
+    if (info.n_subdevice_ranges > all_core_range.end_coord.y + 1) {
+        log_fatal(tt::LogTest, "Too many subdevice ranges for Worker core height");
+    }
+    // Construct/filter each column individually.
+    for (size_t i = 0; i < total_core_x; i++) {
+        uint32_t subdevice_subtract_amount = 0;
+        if (i >= total_core_x - info.n_subdevice_ranges) {
+            // First subdevice range is wide, remaining columns shrink by 1 each time.
+            uint32_t offset = i - (total_core_x - info.n_subdevice_ranges);
+            subdevice_subtract_amount = offset;
+        }
+
+        CoreRange column_core_range{
+            CoreCoord(all_core_range.start_coord.x + i, all_core_range.start_coord.y),
+            CoreCoord(all_core_range.start_coord.x + i, all_core_range.end_coord.y - subdevice_subtract_amount)};
+
+        core_range_set.insert(column_core_range);
+    }
+
+    return tt_metal::CoreRangeSet{core_range_set};
 }
 
 uint32_t get_num_kernels(const TestInfo& info) {
@@ -247,7 +282,10 @@ uint32_t get_num_kernels(const TestInfo& info) {
 }
 
 bool initialize_program(
-    const TestInfo& info, std::shared_ptr<MeshDevice> mesh_device, tt_metal::Program& program, uint32_t run_cycles) {
+    const TestInfo& info,
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    tt_metal::Program& program,
+    uint32_t run_cycles) {
     program = tt_metal::CreateProgram();
 
     std::map<std::string, std::string> defines = {{"KERNEL_BYTES", std::to_string(info.kernel_size)}};
@@ -273,16 +311,22 @@ bool initialize_program(
         for (int j = 0; j < info.n_cbs; j++) {
             tt_metal::CircularBufferConfig cb_config =
                 tt_metal::CircularBufferConfig(16, {{j, tt::DataFormat::Float16_b}}).set_page_size(j, 16);
-            auto cb = tt_metal::CreateCircularBuffer(program, cbg, cb_config);
+            tt_metal::CreateCircularBuffer(program, cbg, cb_config);
         }
         cbg.start_coord = {cbg.end_coord.x + 1, cbg.end_coord.y};
         cbg.end_coord = cbg.start_coord;
     }
 
     // first kernel group is possibly wide, remaining kernel groups are 1 column each
-    CoreRange kg = {info.workers.start_coord, {info.workers.end_coord.x - info.n_kgs + 1, info.workers.end_coord.y}};
+    CoreRange total_kg = {
+        info.workers.start_coord, {info.workers.end_coord.x - info.n_kgs + 1, info.workers.end_coord.y}};
+    std::array<CoreRangeSet, NumHalProgrammableCoreTypes> core_ranges;
+    auto grid_size = mesh_device->compute_with_storage_grid_size();
+    CoreRange all_core_range{{0, 0}, {grid_size.x - 1, grid_size.y - 1}};
+    CoreRangeSet subdevice_core_ranges_set = get_subdevice_core_range_set(info, all_core_range);
     for (uint32_t i = 0; i < info.n_kgs; i++) {
         defines.insert(std::pair<std::string, std::string>(std::string("KG_") + std::to_string(i), ""));
+        CoreRangeSet kg = CoreRangeSet{total_kg}.intersection(subdevice_core_ranges_set);
 
         if (info.brisc_enabled) {
             auto dm0 = tt_metal::CreateKernel(
@@ -320,8 +364,8 @@ bool initialize_program(
             tt_metal::SetCommonRuntimeArgs(program, compute, common_args);
         }
 
-        kg.start_coord = {kg.end_coord.x + 1, kg.end_coord.y};
-        kg.end_coord = kg.start_coord;
+        total_kg.end_coord.x++;
+        total_kg.start_coord.x = total_kg.end_coord.x;
     }
 
     if (info.erisc_enabled) {
@@ -366,7 +410,7 @@ struct ProgramExecutor {
     uint32_t total_program_iterations;
 
     ProgramExecutor(std::function<void()> exec, std::function<void()> warm, uint32_t total_iters) :
-        execute_programs(exec), warmup_programs(warm), total_program_iterations(total_iters) {}
+        execute_programs(std::move(exec)), warmup_programs(std::move(warm)), total_program_iterations(total_iters) {}
 };
 
 // Helper function to create program executor for standard test
@@ -378,8 +422,8 @@ ProgramExecutor create_standard_executor(
     // Create mesh workloads
     mesh_workloads.resize(programs.size());
     for (auto i = 0; i < programs.size(); i++) {
-        AddProgramToMeshWorkload(
-            mesh_workloads[i], std::move(programs[i]), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
+        mesh_workloads[i].add_program(
+            MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)), std::move(programs[i]));
     }
     std::function warmup_func{[&info, &mesh_cq, &mesh_workloads]() {
         for (int i = 0; i < info.warmup_iterations; i++) {
@@ -411,8 +455,8 @@ ProgramExecutor create_load_prefetcher_executor(
     // Create mesh workload
     mesh_workloads.resize(programs.size());
     for (auto i = 0; i < programs.size(); i++) {
-        AddProgramToMeshWorkload(
-            mesh_workloads[i], std::move(programs[i]), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
+        mesh_workloads[i].add_program(
+            MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)), std::move(programs[i]));
     }
 
     std::function warmup_func{[&info, &mesh_cq, &mesh_workloads]() {
@@ -437,13 +481,13 @@ ProgramExecutor create_load_prefetcher_executor(
 // Helper function to setup trace if enabled
 template <typename T>
 MeshTraceId setup_trace_if_enabled(
-    const TestInfo& info, std::shared_ptr<MeshDevice> mesh_device, ProgramExecutor& executor) {
+    const TestInfo& info, const std::shared_ptr<MeshDevice>& mesh_device, ProgramExecutor& executor) {
     MeshTraceId tid;
     if (info.use_trace) {
         const std::size_t cq_id = 0;
         tid = BeginTraceCapture(mesh_device.get(), cq_id);
         executor.execute_programs();
-        EndTraceCapture(mesh_device.get(), cq_id, tid);
+        mesh_device->end_mesh_trace(cq_id, tid);
         Finish(mesh_device->mesh_command_queue(cq_id));
     }
     return tid;
@@ -457,13 +501,13 @@ void run_benchmark_timing_loop(
     MeshCommandQueue& mesh_cq,
     ProgramExecutor& executor,
     MeshTraceId tid,
-    std::shared_ptr<MeshDevice> mesh_device) {
+    const std::shared_ptr<MeshDevice>& mesh_device) {
     constexpr std::size_t cq_id = 0;
     auto execute_func = executor.execute_programs;
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto start = std::chrono::system_clock::now();
         if (info.use_trace) {
-            ReplayTrace(mesh_device.get(), cq_id, tid, false);
+            mesh_device->replay_mesh_trace(cq_id, tid, false);
         } else {
             execute_func();
         }
@@ -537,7 +581,7 @@ CoreType dispatch_core_type_to_core_type(DispatchCoreType dispatch_core_type) {
 
 // Helper function to create standard programs
 std::array<tt_metal::Program, 2> create_standard_programs(
-    const TestInfo& info, std::shared_ptr<MeshDevice> mesh_device, DispatchCoreType dispatch_core_type) {
+    const TestInfo& info, const std::shared_ptr<MeshDevice>& mesh_device, DispatchCoreType dispatch_core_type) {
     std::array<tt_metal::Program, 2> programs;
     if (!initialize_program(info, mesh_device, programs[0], info.slow_kernel_cycles) ||
         !initialize_program(info, mesh_device, programs[1], info.fast_kernel_cycles)) {
@@ -547,7 +591,7 @@ std::array<tt_metal::Program, 2> create_standard_programs(
 }
 // Helper function to create prefetcher cache load programs
 std::pair<std::vector<tt_metal::Program>, std::unordered_map<std::string, uint32_t>> create_load_prefetcher_programs(
-    const TestInfo& info, std::shared_ptr<MeshDevice> mesh_device, DispatchCoreType dispatch_core_type) {
+    const TestInfo& info, const std::shared_ptr<MeshDevice>& mesh_device, DispatchCoreType dispatch_core_type) {
     uint32_t prefetcher_cache_size = tt::tt_metal::MetalContext::instance()
                                          .dispatch_mem_map(dispatch_core_type_to_core_type(dispatch_core_type))
                                          .ringbuffer_size();
@@ -606,6 +650,7 @@ void log_test_configuration(const TestInfo& info) {
     }
 
     log_info(LogTest, "KGs: {}", info.n_kgs);
+    log_info(LogTest, "Subdevice core ranges: {}", info.n_subdevice_ranges);
     log_info(LogTest, "CBs: {}", info.n_cbs);
     log_info(LogTest, "UniqueRTArgs: {}", info.n_args);
     log_info(LogTest, "CommonRTArgs: {}", info.n_common_args);
@@ -627,6 +672,10 @@ static int pgm_dispatch(T& state, TestInfo info) {
         auto core_count = get_core_count();
         info.workers = CoreRange({0, 0}, {std::get<0>(core_count), std::get<1>(core_count)});
     }
+    if (info.use_left_cores) {
+        auto core_count = get_core_count();
+        info.workers = CoreRange({0, 0}, {0, std::get<1>(core_count)});
+    }
 
     log_test_configuration(info);
 
@@ -635,12 +684,24 @@ static int pgm_dispatch(T& state, TestInfo info) {
     bool pass = true;
     std::shared_ptr<MeshDevice> mesh_device;
     try {
-        const chip_id_t device_id = 0;
+        const ChipId device_id = 0;
         const std::size_t cq_id = 0;
         DispatchCoreType dispatch_core_type = info.dispatch_from_eth ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
         mesh_device = MeshDevice::create_unit_mesh(
-            device_id, DEFAULT_L1_SMALL_SIZE, 900 * 1024 * 1024, 1, DispatchCoreConfig{dispatch_core_type});
+            device_id, DEFAULT_L1_SMALL_SIZE, 1000 * 1024 * 1024, 1, DispatchCoreConfig{dispatch_core_type});
         auto& mesh_cq = mesh_device->mesh_command_queue(cq_id);
+
+        std::vector<tt_metal::SubDevice> sub_devices;
+        if (info.n_subdevice_ranges > 1) {
+            std::array<CoreRangeSet, NumHalProgrammableCoreTypes> core_ranges;
+            auto grid_size = mesh_device->compute_with_storage_grid_size();
+            CoreRange all_core_range{{0, 0}, {grid_size.x - 1, grid_size.y - 1}};
+            core_ranges[static_cast<size_t>(HalProgrammableCoreType::TENSIX)] =
+                get_subdevice_core_range_set(info, all_core_range);
+            sub_devices.push_back(tt_metal::SubDevice(core_ranges));
+            auto manager = mesh_device->create_sub_device_manager(sub_devices, 1024);
+            mesh_device->load_sub_device_manager(manager);
+        }
 
         // Declare program storage at function scope to ensure proper lifetime
         ProgramExecutor executor([]() {}, []() {}, 0);  // Initialize with placeholder
@@ -937,6 +998,20 @@ BENCHMARK_CAPTURE(
     BM_pgm_dispatch_vary_slow_cycles,
     256_bytes_brisc_only_all_processors_trace,
     TestInfo{.warmup_iterations = 5000, .kernel_size = 256, .ncrisc_enabled = false, .trisc_enabled = false, .use_trace = true, .use_all_cores = true})
+    ->Apply(KernelCycleArgs)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch_vary_slow_cycles,
+    256_bytes_brisc_only_left_processors_subdevices_trace,
+    TestInfo{
+        .warmup_iterations = 5000,
+        .kernel_size = 256,
+        .n_subdevice_ranges = 6,
+        .ncrisc_enabled = false,
+        .trisc_enabled = false,
+        .use_trace = true,
+        // Use only the left column to allow for a single CoreRange in the kernel group.
+        .use_left_cores = true})
     ->Apply(KernelCycleArgs)
     ->UseManualTime();
 

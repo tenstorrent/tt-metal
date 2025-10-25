@@ -21,10 +21,6 @@ struct Barrier {
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload(
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const std::vector<Tensor>& input_tensors,
-        std::vector<Tensor>& output_tensors) const;
     tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
         const ttnn::MeshCoordinate& mesh_coord,
         const std::vector<Tensor>& input_tensors,
@@ -41,9 +37,9 @@ tt::tt_metal::operation::ProgramWithCallbacks barrier_with_workers(
     bool is_starting_core,
     uint32_t ring_size,
     uint32_t ring_index,
-    chip_id_t target_device_id,
-    std::optional<chip_id_t> receiver_device_id,
-    std::optional<chip_id_t> sender_device_id,
+    tt::ChipId target_device_id,
+    std::optional<tt::ChipId> receiver_device_id,
+    std::optional<tt::ChipId> sender_device_id,
     ttnn::ccl::Topology topology);
 
 };  // namespace ccl::barrier::detail

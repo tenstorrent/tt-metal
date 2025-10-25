@@ -13,6 +13,7 @@ target_sources(
             api/hostdevcommon/kernel_structs.h
             api/hostdevcommon/profiler_common.h
             api/hostdevcommon/flags.hpp
+            api/hostdevcommon/fabric_common.h
             api/hostdevcommon/tensor_accessor/arg_config.hpp
         FILE_SET api
         TYPE HEADERS
@@ -23,6 +24,7 @@ target_sources(
             api/hostdevcommon/kernel_structs.h
             api/hostdevcommon/profiler_common.h
             api/hostdevcommon/flags.hpp
+            api/hostdevcommon/fabric_common.h
             api/hostdevcommon/tensor_accessor/arg_config.hpp
 )
 

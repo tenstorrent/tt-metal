@@ -7,37 +7,29 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t dst_addr = get_arg_val<uint32_t>(1);
-    const uint32_t start_tile_id = get_arg_val<uint32_t>(2);
-    const uint32_t src_num_tiles = get_arg_val<uint32_t>(3);
-    const uint32_t dst_num_tiles = get_arg_val<uint32_t>(4);
-    const uint32_t dst_shard_width = get_arg_val<uint32_t>(5);
-    const uint32_t nD_stride = get_arg_val<uint32_t>(6);
-    const uint32_t d_stride = get_arg_val<uint32_t>(7);
-    const uint32_t n_stride = get_arg_val<uint32_t>(8);
-    const uint32_t c_stride = get_arg_val<uint32_t>(9);
-    const uint32_t D = get_arg_val<uint32_t>(10);
-    const uint32_t N = get_arg_val<uint32_t>(11);
-    const uint32_t C = get_arg_val<uint32_t>(12);
-    const uint32_t Ht = get_arg_val<uint32_t>(13);
-    const uint32_t Wt = get_arg_val<uint32_t>(14);
-    const uint32_t cND = get_arg_val<uint32_t>(15);  // collapsed dims > 5
+    uint32_t index = 0;
+    const uint32_t dst_addr = get_arg_val<uint32_t>(index++);
+    const uint32_t start_tile_id = get_arg_val<uint32_t>(index++);
+    const uint32_t dst_num_tiles = get_arg_val<uint32_t>(index++);
+    const uint32_t dst_shard_width = get_arg_val<uint32_t>(index++);
+    const uint32_t D = get_arg_val<uint32_t>(index++);
+    const uint32_t N = get_arg_val<uint32_t>(index++);
+    const uint32_t C = get_arg_val<uint32_t>(index++);
+    const uint32_t Ht = get_arg_val<uint32_t>(index++);
+    const uint32_t Wt = get_arg_val<uint32_t>(index++);
+    const uint32_t cND = get_arg_val<uint32_t>(index++);  // collapsed dims > 5
 
     constexpr uint32_t onetile = 1;
 
     constexpr auto cb_id_dst = tt::CBIndex::c_2;
 #if !DST_SHARDED
-    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr auto dst_args = TensorAccessorArgs<0>();
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
-    const DataFormat dst_data_format = get_dataformat(cb_id_dst);
-
-    const InterleavedAddrGenFast<dst_is_dram> dst = {
-        .bank_base_address = dst_addr, .page_size = dst_tile_bytes, .data_format = dst_data_format};
+    const auto dst = TensorAccessor(dst_args, dst_addr, dst_tile_bytes);
 #endif
 
 #if !DST_SHARDED
-    constexpr bool has_sharding = get_compile_time_arg_val(2) == 1;
+    constexpr bool has_sharding = get_compile_time_arg_val(dst_args.next_compile_time_args_offset()) == 1;
     const uint32_t HtWt = Ht * Wt;
 
     const uint32_t tiles_per_n = C * HtWt;
@@ -69,7 +61,7 @@ void kernel_main() {
                             //  write a tile to dst, since the dst shape is full, the tile offset simply grows linearly
                             cb_wait_front(cb_id_dst, onetile);
                             uint32_t l1_read_addr = get_read_ptr(cb_id_dst);
-                            noc_async_write_tile(dst_tile_offset + num_tiles_written, dst, l1_read_addr);
+                            noc_async_write_page(dst_tile_offset + num_tiles_written, dst, l1_read_addr);
                             noc_async_write_barrier();
                             cb_pop_front(cb_id_dst, onetile);
 #endif

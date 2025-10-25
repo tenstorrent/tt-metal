@@ -26,7 +26,11 @@ on:
         description: 'Enable watcher'
         default: false
         type: boolean
-
+      gtest_filter:
+        required: false
+        default: "*"
+        type: string
+        description: "Filter for gtest"
 jobs:
   cpp-unit-tests:
     strategy:
@@ -34,35 +38,51 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        test-group: [
-          {name: All C++, cmd: ./tests/scripts/run_cpp_unit_tests.sh},
-          {name: tools, cmd: ./tests/scripts/run_tools_tests.sh},
-
-          {name: user kernel path, cmd: "rm -rf /tmp/kernels && TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*"},
-          {name: api, cmd: "./build/test/tt_metal/unit_tests_api"},
-          {name: debug_tools, cmd: "./build/test/tt_metal/unit_tests_debug_tools"},
-          {name: device, cmd: "./build/test/tt_metal/unit_tests_device"},
-          {name: dispatch, cmd: "TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch"},
-          {name: eth, cmd: "./build/test/tt_metal/unit_tests_eth"},
-          {name: sfpi, cmd: "./build/test/tt_metal/unit_tests_sfpi"},
-          {name: distributed, cmd: "./build/test/tt_metal/distributed/distributed_unit_tests"},
-          {name: distributed_multiprocess, cmd: "./tests/tt_metal/multihost/run_multiprocess_socket_tests.sh"},
-          {name: lightmetal, cmd: "./build/test/tt_metal/unit_tests_lightmetal"},
-          {name: dispatch multicmd queue, cmd: "TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=MultiCommandQueue*Fixture.*"},
-          {name: ttnn cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn},
-          {name: ttnn ccl cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn_ccl},
-          {name: ttnn ccl ops cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn_ccl_ops},
-        ]
+        test-group:
+          - name: All C++
+            cmd: |
+              { [ "$GTEST_FILTER" = "*NIGHTLY_*" ]; } && echo "Skipping run_cpp_unit_tests.sh (nightly filter: $GTEST_FILTER)" || ./tests/scripts/run_cpp_unit_tests.sh # 15 minutes
+          - name: CCL
+            cmd: |
+              ./build/test/ttnn/unit_tests_ttnn_ccl --gtest_filter=$GTEST_FILTER
+              ./build/test/ttnn/unit_tests_ttnn_ccl_ops --gtest_filter=$GTEST_FILTER
+          - name: dispatch
+            cmd: |
+              TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=$GTEST_FILTER
+          - name: dispatch multicmd queue
+            cmd: |
+              TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQ*Fixture.${GTEST_FILTER}
+          - name: distributed
+            cmd: |
+              ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter=$GTEST_FILTER
+              { [ "$GTEST_FILTER" = "*NIGHTLY_*" ]; } && echo "Skipping run_multiprocess_socket_tests.sh (nightly filter: $GTEST_FILTER)" || ./tests/tt_metal/multihost/run_multiprocess_socket_tests.sh
+          - name: eth, misc, and user kernel path
+            cmd: |
+              ./build/test/tt_metal/unit_tests_eth --gtest_filter=$GTEST_FILTER
+              ./build/test/tt_metal/unit_tests_misc --gtest_filter=$GTEST_FILTER
+              rm -rf /tmp/kernels
+              mkdir -p /tmp/kernels
+              TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.${GTEST_FILTER}
+          - name: tools
+            cmd: |
+              { [ "$GTEST_FILTER" = "*NIGHTLY_*" ]; } && echo "Skipping run_tools_tests.sh (nightly filter: $GTEST_FILTER)" || ./tests/scripts/run_tools_tests.sh
+              ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=$GTEST_FILTER
+              ./build/test/tt_metal/unit_tests_inspector --gtest_filter=$GTEST_FILTER
+          - name: ttnn tensor accessor
+            cmd: "./build/test/ttnn/unit_tests_ttnn_accessor --gtest_filter=$GTEST_FILTER"
+          - name: data movement
+            cmd: |
+              ./build/test/tt_metal/unit_tests_data_movement --gtest_filter=$GTEST_FILTER
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     container:
-      image: ${{ inputs.docker-image }}
+      image: ${{ (inputs.runner-label == 'N150' || inputs.runner-label == 'N300') && 'harbor.ci.tenstorrent.net/' || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:/work/generated/test_reports/
-        TT_METAL_HOME: /work
+        LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -73,13 +93,12 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     runs-on: >-
       ${{
-        (startsWith(inputs.runner-label, 'tt-beta-ubuntu') && fromJSON(format('["{0}"]', inputs.runner-label)))
-        || github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
-        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+        (inputs.runner-label == 'P100' || inputs.runner-label == 'P150') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -93,11 +112,12 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: |
             mkdir -p generated/test_reports
+            GTEST_FILTER="${{inputs.gtest_filter}}"
             ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U06CXU895AP # Michael Chiou
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

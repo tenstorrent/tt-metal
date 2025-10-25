@@ -6,6 +6,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn_test_fixtures.hpp"
+#include <tt-metalium/distributed.hpp>
 
 namespace {
 struct NDShardingParams {
@@ -77,12 +78,15 @@ struct NDShardingTensorSpecParams {
 };
 
 TensorSpec get_nd_sharding_tensor_spec(
-    const NDShardingParams& params, BufferType buffer_type, ShardOrientation orientation, IDevice* device) {
+    const NDShardingParams& params,
+    BufferType buffer_type,
+    ShardOrientation orientation,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     CoreRangeSet cores;
     if (buffer_type == BufferType::L1) {
         cores = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6}));
     } else {
-        auto dram_grid_size = device->dram_grid_size();
+        auto dram_grid_size = mesh_device->dram_grid_size();
         cores = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{dram_grid_size.x - 1, dram_grid_size.y - 1}));
     }
     MemoryConfig memory_config{buffer_type, NdShardSpec{params.shard_shape, cores, orientation}};
@@ -97,7 +101,7 @@ class NDShardingTests
 
 TEST_P(NDShardingTests, LoopbackTest) {
     const auto& [params, buffer_type, orientation] = GetParam();
-    auto tensor_spec = get_nd_sharding_tensor_spec(params, buffer_type, orientation, device_);
+    auto tensor_spec = get_nd_sharding_tensor_spec(params, buffer_type, orientation, device_holder_);
 
     size_t volume = params.shape.volume();
     std::vector<uint16_t> data(volume);
@@ -116,7 +120,7 @@ TEST_P(NDShardingTests, LoopbackTest) {
 
 TEST_P(NDShardingTests, RegionWriteReadTest) {
     const auto& [params, buffer_type, orientation] = GetParam();
-    auto tensor_spec = get_nd_sharding_tensor_spec(params, buffer_type, orientation, device_);
+    auto tensor_spec = get_nd_sharding_tensor_spec(params, buffer_type, orientation, device_holder_);
 
     size_t volume = params.shape.volume();
     std::vector<uint16_t> data(volume);
@@ -131,9 +135,7 @@ TEST_P(NDShardingTests, RegionWriteReadTest) {
     auto tensor = Tensor::from_vector(empty_data, tensor_spec, device_);
 
     auto& storage = std::get<DeviceStorage>(tensor.storage());
-    auto buffer = storage.get_buffer();
-    auto page_size = buffer->page_size();
-    auto device = buffer->device();
+    auto buffer = storage.get_mesh_buffer();
 
     size_t region_size = buffer->page_size();
     while (buffer->size() % (region_size * 2) == 0) {
@@ -145,21 +147,24 @@ TEST_P(NDShardingTests, RegionWriteReadTest) {
 
     for (size_t region = 0; region < buffer->size() / region_size; region++) {
         size_t region_offset = region * region_size;
-        auto buffer_view = buffer->view(BufferRegion{region_offset, region_size});
-        EnqueueWriteBuffer(
-            device->command_queue(),
-            buffer_view,
-            reinterpret_cast<const std::byte*>(tensor_data.data()) + region_offset,
-            true);
-        EnqueueReadBuffer(
-            device->command_queue(),
-            buffer_view,
-            reinterpret_cast<std::byte*>(partial_readback_data.data()) + region_offset,
-            true);
+        auto buffer_region = BufferRegion{region_offset, region_size};
+        auto write_shard_data_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
+            .shard_coord = distributed::MeshCoordinate(0, 0),
+            .host_data = reinterpret_cast<std::byte*>(tensor_data.data()) + region_offset,
+            .region = buffer_region,
+        };
+        auto read_shard_data_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
+            .shard_coord = distributed::MeshCoordinate(0, 0),
+            .host_data = reinterpret_cast<std::byte*>(partial_readback_data.data()) + region_offset,
+            .region = buffer_region,
+        };
+        device_->mesh_command_queue().enqueue_write_shards(buffer, {write_shard_data_transfer}, true);
+        device_->mesh_command_queue().enqueue_read_shards({read_shard_data_transfer}, buffer, true);
     }
     EXPECT_EQ(tensor_data, partial_readback_data);
 
-    EnqueueReadBuffer(device->command_queue(), *buffer, full_readback_data.data(), true);
+    distributed::ReadShard(
+        device_->mesh_command_queue(), full_readback_data, buffer, distributed::MeshCoordinate(0, 0), true);
     EXPECT_EQ(tensor_data, full_readback_data);
 }
 
@@ -408,7 +413,8 @@ TEST_F(NDShardingSqueezeRankStressTests, TestSqueezeRankStress) {
     iterate_shapes(Shape({4, 4, 4, 4}), [&](const Shape& tensor_shape) {
         iterate_shapes(tensor_shape, [&](const Shape& shard_shape) {
             BufferDistributionSpec dspec(tensor_shape, shard_shape, cores, ShardOrientation::ROW_MAJOR);
-            auto expected_page_mapping = detail::compute_page_mapping(tensor_shape, shard_shape, dspec.cores());
+            auto expected_page_mapping =
+                tt::tt_metal::detail::compute_page_mapping(tensor_shape, shard_shape, dspec.cores());
             EXPECT_EQ(
                 dspec.compute_page_mapping().core_host_page_indices, expected_page_mapping.core_host_page_indices);
         });

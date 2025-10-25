@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,22 +15,10 @@ namespace ttnn::operations::reduction::detail {
 void bind_reduction_argmax_operation(py::module& module) {
     auto doc =
         R"doc(
+            ``ttnn.argmax(input_tensor: ttnn.Tensor, dim: Optional[int] = None, keepdim: bool = False, memory_config: Optional[ttnn.MemoryConfig] = None, output_tensor: Optional[ttnn.Tensor] = None) -> ttnn.Tensor``
 
-            Returns the indices of the maximum value of elements in the ``input`` tensor
-            If no ``dim`` is provided, it will return the indices of maximum value of all elements in given ``input``
-            If no ``keepdim`` is provided, it will default to `False`.
-
-            Currenly this op only support dimension-specific reduction on last dimension.
-
-            Input tensor must have BFLOAT16 data type and ROW_MAJOR layout.
-
-            Output tensor will have UINT32 data type.
-
-            Equivalent pytorch code:
-
-            .. code-block:: python
-
-                return torch.argmax(input_tensor, dim=dim, keepdim=keepdim)
+            Returns the indices of the maximum value of elements in the :attr:`input_tensor`.
+            If no :attr:`dim` is provided, it will return the indices of maximum value of all elements in given :attr:`input_tensor`.
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
@@ -40,10 +28,59 @@ void bind_reduction_argmax_operation(py::module& module) {
                 keepdim (bool, optional): whether to keep the reduced dimension. Defaults to `False`.
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
-                queue_id (int, optional): command queue id. Defaults to `0`.
 
             Returns:
-                List of ttnn.Tensor: the output tensor.
+                ttnn.Tensor: Output tensor containing the indices of the maximum value.
+
+            Note:
+                The input tensor supports the following data types and layouts:
+
+                .. list-table:: Input Tensor
+                    :header-rows: 1
+
+                    * - dtype
+                      - layout
+                    * - FLOAT32
+                      - ROW_MAJOR, TILE
+                    * - BFLOAT16
+                      - ROW_MAJOR, TILE
+                    * - UINT32
+                      - ROW_MAJOR
+                    * - INT32
+                      - ROW_MAJOR
+                    * - UINT16
+                      - ROW_MAJOR
+
+                The output tensor will be of the following data type and layout:
+
+                .. list-table:: Output Tensor
+                    :header-rows: 1
+
+                    * - dtype
+                      - layout
+                    * - UINT32
+                      - ROW_MAJOR
+
+            Memory Support:
+                - Interleaved: DRAM and L1
+
+            Limitations:
+                - All input tensors must be on-device.
+                - Currently this op only supports dimension-specific reduction on the last dimension (i.e. :attr:`dim` = -1).
+                - Sharding is not supported for this operation
+                - Reduction over all elements (when dim=None) is not supported with the TILE input tensor layout
+                - The (optional) preallocated output tensor must have ROW_MAJOR layout
+
+            Example:
+              .. code-block:: python
+
+                  input_tensor = ttnn.rand([1, 1, 32, 64], device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+                  # Last dim reduction yields shape of [1, 1, 32, 1]
+                  output_onedim = ttnn.argmax(input_tensor, dim=-1, keepdim=True)
+
+                  # All dim reduction yields shape of []
+                  output_alldim = ttnn.argmax(input_tensor)
 
         )doc";
 
@@ -60,17 +97,9 @@ void bind_reduction_argmax_operation(py::module& module) {
                const std::optional<CoreRangeSet>& sub_core_grids,
                const bool use_multicore,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> optional_output_tensor,
-               QueueId queue_id) {
+               std::optional<ttnn::Tensor> optional_output_tensor) {
                 return self(
-                    queue_id,
-                    input_tensor,
-                    dim,
-                    keepdim,
-                    sub_core_grids,
-                    use_multicore,
-                    memory_config,
-                    optional_output_tensor);
+                    input_tensor, dim, keepdim, sub_core_grids, use_multicore, memory_config, optional_output_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("dim") = std::nullopt,
@@ -79,8 +108,7 @@ void bind_reduction_argmax_operation(py::module& module) {
             py::arg("sub_core_grids") = std::nullopt,
             py::arg("use_multicore") = false,
             py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("output_tensor") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::reduction::detail

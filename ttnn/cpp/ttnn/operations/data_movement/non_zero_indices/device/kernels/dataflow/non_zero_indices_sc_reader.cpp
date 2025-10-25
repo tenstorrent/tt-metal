@@ -18,17 +18,13 @@ void kernel_main() {
     constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t output_cb_index_0 = get_compile_time_arg_val(1);
     constexpr uint32_t output_cb_index_1 = get_compile_time_arg_val(2);
-    constexpr bool src0_is_dram = get_compile_time_arg_val(3) == 1;
-    constexpr bool dst0_is_dram = get_compile_time_arg_val(4) == 1;
-    constexpr bool dst1_is_dram = get_compile_time_arg_val(5) == 1;
+    constexpr auto src0_args = TensorAccessorArgs<3>();
+    constexpr auto dst0_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
+    constexpr auto dst1_args = TensorAccessorArgs<dst0_args.next_compile_time_args_offset()>();
 
-    const InterleavedAddrGen<src0_is_dram> s0 = {
-        .bank_base_address = input_addr, .page_size = aligned_elements * element_size};
-
-    const InterleavedAddrGen<dst0_is_dram> out0 = {.bank_base_address = output_addr_0, .page_size = 32};
-
-    const InterleavedAddrGen<dst1_is_dram> out1 = {
-        .bank_base_address = output_addr_1, .page_size = aligned_elements * element_size};
+    const auto s0 = TensorAccessor(src0_args, input_addr, aligned_elements * element_size);
+    const auto out0 = TensorAccessor(dst0_args, output_addr_0, 32);
+    const auto out1 = TensorAccessor(dst1_args, output_addr_1, aligned_elements * element_size);
 
     uint64_t src_noc_addr = get_noc_addr(0, s0);
     uint32_t input_l1_addr = get_write_ptr(input_cb_index);

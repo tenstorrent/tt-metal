@@ -4,9 +4,9 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include "nlp_concat_heads_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -19,7 +19,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads(
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     bool in_sharded = a.is_sharded();
     bool out_sharded = output.is_sharded();
@@ -75,9 +75,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads(
     tt_metal::Program program = tt_metal::CreateProgram();
     uint32_t src0_cb_index = 0, out_cb_index = 16;
 
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-
     tt::tt_metal::KernelHandle reader_kernel_id = 0, writer_kernel_id = 0;
     if (in_sharded) {
         std::vector<uint32_t> compile_time_args = {
@@ -102,18 +99,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads(
             tt_metal::WriterDataMovementConfig(compile_time_args));
     } else {
         std::vector<uint32_t> reader_compile_time_args = {
-            // interleaved accessor args
-            (std::uint32_t)in0_is_dram,
             (std::uint32_t)in0_h_tiles,
             (std::uint32_t)in0_w_tiles,
             (std::uint32_t)in0_c,
             (std::uint32_t)in0_HtWt,
         };
-        std::vector<uint32_t> writer_compile_time_args = {
-            // interleaved accessor args
-            (std::uint32_t)src0_cb_index,
-            (std::uint32_t)out_is_dram,
-        };
+        tt_metal::TensorAccessorArgs(*in0_buffer).append_to(reader_compile_time_args);
+        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index};
+        tt_metal::TensorAccessorArgs(*out_buffer).append_to(writer_compile_time_args);
         reader_kernel_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/kernels/dataflow/"
@@ -174,7 +167,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads(
             uint32_t num_blocks_per_core = i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
 
             uint32_t in0_h_dim = num_blocks_written % in0_h_tiles;
-            uint32_t in0_tensor_tile_id = num_blocks_written / in0_h_tiles * in0_CHtWt + in0_h_dim * in0_w_tiles;
+            uint32_t in0_tensor_tile_id = (num_blocks_written / in0_h_tiles * in0_CHtWt) + (in0_h_dim * in0_w_tiles);
 
             std::vector<uint32_t> reader_runtime_args = {
                 (std::uint32_t)in0_buffer->address(),

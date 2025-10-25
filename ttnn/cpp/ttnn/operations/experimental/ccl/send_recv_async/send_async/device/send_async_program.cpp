@@ -15,7 +15,8 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/fabric.hpp>
-#include <ttnn/tensor/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 using namespace tt::constants;
 
@@ -36,8 +37,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
         if (socket_mesh_device->get_device(connection.sender_core.device_coord)->id() == target_device->id()) {
             sender_core_coord = connection.sender_core.core_coord;
             receiver_core_coord = connection.receiver_core.core_coord;
-            sender_fabric_node_id =
-                input_tensor.mesh_device()->get_device_fabric_node_id(connection.sender_core.device_coord);
+            sender_fabric_node_id = input_tensor.device()->get_fabric_node_id(connection.sender_core.device_coord);
             receiver_fabric_node_id = mesh_socket.get_fabric_node_id(
                 tt::tt_metal::distributed::SocketEndpoint::RECEIVER, connection.receiver_core.device_coord);
             break;
@@ -71,7 +71,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
     uint32_t cb_num_pages = 2;
     uint32_t cb_page_size = fabric_max_payload_size;
 
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     auto src0_cb_index = tt::CBIndex::c_0;
 
@@ -79,7 +79,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
         tt::tt_metal::CircularBufferConfig(cb_num_pages * cb_page_size, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, cb_page_size);
 
-    tt::tt_metal::CBHandle cb_src0_worker = CreateCircularBuffer(program, sender_core_coord, cb_src0_config);
+    CreateCircularBuffer(program, sender_core_coord, cb_src0_config);
 
     uint32_t packet_header_cb_num_pages = 2;  // One for data, one for sync
     uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
@@ -91,8 +91,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
             packet_header_cb_num_pages * packet_header_cb_page_size, {{packet_header_cb_index, tt::DataFormat::UInt32}})
             .set_page_size(packet_header_cb_index, packet_header_cb_page_size);
 
-    tt::tt_metal::CBHandle cb_packet_header_worker =
-        CreateCircularBuffer(program, sender_core_coord, cb_packet_header_config);
+    CreateCircularBuffer(program, sender_core_coord, cb_packet_header_config);
 
     bool socket_storage_in_dram =
         mesh_socket.get_config().socket_mem_config.socket_storage_type == tt::tt_metal::BufferType::DRAM;
@@ -154,7 +153,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
 
     auto link_indices = tt::tt_fabric::get_forwarding_link_indices(sender_fabric_node_id, receiver_fabric_node_id);
     TT_FATAL(
-        link_indices.size() > 0,
+        !link_indices.empty(),
         "No link indices found {} {} {} {}",
         sender_fabric_node_id.mesh_id,
         sender_fabric_node_id.chip_id,

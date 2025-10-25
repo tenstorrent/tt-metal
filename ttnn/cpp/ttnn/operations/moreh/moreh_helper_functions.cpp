@@ -4,12 +4,11 @@
 
 #include "moreh_helper_functions.hpp"
 
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/util.hpp>
 
 #include "tt-metalium/hal.hpp"
 
@@ -104,7 +103,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
         core_spec,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(hal::get_arch()),
+            .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(hal::get_arch()),
             .compile_args = compile_args,
             .defines = std::move(defines)});
 }
@@ -121,7 +120,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
         core_spec,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(hal::get_arch()),
+            .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(hal::get_arch()),
             .compile_args = compile_args,
             .defines = std::move(defines)});
 }
@@ -231,9 +230,8 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
         auto _core_range = (arg.core_range != std::nullopt) ? arg.core_range : core_range;
 
         tt_metal::CircularBufferConfig cb_config =
-            tt_metal::CircularBufferConfig(
-                _num_tiles * tt_metal::detail::TileSize(_data_format), {{_buffer_index, _data_format}})
-                .set_page_size(_buffer_index, tt_metal::detail::TileSize(_data_format));
+            tt_metal::CircularBufferConfig(_num_tiles * tt::tile_size(_data_format), {{_buffer_index, _data_format}})
+                .set_page_size(_buffer_index, tt::tile_size(_data_format));
 
         cb_id = tt_metal::CreateCircularBuffer(program, _core_range.value(), cb_config);
     }
@@ -254,7 +252,7 @@ void check_tensor(
             "{} {} only supports {} layout.",
             op_name,
             tensor_name,
-            magic_enum::enum_name(layout));
+            enchantum::to_string(layout));
     }
     TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} {} need to be on device!", op_name, tensor_name);
     TT_FATAL(tensor.buffer() != nullptr, "{} {} need to be allocated in buffers on device!", op_name, tensor_name);
@@ -274,7 +272,7 @@ void check_tensor(
                 if (!is_first) {
                     dtype_string += ", ";
                 }
-                dtype_string += fmt::format("{}", magic_enum::enum_name(data_type));
+                dtype_string += fmt::format("{}", enchantum::to_string(data_type));
                 is_first = false;
             }
             dtype_string += "]";

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,6 +24,7 @@
 #include "ttnn-pybind/operations/trace.hpp"
 #include "ttnn-pybind/profiler.hpp"
 #include "ttnn-pybind/program_descriptors.hpp"
+#include "ttnn-pybind/tensor_accessor_args.hpp"
 #include "ttnn-pybind/reports.hpp"
 #include "ttnn-pybind/tensor.hpp"
 #include "ttnn-pybind/types.hpp"
@@ -35,6 +36,7 @@
 #include "ttnn/operations/bernoulli/bernoulli_pybind.hpp"
 #include "ttnn/operations/ccl/ccl_pybind.hpp"
 #include "ttnn/operations/conv/conv_pybind.hpp"
+#include "ttnn/operations/debug/debug_pybind.hpp"
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
 #include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward_pybind.hpp"
@@ -59,15 +61,18 @@
 #include "ttnn/operations/matmul/matmul_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_pybind.hpp"
 #include "ttnn/operations/normalization/normalization_pybind.hpp"
+#include "ttnn/operations/point_to_point/point_to_point_pybind.hpp"
 #include "ttnn/operations/pool/generic/generic_pools_pybind.hpp"
 #include "ttnn/operations/pool/global_avg_pool/global_avg_pool_pybind.hpp"
 #include "ttnn/operations/pool/upsample/upsample_pybind.hpp"
+#include "ttnn/operations/pool/grid_sample/grid_sample_pybind.hpp"
 #include "ttnn/operations/prefetcher/prefetcher_pybind.hpp"
 #include "ttnn/operations/reduction/reduction_pybind.hpp"
 #include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
 #include "ttnn/operations/uniform/uniform_pybind.hpp"
 #include "ttnn/operations/rand/rand_pybind.hpp"
+#include "ttnn/operations/experimental/test/hang_device/hang_device_operation_pybind.hpp"
 
 namespace ttnn::operations {
 
@@ -117,6 +122,9 @@ void py_module(py::module& module) {
     auto m_ccl = module.def_submodule("ccl", "collective communication operations");
     ccl::py_module(m_ccl);
 
+    auto m_debug = module.def_submodule("debug", "debug operations");
+    debug::py_module(m_debug);
+
     auto m_creation = module.def_submodule("creation", "creation operations");
     creation::py_module(m_creation);
 
@@ -148,6 +156,7 @@ void py_module(py::module& module) {
     pool::py_module(m_pool);
     avgpool::py_module(m_pool);
     upsample::py_module(m_pool);
+    grid_sample::py_bind_grid_sample(m_pool);
 
     auto m_normalization = module.def_submodule("normalization", "normalization operations");
     normalization::py_module(m_normalization);
@@ -190,6 +199,9 @@ void py_module(py::module& module) {
 
     auto m_rand = module.def_submodule("rand", "ttnn rand operation");
     rand::bind_rand_operation(m_rand);
+
+    auto m_point_to_point = module.def_submodule("point_to_point", "point_to_point operations");
+    point_to_point::py_bind_point_to_point(m_point_to_point);
 }
 }  // namespace ttnn::operations
 
@@ -226,6 +238,7 @@ PYBIND11_MODULE(_ttnn, module) {
     auto m_operations = module.def_submodule("operations", "ttnn Operations");
     auto m_fabric = module.def_submodule("fabric", "Fabric instantiation APIs");
     auto m_program_descriptors = module.def_submodule("program_descriptor", "Program descriptors types");
+    auto m_tensor_accessor_args = module.def_submodule("tensor_accessor_args", "Tensor accessor args types");
 
     // TYPES
     ttnn::tensor::tensor_mem_config_module_types(m_tensor);
@@ -234,6 +247,7 @@ PYBIND11_MODULE(_ttnn, module) {
 
     ttnn::types::py_module_types(m_types);
     ttnn::activation::py_module_types(m_activation);
+    ttnn::cluster::py_cluster_module_types(m_cluster);
     ttnn::core::py_module_types(m_core);
     ttnn::device::py_device_module_types(m_device);
     ttnn::fabric::py_bind_fabric_api(m_fabric);
@@ -244,6 +258,7 @@ PYBIND11_MODULE(_ttnn, module) {
     ttnn::mesh_socket::py_module_types(m_mesh_socket);
     ttnn::reports::py_module_types(m_reports);
     ttnn::program_descriptors::py_module_types(m_program_descriptors);
+    ttnn::tensor_accessor_args::py_module_types(m_tensor_accessor_args);
 
     // FUNCTIONS / OPERATIONS
     ttnn::tensor::tensor_mem_config_module(m_tensor);
@@ -270,6 +285,7 @@ PYBIND11_MODULE(_ttnn, module) {
     ttnn::mesh_socket::py_module(m_mesh_socket);
     ttnn::profiler::py_module(m_profiler);
     ttnn::reports::py_module(m_reports);
+    ttnn::tensor_accessor_args::py_module(m_tensor_accessor_args);
 
     // ttnn operations have to come before the deprecated ones,
     // because ttnn defines additional type bindings.

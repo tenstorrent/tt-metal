@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include "command_queue_common.hpp"
 #include "dispatch_settings.hpp"
 
@@ -59,10 +59,6 @@ public:
     uint32_t prefetch_d_buffer_size() const;
 
     uint32_t prefetch_d_buffer_pages() const;
-
-    uint32_t mux_buffer_size(uint8_t num_hw_cqs = 1) const;
-
-    uint32_t mux_buffer_pages(uint8_t num_hw_cqs = 1) const;
 
     uint32_t dispatch_s_buffer_size() const;
 

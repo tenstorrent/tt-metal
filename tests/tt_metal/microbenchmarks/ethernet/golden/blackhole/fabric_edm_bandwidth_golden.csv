@@ -1,0 +1,4 @@
+Test Name,Noc Message Type,Packet Size,Line Size,Num Links,Disable Interior Workers,Unidirectional,Senders Are Unidirectional,Bandwidth (B/c),Packets/Second
+unicast_Linear,noc_unicast_write,16,2,1,False,False,True,0.0499114049166758,4211274.78984452
+unicast_Linear,noc_unicast_write,2048,2,1,False,False,True,6.388100067528892,4210905.806232424
+unicast_Linear,noc_unicast_write,4096,2,1,False,False,True,12.775499187581492,4210674.781063235

@@ -13,8 +13,8 @@ run_tg_llama3_tests() {
   # Run all Llama3 tests for 8B, 1B, and 3B weights
   # for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b"; do
   for llama_dir in "$llama70b"; do
-    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest --timeout 1800 -n auto models/demos/llama3_subdevices/tests/test_llama_model_nd.py --timeout=1800 ; fail+=$?
-    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest --timeout 1800 -n auto models/demos/llama3_subdevices/tests/test_llama_model.py -k full --timeout=1800 ; fail+=$?
+    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest --timeout 1800 -n auto models/demos/llama3_70b_galaxy/tests/test_llama_model_nd.py --timeout=1800 ; fail+=$?
+    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest --timeout 1800 -n auto models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k full --timeout=1800 ; fail+=$?
     echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
 
@@ -35,7 +35,7 @@ run_tg_tests() {
 
   elif [[ "$1" == "resnet50" ]]; then
     echo "LOG_METAL: running resnet50 run_tg_frequent_tests"
-    pytest -n auto models/demos/tg/resnet50/tests/test_resnet50_performant.py ; fail+=$?
+    pytest -n auto models/demos/ttnn_resnet/tests/test_resnet50_performant.py ; fail+=$?
 
   elif [[ "$1" == "unit" ]]; then
     echo "LOG_METAL: running unit/distributed run_tg_frequent_tests"
@@ -44,10 +44,18 @@ run_tg_tests() {
     ## The jit build also has different behaviour for IRAM enabled/disabled so we enable it globally.
     TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/distributed/test_data_parallel_example_TG.py --timeout=900 ; fail+=$?
     TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/distributed/test_multidevice_TG.py --timeout=900 ; fail+=$?
-    TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/test_multi_device_trace_TG.py --timeout=900 ; fail+=$?
-    TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_gather_TG_post_commit.py --timeout=300 ; fail+=$?
-    TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_TG.py --timeout=500 ; fail+=$?
-    TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_TG.py --timeout=500 ; fail+=$?
+    TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/base_functionality/test_multi_device_trace_TG.py --timeout=900 ; fail+=$?
+    #TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_6U.py --timeout=500 ; fail+=$? #See issue #30017
+    #TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_6U.py --timeout=500 ; fail+=$? #See issue #30017
+    pytest -n auto tests/nightly/tg/ccl/test_all_broadcast.py --timeout=200 ; fail+=$?
+    pytest -n auto tests/nightly/tg/ccl/test_minimal_all_gather_async.py --timeout=500 ; fail+=$?
+    pytest -n auto tests/nightly/tg/ccl/test_minimal_reduce_scatter_async.py --timeout=300 ; fail+=$?
+
+  elif [[ "$1" == "sd35" ]]; then
+    echo "LOG_METAL: running stable diffusion 3.5 Large run_tg_frequent_tests"
+    pytest -n auto models/experimental/tt_dit/tests/models/test_vae_sd35.py -k "tg" --timeout=300; fail+=$?
+    pytest -n auto models/experimental/tt_dit/tests/models/test_attention_sd35.py -k "4x4sp0tp1" --timeout=300; fail+=$?
+    pytest -n auto models/experimental/tt_dit/tests/models/test_transformer_sd35.py::test_sd35_transformer_block -k "4x4sp0tp1" --timeout=300; fail+=$?
 
   else
     echo "LOG_METAL: Unknown model type: $1"
@@ -56,7 +64,7 @@ run_tg_tests() {
 
   if [[ $fail -ne 0 ]]; then
     echo "LOG_METAL: run_tg_frequent_tests failed"
-    # exit 1
+    exit 1
   fi
 
 }

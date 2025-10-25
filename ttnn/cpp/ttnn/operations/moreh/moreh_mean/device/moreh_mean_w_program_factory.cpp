@@ -7,6 +7,7 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include "moreh_mean_device_operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -27,14 +28,11 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     const auto& shape = input.padded_shape();
 
     auto device = input.device();
-    auto kernel_config_val =
-        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
     uint32_t W = shape[-1], H = shape[-2];
-    uint32_t HW = H * W;
 
     uint32_t Wt = W / constants::TILE_WIDTH;
     uint32_t Ht = H / constants::TILE_HEIGHT;
@@ -63,7 +61,6 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
     uint32_t num_input_tiles = 2;
-    uint32_t num_output_tiles = 2;
     CreateCircularBuffer(
         program,
         all_cores,
@@ -78,13 +75,15 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
         });
 
     float scaler = 1.0f / origin_W;
-    auto bfloat_scaler_value = *(new class bfloat16(scaler));
+    bfloat16 bfloat_scaler_value(scaler);
     auto packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
 
-    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(is_dram(input)), packed_scaler_value};
+    std::vector<uint32_t> reader_compile_time_args = {};
+    TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
+    reader_compile_time_args.push_back(packed_scaler_value);
 
-    std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(CBIndex::c_16), static_cast<uint32_t>(is_dram(output))};
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(CBIndex::c_16)};
+    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines{};
     if (do_mask_w) {
@@ -111,7 +110,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     auto reduce_dim = ReduceOpDim::W;
     std::map<std::string, std::string> compute_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
     if (fp32_dest_acc_en) {
-        compute_defines["FP32_DEST_ACC_EN"] = 1;
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         units_per_core_group_1,  // Ht
@@ -190,7 +189,7 @@ void MorehMeanOperation::MorehMeanWFactory::override_runtime_arguments(
     auto src_buffer_address = tensor_args.input.buffer()->address();
     auto dst_buffer_address = tensor_return_value.buffer()->address();
 
-    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
+    for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
 
         {

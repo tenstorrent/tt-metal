@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,7 +24,6 @@
 #include <tt_stl/span.hpp>
 #include "tests/ttnn/unit_tests/gtests/ttnn_test_fixtures.hpp"
 #include <tt-metalium/tile.hpp>
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -71,11 +70,7 @@ std::vector<T> arange(int64_t start, int64_t end, int64_t step, std::optional<in
     std::vector<T> result;
     for (int el : xt::arange<int64_t>(start, end, step)) {
         int capped_el = cap ? el % *cap : el;
-        if constexpr (std::is_same_v<T, ::bfloat16>) {
-            result.push_back(T(static_cast<float>(capped_el)));
-        } else {
-            result.push_back(static_cast<T>(capped_el));
-        }
+        result.push_back(static_cast<T>(capped_el));
     }
     return result;
 }
@@ -92,18 +87,6 @@ TYPED_TEST(VectorConversionTest, InvalidSize) {
 
     ASSERT_NE(input.size(), shape.volume());
     EXPECT_ANY_THROW((void)Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>())));
-}
-
-TYPED_TEST(VectorConversionTest, InvalidDtype) {
-    ttnn::Shape shape{32, 32};
-    auto input = arange<TypeParam>(0, shape.volume(), 1);
-
-    EXPECT_ANY_THROW((void)Tensor::from_vector(
-        input,
-        get_tensor_spec(
-            shape,
-            // Use INT32 for verification, except for when the actual type is int32_t.
-            (std::is_same_v<TypeParam, int32_t> ? DataType::FLOAT32 : DataType::INT32))));
 }
 
 TYPED_TEST(VectorConversionTest, Roundtrip) {
@@ -146,39 +129,13 @@ TYPED_TEST(VectorConversionTest, RoundtripTilizedLayoutOddShape) {
     EXPECT_THAT(output, Pointwise(Eq(), input));
 }
 
-TYPED_TEST(VectorConversionTest, RoundtripWithShardedLayout) {
-    ttnn::Shape shape{56, 56, 30};
-    auto input = arange<TypeParam>(0, shape.volume(), 1);
-    auto tensor = Tensor::from_vector(
-        input,
-        get_tensor_spec(
-            shape,
-            convert_to_data_type<TypeParam>(),
-            Layout::TILE,
-            MemoryConfig{
-                TensorMemoryLayout::HEIGHT_SHARDED,
-                BufferType::L1,
-                ShardSpec{
-                    ttnn::CoreRangeSet{ttnn::CoreRange{ttnn::CoreCoord{0, 0}, ttnn::CoreCoord{63, 63}}},
-                    /*shard_shape_=*/{49, 30},
-                    ShardOrientation::ROW_MAJOR,
-                    ShardMode::LOGICAL}}));
-
-    EXPECT_THAT(tensor.logical_shape(), ShapeIs(56, 56, 30));
-    EXPECT_THAT(tensor.padded_shape(), ShapeIs(56, 64, 32));
-
-    auto output = tensor.template to_vector<TypeParam>();
-
-    EXPECT_THAT(output, Pointwise(Eq(), input));
-}
-
 TEST(FloatVectorConversionTest, Float32Bfloat16Interop) {
     for (const auto& shape : get_shapes_for_test()) {
         auto input_bf16 = arange<bfloat16>(0, shape.volume(), 1);
         std::vector<float> input_ft;
         input_ft.reserve(input_bf16.size());
         std::transform(input_bf16.begin(), input_bf16.end(), std::back_inserter(input_ft), [](bfloat16 bf) {
-            return bf.to_float();
+            return static_cast<float>(bf);
         });
 
         auto output_bf16 =
@@ -222,7 +179,7 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Roundtrip) {
         EXPECT_EQ(ctor_count, 1);
         EXPECT_EQ(dtor_count, 0);
         {
-            Tensor copy(tensor.storage(), tensor.tensor_spec(), tensor.distributed_tensor_config());
+            Tensor copy(tensor.storage(), tensor.tensor_spec(), tensor.tensor_topology());
             EXPECT_EQ(ctor_count, 2);
             EXPECT_EQ(dtor_count, 0);
         }
@@ -254,7 +211,7 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Callbacks) {
     EXPECT_EQ(ctor_count, 1);
     EXPECT_EQ(dtor_count, 0);
     {
-        Tensor copy(tensor.storage(), tensor.tensor_spec(), tensor.distributed_tensor_config());
+        Tensor copy(tensor.storage(), tensor.tensor_spec(), tensor.tensor_topology());
         EXPECT_EQ(ctor_count, 2);
         EXPECT_EQ(dtor_count, 0);
     }

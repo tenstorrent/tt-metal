@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "batch_norm_utils.hpp"
 
 namespace ttnn::operations::normalization {
 
@@ -113,9 +114,13 @@ std::tuple<RunningStatistics::operation_attributes_t, RunningStatistics::tensor_
     const float momentum,
     std::optional<Tensor> running_mean,
     std::optional<Tensor> running_var,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     operation_attributes_t operation_attributes{
-        momentum, memory_config.value_or(batch_mean.memory_config()), batch_mean.dtype()};
+        momentum,
+        memory_config.value_or(batch_mean.memory_config()),
+        batch_norm::utils::resolve_compute_kernel_config(compute_kernel_config, batch_mean),
+        batch_mean.dtype()};
     tensor_args_t tensor_args{batch_mean, batch_var, std::move(running_mean), std::move(running_var)};
     return {operation_attributes, tensor_args};
 }

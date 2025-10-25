@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gather_device_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
 
@@ -28,7 +29,7 @@ GatherDeviceOperation::program_factory_t GatherDeviceOperation::select_program_f
 
 void GatherDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    return validate_on_program_cache_miss(attributes, tensor_args);
+    validate_on_program_cache_miss(attributes, tensor_args);
 }
 
 void GatherDeviceOperation::validate_on_program_cache_miss(
@@ -60,17 +61,18 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
         "Index tensor must be of type UINT32 or UINT16. Got: {}",
         tensor_args.input_index_tensor.dtype());
 
-    for (int i = 0; i < input_tensor_rank; ++i) {
-        if (i != attributes.dim) {
-            TT_FATAL(
-                input_index_tensor_shape[i] <= input_tensor_shape[i],
-                "Index tensor shape dimension {} must be less than or equal to input tensor shape dimension {}. Got "
-                "index tensor shape: {} and input tensor shape: {}",
-                i,
-                i,
-                input_index_tensor_shape[i],
-                input_tensor_shape[i]);
-        }
+    for (int i = 0; i < input_tensor_rank - 1; ++i) {
+        // Validate all dimensions except the last one, as the tensor has been transposed
+        // to move the gather dimension to the last position.
+        // Improvement idea: Consider removing transposition and handling arbitrary dimensions directly in the kernel.
+        TT_FATAL(
+            input_index_tensor_shape[i] <= input_tensor_shape[i],
+            "Index tensor shape dimension {} must be less than or equal to input tensor shape dimension {}. Got "
+            "index tensor shape: {} and input tensor shape: {}",
+            i,
+            i,
+            input_index_tensor_shape[i],
+            input_tensor_shape[i]);
     }
     TT_FATAL(
         attributes.output_mem_config.is_sharded() == false,
@@ -121,6 +123,16 @@ GatherDeviceOperation::tensor_return_value_t GatherDeviceOperation::create_outpu
     }
     const auto output_specs = compute_output_specs(attributes, tensor_args);
     return create_device_tensor(output_specs, tensor_args.input_tensor.device());
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<GatherDeviceOperation::tensor_return_value_t>
+GatherDeviceOperation::create_op_performance_model(
+    const operation_attributes_t& op_attr, const tensor_args_t& inputs, const Tensor& output) {
+    const auto& input_tensor = inputs.input_tensor;
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
+        {input_tensor}, {output}, ideal_dev_clock_cycles);
+    return result;
 }
 
 std::tuple<GatherDeviceOperation::operation_attributes_t, GatherDeviceOperation::tensor_args_t>

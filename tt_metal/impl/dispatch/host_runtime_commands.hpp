@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,6 @@
 #include <utility>
 #include <vector>
 
-#include "command_queue_interface.hpp"
 #include "core_coord.hpp"
 #include "device_command.hpp"
 #include "env_lib.hpp"
@@ -28,7 +27,8 @@
 #include "worker_config_buffer.hpp"
 #include "program/dispatch.hpp"
 
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
+
 namespace tt {
 namespace tt_metal {
 class IDevice;
@@ -41,8 +41,8 @@ enum NOC : uint8_t;
 
 namespace tt::tt_metal {
 
-class BufferRegion;
-class Event;
+struct BufferRegion;
+struct Event;
 class Trace;
 
 // Only contains the types of commands which are enqueued onto the device
@@ -53,7 +53,6 @@ enum class EnqueueCommandType {
     ADD_BUFFER_TO_PROGRAM,
     SET_RUNTIME_ARGS,
     ENQUEUE_PROGRAM,
-    ENQUEUE_TRACE,
     ENQUEUE_RECORD_EVENT,
     ENQUEUE_WAIT_FOR_EVENT,
     FINISH,
@@ -64,7 +63,8 @@ enum class EnqueueCommandType {
 
 class Command {
 public:
-    Command() {}
+    Command() = default;
+    virtual ~Command() = default;
     virtual void process() {};
     virtual EnqueueCommandType type() = 0;
 };

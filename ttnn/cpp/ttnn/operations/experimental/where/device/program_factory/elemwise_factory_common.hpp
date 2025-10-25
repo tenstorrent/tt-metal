@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,6 @@
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 
 #include <optional>
@@ -50,7 +49,7 @@ inline void set_eltwise_ternary_runtime_args(
         }
     }
 
-    uint32_t num_tiles = condition_tensor.volume() / TILE_HW;
+    uint32_t num_tiles = static_cast<uint32_t>(condition_tensor.physical_volume() / TILE_HW);
     bool row_major = true;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         zero_start_grid ? tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles, row_major)

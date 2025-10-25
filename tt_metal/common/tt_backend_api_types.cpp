@@ -5,7 +5,7 @@
 #include "tt_backend_api_types.hpp"
 
 #include <fmt/base.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <string_view>
 
 std::string tt::get_string(tt::ARCH arch) {
@@ -13,7 +13,7 @@ std::string tt::get_string(tt::ARCH arch) {
         case tt::ARCH::GRAYSKULL: return "GRAYSKULL"; break;
         case tt::ARCH::WORMHOLE_B0: return "WORMHOLE_B0"; break;
         case tt::ARCH::BLACKHOLE: return "BLACKHOLE"; break;
-        case tt::ARCH::Invalid: return "Invalid"; break;
+        case tt::ARCH::Invalid:
         default: return "Invalid"; break;
     }
 }
@@ -23,7 +23,7 @@ std::string tt::get_string_lowercase(tt::ARCH arch) {
         case tt::ARCH::GRAYSKULL: return "grayskull"; break;
         case tt::ARCH::WORMHOLE_B0: return "wormhole_b0"; break;
         case tt::ARCH::BLACKHOLE: return "blackhole"; break;
-        case tt::ARCH::Invalid: return "invalid"; break;
+        case tt::ARCH::Invalid:
         default: return "invalid"; break;
     }
 }
@@ -45,6 +45,8 @@ tt::ARCH tt::get_arch_from_string(const std::string& arch_str) {
         arch = tt::ARCH::WORMHOLE_B0;
     } else if ((arch_str == "blackhole") || (arch_str == "BLACKHOLE")) {
         arch = tt::ARCH::BLACKHOLE;
+    } else if ((arch_str == "quasar") || (arch_str == "QUASAR")) {
+        arch = tt::ARCH::QUASAR;
     } else if ((arch_str == "Invalid") || (arch_str == "INVALID")) {
         arch = tt::ARCH::Invalid;
     } else {
@@ -55,7 +57,7 @@ tt::ARCH tt::get_arch_from_string(const std::string& arch_str) {
 }
 
 auto fmt::formatter<tt::DataFormat>::format(tt::DataFormat df, format_context& ctx) const -> format_context::iterator {
-    const auto name = magic_enum::enum_name(df);
+    const auto name = enchantum::to_string(df);
 
     if (name.empty()) {
         throw std::invalid_argument("Unknown format");

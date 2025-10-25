@@ -16,6 +16,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/maybe_remote.hpp>
+#include <tt-metalium/routing_table_generator.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -41,49 +42,51 @@ class MeshDevice;
 
 class MeshDeviceView {
 public:
-    using DeviceView = std::vector<IDevice*>;
-    using DeviceViews = std::vector<std::vector<IDevice*>>;
-
-    // // Create a view of a sub-region of the mesh defined by `range`.
-    // MeshDeviceView(const std::vector<IDevice*>& devices, const MeshCoordinateRange& range);
-    explicit MeshDeviceView(const MeshContainer<IDevice*>& devices);
-    explicit MeshDeviceView(const MeshContainer<MaybeRemote<IDevice*>>& devices);
-    explicit MeshDeviceView(const MeshDevice& mesh_device);
+    // Constructors for MeshDeviceView for fully and partially local meshes.
+    explicit MeshDeviceView(
+        const MeshShape& shape,
+        const std::vector<IDevice*>& devices,
+        const std::vector<tt::tt_fabric::FabricNodeId>& fabric_node_ids);
+    explicit MeshDeviceView(
+        const MeshShape& shape,
+        const std::vector<MaybeRemote<IDevice*>>& devices,
+        const std::vector<tt::tt_fabric::FabricNodeId>& fabric_node_ids);
 
     // Get devices spanning the region defined by `range` in row-major order with start/end coordinates inclusive
-    [[nodiscard]] DeviceView get_devices(const MeshCoordinateRange& range) const;
-    [[nodiscard]] DeviceView get_devices(const MeshShape& submesh_shape) const;
-    [[nodiscard]] DeviceView get_devices() const;
+    [[nodiscard]] std::vector<IDevice*> get_devices(const MeshCoordinateRange& range) const;
+    [[nodiscard]] std::vector<IDevice*> get_devices() const;
+    [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids(const MeshCoordinateRange& range) const;
+    [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids() const;
     [[nodiscard]] size_t num_devices() const;
 
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] size_t size() const noexcept;
     [[nodiscard]] const MeshShape& shape() const noexcept;
+    [[nodiscard]] tt::tt_fabric::MeshId mesh_id() const noexcept;
     [[nodiscard]] bool contains(const MeshCoordinate& coord) const noexcept;
-    [[nodiscard]] IDevice* get_device(const MeshCoordinate& coord) const;
-    [[nodiscard]] const IDevice* at(const MeshCoordinate& coord) const noexcept;
 
-    bool operator==(const MeshDeviceView& other) const;
+    // Returns `IDevice*` instance for `coord`.
+    // In multi-host context, throws if `coord` is querying a remote device.
+    [[nodiscard]] IDevice* get_device(const MeshCoordinate& coord) const;
+
+    // Returns `tt::tt_fabric::FabricNodeId` for `coord`.
+    // In multi-host context, fabric node IDs are always available, even for remote devices.
+    [[nodiscard]] tt::tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
 
     auto begin() const { return devices_.values().begin(); }
     auto end() const { return devices_.values().end(); }
 
-    [[nodiscard]] bool contains_device(chip_id_t device_id) const;
-
     // Throws if no device corresponds to `device_id`.
-    [[nodiscard]] MeshCoordinate find_device(chip_id_t device_id) const;
-
-    // Throws if the `coord` is out of bounds of this view.
-    [[nodiscard]] chip_id_t find_device_id(const MeshCoordinate& coord) const;
+    [[nodiscard]] MeshCoordinate find_device(ChipId device_id) const;
 
     // TODO: #17477 - Remove the methods that assume 2D mesh.
     [[nodiscard]] bool is_mesh_2d() const;
     [[nodiscard]] size_t num_rows() const;
     [[nodiscard]] size_t num_cols() const;
-    [[nodiscard]] DeviceView get_devices_on_row(size_t row) const;
-    [[nodiscard]] DeviceView get_devices_on_column(size_t col) const;
-    [[nodiscard]] DeviceViews get_row_views() const;
-    [[nodiscard]] DeviceViews get_column_views() const;
+    [[nodiscard]] std::vector<IDevice*> get_devices_on_row(size_t row) const;
+    [[nodiscard]] std::vector<IDevice*> get_devices_on_column(size_t col) const;
+    [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids_on_row(size_t row) const;
+    [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids_on_column(size_t col) const;
 
     // These utility methods linearize the set of devices in a mesh into a line or ring.
     // Linearizing a mesh into a line asserts the condition that device[i-1] is connected to device[i].
@@ -97,27 +100,25 @@ public:
     // TODO: #17477 - Remove the methods that assume 2D mesh.
     [[nodiscard]] static std::vector<MeshCoordinate> get_line_coordinates(
         size_t length, const Shape2D& mesh_shape, const Shape2D& mesh_offset);
+    [[nodiscard]] std::vector<MeshCoordinate> get_line_coordinates() const;
     [[nodiscard]] static std::vector<MeshCoordinate> get_ring_coordinates(
         const Shape2D& ring_shape, const Shape2D& mesh_shape);
+    [[nodiscard]] std::vector<MeshCoordinate> get_ring_coordinates() const;
     [[nodiscard]] std::vector<IDevice*> get_ring_devices() const;
     [[nodiscard]] std::vector<IDevice*> get_line_devices() const;
+    [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_ring_fabric_node_ids() const;
+    [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_line_fabric_node_ids() const;
 
-    // Distributed mesh support
-    // Returns the offset of this host's portion of the mesh within the global distributed mesh.
-    // For single-host meshes, this returns (0, 0).
-    [[nodiscard]] MeshCoordinate local_offset() const;
-
-    // Returns the shape of the mesh portion managed by this host.
-    // For single-host meshes, this equals the global mesh shape.
-    [[nodiscard]] MeshShape local_shape() const;
-
-    // Checks if a global coordinate is managed by this host.
-    // Returns true if the coordinate falls within this host's local mesh bounds.
-    [[nodiscard]] bool is_local_coordinate(const MeshCoordinate& coord) const;
+    // Returns true if the view is fully local, i.e. all devices in the view are local.
+    // Throws if the coordinate is out of bounds of this view.
+    bool is_local(const MeshCoordinate& coord) const;
 
 private:
     DistributedMeshContainer<IDevice*> devices_;
-    std::unordered_map<chip_id_t, MeshCoordinate> device_coordinates_;
+    MeshContainer<tt::tt_fabric::FabricNodeId> fabric_node_ids_;
+    tt::tt_fabric::MeshId mesh_id_;
+
+    std::unordered_map<ChipId, MeshCoordinate> device_coordinates_;
 
     // Set if the view is 2D to enable row/col APIs, otherwise nullopt.
     // TODO: #17477 - Remove this?

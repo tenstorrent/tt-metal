@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,6 @@
 #include "buffer.hpp"
 #include "cq_shared_state.hpp"
 #include "command_queue.hpp"
-#include "command_queue_interface.hpp"
 #include "core_coord.hpp"
 #include "dispatch_settings.hpp"
 #include "event.hpp"
@@ -27,7 +26,7 @@
 #include <tt_stl/span.hpp>
 #include "sub_device_types.hpp"
 #include "trace/trace_buffer.hpp"
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include "vector_aligned.hpp"
 #include "worker_config_buffer.hpp"
 #include "trace/trace_node.hpp"
@@ -65,7 +64,8 @@ public:
     void reset_worker_state(
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,
-        const vector_aligned<uint32_t>& go_signal_noc_data) override;
+        const vector_aligned<uint32_t>& go_signal_noc_data,
+        const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) override;
 
     void set_go_signal_noc_data_and_dispatch_sems(
         uint32_t num_dispatch_sems, const vector_aligned<uint32_t>& noc_mcast_unicast_data) override;
@@ -80,7 +80,6 @@ public:
     // This function is temporarily needed since MeshCommandQueue relies on the CommandQueue object
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;
 
-    void enqueue_trace(uint32_t trace_id, bool blocking) override;
     void enqueue_program(Program& program, bool blocking) override;
     void enqueue_read_buffer(
         const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
@@ -138,7 +137,7 @@ private:
     // Expected value of DISPATCH_MESSAGE_ADDR in dispatch core L1
     //  Value in L1 incremented by worker to signal completion to dispatch. Value on host is set on each enqueue program
     //  call
-    DispatchArray<uint32_t> expected_num_workers_completed_;
+    DispatchArray<uint32_t> expected_num_workers_completed_{};
 
     std::atomic<bool> exit_condition_;
     std::atomic<uint32_t> num_entries_in_completion_q_;  // issue queue writer thread increments this when an issued
@@ -152,7 +151,7 @@ private:
     // To ensure that host and device are not out of sync, we reset the wptrs to their original values
     // post trace capture.
     DispatchArray<LaunchMessageRingBufferState> worker_launch_message_buffer_state_reset_;
-    DispatchArray<uint32_t> expected_num_workers_completed_reset_;
+    DispatchArray<uint32_t> expected_num_workers_completed_reset_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset_;
     IDevice* device_;
 

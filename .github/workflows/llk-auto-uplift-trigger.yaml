@@ -1,0 +1,596 @@
+name: Uplift LLK Submodule
+
+on:
+  workflow_dispatch:
+    inputs:
+      workflow_timeout:
+        description: 'Timeout for workflows in minutes'
+        required: false
+        type: number
+        default: 720
+      draft:
+        description: 'Create PR as draft'
+        required: false
+        type: boolean
+        default: true
+      recheck_tests:
+        description: 'Re-check latest test runs'
+        required: false
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      workflow_timeout:
+        description: 'Timeout for workflows in minutes'
+        required: false
+        type: number
+        default: 720
+      draft:
+        description: 'Create PR as draft'
+        required: false
+        type: boolean
+        default: true
+      recheck_tests:
+        description: 'Re-check latest test runs'
+        required: false
+        type: boolean
+        default: false
+  repository_dispatch:
+    types: [trigger-llk-update]
+
+env:
+  BRANCH_NAME: llk-submodule-uplift
+  SUBMODULE_PATH: tt_metal/third_party/tt_llk
+  WORKFLOW_TIMEOUT: 720
+  MAX_RETRIES: 3
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+  issues: write
+  checks: read
+
+jobs:
+  update-submodule:
+    if: inputs.recheck_tests != true
+    runs-on: ubuntu-latest
+    outputs:
+      pr-number: ${{ steps.create-pr.outputs.pull-request-number }}
+      should-run-wormhole: ${{ steps.analyze.outputs.should-run-wormhole }}
+      should-run-blackhole: ${{ steps.analyze.outputs.should-run-blackhole }}
+      has-changes: ${{ steps.update.outputs.has-changes }}
+      changed-files: ${{ steps.analyze.outputs.changed-files }}
+      old-sha: ${{ steps.update.outputs.old-sha }}
+      new-sha: ${{ steps.update.outputs.new-sha }}
+    steps:
+      - name: Setup
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.TEMP_METAL_PAT }}
+          fetch-depth: 0
+          ref: main
+          clean: true
+
+      - name: Configure git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Prepare fresh branch
+        run: |
+          git push origin --delete "${{ env.BRANCH_NAME }}" 2>/dev/null || true
+          git branch -D "${{ env.BRANCH_NAME }}" 2>/dev/null || true
+
+          # Update parent repo to latest
+          git fetch origin main
+          git reset --hard origin/main
+          git submodule update --init --recursive --force
+
+      - name: Update submodule
+        id: update
+        run: |
+          cd ${{ env.SUBMODULE_PATH }}
+          OLD_SHA=$(git rev-parse --short=7 HEAD)
+
+          git remote set-url origin https://${{ secrets.TEMP_METAL_PAT }}@github.com/tenstorrent/tt-llk.git
+          git fetch origin main
+          git checkout main
+          git pull origin main
+
+          NEW_SHA=$(git rev-parse --short=7 HEAD)
+
+          echo "old-sha=$OLD_SHA" >> $GITHUB_OUTPUT
+          echo "new-sha=$NEW_SHA" >> $GITHUB_OUTPUT
+
+          if [ "$OLD_SHA" = "$NEW_SHA" ]; then
+            echo "has-changes=false" >> $GITHUB_OUTPUT
+            echo "⚠️ No changes detected"
+          else
+            echo "has-changes=true" >> $GITHUB_OUTPUT
+            echo "✅ Changes detected: $OLD_SHA -> $NEW_SHA"
+            cd - && git submodule update --remote ${{ env.SUBMODULE_PATH }}
+          fi
+
+      - name: Analyze changes
+        id: analyze
+        if: steps.update.outputs.has-changes == 'true'
+        run: |
+          cd ${{ env.SUBMODULE_PATH }}
+          OLD_SHA="${{ steps.update.outputs.old-sha }}"
+          NEW_SHA="${{ steps.update.outputs.new-sha }}"
+
+          # Get analysis data
+          CHANGED_FILES=$(git diff --name-only ${OLD_SHA}..${NEW_SHA})
+          COMMIT_COUNT=$(git log --oneline ${OLD_SHA}..${NEW_SHA} | wc -l)
+          FILE_COUNT=$(echo "$CHANGED_FILES" | wc -l)
+
+          # Architecture impact detection
+          SHOULD_RUN_WH=$(echo "$CHANGED_FILES" | grep -q "^tt_llk_wormhole_b0/" && echo "true" || echo "false")
+          SHOULD_RUN_BH=$(echo "$CHANGED_FILES" | grep -q "^tt_llk_blackhole/" && echo "true" || echo "false")
+
+          echo "should-run-wormhole=$SHOULD_RUN_WH" >> $GITHUB_OUTPUT
+          echo "should-run-blackhole=$SHOULD_RUN_BH" >> $GITHUB_OUTPUT
+
+          # Output analysis data for later use
+          echo "changed-files<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Generate rich commits table with PR links
+          COMMITS_TABLE="| Commit | Message | Author | PR |"$'\n'
+          COMMITS_TABLE+="|--------|---------|---------|-----|"$'\n'
+
+          if [ "$COMMIT_COUNT" -gt 0 ]; then
+            while IFS='|' read -r short_hash message author full_hash || [ -n "$short_hash" ]; do
+              [ -z "$short_hash" ] && continue
+
+              pr_number=$(echo "$message" | grep -oE '\(#[0-9]+\)' | grep -oE '[0-9]+' | head -1)
+              clean_message=$(echo "$message" | sed 's/ *(#[0-9]\+) *$//')
+
+              if [ -n "$pr_number" ]; then
+                COMMITS_TABLE+="| [$short_hash](https://github.com/tenstorrent/tt-llk/commit/$full_hash) | $clean_message | $author | [#$pr_number](https://github.com/tenstorrent/tt-llk/pull/$pr_number) |"$'\n'
+              else
+                COMMITS_TABLE+="| [$short_hash](https://github.com/tenstorrent/tt-llk/commit/$full_hash) | $clean_message | $author | - |"$'\n'
+              fi
+            done < <(git log --pretty=format:"%h|%s|%an|%H" ${OLD_SHA}..${NEW_SHA})
+          else
+            COMMITS_TABLE+="| (No commits found) | - | - | - |"$'\n'
+          fi
+
+          # Determine labels for counts
+          COMMIT_LABEL=$([ "$COMMIT_COUNT" -eq 1 ] && echo "$COMMIT_COUNT commit" || echo "$COMMIT_COUNT commits")
+          FILE_LABEL=$([ "$FILE_COUNT" -eq 1 ] && echo "$FILE_COUNT file" || echo "$FILE_COUNT files")
+
+          # Create rich PR body
+          cat > ../../../pr_body.md << EOF
+          ╔═════════════════════════════════════════════════╗
+          ║    THIS IS AN AUTOMATED PULL REQUEST CREATED    ║
+          ║              BY THE LLK UPLIFT BOT              ║
+          ╚═════════════════════════════════════════════════╝
+          ## 📋 Summary
+          This PR updates the LLK submodule to the latest version from the main branch.
+
+          | Package | Update |
+          |---------|---------|
+          | tt-llk | [\`$OLD_SHA\`](https://github.com/tenstorrent/tt-llk/commit/$OLD_SHA) [->](https://github.com/tenstorrent/tt-llk/compare/$OLD_SHA...$NEW_SHA) [\`$NEW_SHA\`](https://github.com/tenstorrent/tt-llk/commit/$NEW_SHA) |
+
+          ### 📝 Changelog ($COMMIT_LABEL)
+          $COMMITS_TABLE
+
+          ### 📁 Files Changed ($FILE_LABEL)
+          <details>
+          <summary>Click to expand file list</summary>
+
+          $(echo "$CHANGED_FILES" | sed 's/^/- `/' | sed 's/$/`/')
+          </details>
+
+          ### 🏗️ Architecture Impact
+          $(if [ "$SHOULD_RUN_WH" = "true" ]; then echo "- ⚠️ **Wormhole** changes detected - will trigger all-post-commit tests"; fi)
+          $(if [ "$SHOULD_RUN_BH" = "true" ]; then echo "- ⚠️ **Blackhole** changes detected - will trigger blackhole-post-commit tests"; fi)
+          $(if [ "$SHOULD_RUN_WH" = "false" ] && [ "$SHOULD_RUN_BH" = "false" ]; then echo "- ℹ️ No architecture-specific changes detected"; fi)
+
+          <!-- WORKFLOW_DECISIONS:should-run-wormhole=$SHOULD_RUN_WH,should-run-blackhole=$SHOULD_RUN_BH -->
+
+          ### 🤖 Automation Status
+          - **Created by:** LLK Auto-Uplift Workflow
+          - **Trigger:** $(if [ "${{ github.event_name }}" = "repository_dispatch" ]; then echo "Repository Dispatch"; else echo "Manual/Workflow Call"; fi)
+
+          ### 🧪 Test Status
+          Test results and workflow status will be updated here automatically.
+
+          ---
+          *This PR will be automatically updated with test results and merged upon successful completion of all required checks.*
+          EOF
+
+      - name: Create PR
+        id: create-pr
+        if: steps.update.outputs.has-changes == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.TEMP_METAL_PAT }}
+          commit-message: "chore: update LLK submodule to ${{ steps.update.outputs.new-sha }}"
+          title: "chore: update LLK submodule to ${{ steps.update.outputs.new-sha }}"
+          branch: ${{ env.BRANCH_NAME }}
+          base: main
+          delete-branch: true
+          body-path: pr_body.md
+          add-paths: ${{ env.SUBMODULE_PATH }}
+          draft: ${{ github.event_name == 'repository_dispatch' || inputs.draft == true }}
+          labels: |
+            llk-update
+            automated
+
+  run-tests:
+    needs: update-submodule
+    if: |
+      inputs.recheck_tests != true &&
+      needs.update-submodule.outputs.has-changes == 'true' &&
+      (needs.update-submodule.outputs.should-run-wormhole == 'true' ||
+       needs.update-submodule.outputs.should-run-blackhole == 'true')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - workflow: "all-post-commit-workflows.yaml"
+            name: "All Post Commit Workflows"
+            should-run: ${{ needs.update-submodule.outputs.should-run-wormhole }}
+          - workflow: "blackhole-post-commit.yaml"
+            name: "Blackhole Post Commit"
+            should-run: ${{ needs.update-submodule.outputs.should-run-blackhole }}
+          - workflow: "tt-metal-l2-nightly.yaml"
+            name: "TT-Metal L2 Nightly APC"
+            should-run: ${{ needs.update-submodule.outputs.should-run-wormhole }}
+    steps:
+      - name: Checkout
+        if: matrix.should-run == 'true'
+        uses: actions/checkout@v4
+
+      - name: Trigger and monitor workflow
+        if: matrix.should-run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
+        run: |
+          PR_NUMBER="${{ needs.update-submodule.outputs.pr-number }}"
+          WORKFLOW="${{ matrix.workflow }}"
+          DISPLAY_NAME="${{ matrix.name }}"
+          TIMEOUT_MINUTES="${{ inputs.workflow_timeout || env.WORKFLOW_TIMEOUT }}"
+
+          # Helper function for workflow monitoring
+          monitor_workflow() {
+            local run_id=$1
+            local retries=0
+
+            while [ $retries -lt ${{ env.MAX_RETRIES }} ]; do
+              # Wait for completion with timeout
+              local elapsed=0
+              local timeout_seconds=$((TIMEOUT_MINUTES * 60))
+
+              while [ $elapsed -lt $timeout_seconds ]; do
+                local status=$(gh run view "$run_id" --json status,conclusion --jq '{status: .status, conclusion: .conclusion}' 2>/dev/null || echo '{"status": "unknown"}')
+                local run_status=$(echo "$status" | jq -r '.status // "unknown"')
+                local conclusion=$(echo "$status" | jq -r '.conclusion // "unknown"')
+
+                if [ "$run_status" = "completed" ]; then
+                  local run_url="https://github.com/${{ github.repository }}/actions/runs/$run_id"
+
+                  if [ "$conclusion" = "success" ]; then
+                    gh pr comment "$PR_NUMBER" --body "✅ **$DISPLAY_NAME** passed: [View run]($run_url)" --repo "${{ github.repository }}"
+                    return 0
+                  else
+                    gh pr comment "$PR_NUMBER" --body "❌ **$DISPLAY_NAME** failed (attempt $((retries + 1))): [View run]($run_url/attempts/$((retries + 1)))" --repo "${{ github.repository }}"
+                    break
+                  fi
+                fi
+
+                sleep 300  # 5 minutes
+                elapsed=$((elapsed + 300))
+              done
+
+              # Handle timeout or failure
+              if [ $elapsed -ge $timeout_seconds ]; then
+                local run_url="https://github.com/${{ github.repository }}/actions/runs/$run_id"
+                gh pr comment "$PR_NUMBER" --body "⏰ **$DISPLAY_NAME** timed out after ${TIMEOUT_MINUTES}m: [View run]($run_url)" --repo "${{ github.repository }}"
+                return 1
+              fi
+
+              # Retry failed run
+              retries=$((retries + 1))
+              if [ $retries -lt ${{ env.MAX_RETRIES }} ]; then
+                echo "Retrying $DISPLAY_NAME (attempt $((retries + 1))/${{ env.MAX_RETRIES }})"
+                if gh run rerun "$run_id" --failed --repo "${{ github.repository }}"; then
+                  echo "✅ Retry triggered successfully for run ID: $run_id"
+                  # Wait a bit for the rerun to start, then continue monitoring the same run_id
+                  sleep 30
+                else
+                  echo "❌ Failed to trigger retry"
+                  break
+                fi
+              fi
+            done
+
+            return 1
+          }
+
+          # Record trigger time before triggering workflow
+          TRIGGER_TIME=$(date +%s)
+          echo "Trigger timestamp: $TRIGGER_TIME"
+
+          # Trigger workflow with appropriate inputs
+          echo "Triggering $WORKFLOW..."
+          # Special handling for tt-metal-l2-nightly.yaml to pass run_APC_cpp_tests parameter
+          if [ "$WORKFLOW" = "tt-metal-l2-nightly.yaml" ]; then
+            gh workflow run "$WORKFLOW" --ref "${{ env.BRANCH_NAME }}" --repo "${{ github.repository }}" -f run_APC_cpp_tests=true
+          else
+            gh workflow run "$WORKFLOW" --ref "${{ env.BRANCH_NAME }}" --repo "${{ github.repository }}"
+          fi
+
+          # Wait for the new run to appear and ensure it's created after trigger time
+          run_id=""
+          for i in {1..20}; do
+            sleep 10
+
+            # Get runs created after trigger time
+            RUNS_DATA=$(gh run list --workflow "$WORKFLOW" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json databaseId,createdAt,status --repo "${{ github.repository }}")
+
+            # Find the newest run created after our trigger timestamp
+            NEW_RUN_ID=$(echo "$RUNS_DATA" | jq -r --argjson trigger_time "$TRIGGER_TIME" '
+              map(select(
+                (.createdAt | fromdateiso8601) >= $trigger_time
+              )) |
+              sort_by(.createdAt) |
+              reverse |
+              .[0].databaseId // empty
+            ')
+
+            if [ -n "$NEW_RUN_ID" ] && [ "$NEW_RUN_ID" != "empty" ]; then
+              run_id="$NEW_RUN_ID"
+              echo "✅ Found new run ID: $run_id (created after trigger time)"
+              break
+            fi
+
+            echo "Attempt $i: Waiting for new workflow run to appear..."
+          done
+
+          if [ -n "$run_id" ] && [ "$run_id" != "null" ]; then
+            run_url="https://github.com/${{ github.repository }}/actions/runs/$run_id"
+            gh pr comment "$PR_NUMBER" --body "🚀 **$DISPLAY_NAME** triggered: [View run]($run_url)" --repo "${{ github.repository }}"
+
+            if monitor_workflow "$run_id"; then
+              echo "✅ $DISPLAY_NAME completed successfully"
+            else
+              echo "❌ $DISPLAY_NAME failed or timed out"
+              exit 1
+            fi
+          else
+            echo "❌ Failed to find run ID for $WORKFLOW"
+            exit 1
+          fi
+
+  recheck-tests:
+    if: inputs.recheck_tests == true
+    runs-on: ubuntu-latest
+    outputs:
+      pr-number: ${{ steps.check.outputs.pr-number }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.TEMP_METAL_PAT }}
+
+      - name: Check latest test runs
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
+        run: |
+          # Find PR and get decisions
+          PR_NUMBER=$(gh pr list --head "${{ env.BRANCH_NAME }}" --json number --jq '.[0].number // empty')
+          [ -z "$PR_NUMBER" ] && { echo "❌ No LLK PR found"; exit 1; }
+
+          echo "pr-number=$PR_NUMBER" >> $GITHUB_OUTPUT
+
+          PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq '.body')
+          DECISIONS=$(echo "$PR_BODY" | grep -o "WORKFLOW_DECISIONS:[^>]*" | head -1)
+
+          # Parse decisions
+          SHOULD_RUN_WH=$(echo "$DECISIONS" | grep -o "should-run-wormhole=[^, ]*" | cut -d= -f2)
+          SHOULD_RUN_BH=$(echo "$DECISIONS" | grep -o "should-run-blackhole=[^, ]*" | cut -d= -f2)
+
+          # Check workflow results
+          check_workflow() {
+            local workflow=$1
+            local name=$2
+
+            # Get the most recent completed run (if any)
+            local runs=$(
+              gh run list \
+                --workflow "$workflow" \
+                --branch "${{ env.BRANCH_NAME }}" \
+                --limit 5 \
+                --json conclusion,url,status,attempt \
+                --jq 'map(select(.status == "completed")) | .[0] | select(. != null)'
+              )
+
+            # If no completed runs are found, exit early
+            if [ -z "$runs" ]; then
+              echo "❌ Error: No completed runs found for workflow '$workflow' on branch '${{ env.BRANCH_NAME }}'" >&2
+              return 1
+            fi
+
+            local conclusion=$(echo "$runs" | jq -r '.conclusion // "unknown"')
+            local url=$(echo "$runs" | jq -r '.url // ""')
+            local attempt=$(echo "$runs" | jq -r '.attempt // 1')
+
+            if [ "$conclusion" = "success" ]; then
+              echo "✅ $name passed: [View run]($url)"
+              return 0
+            else
+              echo "❌ $name failed (conclusion: $conclusion): [View run]($url/attempts/$attempt)"
+              return 1
+            fi
+          }
+
+          ALL_PASSED=true
+          RESULTS=""
+
+          if [ "$SHOULD_RUN_WH" = "true" ]; then
+            if check_workflow "all-post-commit-workflows.yaml" "All Post Commit Workflows"; then
+              RESULTS+="- $(check_workflow "all-post-commit-workflows.yaml" "All Post Commit Workflows")"$'\n'
+            else
+              RESULTS+="- $(check_workflow "all-post-commit-workflows.yaml" "All Post Commit Workflows")"$'\n'
+              ALL_PASSED=false
+            fi
+
+            if check_workflow "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly APC"; then
+              RESULTS+="- $(check_workflow "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly APC")"$'\n'
+            else
+              RESULTS+="- $(check_workflow "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly APC")"$'\n'
+              ALL_PASSED=false
+            fi
+          fi
+
+          if [ "$SHOULD_RUN_BH" = "true" ]; then
+            if check_workflow "blackhole-post-commit.yaml" "Blackhole Post Commit"; then
+              RESULTS+="- $(check_workflow "blackhole-post-commit.yaml" "Blackhole Post Commit")"$'\n'
+            else
+              RESULTS+="- $(check_workflow "blackhole-post-commit.yaml" "Blackhole Post Commit")"$'\n'
+              ALL_PASSED=false
+            fi
+          fi
+
+          # Comment with results
+          if [ "$ALL_PASSED" = "true" ]; then
+            COMMENT="✅ **Test Re-check Successful**: All required workflows have passed."$'\n\n'"$RESULTS"
+          else
+            COMMENT="❌ **Test Re-check Failed**: Some workflows are still failing."$'\n\n'"$RESULTS"
+          fi
+
+          gh pr comment "$PR_NUMBER" --body "$COMMENT" --repo "${{ github.repository }}"
+          if [ "$ALL_PASSED" != "true" ]; then
+            exit 1
+          fi
+
+  finalize:
+    needs: [update-submodule, run-tests, recheck-tests]
+    if: |
+      always() && (
+        (inputs.recheck_tests != true && needs.update-submodule.outputs.has-changes == 'true' && needs.update-submodule.result == 'success' && (needs.run-tests.result == 'success' || needs.run-tests.result == 'skipped')) ||
+        (inputs.recheck_tests == true && needs.recheck-tests.result == 'success')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Finalize PR
+        env:
+          GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
+        run: |
+          PR_NUMBER="${{ inputs.recheck_tests == true && needs.recheck-tests.outputs.pr-number || needs.update-submodule.outputs.pr-number }}"
+
+          # Mark as ready if needed
+          if [ "${{ inputs.draft }}" = "true" ] || [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            echo "Marking PR as ready for review"
+            if gh pr ready "$PR_NUMBER" --repo "${{ github.repository }}" 2>/dev/null; then
+              echo "ℹ️ PR converted to ready-for-review"
+            else
+              echo "⚠️ PR already ready or failed to convert (check permissions)"
+            fi
+          fi
+          # Build test status for PR body update
+          TEST_STATUS="### 🧪 Test Status"$'\n'
+
+          if [ "${{ inputs.recheck_tests }}" = "true" ]; then
+            TEST_STATUS+="**Workflow Results (Re-checked):**"$'\n'
+          else
+            TEST_STATUS+="**Workflow Results:**"$'\n'
+          fi
+
+          # Get PR creation time to filter runs created after PR
+          if [ "${{ inputs.recheck_tests }}" != "true" ]; then
+            PR_CREATED_AT=$(gh pr view "$PR_NUMBER" --json createdAt --jq '.createdAt' --repo "${{ github.repository }}")
+            echo "PR created at: $PR_CREATED_AT"
+          fi
+
+          # Collect workflow results
+          if [ "${{ needs.update-submodule.outputs.should-run-wormhole || 'false' }}" = "true" ] || [ "${{ inputs.recheck_tests }}" = "true" ]; then
+            # Get Wormhole workflow results (filter by PR creation time if not recheck)
+            if [ "${{ inputs.recheck_tests }}" = "true" ]; then
+              WH_RUNS=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "${{ github.repository }}")
+            else
+              WH_RUNS=$(gh run list --workflow "all-post-commit-workflows.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "${{ github.repository }}")
+            fi
+
+            if [ "$WH_RUNS" != "empty" ]; then
+              WH_URL=$(echo "$WH_RUNS" | jq -r '.url // ""')
+              TEST_STATUS+="- ✅ **All Post Commit Workflows** passed: [View run]($WH_URL)"$'\n'
+            fi
+
+            # Get TT-Metal L2 Nightly APC workflow results (filter by PR creation time if not recheck)
+            if [ "${{ inputs.recheck_tests }}" = "true" ]; then
+              L2_RUNS=$(gh run list --workflow "tt-metal-l2-nightly.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "${{ github.repository }}")
+            else
+              L2_RUNS=$(gh run list --workflow "tt-metal-l2-nightly.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "${{ github.repository }}")
+            fi
+
+            if [ "$L2_RUNS" != "empty" ]; then
+              L2_URL=$(echo "$L2_RUNS" | jq -r '.url // ""')
+              TEST_STATUS+="- ✅ **TT-Metal L2 Nightly APC** passed: [View run]($L2_URL)"$'\n'
+            fi
+          fi
+
+          if [ "${{ needs.update-submodule.outputs.should-run-blackhole || 'false' }}" = "true" ] || [ "${{ inputs.recheck_tests }}" = "true" ]; then
+            # Get Blackhole workflow results (filter by PR creation time if not recheck)
+            if [ "${{ inputs.recheck_tests }}" = "true" ]; then
+              BH_RUNS=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "${{ github.repository }}")
+            else
+              BH_RUNS=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "${{ github.repository }}")
+            fi
+
+            if [ "$BH_RUNS" != "empty" ]; then
+              BH_URL=$(echo "$BH_RUNS" | jq -r '.url // ""')
+              TEST_STATUS+="- ✅ **Blackhole Post Commit** passed: [View run]($BH_URL)"$'\n'
+            fi
+          fi
+
+          # If no workflows were run
+          if [ "${{ needs.update-submodule.outputs.should-run-wormhole || 'false' }}" = "false" ] && [ "${{ needs.update-submodule.outputs.should-run-blackhole || 'false' }}" = "false" ] && [ "${{ inputs.recheck_tests }}" != "true" ]; then
+            TEST_STATUS+="- ℹ️ **No architecture-specific tests required** - No Wormhole or Blackhole tests were run"$'\n'
+          fi
+
+          # Get current PR body and update the Test Status section
+          CURRENT_BODY=$(gh pr view "$PR_NUMBER" --json body --jq '.body' --repo "${{ github.repository }}")
+
+          # Remove existing Test Status section and everything after it
+          UPDATED_BODY=$(echo "$CURRENT_BODY" | sed -E '/### 🧪 Test Status.*/,$d')
+
+          # Add new test status
+          UPDATED_BODY="$UPDATED_BODY"$'\n\n'"$TEST_STATUS"
+
+          # Update PR body
+          echo "$UPDATED_BODY" | gh pr edit "$PR_NUMBER" --body-file - --repo "${{ github.repository }}"
+
+          # Enable auto-merge
+          echo "🔄 Enabling auto-merge for PR #$PR_NUMBER"
+          if [ "${{ inputs.recheck_tests }}" != "true" ]; then
+            gh pr merge "$PR_NUMBER" --auto --squash --subject "chore: update LLK submodule to ${{ needs.update-submodule.outputs.new-sha }}" --repo "${{ github.repository }}" || echo "⚠️ Could not enable auto-merge (may require additional permissions)"
+          else
+            gh pr merge "$PR_NUMBER" --auto --squash --repo "${{ github.repository }}" || echo "⚠️ Could not enable auto-merge (may require additional permissions)"
+          fi
+
+          # Final comment
+          MESSAGE="🎉 **LLK submodule update completed successfully!** Auto-merge enabled - will merge automatically once approved by reviewers."
+          gh pr comment "$PR_NUMBER" --body "$MESSAGE" --repo "${{ github.repository }}"
+
+          echo "✅ Updated PR body with test status"
+          echo "✅ PR #$PR_NUMBER ready for review"
+
+      - name: Auto-approve by codeowners
+        if: success()
+        run: |
+          echo "🚀 Triggering auto-approval"
+          gh workflow run "code-analysis.yaml" \
+            --ref "Aswinmcw/approve_llk_uplift" \
+            --repo "${{ github.repository }}"

@@ -1,13 +1,14 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/routing_table_generator.hpp>
+#include <utility>
 
 namespace tt::tt_metal::distributed {
 
@@ -26,6 +27,10 @@ struct MeshCoreCoord {
 struct SocketConnection {
     MeshCoreCoord sender_core;
     MeshCoreCoord receiver_core;
+
+    bool operator==(const SocketConnection& other) const {
+        return sender_core == other.sender_core && receiver_core == other.receiver_core;
+    }
 };
 
 // Specifies how memory is allocated for this socket.
@@ -91,25 +96,33 @@ private:
         std::shared_ptr<MeshBuffer> config_buffer,
         const SocketConfig& config,
         SocketEndpoint socket_endpoint_type) :
-        data_buffer_(data_buffer),
-        config_buffer_(config_buffer),
+        data_buffer_(std::move(data_buffer)),
+        config_buffer_(std::move(config_buffer)),
         config_(config),
         socket_endpoint_type_(socket_endpoint_type) {}
-    void connect_with_peer(std::shared_ptr<multihost::DistributedContext> context);
+    void connect_with_peer(const std::shared_ptr<multihost::DistributedContext>& context);
 
     std::shared_ptr<MeshBuffer> data_buffer_;
     std::shared_ptr<MeshBuffer> config_buffer_;
     SocketConfig config_;
     SocketEndpoint socket_endpoint_type_;
+    // TODO: replace with enchantum::array
     std::
-        array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, magic_enum::enum_count<SocketEndpoint>()>
+        array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, enchantum::count<SocketEndpoint>>
             fabric_node_id_map_;
 };
 
 }  // namespace tt::tt_metal::distributed
 
 namespace std {
-
+template <>
+struct hash<tt::tt_metal::distributed::MeshCoreCoord> {
+    size_t operator()(const tt::tt_metal::distributed::MeshCoreCoord& coord) const noexcept;
+};
+template <>
+struct hash<tt::tt_metal::distributed::SocketConnection> {
+    size_t operator()(const tt::tt_metal::distributed::SocketConnection& conn) const noexcept;
+};
 template <>
 struct hash<tt::tt_metal::distributed::SocketConfig> {
     size_t operator()(const tt::tt_metal::distributed::SocketConfig& config) const noexcept;

@@ -5,10 +5,9 @@
 #include <string>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/tensor/tensor_accessor_args.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
 using namespace tt::constants;
@@ -26,7 +25,6 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     float scaler) {
     const auto& shape = a.padded_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
-    uint32_t HW = H * W;
 
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
@@ -37,20 +35,16 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     tt_metal::Program program = tt_metal::CreateProgram();
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
+    uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
     // Scaler datatype is hardcoded bfloat16 due to tile creation in reader
     tt::DataFormat scaler_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t scaler_single_tile_size = tt_metal::detail::TileSize(scaler_cb_data_format);
+    uint32_t scaler_single_tile_size = tt::tile_size(scaler_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
-
-    uint32_t num_tiles = a.physical_volume() / TILE_HW;
+    uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
     tt_metal::IDevice* device = a.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto num_rows = NC * Ht;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows);
@@ -60,29 +54,29 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
             .set_page_size(src0_cb_index, src0_single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     tt_metal::CircularBufferConfig cb_scaler_config =
         tt_metal::CircularBufferConfig(
             num_input_tiles * scaler_single_tile_size, {{CBIndex::c_2, scaler_cb_data_format}})
             .set_page_size(CBIndex::c_2, scaler_single_tile_size);
-    auto cb_scaler = tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_3;
     uint32_t num_output_tiles = 2;
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
             .set_page_size(output_cb_index, dst_single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    bfloat16 bfloat_scaler_value = bfloat16(scaler);
+    bfloat16 bfloat_scaler_value = bfloat16::truncate(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     tt_metal::Buffer* src_buffer = a.buffer();
     std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
-    TensorAccessorArgs(*src_buffer).append_args(reader_compile_time_args);
+    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
     tt_metal::Buffer* dst_buffer = output.buffer();
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-    TensorAccessorArgs(*dst_buffer).append_args(writer_compile_time_args);
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reduce_defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::W);
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
@@ -104,7 +98,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
         1,                          // NC
     };
 
-    auto reduce_compute_kernel_group_1_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_w.cpp",
         core_group_1,
@@ -121,7 +115,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
             1,                          // NC
         };
 
-        auto reduce_compute_kernel_group_2_id = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_w.cpp",
             core_group_2,

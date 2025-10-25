@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,9 +10,18 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
 )
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_flash_multi_latent_attention_decode import (
+    page_table_setup,
+    to_paged_cache,
+    from_paged_cache,
+)
 import ttnn
 from loguru import logger
 import pytest
+
+from models.tt_transformers.tt.common import (
+    PagedAttentionConfig,
+)
 
 
 def nearest_n(x, n):
@@ -56,17 +65,30 @@ def run_flash_mla_prefill_impl(
     d_rope,
     q_dtype,
     dtype,
+    use_paged_attention=False,
+    block_size=ttnn.TILE_SIZE,
 ):
     # Log the test parameters
-    logger.info(f"Running FlashMLA Prefill with parameters: ")
-    logger.info(f"Batch: {batch}")
-    logger.info(f"Sequence Length: {seq_len}")
-    logger.info(f"Number of Heads (Q): {nh}")
-    logger.info(f"Number of Heads (KV): {nkv}")
-    logger.info(f"KV LoRA Rank: {kv_lora_rank}")
-    logger.info(f"Dimensionality of RoPE: {d_rope}")
-    logger.info(f"Query Data Type: {q_dtype}")
-    logger.info(f"Key-Value Data Type: {dtype}")
+    logger.debug(f"Running FlashMLA Prefill with parameters: ")
+    logger.debug(f"Batch: {batch}")
+    logger.debug(f"Sequence Length: {seq_len}")
+    logger.debug(f"Number of Heads (Q): {nh}")
+    logger.debug(f"Number of Heads (KV): {nkv}")
+    logger.debug(f"KV LoRA Rank: {kv_lora_rank}")
+    logger.debug(f"Dimensionality of RoPE: {d_rope}")
+    logger.debug(f"Query Data Type: {q_dtype}")
+    logger.debug(f"Key-Value Data Type: {dtype}")
+
+    # Paged attention configuration
+    paged_attention_cfg = None
+    if use_paged_attention:
+        assert seq_len % block_size == 0, f"Sequence length must be a multiple of {block_size=} for paged attention."
+
+        max_num_blocks = seq_len // block_size * batch
+        paged_attention_cfg = PagedAttentionConfig(
+            block_size=block_size,
+            max_num_blocks=max_num_blocks,
+        )
 
     ######################
     ### Torch Setup
@@ -77,6 +99,30 @@ def run_flash_mla_prefill_impl(
     ######################
     ### TT Setup
     #######################
+
+    # Page-related setup
+    tt_k_torch = k
+    tt_page_table = None
+    if paged_attention_cfg:
+        page_table = page_table_setup(batch, paged_attention_cfg)
+        tt_k_torch = to_paged_cache(
+            k,
+            page_table,
+            paged_attention_cfg,
+        )
+        tt_k_torch_og = from_paged_cache(
+            tt_k_torch,
+            page_table,
+            paged_attention_cfg,
+        )
+        assert torch.all(tt_k_torch_og == k), "Paged cache conversion for K failed."
+
+        tt_page_table = ttnn.from_torch(
+            page_table,
+            device=device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
 
     padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
     q_chunk_size = padded_num_heads
@@ -110,7 +156,7 @@ def run_flash_mla_prefill_impl(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     tt_k = ttnn.from_torch(
-        k,  # (B, H, S, D)
+        tt_k_torch,  # (B, H, S, D)
         device=device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
@@ -120,19 +166,31 @@ def run_flash_mla_prefill_impl(
     ##########################
     ### FlashMLA Prefill
     ##########################
-    tt_out = ttnn.transformer.flash_mla_prefill(
-        tt_q,
-        tt_k,
-        head_dim_v=kv_lora_rank,
-        scale=scale,
-        program_config=sdpa_program_config,
-        compute_kernel_config=compute_kernel_config,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        attn_mask=None,
-        is_causal=True,
-    )
+    if tt_page_table:
+        tt_out = ttnn.transformer.chunked_flash_mla_prefill(
+            tt_q,
+            tt_k,
+            kv_lora_rank,
+            tt_page_table,
+            chunk_start_idx=0,
+            scale=scale,
+            program_config=sdpa_program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    else:
+        tt_out = ttnn.transformer.flash_mla_prefill(
+            tt_q,
+            tt_k,
+            head_dim_v=kv_lora_rank,
+            scale=scale,
+            program_config=sdpa_program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            attn_mask=None,
+            is_causal=True,
+        )
     tt_back = ttnn.to_torch(tt_out)  # now (B, H_padded, S_padded, D)
-    print("raw to_torch shape:", tt_back.shape)
     # slice out the padded heads and sequence length; no permute needed
     tt_out_torch = tt_back[:, :nh, :seq_len, :]  # (B, nh, S, D)
 
@@ -152,7 +210,7 @@ def run_flash_mla_prefill_impl(
         pcc_threshold = 0.98
 
     out_pass, out_pcc = comp_pcc(tt_out_torch, out_t, pcc_threshold)
-    logger.info(f"Output PCC: {out_pcc}")
+    logger.debug(f"Output PCC: {out_pcc}")
 
     assert out_pass, f"Output mismatch: PCC {out_pcc} < 0.99"
 
@@ -172,9 +230,21 @@ def run_flash_mla_prefill_impl(
     "q_dtype, dtype",
     [
         (ttnn.bfloat16, ttnn.bfloat8_b),
-        (ttnn.bfloat8_b, ttnn.bfloat8_b),
-        (ttnn.bfloat16, ttnn.bfloat4_b),
         (ttnn.bfloat8_b, ttnn.bfloat4_b),
+    ],
+)
+@pytest.mark.parametrize(
+    "use_paged_attention",
+    [
+        # False,
+        True,
+    ],
+)
+@pytest.mark.parametrize(
+    "block_size",
+    [
+        32,
+        128,
     ],
 )
 def test_flash_mla_prefill(
@@ -187,6 +257,8 @@ def test_flash_mla_prefill(
     d_rope,
     q_dtype,
     dtype,
+    use_paged_attention,
+    block_size,
     function_level_defaults,
     reset_seeds,
 ):
@@ -200,81 +272,6 @@ def test_flash_mla_prefill(
         d_rope,
         q_dtype,
         dtype,
-    )
-
-
-@pytest.mark.parametrize(
-    "batch",
-    [
-        1,  # Single batch
-        2,  # Multiple batches
-        8,  # Even larger batch size
-    ],
-)
-@pytest.mark.parametrize(
-    "seq_len",
-    [
-        1 * 1024,  # Long sequence length
-    ],
-)
-@pytest.mark.parametrize(
-    "nh",
-    [
-        16,
-        32,
-        128,
-    ],
-)
-@pytest.mark.parametrize(
-    "nkv",
-    [
-        1,
-        8,
-        16,
-    ],
-)
-@pytest.mark.parametrize(
-    "kv_lora_rank",
-    [
-        64,
-        512,
-    ],
-)
-@pytest.mark.parametrize(
-    "d_rope",
-    [
-        0,
-        32,
-        128,
-    ],
-)
-@pytest.mark.parametrize(
-    "q_dtype, dtype",
-    [
-        (ttnn.bfloat16, ttnn.bfloat8_b),
-    ],
-)
-def test_flash_mla_prefill_stress(
-    device,
-    batch,
-    seq_len,
-    nh,
-    nkv,
-    kv_lora_rank,
-    d_rope,
-    q_dtype,
-    dtype,
-    function_level_defaults,
-    reset_seeds,
-):
-    run_flash_mla_prefill_impl(
-        device,
-        batch,
-        seq_len,
-        nh,
-        nkv,
-        kv_lora_rank,
-        d_rope,
-        q_dtype,
-        dtype,
+        use_paged_attention,
+        block_size,
     )

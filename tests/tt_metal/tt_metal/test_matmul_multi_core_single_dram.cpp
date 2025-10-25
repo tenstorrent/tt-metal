@@ -53,7 +53,7 @@ void print_faces(std::vector<bfloat16> data, std::string name) {
                 face_index = 0;
             }
         }
-        std::cout << data.at(i).to_float() << ", ";
+        std::cout << static_cast<float>(data.at(i)) << ", ";
         if ((i + 1) % 16 == 0) {
             std::cout << std::endl;
         }

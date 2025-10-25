@@ -9,7 +9,11 @@ import torch
 
 from tests.didt.op_test_base import OpTestBase, get_blackhole_grid_size
 import ttnn
-from models.utility_functions import skip_for_blackhole, is_blackhole
+from models.common.utility_functions import skip_for_blackhole, is_blackhole
+
+NUM_DEVICES = ttnn.distributed.get_num_devices()
+MESH_X = NUM_DEVICES if NUM_DEVICES <= 8 else 8
+MESH_Y = 1 if NUM_DEVICES <= 8 else NUM_DEVICES / MESH_X
 
 
 class ResnetConvTest(OpTestBase):
@@ -137,6 +141,7 @@ class ResnetConvTest(OpTestBase):
             input_height=self.input_height,
             input_width=self.input_width,
             conv_config=self.program_config,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
             compute_config=self.compute_config,
             groups=self.groups,
             dtype=self.out_dtype,
@@ -153,6 +158,7 @@ class ResnetConvTest(OpTestBase):
         pytest.param(2, id="2chips"),
         pytest.param(8, id="8chips"),
         pytest.param((8, 4), id="galaxy"),
+        pytest.param((MESH_X, MESH_Y), id="all"),  # run on all available devices
     ],
     indirect=["mesh_device"],
 )
@@ -201,8 +207,6 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
         shard_layout=shard_layout,
         deallocate_activation=False,
         enable_act_double_buffer=True,
-        enable_split_reader=True,
-        enable_subblock_padding=False,
     )
     # This sets subblocks to [2, 4] in underlying matmul
     conv_config.act_block_h_override = 40 * 32
@@ -254,7 +258,6 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
     resnetConvTest.run_op_test()
 
 
-@skip_for_blackhole("Multi-chip Blackhole has not been tested")
 @pytest.mark.parametrize("logical_chip_id", range(32), ids=[f"logical_chip_{i}_" for i in range(32)])
 @pytest.mark.parametrize(
     "mesh_device",

@@ -6,6 +6,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -14,19 +16,19 @@
 #include <vector>
 
 using namespace tt::tt_metal;
-
 using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
 
 constexpr uint32_t TILE_WIDTH = 32;
 constexpr uint32_t TILE_HEIGHT = 32;
 
-std::shared_ptr<Buffer> MakeBuffer(IDevice* device, uint32_t size, uint32_t page_size, bool sram) {
-    InterleavedBufferConfig config{
-        .device = device,
-        .size = size,
-        .page_size = page_size,
-        .buffer_type = (sram ? BufferType::L1 : BufferType::DRAM)};
-    return CreateBuffer(config);
+std::shared_ptr<distributed::MeshBuffer> MakeBuffer(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t size, uint32_t page_size, bool sram) {
+    constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
+    const uint32_t page_tiles = sram ? size : 1;
+    const distributed::DeviceLocalBufferConfig device_local_config{
+        .page_size = page_tiles * tile_size, .buffer_type = (sram ? BufferType::L1 : BufferType::DRAM)};
+    const distributed::ReplicatedBufferConfig buffer_config{.size = tile_size * size};
+    return distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
 }
 
 // Allocate a buffer on DRAM or SRAM. Assuming the buffer holds BFP16 data.
@@ -35,11 +37,16 @@ std::shared_ptr<Buffer> MakeBuffer(IDevice* device, uint32_t size, uint32_t page
 // @param device: The device to allocate the buffer on.
 // @param n_tiles: The number of tiles to allocate.
 // @param sram: If true, allocate the buffer on SRAM, otherwise allocate it on DRAM.
-std::shared_ptr<Buffer> MakeBufferBFP16(IDevice* device, uint32_t n_tiles, bool sram) {
+std::shared_ptr<distributed::MeshBuffer> MakeBufferBFP16(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t n_tiles, bool sram) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
-    // For simplicity, all DRAM buffers have page size = tile size.
     const uint32_t page_tiles = sram ? n_tiles : 1;
-    return MakeBuffer(device, tile_size * n_tiles, page_tiles * tile_size, sram);
+    const distributed::DeviceLocalBufferConfig device_local_config{
+        .page_size = page_tiles * tile_size,
+        .buffer_type = (sram ? BufferType::L1 : BufferType::DRAM),
+        .bottom_up = false};
+    const distributed::ReplicatedBufferConfig buffer_config{.size = tile_size * n_tiles};
+    return distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
 }
 
 CBHandle MakeCircularBuffer(
@@ -101,20 +108,22 @@ int main(int argc, char** argv) {
         }
     }
 
-    IDevice* device = CreateDevice(device_id);
-
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+    auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    distributed::MeshWorkload workload;
     Program program = CreateProgram();
     // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
-    constexpr CoreCoord core = {0, 0};
+    CoreCoord core = {0, 0};
+    const auto device_coord = distributed::MeshCoordinate(0, 0);
 
-    CommandQueue& cq = device->command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     const uint32_t n_tiles = 64;
     const uint32_t tile_size = TILE_WIDTH * TILE_HEIGHT;
     // Create 3 buffers on DRAM. These will hold the input and output data. A and B are the input buffers, C is the
     // output buffer.
-    auto a = MakeBufferBFP16(device, n_tiles, false);
-    auto b = MakeBufferBFP16(device, n_tiles, false);
-    auto c = MakeBufferBFP16(device, n_tiles, false);
+    auto a = MakeBufferBFP16(mesh_device, n_tiles, false);
+    auto b = MakeBufferBFP16(mesh_device, n_tiles, false);
+    auto c = MakeBufferBFP16(mesh_device, n_tiles, false);
 
     std::mt19937 rng(seed);
     std::vector<uint32_t> a_data = create_random_vector_of_bfloat16(tile_size * n_tiles * 2, 10, rng());
@@ -127,8 +136,11 @@ int main(int argc, char** argv) {
     MakeCircularBufferBFP16(program, core, tt::CBIndex::c_1, tiles_per_cb);
     MakeCircularBufferBFP16(program, core, tt::CBIndex::c_16, tiles_per_cb);
 
-    EnqueueWriteBuffer(cq, a, a_data, false);
-    EnqueueWriteBuffer(cq, b, b_data, false);
+    // We're writing to a shard allocated on MeshCoordinate 0, 0, since this is a 1x1 MeshDevice
+    //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
+    // The last argument indicates if the operation is blocking or not.
+    distributed::WriteShard(cq, a, a_data, device_coord, false);
+    distributed::WriteShard(cq, b, b_data, device_coord, false);
 
     // A Tensix core is made up with 5 processors. 2 data movement processors, and 3 compute processors. The 2 data
     // movement processors act independent to other cores. And the 3 compute processors act together (hence 1 kerenl for
@@ -141,16 +153,27 @@ int main(int argc, char** argv) {
     // into 2 circular buffers. `add` reads tiles from the circular buffers, adds them together, and dumps the result
     // into a third circular buffer. `tile_write` reads tiles from the third circular buffer and writes them to the
     // output buffer C.
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*a).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*b).append_to(reader_compile_time_args);
     auto reader = CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/interleaved_tile_read.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = reader_compile_time_args});
+    std::vector<uint32_t> writer_compile_time_args;
+    TensorAccessorArgs(*c).append_to(writer_compile_time_args);
     auto writer = CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/tile_write.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = writer_compile_time_args});
     auto compute = CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/add.cpp",
@@ -163,20 +186,24 @@ int main(int argc, char** argv) {
     SetRuntimeArgs(program, writer, core, {c->address(), n_tiles});
     SetRuntimeArgs(program, compute, core, {n_tiles});
 
-    // We have setup the program. Now we can queue the kernel for execution.
-    // The last argument to EnqueueProgram is a boolean that specifies whether
+    // We have setup the program. Now we can add it to the workload and queue it for execution.
+    // The last argument to EnqueueMeshWorkload is a boolean that specifies whether
     // we wait for the program to finish execution before returning. I've set
     // it to true. But alternatively, you can set it to false and call
     // `Finish(cq)` to wait for all programs to finish.
     // But it shouldn't matter in this case since we block on reading the output
     // buffer.
-    EnqueueProgram(cq, program, true);
-    // Finish(cq);
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, true);
+    // distributed::Finish(cq);
     std::cout << "Kernel execution finished" << std::endl;
 
     // Read the output buffer.
     std::vector<uint32_t> c_data;
-    EnqueueReadBuffer(cq, c, c_data, true);
+
+    // We're reading from a shard allocated on Device Coordinate 0, 0, since this is a 1x1
+    //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
+    distributed::EnqueueReadMeshBuffer(cq, c_data, c, true);
 
     // Print partial results so we can see the output is correct (plus or minus some error due to BFP16 precision)
     std::cout << "Partial results: (note we are running under BFP16. It's going to be less accurate)\n";
@@ -185,12 +212,12 @@ int main(int argc, char** argv) {
     bfloat16* b_bf16 = reinterpret_cast<bfloat16*>(b_data.data());
     bfloat16* c_bf16 = reinterpret_cast<bfloat16*>(c_data.data());
     for (int i = 0; i < n; i++) {
-        std::cout << "  " << a_bf16[i].to_float() << " + " << b_bf16[i].to_float() << " = " << c_bf16[i].to_float()
-                  << "\n";
+        std::cout << "  " << static_cast<float>(a_bf16[i]) << " + " << static_cast<float>(b_bf16[i]) << " = "
+                  << static_cast<float>(c_bf16[i]) << "\n";
     }
     std::cout << std::flush;
 
     // Finally, we close the device.
-    CloseDevice(device);
+    mesh_device->close();
     return 0;
 }

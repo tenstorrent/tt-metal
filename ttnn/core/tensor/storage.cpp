@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,42 +24,33 @@ HostStorage HostStorage::transform(const std::function<HostBuffer(const HostBuff
         distributed_buffer_.transform(callable, DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL));
 }
 
-DeviceStorage::DeviceStorage(std::shared_ptr<Buffer> buffer_) { buffer = std::move(buffer_); }
-
 DeviceStorage::DeviceStorage(
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer_, std::vector<distributed::MeshCoordinate> coords_) :
     coords(std::move(coords_)), mesh_buffer(std::move(mesh_buffer_)) {}
 
 Buffer* DeviceStorage::get_buffer() const {
-    if (this->mesh_buffer.get() != nullptr) {
+    if (this->mesh_buffer != nullptr) {
         return this->mesh_buffer->get_reference_buffer();
     }
-    TT_FATAL(this->buffer != nullptr, "Buffer is not allocated");
-    return this->buffer.get();
+    TT_THROW("Buffer is not allocated");
 }
 
 std::shared_ptr<distributed::MeshBuffer> DeviceStorage::get_mesh_buffer() const {
-    TT_FATAL(mesh_buffer != nullptr, "Mesh buffer is not allocated");
+    TT_FATAL(mesh_buffer != nullptr, "Buffer is not allocated");
     return mesh_buffer;
 }
 
-bool DeviceStorage::is_allocated() const {
-    if (this->mesh_buffer.get() != nullptr) {
-        return this->mesh_buffer->is_allocated();
-    }
-    return this->buffer != nullptr && this->buffer->is_allocated();
-}
+bool DeviceStorage::is_allocated() const { return this->mesh_buffer != nullptr && this->mesh_buffer->is_allocated(); }
 
-IDevice* DeviceStorage::get_device() const {
-    if (this->mesh_buffer.get() != nullptr) {
+distributed::MeshDevice* DeviceStorage::get_device() const {
+    if (this->mesh_buffer != nullptr) {
         return this->mesh_buffer->device();
     }
-    TT_FATAL(this->buffer != nullptr, "Buffer is not allocated");
-    return this->buffer->device();
+    TT_THROW("Buffer is not allocated");
 }
 
 bool DeviceStorage::is_uniform_storage() const {
-    if (mesh_buffer.get() == nullptr) {
+    if (mesh_buffer == nullptr) {
         return true;
     }
     return coords.size() == mesh_buffer->device()->num_devices();

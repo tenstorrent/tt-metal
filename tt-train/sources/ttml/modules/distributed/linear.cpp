@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,7 +32,12 @@ RowParallelLinear::RowParallelLinear(
 autograd::TensorPtr RowParallelLinear::operator()(const autograd::TensorPtr& tensor) {
     auto x = tensor;
     if (!m_input_is_parallel) {
-        x = ops::distributed::scatter(x, tensor->get_rank() - 1U);
+        // noop during forward and all reduce during backward
+        x = ops::distributed::broadcast(x);
+
+        // reduce scatter with mean
+        x = ops::distributed::reduce_scatter(x, tensor->get_rank() - 1U);
+        x = ops::mul(x, 1.F / static_cast<float>(autograd::ctx().get_device().num_devices()));
     }
     // do not pass bias
     x = ops::linear_op(x, m_weight, /* bias */ nullptr);

@@ -12,10 +12,13 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <cstdint>
 #include <vector>
 #include <memory>
 #include <iostream>
+#include <tt-metalium/tt_metal.hpp>
 
 // Optional: For verbose host-side tile verification prints.
 #include <optional>
@@ -34,10 +37,16 @@ using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif
 
-std::shared_ptr<Buffer> MakeBufferBFP16(IDevice* device, uint32_t n_tiles, bool sram) {
+std::shared_ptr<distributed::MeshBuffer> MakeBufferBFP16(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t n_tiles, bool sram) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
     const uint32_t page_tiles = sram ? n_tiles : 1;
-    return CreateBuffer({.device = device, .size = tile_size * n_tiles, .page_size = page_tiles * tile_size, .buffer_type = (sram ? BufferType::L1 : BufferType::DRAM)});
+    const distributed::DeviceLocalBufferConfig device_local_config{
+        .page_size = page_tiles * tile_size,
+        .buffer_type = (sram ? BufferType::L1 : BufferType::DRAM),
+        .bottom_up = false};
+    const distributed::ReplicatedBufferConfig buffer_config{.size = tile_size * n_tiles};
+    return distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
 }
 
 CBHandle MakeCircularBufferBFP16(Program& program, const CoreSpec& core, tt::CBIndex cb, uint32_t n_tiles) {
@@ -81,7 +90,9 @@ void verify_tiles(
     fmt::print("\n=========== MULTICASTED TILE VERIFICATION ===========\n");
 
     ////////// LAMBDAS FOR ITERATING AND VERBOSE PRINTING TILES //////////
-    auto tile_elem_idx = [](int tile, int i, int j) { return tile * TILE_WIDTH * TILE_HEIGHT + i * TILE_WIDTH + j; };
+    auto tile_elem_idx = [](int tile, int i, int j) {
+        return (tile * TILE_WIDTH * TILE_HEIGHT) + (i * TILE_WIDTH) + j;
+    };
 
     auto print_tile =
         [&](const std::string& label, const std::vector<bfloat16>& data, std::optional<int> tile_num = std::nullopt) {
@@ -93,8 +104,8 @@ void verify_tiles(
 
             for (int i = 0; i < TILE_HEIGHT; i++) {
                 for (int j = 0; j < TILE_WIDTH; j++) {
-                    int idx = tile_num.has_value() ? tile_elem_idx(tile_num.value(), i, j) : i * TILE_WIDTH + j;
-                    fmt::print("{} ", data[idx].to_float());
+                    int idx = tile_num.has_value() ? tile_elem_idx(tile_num.value(), i, j) : (i * TILE_WIDTH) + j;
+                    fmt::print("{} ", static_cast<float>(data[idx]));
                 }
                 fmt::print("\n");
             }
@@ -117,8 +128,8 @@ void verify_tiles(
         for (int i = 0; i < TILE_HEIGHT && tile_match; i++) {
             for (int j = 0; j < TILE_WIDTH; j++) {
                 int idx = tile_elem_idx(tile, i, j);
-                float received = received_tiles[idx].to_float();
-                float golden = golden_tile[i * TILE_WIDTH + j].to_float();
+                float received = static_cast<float>(received_tiles[idx]);
+                float golden = static_cast<float>(golden_tile[(i * TILE_WIDTH) + j]);
                 if (received != golden) {
                     tile_match = false;
                     break;
@@ -141,16 +152,21 @@ void verify_tiles(
     fmt::print("=====================================================\n\n");
 }
 
-int main(int argc, char **argv) {
-
+int main(int argc, char** argv) {
     ////////// DEVICE SETUP //////////
+    // A MeshDevice is a software concept that allows developers to virtualize a cluster of connected devices as a
+    // single object, maintaining uniform memory and runtime state across all physical devices. A UnitMesh is a 1x1
+    // MeshDevice that allows users to interface with a single physical device.
     int device_id = 0;
-    IDevice* device = CreateDevice(device_id);
-    CommandQueue& cq = device->command_queue();
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     ////////// PROGRAM BLOCK //////////
     {
+        distributed::MeshWorkload workload;
         Program program = CreateProgram();
+        const auto device_coord = distributed::MeshCoordinate(0, 0);
 
         ////////// TENSIX CORE SETUP //////////
         // Define logical sender core and receiver core range (for kernel creation on the host).
@@ -158,11 +174,10 @@ int main(int argc, char **argv) {
         CoreCoord sender_core_logical = {0, 0};
         CoreRange receiver_cores_logical = CoreRange({1, 0}, {3, 0});
         // Convert logical coordinates to physical coordinates (necessary for multicasting).
-        CoreCoord sender_core_physical = device->worker_core_from_logical_core(sender_core_logical);
+        CoreCoord sender_core_physical = mesh_device->worker_core_from_logical_core(sender_core_logical);
         CoreRange receiver_cores_physical = CoreRange(
-            device->worker_core_from_logical_core(receiver_cores_logical.start_coord),
-            device->worker_core_from_logical_core(receiver_cores_logical.end_coord)
-        );
+            mesh_device->worker_core_from_logical_core(receiver_cores_logical.start_coord),
+            mesh_device->worker_core_from_logical_core(receiver_cores_logical.end_coord));
         // Define physical sender core and receiver core range (for runtime arguments on the device).
         CoreCoord sender_core = sender_core_physical;
         CoreCoord receiver_core_start = receiver_cores_physical.start_coord;
@@ -171,46 +186,6 @@ int main(int argc, char **argv) {
         // reference for num of receivers.
         size_t num_dests = receiver_cores_logical.size();
 
-        ////////// DATA MOVEMENT CONFIG SETUP //////////
-        DataMovementConfig DataMovementConfigIn = {.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
-        DataMovementConfig DataMovementConfigOut = {.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default};
-
-        ////////// COORDINATOR KERNEL SETUP //////////
-        KernelHandle coordinator_kernel_id = CreateKernel(
-            program,
-            "tt_metal/programming_examples/contributed/multicast/kernels/dataflow/coordinator_kernel.cpp",
-            sender_core_logical,
-            DataMovementConfigIn
-        );
-
-        ////////// DATAFLOW KERNELS SETUP //////////
-        KernelHandle inbound_kernel_id = CreateKernel(
-            program,
-            "tt_metal/programming_examples/contributed/multicast/kernels/dataflow/inbound_kernel.cpp",
-            receiver_cores_logical,
-            DataMovementConfigIn
-        );
-        KernelHandle outbound_kernel_id = CreateKernel(
-            program,
-            "tt_metal/programming_examples/contributed/multicast/kernels/dataflow/outbound_kernel.cpp",
-            receiver_cores_logical,
-            DataMovementConfigOut
-        );
-
-        ////////// COMPUTE KERNEL SETUP //////////
-        vector<uint32_t> compute_kernel_args = {};
-        KernelHandle comp_kernel_id = CreateKernel(
-            program,
-            "tt_metal/programming_examples/contributed/multicast/kernels/compute/void_compute_kernel.cpp",
-            receiver_cores_logical,
-            ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = false,
-                .math_approx_mode = false,
-                .compile_args = compute_kernel_args
-            }
-        );
-
         ////////// SEMAPHORE SETUP //////////
         uint32_t sender = CreateSemaphore(program, all_cores_logical, 0);
         uint32_t receiver = CreateSemaphore(program, all_cores_logical, 0);
@@ -218,14 +193,54 @@ int main(int argc, char **argv) {
         ////////// DRAM & SRAM BUFFERS SETUP //////////
         constexpr uint32_t num_tiles = 1;
         uint32_t dram_bank_id = 0;
-        auto src0_dram_buffer = MakeBufferBFP16(device, num_tiles, false);
-        auto output_dram_buffer = MakeBufferBFP16(device, num_dests * num_tiles, false);
-        auto cb_src0 = MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_0, num_tiles);
-        auto cb_output = MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_16, num_tiles);
+        auto src0_dram_buffer = MakeBufferBFP16(mesh_device, num_tiles, false);
+        auto output_dram_buffer = MakeBufferBFP16(mesh_device, num_dests * num_tiles, false);
+        MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_0, num_tiles);
+        MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_16, num_tiles);
+
+        ////////// DATA MOVEMENT CONFIG SETUP //////////
+        DataMovementConfig DataMovementConfigIn = {.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
+        std::vector<uint32_t> writer_compile_time_args;
+        TensorAccessorArgs(*output_dram_buffer).append_to(writer_compile_time_args);
+        DataMovementConfig DataMovementConfigOut = {
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = writer_compile_time_args};
+
+        ////////// COORDINATOR KERNEL SETUP //////////
+        KernelHandle coordinator_kernel_id = CreateKernel(
+            program,
+            "tt_metal/programming_examples/contributed/multicast/kernels/dataflow/coordinator_kernel.cpp",
+            sender_core_logical,
+            DataMovementConfigIn);
+
+        ////////// DATAFLOW KERNELS SETUP //////////
+        KernelHandle inbound_kernel_id = CreateKernel(
+            program,
+            "tt_metal/programming_examples/contributed/multicast/kernels/dataflow/inbound_kernel.cpp",
+            receiver_cores_logical,
+            DataMovementConfigIn);
+        KernelHandle outbound_kernel_id = CreateKernel(
+            program,
+            "tt_metal/programming_examples/contributed/multicast/kernels/dataflow/outbound_kernel.cpp",
+            receiver_cores_logical,
+            DataMovementConfigOut);
+
+        ////////// COMPUTE KERNEL SETUP //////////
+        vector<uint32_t> compute_kernel_args = {};
+        CreateKernel(
+            program,
+            "tt_metal/programming_examples/contributed/multicast/kernels/compute/void_compute_kernel.cpp",
+            receiver_cores_logical,
+            ComputeConfig{
+                .math_fidelity = MathFidelity::HiFi4,
+                .fp32_dest_acc_en = false,
+                .math_approx_mode = false,
+                .compile_args = compute_kernel_args});
 
         ////////// IDENTITY MATRIX TILE SETUP //////////
         std::vector<bfloat16> identity_tile = create_identity_matrix(TILE_WIDTH, TILE_HEIGHT, TILE_WIDTH);
-        EnqueueWriteBuffer(cq, src0_dram_buffer, identity_tile.data(), false);
+        distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, identity_tile);
 
         ////////// RUNTIME ARGS SETUP //////////
         // Args for the sender core to multicast tile.
@@ -246,11 +261,11 @@ int main(int argc, char **argv) {
              num_dests});
         // Args for the receiver cores to receive tile.
         // They must have access to coordinates of the sender core, to listen for multicast operation.
-        SetRuntimeArgs(program, inbound_kernel_id, receiver_cores_logical, {
-            (uint32_t)(sender_core.x),
-            (uint32_t)(sender_core.y),
-            sender, receiver
-        });
+        SetRuntimeArgs(
+            program,
+            inbound_kernel_id,
+            receiver_cores_logical,
+            {(uint32_t)(sender_core.x), (uint32_t)(sender_core.y), sender, receiver});
 
         // Args for the receiver cores to send tile back to DRAM.
         int tile_index = 0;
@@ -268,9 +283,10 @@ int main(int argc, char **argv) {
             sender_core_logical.x,
             sender_core_logical.y,
             device_id);
-        EnqueueProgram(cq, program, false);
+        workload.add_program(device_range, std::move(program));
+        distributed::EnqueueMeshWorkload(cq, workload, false);
         fmt::print("Waiting until program finishes\n");
-        Finish(cq);
+        distributed::Finish(cq);
         fmt::print(
             "Thank you, Core ({}, {}) on Device {}, for the multicast.\n",
             sender_core_logical.x,
@@ -283,14 +299,15 @@ int main(int argc, char **argv) {
 
         ////////// TILE MULTICAST VERIFICATION //////////
         std::vector<bfloat16> received_tiles(num_dests * TILE_HW);
-        EnqueueReadBuffer(
-            cq, output_dram_buffer, received_tiles.data(), true);  // read all multicast-received tiles to host.
+
+        // We're reading from a shard allocated on Device Coordinate 0, 0, since this is a 1x1
+        //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
+        distributed::EnqueueReadMeshBuffer(cq, received_tiles, output_dram_buffer, true);
         bool verbose_verify =
             false;  // if enabled, the original and all multicast-received tiles are printed in full (32x32).
         verify_tiles(identity_tile, received_tiles, num_dests, verbose_verify);
     }
 
-    CloseDevice(device);
-
+    mesh_device->close();
     return 0;
 }

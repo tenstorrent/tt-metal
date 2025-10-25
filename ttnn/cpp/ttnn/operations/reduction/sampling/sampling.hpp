@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,20 +13,11 @@ namespace operations::reduction {
 
 struct SamplingOperation {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const Tensor& input_values_tensor,
         const Tensor& input_indices_tensor,
-        const std::vector<uint16_t>& k,
-        const std::vector<float>& p,
-        const std::optional<uint32_t>& seed = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-
-    static ttnn::Tensor invoke(
-        const Tensor& input_values_tensor,
-        const Tensor& input_indices_tensor,
-        const std::vector<uint16_t>& k,
-        const std::vector<float>& p,
+        const Tensor& k,
+        const Tensor& p,
+        const Tensor& temp,
         const std::optional<uint32_t>& seed = std::nullopt,
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);

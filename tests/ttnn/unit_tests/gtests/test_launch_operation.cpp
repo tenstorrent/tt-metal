@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,6 @@
 
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
-#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/old_infra_device_operation.hpp"
@@ -30,7 +29,7 @@ using ::ttnn::device_operation::mesh_device_operation_utils::extract_tensor_coor
 using ::ttnn::device_operation::mesh_device_operation_utils::filter_tensor_shards;
 
 // Returns a dummy device tensor with `num_device_shards` populated.
-Tensor make_tensor_with_num_shards(int num_device_shards, MeshDevice* mesh_device) {
+Tensor make_tensor_with_num_shards(int num_device_shards, MeshDevice* mesh_device, int shard_dim = 0) {
     TT_FATAL(num_device_shards > 0 && num_device_shards <= mesh_device->num_devices(), "Invalid number of shards");
 
     const auto global_shape = ttnn::Shape{num_device_shards, 1, 32, 32};
@@ -40,7 +39,22 @@ Tensor make_tensor_with_num_shards(int num_device_shards, MeshDevice* mesh_devic
         global_shape,
         tt::tt_metal::MemoryPin{buffer},
         tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::TILE, MemoryConfig{}),
-        *distributed::shard_tensor_to_mesh_mapper(*mesh_device, /*dim=*/0),
+        *distributed::shard_tensor_to_mesh_mapper(*mesh_device, shard_dim),
+        *mesh_device);
+}
+
+// Returns a dummy device tensor distributed according to the `mapper_config`.
+Tensor make_tensor_with_mapper_config(
+    int num_device_shards, MeshDevice* mesh_device, const distributed::MeshMapperConfig& mapper_config) {
+    auto mapper = distributed::create_mesh_mapper(*mesh_device, mapper_config);
+    const auto global_shape = ttnn::Shape{num_device_shards, 1, 32, 32};
+    auto buffer = std::make_shared<std::vector<float>>(global_shape.volume());
+    return distributed::create_distributed_tensor(
+        tt::stl::make_span(*buffer),
+        global_shape,
+        tt::tt_metal::MemoryPin{buffer},
+        tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::TILE, MemoryConfig{}),
+        *mapper,
         *mesh_device);
 }
 
@@ -152,9 +166,9 @@ TEST(LaunchOperationTest, MeshDeviceOperationAdapterGetName) {
         "ExampleDeviceOperation");
 }
 
-using LaunchOperationT3000Test = tt::tt_metal::T3000MeshDeviceFixture;
+using LaunchOperation2x4Test = tt::tt_metal::MeshDevice2x4Fixture;
 
-TEST_F(LaunchOperationT3000Test, UniformTensor) {
+TEST_F(LaunchOperation2x4Test, UniformTensor) {
     const TensorSpec tensor_spec = TensorSpec(
         ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
     auto full_tensor = tt::tt_metal::allocate_tensor_on_device(tensor_spec, mesh_device_.get());
@@ -174,7 +188,7 @@ TEST_F(LaunchOperationT3000Test, UniformTensor) {
             ttnn::MeshCoordinate{1, 3}));
 }
 
-TEST_F(LaunchOperationT3000Test, UnevenTensor) {
+TEST_F(LaunchOperation2x4Test, UnevenTensor) {
     auto uneven_tensor = make_tensor_with_num_shards(2, mesh_device_.get());
 
     EXPECT_THAT(uneven_tensor.device_storage().coords, SizeIs(2));
@@ -187,7 +201,7 @@ TEST_F(LaunchOperationT3000Test, UnevenTensor) {
             ttnn::MeshCoordinate{0, 1}));
 }
 
-TEST_F(LaunchOperationT3000Test, FilterTensorShards) {
+TEST_F(LaunchOperation2x4Test, FilterTensorShards) {
     const TensorSpec tensor_spec = TensorSpec(
         ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
     auto full_tensor = tt::tt_metal::allocate_tensor_on_device(tensor_spec, mesh_device_.get());
@@ -244,7 +258,7 @@ TEST_F(LaunchOperationT3000Test, FilterTensorShards) {
     EXPECT_THAT(extract_tensor_coordinates(full_tensor), IsEmpty());
 }
 
-TEST_F(LaunchOperationT3000Test, LaunchOpFilterTensorShards) {
+TEST_F(LaunchOperation2x4Test, LaunchOpFilterTensorShards) {
     auto full_tensor = make_tensor_with_num_shards(8, mesh_device_.get());
     auto sum = ttnn::add(full_tensor, full_tensor);
 
@@ -272,7 +286,7 @@ TEST_F(LaunchOperationT3000Test, LaunchOpFilterTensorShards) {
             ttnn::MeshCoordinate{0, 1}));
 }
 
-TEST_F(LaunchOperationT3000Test, CachingHeterogeneousDispatch) {
+TEST_F(LaunchOperation2x4Test, CachingHeterogeneousDispatch) {
     EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 0);
 
     auto full_tensor = make_tensor_with_num_shards(8, mesh_device_.get());
@@ -290,6 +304,68 @@ TEST_F(LaunchOperationT3000Test, CachingHeterogeneousDispatch) {
 
     auto sum3 = ttnn::add(uneven_tensor, uneven_tensor);
     EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 2);
+}
+
+TEST_F(LaunchOperation2x4Test, OutputTensorTopology) {
+    auto input_tensor_1 = make_tensor_with_num_shards(8, mesh_device_.get());
+    auto input_tensor_2 = make_tensor_with_num_shards(8, mesh_device_.get());
+
+    auto sum = ttnn::add(input_tensor_1, input_tensor_2);
+
+    EXPECT_EQ(sum.tensor_topology().distribution_shape(), MeshShape(8));
+    EXPECT_EQ(
+        sum.tensor_topology().placements(),
+        (tt::stl::SmallVector<distributed::MeshMapperConfig::Placement>{distributed::MeshMapperConfig::Shard{0}}));
+}
+
+TEST_F(LaunchOperation2x4Test, OutputTensorTopologyAugmentedDistribution) {
+    auto config_1 = distributed::MeshMapperConfig{
+        .placements = {distributed::MeshMapperConfig::Shard{0}, distributed::MeshMapperConfig::Replicate{}},
+        .mesh_shape_override = MeshShape(2, 2),
+    };
+    auto input_tensor_1 = make_tensor_with_mapper_config(4, mesh_device_.get(), config_1);
+    auto config_2 = distributed::MeshMapperConfig{
+        .placements = {distributed::MeshMapperConfig::Replicate{}, distributed::MeshMapperConfig::Shard{0}},
+        .mesh_shape_override = MeshShape(1, 4),
+    };
+    auto input_tensor_2 = make_tensor_with_mapper_config(8, mesh_device_.get(), config_2);
+    auto config_3 = distributed::MeshMapperConfig{
+        .placements = {distributed::MeshMapperConfig::Shard{0}},
+        .mesh_shape_override = MeshShape(8),
+    };
+    auto input_tensor_3 = make_tensor_with_mapper_config(16, mesh_device_.get(), config_3);
+
+    auto sum_1 = ttnn::add(input_tensor_1, input_tensor_2);
+    auto sum_2 = ttnn::add(input_tensor_2, input_tensor_1);
+    auto sum_3 = ttnn::add(input_tensor_3, input_tensor_2);
+
+    EXPECT_EQ(sum_1.tensor_topology().distribution_shape(), MeshShape(2, 4));
+    EXPECT_EQ(
+        sum_1.tensor_topology().placements(),
+        (tt::stl::SmallVector<distributed::MeshMapperConfig::Placement>{
+            distributed::MeshMapperConfig::Shard{0}, distributed::MeshMapperConfig::Replicate{}}));
+    EXPECT_EQ(sum_2.tensor_topology().distribution_shape(), MeshShape(2, 4));
+    EXPECT_EQ(
+        sum_2.tensor_topology().placements(),
+        (tt::stl::SmallVector<distributed::MeshMapperConfig::Placement>{
+            distributed::MeshMapperConfig::Replicate{}, distributed::MeshMapperConfig::Shard{0}}));
+    EXPECT_EQ(sum_3.tensor_topology().distribution_shape(), MeshShape(1, 4));
+    EXPECT_EQ(
+        sum_3.tensor_topology().placements(),
+        (tt::stl::SmallVector<distributed::MeshMapperConfig::Placement>{
+            distributed::MeshMapperConfig::Replicate{}, distributed::MeshMapperConfig::Shard{0}}));
+}
+
+TEST_F(LaunchOperation2x4Test, OutputTensorTopologyMultipleShardDims) {
+    auto input_tensor_1 = make_tensor_with_num_shards(8, mesh_device_.get());
+    auto input_tensor_2 = make_tensor_with_num_shards(8, mesh_device_.get(), /*shard_dim=*/1);
+
+    auto sum = ttnn::add(input_tensor_1, input_tensor_2);
+
+    EXPECT_EQ(sum.tensor_topology().distribution_shape(), MeshShape(8));
+    EXPECT_EQ(
+        sum.tensor_topology().placements(),
+        (tt::stl::SmallVector<distributed::MeshMapperConfig::Placement>{distributed::MeshMapperConfig::Shard{0}}));
 }
 
 }  // namespace

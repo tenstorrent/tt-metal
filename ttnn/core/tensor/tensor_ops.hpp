@@ -7,27 +7,24 @@
 #include "ttnn/common/queue_id.hpp"
 
 namespace tt::tt_metal {
-struct Tensor;
-struct MemoryConfig;
-class CommandQueue;
+class Tensor;
+class MemoryConfig;
 namespace distributed {
 class MeshDevice;
 }  // namespace distributed
-
-class IDevice;
-
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::tensor_ops {
 
 Tensor tensor_to_device(
-    const Tensor& input_tensor, IDevice* target_device, const MemoryConfig& mem_config, QueueId cq_id);
-Tensor tensor_to_device(
-    const Tensor& input_tensor, distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config, QueueId cq_id);
+    const Tensor& input_tensor,
+    distributed::MeshDevice* mesh_device,
+    ttsl::optional_reference<const MemoryConfig> mem_config,
+    std::optional<QueueId> cq_id);
 
 Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout);
 
-Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id);
+Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_id);
 
 void tensor_print(const Tensor& input_tensor);
 

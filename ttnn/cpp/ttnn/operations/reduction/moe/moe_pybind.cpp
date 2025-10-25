@@ -18,15 +18,12 @@ namespace ttnn::operations::reduction::detail {
 
 void bind_reduction_moe_operation(py::module& module) {
     auto doc =
-        R"doc(moe(input_tensor: ttnn.Tensor, expert_mask_tensor: ttnn.Tensor, topk_mask_tensor: ttnn.Tensor, k: int, out : Optional[ttnn.Tensor] = std::nullopt, memory_config: MemoryConfig = std::nullopt, queue_id : [int] = 0) -> ttnn.Tensor
+        R"doc(
+            ``ttnn.moe(input_tensor: ttnn.Tensor, expert_mask_tensor: ttnn.Tensor, topk_mask_tensor: ttnn.Tensor, k: int = 32, output_tensor: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor``
 
             Returns the weight of the zero-th MoE expert.
-            Input tensor must have BBFLOAT16 data type and TILE_LAYOUT layout.
-            expert_mask_tensor and topk_mask_tensor must have BFLOAT16 data type and TILE_LAYOUT layout.
 
-            Output value tensor will have the same data type as input tensor and output.
-
-            Equivalent pytorch code:
+            Equivalent PyTorch code:
 
             .. code-block:: python
                 val, ind = torch.topk(input_tensor + expert_mask_tensor, k)
@@ -41,7 +38,47 @@ void bind_reduction_moe_operation(py::module& module) {
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensors
                 * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensors
-                * :attr:`queue_id` (Optional[uint8]): command queue id
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+
+            Note:
+                The :attr:`input_tensor`, :attr:`expert_mask_tensor`, and :attr:`topk_mask_tensor` must match the following data type and layout:
+
+                    .. list-table::
+                        :header-rows: 1
+
+                        * - dtype
+                          - layout
+                        * - BFLOAT16
+                          - TILE
+
+                The output tensor will match the data type and layout of the input tensor.
+
+            Memory Support:
+                - Interleaved: DRAM and L1
+
+            Limitations:
+                - Tensors must be 4D with shape [N, C, H, W], and must be located on the device.
+                - For the :attr:`input_tensor`, N*C*H must be a multiple of 32. The last dimension must be a power of two and ≥64.
+                - :attr:`k` must be exactly 32.
+                - For the :attr:`topk_mask_tensor`, H must be 32 and W must match :attr:`k` (i.e. 32).
+                - For the :attr:`expert_mask_tensor`, H must be 32 and W must match W of the :attr:`input_tensor`.
+                - All of the shape validations are performed on padded shapes.
+                - Sharding is not supported for this operation.
+
+            Example:
+                .. code-block:: python
+
+                    N, C, H, W = 1, 1, 32, 64
+                    k = 32
+
+                    input_tensor = ttnn.rand([N, C, H, W], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+                    expert_mask = ttnn.zeros([N, C, 1, W], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+                    topE_mask = ttnn.zeros([N, C, 1, k], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+                    ttnn_output = ttnn.moe(input_tensor, expert_mask, topE_mask, k)
+
         )doc";
 
     using OperationType = decltype(ttnn::moe);
@@ -56,16 +93,9 @@ void bind_reduction_moe_operation(py::module& module) {
                const ttnn::Tensor& topk_mask_tensor,
                const uint16_t k,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> optional_output_tensor,
-               QueueId queue_id) {
+               std::optional<ttnn::Tensor> optional_output_tensor) {
                 return self(
-                    queue_id,
-                    input_tensor,
-                    expert_mask_tensor,
-                    topk_mask_tensor,
-                    k,
-                    memory_config,
-                    optional_output_tensor);
+                    input_tensor, expert_mask_tensor, topk_mask_tensor, k, memory_config, optional_output_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("expert_mask_tensor").noconvert(),
@@ -73,8 +103,7 @@ void bind_reduction_moe_operation(py::module& module) {
             py::arg("k") = 32,
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("output_tensor") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::reduction::detail

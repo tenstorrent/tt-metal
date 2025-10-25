@@ -5,27 +5,27 @@
 import pytest
 from loguru import logger
 import ttnn
-from models.utility_functions import is_wormhole_b0, is_grayskull, skip_for_wormhole_b0, is_blackhole
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
+from models.common.utility_functions import is_wormhole_b0, is_grayskull, skip_for_wormhole_b0, is_blackhole
+from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 import torch
 import itertools
 import os
 
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
+from conftest import is_6u
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
+from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
-from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
+from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
 import random
 import math
-from models.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b0, is_blackhole
+from models.common.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b0, is_blackhole
 from tracy import signpost
 
-from models.demos.llama3_subdevices.tt.model_config import (
+from models.demos.llama3_70b_galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
 
@@ -233,7 +233,6 @@ def run_multi_core_matmul_1d(
     warmup_iters = 10
     num_iters = 75
     warmup_iters = 10
-    mesh_device.enable_program_cache()
     num_pages_per_packet = 4
     cyclic_buffer_size = 8
     compute_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
@@ -519,10 +518,9 @@ def run_multi_core_matmul_1d(
     worker_sub_device_id = ttnn.SubDeviceId(0)
     signpost("start")
     logger.info("Compiling model")
-    rs_out, matmul_out = ttnn.experimental.llama_rs_matmul(
+    rs_out_val, matmul_out_val = ttnn.experimental.llama_rs_matmul(
         in0_t,
         in1_t,
-        tt_input,
         tt_intermediate,
         dim,
         ccl_semaphore_handle,
@@ -530,6 +528,7 @@ def run_multi_core_matmul_1d(
         mesh_device,
         num_links,
         worker_sub_device_id,
+        rs_tensor=tt_input,
         program_config=program_config,
         memory_config_mm=output_sharded_mem_config,
         compute_kernel_config=compute_kernel_config,
@@ -544,7 +543,6 @@ def run_multi_core_matmul_1d(
         rs_out, matmul_out = ttnn.experimental.llama_rs_matmul(
             in0_t,
             in1_t,
-            tt_input,
             tt_intermediate,
             dim,
             ccl_semaphore_handle,
@@ -552,6 +550,7 @@ def run_multi_core_matmul_1d(
             mesh_device,
             num_links,
             worker_sub_device_id,
+            rs_tensor=tt_input,
             program_config=program_config,
             memory_config_mm=output_sharded_mem_config,
             compute_kernel_config=compute_kernel_config,
@@ -568,7 +567,6 @@ def run_multi_core_matmul_1d(
         rs_out, matmul_out = ttnn.experimental.llama_rs_matmul(
             in0_t,
             in1_t,
-            tt_input,
             tt_intermediate,
             dim,
             ccl_semaphore_handle,
@@ -576,6 +574,7 @@ def run_multi_core_matmul_1d(
             mesh_device,
             num_links,
             worker_sub_device_id,
+            rs_tensor=tt_input,
             program_config=program_config,
             memory_config_mm=output_sharded_mem_config,
             compute_kernel_config=compute_kernel_config,
@@ -596,7 +595,7 @@ def run_multi_core_matmul_1d(
     mesh_device.reset_sub_device_stall_group()
 
 
-@pytest.mark.skipif(is_RING_6U, reason="This test is not for 6U devices")
+@pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
 @pytest.mark.skipif(is_grayskull(), reason="Test suite for WH only")
 @pytest.mark.skipif(is_blackhole(), reason="Test suite for WH only")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
@@ -716,7 +715,7 @@ def test_tg_matmul_1d_ring_llama_with_rs_perf(
     )
 
 
-@pytest.mark.skipif(not is_RING_6U, reason="This test is only for 6U devices")
+@pytest.mark.skipif(not is_6u(), reason="This test is only for 6U devices")
 @pytest.mark.skipif(is_grayskull(), reason="Test suite for WH only")
 @pytest.mark.skipif(is_blackhole(), reason="Test suite for WH only")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
@@ -787,7 +786,6 @@ def test_6U_matmul_1d_ring_llama_with_rs_perf(
     in1_is_dram_interleaved,
     untilize_out,
     num_iters,
-    use_program_cache,
     function_level_defaults,
     shard_height,
     shard_width,

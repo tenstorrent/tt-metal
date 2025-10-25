@@ -25,7 +25,7 @@ string output_dir_name = "generated/watcher/";
 string logfile_name = "cq_dump.txt";
 
 void dump_data(
-    vector<chip_id_t>& device_ids,
+    vector<ChipId>& device_ids,
     bool dump_watcher,
     bool dump_cqs,
     bool dump_cqs_raw_data,
@@ -44,16 +44,9 @@ void dump_data(
     std::filesystem::path cq_dir(parent_dir.string() + "command_queue_dump/");
     std::filesystem::create_directories(cq_dir);
 
-    if (dump_cqs) {
-        cout << "Dumping Command Queues into: " << cq_dir.string() << endl;
-    }
-    if (dump_watcher) {
-        cout << "Dumping Watcher Log into: " << MetalContext::instance().watcher_server()->log_file_name() << endl;
-    }
-
     // Only look at user-specified devices
-    vector<IDevice*> devices;
-    for (chip_id_t id : device_ids) {
+    vector<std::unique_ptr<IDevice>> devices;
+    for (ChipId id : device_ids) {
         string cq_fname = cq_dir.string() + fmt::format("device_{}_completion_q.txt", id);
         std::ofstream cq_file = std::ofstream(cq_fname);
         string iq_fname = cq_dir.string() + fmt::format("device_{}_issue_q.txt", id);
@@ -61,8 +54,9 @@ void dump_data(
         // Minimal setup, since we'll be attaching to a potentially hanging chip.
         IDevice* device = tt::tt_metal::CreateDeviceMinimal(
             id, num_hw_cqs, DispatchCoreConfig{eth_dispatch ? DispatchCoreType::ETH : DispatchCoreType::WORKER});
-        devices.push_back(device);
+        devices.push_back(std::unique_ptr<IDevice>(device));
         if (dump_cqs) {
+            cout << "Dumping Command Queues into: " << cq_dir.string() << endl;
             std::unique_ptr<SystemMemoryManager> sysmem_manager = std::make_unique<SystemMemoryManager>(id, num_hw_cqs);
             internal::dump_cqs(cq_file, iq_file, *sysmem_manager, dump_cqs_raw_data);
         }
@@ -70,6 +64,7 @@ void dump_data(
 
     // Watcher doesn't have kernel ids since we didn't create them here, need to read from file.
     if (dump_watcher) {
+        cout << "Dumping Watcher Log into: " << MetalContext::instance().watcher_server()->log_file_name() << endl;
         MetalContext::instance().watcher_server()->isolated_dump(device_ids);
     }
 
@@ -100,10 +95,10 @@ void print_usage(const char* exec_name) {
 int main(int argc, char* argv[]) {
     cout << "Running watcher dump tool..." << endl;
     // Default devices is all of them.
-    vector<chip_id_t> device_ids;
+    vector<ChipId> device_ids;
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     device_ids.reserve(num_devices);
-    for (chip_id_t id = 0; id < num_devices; id++) {
+    for (ChipId id = 0; id < num_devices; id++) {
         device_ids.push_back(id);
     }
 
@@ -138,7 +133,7 @@ int main(int argc, char* argv[]) {
             }
         } else if ((s.rfind("-n=", 0) == 0) || (s.rfind("--num-hw-cqs==", 0) == 0)) {
             string value_str = s.substr(s.find("=") + 1);
-            num_hw_cqs = std::stoi(value_str.c_str());
+            num_hw_cqs = std::stoi(value_str);
         } else if (s == "-w" || s == "--dump-watcher") {
             dump_watcher = true;
         } else if (s == "-c" || s == "--dump-cqs") {

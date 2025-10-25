@@ -5,13 +5,13 @@
 import pytest
 
 import ttnn
-from models.demos.ttnn_resnet.tests.resnet50_performant import (
+from models.common.utility_functions import run_for_wormhole_b0
+from models.demos.ttnn_resnet.tests.common.resnet50_performant import (
     run_resnet50_2cqs_inference,
     run_resnet50_inference,
     run_resnet50_trace_2cqs_inference,
     run_resnet50_trace_inference,
 )
-from models.utility_functions import run_for_wormhole_b0
 
 
 @run_for_wormhole_b0()
@@ -20,8 +20,19 @@ from models.utility_functions import run_for_wormhole_b0
     "batch_size, act_dtype, weight_dtype, math_fidelity",
     ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
-def test_run_resnet50_inference(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator):
-    run_resnet50_inference(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator)
+@pytest.mark.parametrize("skip_compile_run", [True, False])
+def test_run_resnet50_inference(
+    device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator, skip_compile_run
+):
+    run_resnet50_inference(
+        device,
+        batch_size,
+        act_dtype,
+        weight_dtype,
+        math_fidelity,
+        model_location_generator,
+        skip_compile_run=skip_compile_run,
+    )
 
 
 @run_for_wormhole_b0()

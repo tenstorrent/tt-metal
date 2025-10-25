@@ -7,13 +7,15 @@
 #include "moreh_getitem_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
+#include <tt-metalium/tensor_accessor_args.hpp>
+
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 struct IndexInfo {
-    bool is_defined;
-    bool is_dram;
-    uint32_t address;
-    uint32_t unit_size;
+    bool is_defined{};
+    tt::tt_metal::TensorAccessorArgs args;
+    uint32_t address{};
+    uint32_t unit_size{};
 };
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
@@ -90,11 +92,11 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
         for (uint32_t i = 0; i < index_tensors.size(); i++) {
             auto dim = index_dims[i] + input_dim_offset;
-            auto index = index_tensors[i];
+            const auto& index = index_tensors[i];
 
             index_info[dim].is_defined = true;
             index_info[dim].address = index.buffer()->address();
-            index_info[dim].is_dram = is_dram(index);
+            index_info[dim].args = tt::tt_metal::TensorAccessorArgs(index.buffer());
             index_info[dim].unit_size = index.element_size();
         }
 
@@ -110,7 +112,6 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             output_5d_shape_without_padding[2] * output_5d_shape_without_padding[3] *
             ((output_5d_shape_without_padding[4] + num_elements_per_alignment - 1) / num_elements_per_alignment);
 
-        uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
         uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
         auto
@@ -128,7 +129,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         auto rounded_input_page_size = round_up_to_mul32(input_unit_size);
         auto cb_src0_config = CircularBufferConfig(rounded_input_page_size, {{src_cb_index, src_cb_data_format}})
                                   .set_page_size(src_cb_index, rounded_input_page_size);
-        auto cb_src0 = CreateCircularBuffer(program, all_cores, cb_src0_config);
+        CreateCircularBuffer(program, all_cores, cb_src0_config);
 
         for (uint32_t dim = 0; dim < 5; dim++) {
             if (!index_info[dim].is_defined) {
@@ -139,53 +140,50 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             auto index_page_size = 1024 * 4;
             auto cb_index_config = CircularBufferConfig(index_page_size, {{src1_cb_index, index_cb_data_format}})
                                        .set_page_size(src1_cb_index, index_page_size);
-            auto cb_src1 = CreateCircularBuffer(program, all_cores, cb_index_config);
+            CreateCircularBuffer(program, all_cores, cb_index_config);
         }
 
         auto out_cb0_index = CBIndex::c_16;
         auto rounded_output_page_size = round_up_to_mul32(output_unit_size);
         auto cb_out0_config = CircularBufferConfig(rounded_output_page_size, {{out_cb0_index, output_cb_data_format}})
                                   .set_page_size(out_cb0_index, rounded_output_page_size);
-        auto cb_out0 = CreateCircularBuffer(program, all_cores, cb_out0_config);
+        CreateCircularBuffer(program, all_cores, cb_out0_config);
 
         auto out_cb1_index = CBIndex::c_17;
         auto cb_out1_config = CircularBufferConfig(rounded_output_page_size, {{out_cb1_index, output_cb_data_format}})
                                   .set_page_size(out_cb1_index, rounded_output_page_size);
-        auto cb_out1 = CreateCircularBuffer(program, all_cores, cb_out1_config);
+        CreateCircularBuffer(program, all_cores, cb_out1_config);
 
         // create read/wrtie kernel
-        auto src_is_dram = is_dram(input);
-        auto dst_is_dram = is_dram(output);
-
         std::map<std::string, std::string> reader_defines;
         std::map<std::string, std::string> writer_defines;
 
         if (is_row_major_index) {
-            reader_defines["ROW_MAJOR_INDEX"] = 1;
+            reader_defines["ROW_MAJOR_INDEX"] = "1";
         } else {
-            reader_defines["TILIZE_INDEX"] = 1;
+            reader_defines["TILIZE_INDEX"] = "1";
         }
 
+        std::vector<uint32_t> reader_compile_time_args;
+        tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
+        for (uint32_t dim = 0; dim < 5; dim++) {
+            index_info[dim].args.append_to(reader_compile_time_args);
+        }
         auto reader_kernel_id = CreateReadKernel(
             program,
             "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
             "reader_moreh_getitem_tilize_w.cpp",
             all_cores,
-            {
-                src_is_dram,
-                index_info[0].is_dram,
-                index_info[1].is_dram,
-                index_info[2].is_dram,
-                index_info[3].is_dram,
-                index_info[4].is_dram,
-            },
+            reader_compile_time_args,
             reader_defines);
+        std::vector<uint32_t> writer_compile_time_args;
+        tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
         auto writer_kernel_id = CreateWriteKernel(
             program,
             "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
             "writer_moreh_getitem_tilize_w.cpp",
             all_cores,
-            {dst_is_dram},
+            writer_compile_time_args,
             writer_defines);
 
         uint32_t face_width = 16;
@@ -223,11 +221,10 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         auto core_y_offset = core_range.start_coord.y;
 
         uint32_t g1_numcores = core_group_1.num_cores();
-        uint32_t g2_numcores = core_group_2.num_cores();
 
         uint32_t start_id = 0;
-        for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
-            CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
+        for (uint32_t i = 0; i < num_cores; i++) {
+            CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};
             uint32_t num_units_per_core = i < g1_numcores ? num_units_per_core_group_1 : num_units_per_core_group_2;
 
             std::vector<uint32_t> reader_args = {
@@ -328,11 +325,11 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
         for (uint32_t i = 0; i < index_tensors.size(); i++) {
             auto dim = index_dims[i] + input_dim_offset;
-            auto index = index_tensors[i];
+            const auto& index = index_tensors[i];
 
             index_info[dim].is_defined = true;
             index_info[dim].address = index_tensors[i].buffer()->address();
-            index_info[dim].is_dram = is_dram(index_tensors[i]);
+            index_info[dim].args = tt::tt_metal::TensorAccessorArgs(index_tensors[i].buffer());
             index_info[dim].unit_size = index.padded_shape()[-1] * index.element_size();
         }
         uint32_t index_size = index_tensors[0].logical_shape()[-1];
@@ -344,7 +341,6 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
                              output_5d_shape_without_padding[2] * output_5d_shape_without_padding[3] *
                              ((output_5d_shape_without_padding[4] + 15) / 16);
 
-        uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
         uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
         auto
@@ -362,7 +358,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         auto rounded_input_page_size = round_up_to_mul32(input_unit_size);
         auto cb_src0_config = CircularBufferConfig(rounded_input_page_size, {{src_cb_index, src_cb_data_format}})
                                   .set_page_size(src_cb_index, rounded_input_page_size);
-        auto cb_src0 = CreateCircularBuffer(program, all_cores, cb_src0_config);
+        CreateCircularBuffer(program, all_cores, cb_src0_config);
 
         for (uint32_t dim = 0; dim < 5; dim++) {
             if (!index_info[dim].is_defined) {
@@ -374,48 +370,44 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             auto index_page_size = 1024 * 4;
             auto cb_index_config = CircularBufferConfig(index_page_size, {{src1_cb_index, index_cb_data_format}})
                                        .set_page_size(src1_cb_index, index_page_size);
-            auto cb_src1 = CreateCircularBuffer(program, all_cores, cb_index_config);
+            CreateCircularBuffer(program, all_cores, cb_index_config);
         }
 
         auto out_cb_index = CBIndex::c_16;
-        auto rounded_output_page_size = round_up_to_mul32(input_unit_size);
         auto cb_out0_config = CircularBufferConfig(rounded_input_page_size, {{out_cb_index, output_cb_data_format}})
                                   .set_page_size(out_cb_index, rounded_input_page_size);
-        auto cb_out0 = CreateCircularBuffer(program, all_cores, cb_out0_config);
+        CreateCircularBuffer(program, all_cores, cb_out0_config);
 
         // create read/wrtie kernel
-        auto src_is_dram = is_dram(input);
-        auto dst_is_dram = is_dram(output);
-
         std::map<std::string, std::string> reader_defines;
         std::map<std::string, std::string> writer_defines;
 
         if (is_row_major_index) {
-            reader_defines["ROW_MAJOR_INDEX"] = 1;
+            reader_defines["ROW_MAJOR_INDEX"] = "1";
         } else {
-            reader_defines["TILIZE_INDEX"] = 1;
+            reader_defines["TILIZE_INDEX"] = "1";
         }
 
+        std::vector<uint32_t> reader_compile_time_args;
+        tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
+        for (uint32_t dim = 0; dim < 5; dim++) {
+            index_info[dim].args.append_to(reader_compile_time_args);
+        }
         auto reader_kernel_id = CreateReadKernel(
             program,
             "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
             "reader_moreh_getitem_tilize.cpp",
             all_cores,
-            {
-                src_is_dram,
-                index_info[0].is_dram,
-                index_info[1].is_dram,
-                index_info[2].is_dram,
-                index_info[3].is_dram,
-                index_info[4].is_dram,
-            },
+            reader_compile_time_args,
             reader_defines);
+        std::vector<uint32_t> writer_compile_time_args;
+        tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
         auto writer_kernel_id = CreateWriteKernel(
             program,
             "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
             "writer_moreh_getitem_tilize.cpp",
             all_cores,
-            {dst_is_dram},
+            writer_compile_time_args,
             writer_defines);
 
         uint32_t face_width = 16;
@@ -451,11 +443,10 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         auto core_x_offset = core_range.start_coord.x;
         auto core_y_offset = core_range.start_coord.y;
         uint32_t g1_numcores = core_group_1.num_cores();
-        uint32_t g2_numcores = core_group_2.num_cores();
 
         uint32_t start_id = 0;
-        for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
-            CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
+        for (uint32_t i = 0; i < num_cores; i++) {
+            CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};
             uint32_t num_units_per_core = i < g1_numcores ? num_units_per_core_group_1 : num_units_per_core_group_2;
 
             std::vector<uint32_t> reader_args = {
@@ -568,7 +559,7 @@ void MorehGetItemOperation::MorehGetItemTilizedFactory::override_runtime_argumen
     IndexInfo index_info[5] = {{false}};
     for (uint32_t i = 0; i < index_dims.size(); i++) {
         auto dim = index_dims[i] + input_dim_offset;
-        auto index_buffer = index_tensors[i];
+        const auto& index_buffer = index_tensors[i];
 
         index_info[dim].address = index_buffer.buffer()->address();
     }

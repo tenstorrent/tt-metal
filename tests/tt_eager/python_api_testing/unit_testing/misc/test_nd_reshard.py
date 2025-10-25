@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -84,7 +84,7 @@ def run_nd_reshard_test(
     return torch_tensor, round_trip_tensor, expected_resharded_tensor
 
 
-# TODO: Make implementation for cases when tile size changes
+# TODO: Make implementation for cases when page size changes
 @pytest.mark.parametrize(
     "input_shape, layout, input_shard_shape, input_shard_orientation, output_shard_shape, output_shard_orientation, input_grid",
     [
@@ -448,12 +448,28 @@ def test_nd_reshard(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
         (
+            [1, 1, 2048, 4096],
+            ttnn.TILE_LAYOUT,
+            (64, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            (32, 64),
+            ttnn.ShardOrientation.COL_MAJOR,
+        ),
+        (
             [1, 3, 1024, 1024],
             ttnn.TILE_LAYOUT,
             (1, 32, 32),
             ttnn.ShardOrientation.ROW_MAJOR,
             (3, 32, 32),
             ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+        (
+            [1, 3, 1024, 1024],
+            ttnn.TILE_LAYOUT,
+            (1, 32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            (3, 32, 32),
+            ttnn.ShardOrientation.COL_MAJOR,
         ),
         (
             [3, 4, 1024, 1024],
@@ -464,12 +480,28 @@ def test_nd_reshard(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
         (
+            [3, 4, 1024, 1024],
+            ttnn.TILE_LAYOUT,
+            (1, 1, 32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            (3, 4, 32, 32),
+            ttnn.ShardOrientation.COL_MAJOR,
+        ),
+        (
             [2, 3, 4, 512, 512],
             ttnn.TILE_LAYOUT,
             (2, 1, 1, 32, 32),
             ttnn.ShardOrientation.ROW_MAJOR,
             (1, 3, 4, 32, 32),
             ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+        (
+            [2, 3, 4, 512, 512],
+            ttnn.TILE_LAYOUT,
+            (2, 1, 1, 32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            (1, 3, 4, 32, 32),
+            ttnn.ShardOrientation.COL_MAJOR,
         ),
     ],
 )
@@ -589,7 +621,7 @@ def test_nd_reshard_different_input_output_grid(
 
 
 # TODO: Fix DRAM cases
-@pytest.mark.skip(reason="DRAM resharding is not supported yet")
+# @pytest.mark.skip(reason="DRAM resharding is not supported yet")
 @pytest.mark.parametrize(
     "input_shape, layout, input_shard_shape, input_shard_orientation, output_shard_shape, output_shard_orientation, input_grid, output_grid, dtype, input_buffer_type, output_buffer_type",
     [
@@ -601,7 +633,7 @@ def test_nd_reshard_different_input_output_grid(
             ttnn.ShardOrientation.ROW_MAJOR,
             (32, 64),
             ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))]),
             ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 2), ttnn.CoreCoord(5, 5))]),
             ttnn.bfloat16,
             ttnn.BufferType.DRAM,
@@ -614,7 +646,7 @@ def test_nd_reshard_different_input_output_grid(
             ttnn.ShardOrientation.ROW_MAJOR,
             (3, 32, 32),
             ttnn.ShardOrientation.COL_MAJOR,
-            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))]),
             ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 0))]),
             ttnn.uint32,
             ttnn.BufferType.DRAM,
@@ -629,7 +661,7 @@ def test_nd_reshard_different_input_output_grid(
             (64, 32),
             ttnn.ShardOrientation.ROW_MAJOR,
             ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 2))]),
-            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))]),
             ttnn.bfloat16,
             ttnn.BufferType.L1,
             ttnn.BufferType.DRAM,
@@ -642,7 +674,7 @@ def test_nd_reshard_different_input_output_grid(
             (2, 1, 64, 32),
             ttnn.ShardOrientation.ROW_MAJOR,
             ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 2))]),
-            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 1))]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(4, 0))]),
             ttnn.bfloat16,
             ttnn.BufferType.L1,
             ttnn.BufferType.DRAM,
@@ -655,8 +687,8 @@ def test_nd_reshard_different_input_output_grid(
             ttnn.ShardOrientation.ROW_MAJOR,
             (4, 64, 256),
             ttnn.ShardOrientation.COL_MAJOR,
-            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))]),
-            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 2), ttnn.CoreCoord(5, 5))]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(5, 0))]),
             ttnn.bfloat16,
             ttnn.BufferType.DRAM,
             ttnn.BufferType.DRAM,
@@ -670,9 +702,9 @@ def test_nd_reshard_different_input_output_grid(
             ttnn.ShardOrientation.COL_MAJOR,
             ttnn.CoreRangeSet(
                 [
-                    ttnn.CoreRange(ttnn.CoreCoord(4, 6), ttnn.CoreCoord(6, 6)),
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(1, 1)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 3), ttnn.CoreCoord(3, 3)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 0)),
                 ]
             ),
             ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 5))]),
@@ -681,14 +713,14 @@ def test_nd_reshard_different_input_output_grid(
             ttnn.BufferType.L1,
         ),
         (
-            [2, 3, 2, 3, 4],
+            [2, 3, 2, 3, 32],
             ttnn.ROW_MAJOR_LAYOUT,
-            (1, 1, 2, 2, 4),
+            (1, 1, 2, 2, 32),
             ttnn.ShardOrientation.COL_MAJOR,
-            (3, 3, 1, 1, 4),
+            (2, 3, 1, 1, 32),
             ttnn.ShardOrientation.ROW_MAJOR,
             ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 4))]),
-            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))]),
             ttnn.bfloat16,
             ttnn.BufferType.L1,
             ttnn.BufferType.DRAM,

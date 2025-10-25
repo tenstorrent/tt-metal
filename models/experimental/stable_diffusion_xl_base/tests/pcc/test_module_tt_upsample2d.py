@@ -10,7 +10,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_upsample2d import TtUpsa
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     to_channel_last_ttnn,
     from_channel_last_ttnn,
@@ -23,9 +23,23 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 @pytest.mark.parametrize("padding", [(1, 1)])
 @pytest.mark.parametrize("dilation", [(1, 1)])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_upsample2d(device, input_shape, up_block_id, stride, padding, dilation, reset_seeds):
+def test_upsample2d(
+    device,
+    input_shape,
+    up_block_id,
+    stride,
+    padding,
+    dilation,
+    debug_mode,
+    is_ci_env,
+    reset_seeds,
+):
     unet = UNet2DConditionModel.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+        subfolder="unet",
+        local_files_only=is_ci_env,
     )
     unet.eval()
     state_dict = unet.state_dict()
@@ -43,6 +57,7 @@ def test_upsample2d(device, input_shape, up_block_id, stride, padding, dilation,
         dilation,
         groups,
         model_config=model_config,
+        debug_mode=debug_mode,
     )
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)

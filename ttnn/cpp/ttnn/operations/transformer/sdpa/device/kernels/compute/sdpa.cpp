@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -43,6 +43,7 @@ void MAIN {
     constexpr uint32_t use_padded_mask = get_compile_time_arg_val(25) == 1;
     constexpr uint32_t is_chunked = get_compile_time_arg_val(26) == 1;
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(27);
+    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(28);
 
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
@@ -51,7 +52,13 @@ void MAIN {
     const uint32_t local_nh_end = get_arg_val<uint32_t>(4);
     const uint32_t local_q_start = get_arg_val<uint32_t>(5);
     const uint32_t local_q_end = get_arg_val<uint32_t>(6);
-    const uint32_t chunked_q_chunk_offset = get_arg_val<uint32_t>(7);
+    // const uint32_t chunked_q_chunk_offset = get_arg_val<uint32_t>(7);
+    const uint32_t num_phases = get_arg_val<uint32_t>(7);
+    const uint32_t chunked_q_chunk_offset_phase_1 = get_arg_val<uint32_t>(8);
+    uint32_t chunked_q_chunk_offset_phase_2 = 0;
+    if (num_phases == 2) {
+        chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(9);
+    }
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
@@ -78,12 +85,20 @@ void MAIN {
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
+    uint32_t chunked_q_chunk_offset = 0;
     mm_init(cb_q_in, cb_k_in, cb_out);
 
-    for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
-        for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-            for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
-                uint32_t q_chunk;
+    for (uint32_t phase = 0; phase < num_phases; ++phase) {
+        if (phase == 0) {
+            chunked_q_chunk_offset = chunked_q_chunk_offset_phase_1;
+        } else {
+            chunked_q_chunk_offset = chunked_q_chunk_offset_phase_2;
+        }
+
+        for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
+            for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
+                for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
+                    uint32_t q_chunk;
 #if defined BALANCED_Q_PARALLEL
                 uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
                 if (q_iter < q_chunk_div_2) {  // bottom half
@@ -152,9 +167,11 @@ void MAIN {
                     // K-range = [k_low, k_high)
                     // does_overlap = not (q_low >= k_high or k_low >= q_high)
                     // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional check
-                    if constexpr (is_causal) {
-                        if (!(q_low_idx >= k_high_idx)) {
-                            /* QK += MASK */
+                    if constexpr (is_causal || sliding_window_size > 0) {
+                        /* QK += MASK */
+                        if (!(q_low_idx >= k_high_idx) || sliding_window_size > 0) {
+                            // If no sliding window - simple causal case - only apply along the diagonal
+                            // Otherwise, apply mask for all chunks
                             reconfig_data_format(cb_qk_im, cb_mask_in);
                             add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
                         }
@@ -267,6 +284,7 @@ void MAIN {
                 cb_pop_front(cb_q_in, q_chunk_tiles);
                 // free up cb_prev_max after K chunks
                 cb_pop_front(alias_prev_max, Sq_chunk_t);
+                }
             }
         }
     }

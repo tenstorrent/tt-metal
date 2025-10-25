@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import setup_tt_tensor
-from models.utility_functions import tt2torch_tensor
+from models.common.utility_functions import tt2torch_tensor
 
 
 def run_addcdiv(input_shape, dtype, dlayout, buffer_type, output_mem_config, data_seed, scalar):
@@ -54,7 +54,7 @@ def run_addcdiv(input_shape, dtype, dlayout, buffer_type, output_mem_config, dat
         y = tt2torch_tensor(t3)
 
     except Exception as exc:
-        logger.warning(f"run_addcdiv RuntimeError occured {exc}")
+        logger.warning(f"run_addcdiv RuntimeError occurred {exc}")
 
     ttnn.experimental.device.DeallocateBuffers(device)
     ttnn.close_device(device)

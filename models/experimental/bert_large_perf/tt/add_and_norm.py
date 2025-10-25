@@ -12,7 +12,7 @@ import ttnn
 from models.experimental.bert_large_perf.fused_ops.add_and_norm import AddAndNorm
 from models.experimental.bert_large_perf.fused_ops.layernorm import create_var_scaler
 from tt_lib.utils import pad_activation, pad_weight
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )

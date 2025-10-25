@@ -2,18 +2,19 @@
 
 # Table of Contents
 
-1. [Introduction](#1-introduction)
-2. [Tensor Attributes](#2-tensor-attributes)
-3. [Tensor Layout](#3-tensor-layout)
-   - [3.1 Row-Major layout](#31-row-major-layout)
-   - [3.2 Tiled layout](#32-tiled-layout)
-     - [3.2.1 Tile Shapes](#321-tile-shapes)
-4. [Memory Layout](#4-memory-layout)
-   - [4.1 Interleaved](#41-interleaved)
-     - [4.1.1 User Interface](#411-user-interface)
-   - [4.2 Sharding](#42-sharding)
-     - [4.2.1 User Interface](#421-user-interface)
-     - [4.2.2 Other Sharding Parameters and Notes](#422-other-sharding-parameters-and-notes)
+- [Tensor and Memory Layouts](#tensor-and-memory-layouts)
+- [Table of Contents](#table-of-contents)
+  - [1. Introduction](#1-introduction)
+  - [2. Tensor Attributes](#2-tensor-attributes)
+  - [3. Tensor Layout](#3-tensor-layout)
+    - [3.1 Row-Major layout](#31-row-major-layout)
+    - [3.2 Tiled layout](#32-tiled-layout)
+      - [3.2.1 Tile Shapes](#321-tile-shapes)
+      - [3.2.2 Faces](#322-faces)
+  - [4. Memory Layout](#4-memory-layout)
+    - [4.1 Interleaved](#41-interleaved)
+      - [4.1.1 User Interface](#411-user-interface)
+    - [4.2 Sharding](#42-sharding)
 
 ## 1. Introduction
 Tensors are stored in a 2D memory space known as a `buffer`. An N-dimensional tensor is represented as a 2D memory object by combining the outer dimensions into a single dimension while keeping the inner dimension as the second dimension. For example, a tensor with dimensions `[1x4x6x8]` will be represented in memory as a `[24x8]` tensor, where 1x4x6 is squeezed into 24. At the most granular level, a block of memory representing a portion of the tensor is referred to as a page.
@@ -36,6 +37,13 @@ Each row of a 2D tensor corresponds to a single page in our buffer (with a minor
 
 *Figure 1: Row major representation of a 64x64 Tensor.*
 
+To create a tensor with row-major layout, you can pass layout=ttnn.ROW_MAJOR_LAYOUT in most tensor-creation functions:
+
+```python3
+ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+ttnn_tensor = ttnn.full(42, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+```
+
 
 
 ### 3.2 Tiled layout
@@ -46,7 +54,33 @@ In a tiled tensor, pages are represented as 2D tiles, with the default tile size
 
 
 #### 3.2.1 Tile Shapes
-The hardware architecture supports tile shapes of `32x32` , `16x32` , `4x32`, `2x32`, `1x32`. **However currently TT-Metallium only supports `32x32`, and other tile shapes will be supported in Q4'2024**
+The hardware architecture supports tile shapes of `32x32` , `16x32` , `4x32`, `2x32`, `1x32`. **However currently TT-Metalium only supports 32x32, with limited functionality for 16x32 in some ops such as matmul**
+
+#### 3.2.2 Faces
+Data inside the tile isn't contiguous. Each tile is split into faces ("sub-tiles"). By default, tile size is 32x32, and face size is 16x16 -- 4 faces per tile and each tile lies one after another contiguously in memory in row-major fashion (i.e., face0->face1->face2->face3 on the picture below)
+
+The reason for using faces is that the matrix engine natively multiplies 16x16 matrices, and tile multiplication is decomposed into multiple face multiplications.
+
+<img src="images/tile_faces.svg" style="width:500px;"/>
+
+
+*Figure 3: Default split of tile into faces*
+
+To create a tensor with a tile layout, you can pass layout=ttnn.TILE_LAYOUT in most tensor-creation functions, or change row-major tensor with `ttnn.to_layout`
+
+```python3
+ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT)
+ttnn_tensor = ttnn.full(42, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+ttnn_tensor = ttnn.to_layout(ttnn_rm_tensor, ttnn.TILE_LAYOUT)
+```
+
+Also, you can specify tile size:
+
+```python3
+ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, tile=ttnn.Tile((16, 32), transpose_tile=True))
+```
+
+If transpose_tile==true, then the faces' order is transposed, i.e. they are placed in memory in col-major fashion (face0->face2->face1->face3 on the image above), and values inside faces are also transposed.
 
 
 ## 4. Memory Layout
@@ -62,11 +96,11 @@ An individual tensor is represented across several pages, with the distribution 
 
 In an interleaved tensor layout, pages are allocated in a round-robin fashion across multiple banks. Allocation of a new tensor always begins with the first bank, which can lead to some fragmentation between tensors.
 
-For example in *Figure 3*, consider a tensor requiring four pages (P0 to P3) across three banks (0 through 2). The first three pages are allocated to banks 0 through 2, and the fourth page wraps around and is allocated to bank 0. The next tensor will also start allocation at bank 0. 
+For example in *Figure 3*, consider a tensor requiring four pages (P0 to P3) across three banks (0 through 2). The first three pages are allocated to banks 0 through 2, and the fourth page wraps around and is allocated to bank 0. The next tensor will also start allocation at bank 0.
 
 <img src="images/interleaved_2.svg" style="width:500px;"/>
 
-*Figure 3: Interleaved tensor partitioned over several banks*
+*Figure 4: Interleaved tensor partitioned over several banks*
 
 #### 4.1.1 User Interface
 
@@ -81,46 +115,4 @@ a = ttnn.to_device(a, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
 
 ### 4.2 Sharding
-
-A sharded tensor physically distributes the tensor across the L1 memories of multiple cores in a core grid according to a user-specified distribution, known as a shard specification. The tensor is divided into partitions called shards, with each shard placed in the L1 memory of a specific core.
-
-Unlike interleaved tensors, where pages are distributed across all available L1 banks on the device without explicit mapping, sharding explicitly assigns each shard to specific cores.
-
-
-This can be illustrated with an example. Consider a tensor with 16 pages, denoted P0 to P15. The left side of the figure shows how the tiled tensor appears in host memory. When the tensor is sharded, each shard is written into the L1 memory of a core.
-
-In the example illustrated in *Figure 4*, Core (0,0) holds pages 0, 1, 4, and 5, while Core (0,1) holds pages 2, 3, 7, and 8. This distribution is defined by a shard specification that includes the shard shape (in this case, 2x2 pages) and the core grid where the shards are placed (a 2x2 core grid).
-
-<img src="images/sharded_page_mapping_2.svg" style="width:1000px;"/>
-
-*Figure 4: Mapping of a sharded tensor onto a core-grid.*
-
-
-The main purpose of sharding is to keep data local. While an interleaved L1 tensor can also be distributed across banks in multiple cores, sharding offers a more explicit mapping of pages. This allows us to ensure that each core works on a specific portion of memory that is kept local within its respective L1 memory.
-
-#### 4.2.1 User Interface
-The sharded tensor requires more detailed memory config with the shard shape, core grid, shard strategy.
-
-The following is example code to specify the above example:
-```
-torch_a = torch.randn((64, 64), dtype=torch.bfloat16)
-a = ttnn.from_torch(torch_a)
-sharded_memory_config = ttnn.create_sharded_memory_config(
-            32x32, core_grid=ttnn.CoreGrid(y=2, x=2), strategy=ttnn.ShardStrategy.BLOCK, use_height_and_width_as_shard_shape=True
-        )
-a = ttnn.to_device(a, device, memory_config=sharded_memory_config)
-```
-
-#### 4.2.2 Other Sharding Parameters And Notes
-Other sharding parameters include:
-
-- **Sharding Strategy**: Describes how the tensor is split when distributed across the core grid. The available methods are:
-  - `HEIGHT`: Each shard represents entire rows of the tensor (i.e., the shard width is equivalent to the tensor width).
-  - `WIDTH`: Each shard represents entire columns of the tensor.
-  - `BLOCK`: Each shard is neither an entire row nor an entire column, similar to the example above.
-
-- **Shard Orientation**: Describes the order in which shards are distributed to the cores in the core grid. This can be either `ROW-MAJOR` or `COLUMN-MAJOR`.
-
-- For tensors with a `Row-Major` layout, each page typically represents a single row of the tensor. However, for sharded tensors, the width of each page matches the width of the shard. For tiled tensors, the page shape remains the same as the tile shape (e.g., 32x32).
-
- 
+Tensor sharding is a technique that allows you to customize how tensor data is distributed across memory banks by dividing it into smaller pieces called shards. This approach improves performance by enhancing data locality and reducing communication overhead. It is fully described [here](../tensor_sharding/tensor_sharding.md).

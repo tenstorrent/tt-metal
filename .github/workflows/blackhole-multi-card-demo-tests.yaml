@@ -1,0 +1,58 @@
+name: "(Blackhole) Multi-card Demo tests"
+
+on:
+  workflow_dispatch:
+    inputs:
+      regenerate-ttnn-cache:
+        description: "Mount model cache volume read-write to regenerate TTNN cache (otherwise read-only)."
+        required: false
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      regenerate-ttnn-cache:
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-wheel: true
+      version: 22.04
+  blackhole-multi-card-demo-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group:
+          - name: LLMBox Demo tests
+            runner-label: BH-LLMBox
+            extra-tag: pipeline-perf
+            num_devices: 4
+          - name: DeskBox Demo tests
+            runner-label: BH-DeskBox
+            extra-tag: pipeline-perf
+            num_devices: 2
+          - name: LoudBox Demo tests
+            runner-label: BH-LoudBox
+            extra-tag: pipeline-perf
+            num_devices: 8
+          - name: P300 Demo tests
+            runner-label: P300-viommu
+            extra-tag: pipeline-yyz2-lfc
+            num_devices: 2
+    with:
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      extra-tag: ${{ matrix.test-group.extra-tag }}
+      num_devices: ${{ matrix.test-group.num_devices }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false  }}

@@ -55,23 +55,17 @@ struct ExecuteUnaryCompositeOpWithFloats {
 struct ExecuteUnaryCompositeClamp {
     static Tensor invoke(
         const Tensor& input_tensor,
-        std::optional<float> min = std::nullopt,
-        std::optional<float> max = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        std::optional<std::variant<float, int32_t>> min = std::nullopt,
+        std::optional<std::variant<float, int32_t>> max = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& output_tensor = std::nullopt);
 
     static Tensor invoke(
         const Tensor& input_tensor,
         std::optional<Tensor> min = std::nullopt,
         std::optional<Tensor> max = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
-};
-
-struct ExecuteUnaryCompositeThreshold {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        float threshold,
-        float value,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& output_tensor = std::nullopt);
 };
 
 struct ExecuteUnaryCompositeClip {
@@ -99,7 +93,6 @@ struct ExecuteUnaryCompositeOpWithInt {
 
 struct ExecuteRdiv {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& input_tensor,
         float value,
         const std::optional<std::string>& round_mode = std::nullopt,
@@ -154,12 +147,6 @@ auto transform_first_matching_arg(Lambda lambda, First&& first, Rest&&... rest) 
     })
 
 constexpr auto rdiv = ttnn::register_operation<"ttnn::rdiv", operations::unary::ExecuteRdiv>();
-constexpr auto cbrt = ttnn::register_operation<
-    "ttnn::cbrt",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::CBRT>>();
-constexpr auto cosh = ttnn::register_operation<
-    "ttnn::cosh",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::COSH>>();
 constexpr auto digamma = ttnn::register_operation<
     "ttnn::digamma",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::DIGAMMA>>();
@@ -169,12 +156,6 @@ constexpr auto lgamma = ttnn::register_operation<
 constexpr auto multigammaln = ttnn::register_operation<
     "ttnn::multigammaln",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::MULTIGAMMALN>>();
-constexpr auto sinh = ttnn::register_operation<
-    "ttnn::sinh",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SINH>>();
-constexpr auto softsign = ttnn::register_operation<
-    "ttnn::softsign",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SOFTSIGN>>();
 constexpr auto swish = ttnn::register_operation<
     "ttnn::swish",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SWISH>>();
@@ -187,24 +168,8 @@ constexpr auto std_hw = ttnn::register_operation<
 constexpr auto normalize_hw = ttnn::register_operation<
     "ttnn::normalize_hw",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::NORMALIZE_HW>>();
-
-constexpr auto hardswish = ttnn::register_operation<
-    "ttnn::hardswish",
-    operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::HARDSWISH>>();
-constexpr auto hardsigmoid = ttnn::register_operation<
-    "ttnn::hardsigmoid",
-    operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::HARDSIGMOID>>();
-
-constexpr auto hardtanh = ttnn::register_operation<
-    "ttnn::hardtanh",
-    operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::HARDTANH>>();
 constexpr auto clip = ttnn::register_operation<"ttnn::clip", operations::unary::ExecuteUnaryCompositeClip>();
 constexpr auto clamp = ttnn::register_operation<"ttnn::clamp", operations::unary::ExecuteUnaryCompositeClamp>();
-constexpr auto selu = ttnn::register_operation<
-    "ttnn::selu",
-    operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::SELU>>();
-constexpr auto threshold =
-    ttnn::register_operation<"ttnn::threshold", operations::unary::ExecuteUnaryCompositeThreshold>();
 constexpr auto glu = ttnn::register_operation<
     "ttnn::glu",
     operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::GLU>>();
@@ -220,15 +185,9 @@ constexpr auto swiglu = ttnn::register_operation<
 constexpr auto logical_not_ = ttnn::register_operation<
     "ttnn::logical_not_",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::LOGICAL_NOT_>>();
-constexpr auto softshrink = ttnn::register_operation<
-    "ttnn::softshrink",
-    operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::SOFTSHRINK>>();
 constexpr auto logit = ttnn::register_operation<
     "ttnn::logit",
     operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::LOGIT>>();
-constexpr auto celu = ttnn::register_operation<
-    "ttnn::celu",
-    operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::CELU>>();
 constexpr auto tril = ttnn::register_operation<
     "ttnn::tril",
     operations::unary::ExecuteUnaryCompositeOpWithInt<operations::unary::UnaryCompositeOpType::TRIL>>();
@@ -238,14 +197,8 @@ constexpr auto triu = ttnn::register_operation<
 constexpr auto polygamma = ttnn::register_operation<
     "ttnn::polygamma",
     operations::unary::ExecuteUnaryCompositeOpWithInt<operations::unary::UnaryCompositeOpType::POLYGAMMA>>();
-constexpr auto rpow = ttnn::register_operation<
-    "ttnn::rpow",
-    operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::RPOW>>();
 constexpr auto normalize_global = ttnn::register_operation<
     "ttnn::normalize_global",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::NORMALIZE_GLOBAL>>();
-constexpr auto frac = ttnn::register_operation<
-    "ttnn::frac",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::FRAC>>();
 
 }  // namespace ttnn

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -175,16 +175,6 @@ def plot_boxes_cv2(img, boxes, savename=None, class_names=None, color=None):
         print("save plot results to %s" % savename)
         cv2.imwrite(savename, img)
     return img
-
-
-def load_class_names(namesfile):
-    class_names = []
-    with open(namesfile, "r") as fp:
-        lines = fp.readlines()
-    for line in lines:
-        line = line.rstrip()
-        class_names.append(line)
-    return class_names
 
 
 class YoloLayer(nn.Module):

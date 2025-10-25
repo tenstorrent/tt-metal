@@ -1,16 +1,11 @@
 ARG UBUNTU_VERSION=22.04
-FROM public.ecr.aws/ubuntu/ubuntu:${UBUNTU_VERSION} AS base
+FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
 # Re-declare ARG make it available in the build stage
 ARG UBUNTU_VERSION
 
 # Install basic tools to build
-# The Boost PPA is because TT-Metalium depends on a Boost too new for Ubuntu 22.04
-# It should not be used in 24.04.
 RUN apt-get update && apt-get install -y \
     software-properties-common \
-    && if [ "${UBUNTU_VERSION}" = "22.04" ]; then \
-        add-apt-repository -y ppa:mhier/libboost-latest; \
-    fi \
     && apt-get update && apt-get install -y \
     cmake \
     ninja-build \
@@ -29,3 +24,37 @@ RUN set -eux; \
     apt-get install -f -y "$TMP_DIR/ompi.deb" && \
     rm -rf "$TMP_DIR" && \
     rm -rf /var/lib/apt/lists/*
+
+#############################################################
+
+FROM base AS basic-ttnn-runtime
+
+# Install basic runtime dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    python3-dev \
+    python3-pip \
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install the SFPI compiler
+COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
+COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
+COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
+RUN chmod +x /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
+RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --sfpi
+
+# Set up virtual environment
+ENV PYTHON_ENV_DIR=/opt/venv
+RUN python3 -m venv $PYTHON_ENV_DIR
+
+# Ensure the virtual environment is used for all Python-related commands
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Ensure the virtual environment is activated on shell startup
+RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
+
+# Add PyTorch CPU wheels to pip config
+RUN mkdir -p /etc && \
+    echo "[global]\nextra-index-url = https://download.pytorch.org/whl/cpu" > /etc/pip.conf

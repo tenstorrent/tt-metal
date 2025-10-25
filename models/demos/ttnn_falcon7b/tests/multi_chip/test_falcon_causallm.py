@@ -73,7 +73,8 @@ def test_falcon_causal_lm(
     else:
         shard_dim = 0
 
-    model_location_or_version = model_location_generator(model_version, download_if_ci_v2=True, ci_v2_timeout_in_s=900)
+    # This is way too long... but hopefully after github-ci-infra#1016 we can try lowering this again
+    model_location_or_version = model_location_generator(model_version, download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
 
     configuration = transformers.FalconConfig.from_pretrained(model_location_or_version)
     configuration.num_hidden_layers = num_layers
@@ -115,7 +116,7 @@ def test_falcon_causal_lm(
                 mesh_device,
                 mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
             )
-            past_key_values += (current_layer_past,)
+            past_key_values += ((current_layer_past.key_cache[0], current_layer_past.value_cache[0]),)
             tt_layer_past += (tt_current_layer_past,)
 
     else:

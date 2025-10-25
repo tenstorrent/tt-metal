@@ -15,11 +15,37 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <tt-metalium/program.hpp>
 #include "ttnn/tensor/types.hpp"
-#include <tt-metalium/erisc_datamover_builder.hpp>
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 namespace ttnn {
 namespace ccl {
+
+uint32_t get_topological_dimension(
+    const Tensor& tensor, const std::optional<uint32_t>& cluster_axis);
+
+tt::tt_fabric::Topology get_usable_topology(const Tensor& tensor, tt::tt_fabric::Topology whole_device_topology, const std::optional<uint32_t>& cluster_axis = std::nullopt);
+
+uint32_t get_linearized_index_from_physical_coord(
+    const Tensor& tensor,
+    const MeshCoordinate& physical_coord,
+    const std::optional<uint32_t>& cluster_axis);
+
+std::optional<MeshCoordinate> get_physical_neighbor_from_physical_coord(
+    const Tensor& tensor,
+    const MeshCoordinate& physical_coord,
+    int offset,
+    ttnn::ccl::Topology topology,
+    const std::optional<uint32_t>& cluster_axis);
+
+struct SyncModeSpec {
+    uint32_t num_signals = 0;
+    CoreCoord core;
+    std::vector<uint32_t> sem_ids;
+    std::vector<uint32_t> wait_counts;
+
+    void add_signal(uint32_t sem_id, uint32_t wait_count);
+};
+
 
 enum class LineDirection: uint8_t {
     FORWARD,
@@ -34,31 +60,34 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_pro
     const std::function<tt::tt_metal::operation::ProgramWithCallbacks(const ttnn::MeshCoordinate&)>& create_program);
 
 // Configuration structure for a device, containing its receiver and sender device ids.
-struct SenderRecieverConfig {
+struct SenderReceiverConfig {
     uint32_t device_index = 0;
-    std::optional<chip_id_t> sender_device_id;
-    std::optional<chip_id_t> receiver_device_id;
+    std::optional<tt::ChipId> sender_device_id;
+    std::optional<tt::ChipId> receiver_device_id;
 };
 
-// Returns `SenderRecieverConfig` for a given device, given topology.
-SenderRecieverConfig get_device_sender_receiver_config(
+// Returns `SenderReceiverConfig` for a given device, given topology.
+SenderReceiverConfig get_device_sender_receiver_config(
     const IDevice* target_device, const std::vector<IDevice*>& devices, ttnn::ccl::Topology topology);
 
-// Returns `SenderRecieverConfig` for a given device in a ring topology with a given cluster axis.
-SenderRecieverConfig get_device_sender_receiver_config_in_ring(
+// Returns `SenderReceiverConfig` for a given device in a ring topology with a given cluster axis.
+SenderReceiverConfig get_device_sender_receiver_config_in_ring(
     const MeshCoordinate& mesh_coord, const distributed::MeshDevice* mesh_device, uint32_t cluster_axis, int ring_size);
 
 // Returns a vector of devices that the given tensor is stored on.
 std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor);
 
-struct SyncModeSpec {
-    uint32_t num_signals = 0;
-    CoreCoord core;
-    std::vector<uint32_t> sem_ids;
-    std::vector<uint32_t> wait_counts;
+// Returns a vector of devices that `tensor_shards` are stored on.
+// Each `tensor_shard` is assumed to be allocated on a 1x1 "unit-mesh"; the function returns the devices that the shards
+// to run a CCL over the unit-meshes.
+std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& tensor_shards);
 
-    void add_signal(uint32_t sem_id, uint32_t wait_count);
-};
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+    size_t num_links,
+    size_t num_workers_per_link,
+    IDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    CoreCoord core_grid_offset = CoreCoord(0, 0));
 
 class EriscDatamoverBuilder;
 
@@ -162,8 +191,8 @@ class CclOpShardedTensorConfig final : public virtual CclOpTensorConfig {
     tt::tt_metal::ShardSpec const& get_shard_spec() const;
 
    private:
-    uint32_t page_size;
-    tt::tt_metal::ShardSpec const shard_spec;
+       uint32_t page_size{};
+       tt::tt_metal::ShardSpec const shard_spec;
 };
 
 struct CclTensorSlicer {
@@ -265,6 +294,8 @@ struct LegacyCclTensorSlicer {
 
     virtual void increment(uint32_t num_pages) = 0;
 
+    virtual ~LegacyCclTensorSlicer() = default;
+
     uint32_t input_page_size;
     uint32_t num_rows;
     uint32_t num_cols;
@@ -293,7 +324,7 @@ struct TensorSlice {
     ords_t tensor_slice_offset;
     ords_t worker_slice_shape;
     ords_t worker_slice_offset;
-    std::size_t dim;
+    std::size_t dim{};
 };
 };
 
@@ -366,6 +397,7 @@ struct InterleavedTensorWorkerSlice {
 template <class DERIVED_SLICER_T>
 class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
     public:
+    ~RingReduceScatterBaseTensorSlicer() override = default;
     RingReduceScatterBaseTensorSlicer(
         Tensor const& input_tensor,
         Tensor const& output_tensor,
@@ -430,6 +462,7 @@ class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
 
 class RingReduceScatterTensorSlicer : public RingReduceScatterBaseTensorSlicer<RingReduceScatterTensorSlicer> {
    public:
+    ~RingReduceScatterTensorSlicer() override = default;
     RingReduceScatterTensorSlicer(
         Tensor const& input_tensor,
         Tensor const& output_tensor,
@@ -458,6 +491,7 @@ class RingReduceScatterTensorSlicer : public RingReduceScatterBaseTensorSlicer<R
 // Define a class RingReduceScatterWrappedTensor slicer that inherits from RingReduceScatterBaseTensorSlicer and overwrites the compute_worker_slice_offsets and create_worker_slice_shapes_for_tile_layout functions
 class RingReduceScatterWrappedTensorSlicer : public RingReduceScatterBaseTensorSlicer<RingReduceScatterWrappedTensorSlicer> {
    public:
+    ~RingReduceScatterWrappedTensorSlicer() override = default;
     RingReduceScatterWrappedTensorSlicer(
         Tensor const& input_tensor,
         Tensor const& output_tensor,
@@ -485,6 +519,7 @@ class RingReduceScatterWrappedTensorSlicer : public RingReduceScatterBaseTensorS
 
 class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
    public:
+    ~InterleavedRingAllGatherTensorSlicer() override = default;
     InterleavedRingAllGatherTensorSlicer(
          const Tensor & input_tensor,  const Tensor & output_tensor, int slice_dim, uint32_t slice_idx) :
         LegacyCclTensorSlicer() {
@@ -560,14 +595,6 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
         this->input_start_page_idx += num_pages /*pages_per_worker*/;
     }
 };
-
-tt::tt_metal::KernelHandle generate_edm_kernel(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::IDevice* device,
-    const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder,
-    const CoreCoord& eth_core,
-    tt::tt_metal::DataMovementProcessor risc_id,
-    tt::tt_metal::NOC noc_id);
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
     tt::tt_metal::Program& program,
@@ -651,13 +678,13 @@ private:
     // Class member variables
     tt_xy_pair flattened_tensor_shape;
     tt_xy_pair tensor_slice_shape;
-    Shape4D<uint32_t> tensor_slice_offset;
+    Shape4D<uint32_t> tensor_slice_offset{};
     std::vector<tt_xy_pair> worker_slice_shapes;
     std::vector<tt_xy_pair> worker_slice_offsets;
-    uint32_t input_page_size;
-    bool row_major;
-    uint32_t partition_index;
-    uint32_t partition_size;
+    uint32_t input_page_size{};
+    bool row_major{};
+    uint32_t partition_index{};
+    uint32_t partition_size{};
 };
 
 
@@ -692,18 +719,32 @@ private:
     Shape4D<uint32_t> calculate_tensor_slice_offset(Shape4D<uint32_t> const& tensor_shape, int slice_dim, uint32_t partition_index);
 
     // Class member variables
-    Shape4D<uint32_t> tensor_shape;
-    Shape4D<uint32_t> tensor_slice_shape;
-    Shape4D<uint32_t> tensor_slice_offset;
+    Shape4D<uint32_t> tensor_shape{};
+    Shape4D<uint32_t> tensor_slice_shape{};
+    Shape4D<uint32_t> tensor_slice_offset{};
     std::vector<Shape4D<uint32_t>> worker_slice_shapes;
     std::vector<Shape4D<uint32_t>> worker_slice_offsets;
-    uint32_t input_page_size;
-    bool row_major;
-    uint32_t partition_index;
-    uint32_t partition_size;
+    uint32_t input_page_size{};
+    bool row_major{};
+    uint32_t partition_index{};
+    uint32_t partition_size{};
 };
 
 std::tuple<size_t, size_t, bool> get_forward_backward_configuration(size_t ring_size, size_t ring_index, Topology topology);
+
+// Forward/backward devices are assumed to be neighbors for 1D fabric for now
+std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backward_line_unicast_configuration(Topology topology, const distributed::MeshCoordinate& src_device_coord, const std::optional<distributed::MeshCoordinate>& forward_device_coord, const std::optional<distributed::MeshCoordinate>& backward_device_coord, distributed::MeshDevice* mesh_device);
+
+std::tuple<uint32_t, uint32_t> get_forward_backward_line_mcast_distance(
+    size_t ring_size,
+    size_t ring_index,
+    Topology topology,
+    bool static_alternate);
+
+// Forward/backward devices are assumed to be neighbors for 1D fabric for now
+std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backward_line_mcast_configuration(
+    Topology topology, const distributed::MeshCoordinate& src_device_coord, const std::optional<distributed::MeshCoordinate>& forward_device_coord, const std::optional<distributed::MeshCoordinate>& backward_device_coord, uint32_t num_targets_forward, uint32_t num_targets_backward, distributed::MeshDevice* mesh_device);
+
 
 }  // namespace ccl
 }  // namespace ttnn

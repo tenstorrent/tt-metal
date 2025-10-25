@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,10 +14,10 @@
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/fabric.hpp>
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -150,7 +150,7 @@ std::vector<std::vector<ReadRequest>> distribute_work_evenly(
         //   packets_remaining_for_worker * packet_size - leftover_in_packet
         //
         // Because leftover_in_packet pages are already in the partial packet buffer.
-        uint32_t max_pages_for_worker = packets_remaining_for_worker * packet_size - leftover_in_packet;
+        uint32_t max_pages_for_worker = (packets_remaining_for_worker * packet_size) - leftover_in_packet;
 
         // So the chunk we read must be <= pages_left_in_bank
         // and <= max_pages_for_worker
@@ -283,9 +283,49 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     tt::tt_metal::Program& program) {
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler = std::nullopt;
     return {
         std::move(program),
-        create_at_program_processing(operation_attributes, mesh_coordinate, tensor_args, tensor_return_value, program)};
+        create_at_program_processing(
+            operation_attributes, mesh_coordinate, tensor_args, tensor_return_value, program, empty_fused_op_signaler)};
+}
+
+std::tuple<CoreRangeSet, CoreRangeSet> LlamaReduceScatterDeviceOperation::get_rs_core_grids(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    const uint32_t ring_size = operation_attributes.ring_devices;
+    const auto& input_tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    auto input_tensor_width = input_tensor.logical_shape()[-1];
+    auto input_shard_spec = input_tensor.shard_spec().value();
+    uint32_t input_shard_width = input_shard_spec.shape[1];
+    uint32_t input_tiles_per_core_width = input_shard_width / input_tile_shape[1];
+    uint32_t num_links = operation_attributes.num_links;
+    const uint32_t num_devices = ring_size;
+    auto intermediate_packet_buffer_grid = tensor_args.intermediate_packet_buffer.shard_spec().value().grid;
+    uint32_t ncores_input = (input_tensor_width + input_shard_width - 1) / input_shard_width;
+    if (ncores_input % num_devices != 0) {
+        ncores_input = ((ncores_input + num_devices - 1) / num_devices) * num_devices;
+    }
+    uint32_t input_shard_cores_per_device = ncores_input / num_devices;
+    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    size_t packet_size_bytes =
+        input_tensor.dtype() == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size) : fabric_max_packet_size;
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    uint32_t input_page_size = tile_size(cb_data_format);
+    uint32_t num_pages_per_packet = packet_size_bytes / input_page_size;
+    uint32_t num_packets_total_per_device =
+        (input_shard_cores_per_device * input_tiles_per_core_width + num_pages_per_packet - 1) / num_pages_per_packet;
+    auto packet_worker_cores_grid = detail::get_worker_cores(
+        intermediate_packet_buffer_grid,
+        num_packets_total_per_device,
+        input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+
+    auto available_cores = llama_specific::get_custom_cores(num_links);
+
+    auto sender_core_grid = detail::get_worker_cores(
+        available_cores, num_links, input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto all_cores_grid = packet_worker_cores_grid.merge(sender_core_grid);
+    return {sender_core_grid, all_cores_grid};
 }
 
 LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::shared_variables_t
@@ -294,14 +334,15 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
-    tt::tt_metal::Program& program) {
+    tt::tt_metal::Program& program,
+    const std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& signaler) {
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::tt_fabric;
     using namespace ttnn::ccl;
 
     const auto& input_tensor = tensor_args.input_tensor;
-    auto mesh_device = input_tensor.mesh_device();
+    auto mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
     const uint32_t ring_devices =
         (operation_attributes.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
@@ -343,27 +384,19 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
 
     std::map<std::string, std::string> reader_defines = {{"DEVICE_ORDER", device_order}};
 
-    const auto& input_shape = input_tensor.logical_shape();
-    const auto dim = operation_attributes.dim;
-    uint32_t rank = input_shape.size();
     auto& output_tensor = tensor_return_value;
-    auto& output_shape = output_tensor.logical_shape();
-    auto& padded_output_shape = output_tensor.padded_shape();
     const auto& input_tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     const auto& output_tile_shape = output_tensor.tensor_spec().tile().get_tile_shape();
     auto input_tensor_width = input_tensor.logical_shape()[-1];
     auto output_tensor_width = output_tensor.logical_shape()[-1];
-    auto input_tensor_width_in_tiles = input_tensor.logical_shape()[-1] / input_tile_shape[1];
     auto output_tensor_width_in_tiles = output_tensor.logical_shape()[-1] / output_tile_shape[1];
     auto input_shard_spec = input_tensor.shard_spec().value();
     auto output_shard_spec = output_tensor.shard_spec().value();
     const auto& cross_device_semaphore = operation_attributes.cross_device_semaphore;
 
-    uint32_t input_shard_height = input_shard_spec.shape[0];
     uint32_t input_shard_width = input_shard_spec.shape[1];
     uint32_t input_tiles_per_core_width = input_shard_width / input_tile_shape[1];
 
-    uint32_t output_shard_height = output_shard_spec.shape[0];
     uint32_t output_shard_width = output_shard_spec.shape[1];
     uint32_t output_tiles_per_core_width = output_shard_width / input_tile_shape[1];
 
@@ -381,7 +414,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t input_page_size = tile_size(cb_data_format);
-    uint32_t output_page_size = tile_size(cb_data_format);
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
@@ -424,18 +456,13 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
         num_packets_total_per_device,
         input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
-    auto available_cores = llama_specific::get_custom_cores(num_links);
-
-    auto sender_core_grid = detail::get_worker_cores(
-        available_cores, num_workers_per_link * num_links, input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-    auto all_cores_grid = packet_worker_cores_grid.merge(sender_core_grid);
-
     auto schedule = detail::distribute_work_evenly(
         input_shard_cores_per_device,
         num_workers_per_link * num_links,
         input_tiles_per_core_width,
         num_pages_per_packet);
     auto schedule_string = detail::schedule_to_string(schedule);
+    auto [sender_core_grid, all_cores_grid] = get_rs_core_grids(operation_attributes, tensor_args);
 
     // input sharded buffer
     uint32_t input_tensor_cb_id = tt::CBIndex::c_0;
@@ -566,12 +593,11 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
         tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, cb_input_tensor_config);  // input buffer
     auto cb_output_tensor_handle =
         tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, cb_output_tensor_config);  // output buffer
-    auto cb_client_interface_handle =
-        tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, packet_header_cb_config);  // client interface
+    tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, packet_header_cb_config);      // client interface
     auto cb_fabric_receiver_handle =
         tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, fabric_receiver_cb_config);
-    auto cb_fabric_sender_handle = tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, fabric_sender_cb_config);
-    auto cb_accumulator_handle = tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, accumulator_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, fabric_sender_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, accumulator_cb_config);
 
     auto input_cores =
         corerange_to_cores(input_grid, std::nullopt, input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
@@ -624,7 +650,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
         packet_end_worker_core.at(0).x,
         packet_end_worker_core.at(0).y,
         sender_cores.size(),
-        total_num_read_txns};
+        total_num_read_txns,
+        signaler.has_value()};
 
     if (packet_worker_cores_grid.num_cores() == 1) {
         reader_defines["SKIP_MCAST"] = "1";
@@ -654,7 +681,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
     auto num_packet_worker_cores = packet_worker_cores.size();
 
     std::vector<uint32_t> writer_compile_time_args = {
-        input_tensor_cb_id,
         fabric_sender_cb_index,
         packet_header_cb_index,
         fabric_receiver_cb_index,
@@ -813,6 +839,9 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
             reader_runtime_args[is_reader_receiver_core_idx] = false;
             writer_runtime_args[is_writer_sender_core_idx] = false;
             writer_runtime_args[is_writer_worker_core_idx] = false;
+        }
+        if (signaler.has_value()) {
+            signaler.value().push_llama_rs_rt_args_for_rs(reader_runtime_args);
         }
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);

@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
-#include <algorithm>
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 #define ALWI inline __attribute__((always_inline))
@@ -30,9 +28,9 @@ void kernel_main() {
     uint32_t scale_w = get_arg_val<uint32_t>(3);
     uint32_t in_w = get_arg_val<uint32_t>(4);
     uint32_t out_w = get_arg_val<uint32_t>(5);
-    uint32_t src1_addr = get_arg_val<uint32_t>(6);
-    uint32_t read_offset = get_arg_val<uint32_t>(8);
-    uint32_t is_last_row = get_arg_val<uint32_t>(9);
+    uint32_t start_input_row_in_image_id = get_arg_val<uint32_t>(6);
+    uint32_t in_h = get_arg_val<uint32_t>(7);
+
     constexpr bool src1_is_dram = false;
     constexpr uint32_t in_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(1);
@@ -40,8 +38,8 @@ void kernel_main() {
     // constexpr uint32_t is_reader = get_compile_time_arg_val(2);
     constexpr uint32_t scale_h_inv_comp = get_compile_time_arg_val(3);
     constexpr uint32_t scale_w_inv_comp = get_compile_time_arg_val(4);
-    constexpr uint32_t y_index_comp = get_compile_time_arg_val(5);
-    constexpr uint32_t x_index_compute_comp = get_compile_time_arg_val(6);
+    constexpr uint32_t y_starting_coordinate_u32 = get_compile_time_arg_val(5);
+    constexpr uint32_t x_starting_coordinate_u32 = get_compile_time_arg_val(6);
     constexpr uint32_t is_reader = get_compile_time_arg_val(7);
     constexpr uint32_t blocks = get_compile_time_arg_val(8);
     constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(9);
@@ -54,36 +52,93 @@ void kernel_main() {
     // assuming shard begins with a new row. TODO: generalize?
     float scale_h_inv = uint32_to_float(scale_h_inv_comp);
     float scale_w_inv = uint32_to_float(scale_w_inv_comp);
-    float x, y, x_index, y_index, dx, dy;
-    y_index = uint32_to_float(y_index_comp);
-    float x_index_compute = uint32_to_float(x_index_compute_comp);
+    float y_coordinate,
+        x_coordinate;  // x and y coordinate of the output pixel, as if it had existed in the input image
+    float x;           // helper variable to avoid out of bound reads in the x direction
+    float dx,
+        dy;  // distance between the output pixel and its closest pixel with lower coordinates (up and to the left)
+    y_coordinate = uint32_to_float(y_starting_coordinate_u32);
+    float x_starting_coordinate = uint32_to_float(x_starting_coordinate_u32);
 
-    // If the current core is a writer core, adjust the x_index_compute to start from the correct position.
+    // If the current core is a writer core, adjust the x_starting_coordinate to start from the correct position.
+
     if (!is_reader) {
-        x_index_compute += scale_w_inv;
+        x_starting_coordinate += scale_w_inv;
         // If the total number of sticks is odd, process one less stick.
         nsticks_to_process_on_core =
             (total_nsticks_to_process % 2) ? nsticks_to_process_on_core - 1 : nsticks_to_process_on_core;
     }
+    int32_t accumulated_offset = 0;  // offset used to calculate the position of row in batch
+                                     // every time we encounter a boundary between images, it is increased by
+                                     // in_h (corresponding to height of a single batch) +
+                                     // 2 (corresponding to the 2 skipped padding rows)
+
     for (uint32_t image_row = 0; image_row < in_image_rows_per_core * scale_h; ++image_row) {
-        x_index = x_index_compute;
+        x_coordinate = x_starting_coordinate;
+
+        // These variables are for referencing the appropriate input rows, specifically
+        // Their coordinates in the halo shard
+
+        uint32_t y1 = int(y_coordinate);
+        uint32_t y2 = y1 + 1;
+
+        // These two variables represent the indices of the rows referenced by y1 and y2
+        // In the according batch in the input image
+        // Value of -1 for either of these corresponds to the top padding row,
+        // And value of in_h corresponds to the bottom padding row
+
+        int32_t in_batch_index_y1 = int32_t(y1) - 1 + start_input_row_in_image_id - accumulated_offset;
+        int32_t in_batch_index_y2 = int32_t(y2) - 1 + start_input_row_in_image_id - accumulated_offset;
+
+        dy = y_coordinate - y1;
+
+        // In no circumstance should the padding rows have weights greater than 0.5
+
+        if (in_batch_index_y1 == -1) {
+            // This case handles the error on the top border of the image, where the top padding row could be wrongly
+            // included
+
+            // Entering this case means that in_batch_index_y1 (the "upper" row) corresponds to a padding row
+            // (specifically the top padding row) Reduce the padding row's weight to 0 and put full weight on the row
+            // below it
+            dy = 1;
+        }
+
+        if (in_batch_index_y2 == int(in_h)) {
+            // This case handles the error on the bottom border of the image, where the bottom padding could be wrongly
+            // included
+
+            // Entering this case means that in_batch_index_y2 (the "lower row") corresponds to a padding
+            // row(specifically the bottom padding row)
+
+            if (dy > 0.5) {  // Due to math behind bilinear upsampling, dy could never be exactly 0.5, so this check
+                             // should be numerically safe
+
+                // In this case, a padding row has weight higher than 0.5.
+                // This means we  are actually done with the current batch,
+                // and have to skip the next 2 rows (lower padding of current image and upper padding of
+                // previous image) The iteration that enters this case outputs the first row of the next batch
+                y1 += 2;
+                y2 += 2;
+                y_coordinate += 2;
+                dy = 1;
+                accumulated_offset += 2 + in_h;
+            } else {
+                // In this case, we handle the rows on the bottom border of the image
+
+                // We should do no skipping, but just set weight to 0 for the padding row (y2)
+                dy = 0;
+            }
+        }
         for (uint32_t j = 0; j < nsticks_to_process_on_core; j++) {
             for (uint32_t i = 0; i < blocks; i++) {
                 cb_reserve_back(out_cb_id, 4);
                 cb_reserve_back(in_scalar_cb_id, 1);
 
-                x = x_index < 0 ? 0 : x_index;
-                y = y_index < read_offset ? read_offset : y_index;
+                x = x_coordinate < 0 ? 0 : x_coordinate;
                 dx = x - int(x);
-                dy = y - int(y);
-
                 uint32_t x1 = int(x);
-                uint32_t y1 = int(y);
-                uint32_t x2 = std::min(x1 + 1, in_w - 1);
-                uint32_t y2 = y1 + 1;
-                if (is_last_row) {
-                    y2 = std::min(y2, in_image_rows_per_core);  // if last row, y2 should be in_image_rows_per_core
-                }
+                uint32_t x2 = (x1 + 1) < (in_w - 1) ? (x1 + 1) : (in_w - 1);
 
                 fill_four_val(
                     get_write_ptr(in_scalar_cb_id),
@@ -126,8 +181,8 @@ void kernel_main() {
                 cb_push_back(out_cb_id, 4);
                 cb_push_back(in_scalar_cb_id, 1);
             }
-            x_index += scale_w_inv * 2;
+            x_coordinate += scale_w_inv * 2;
         }
-        y_index += scale_h_inv;
+        y_coordinate += scale_h_inv;
     }
 }

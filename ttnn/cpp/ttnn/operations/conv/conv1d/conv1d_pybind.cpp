@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -30,7 +30,7 @@ void py_bind_conv1d(py::module& module) {
         :param ttnn.Tensor input_tensor:  The input tensor. This must be in the format [N, H, W, C]. It can be on host or device.
         :param ttnn.Tensor weight_tensor: The weight tensor. The weights can be passed in the same format as PyTorch, [out_channels, in_channels, kernel_height, kernel_width]. The op w
         :param ttnn.Tensor, None bias_tensor:   Optional bias tensor. Default: None
-        :param ttnn.IDevice device:  The device to use.
+        :param ttnn.MeshDevice device:  The device to use.
         :param int in_channels:  Number of input channels.
         :param int out_channels:  Number of output channels.
         :param int batch_size:  Batch size.
@@ -58,72 +58,6 @@ void py_bind_conv1d(py::module& module) {
             [](const decltype(ttnn::conv1d)& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& weight_tensor,
-               ttnn::IDevice* device,
-               uint32_t in_channels,
-               uint32_t out_channels,
-               uint32_t batch_size,
-               uint32_t input_length,
-               uint32_t kernel_size,
-               uint32_t stride,
-               std::variant<std::array<uint32_t, 2>, uint32_t> padding,
-               uint32_t dilation,
-               uint32_t groups,
-               const std::optional<const DataType>& dtype,
-               std::optional<const ttnn::Tensor> bias_tensor,
-               const std::optional<const Conv1dConfig>& conv_config,
-               const std::optional<const DeviceComputeKernelConfig>& compute_config,
-               const std::optional<const MemoryConfig>& memory_config,
-               bool return_output_dim,
-               bool return_weights_and_bias,
-               QueueId queue_id) -> Result {
-                return self(
-                    queue_id,
-                    input_tensor,
-                    weight_tensor,
-                    device,
-                    in_channels,
-                    out_channels,
-                    batch_size,
-                    input_length,
-                    kernel_size,
-                    stride,
-                    padding,
-                    dilation,
-                    groups,
-                    dtype,
-                    bias_tensor,
-                    conv_config,
-                    compute_config,
-                    memory_config,
-                    return_output_dim,
-                    return_weights_and_bias);
-            },
-            py::kw_only(),
-            py::arg("input_tensor"),
-            py::arg("weight_tensor"),
-            py::arg("device"),
-            py::arg("in_channels"),
-            py::arg("out_channels"),
-            py::arg("batch_size"),
-            py::arg("input_length"),
-            py::arg("kernel_size"),
-            py::arg("stride") = 1,
-            py::arg("padding") = 0,
-            py::arg("dilation") = 1,
-            py::arg("groups") = 1,
-            py::arg("dtype") = std::nullopt,
-            py::arg("bias_tensor") = std::nullopt,
-            py::arg("conv_config") = std::nullopt,
-            py::arg("compute_config") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("return_output_dim") = false,
-            py::arg("return_weights_and_bias") = false,
-            py::arg("queue_id") = DefaultQueueId},
-
-        ttnn::pybind_overload_t{
-            [](const decltype(ttnn::conv1d)& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& weight_tensor,
                ttnn::MeshDevice* device,
                uint32_t in_channels,
                uint32_t out_channels,
@@ -140,10 +74,8 @@ void py_bind_conv1d(py::module& module) {
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
                bool return_output_dim,
-               bool return_weights_and_bias,
-               QueueId queue_id) -> Result {
+               bool return_weights_and_bias) -> Result {
                 return self(
-                    queue_id,
                     input_tensor,
                     weight_tensor,
                     device,
@@ -183,7 +115,6 @@ void py_bind_conv1d(py::module& module) {
             py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("return_output_dim") = false,
-            py::arg("return_weights_and_bias") = false,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("return_weights_and_bias") = false});
 }
 }  // namespace ttnn::operations::conv::conv1d

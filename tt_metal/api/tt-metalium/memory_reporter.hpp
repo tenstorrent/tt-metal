@@ -14,7 +14,6 @@
 #include <vector>
 
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/allocator_types.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -117,7 +116,7 @@ public:
     static bool enabled();
 
 private:
-    MemoryReporter() {};
+    MemoryReporter() = default;
     ~MemoryReporter();
     void init_reports();
     static std::atomic<bool> is_enabled_;

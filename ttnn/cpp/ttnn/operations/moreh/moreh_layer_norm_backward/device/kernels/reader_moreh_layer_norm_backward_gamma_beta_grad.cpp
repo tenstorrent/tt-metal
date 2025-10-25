@@ -109,37 +109,21 @@ void kernel_main() {
     constexpr uint32_t cb_id_mask_h = 5;
 
     const uint32_t output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
-    const auto output_grad_data_format = get_dataformat(cb_id_output_grad);
-
     const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
-    const auto input_data_format = get_dataformat(cb_id_input);
-
     const uint32_t mean_tile_bytes = get_tile_size(cb_id_mean);
-    const auto mean_data_format = get_dataformat(cb_id_mean);
-
     const uint32_t rstd_tile_bytes = get_tile_size(cb_id_rstd);
-    const auto rstd_data_format = get_dataformat(cb_id_rstd);
 
-    constexpr bool output_grad_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool input_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr bool mean_is_dram = get_compile_time_arg_val(2) == 1;
-    constexpr bool rstd_is_dram = get_compile_time_arg_val(3) == 1;
-    constexpr bool gamma_grad_has_value = get_compile_time_arg_val(4) == 1;
-    constexpr bool do_mask_h = get_compile_time_arg_val(5) == 1;
+    constexpr bool gamma_grad_has_value = get_compile_time_arg_val(0) == 1;
+    constexpr bool do_mask_h = get_compile_time_arg_val(1) == 1;
+    constexpr auto output_grad_args = TensorAccessorArgs<2>();
+    constexpr auto input_args = TensorAccessorArgs<output_grad_args.next_compile_time_args_offset()>();
+    constexpr auto mean_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    constexpr auto rstd_args = TensorAccessorArgs<mean_args.next_compile_time_args_offset()>();
 
-    const InterleavedAddrGenFast<output_grad_is_dram> output_grad_addrg = {
-        .bank_base_address = output_grad_addr,
-        .page_size = output_grad_tile_bytes,
-        .data_format = output_grad_data_format};
-
-    const InterleavedAddrGenFast<input_is_dram> input_addrg = {
-        .bank_base_address = input_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
-
-    const InterleavedAddrGenFast<mean_is_dram> mean_addrg = {
-        .bank_base_address = mean_addr, .page_size = mean_tile_bytes, .data_format = mean_data_format};
-
-    const InterleavedAddrGenFast<rstd_is_dram> rstd_addrg = {
-        .bank_base_address = rstd_addr, .page_size = rstd_tile_bytes, .data_format = rstd_data_format};
+    const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr, output_grad_tile_bytes);
+    const auto input_addrg = TensorAccessor(input_args, input_addr, input_tile_bytes);
+    const auto mean_addrg = TensorAccessor(mean_args, mean_addr, mean_tile_bytes);
+    const auto rstd_addrg = TensorAccessor(rstd_args, rstd_addr, rstd_tile_bytes);
 
     uint32_t offs = 0;
     constexpr uint32_t onetile = 1;

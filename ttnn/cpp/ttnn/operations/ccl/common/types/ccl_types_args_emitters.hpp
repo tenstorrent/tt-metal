@@ -12,7 +12,7 @@
 namespace tt {
 namespace tt_metal {
 class Tensor;
-class ShardSpec;
+struct ShardSpec;
 
 class IDevice;
 

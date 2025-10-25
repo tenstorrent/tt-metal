@@ -10,6 +10,7 @@
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/run_operation.hpp"
 #include <tt-logger/tt-logger.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -130,12 +131,25 @@ operation::ProgramWithCallbacks ConcatDeviceOperation::create_program(
     };
 }
 
+tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
+ConcatDeviceOperation::create_op_performance_model(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& output_tensor = output_tensors.at(0);
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor, false, 0, false, false, false, true);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
+        input_tensors, output_tensors, ideal_dev_clock_cycles);
+    return result;
+}
+
 Tensor concat_impl(
     const std::vector<Tensor>& input_tensors,
     const std::int64_t dim,
     const unsigned int groups,
     const MemoryConfig& output_mem_config) {
-    TT_FATAL(input_tensors.size() > 0, "need 1 or more tensors");
+    TT_FATAL(!input_tensors.empty(), "need 1 or more tensors");
     if (input_tensors.size() == 1) {
         return {ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(
             input_tensors[0], output_mem_config)};

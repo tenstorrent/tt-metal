@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <string>
 #include <unordered_set>
+#include <enchantum/enchantum.hpp>
 
 #include <tt-metalium/mesh_socket.hpp>
 #include "ttnn/tensor/tensor.hpp"
@@ -24,7 +25,7 @@ void validate(
         mesh_socket.get_socket_endpoint_type() == socket_type,
         "{} op requires a {} socket",
         op_name,
-        magic_enum::enum_name(socket_type));
+        enchantum::to_string(socket_type));
     const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
     const auto& socket_connection_config = mesh_socket.get_config().socket_connection_config;
     TT_FATAL(
@@ -32,10 +33,10 @@ void validate(
         "{} op requires a fifo size greater than or equal to the input tensor page size",
         op_name);
 
-    auto device_ids = input_tensor.mesh_device()->get_device_ids();
-    std::unordered_set<chip_id_t> found_device_ids;
+    auto device_ids = input_tensor.device()->get_device_ids();
+    std::unordered_set<tt::ChipId> found_device_ids;
     for (const auto& connection : socket_connection_config) {
-        chip_id_t device_id;
+        tt::ChipId device_id;
         if constexpr (socket_type == tt::tt_metal::distributed::SocketEndpoint::SENDER) {
             device_id = socket_mesh_device->get_device(connection.sender_core.device_coord)->id();
         } else {

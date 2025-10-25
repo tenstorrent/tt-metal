@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -42,17 +43,28 @@ Program CreateEltwiseAddProgram(
     tt_metal::CreateCircularBuffer(program, target_tensix_core, cb_output_config);
 
     // Add data movement kernels
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*a->get_reference_buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*b->get_reference_buffer()).append_to(reader_compile_time_args);
     KernelHandle reader = CreateKernel(
         program,
         "tt_metal/programming_examples/contributed/vecadd/kernels/interleaved_tile_read.cpp",
         target_tensix_core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = reader_compile_time_args});
 
+    std::vector<uint32_t> writer_compile_time_args;
+    TensorAccessorArgs(*c->get_reference_buffer()).append_to(writer_compile_time_args);
     KernelHandle writer = CreateKernel(
         program,
         "tt_metal/programming_examples/contributed/vecadd/kernels/tile_write.cpp",
         target_tensix_core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = writer_compile_time_args});
 
     // Create the eltwise binary kernel
     auto compute = CreateKernel(
@@ -92,7 +104,7 @@ int main() {
     auto distributed_buffer_shape =
         Shape2D{shard_shape.height() * mesh_device->num_rows(), shard_shape.width() * mesh_device->num_cols()};
     auto num_tiles = 1;
-    auto tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
+    auto tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
     auto distributed_buffer_size_bytes = mesh_device->num_rows() * mesh_device->num_cols() * tile_size_bytes;
 
     // Configure device-local buffer settings
@@ -110,7 +122,7 @@ int main() {
     auto c = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device.get());
 
     // Create and initialize source data
-    constexpr float val_to_add = 0.5f;
+    constexpr auto val_to_add = 0.5f;
     std::vector<uint32_t> a_data =
         create_random_vector_of_bfloat16(distributed_buffer_size_bytes, 1 /* rand_max_float */, 0 /* seed */);
     std::vector<uint32_t> b_data = create_constant_vector_of_bfloat16(distributed_buffer_size_bytes, val_to_add);
@@ -124,10 +136,10 @@ int main() {
     auto program = CreateEltwiseAddProgram(a, b, c, tile_size_bytes, num_tiles);
 
     // Create mesh workload and broadcast the program across all devices
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
     auto device_range = MeshCoordinateRange(mesh_device->shape());
 
-    AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
+    mesh_workload.add_program(device_range, std::move(program));
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
 
     // Read back results
@@ -135,7 +147,7 @@ int main() {
     EnqueueReadMeshBuffer(cq, result_data, c, true /* blocking */);
 
     // Verify results
-    auto transform_to_golden = [val_to_add](const bfloat16& a) { return bfloat16(a.to_float() + val_to_add); };
+    auto transform_to_golden = [](const bfloat16& a) { return bfloat16(static_cast<float>(a) + val_to_add); };
     std::vector<uint32_t> golden_data =
         pack_bfloat16_vec_into_uint32_vec(unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden));
 
@@ -147,7 +159,7 @@ int main() {
     size_t num_failures = 0;
     auto total_values = result_data.size() * 2;
     for (int i = 0; i < total_values; i++) {
-        if (!is_close(c_bf16[i].to_float(), golden_bf16[i].to_float())) {
+        if (!is_close(static_cast<float>(c_bf16[i]), static_cast<float>(golden_bf16[i]))) {
             num_failures++;
         }
     }

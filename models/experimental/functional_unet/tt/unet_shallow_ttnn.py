@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import math
@@ -134,7 +134,7 @@ class UNetConv2D:
         conv,
         bn=None,
         device=None,
-        activation="relu",
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         activation_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat8_b,
         output_layout=ttnn.TILE_LAYOUT,
@@ -176,13 +176,12 @@ class UNetConv2D:
             enable_act_double_buffer=(
                 conv.use_activation_double_buffer if "use_activation_double_buffer" in conv else False
             ),
-            enable_split_reader=(conv.use_split_reader if "use_split_reader" in conv else False),
-            enable_subblock_padding=False,
             activation=activation,
             output_layout=output_layout,
             reshard_if_not_optimal=reshard_if_not_optimal,
             reallocate_halo_output=reallocate_halo_output,
             enable_weights_double_buffer=True,
+            enable_activation_reuse=(conv.enable_activation_reuse if "enable_activation_reuse" in conv else False),
         )
 
         if override_core_grid is not None:
@@ -235,6 +234,7 @@ class UNetConv2D:
             weight_tensor=self.weight,
             bias_tensor=self.bias,
             compute_config=self.compute_config,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
             return_output_dim=False,
             return_weights_and_bias=True,
             **self.get_conv2d_kwargs(),
@@ -509,7 +509,7 @@ class UNet:
         self.output_layer = UNetConv2D(
             parameters.output_layer,
             device=device,
-            activation="",
+            activation=None,
             mesh_mapper=mesh_mapper,
             activation_dtype=ttnn.bfloat16,
         )
@@ -540,17 +540,7 @@ class UNet:
     def postprocess_output_tensor(self, x):
         # Convert the output tensor (in TILE layout) to RM to prevent transferring padding back to host.
         assert x.is_sharded(), "Expected output to be sharded"
-        input_shard_spec = x.memory_config().shard_spec
-        output_shard_shape = (x.shape[-1], input_shard_spec.shape[0])
-        output_shard_spec = ttnn.ShardSpec(
-            input_shard_spec.grid,
-            output_shard_shape,
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        output_memory_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec
-        )
-        return ttnn.experimental.convert_to_chw(x, memory_config=output_memory_config, dtype=ttnn.bfloat16)
+        return ttnn.experimental.convert_to_chw(x, dtype=ttnn.bfloat16)
 
     def __call__(self, x, move_input_tensor_to_device=True, deallocate_input_activation=True):
         assert len(x.shape) == 4, f"Expected UNet input tensors to be rank 4 (was {len(x.shape)})"

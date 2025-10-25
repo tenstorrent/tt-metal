@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -72,6 +72,7 @@ public:
 
     /* ---------------- point‑to‑point ------------------- */
     void send(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const override;
+    void ssend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const override;
     void recv(tt::stl::Span<std::byte> buf, Rank source, Tag tag) const override;
 
     [[nodiscard]] RequestPtr isend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const override;

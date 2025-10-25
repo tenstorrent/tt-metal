@@ -29,7 +29,7 @@ class TtYolov10Conv2D:
         conv_pth,
         bn=None,
         device=None,
-        activation="",
+        activation=None,
         activation_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat8_b,
         use_1d_systolic_array=True,
@@ -77,11 +77,14 @@ class TtYolov10Conv2D:
             deallocate_activation=self.deallocate_activation,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
-            enable_subblock_padding=False,
             output_layout=ttnn.TILE_LAYOUT,
             act_block_h_override=act_block_h_override,
-            enable_act_double_buffer=enable_act_double_buffer,
-            enable_weights_double_buffer=enable_weights_double_buffer,
+            enable_act_double_buffer=True
+            if shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            else enable_act_double_buffer,
+            enable_weights_double_buffer=True
+            if shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            else enable_weights_double_buffer,
         )
         if auto_shard:
             self.conv_config.shard_layout = None
@@ -131,6 +134,7 @@ class TtYolov10Conv2D:
             return_output_dim=True,
             return_weights_and_bias=True,
             dtype=self.conv_output_dtype,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
         return x
 
@@ -149,7 +153,7 @@ class Conv:
         use_1d_systolic_array=True,
         auto_shard=False,
         shard_layout=None,
-        activation="",
+        activation=None,
         deallocate_activation=False,
         activation_dtype=ttnn.bfloat8_b,
         enable_act_double_buffer=False,
@@ -158,7 +162,7 @@ class Conv:
         self.enable_identity = enable_identity
         self.enable_act = enable_act
         if not self.enable_identity:
-            activation = "silu"
+            activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
         self.conv = TtYolov10Conv2D(
             parameter.conv,
             conv_pt.conv,

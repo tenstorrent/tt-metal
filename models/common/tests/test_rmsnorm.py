@@ -10,11 +10,10 @@ from loguru import logger
 # Set flags for CI, if CI environment is setup
 if os.getenv("CI") == "true":
     os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
-    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
 
 import ttnn
 from models.common.rmsnorm import RMSNorm as TtRMSNorm
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from models.common.utility_functions import comp_allclose, comp_pcc
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
@@ -55,7 +54,6 @@ class RefModel(torch.nn.Module):
         return self.rmsnorm(x)
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "is_sharded",
     (True, False),
@@ -99,7 +97,6 @@ def test_rmsnorm_singledevice(device, is_sharded, reset_seeds):
     assert passing, f"Common rmsnorm_singledevice output does not meet PCC requirement {0.99}."
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "is_sharded",
     (True, False),

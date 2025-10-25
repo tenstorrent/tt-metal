@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <boost/container/small_vector.hpp>
+#include <tt_stl/llvm/llvm_small_vector.hpp>
 
 #include <tt_stl/reflection.hpp>
 
@@ -12,13 +12,13 @@ namespace ttsl {
 
 static constexpr size_t SMALL_VECTOR_SIZE = 8;
 
-template <typename T, size_t PREALLOCATED_SIZE = SMALL_VECTOR_SIZE>
-struct SmallVector : public boost::container::small_vector<T, PREALLOCATED_SIZE> {
-    using boost::container::small_vector<T, PREALLOCATED_SIZE>::small_vector;
+template <typename T, std::size_t PREALLOCATED_SIZE = SMALL_VECTOR_SIZE>
+struct SmallVector : public ttsl::detail::llvm::SmallVector<T, PREALLOCATED_SIZE> {
+    using ttsl::detail::llvm::SmallVector<T, PREALLOCATED_SIZE>::SmallVector;
 };
 
-template <typename T, size_t PREALLOCATED_SIZE>
-std::ostream& operator<<(std::ostream& os, const SmallVector<T, PREALLOCATED_SIZE>& vec) {
+template <typename Stream, typename T, std::size_t PREALLOCATED_SIZE>
+Stream& operator<<(Stream& os, const SmallVector<T, PREALLOCATED_SIZE>& vec) {
     os << "SmallVector([";
     for (auto i = 0; i < vec.size(); ++i) {
         if (i > 0) {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,7 +19,7 @@ using namespace tt::tt_metal;
 // works correctly.
 TEST(MultiHostSocketTest, MultiProcessHandshaking) {
     // Get the current distributed context
-    auto context = DistributedContext::get_current_world();
+    const auto& context = DistributedContext::get_current_world();
     TT_FATAL(context != nullptr, "DistributedContext is not initialized.");
 
     auto rank = *context->rank();  // Host rank
@@ -46,7 +46,7 @@ TEST(MultiHostSocketTest, MultiProcessHandshaking) {
             sender_logical_coords.push_back(CoreCoord(x, y));
             recv_logical_coords.push_back(CoreCoord(x, y));
             sender_chip_ids.push_back(core_idx % 4);
-            recv_chip_ids.push_back(4 + core_idx % 4);
+            recv_chip_ids.push_back(4 + (core_idx % 4));
             sender_device_coords.push_back(MeshCoordinate(0, core_idx % 4));
             recv_device_coords.push_back(MeshCoordinate(1, core_idx % 4));
             core_idx++;

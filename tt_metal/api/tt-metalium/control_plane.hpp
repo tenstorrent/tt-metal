@@ -8,31 +8,47 @@
 
 #include <tt_stl/span.hpp>
 #include <tt-metalium/routing_table_generator.hpp>
-#include <tt-metalium/fabric_host_interface.h>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/fabric_types.hpp>
-#include <tt-metalium/multi_mesh_types.hpp>
+#include <hostdevcommon/fabric_common.h>
+#include <tt-metalium/distributed_context.hpp>
 
 #include <map>
 #include <unordered_map>
 #include <memory>
 #include <vector>
 
+namespace tt::tt_metal {
+
+class PhysicalSystemDescriptor;
+
+}  // namespace tt::tt_metal
+
 namespace tt::tt_fabric {
 
-class FabricContext;
+class TopologyMapper;
 
-// This struct provides information for how a process binds to a particular
-// mesh and local mesh rank (HostRankId rename - #24178) in the mesh graph
-// descriptor.
-struct LocalMeshBinding {
-    // Can bind multiple meshes to a single host. Most use-cases
-    // only require a 1:1 host to mesh mapping. At least one mesh_id
-    // is guaranteed to be present in this vector.
-    std::vector<MeshId> mesh_ids;
-    HostRankId host_rank;
-};
+// TODO: remove this once UMD provides API for UBB ID
+ struct UbbId {
+     std::uint32_t tray_id;
+     std::uint32_t asic_id;
+ };
+
+ UbbId get_ubb_id(ChipId chip_id);
+
+ class FabricContext;
+
+ // This struct provides information for how a process binds to a particular
+ // mesh and local mesh rank (MeshHostRankId rename - #24178) in the mesh graph
+ // descriptor.
+ struct LocalMeshBinding {
+     // Can bind multiple meshes to a single host. Most use-cases
+     // only require a 1:1 host to mesh mapping. At least one mesh_id
+     // is guaranteed to be present in this vector.
+     std::vector<MeshId> mesh_ids;
+     MeshHostRankId host_rank;
+ };
 
 // In multi-host context, APIs parameterized with MeshScope, can return
 // results for local mesh or global mesh.
@@ -41,12 +57,21 @@ enum class MeshScope {
     GLOBAL,
 };
 
+struct PortDescriptor {
+    port_id_t port_id = {RoutingDirection::NONE, 0};
+    std::size_t connection_hash = 0;
+};
+
+// Stores the logical ports (routing direction, logical channel id and connection hash) between the src mesh and its
+// neighbor meshes
+using PortDescriptorTable = std::unordered_map<MeshId, std::unordered_map<MeshId, std::vector<PortDescriptor>>>;
+
 class ControlPlane {
 public:
-    explicit ControlPlane(const std::string& mesh_graph_desc_yaml_file);
+    explicit ControlPlane(const std::string& mesh_graph_desc_file);
     explicit ControlPlane(
-        const std::string& mesh_graph_desc_yaml_file,
-        const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+        const std::string& mesh_graph_desc_file,
+        const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
 
     ~ControlPlane();
 
@@ -62,26 +87,44 @@ public:
     void write_routing_tables_to_all_chips() const;
 
     // Return mesh_id, chip_id from physical chip id
-    FabricNodeId get_fabric_node_id_from_physical_chip_id(chip_id_t physical_chip_id) const;
-    chip_id_t get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
-
+    FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id) const;
+    // Return physical chip id from fabric node id
+    ChipId get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
+    // Return fabric node id from ASIC id
+    FabricNodeId get_fabric_node_id_from_asic_id(uint64_t asic_id) const;
+    // Return user physical mesh ids
     std::vector<MeshId> get_user_physical_mesh_ids() const;
 
-    // Queries for the MeshId(s) and HostRankId owned by the local rank. A vector of MeshIds allows
+    // Queries for the MeshId(s) and MeshHostRankId owned by the local rank. A vector of MeshIds allows
     // a single host to bind to multiple meshes.
     std::vector<MeshId> get_local_mesh_id_bindings() const;
-    HostRankId get_local_host_rank_id_binding() const;
+    MeshHostRankId get_local_host_rank_id_binding() const;
     MeshCoordinate get_local_mesh_offset() const;
 
     // Queries that are MeshScope-aware (i.e. return results for local mesh or global mesh)
     MeshShape get_physical_mesh_shape(MeshId mesh_id, MeshScope scope = MeshScope::GLOBAL) const;
     MeshCoordinateRange get_coord_range(MeshId mesh_id, MeshScope scope = MeshScope::GLOBAL) const;
 
+    // Initializes distributed contexts for each mesh; for host-to-host communication.
+    void initialize_distributed_contexts();
+
+    // Returns distributed context for `mesh_id`.
+    // Throws if `mesh_id` is unknown.
+    const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& get_distributed_context(
+        MeshId mesh_id) const;
+
+    // Returns the distributed context with only one host.
+    const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& get_host_local_context() const;
+
     // Return valid ethernet channels on the specificed routing plane
     std::vector<chan_id_t> get_valid_eth_chans_on_routing_plane(
         FabricNodeId fabric_node_id, routing_plane_id_t routing_plane_id) const;
 
-    // Return path from device to device in the fabric
+    // Return path from device to device in the fabric.
+    // Constraints:
+    // - src_fabric_node_id must be local to the host on which this ControlPlane is running.
+    // - If dst_fabric_node_id is not local to the current host, the path will end at a local
+    // fabric node routing to the remote cluster.
     std::vector<std::pair<FabricNodeId, chan_id_t>> get_fabric_route(
         FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, chan_id_t src_chan_id) const;
 
@@ -97,9 +140,9 @@ public:
     std::vector<chan_id_t> get_forwarding_eth_chans_to_chip(
         FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, RoutingDirection forwarding_direction) const;
 
-    stl::Span<const chip_id_t> get_intra_chip_neighbors(
+    stl::Span<const ChipId> get_intra_chip_neighbors(
         FabricNodeId src_fabric_node_id, RoutingDirection routing_direction) const;
-    std::unordered_map<MeshId, std::vector<chip_id_t>> get_chip_neighbors(
+    std::unordered_map<MeshId, std::vector<ChipId>> get_chip_neighbors(
         FabricNodeId src_fabric_node_id, RoutingDirection routing_direction) const;
 
     routing_plane_id_t get_routing_plane_id(FabricNodeId fabric_node_id, chan_id_t eth_chan_id) const;
@@ -134,89 +177,84 @@ public:
 
     void clear_fabric_context();
 
-    // Check if ANY managed chip supports intermesh links
-    bool system_has_intermesh_links() const;
+    // Initialize fabric tensix config (call after routing tables are configured)
+    void initialize_fabric_tensix_datamover_config();
 
-    // Check if a specific chip has intermesh links configured
-    bool has_intermesh_links(chip_id_t chip_id) const;
-
-    // Get intermesh ethernet links for a specific chip
-    // Returns: vector of (eth_core, channel)
-    const std::vector<std::pair<CoreCoord, chan_id_t>>& get_intermesh_eth_links(chip_id_t chip_id) const;
-
-    // Get all intermesh ethernet links in the system
-    // Returns: map of chip_id -> vector of (eth_core, channel)
-    const std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>>& get_all_intermesh_eth_links()
-        const;
-
-    // Check if a specific ethernet core is an intermesh link
-    bool is_intermesh_eth_link(chip_id_t chip_id, CoreCoord eth_core) const;
-
-    // If the ethernet core is an intermesh link, probe to see if it is trained
-    bool is_intermesh_eth_link_trained(chip_id_t chip_id, CoreCoord eth_core) const;
+    // Check if the provided chip and channel is a cross-host eth link
+    bool is_cross_host_eth_link(ChipId chip_id, chan_id_t chan_id) const;
 
     // Returns set of logical active ethernet coordinates on chip
     // If skip_reserved_cores is true, will return cores that dispatch is not using,
     // intended for users to grab available eth cores for testing
     // `skip_reserved_cores` is ignored on BH because there are no ethernet cores used for Fast Dispatch
     // tunneling
-    std::unordered_set<CoreCoord> get_active_ethernet_cores(chip_id_t chip_id, bool skip_reserved_cores = false) const;
-    std::unordered_set<CoreCoord> get_inactive_ethernet_cores(chip_id_t chip_id) const;
+    std::unordered_set<CoreCoord> get_active_ethernet_cores(ChipId chip_id, bool skip_reserved_cores = false) const;
+    std::unordered_set<CoreCoord> get_inactive_ethernet_cores(ChipId chip_id) const;
 
-    // Query the local intermesh link table containing the local to remote link mapping
-    const IntermeshLinkTable& get_local_intermesh_link_table() const;
+    // Collect router port directions map from all hosts via MPI and merge into local map
+    void collect_and_merge_router_port_directions_from_all_hosts();
 
-    // Get the ASIC ID for a chip (the ASIC ID is unique per chip, even in multi-host systems and is programmed
-    // by SPI-ROM firmware)
-    uint64_t get_asic_id(chip_id_t chip_id) const;
+    // Get the mesh graph from the routing table
+    const MeshGraph& get_mesh_graph() const;
+
+    // Get the logical node id to mesh id and mesh host rank id mapping
+    const std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>&
+    get_global_logical_bindings() const;
 
 private:
+    // Check if the provided mesh is local to this host
+    bool is_local_mesh(MeshId mesh_id) const;
+
+    void init_control_plane(
+        const std::string& mesh_graph_desc_file,
+        std::optional<std::reference_wrapper<const std::map<FabricNodeId, ChipId>>>
+            logical_mesh_chip_id_to_physical_chip_id_mapping = std::nullopt);
+
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
     // TODO: remove this from local node control plane. Can get it from the global control plane
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
 
-    std::map<FabricNodeId, chip_id_t> logical_mesh_chip_id_to_physical_chip_id_mapping_;
+    std::map<FabricNodeId, ChipId> logical_mesh_chip_id_to_physical_chip_id_mapping_;
+
     // map[mesh_fabric_id][direction] has a vector of ethernet channels in that direction
     std::map<FabricNodeId, std::unordered_map<RoutingDirection, std::vector<chan_id_t>>>
         router_port_directions_to_physical_eth_chan_map_;
+
     // map[mesh_fabric_id][direction] has the number of live routing planes in that direction
     std::map<FabricNodeId, std::unordered_map<RoutingDirection, size_t>>
         router_port_directions_to_num_routing_planes_map_;
+
     // tables[mesh_fabric_id][eth_chan]
     std::map<FabricNodeId, std::vector<std::vector<chan_id_t>>>
         intra_mesh_routing_tables_;  // table that will be written to each ethernet core
     std::map<FabricNodeId, std::vector<std::vector<chan_id_t>>>
         inter_mesh_routing_tables_;  // table that will be written to each ethernet core
-    // map[phys_chip_id] has a vector of (eth_core, channel) pairs used for intermesh routing
-    std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>> intermesh_eth_links_;
-    // Stores a table of all local intermesh links (board_id, chan_id) and the corresponding remote intermesh links
-    IntermeshLinkTable intermesh_link_table_;
+    // Store the logical direction assigned to each exit node (an exit node is fully specified by
+    // a FabricNodeId and logical channel id)
+    std::map<FabricNodeId, std::unordered_map<chan_id_t, RoutingDirection>> exit_node_directions_;
+    // For each FabricNode, store a mapping of the logical port (direction and logical channel id)
+    // to the physical channel id
+    std::map<FabricNodeId, std::unordered_map<port_id_t, chan_id_t>> logical_port_to_eth_chan_;
+    // Mapping from MeshId, MeshHostRankId to MPI rank
+    std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, tt_metal::distributed::multihost::Rank>> mpi_ranks_;
+    std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>
+        global_logical_bindings_;
 
-    std::unordered_map<MeshId, std::map<EthChanDescriptor, EthChanDescriptor>> peer_intermesh_link_tables_;
-
-    std::unordered_map<chip_id_t, uint64_t> chip_id_to_asic_id_;
     // custom logic to order eth channels
     void order_ethernet_channels();
 
     routing_plane_id_t get_routing_plane_id(
         chan_id_t eth_chan_id, const std::vector<chan_id_t>& eth_chans_in_direction) const;
 
-    std::vector<chip_id_t> get_mesh_physical_chip_ids(
-        const tt::tt_metal::distributed::MeshContainer<chip_id_t>& mesh_container,
-        std::optional<chip_id_t> nw_corner_chip_id = std::nullopt) const;
-
-    std::map<FabricNodeId, chip_id_t> get_logical_chip_to_physical_chip_mapping(
-        const std::string& mesh_graph_desc_file);
-
     // Tries to get a valid downstream channel from the candidate_target_chans
     // First along same routing plane, but if not available, take round robin from candidates
     chan_id_t get_downstream_eth_chan_id(
         chan_id_t src_chan_id, const std::vector<chan_id_t>& candidate_target_chans) const;
 
-    chip_id_t get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const;
+    ChipId get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) const;
 
     void load_physical_chip_mapping(
-        const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+        const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
     size_t get_num_live_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
     void initialize_dynamic_routing_plane_counts(
         const IntraMeshConnectivity& intra_mesh_connectivity,
@@ -233,59 +271,99 @@ private:
     // Takes RoutingTableGenerator table and converts to routing tables for each ethernet port
     void convert_fabric_routing_table_to_chip_routing_table();
 
-    void write_routing_tables_to_eth_cores(MeshId mesh_id, chip_id_t chip_id) const;
-    void write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const;
-    void write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const;
+    void write_routing_tables_to_eth_cores(MeshId mesh_id, ChipId chip_id) const;
+    void write_routing_tables_to_tensix_cores(MeshId mesh_id, ChipId chip_id) const;
+    void write_fabric_connections_to_tensix_cores(MeshId mesh_id, ChipId chip_id) const;
 
-    // Populate the local intermesh link to remote intermesh link table
-    void generate_local_intermesh_link_table();
+    // Helper to populate fabric connection info for both router and mux configurations
+    void populate_fabric_connection_info(
+        tt::tt_fabric::fabric_connection_info_t& worker_connection_info,
+        tt::tt_fabric::fabric_connection_info_t& dispatcher_connection_info,
+        tt::tt_fabric::fabric_connection_info_t& tensix_connection_info,
+        ChipId physical_chip_id,
+        chan_id_t eth_channel_id,
+        eth_chan_directions router_direction) const;
 
-    // All to All exchange of intermesh link tables between all hosts in the system
-    void exchange_intermesh_link_tables();
-
-    // Initialize internal map of physical chip_id to intermesh ethernet links
-    void initialize_intermesh_eth_links();
-
-    // Check if intermesh links are available by reading SPI ROM config from first chip
-    bool is_intermesh_enabled() const;
-
-    // Check if the provided mesh is local to this host
-    bool is_local_mesh(MeshId mesh_id) const;
+    void assign_direction_to_fabric_eth_chan(
+        const FabricNodeId& fabric_node_id, chan_id_t chan_id, RoutingDirection direction);
 
     void assign_direction_to_fabric_eth_core(
         const FabricNodeId& fabric_node_id, const CoreCoord& eth_core, RoutingDirection direction);
-
-    void assign_intermesh_link_directions_to_local_host(const FabricNodeId& fabric_node_id);
-
-    void assign_intermesh_link_directions_to_remote_host(const FabricNodeId& fabric_node_id);
 
     // Initialize the local mesh binding from the environment variables
     // Returns std::nullopt if not in multi-host context
     LocalMeshBinding initialize_local_mesh_binding();
 
+    template <uint8_t dim, bool compressed>
+    void write_all_to_all_routing_fields(MeshId mesh_id) const;
+
+    // Top level function responsible for generating intermesh connectivity
+    // based on the MGD and Physical State of the system.
+    // This function will annotate physical connections between physical meshes (exit nodes)
+    // with a logical direction and channel id.
+    // This function requires the Physical System Descriptor and Intra-Mesh Connectivity in
+    // the Mesh Graph to be initialized.
+    // Once this function returns, Inter Mesh Connectivity will be specified in the Mesh Graph
+    // and Routing Table Generator.
+    void generate_intermesh_connectivity();
+
+    // Multi-Host Intermesh Connectivity Helper Function:
+    // Assign a logical direction and channel id to each local exit node.
+    std::vector<PortDescriptor> assign_logical_ports_to_exit_nodes(
+        const std::string& my_host,
+        const std::string& neighbor_host,
+        bool strict_binding,
+        const std::unordered_set<FabricNodeId>& requested_exit_nodes,
+        std::unordered_set<port_id_t>& assigned_port_ids);
+
+    // Multi-Host Intermesh Connectivity Helper Function:
+    // Fully annotate local physical exit nodes in logical space (src/dst mesh id, direction, channel id)
+    PortDescriptorTable generate_port_descriptors_for_exit_nodes();
+
+    // Multi-Host Intermesh Connectivity Helper Function:
+    // If the user has specified the logical devices to connect between meshes, this function will return
+    // the FabricNodeIds of the requested logical exit nodes.
+    std::unordered_set<FabricNodeId> get_requested_exit_nodes(
+        MeshId my_mesh_id,
+        MeshId neighbor_mesh_id,
+        const RequestedIntermeshConnections& requested_intermesh_connections,
+        const RequestedIntermeshPorts& requested_intermesh_ports,
+        const std::vector<uint64_t>& src_exit_node_chips);
+
+    // Multi-Host Intermesh Connectivity Helper Function:
+    // Have each host send their port descriptors to the controller host, for intermesh connectivity generation.
+    void forward_descriptors_to_controller(
+        PortDescriptorTable& port_descriptors, uint32_t my_rank, const std::string& my_host);
+
+    // Multi-Host Intermesh Connectivity Helper Function:
+    // Have the controller host send the generated intermesh connections to each host.
+    void forward_intermesh_connections_from_controller(AnnotatedIntermeshConnections& intermesh_connections);
+
+    // Multi-Host Intermesh Connectivity Helper Function:
+    // Runs on the controller host and pairs logical port descriptors to generate intermesh connections.
+    // Pairing is based on the physical connections between exit nodes.
+    AnnotatedIntermeshConnections pair_logical_intermesh_ports(const PortDescriptorTable& port_descriptors);
+
+    // Multi-Host Intermesh Connectivity Helper Function:
+    // Runs on all hosts: Given the local port descriptors, this function will return the full list of intermesh
+    // connections.
+    AnnotatedIntermeshConnections convert_port_desciptors_to_intermesh_connections(
+        PortDescriptorTable& port_descriptors);
+
+    // Single-Host Intermesh Connectivity Helper Function:
+    // Generate intermesh connections for the local host.
+    AnnotatedIntermeshConnections generate_intermesh_connections_on_local_host();
+
     std::unique_ptr<FabricContext> fabric_context_;
     LocalMeshBinding local_mesh_binding_;
-};
 
-class GlobalControlPlane {
-public:
-    explicit GlobalControlPlane(const std::string& mesh_graph_desc_yaml_file);
-    explicit GlobalControlPlane(
-        const std::string& mesh_graph_desc_yaml_file,
-        const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
-    ~GlobalControlPlane();
+    // Distributed contexts for each multi-host mesh, that this host is part of - this is typically a single mesh.
+    std::unordered_map<MeshId, std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>>
+        distributed_contexts_;
 
-    void initialize_host_mapping();
-
-    tt::tt_fabric::ControlPlane& get_local_node_control_plane() { return *control_plane_; }
-
-private:
-    std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
-    // Host rank to sub mesh shape
-    std::unordered_map<HostRankId, std::vector<MeshCoordinate>> host_rank_to_sub_mesh_shape_;
-    std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
-
-    std::string mesh_graph_desc_file_;
+    std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> host_local_context_;
+    std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;
+    std::unique_ptr<tt::tt_fabric::TopologyMapper> topology_mapper_;
 };
 
 }  // namespace tt::tt_fabric

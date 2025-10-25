@@ -4,14 +4,12 @@
 
 import pytest
 import ttnn
-from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_post_commit import (
     run_reduce_scatter_test,
     run_reduce_scatter_sharded_test,
 )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -45,8 +43,9 @@ from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_post_commit import
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 2), id="1x2_grid")], indirect=True)
 def test_ring_reduce_scatter_n300_post_commit(
-    n300_mesh_device,
+    mesh_device,
     num_devices,
     per_chip_output_shape,
     dim,
@@ -59,7 +58,7 @@ def test_ring_reduce_scatter_n300_post_commit(
     num_iters=5,
 ):
     run_reduce_scatter_test(
-        n300_mesh_device,
+        mesh_device,
         num_devices,
         per_chip_output_shape,
         dim,
@@ -73,7 +72,6 @@ def test_ring_reduce_scatter_n300_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",

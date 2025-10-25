@@ -12,7 +12,7 @@ import ttnn
 
 from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
 
@@ -195,7 +195,7 @@ def test_matmul(
     output_dtype,
     input_layout,
 ):
-    run_matmul(
+    (result, msg), e2e_perf = run_matmul(
         device,
         batch_sizes,
         input_shapes,
@@ -208,6 +208,8 @@ def test_matmul(
         output_dtype,
         input_layout,
     )
+    assert result, msg
+    logger.info(f"e2e_perf: {e2e_perf}")
 
 
 def run(

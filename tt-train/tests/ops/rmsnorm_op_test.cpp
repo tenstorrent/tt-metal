@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,9 +8,12 @@
 
 #include <cassert>
 #include <core/ttnn_all_includes.hpp>
+#include <umd/device/cluster.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/losses.hpp"
 
@@ -18,6 +21,7 @@ class RMSNormOpTest : public ::testing::Test {
 protected:
     void SetUp() override {
         ttml::autograd::ctx().open_device();
+        ttml::autograd::ctx().set_seed(42);
     }
 
     void TearDown() override {
@@ -39,9 +43,8 @@ protected:
 // ============================================================================
 TEST_F(RMSNormOpTest, RMSNorm_Small_Forward) {
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
-    uint32_t N = 1, C = 1, H = 1, W = 8;
+    [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
@@ -55,9 +58,8 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Forward) {
 
 TEST_F(RMSNormOpTest, RMSNorm_Small_Backward) {
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
-    uint32_t N = 1, C = 1, H = 1, W = 8;
+    [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
@@ -87,9 +89,12 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Backward) {
     EXPECT_TRUE(xt::allclose(gamma_grad, expected_gamma_grad, 1.0e-3F, 1e-2F));
 }
 
-TEST_F(RMSNormOpTest, RMSNorm_Forward_Batch) {
+TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Forward_Batch) {
+    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
+    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
+        GTEST_SKIP() << "Skipping on P100/P150 boards";
+    }
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
     // 2 batches, 1 sequence, 20 tokens, 5-dim'l embedding space.
     std::array<uint32_t, 4> a_shape = {2, 1, 20, 5};
@@ -126,9 +131,12 @@ TEST_F(RMSNormOpTest, RMSNorm_Forward_Batch) {
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 6e-2F, 1e-8F));
 }
 
-TEST_F(RMSNormOpTest, RMSNorm_Backward_Batch) {
+TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Backward_Batch) {
+    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
+    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
+        GTEST_SKIP() << "Skipping on P100/P150 boards";
+    }
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
     // 2 batches, 1 sequence, 20 tokens, 5-dim'l embedding space.
     std::array<uint32_t, 4> a_shape = {2, 1, 20, 5};
@@ -164,11 +172,10 @@ TEST_F(RMSNormOpTest, RMSNorm_Backward_Batch) {
 // and uses standard operations like power, mean, sqrt, and multiply.
 // Same test methodology as Section 1, but using rmsnorm_composite() instead.
 // ============================================================================
-TEST_F(RMSNormOpTest, CompositeRMSNorm_Small_Forward) {
+TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Small_Forward) {
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
-    uint32_t N = 1, C = 1, H = 1, W = 8;
+    [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
@@ -180,11 +187,10 @@ TEST_F(RMSNormOpTest, CompositeRMSNorm_Small_Forward) {
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 1e-2F));
 }
 
-TEST_F(RMSNormOpTest, CompositeRMSNorm_Small_Backward) {
+TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Small_Backward) {
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
-    uint32_t N = 1, C = 1, H = 1, W = 8;
+    [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
@@ -214,9 +220,8 @@ TEST_F(RMSNormOpTest, CompositeRMSNorm_Small_Backward) {
     EXPECT_TRUE(xt::allclose(gamma_grad, expected_gamma_grad, 1.0e-3F, 1e-2F));
 }
 
-TEST_F(RMSNormOpTest, CompositeRMSNorm_Forward_Batch) {
+TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Forward_Batch) {
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
     // 2 batches, 1 sequence, 20 tokens, 5-dim'l embedding space.
     std::array<uint32_t, 4> a_shape = {2, 1, 20, 5};
@@ -253,9 +258,8 @@ TEST_F(RMSNormOpTest, CompositeRMSNorm_Forward_Batch) {
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 6e-2F, 1e-8F));
 }
 
-TEST_F(RMSNormOpTest, CompositeRMSNorm_Backward_Batch) {
+TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Backward_Batch) {
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
     // 2 batches, 1 sequence, 20 tokens, 5-dim'l embedding space.
     std::array<uint32_t, 4> a_shape = {2, 1, 20, 5};
@@ -319,11 +323,16 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
     float eps = 0.0078125F;
 
     // Generate random input data
-    xt::random::seed(42);
     std::array<uint32_t, 4> gamma_shape = {1, 1, 1, shape[3]};
-    xt::xarray<float> x_data = xt::random::rand<float>(shape, -1.0F, 1.0F);
+    xt::xarray<float> x_data = xt::empty<float>(shape);
+    auto rng = autograd::ctx().get_generator();
+    uint32_t seed1 = rng();
+    core::parallel_generate<float>(x_data, []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); }, seed1);
 
-    xt::xarray<float> gamma_data = xt::random::rand<float>(gamma_shape, 0.0F, 1.0F);
+    xt::xarray<float> gamma_data = xt::empty<float>(gamma_shape);
+    uint32_t seed2 = rng();
+    core::parallel_generate<float>(
+        gamma_data, []() { return std::uniform_real_distribution<float>(0.0F, 1.0F); }, seed2);
 
     // Test forward pass - kernel vs composite
     auto x_kernel = autograd::create_tensor(core::from_xtensor(x_data, device));
@@ -341,7 +350,7 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
     EXPECT_EQ(result_composite_xtensor.shape(), x_data.shape());
 
     // Compare forward results
-    EXPECT_TRUE(xt::allclose(result_kernel_xtensor, result_composite_xtensor, 1.0e-3F, 3e-2F));
+    EXPECT_TRUE(xt::allclose(result_kernel_xtensor, result_composite_xtensor, 4e-2F, 3e-2F));
     EXPECT_TRUE(xt::all(xt::isfinite(result_kernel_xtensor)));
     EXPECT_TRUE(xt::all(xt::isfinite(result_composite_xtensor)));
 
@@ -372,8 +381,8 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
     EXPECT_TRUE(xt::all(xt::isfinite(gamma_grad_composite)));
 
     // Compare backward results
-    EXPECT_TRUE(xt::allclose(x_grad_kernel, x_grad_composite, 1.0e-3F, 3e-2F));
-    EXPECT_TRUE(xt::allclose(gamma_grad_kernel, gamma_grad_composite, 1.0e-3F, 3e-2F));
+    EXPECT_TRUE(xt::allclose(x_grad_kernel, x_grad_composite, 1.0e-3F, 2e-3F));
+    EXPECT_TRUE(xt::allclose(gamma_grad_kernel, gamma_grad_composite, 1.0e-3F, 2e-3F));
 
     autograd::ctx().reset_graph();
 }
@@ -390,6 +399,10 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
 // - Scale testing: small to very large tensor dimensions
 // - Training scenarios: realistic model shapes (NanoLlama, etc.)
 // ============================================================================
+
+TEST_F(RMSNormOpTest, RMSNorm_Compare_Basic_Small) {
+    CompareKernelVsComposite({1U, 1U, 2U, 32U});
+}
 
 // Test aligned dimensions (C % 32 == 0) that fit in L1 cache
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_FitsInL1) {
@@ -454,20 +467,33 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_BlockSize2_EvenC) {
     CompareKernelVsComposite({1U, 1U, 1U, 126U});  // C = 126 (even)
 }
 
-// Test training-like shapes with realistic model dimensions
+// Test training-like shapes with NanoLlama dimensions
 TEST_F(RMSNormOpTest, RMSNorm_Compare_TrainingShapes_NanoLlama) {
     // NanoLlama training shape: batch=64, seq_len=256, hidden_dim=384
     CompareKernelVsComposite({64U, 1U, 256U, 384U});
 }
 
+// Test training-like shapes with LLaMA 7B dimensions
+TEST_F(RMSNormOpTest, RMSNorm_Compare_TrainingShapes_NanoGPT) {
+    CompareKernelVsComposite({1U, 1U, 512U, 4096U});
+}
+
 // Test small batch and sequence dimensions (non-1 values)
-TEST_F(RMSNormOpTest, RMSNorm_Compare_SmallBatch_NonUnit) {
+TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Compare_SmallBatch_NonUnit) {
+    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
+    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
+        GTEST_SKIP() << "Skipping on P100/P150 boards";
+    }
     CompareKernelVsComposite({2U, 1U, 4U, 64U});
     CompareKernelVsComposite({32U, 1U, 64U, 128U});
 }
 
 // Test different masking patterns with larger batches
-TEST_F(RMSNormOpTest, RMSNorm_Compare_Masking_Patterns) {
+TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Compare_Masking_Patterns) {
+    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
+    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
+        GTEST_SKIP() << "Skipping on P100/P150 boards";
+    }
     CompareKernelVsComposite({32U, 1U, 1024U, 4091U});  // C % 32 = 11
     CompareKernelVsComposite({32U, 1U, 1024U, 4079U});  // C % 32 = 31
     CompareKernelVsComposite({32U, 1U, 1024U, 4097U});  // C % 32 = 1

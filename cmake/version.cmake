@@ -35,7 +35,7 @@ function(ParseGitDescribe)
     endif()
     if(NOT version)
         set(version ${fallbackVersion})
-        # A shallow Git clone will fail a git describe, but also will not have substitued the fallbackVersion
+        # A shallow Git clone will fail a git describe, but also will not have substituted the fallbackVersion
         if(version MATCHES "Format")
             set(version "0.0-alpha0-1-g${VERSION_HASH}-dirty")
         endif()
@@ -73,7 +73,7 @@ function(ParseGitDescribe)
     string(REGEX REPLACE "${tagRegex}" "\\1" VERSION_NUMERIC "${tagname}")
 
     # Build a new regex because we cannot access a capture group that was not matched.
-    # And also only the first 9 capture groups are referencable.
+    # And also only the first 9 capture groups are referenceable.
     set(statusRegex ".*(${status})$")
     if("${tagname}" MATCHES "${statusRegex}")
         string(REGEX REPLACE "${statusRegex}" "\\2" VERSION_STATUS "${tagname}")

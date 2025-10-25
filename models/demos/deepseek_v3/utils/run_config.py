@@ -1,49 +1,88 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import functools
 from collections.abc import Callable
 from dataclasses import fields, is_dataclass
 from enum import Enum
 from types import NoneType
-from typing import Any, Callable, overload
+from typing import Any, overload
 
 import ttnn
-from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, MeshDeviceStub, OpConfigBase
+from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, MeshDeviceStub, OpConfigBase, SavedWeight
 
 MESH_DEVICE_STATE_DICT_KEY = "mesh_device"
 
-WeightConfig = dict[str, "WeightConfig | str"]
+WeightConfig = (
+    dict[str, "WeightConfig | SavedWeight | None"]
+    | list["WeightConfig | SavedWeight | None"]
+    | tuple[
+        "WeightConfig | SavedWeight | None", ...
+    ]  # TODO: bring regular tensor saving back once Issue #26763 is resolved
+)
 
 _PRIMITIVE_COPYABLE_TYPES = bool | int | float | complex | str | bytes | None | Enum
-# In general, we require ModelConfig to be deepcopyable
-ModelPrefillConfig = dict[str, "ModelPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"] | OpConfigBase
-ModelDecodeConfig = dict[str, "ModelDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"] | OpConfigBase
+# In general, we require ModelConfig to be serializable (NOTE: mesh device and classes that hold references to the objects on it are NOT serializable).
+ModelPrefillConfig = (
+    dict[str, "ModelPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | list["ModelPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | tuple["ModelPrefillConfig | _PRIMITIVE_COPYABLE_TYPES", ...]
+    | OpConfigBase
+)
+ModelDecodeConfig = (
+    dict[str, "ModelDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | list["ModelDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | tuple["ModelDecodeConfig | _PRIMITIVE_COPYABLE_TYPES", ...]
+    | OpConfigBase
+)
 
-ModelState = Any  # Type of the persistent model state
+ModelState = Any  # Type of the model state
 
-RunPrefillConfig = dict[str, "RunPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"] | OpConfigBase
-RunDecodeConfig = dict[str, "RunDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"] | OpConfigBase
+RunPrefillConfig = (
+    dict[str, "RunPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | list["RunPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | tuple["RunPrefillConfig | _PRIMITIVE_COPYABLE_TYPES", ...]
+    | OpConfigBase
+)
+RunDecodeConfig = (
+    dict[str, "RunDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | list["RunDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | tuple["RunDecodeConfig | _PRIMITIVE_COPYABLE_TYPES", ...]
+    | OpConfigBase
+)
 
 
 @overload
-def run_config(
-    model_config: ModelPrefillConfig, weight_config: WeightConfig, model_state: ModelState
+def create_run_config(
+    model_config: ModelPrefillConfig, weight_config: WeightConfig, *model_states: ModelState
 ) -> RunPrefillConfig:
     ...
 
 
 @overload
-def run_config(  # type: ignore
-    model_config: ModelDecodeConfig, weight_config: WeightConfig, model_state: ModelState
+def create_run_config(  # type: ignore
+    model_config: ModelDecodeConfig, weight_config: WeightConfig, *model_states: ModelState
 ) -> RunDecodeConfig:
     ...
 
 
-def create_run_config(model_config, weight_config, model_state):
+def create_run_config(model_config, weight_config, *model_states):
+    # The states are merged to create a single unified model state.
+    unified_model_state = functools.reduce(
+        lambda cfg1, cfg2: _merge_config_containers(
+            cfg1,
+            cfg2,
+            merge_config_specific_items=_merge_model_states,
+            search_for_mesh_device=False,
+            mb_mesh_device=None,
+        ),
+        model_states,
+    )
+
     # The model config and state config are merged first to determine the mesh devices to load the configs on.
     model_state_config = _merge_config_containers(
         model_config,
-        model_state,
+        unified_model_state,
         merge_config_specific_items=_merge_model_config_state_items,
         search_for_mesh_device=True,
         mb_mesh_device=None,
@@ -56,8 +95,6 @@ def create_run_config(model_config, weight_config, model_state):
         search_for_mesh_device=False,
         mb_mesh_device=None,
     )
-
-    print(f"run config: {_convert_run_config_to_pretty_print(run_config)}")
 
     return run_config
 
@@ -87,8 +124,12 @@ def _merge_model_config_state_items(model_config_item: Any, state_item: Any, mb_
 
 
 def _merge_run_config(model_state_config_item: Any, weight_config_item: Any, _: ttnn.Device | None) -> Any:
-    if isinstance(model_state_config_item, FromWeightConfig) and isinstance(weight_config_item, str):
-        return ttnn.load_tensor(weight_config_item, device=model_state_config_item.mesh_device)
+    if isinstance(
+        model_state_config_item, FromWeightConfig
+    ):  # TODO: bring regular tensor saving back once Issue #26763 is resolved
+        if isinstance(weight_config_item, SavedWeight):
+            return load_weight(weight_config_item, model_state_config_item.mesh_device)
+        return None
 
     if weight_config_item is None:
         assert not isinstance(
@@ -97,8 +138,16 @@ def _merge_run_config(model_state_config_item: Any, weight_config_item: Any, _: 
         return model_state_config_item
 
     raise ValueError(
-        f"Unsupported model and weight config items to merge: {model_state_config_item} and {weight_config_item}"
+        f"Unsupported model and weight config items to merge: {model_state_config_item} and {weight_config_item}. Try recalculating cached weights."
     )
+
+
+def _merge_model_states(cfg1: Any, cfg2: Any, _: ttnn.Device | None) -> Any:
+    if cfg1 is None:
+        return cfg2
+    if cfg2 is None:
+        return cfg1
+    raise ValueError(f"Unsupported partial model state items to merge: {cfg1} and {cfg2}")
 
 
 def _merge_config_containers(
@@ -118,10 +167,21 @@ def _merge_config_containers(
 
     # If both configs are lists/tuples of the same length or one of them is None, merge them as a list/tuple.
     if isinstance(cfg_a, (list, tuple, NoneType)) and isinstance(cfg_b, (list, tuple, NoneType)):
-        if cfg_a is None or cfg_b is None or (len(cfg_a) == len(cfg_b) and type(cfg_a) == type(cfg_b)):
+        if (
+            cfg_a is None
+            or cfg_b is None
+            or (len(cfg_a) == len(cfg_b) and type(cfg_a) == type(cfg_b))
+            or (len(cfg_a) == 1 or len(cfg_b) == 1 and type(cfg_a) == type(cfg_b))
+        ):
             container = type(cfg_a) if cfg_a is not None else type(cfg_b)
-            cfg_a = cfg_a or (container([None]) * len(cfg_b))
-            cfg_b = cfg_b or (container([None]) * len(cfg_a))
+            if cfg_a is None:
+                cfg_a = container([None]) * len(cfg_b)
+            if cfg_b is None:
+                cfg_b = container([None]) * len(cfg_a)
+            if len(cfg_a) == 1:
+                cfg_a *= len(cfg_b)
+            if len(cfg_b) == 1:
+                cfg_b *= len(cfg_a)
             return container(
                 _merge_config_containers(a, b, merge_config_specific_items, search_for_mesh_device, mb_mesh_device)
                 for a, b in zip(cfg_a, cfg_b, strict=True)
@@ -160,7 +220,7 @@ def _convert_run_config_to_pretty_print(run_config_item: Any, indent: int = 0) -
             return "{}"
 
         lines = ["{"]
-        for k, v in run_config_item.items():
+        for k, v in sorted(run_config_item.items(), key=lambda item: item[0]):
             value_str = _convert_run_config_to_pretty_print(v, indent + 1)
             lines.append(f"{next_indent_str}{k!r}: {value_str},")
         lines.append(f"{indent_str}}}")
@@ -281,3 +341,15 @@ def _convert_run_config_to_pretty_print(run_config_item: Any, indent: int = 0) -
 def is_op_config(obj: Any) -> bool:
     """Check if the object is an op config instance."""
     return issubclass(type(obj), OpConfigBase) and is_dataclass(obj)
+
+
+def load_weight(saved_weight: SavedWeight, device: ttnn.Device) -> ttnn.Tensor:
+    """
+    Load a weight tensor from a SavedWeight object to a given mesh device.
+    """
+    return ttnn.load_tensor(
+        saved_weight.path,
+    ).to(
+        device=device,
+        mem_config=saved_weight.memory_config,
+    )

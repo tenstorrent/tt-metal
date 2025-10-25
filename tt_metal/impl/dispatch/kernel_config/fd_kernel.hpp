@@ -5,17 +5,18 @@
 #pragma once
 
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <stdint.h>
 #include <map>
 #include <string>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/tt_xy_pair.h>
-
-enum class CoreType;
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/core_coordinates.hpp>
+#include <tt_stl/tt_stl/reflection.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -80,8 +81,7 @@ static std::vector<std::string> dispatch_kernel_file_names = {
 // from this class and implement the virtual functions as required.
 class FDKernel {
 public:
-    FDKernel(
-        int node_id, chip_id_t device_id, chip_id_t servicing_device_id, uint8_t cq_id, noc_selection_t noc_selection) :
+    FDKernel(int node_id, ChipId device_id, ChipId servicing_device_id, uint8_t cq_id, noc_selection_t noc_selection) :
         node_id_(node_id),
         device_id_(device_id),
         servicing_device_id_(servicing_device_id),
@@ -107,8 +107,8 @@ public:
     // Generator function to create a kernel of a given type. New kernels need to be added here.
     static FDKernel* Generate(
         int node_id,
-        chip_id_t device_id,
-        chip_id_t servicing_device_id,
+        ChipId device_id,
+        ChipId servicing_device_id,
         uint8_t cq_id,
         noc_selection_t noc_selection,
         tt::tt_metal::DispatchWorkerType type,
@@ -136,7 +136,7 @@ public:
         return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
             logical_core_, GetCoreType());
     }
-    chip_id_t GetDeviceId() const { return device_id_; }  // Since this->device may not exist yet
+    ChipId GetDeviceId() const { return device_id_; }  // Since this->device may not exist yet
     int GetNodeId() const { return node_id_; }
     virtual std::optional<tt::tt_metal::TerminationInfo> GetTerminationInfo() const { return std::nullopt; }
 
@@ -173,19 +173,19 @@ protected:
     }
 
     // Helper function to get upstream device in the tunnel from current device, not valid for mmio
-    static chip_id_t GetUpstreamDeviceId(chip_id_t device_id);
+    static ChipId GetUpstreamDeviceId(ChipId device_id);
     // Helper function to get downstream device in the tunnel from current device
-    static chip_id_t GetDownstreamDeviceId(chip_id_t device_id, int tunnel = -1);
+    static ChipId GetDownstreamDeviceId(ChipId device_id, int tunnel = -1);
     // Helper function to get the tunnel stop index of current device
-    static uint32_t GetTunnelStop(chip_id_t device_id);
+    static uint32_t GetTunnelStop(ChipId device_id);
     // Create and populate semaphores for the EDM connection
     void create_edm_connection_sems(FDKernelEdmConnectionAttributes& attributes);
     tt::tt_metal::IDevice* device_ = nullptr;  // Set at configuration time by AddDeviceAndProgram()
     tt::tt_metal::Program* program_ = nullptr;
     tt_cxy_pair logical_core_;
-    FDKernelType kernel_type_;
-    chip_id_t device_id_;
-    chip_id_t servicing_device_id_;  // Remote chip that this PREFETCH_H/DISPATCH_H is servicing
+    FDKernelType kernel_type_ = FDKernelType::UNSET;
+    ChipId device_id_;
+    ChipId servicing_device_id_;  // Remote chip that this PREFETCH_H/DISPATCH_H is servicing
     int node_id_;
     uint8_t cq_id_;
     noc_selection_t noc_selection_;
@@ -202,10 +202,10 @@ template <>
 struct hash<tt::tt_metal::TerminationInfo> {
     std::size_t operator()(const tt::tt_metal::TerminationInfo& info) const {
         size_t hash = 0;
-        tt::utils::hash_combine(hash, info.logical_core);
-        tt::utils::hash_combine(hash, info.core_type);
-        tt::utils::hash_combine(hash, info.address);
-        tt::utils::hash_combine(hash, info.val);
+        ttsl::hash::hash_combine(hash, info.logical_core);
+        ttsl::hash::hash_combine(hash, info.core_type);
+        ttsl::hash::hash_combine(hash, info.address);
+        ttsl::hash::hash_combine(hash, info.val);
         return hash;
     }
 };

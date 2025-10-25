@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/data_movement/repeat/device/host/repeat_program_factory.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_device_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn {
 
@@ -18,10 +19,12 @@ void RepeatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "This function is for RM->RM");
     TT_FATAL(
-        input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16 or
+        input_tensor_a.dtype() == tt::tt_metal::DataType::UINT16 or
+            input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16 or
             input_tensor_a.dtype() == tt::tt_metal::DataType::UINT32 or
+            input_tensor_a.dtype() == tt::tt_metal::DataType::INT32 or
             input_tensor_a.dtype() == tt::tt_metal::DataType::FLOAT32,
-        "Can only work with bfloat16/float32 or uint32 tensors");
+        "Can only work with UINT16, BFLOAT16, UINT32, INT32, FLOAT32 data types");
     // is this relevant?
     TT_FATAL(
         this->m_output_mem_config.memory_layout() == input_tensor_a.memory_config().memory_layout(),
@@ -43,6 +46,19 @@ std::vector<TensorSpec> RepeatDeviceOperation::compute_output_specs(const std::v
         output_shape,
         tt::tt_metal::TensorLayout(
             input_tensor_a.dtype(), tt::tt_metal::PageConfig(input_tensor_a.layout()), mem_config))};
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
+RepeatDeviceOperation::create_op_performance_model(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& output_tensor = output_tensors.at(0);
+    int ideal_dev_clock_cycles = operations::data_movement::common_tm_bw_model(input_tensor, output_tensor);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
+        input_tensors, output_tensors, ideal_dev_clock_cycles);
+    return result;
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks RepeatDeviceOperation::create_program(

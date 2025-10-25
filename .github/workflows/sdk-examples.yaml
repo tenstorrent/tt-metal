@@ -18,7 +18,7 @@ on:
 
 jobs:
   sdk-examples:
-    runs-on: ${{ format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner) }}
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner) }}
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
       volumes:
@@ -30,7 +30,7 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
@@ -40,7 +40,15 @@ jobs:
         run: |
           set -euo pipefail
           apt update
-          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb
+          DEBIAN_FRONTEND=noninteractive TZ=UTC apt install -y -q libprotobuf-dev # this is being installed for testing dependency conflicts with protobuf
+          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb
+
+          if [ "${{ inputs.product }}" == "tt-metalium" ]; then
+            apt install -y ./pkgs/tt-metalium-examples_*.deb
+          fi
+          if [ "${{ inputs.product }}" == "tt-nn" ]; then
+            apt install -y ./pkgs/tt-nn_*.deb ./pkgs/tt-nn-dev_*.deb ./pkgs/tt-nn-examples_*.deb
+          fi
 
       - name: Run examples
         id: test

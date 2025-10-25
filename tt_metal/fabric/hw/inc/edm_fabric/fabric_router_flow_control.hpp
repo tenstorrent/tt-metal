@@ -1,61 +1,78 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_constants.hpp"
+#if !defined(COMPILE_FOR_LITE_FABRIC)
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
+#endif
+
 #include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
 
 struct ReceiverChannelCounterBasedResponseCreditSender {
     ReceiverChannelCounterBasedResponseCreditSender() = default;
     ReceiverChannelCounterBasedResponseCreditSender(size_t receiver_channel_index) :
-        completion_counter_ptr(
-            reinterpret_cast<volatile uint32_t*>(local_receiver_completion_counter_ptrs[receiver_channel_index])),
-        ack_counter_ptr(reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counter_ptrs[receiver_channel_index])),
-        completion_counter(0),
-        ack_counter(0) {}
+        completion_counters_base_ptr(
+            reinterpret_cast<volatile uint32_t*>(local_receiver_completion_counters_base_address)),
+        ack_counters_base_ptr(reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counters_base_address)),
+        completion_counters({}),
+        ack_counters({}) {
+        for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+            completion_counters[i] = 0;
+            ack_counters[i] = 0;
+        }
+    }
+
+    static FORCE_INLINE uint32_t round_down_to_eth_word_alignment(uint32_t addr) { return addr & ~0xF; }
 
     FORCE_INLINE void send_completion_credit(uint8_t src_id) {
-        completion_counter++;
-        *completion_counter_ptr = completion_counter;
+        completion_counters[src_id]++;
+        completion_counters_base_ptr[src_id] = completion_counters[src_id];
         internal_::eth_send_packet_bytes_unsafe(
             receiver_txq_id,
-            reinterpret_cast<uint32_t>(this->completion_counter_ptr),
-            to_sender_remote_completion_counter_addrs[src_id],
+            round_down_to_eth_word_alignment(reinterpret_cast<uint32_t>(this->completion_counters_base_ptr + src_id)),
+            round_down_to_eth_word_alignment(
+                to_sender_remote_completion_counters_base_address + src_id * sizeof(uint32_t)),
             ETH_WORD_SIZE_BYTES);
     }
 
     // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
     FORCE_INLINE void send_ack_credit(uint8_t src_id) {
-        ack_counter++;
-        *ack_counter_ptr = ack_counter;
+        ack_counters[src_id]++;
+        ack_counters_base_ptr[src_id] = ack_counters[src_id];
         internal_::eth_send_packet_bytes_unsafe(
             receiver_txq_id,
-            reinterpret_cast<uint32_t>(this->ack_counter_ptr),
-            to_sender_remote_ack_counter_addrs[src_id],
+            round_down_to_eth_word_alignment(reinterpret_cast<uint32_t>(this->ack_counters_base_ptr + src_id)),
+            round_down_to_eth_word_alignment(to_sender_remote_ack_counters_base_address + src_id * sizeof(uint32_t)),
             ETH_WORD_SIZE_BYTES);
     }
 
-    volatile tt_l1_ptr uint32_t* completion_counter_ptr;
-    volatile tt_l1_ptr uint32_t* ack_counter_ptr;
+    volatile tt_l1_ptr uint32_t* completion_counters_base_ptr;
+    volatile tt_l1_ptr uint32_t* ack_counters_base_ptr;
     // Local memory copy to save an L1 load
-    uint32_t completion_counter;
-    uint32_t ack_counter;
+    std::array<uint32_t, NUM_SENDER_CHANNELS> completion_counters;
+    std::array<uint32_t, NUM_SENDER_CHANNELS> ack_counters;
 };
 
 struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
-    ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender() {}
+    ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender() {
+        for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
+            sender_channel_packets_completed_stream_ids[i] = to_sender_packets_completed_streams[i];
+        }
+    }
 
     FORCE_INLINE void send_completion_credit(uint8_t src_id) {
-        remote_update_ptr_val<receiver_txq_id>(to_sender_packets_completed_streams[src_id], 1);
+        remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_completed_stream_ids[src_id], 1);
     }
 
     // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
     FORCE_INLINE void send_ack_credit(uint8_t src_id) {
-        remote_update_ptr_val<receiver_txq_id>(to_sender_packets_acked_streams[src_id], 1);
+        remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_completed_stream_ids[src_id], 1);
     }
+
+    std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_packets_completed_stream_ids;
 };
 
 using ReceiverChannelResponseCreditSender = typename std::conditional_t<
@@ -103,9 +120,10 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
     SenderChannelFromReceiverCounterBasedCreditsReceiver() = default;
     SenderChannelFromReceiverCounterBasedCreditsReceiver(size_t sender_channel_index) :
         acks_received_counter_ptr(
-            reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counter_addrs[sender_channel_index])),
+            reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counters_base_address) + sender_channel_index),
         completions_received_counter_ptr(
-            reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counter_addrs[sender_channel_index])),
+            reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counters_base_address) +
+            sender_channel_index),
         acks_received_and_processed(0),
         completions_received_and_processed(0) {}
 
@@ -211,4 +229,15 @@ constexpr FORCE_INLINE auto init_sender_channel_from_receiver_credits_flow_contr
     -> std::enable_if_t<multi_txq_enabled, std::array<SenderChannelFromReceiverCredits, NUM_SENDER_CHANNELS>> {
     return init_sender_channel_from_receiver_credits_flow_controllers_impl<
         SenderChannelFromReceiverCounterBasedCreditsReceiver>::template init<NUM_SENDER_CHANNELS>();
+}
+
+// MUST CHECK !is_eth_txq_busy() before calling
+template <bool CHECK_BUSY>
+FORCE_INLINE void receiver_send_completion_ack(
+    ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender, uint8_t src_id) {
+    if constexpr (CHECK_BUSY) {
+        while (internal_::eth_txq_is_busy(receiver_txq_id)) {
+        };
+    }
+    receiver_channel_response_credit_sender.send_completion_credit(src_id);
 }

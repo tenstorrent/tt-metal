@@ -4,7 +4,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::transformer::detail {
@@ -13,13 +13,13 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 using namespace tt;
 
-tt::tt_metal::operation::ProgramWithCallbacks concatenate_heads_multi_core(
+inline tt::tt_metal::operation::ProgramWithCallbacks concatenate_heads_multi_core(
     const Tensor& a, Tensor& output, CoreCoord compute_with_storage_grid_size) {
     const auto& ashape = a.padded_shape();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     TT_ASSERT(in0_buffer->size() % single_tile_size == 0);
 
@@ -65,28 +65,19 @@ tt::tt_metal::operation::ProgramWithCallbacks concatenate_heads_multi_core(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
 
-    bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)tile_dtype_is_bfloat16,
-        (std::uint32_t)in0_is_dram,
-
         // READER COMPILE TIME ARGS
         (std::uint32_t)in0_w_tiles,  // in0_w_tiles
         (std::uint32_t)in0_c,        // in0_c
         (std::uint32_t)in0_HtWt,     // in0_HtWt
     };
+    tt::tt_metal::TensorAccessorArgs(in0_buffer).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)tile_dtype_is_bfloat16,
-        (std::uint32_t)out_is_dram,
-
         // WRITER COMPILE TIME ARGS
         (std::uint32_t)in0_w_tiles,  // in0_w_tiles
         (std::uint32_t)in0_c,        // in0_c
     };
+    tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_compile_time_args);
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -112,7 +103,7 @@ tt::tt_metal::operation::ProgramWithCallbacks concatenate_heads_multi_core(
     for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
-            uint32_t in0_tensor_tile_id = core_idx_x * in0_w_tiles + core_idx_y * in0_CHtWt;
+            uint32_t in0_tensor_tile_id = (core_idx_x * in0_w_tiles) + (core_idx_y * in0_CHtWt);
 
             std::vector<uint32_t> reader_runtime_args = {
                 (std::uint32_t)in0_buffer->address(),  // in0_tensor_addr

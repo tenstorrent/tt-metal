@@ -9,10 +9,10 @@ from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
     concat,
     determine_num_cores_for_upsample,
     get_core_grid_from_num_cores,
-    tt_adaptive_to_max_pool2d,
     ttnn_custom_normalize,
     ttnn_decode_bboxes,
 )
+from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
 class TtConv:
@@ -37,10 +37,10 @@ class TtConv:
         width_shard=False,
         act_blocks=False,
         enable_act_double_buffer=True,
-        enable_split_reader=True,
         reshard_if_not_optimal=True,
         batch_size=1,
         conv_math_fidelity=None,
+        core_count=None,
     ):
         self.device = device
         self.parameters = parameters
@@ -59,10 +59,10 @@ class TtConv:
         self.width_shard = width_shard
         self.act_blocks = act_blocks
         self.enable_act_double_buffer = enable_act_double_buffer
-        self.enable_split_reader = enable_split_reader
         self.reshard_if_not_optimal = reshard_if_not_optimal
         self.batch_size = batch_size
         self.reshape_tensor = reshape_tensor
+        self.core_count = core_count
 
         self.conv_config = self._initialize_conv_config()
         self.compute_config = self._initialize_compute_config(conv_math_fidelity)
@@ -74,12 +74,10 @@ class TtConv:
     def _initialize_conv_config(self):
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat16,
-            activation="",
+            activation=None,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             deallocate_activation=False,
             enable_act_double_buffer=self.enable_act_double_buffer,
-            enable_split_reader=self.enable_split_reader,
-            enable_subblock_padding=True,
             output_layout=self.output_layout,
             reallocate_halo_output=False,
             reshard_if_not_optimal=self.reshard_if_not_optimal,
@@ -94,7 +92,7 @@ class TtConv:
             conv_config.shard_layout = None
 
         if self.is_act_false != True:
-            conv_config.activation = "silu"
+            conv_config.activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
 
         if self.act_block_h:
             conv_config.act_block_h_override = self.act_blocks
@@ -107,6 +105,11 @@ class TtConv:
 
         if self.bfloat8:
             conv_config.weights_dtype = ttnn.bfloat8_b
+
+        if self.core_count is not None:
+            shard_grid = get_shard_grid_from_num_cores(self.core_count, self.device)
+            conv_config.core_grid = shard_grid
+            conv_config.override_sharding_config = True
 
         return conv_config
 
@@ -147,6 +150,7 @@ class TtConv:
             return_weights_and_bias=True,
             return_output_dim=True,
             dtype=ttnn.bfloat16,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
 
         if self.is_act_false:
@@ -169,6 +173,7 @@ class TtBottleneck:
         deallocate_activation=False,
         output_layout=ttnn.TILE_LAYOUT,
         tilize=False,
+        core_count=None,
     ):
         self.device = device
         self.tilize = tilize
@@ -179,6 +184,7 @@ class TtBottleneck:
             input_params,
             deallocate_activation=deallocate_activation,
             output_layout=output_layout,
+            core_count=core_count,
         )
         self.cv2 = TtConv(
             device,
@@ -186,6 +192,7 @@ class TtBottleneck:
             input_params,
             act_block_h=act_block_h,
             deallocate_activation=deallocate_activation,
+            core_count=core_count,
         )
 
     def __call__(self, x):
@@ -230,6 +237,7 @@ class TtC2f:
             device,
             self.parameters["cv1_a"],
             input_params=self.input_params[0],
+            block_shard=self.block_shard,
             deallocate_activation=self.deallocate_activation,
             output_layout=self.output_layout,
         )
@@ -237,6 +245,7 @@ class TtC2f:
             device,
             self.parameters["cv1_b"],
             input_params=self.input_params[0],
+            block_shard=self.block_shard,
             deallocate_activation=self.deallocate_activation,
             output_layout=self.output_layout,
         )
@@ -262,6 +271,7 @@ class TtC2f:
                     act_block_h=self.act_block_h,
                     deallocate_activation=self.deallocate_activation,
                     tilize=self.tilize,
+                    core_count=64 if block_shard else None,
                 )
             )
 
@@ -419,21 +429,19 @@ class TtMaxSigmoidAttnBlock:
         guide = ttnn.reshape(guide, (bs, -1, self.nh, self.hc))
         x = ttnn.permute(x, (0, 3, 1, 2))  # nhwc->nchw
         embed = self.ec(x) if self.ec is not None else x
-        embed = ttnn.reshape(embed, (bs, self.nh, self.hc, h, w))
+        embed = ttnn.reshape(embed, (bs, self.nh, self.hc, embed.shape[-1]))
 
         ## Replacement for torch.einsum('bmchw,bnmc->bmhwn', embed, guide)
-        batch, m, channel, height, width = embed.shape
+        batch, m, channel, height, width = bs, self.nh, self.hc, h, w
         _, n, _, _ = guide.shape
-        embed = ttnn.permute(embed, (0, 1, 3, 4, 2))
-        embed = ttnn.reshape(embed, (batch, m, -1, channel))
+        embed = ttnn.permute(embed, (0, 1, 3, 2))
         guide = ttnn.permute(guide, (0, 2, 3, 1))
         aw = ttnn.matmul(embed, guide, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(embed)
         ttnn.deallocate(guide)
         aw = ttnn.reshape(aw, (batch, m, height, width, n))
-
         aw = ttnn.max(aw, dim=-1, keepdim=True)
-        aw = ttnn.permute(aw, (0, 1, 2, 4, 3))  # To increase the perfomance of squeeze operation
+        aw = ttnn.permute(aw, (0, 1, 2, 4, 3))  # To increase the performance of squeeze operation
         aw = ttnn.squeeze(aw, -2)  # If the above permute is removed use ttnn.squeeze(aw, -1)
         aw = ttnn.div(aw, (self.hc**0.5))
         aw = aw + ttnn.reshape(self.bias, (1, -1, 1, 1))
@@ -472,6 +480,7 @@ class TtC2fAttn:
         gc=512,
         g=1,
         e=0.5,
+        block_shard=False,
     ):
         """Initializes C2f module with attention mechanism for enhanced feature extraction and processing."""
         super().__init__()
@@ -500,6 +509,7 @@ class TtC2fAttn:
             input_params=input_params[1],
             deallocate_activation=self.deallocate_activation,
             conv_math_fidelity=ttnn.MathFidelity.HiFi2,
+            block_shard=block_shard,
         )
         self.m = [
             TtBottleneck(
@@ -573,7 +583,7 @@ class TtImagePoolingAttn:
             )
             for i, in_channels in enumerate(ch)
         ]
-        self.im_pools = [ttnn.max_pool2d for i in range(nf)]
+
         self.ec = ec
         self.nh = nh
         self.nf = nf
@@ -588,46 +598,22 @@ class TtImagePoolingAttn:
 
         x = [proj(x)[0] for (x, proj) in zip(x, self.projections)]
         x = [
-            ttnn.to_layout(
-                ttnn.reshape(
-                    pool(
-                        input_tensor=ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT),
-                        batch_size=1,
-                        input_h=int(math.sqrt(x.shape[2])),
-                        input_w=int(math.sqrt(x.shape[2])),
-                        channels=x.shape[-1],
-                        kernel_size=[
-                            tt_adaptive_to_max_pool2d(
-                                [x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]],
-                                (3, 3),
-                            )[0],
-                            tt_adaptive_to_max_pool2d(
-                                [x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]],
-                                (3, 3),
-                            )[0],
-                        ],
-                        stride=[
-                            tt_adaptive_to_max_pool2d(
-                                [x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]],
-                                (3, 3),
-                            )[1],
-                            tt_adaptive_to_max_pool2d(
-                                [x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]],
-                                (3, 3),
-                            )[1],
-                        ],
-                        padding=[0, 0],
-                        dilation=[1, 1],
-                        memory_config=ttnn.L1_MEMORY_CONFIG,
-                        applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                    ),
-                    (bs, num_patches, -1),
+            ttnn.reshape(
+                ttnn.adaptive_max_pool2d(
+                    input_tensor=x,
+                    batch_size=1,
+                    input_h=int(math.sqrt(x.shape[2])),
+                    input_w=int(math.sqrt(x.shape[2])),
+                    channels=x.shape[-1],
+                    output_size=(3, 3),
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
                 ),
-                layout=ttnn.TILE_LAYOUT,
+                (bs, num_patches, -1),
             )
-            for (x, pool) in zip(x, self.im_pools)
+            for x in x
         ]
         x = concat(x, dim=1, use_sharded_concat=False)
+        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
         q = ttnn.clone(text)
         for index, module in enumerate(self.query):
             if module == ttnn.linear:
@@ -636,6 +622,7 @@ class TtImagePoolingAttn:
                     self.parameters["query"][index]["weight"],
                     bias=self.parameters["query"][index]["bias"],
                     memory_config=ttnn.L1_MEMORY_CONFIG,
+                    core_grid=ttnn.CoreGrid(y=8, x=8),
                 )
             else:
                 q = module(
@@ -643,6 +630,7 @@ class TtImagePoolingAttn:
                     weight=self.parameters["query"][index]["weight"],
                     bias=self.parameters["query"][index]["bias"],
                     memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
                 )
 
         k = ttnn.clone(x)
@@ -653,6 +641,7 @@ class TtImagePoolingAttn:
                     self.parameters["key"][index]["weight"],
                     bias=self.parameters["key"][index]["bias"],
                     memory_config=ttnn.L1_MEMORY_CONFIG,
+                    core_grid=ttnn.CoreGrid(y=8, x=8),
                 )
             else:
                 k = module(
@@ -660,6 +649,7 @@ class TtImagePoolingAttn:
                     weight=self.parameters["key"][index]["weight"],
                     bias=self.parameters["key"][index]["bias"],
                     memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
                 )
 
         v = ttnn.clone(x)
@@ -670,6 +660,7 @@ class TtImagePoolingAttn:
                     self.parameters["value"][index]["weight"],
                     bias=self.parameters["value"][index]["bias"],
                     memory_config=ttnn.L1_MEMORY_CONFIG,
+                    core_grid=ttnn.CoreGrid(y=8, x=8),
                 )
             else:
                 v = module(
@@ -677,6 +668,7 @@ class TtImagePoolingAttn:
                     weight=self.parameters["value"][index]["weight"],
                     bias=self.parameters["value"][index]["bias"],
                     memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
                 )
 
         q = q.reshape(bs, -1, self.nh, self.hc)
@@ -730,7 +722,7 @@ class TtDFL:
         x = ttnn.softmax(x, dim=-1)
 
         x, _, _ = self.conv(x)
-        x = ttnn.permute(x, (0, 1, 3, 2))  # To increase the perfomance of below reshape operation
+        x = ttnn.permute(x, (0, 1, 3, 2))  # To increase the performance of below reshape operation
         x = ttnn.reshape(x, (x.shape[0], 4, -1))
         return x
 
@@ -789,11 +781,13 @@ class TtWorldDetect:
                     self.device,
                     self.parameters["cv2"][i][0],
                     input_params=input_params["cv2_params"][i]["input_params"][0],
+                    core_count=64 if i == 2 else None,
                 ),
                 TtConv(
                     self.device,
                     self.parameters["cv2"][i][1],
                     input_params=input_params["cv2_params"][i]["input_params"][1],
+                    core_count=64 if i == 2 else None,
                 ),
                 TtConv(
                     self.device,
@@ -801,6 +795,7 @@ class TtWorldDetect:
                     input_params=input_params["cv2_params"][i]["input_params"][2],
                     is_act_false=True,
                     conv_alone=True,
+                    core_count=64 if i == 2 else None,
                 ),
             ]
             for i in range(self.nl)
@@ -813,11 +808,13 @@ class TtWorldDetect:
                     self.device,
                     self.parameters["cv3"][i][0],
                     input_params=input_params["cv3_params"][i]["input_params"][0],
+                    core_count=64 if i == 2 else None,
                 ),
                 TtConv(
                     self.device,
                     self.parameters["cv3"][i][1],
                     input_params=input_params["cv3_params"][i]["input_params"][1],
+                    core_count=64 if i == 2 else None,
                 ),
                 TtConv(
                     self.device,
@@ -825,6 +822,7 @@ class TtWorldDetect:
                     input_params=input_params["cv3_params"][i]["input_params"][2],
                     is_act_false=True,
                     conv_alone=True,
+                    core_count=64 if i == 2 else None,
                 ),
             ]
             for i, x in enumerate(ch)
@@ -988,7 +986,12 @@ class TtWorldModel:
         )
         self.conv_7 = TtConv(device, parameters["model"][7], input_params=[3, 2, 1, 512, 256], block_shard=True)
         self.c2f_8 = TtC2f(
-            device, parameters["model"][8], n=1, shortcut=True, input_params=c2f_configs["model.8"]["input_params"]
+            device,
+            parameters["model"][8],
+            n=1,
+            shortcut=True,
+            input_params=c2f_configs["model.8"]["input_params"],
+            block_shard=True,
         )
         self.sppf_9 = TtSPPF(device, parameters["model"][9], input_params=sppf_configs["input_params"], batch_size=1)
 
@@ -1051,6 +1054,7 @@ class TtWorldModel:
             n=1,
             ec=256,
             nh=8,
+            block_shard=True,
         )
         self.world_detect_23 = TtWorldDetect(
             device,

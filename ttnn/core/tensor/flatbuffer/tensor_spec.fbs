@@ -40,7 +40,12 @@ enum ShardOrientation : ubyte {
     ColMajor = 1,
 }
 
-enum ShardMode : ubyte {
+enum ShardDistributionStrategy : ubyte {
+    ROUND_ROBIN_1D = 0,
+    GRID_2D = 1,
+}
+
+enum ShardModeDeprecated : ubyte {
     Physical,
     Logical,
 }
@@ -55,8 +60,15 @@ table ShardSpec {
     shape_h: uint32;
     shape_w: uint32;
     orientation: ShardOrientation;
-    shard_mode: ShardMode;
-    physical_shard_shape: ShardShape;
+    shard_mode_deprecated: ShardModeDeprecated;
+    physical_shard_shape_deprecated: ShardShape;
+}
+
+table NdShardSpec {
+    shard_shape: [uint32];
+    grid: CoreRangeSet;
+    orientation: ShardOrientation;
+    shard_distribution_strategy: ShardDistributionStrategy;
 }
 
 enum DataType : ubyte {
@@ -85,6 +97,8 @@ table MemoryConfig {
     memory_layout: TensorMemoryLayout;
     buffer_type: BufferType;
     shard_spec: ShardSpec;
+    nd_shard_spec: NdShardSpec;
+    created_with_nd_shard_spec: bool;
 }
 
 table TensorLayout {

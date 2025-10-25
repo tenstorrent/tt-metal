@@ -33,8 +33,8 @@ message(STATUS "Building Unified Library for all architectures, thanks to blozan
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 # FIXME: Why are we setting these ourselves?
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
-set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG")
+set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG -fno-omit-frame-pointer")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG -fno-omit-frame-pointer")
 
 # Defining build types is the pervue of the top-level project
 if(PROJECT_IS_TOP_LEVEL)
@@ -111,6 +111,7 @@ message(STATUS "Build Python bindings: ${WITH_PYTHON_BINDINGS}")
 message(STATUS "Build Programming Examples: ${BUILD_PROGRAMMING_EXAMPLES}")
 message(STATUS "Build TT METAL Tests: ${TT_METAL_BUILD_TESTS}")
 message(STATUS "Build TTNN Tests: ${TTNN_BUILD_TESTS}")
+message(STATUS "Build TT Telemetry Server: ${BUILD_TELEMETRY}")
 message(STATUS "Build with Unity builds: ${TT_UNITY_BUILDS}")
 message(STATUS "Build with LTO: ${TT_LTO_ENABLED}")
 message(STATUS "Build with Shared TTNN Sublibraries: ${ENABLE_TTNN_SHARED_SUBLIBS}")
@@ -128,6 +129,10 @@ if(ENABLE_BUILD_TIME_TRACE)
     endif()
 endif()
 
+# Top-level target to build all generated files
+# Useful for eg: ensuring all files exist before linting
+add_custom_target(all_generated_files)
+
 include(CPM)
 if(CMAKE_VERSION VERSION_LESS 3.25)
     # FIXME(14681): `SYSTEM` was introduced in v3.25; remove this when we can require v3.25
@@ -141,7 +146,7 @@ endif()
 ############################################################################################################################
 # Constructing interface libs for common compiler flags, header directories, and libraries
 #   These interface libs are linked with PUBLIC scope at lowest common target (tt_metal/common) and at tt_metal_libs level
-#   in order to propogate to the rest of tt_metal, tt_eager, etc.
+#   in order to propagate to the rest of tt_metal, tt_eager, etc.
 ############################################################################################################################
 add_library(metal_common_libs INTERFACE)
 target_link_libraries(
@@ -149,13 +154,12 @@ target_link_libraries(
     INTERFACE
         dl
         pthread
-        atomic
         hwloc
         numa
 )
 
 add_compile_options(
-    "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-mavx2>"
+    "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=x86-64-v3>"
     -fPIC
     -fvisibility-inlines-hidden
     -Wall
@@ -166,15 +170,10 @@ add_compile_options(
     # Vars that are used only in Asserts will appear as dead stores in builds
     # where the preprocessor has stripped away the assert.
     -Wno-unused-but-set-variable
-    -Wno-unused-function
-    -Wno-unused-variable
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-volatile>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-for-loop-analysis>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-logical-op-parentheses>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-mismatched-tags>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-reorder-ctor>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-lambda-capture>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-private-field>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unknown-pragmas>"
     "$<$<CXX_COMPILER_ID:Clang>:SHELL:-Xclang -fno-pch-timestamp>" # ccache-friendly PCH flag
@@ -234,6 +233,11 @@ if(ENABLE_CODE_TIMERS)
 endif()
 include(tracy)
 
+if(ENABLE_TRACY AND TARGET TracyClient)
+    message(STATUS "Adding -Wno-unused-variable to TracyClient")
+    target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
+endif()
+
 add_library(metal_common_pch STATIC)
 add_library(TT::CommonPCH ALIAS metal_common_pch)
 file(GENERATE OUTPUT metal_common_pch.cpp CONTENT "/*dummy pch file*/\n")
@@ -269,11 +273,16 @@ target_link_libraries(
 ############################################################################################################################
 
 add_subdirectory(tt_stl)
+add_subdirectory(tools)
 add_subdirectory(tt_metal)
 add_subdirectory(ttnn)
 
 if(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
     add_subdirectory(${PROJECT_SOURCE_DIR}/tests)
+endif()
+
+if(BUILD_TELEMETRY)
+    add_subdirectory(${PROJECT_SOURCE_DIR}/tt_telemetry)
 endif()
 
 ############################################################################################################################
@@ -292,14 +301,16 @@ install(
         COMPONENT tar
 )
 
-# FIXME(17578): figure out what bits we actually need to ship and omit the rest
-install(
-    DIRECTORY
-        runtime
-    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium
-    USE_SOURCE_PERMISSIONS
-    COMPONENT jit-build
-)
+if(NOT TT_USE_SYSTEM_SFPI)
+    # FIXME(17578): figure out what bits we actually need to ship and omit the rest
+    install(
+        DIRECTORY
+            runtime/sfpi
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/runtime
+        USE_SOURCE_PERMISSIONS
+        COMPONENT jit-build
+    )
+endif()
 
 # Custom clean target for `built` folder for when new kernel changes are pulled
 add_custom_target(

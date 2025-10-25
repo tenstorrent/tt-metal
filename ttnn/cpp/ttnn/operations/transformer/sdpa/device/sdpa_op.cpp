@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sdpa_op.hpp"
+#include <enchantum/enchantum.hpp>
 
 #include "sdpa_program_factory.hpp"
 #include "ttnn/run_operation.hpp"
@@ -192,7 +193,6 @@ void ScaledDotProductAttention::validate(
         const auto B = q_shape[0];
         const auto nqh = q_shape[1];
         const auto nkv = k_shape[1];
-        const auto Sq = q_shape[2];
         const auto DH = q_shape[3];
         const auto k_page_size = k_shape[2];
         const uint32_t num_pages_per_user = page_table.logical_shape()[1];
@@ -335,7 +335,8 @@ operation::ProgramWithCallbacks ScaledDotProductAttention::create_program(
         this->compute_kernel_config,
         this->program_config,
         this->use_mla.value_or(false),
-        this->head_dim_v.value_or(0));
+        this->head_dim_v.value_or(0),
+        this->sliding_window_size);
 }
 
 operation::OpPerformanceModel ScaledDotProductAttention::create_op_performance_model(
@@ -357,7 +358,7 @@ operation::OpPerformanceModel ScaledDotProductAttention::create_op_performance_m
                     ? output_tensor.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
-        log_warning(tt::LogOp, "SDPA perf model does not support tt::arch '{}'", magic_enum::enum_name(arch));
+        log_warning(tt::LogOp, "SDPA perf model does not support tt::arch '{}'", enchantum::to_string(arch));
         return operation::OpPerformanceModel(input_tensors, output_tensors, 0);
     }
 

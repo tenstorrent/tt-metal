@@ -1,18 +1,27 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import itertools
+import json
 import math
 from itertools import takewhile
-from typing import Sequence
+from pathlib import Path
+from types import NoneType
+from typing import Any, Sequence
 
 import torch
+from loguru import logger
+from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
+from models.demos.deepseek_v3.utils.run_config import WeightConfig
 
 # Constants
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
-MAX_BATCH_SIZE = 32
+USERS_PER_ROW = 32
 SEQ_LEN_CHUNK_SIZE = 1024  # NOTE: should be 512 for blackhole (in case of future bring-up)
+TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
 
 
 # Compute kernel configurations
@@ -58,6 +67,31 @@ COMPUTE_KERNEL_CONFIG_SDPA = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=True,
     packer_l1_acc=False,
 )
+
+
+# JSON serializer for the weight config
+class WeightConfigEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, SavedWeight):
+            obj = {
+                "path": str(obj.path),
+                "memory_config": None if obj.memory_config is None else json.loads(obj.memory_config.to_json()),
+            }
+        return obj
+
+
+def try_decode_saved_weight(obj: dict[str, Any]) -> Any:
+    path_str = obj.get("path", None)
+    if not isinstance(path_str, str):
+        return obj
+    memory_config_dict = obj.get("memory_config", None)
+    if not isinstance(memory_config_dict, dict) or not {
+        "buffer_type",
+        "memory_layout",
+        "created_with_nd_shard_spec",
+    }.issubset(memory_config_dict.keys()):
+        return obj
+    return SavedWeight(path=Path(path_str), memory_config=ttnn.MemoryConfig.from_json(json.dumps(memory_config_dict)))
 
 
 # Helper math functions
@@ -481,24 +515,371 @@ def base_model_name(hf_config):
 
 def dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Sequence[int]) -> torch.Tensor:
     """Dequantize a pytorch tensor using the provided scale."""
-    assert tensor.ndim == inv_scale.ndim and tensor.dtype == torch.float8_e4m3fn and inv_scale.dtype == torch.float32
+    assert tensor.ndim == inv_scale.ndim
     assert len(block_shape) == tensor.ndim and all(
         inv_scale.shape[i] * block_shape[i] >= tensor.shape[i] for i in range(tensor.ndim)
     )
     for i, block_dim in enumerate(block_shape):
         inv_scale = inv_scale.repeat_interleave(block_dim, dim=i)
-    tensor = tensor.bfloat16() * inv_scale[tuple(slice(0, s) for s in tensor.shape)].bfloat16()
+    tensor = tensor.float() * inv_scale[tuple(slice(0, s) for s in tensor.shape)].float()
     del inv_scale
     return tensor
 
 
-def sub_state_dict(state_dict, prefix):
+def get_state_dicts(
+    dicts: Sequence[dict[str, torch.Tensor] | None],
+    key: Any,
+    shape: Sequence[int] | None = None,
+    dtype: torch.dtype | None = None,
+    concat_dim: int = 0,
+    concat: bool = False,
+) -> torch.Tensor:
+    """Get a weight from a list of state dictionaries and combine them into a single tensor.
+
+    Args:
+        key (str): The key to look for in the dictionaries.
+        dicts (Sequence[dict[str, torch.Tensor]]): A sequence of state dicts
+        dim (int, optional): The dimension along which to combine the tensors. Defaults to 0.
+        concat (bool, optional): Whether to concatenate the tensors or stack them. Defaults to False.
+    Returns:
+        torch.Tensor: The combined tensor.
+    """
+    if not dicts:
+        return torch.empty()
+
+    expected_shape = (
+        next(map(lambda d: d[key].shape, filter(lambda d: d is not None, dicts)), None) if shape is None else shape
+    )
+    assert expected_shape is not None, "At least one dictionary must be non-empty, or a shape must be provided"
+
+    expected_dtype = (
+        next(map(lambda d: d[key].dtype, filter(lambda d: d is not None, dicts)), None) if dtype is None else dtype
+    )
+    assert expected_dtype is not None, "At least one dictionary must be non-empty, or a dtype must be provided"
+
+    assert all(key in d for d in dicts if d is not None), f"Key {key} not found in all dictionaries"
+    assert all(
+        d[key].shape == expected_shape for d in dicts if d is not None
+    ), f"Key {key} must have the value shaped as {expected_shape} in all dictionaries; instead got {[d[key].shape if d is not None else None for d in dicts]}"
+    assert all(
+        d[key].dtype == expected_dtype for d in dicts if d is not None
+    ), f"Key {key} must have the dtype as {expected_dtype} in all dictionaries; instead got {[d[key].dtype if d is not None else None for d in dicts]}"
+
+    tensors = [torch.zeros(expected_shape).to(dtype) if d is None else d[key] for d in dicts]
+
+    if concat:
+        return torch.concat(tensors, dim=concat_dim)
+    return torch.stack(tensors, dim=concat_dim)
+
+
+def sub_state_dict(state_dict: dict[str, torch.Tensor], prefix: str, num_layers: int | None = None):
     """Get a subset of the state dict with a given prefix."""
-    return {k[len(prefix) :]: v for k, v in state_dict.items() if k.startswith(prefix)}
+    if num_layers is None:
+        return {k[len(prefix) :]: v for k, v in state_dict.items() if k.startswith(prefix)}
+    else:
+        return {
+            k[len(prefix) :]: v
+            for k, v in state_dict.items()
+            if k.startswith(prefix)
+            for layer_idx_str in ["".join(itertools.takewhile(str.isdigit, k.removeprefix("model.layers.")))]
+            if not layer_idx_str or int(layer_idx_str) < num_layers
+        }
 
 
-def save_and_get_path(path, tensor):
-    """Save a tensor to a file and return the path."""
-    ttnn.dump_tensor(path, tensor)
-    ttnn.deallocate(tensor)
-    return str(path)
+def sub_state_dicts(
+    state_dicts: Sequence[dict[str, torch.Tensor] | None], prefix: str
+) -> tuple[dict[str, torch.Tensor] | None, ...]:
+    """Get a subset of the state dict with a given prefix."""
+    return tuple(None if d is None else sub_state_dict(d, prefix) for d in state_dicts)
+
+
+TENSOR_CACHE_EXTENSION = ".tensorbin"
+
+
+def shard_and_save(
+    path: Path,
+    tensor: torch.Tensor,
+    shard_dims: tuple[int | None, int | None],
+    mesh_device: ttnn.MeshDevice,
+    remove_dims: tuple[bool, bool] | bool = False,
+    *,
+    dtype: ttnn.DataType | None = None,
+    layout: ttnn.Layout | None = None,
+    memory_config: ttnn.MemoryConfig | None = None,
+    _torch_impl: bool = False,
+) -> SavedWeight:
+    """Shard a tensor and save it to a file."""
+    assert all(isinstance(shard_dim, (int, NoneType)) for shard_dim in shard_dims)
+    assert isinstance(remove_dims, bool) or all(isinstance(remove_dim, bool) for remove_dim in remove_dims)
+    assert len(shard_dims) == 2, "shard_dims must be exactly 2 dimensions (can repeat)"
+
+    if isinstance(remove_dims, bool):
+        remove_dims = (remove_dims, remove_dims)
+
+    assert (
+        shard_dims[0] != shard_dims[1] or remove_dims[0] == remove_dims[1]
+    ), "If sharding a single dim, both remove_dim values must be the same"
+
+    for remove_dim, shard_dim, mesh_dim in zip(remove_dims, shard_dims, mesh_device.shape, strict=True):
+        assert (
+            shard_dim is None or tensor.shape[shard_dim] % mesh_dim == 0
+        ), f"Cannot shard dimension {shard_dim} of size {tensor.shape[shard_dim]} into {mesh_dim} shards"
+        assert not (remove_dim and shard_dim is None), f"Cannot remove unsharded dimension {shard_dim}"
+
+    if shard_dims[0] == shard_dims[1] and shard_dims[0] is not None:
+        assert remove_dims[0] == remove_dims[1], "If sharding a single dim, both remove_dim values must be the same"
+        assert (
+            tensor.shape[shard_dims[0]] % mesh_device.get_num_devices() == 0
+        ), f"Cannot shard dimension {shard_dims[0]} of size {tensor.shape[shard_dims[0]]} into {mesh_device.get_num_devices()} shards"
+        assert (
+            not remove_dims[0] or tensor.shape[shard_dims[0]] == mesh_device.get_num_devices()
+        ), f"The removed dim {shard_dims[0]} must be fully sharded"
+    else:
+        for remove_dim, shard_dim, mesh_dim in zip(remove_dims, shard_dims, mesh_device.shape, strict=True):
+            assert (
+                shard_dim is None or tensor.shape[shard_dim] % mesh_dim == 0
+            ), f"Cannot shard dimension {shard_dim} of size {tensor.shape[shard_dim]} into {mesh_dim} shards"
+            assert not (remove_dim and shard_dim is None), f"Cannot remove unsharded dimension {shard_dim}"
+            assert (
+                not remove_dim or tensor.shape[shard_dim] == mesh_dim
+            ), f"The removed dim {shard_dim} must be fully sharded"
+
+    if _torch_impl:
+        ttnn_tensor = _shard_torch_impl(
+            path=path,
+            tensor=tensor,
+            shard_dims=shard_dims,
+            mesh_device=mesh_device,
+            remove_dims=remove_dims,
+            dtype=dtype,
+            layout=layout,
+            memory_config=memory_config,
+        )
+    else:
+        ttnn_tensor = _shard_device_impl(
+            path=path,
+            tensor=tensor,
+            shard_dims=shard_dims,
+            mesh_device=mesh_device,
+            remove_dims=remove_dims,
+            dtype=dtype,
+            layout=layout,
+            memory_config=memory_config,
+        )
+
+    # Ensure the path has an appropriate extension
+    if not path.name.endswith(TENSOR_CACHE_EXTENSION):
+        path = path.with_name(f"{path.name}{TENSOR_CACHE_EXTENSION}")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    if path.exists():
+        logger.warning(f"Overwriting existing cache file: {path}")
+    ttnn.dump_tensor(path, ttnn_tensor)
+
+    return SavedWeight(path, memory_config)
+
+
+def _shard_device_impl(
+    *,
+    path: Path,
+    tensor: torch.Tensor,
+    shard_dims: tuple[int | None, int | None],
+    mesh_device: ttnn.MeshDevice,
+    remove_dims: tuple[bool, bool] | bool,
+    dtype: ttnn.DataType | None,
+    layout: ttnn.Layout | None,
+    memory_config: ttnn.MemoryConfig | None,
+) -> SavedWeight:
+    assert layout in {
+        None,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.TILE_LAYOUT,
+    }, "Device implementation only supports row-major and tiled layouts"
+
+    dtype_is_tilized = dtype in {ttnn.bfloat4_b, ttnn.bfloat8_b}
+    assert not (
+        layout == ttnn.ROW_MAJOR_LAYOUT and dtype_is_tilized
+    ), "Row-major layout is not supported for tilized dtypes"
+    if dtype_is_tilized:
+        layout = ttnn.TILE_LAYOUT  # Force tiled layout for tilized dtypes
+
+    if isinstance(remove_dims, bool):
+        remove_dims = (remove_dims, remove_dims)
+
+    if shard_dims[0] is None and shard_dims[1] is None:
+        mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    if shard_dims[0] == shard_dims[1] and shard_dims[0] is not None:
+        mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=shard_dims[0])
+    else:
+        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=shard_dims)
+
+    # NOTE: START OF THE WORKAROUND for issues #28715, #28805, #28806, #28807
+
+    if (
+        memory_config != ttnn.DRAM_MEMORY_CONFIG
+    ):  # TODO: remove these workaround once issues #28715, #28805, #28806, #28807 are resolved and implement things properly
+        ttnn_tensor = ttnn.from_torch(
+            tensor, layout=layout, memory_config=memory_config, mesh_mapper=mesh_mapper, device=mesh_device, dtype=dtype
+        )
+    else:
+        ttnn_tensor = ttnn.from_torch(
+            tensor,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+        ttnn_tensor = ttnn.to_dtype(ttnn_tensor, dtype)
+        ttnn_tensor = ttnn_tensor.to(layout)
+
+    assert memory_config == ttnn_tensor.memory_config()
+    assert dtype == ttnn_tensor.dtype
+    assert layout == ttnn_tensor.layout
+
+    new_tensor_shape = list(ttnn_tensor.shape)
+    if shard_dims[0] == shard_dims[1]:
+        if remove_dims[0]:
+            new_tensor_shape.pop(shard_dims[0])
+    else:
+        if (
+            None not in shard_dims and shard_dims[0] > shard_dims[1]
+        ):  # We will squeeze the least significant dimension first
+            shard_dims = (shard_dims[1], shard_dims[0])
+            remove_dims = (remove_dims[1], remove_dims[0])
+        if remove_dims[1]:
+            new_tensor_shape.pop(shard_dims[1])
+        if remove_dims[0]:
+            new_tensor_shape.pop(shard_dims[0])
+
+    new_tensor_shape = [1] * sum(remove_dims) + new_tensor_shape  # Keep the number of dimensions the same
+    ttnn_tensor = ttnn_tensor.reshape(new_tensor_shape)
+
+    return ttnn_tensor
+
+
+def _shard_torch_impl(
+    *,
+    path: Path,
+    tensor: torch.Tensor,
+    shard_dims: tuple[int | None, ...],
+    mesh_device: ttnn.MeshDevice,
+    remove_dims: tuple[bool, ...],
+    dtype: ttnn.DataType | None = None,
+    layout: ttnn.Layout | None = None,
+    memory_config: ttnn.MemoryConfig | None = None,
+) -> SavedWeight:
+    if (
+        shard_dims[0] == shard_dims[1]
+    ):  # This is a lil hacky case for when we want to shard a single dim over all devices
+        assert remove_dims[0] == remove_dims[1], "If sharding a single dim, both remove_dim values must be the same"
+        remove_dims = (remove_dims[0],)
+        shard_dims = (shard_dims[0],)
+        sharding_shape = (mesh_device.shape[0] * mesh_device.shape[1],)
+    else:
+        sharding_shape = (mesh_device.shape[0], mesh_device.shape[1])
+
+    # Create the ttnn sharded tensor
+    return ttnn.from_host_shards(
+        [
+            ttnn.from_torch(
+                tensor[_get_shard_slices(tensor.shape, shard_dims, sharding_shape, shard_coords)][
+                    _get_remove_dim_slices(tensor.shape, shard_dims, remove_dims)
+                ],
+                dtype=dtype,
+                layout=layout,
+                memory_config=memory_config,
+            )
+            for shard_coords in itertools.product(*map(range, sharding_shape))
+        ],
+        mesh_shape=mesh_device.shape,
+    )
+
+
+def _get_shard_slices(
+    tensor_shape: Sequence[int],
+    shard_dims: tuple[int | None, ...],
+    mesh_shape: tuple[int, ...],
+    device_coords: tuple[int, ...],
+) -> tuple[slice, ...]:
+    """Get the slices for a shard of a tensor given the sharding dimensions, mesh shape, and device coordinates."""
+    slices = [slice(None) for _ in tensor_shape]
+    for dim_idx, (device_coord, mesh_dim, shard_dim) in enumerate(
+        zip(device_coords, mesh_shape, shard_dims, strict=True)
+    ):
+        assert 0 <= device_coord < mesh_dim, f"device_coords[{dim_idx}] out of range"
+        if shard_dim is None:
+            continue
+        shard_size = even_int_div(tensor_shape[shard_dim], mesh_dim)
+        slices[shard_dim] = slice(shard_size * device_coord, shard_size * (device_coord + 1))
+    return tuple(slices)
+
+
+def _get_remove_dim_slices(
+    tensor_shape: Sequence[int],
+    shard_dims: tuple[int | None, ...],
+    remove_dims: tuple[bool, ...],
+) -> tuple[slice | int, ...]:
+    """Get the slices to remove the sharded dimensions if specified."""
+    slices: list[slice | int] = [slice(None) for _ in tensor_shape]
+    for shard_dim, remove_dim in zip(shard_dims, remove_dims, strict=True):
+        if not remove_dim:
+            continue
+        assert shard_dim is not None
+        slices[shard_dim] = 0
+    return tuple(slices)
+
+
+def get_weight_config(
+    ModuleClass: type["models.demos.deepseek_v3.utils.abstract_module.AbstractModule"],
+    hf_config: PretrainedConfig,
+    state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
+    weight_cache_path: Path,
+    mesh_device: ttnn.Device,
+    force_recalculate: bool,
+):
+    weight_cache_path = weight_cache_path / f"{hf_config.num_hidden_layers}_layers"
+    config_path = weight_cache_path / "config.json"
+    weight_path = weight_cache_path / "weights"
+    for _ in range(1):
+        if force_recalculate:
+            break
+        if not config_path.exists():
+            break
+        weight_config = json.load(config_path.open(), object_hook=try_decode_saved_weight)
+        if not _check_weights_exist(weight_path, weight_config):
+            break
+        logger.info(f"Using weights cached at {weight_cache_path}")
+        return weight_config
+
+    logger.info(f"Caching weights at {weight_cache_path}")
+    weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
+    json.dump(weight_config, config_path.open("w"), cls=WeightConfigEncoder)
+    return weight_config
+
+
+def _check_weights_exist(root_path: Path, weight_config: WeightConfig) -> bool:
+    if isinstance(weight_config, dict):
+        entries = weight_config.values()
+    else:
+        entries = weight_config
+    for entry in entries:
+        if entry is None:
+            continue
+        if isinstance(entry, SavedWeight):
+            if not (root_path / entry.path).exists() or entry.path.suffix != TENSOR_CACHE_EXTENSION:
+                return False
+        elif not _check_weights_exist(root_path, entry):
+            return False
+    return True
+
+
+def get_mesh_coords(mesh_shape: list[int], row: int = None, col: int = None) -> list[ttnn.MeshCoordinate]:
+    """Get mesh coordinates for a given mesh shape and optional row and column indices."""
+    if row:
+        assert 0 <= row < mesh_shape[0], "Row index out of bounds"
+    if col:
+        assert 0 <= col < mesh_shape[1], "Column index out of bounds"
+
+    row_select = range(mesh_shape[0]) if row is None else [row]
+    col_select = range(mesh_shape[1]) if col is None else [col]
+    return [ttnn.MeshCoordinate(r, c) for r in row_select for c in col_select]

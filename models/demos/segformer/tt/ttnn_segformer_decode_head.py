@@ -34,7 +34,12 @@ class TtSegformerDecodeHead:
             mlps.append(mlp)
         self.linear_c = mlps
 
-        self.linear_fuse = Conv([1, 1, 0, 0], parameters=parameters["linear_fuse"], activation="relu", deallocate=False)
+        self.linear_fuse = Conv(
+            [1, 1, 0, 0],
+            parameters=parameters["linear_fuse"],
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+            deallocate=False,
+        )
 
         self.classifier = Conv(
             [1, 1, 0, 0],
@@ -52,7 +57,8 @@ class TtSegformerDecodeHead:
         for encoder_hidden_state, mlp in zip(encoder_hidden_states, self.linear_c):
             height = width = int(math.sqrt(encoder_hidden_state.shape[-2]))
             encoder_hidden_state = mlp(device, encoder_hidden_state, parameters=parameters["linear_c"][index])
-            encoder_hidden_state = ttnn.to_layout(encoder_hidden_state, layout=ttnn.ROW_MAJOR_LAYOUT)
+            if encoder_hidden_state.shape[-2] == 256:
+                encoder_hidden_state = ttnn.to_layout(encoder_hidden_state, layout=ttnn.ROW_MAJOR_LAYOUT)
             encoder_hidden_state = ttnn.reshape(encoder_hidden_state, (batch_size, height, width, -1))
 
             if encoder_hidden_state.shape[-2] == 16:
@@ -73,6 +79,7 @@ class TtSegformerDecodeHead:
                 ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
             )
             encoder_hidden_state = ttnn.to_memory_config(encoder_hidden_state, memory_config=input_memory_config)
+            encoder_hidden_state = ttnn.to_layout(encoder_hidden_state, layout=ttnn.ROW_MAJOR_LAYOUT)
 
             encoder_hidden_state = ttnn.upsample(
                 encoder_hidden_state,

@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include <vector>
-
 /******************************************************************************
  *                                                                             *
  *                   Common Functions for Dataflow Kernels                     *
@@ -23,19 +22,28 @@ constexpr uint32_t get_barrier_read_threshold() {
 /******************************************************************************
  *                   Page Cache Functions            *
  ******************************************************************************/
-template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
+template <typename PageT, uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
 uint32_t virtual_seq_tile_id_to_physical_tile_id(
-    uint32_t seq_tile_idx, uint32_t cur_head, volatile tt_l1_ptr const uint32_t* const page_table_ptr) {
+    uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr PageT* const page_table_ptr) {
     // Given some index in the sequence tiles in range [0, max_seq_len_t]
     // Return the physical tile id for that tile row
     constexpr uint32_t block_stride = num_heads * block_size_t * Wt;
     const uint32_t head_offset = cur_head * block_size_t * Wt;
 
     const uint32_t virtual_block = seq_tile_idx / block_size_t;
-    const uint32_t physical_block = page_table_ptr[virtual_block];
+
+    const uint32_t physical_block = static_cast<uint32_t>(page_table_ptr[virtual_block]);
     const uint32_t block_row_offset = seq_tile_idx % block_size_t;
     const uint32_t block_offset = block_row_offset * Wt;
     return physical_block * block_stride + head_offset + block_offset;
+}
+
+// Backward-compatible overload (defaults to uint32_t page table entries)
+template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
+uint32_t virtual_seq_tile_id_to_physical_tile_id(
+    uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr uint32_t* const page_table_ptr) {
+    return virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_heads, block_size_t, Wt>(
+        seq_tile_idx, cur_head, page_table_ptr);
 }
 
 /******************************************************************************
@@ -128,16 +136,87 @@ void fill_tile_partial(uint32_t cb_id, uint32_t tile_id, uint32_t cur_pos_in_til
     }
 }
 
+template <uint32_t tile_bytes>
+void fill_tile_partial_sliding_window(uint32_t cb_id, uint32_t tile_id, uint32_t window_start_pos_in_tile, uint32_t partial_val) {
+    /*
+    For sliding window mask: fill positions 0 to window_start_pos_in_tile - 1 with partial_val (-inf)
+    This is the inverse of fill_tile_partial which fills from cur_pos_in_tile + 1 to end
+
+    Example: if window_start_pos_in_tile = 5, then positions 0,1,2,3,4 are filled with -inf
+             and positions 5,6,7,...,31 remain as 0 (allowed)
+    */
+    constexpr int num_faces = (tile_bytes == 1024) ? 2 : 4;
+
+    fill_tile<tile_bytes>(cb_id, tile_id, 0);
+    if (window_start_pos_in_tile == 0 || partial_val == 0) {
+        return;  // No masking needed if window starts at position 0 or no mask value
+    }
+
+    const uint16_t datum_val = partial_val >> 16;
+    volatile tt_l1_ptr uint16_t* uint16_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+    volatile tt_l1_ptr uint32_t* uint32_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+
+    // Determine which faces to fill completely (before the window_start_pos_in_tile)
+    int face_start = (window_start_pos_in_tile < 15) ? 0 : 1;  // Last face to fill completely
+
+    // Fill complete faces (faces 0, 2, 4, 6... for faces before face_start)
+    if (face_start == 1) {
+        constexpr int num_uint32_datums_tile_face = (16 * 16) / 2;
+        for (int k = 0; k < num_faces; k += 2) {
+            uint32_t uint32_face_idx = k << 7;
+            for (int j = 0; j < num_uint32_datums_tile_face; j++) {
+                uint32_ptr[uint32_face_idx + j] = partial_val;
+            }
+        }
+    }
+
+    // Fill partial face (the face containing window_start_pos_in_tile)
+    uint32_t fill_end_pos_in_face = window_start_pos_in_tile % 16;  // Position to stop filling (exclusive)
+
+    // Optimize performance by filling 2 uint16 datums in each write
+    bool is_odd_end_pos = fill_end_pos_in_face % 2 == 1;
+    uint32_t fill_end_pos_in_uint32_face = fill_end_pos_in_face >> 1;
+    constexpr uint32_t num_cols_in_face = 16;
+    constexpr uint32_t num_rows_in_face = 16;
+    constexpr uint32_t num_cols_in_uint32_face = num_cols_in_face >> 1;
+
+    // Fill the face containing window_start_pos_in_tile
+    int target_face = (window_start_pos_in_tile < 16) ? 0 : 1;
+    for (int k = target_face; k < num_faces; k += 2) {
+        uint32_t uint16_face_idx = k << 8;
+        uint32_t uint32_face_idx = k << 7;
+
+        for (uint32_t face_row_idx = 0; face_row_idx < num_rows_in_face; face_row_idx++) {
+            // Fill uint32 pairs from start to fill_end_pos_in_uint32_face
+            for (uint32_t uint32_face_col_idx = 0; uint32_face_col_idx < fill_end_pos_in_uint32_face; uint32_face_col_idx++) {
+                uint32_ptr[uint32_face_idx + (uint32_face_col_idx + num_cols_in_uint32_face * face_row_idx)] = partial_val;
+            }
+
+            // Handle the odd position if fill_end_pos_in_face is odd
+            if (is_odd_end_pos && fill_end_pos_in_face > 0) {
+                uint16_ptr[uint16_face_idx + ((fill_end_pos_in_face - 1) + num_cols_in_face * face_row_idx)] = datum_val;
+            }
+        }
+    }
+}
+
 /******************************************************************************
  *                   Attention Mask Functions                                 *
  ******************************************************************************/
-template <uint32_t cb_mask_in, uint32_t mask_tile_bytes, uint32_t barrier_threshold, uint32_t PNHt>
+template <
+    uint32_t cb_mask_in,
+    uint32_t mask_tile_bytes,
+    uint32_t barrier_threshold,
+    uint32_t PNHt,
+    typename MaskReaderType>
 uint32_t read_mask_chunk(
     uint32_t PSt,
     uint32_t Sk_chunk_t,
     uint32_t mask_chunk_tiles,
     uint32_t mask_start_tile_id,
-    const InterleavedAddrGenFast<true> mask_reader) {
+    const MaskReaderType& mask_reader) {
     // Read mask chunk
     cb_reserve_back(cb_mask_in, mask_chunk_tiles);
     uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
@@ -252,6 +331,69 @@ void generate_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t cur_pos)
     cb_push_back(cb_mask_in, total_read_tiles);
 }
 
+template <uint32_t cb_mask_in, uint32_t PNHt>
+void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t window_start) {
+    /*
+    Generate sliding window mask for the first chunk:
+    - Mask positions < window_start with -inf (sliding window start)
+    - Allow positions >= window_start
+
+    This mask is applied only to the first chunk to enforce sliding window constraint.
+    */
+
+    // the cb_mask in is of size PNHt * Sk_chunk_t
+    uint32_t total_read_tiles = PNHt * Sk_chunk_t;
+    uint32_t window_start_in_chunk = window_start % (Sk_chunk_t * 32);
+    uint32_t window_start_in_chunk_t = window_start_in_chunk / 32;
+    uint32_t window_start_in_tile = window_start_in_chunk % 32;
+    constexpr uint32_t NEG_INF = 0xFF80FF80;  // TODO: Make sure this is -inf
+
+    cb_reserve_back(cb_mask_in, total_read_tiles);
+
+    uint64_t noc_read_addr_base = get_noc_addr(get_read_ptr(cb_mask_in));
+    uint32_t q_write_ptr_base = get_read_ptr(cb_mask_in);
+    constexpr uint32_t tile_bytes = get_tile_size(cb_mask_in);
+
+    for (uint32_t i = 0; i < Sk_chunk_t; ++i) {
+        if (i < window_start_in_chunk_t) {
+            // Tile is completely before sliding window - fill with -inf
+            if (i == 0) {
+                fill_tile<tile_bytes>(cb_mask_in, i, NEG_INF);
+            } else {
+                copy_tile<tile_bytes>(noc_read_addr_base, q_write_ptr_base, 0, i);
+            }
+        } else if (i == window_start_in_chunk_t) {
+            // Tile contains sliding window start - partial mask at beginning
+            fill_tile_partial_sliding_window<tile_bytes>(cb_mask_in, i, window_start_in_tile, NEG_INF);
+        } else {
+            // Tile is within sliding window - fill with zeros (allow)
+            if (i == window_start_in_chunk_t + 1) {
+                fill_tile<tile_bytes>(cb_mask_in, i, 0);
+            } else {
+                // Copy from the first allowed tile
+                copy_tile<tile_bytes>(
+                    noc_read_addr_base,
+                    q_write_ptr_base,
+                    window_start_in_chunk_t + 1,
+                    i);  // copy from cb_mask_in[cur_pos_in_chunk_t+1] to cb_mask_in[i]
+                if (i == Sk_chunk_t - 1) {
+                    noc_async_read_barrier();
+                }
+            }
+        }
+
+        // Copy to all heads
+        for (uint32_t j = 1; j < PNHt; ++j) {
+            copy_tile<tile_bytes>(noc_read_addr_base, q_write_ptr_base, i, j * Sk_chunk_t + i);
+            if (j == PNHt - 1) {
+                noc_async_read_barrier();
+            }
+        }
+    }
+
+    cb_push_back(cb_mask_in, total_read_tiles);
+}
+
 /******************************************************************************
  *                   Writer Kernel Specific Functions                         *
  ******************************************************************************/
@@ -298,9 +440,8 @@ void worker_compute(
     cb_pop_front(cb_out_l, PNHt);
 }
 
-template <uint32_t cb_out, uint32_t out_chunk_tiles, uint32_t barrier_threshold>
-uint32_t write_tiles_to_memory(
-    uint32_t& out_tile_id, const InterleavedAddrGenFast<true>& out_writer, uint32_t& barrier_count) {
+template <uint32_t cb_out, uint32_t out_chunk_tiles, uint32_t barrier_threshold, typename WriterType>
+uint32_t write_tiles_to_memory(uint32_t& out_tile_id, const WriterType& out_writer, uint32_t& barrier_count) {
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     uint32_t l1_read_addr = get_read_ptr(cb_out);
     for (uint32_t tile = 0; tile < out_chunk_tiles; ++tile) {
@@ -315,10 +456,10 @@ uint32_t write_tiles_to_memory(
     return barrier_count;
 }
 
-template <uint32_t cb_out, uint32_t ELEMENT_SIZE, uint32_t barrier_threshold>
+template <uint32_t cb_out, uint32_t ELEMENT_SIZE, uint32_t barrier_threshold, typename WriterType>
 uint32_t write_partial_tiles_to_memory(
     uint32_t& out_tile_id,
-    const InterleavedAddrGenFast<true>& out_writer,
+    const WriterType& out_writer,
     uint32_t& barrier_count,
     uint32_t cur_head,
     uint32_t num_heads_to_write,
@@ -376,21 +517,22 @@ template <
     uint32_t cb_k_in,
     uint32_t cb_v_in,
     uint32_t cb_mask_in,
-    bool reuse_k  // If enabled, read V from K, instead of from DRAM
-    >
+    bool reuse_k,  // If enabled, read V from K, instead of from DRAM
+    typename KReaderType,
+    typename VReaderType,
+    typename MaskReaderType>
 void read_kv_mask_chunks(
     uint32_t k_chunk_start,
     uint32_t k_chunk_end,
     uint32_t k_start_tile_id,
-    uint32_t v_start_tile_id,
     uint32_t mask_start_tile_id,
     uint32_t Sk_chunk_t,
     uint32_t k_chunk_tiles,
     uint32_t v_chunk_tiles,
     uint32_t mask_chunk_tiles,
-    const InterleavedAddrGenFast<true>& k_reader,
-    const InterleavedAddrGenFast<true>& v_reader,
-    const InterleavedAddrGenFast<true>& mask_reader,
+    const KReaderType& k_reader,
+    const VReaderType& v_reader,
+    const MaskReaderType& mask_reader,
     uint32_t k_tile_bytes,
     uint32_t v_tile_bytes,
     uint32_t PSt) {
@@ -415,14 +557,13 @@ void read_kv_mask_chunks(
         }
         noc_async_read_barrier();
         cb_push_back(cb_k_in, k_chunk_tiles);
-        k_start_tile_id += k_chunk_tiles;
 
         if constexpr (use_attention_mask) {
             mask_start_tile_id = read_mask_chunk<cb_mask_in, mask_tile_bytes, barrier_threshold, PNHt>(
                 PSt, Sk_chunk_t, mask_chunk_tiles, mask_start_tile_id, mask_reader);
         }
 
-        // Read V chunk (tranpose of K)
+        // Read V chunk (tranpose of K), from K's L1 buffer
         if constexpr (reuse_k) {
             cb_reserve_back(cb_v_in, v_chunk_tiles);
             uint32_t v_write_ptr = get_write_ptr(cb_v_in);
@@ -437,14 +578,11 @@ void read_kv_mask_chunks(
                     k_read_ptr += Sk_chunk_t * k_tile_bytes;  // Strid across K's width
                 }
             }
-
-            noc_async_read_barrier();
-            cb_push_back(cb_v_in, v_chunk_tiles);
         } else {
             cb_reserve_back(cb_v_in, v_chunk_tiles);
             uint32_t v_write_ptr = get_write_ptr(cb_v_in);
             barrier_count = 0;
-            uint32_t v_tile_id = v_start_tile_id;
+            uint32_t v_tile_id = k_start_tile_id;
             for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
                 for (uint32_t col = 0; col < vDHt; ++col) {
                     noc_async_read_tile(v_tile_id, v_reader, v_write_ptr);
@@ -457,9 +595,11 @@ void read_kv_mask_chunks(
                 }
                 v_tile_id += (DHt - vDHt);  // Skip the padding!
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_v_in, v_chunk_tiles);
-            v_start_tile_id += v_chunk_tiles;
         }
+        noc_async_read_barrier();
+        cb_push_back(cb_v_in, v_chunk_tiles);
+
+        // Update the starting tile id for next iteration
+        k_start_tile_id += k_chunk_tiles;
     }
 }

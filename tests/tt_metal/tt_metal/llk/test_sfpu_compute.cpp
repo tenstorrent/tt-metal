@@ -19,7 +19,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -28,6 +28,7 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -38,8 +39,7 @@
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/types/arch.h"
-#include <tt-metalium/utils.hpp>
+#include <umd/device/types/arch.hpp>
 
 namespace tt::tt_metal {
 
@@ -66,29 +66,30 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
 
 bfloat16 sfpu_function(const std::string& op_name, const bfloat16& input) {
     if (op_name == "relu") {
-        return bfloat16(fmaxf(input.to_float(), 0.0f));
+        return bfloat16(fmaxf(static_cast<float>(input), 0.0f));
     } else if (op_name == "exponential") {
-        return bfloat16(std::exp(input.to_float()));
+        return bfloat16(std::exp(static_cast<float>(input)));
     } else if (op_name == "reciprocal") {
-        return bfloat16(1 / input.to_float());
+        return bfloat16(1 / static_cast<float>(input));
     } else if (op_name == "gelu") {
         static constexpr float alpha = M_2_SQRTPI * M_SQRT1_2;
-        auto x = input.to_float();
+        auto x = static_cast<float>(input);
         auto x3 = x * x * x;
         float result = x * 0.5 * (1.0 + tanhf(alpha * (x + 0.044715 * x3)));
         return bfloat16(result);
     } else if (op_name == "sqrt") {
-        return bfloat16(sqrtf(input.to_float()));
+        return bfloat16(sqrtf(static_cast<float>(input)));
     } else if (op_name == "sigmoid") {
-        auto x = input.to_float();
+        auto x = static_cast<float>(input);
         float result = 1 / (1 + std::exp(-x));
         return bfloat16(result);
     } else if (op_name == "log") {
-        return bfloat16(logf(input.to_float()));
+        return bfloat16(logf(static_cast<float>(input)));
     } else if (op_name == "tanh") {
-        return bfloat16(std::tanh(input.to_float()));
+        return bfloat16(std::tanh(static_cast<float>(input)));
     } else if (op_name == "sign") {
-        return bfloat16((0.0f < input.to_float()) ? 1.0f : ((input.to_float() < 0.0f) ? -1.0f : 0.0f));
+        return bfloat16(
+            (0.0f < static_cast<float>(input)) ? 1.0f : ((static_cast<float>(input) < 0.0f) ? -1.0f : 0.0f));
     } else {
         TT_THROW("Unsupported op_name in test");
         return bfloat16(0.0f);
@@ -144,9 +145,18 @@ struct SfpuConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_sfpu_all_same_buffer(tt_metal::IDevice* device, const SfpuConfig& test_config) {
+bool run_sfpu_all_same_buffer(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SfpuConfig& test_config) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::CreateProgram();
+    workload.add_program(device_range, std::move(program));
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
+
     tt::tt_metal::InterleavedBufferConfig dram_config{
         .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
 
@@ -162,7 +172,7 @@ bool run_sfpu_all_same_buffer(tt_metal::IDevice* device, const SfpuConfig& test_
 
     // Input
     std::vector<uint32_t> packed_input = sfpu_util::generate_packed_sfpu_input(
-        byte_size / bfloat16::SIZEOF, test_config.sfpu_op, std::chrono::system_clock::now().time_since_epoch().count());
+        byte_size / sizeof(bfloat16), test_config.sfpu_op, std::chrono::system_clock::now().time_since_epoch().count());
 
     // Golden output
     auto input = unpack_vector<bfloat16, uint32_t>(packed_input);
@@ -189,22 +199,22 @@ bool run_sfpu_all_same_buffer(tt_metal::IDevice* device, const SfpuConfig& test_
         tt_metal::CircularBufferConfig l1_input_cb_config =
             tt_metal::CircularBufferConfig(byte_size, {{tt::CBIndex::c_0, test_config.l1_input_data_format}})
                 .set_page_size(tt::CBIndex::c_0, test_config.tile_byte_size);
-        auto l1_input_cb = tt_metal::CreateCircularBuffer(program, core_range, l1_input_cb_config);
+        tt_metal::CreateCircularBuffer(program_, core_range, l1_input_cb_config);
 
         tt_metal::CircularBufferConfig l1_output_cb_config =
             tt_metal::CircularBufferConfig(byte_size, {{tt::CBIndex::c_16, test_config.l1_output_data_format}})
                 .set_page_size(tt::CBIndex::c_16, test_config.tile_byte_size);
-        auto l1_output_cb = tt_metal::CreateCircularBuffer(program, core_range, l1_output_cb_config);
+        tt_metal::CreateCircularBuffer(program_, core_range, l1_output_cb_config);
 
         auto reader_kernel = tt_metal::CreateKernel(
-            program,
+            program_,
             "tt_metal/kernels/dataflow/reader_unary.cpp",
             test_config.cores,
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         auto writer_kernel = tt_metal::CreateKernel(
-            program,
+            program_,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
             test_config.cores,
             tt_metal::DataMovementConfig{
@@ -222,8 +232,8 @@ bool run_sfpu_all_same_buffer(tt_metal::IDevice* device, const SfpuConfig& test_
         sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
         sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
 
-        auto sfpu_kernel = tt_metal::CreateKernel(
-            program,
+        tt_metal::CreateKernel(
+            program_,
             "tt_metal/kernels/compute/eltwise_sfpu.cpp",
             test_config.cores,
             tt_metal::ComputeConfig{
@@ -232,24 +242,24 @@ bool run_sfpu_all_same_buffer(tt_metal::IDevice* device, const SfpuConfig& test_
                 .defines = sfpu_defines});
 
         for (const CoreCoord& core_coord : core_range) {
-            SetRuntimeArgs(program, writer_kernel, core_coord, writer_rt_args);
-            SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
+            SetRuntimeArgs(program_, writer_kernel, core_coord, writer_rt_args);
+            SetRuntimeArgs(program_, reader_kernel, core_coord, reader_rt_args);
         }
     }
 
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::WriteToBuffer(input_dram_buffer, packed_input);
-    tt_metal::detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
 
     return sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
 }
 
 }  // namespace unit_tests::compute::sfpu
-class SingleCoreSingleDeviceSfpuParameterizedFixture
-    : public DeviceFixture,
+class SingleCoreSingleMeshDeviceSfpuParameterizedFixture
+    : public MeshDeviceFixture,
       public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
-TEST_P(SingleCoreSingleDeviceSfpuParameterizedFixture, TensixSfpuCompute) {
+TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedFixture, TensixSfpuCompute) {
     size_t num_tiles = std::get<0>(GetParam());
     std::string sfpu_op = std::get<1>(GetParam());
 
@@ -271,7 +281,7 @@ TEST_P(SingleCoreSingleDeviceSfpuParameterizedFixture, TensixSfpuCompute) {
 
 INSTANTIATE_TEST_SUITE_P(
     SingleCoreSfpuCompute,
-    SingleCoreSingleDeviceSfpuParameterizedFixture,
+    SingleCoreSingleMeshDeviceSfpuParameterizedFixture,
     ::testing::Values(
         std::make_tuple(1, "relu"),
         std::make_tuple(1, "exponential"),
@@ -291,11 +301,11 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "log"),
         std::make_tuple(4, "tanh"),
         std::make_tuple(4, "sign")));
-class SingleCoreSingleDeviceSfpuParameterizedApproxFixture
-    : public DeviceFixture,
+class SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture
+    : public MeshDeviceFixture,
       public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
 
-TEST_P(SingleCoreSingleDeviceSfpuParameterizedApproxFixture, TensixSfpuCompute) {
+TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture, TensixSfpuCompute) {
     size_t num_tiles = std::get<0>(GetParam());
     std::string sfpu_op = std::get<1>(GetParam());
 
@@ -322,7 +332,7 @@ TEST_P(SingleCoreSingleDeviceSfpuParameterizedApproxFixture, TensixSfpuCompute) 
 }
 INSTANTIATE_TEST_SUITE_P(
     SingleCoreSfpuCompute,
-    SingleCoreSingleDeviceSfpuParameterizedApproxFixture,
+    SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture,
     ::testing::Values(
         std::make_tuple(1, "relu"),
         std::make_tuple(1, "exponential"),
@@ -343,7 +353,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "tanh"),
         std::make_tuple(4, "sign")));
 
-TEST_F(DeviceFixture, DISABLED_TensixMultiContinguousCoreSingleTileSfpuApproxCompute) {
+TEST_F(MeshDeviceFixture, DISABLED_TensixMultiContinguousCoreSingleTileSfpuApproxCompute) {
     CoreRange core_range({0, 0}, {1, 0});
     CoreRangeSet core_range_set({core_range});
     unit_tests::compute::sfpu::SfpuConfig test_config = {
@@ -381,7 +391,7 @@ TEST_F(DeviceFixture, DISABLED_TensixMultiContinguousCoreSingleTileSfpuApproxCom
     EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
 }
 
-TEST_F(DeviceFixture, DISABLED_TensixMultiContinguousCoreMultiTileSfpuApproxCompute) {
+TEST_F(MeshDeviceFixture, DISABLED_TensixMultiContinguousCoreMultiTileSfpuApproxCompute) {
     CoreRange core_range({0, 0}, {1, 0});
     CoreRangeSet core_range_set({core_range});
     unit_tests::compute::sfpu::SfpuConfig test_config = {
@@ -419,7 +429,7 @@ TEST_F(DeviceFixture, DISABLED_TensixMultiContinguousCoreMultiTileSfpuApproxComp
     test_config.sfpu_op = "tanh";
     EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
 }
-TEST_F(DeviceFixture, DISABLED_TensixAllCoreSingleTileSfpuApproxCompute) {
+TEST_F(MeshDeviceFixture, DISABLED_TensixAllCoreSingleTileSfpuApproxCompute) {
     unit_tests::compute::sfpu::SfpuConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
         .l1_input_data_format = tt::DataFormat::Float16_b,
@@ -433,7 +443,6 @@ TEST_F(DeviceFixture, DISABLED_TensixAllCoreSingleTileSfpuApproxCompute) {
         GTEST_SKIP();
     }
 
-    int chip_id = 0;
     CoreCoord worker_grid_size = this->devices_.at(0)->logical_grid_size();
     CoreRange core_range({0, 0}, {worker_grid_size.x - 2, worker_grid_size.y - 2});
 
@@ -458,7 +467,7 @@ TEST_F(DeviceFixture, DISABLED_TensixAllCoreSingleTileSfpuApproxCompute) {
     test_config.sfpu_op = "tanh";
     EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
 }
-TEST_F(DeviceFixture, DISABLED_TensixAllCoreMultiTileSfpuApproxCompute) {
+TEST_F(MeshDeviceFixture, DISABLED_TensixAllCoreMultiTileSfpuApproxCompute) {
     unit_tests::compute::sfpu::SfpuConfig test_config = {
         .tile_byte_size = 2 * 32 * 32,
         .l1_input_data_format = tt::DataFormat::Float16_b,
@@ -472,7 +481,6 @@ TEST_F(DeviceFixture, DISABLED_TensixAllCoreMultiTileSfpuApproxCompute) {
         GTEST_SKIP();
     }
 
-    int chip_id = 0;
     CoreCoord worker_grid_size = this->devices_.at(0)->logical_grid_size();
     CoreRange core_range({0, 0}, {worker_grid_size.x - 2, worker_grid_size.y - 2});
 

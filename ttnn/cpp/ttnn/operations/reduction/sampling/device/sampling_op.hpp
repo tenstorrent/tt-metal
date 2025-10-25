@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,15 +6,12 @@
 
 #include <optional>
 
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::reduction {
 
 struct Sampling {
-    const std::vector<uint16_t> k;
-    const std::vector<float> p;
     const std::optional<uint32_t> seed;
     const std::optional<CoreRangeSet> sub_core_grids;
 

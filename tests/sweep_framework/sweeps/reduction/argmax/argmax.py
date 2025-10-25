@@ -13,7 +13,7 @@ from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_r
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 from loguru import logger
 
@@ -73,25 +73,31 @@ parameters = {
 # If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    if test_vector["input_shape"][0] != 1:
+    input_shape = test_vector["input_shape"]
+    input_dtype = test_vector["input_a_dtype"]
+    input_layout = test_vector["input_layout"]
+    dim = test_vector["dim"]
+
+    # Shape
+    if input_shape[0] != 1:
         return True, "dim 0 must be 1"
-    if test_vector["input_shape"][1] != 1:
+    if len(input_shape) > 1 and input_shape[1] != 1:
         return True, "dim 1 must be 1"
-    if test_vector["dim"] != 3:
+
+    # Reduction dimension
+    if dim != 3:
         return True, "Only argmax on last dim is supported"
-    if test_vector["dim"] is not None:
-        if test_vector["dim"] * (-1) > (len(test_vector["input_shape"])):
+    if dim is not None:
+        if dim * (-1) > len(input_shape):
             return True, "Absolute value of dim must be less or equal than the rank of input tensor"
-    if test_vector["input_layout"] == ttnn.TILE_LAYOUT:
-        return True, "Tiled layout not supported"
-    if test_vector["input_a_dtype"] != ttnn.bfloat16:
-        return True, "Only BFLOAT16 is supported for inputs!"
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and not (
-        test_vector["input_a_dtype"] == ttnn.float32 or test_vector["input_a_dtype"] == ttnn.bfloat16
-    ):
-        return True, "Row major is only supported for fp32 & fp16"
-    if not test_vector["keepdim"]:
-        return True, "keepdim = false is not supported"
+
+    # Data type
+    supported_dtypes = [ttnn.bfloat16, ttnn.float32, ttnn.int32]
+    if test_vector["input_a_dtype"] not in supported_dtypes:
+        return True, "Only BFLOAT16, FLOAT32, INT32, UINT32, and UINT16 are supported for inputs!"
+    if input_layout == ttnn.TILE_LAYOUT:
+        if input_dtype != ttnn.float32 and input_dtype != ttnn.bfloat16:
+            return True, "For TILE_LAYOUT only fp32 and bloat16 data types are supported"
 
     return False, None
 

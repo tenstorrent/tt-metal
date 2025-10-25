@@ -1,29 +1,16 @@
 tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_tilize_api.h
-tt_metal/impl/dispatch/kernels/eth_tunneler.cpp
-tt_metal/impl/dispatch/kernels/packet_demux.cpp
-tt_metal/impl/dispatch/kernels/packet_mux.cpp
-tt_metal/impl/dispatch/kernels/packet_queue.hpp
-tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp
-tt_metal/impl/dispatch/kernels/vc_eth_tunneler.cpp
-tt_metal/impl/dispatch/kernels/vc_packet_router.cpp
 ttnn/cpp/pybind11/tensor.cpp
 ttnn/cpp/ttnn/device_operation.hpp
 ttnn/cpp/ttnn/graph/graph_processor.cpp
 ttnn/cpp/ttnn/graph/graph_processor.hpp
 ttnn/cpp/ttnn/operations/bernoulli/device/bernoulli_device_operation.cpp
 ttnn/cpp/ttnn/operations/bernoulli/device/bernoulli_device_operation.hpp
-ttnn/cpp/ttnn/operations/ccl/all_gather/all_gather.cpp
-ttnn/cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.hpp
-ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp
 ttnn/cpp/ttnn/operations/ccl/all_gather_v2/device/all_gather_op.hpp
 ttnn/cpp/ttnn/operations/ccl/all_gather_v2/device/multi_core/all_gather_op_multi_core_new.cpp
 ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp
 ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.cpp
 ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp
-ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_send_reader.cpp
 ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_send_reader_two_input.cpp
-ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_send_utils.hpp
-ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_send_writer.cpp
 ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_wait_completion.cpp
 ttnn/cpp/ttnn/operations/ccl/common/kernels/command_processor.hpp
 ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp
@@ -32,8 +19,6 @@ ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command_device.hpp
 ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.cpp
 ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.hpp
 ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp
-ttnn/cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.cpp
-ttnn/cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.hpp
 ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp
 ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp
 ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reader_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp
@@ -51,7 +36,6 @@ ttnn/cpp/ttnn/operations/embedding/device/embedding_device_operation.cpp
 ttnn/cpp/ttnn/operations/embedding/device/embedding_device_operation.hpp
 ttnn/cpp/ttnn/operations/embedding_backward/device/embedding_backward_device_operation.cpp
 ttnn/cpp/ttnn/operations/embedding_backward/device/embedding_backward_device_operation.hpp
-ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_program.cpp
 ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/compute/transformer_group_attn_matmul.cpp
 ttnn/cpp/ttnn/operations/uniform/device/uniform_device_operation.cpp
 ttnn/cpp/ttnn/operations/uniform/device/uniform_device_operation.hpp
@@ -64,17 +48,6 @@ tests/tt_metal/tt_metal/dispatch/sub_device_test_utils.hpp
 tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/pgm_dispatch_golden.json
 tests/tt_metal/tt_metal/perf_microbenchmark/10_dram_read_remote_cb_sync/test_dram_read_remote_cb.cpp
 tests/tt_metal/tt_metal/perf_microbenchmark/11_remote_cb_sync_matmul_single_core/test_remote_cb_sync_matmul.cpp
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_rx.cpp
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_tx.cpp
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_mux_demux.cpp
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_mux_demux_2level.cpp
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_tx_rx.cpp
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_vc_bi_tunnel_2ep.cpp
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_vc_bi_tunnel_4ep.cpp
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_vc_loopback_tunnel.cpp
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_vc_mux_demux.cpp
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_vc_uni_tunnel.cpp
 tests/ttnn/unit_tests/gtests/test_ccl_on_galaxy.cpp
 
 # Suspicious Formatting Could Cause Issues

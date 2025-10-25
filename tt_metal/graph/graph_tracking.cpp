@@ -4,7 +4,7 @@
 
 #include <graph_tracking.hpp>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -114,6 +114,34 @@ bool GraphTracker::hook_deallocate(Buffer* buffer) {
         hooked_buffers.erase(buffer_it);
     }
     return hooked;
+}
+
+bool GraphTracker::hook_write_to_device(const tt::tt_metal::Buffer* buffer) {
+    if (hook == nullptr) {
+        return false;
+    }
+    return hook->hook_write_to_device(buffer);
+}
+
+bool GraphTracker::hook_write_to_device(const tt::tt_metal::distributed::MeshBuffer* mesh_buffer) {
+    if (hook == nullptr) {
+        return false;
+    }
+    return hook->hook_write_to_device(mesh_buffer);
+}
+
+bool GraphTracker::hook_read_from_device(tt::tt_metal::Buffer* buffer) {
+    if (hook == nullptr) {
+        return false;
+    }
+    return hook->hook_read_from_device(buffer);
+}
+
+bool GraphTracker::hook_read_from_device(const tt::tt_metal::distributed::MeshBuffer* mesh_buffer) {
+    if (hook == nullptr) {
+        return false;
+    }
+    return hook->hook_read_from_device(mesh_buffer);
 }
 
 bool GraphTracker::hook_program(tt::tt_metal::Program* program) {

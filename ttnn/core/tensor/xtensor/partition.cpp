@@ -86,8 +86,8 @@ StridedViews<Expression> chunk_ndim(
         dim_ranges.push_back(std::move(ranges));
     }
 
-    const size_t total_chunks =
-        std::accumulate(num_chunks_per_dim.begin(), num_chunks_per_dim.end(), 1, std::multiplies<size_t>());
+    const size_t total_chunks = std::accumulate(
+        num_chunks_per_dim.begin(), num_chunks_per_dim.end(), static_cast<size_t>(1), std::multiplies<size_t>());
 
     StridedViews<Expression> chunk_views;
     tt::stl::SmallVector<size_t> current_indices(dims_size, 0);
@@ -167,7 +167,7 @@ XtensorAdapter<typename Expression::value_type> concat_ndim(
         result_shape[dim] *= num_chunks[i];
     }
     const size_t result_volume =
-        std::accumulate(result_shape.begin(), result_shape.end(), 1, std::multiplies<size_t>());
+        std::accumulate(result_shape.begin(), result_shape.end(), static_cast<size_t>(1), std::multiplies<size_t>());
     XtensorAdapter<DataType> result(std::vector<DataType>(result_volume), std::move(result_shape));
 
     // An optimization for concatenating along the outer dimension.
@@ -183,8 +183,8 @@ XtensorAdapter<typename Expression::value_type> concat_ndim(
 
         if (can_use_memcpy) {
             DataType* result_ptr = result.data().data();
-            const size_t chunk_size =
-                std::accumulate(expected_shape.begin(), expected_shape.end(), 1, std::multiplies<size_t>());
+            const size_t chunk_size = std::accumulate(
+                expected_shape.begin(), expected_shape.end(), static_cast<size_t>(1), std::multiplies<size_t>());
             size_t offset = 0;
             for (const auto& expr : expressions) {
                 std::memcpy(result_ptr + offset, expr.data(), chunk_size * sizeof(DataType));
@@ -249,7 +249,7 @@ Tensor concat_impl(const std::vector<Tensor>& tensors, const tt::tt_metal::Tenso
 }  // namespace adaptor
 
 Tensor concat(const std::vector<Tensor>& tensors, int dim) {
-    TT_FATAL(tensors.size() > 0, "Cannot concatenate an empty list of tensors");
+    TT_FATAL(!tensors.empty(), "Cannot concatenate an empty list of tensors");
     const auto& reference_layout = tensors.front().tensor_spec().tensor_layout();
     switch (reference_layout.get_data_type()) {
         case tt::tt_metal::DataType::BFLOAT4_B:
@@ -265,6 +265,7 @@ Tensor concat(const std::vector<Tensor>& tensors, int dim) {
 }
 
 // Explicit instantiations for the public API.
+// NOLINTBEGIN(bugprone-macro-parentheses)
 #define EXPLICIT_INSTANTIATIONS_FOR_TYPE(T)                                                                          \
     template StridedViews<xt::xarray<T>> chunk(const xt::xexpression<xt::xarray<T>>&, int, int);                     \
     template StridedViews<xt::xarray<T>> chunk_ndim(                                                                 \
@@ -300,6 +301,7 @@ EXPLICIT_INSTANTIATIONS_FOR_TYPE(int32_t)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(uint8_t)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(uint16_t)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(uint32_t)
+// NOLINTEND(bugprone-macro-parentheses)
 
 #undef EXPLICIT_INSTANTIATIONS_FOR_TYPE
 

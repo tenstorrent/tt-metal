@@ -11,6 +11,8 @@
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.hpp"
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace tt::constants;
@@ -26,7 +28,6 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         num_units_per_shard_height, num_units_offset, num_units_per_row, num_units_height, num_units_per_shard_height_last,
         num_units_per_shard_width_last;
 
-    tt_metal::IDevice* device = input.device();
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -42,8 +43,8 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
     CoreCoord end_core = cores[num_cores - 1];
     if (output.layout() == Layout::TILE) {
-        input_unit_size = tt_metal::detail::TileSize(input_cb_data_format);
-        output_unit_size = tt_metal::detail::TileSize(output_cb_data_format);
+        input_unit_size = tt::tile_size(input_cb_data_format);
+        output_unit_size = tt::tile_size(output_cb_data_format);
         num_units_per_shard_height = shard_spec.shape[0] / TILE_HEIGHT;
         num_units_per_shard_width = shard_spec.shape[1] / TILE_WIDTH;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
@@ -98,10 +99,9 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         tt_metal::CircularBufferConfig output_cb_out_config =
             tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, output_cb_data_format}})
                 .set_page_size(out_cb_index, output_page_size);
-        auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
     }
 
-    auto src_buffer = input.buffer();
 
     auto dst_buffer = output.buffer();
 
@@ -118,7 +118,8 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
     tt_metal::KernelHandle unary_writer_kernel_id;
     if (input.layout() == Layout::TILE) {
-        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)out_cb_index, (std::uint32_t)dst_is_dram};
+        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)out_cb_index};
+        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
         unary_writer_kernel_id = tt_metal::CreateKernel(
             program,
@@ -126,13 +127,8 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
             all_cores,
             tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     } else {
-        bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(num_units_per_row);
-        uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (std::uint32_t)log2(num_units_per_row) : 0;
-        std::vector<uint32_t> writer_compile_time_args = {
-            (std::uint32_t)out_cb_index,
-            (std::uint32_t)dst_is_dram,
-            (std::uint32_t)dst_stick_size_is_power_of_two,
-            (std::uint32_t)dst_log2_stick_size};
+        std::vector<uint32_t> writer_compile_time_args = {out_cb_index, num_units_per_row};
+        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
         unary_writer_kernel_id = tt_metal::CreateKernel(
             program,
@@ -144,7 +140,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     if (convert_df) {
         std::vector<uint32_t> compute_kernel_args = {num_units_per_shard};
 
-        auto eltwise_unary_kernel_group_1 = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp",
             all_cores,
@@ -157,9 +153,9 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     uint32_t curr_idx_h = 0;
     uint32_t curr_idx_w = 0;
 
-    uint32_t padded_offset_bytes;
 
-    for (const auto& core : cores) {
+    for (uint32_t core_idx = 0; core_idx < num_cores_unpadded; core_idx++) {
+        const auto& core = cores[core_idx];
         uint32_t shard_height = num_units_per_shard_height;
         uint32_t shard_width = input.layout() == Layout::TILE ? num_units_per_shard_width : output_unit_size;
         if (input.layout() == Layout::TILE) {
@@ -232,7 +228,6 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
                     }
                 }
             }
-            uint32_t dram_alignment = hal::get_dram_alignment();
             uint32_t l1_alignment = hal::get_l1_alignment();
             uint32_t padded_shard_width = align(output_unit_size, dst_buffer->alignment());
             if(is_blackhole or is_l1_aligned) {
@@ -258,7 +253,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         }
     }
     auto override_runtime_arguments_callback =
-        [unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cores, num_slices](
+        [unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cores, num_slices, num_cores_unpadded](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -268,7 +263,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
             Buffer* dst_buffer = nullptr;
             uint32_t starting_idx_h = 0;
-            const bool partial_op = num_slices > 1 || (num_slices == 1 && output_tensors.size() == 0);
+            const bool partial_op = num_slices > 1 || (num_slices == 1 && output_tensors.empty());
             if (partial_op) {
                 // If we have num_slices > 1, it means that our op is S->I partial.
                 // And currently we store output tensors there as input[1]
@@ -284,7 +279,8 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
             }
             // TODO: Make these common args instead
             auto& runtime_args_by_core = GetRuntimeArgs(program, unary_writer_kernel_id);
-            for (const auto& core : cores) {
+            for (uint32_t core_idx = 0; core_idx < num_cores_unpadded; core_idx++) {
+                const auto& core = cores[core_idx];
                 auto& runtime_args = runtime_args_by_core[core.x][core.y];
                 runtime_args[0] = dst_buffer->address();
                 if (partial_op) {

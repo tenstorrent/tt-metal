@@ -11,7 +11,7 @@ seq_lens=(128 2048)
 for seq_len in ${seq_lens[@]}; do
     echo "Running seq length: $seq_len"
     output_folder="generated/profiler/reports"
-    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml python3 -m tracy -r -m "pytest models/demos/t3000/falcon40b/tests/test_perf_falcon.py::test_device_perf_bare_metal[wormhole_b0-True-falcon_40b-prefill_seq${seq_len}_bfp8_layers1-8chips]"
+    python3 -m tracy -r -m "pytest models/demos/t3000/falcon40b/tests/test_perf_falcon.py::test_device_perf_bare_metal[wormhole_b0-True-falcon_40b-prefill_seq${seq_len}_bfp8_layers1-8chips]"
     # get latest folder in output folder
     latest_created_folder=$(ls -td $output_folder/* | head -n 1)
     # find csv file that starts with "ops_perf_results"

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <core_coord.hpp>
 #include <nlohmann/json.hpp>
 #include <tt_stl/reflection.hpp>
@@ -168,12 +168,10 @@ auto fmt::formatter<CoreRange>::format(const CoreRange& core_range, format_conte
 
 CoreRangeSet::CoreRangeSet(tt::stl::Span<const CoreRange> core_ranges) :
     ranges_(core_ranges.begin(), core_ranges.end()) {
-    ZoneScoped;
     this->validate_no_overlap();
 }
 
 CoreRangeSet::CoreRangeSet(const std::set<CoreRange>& core_ranges) : ranges_(core_ranges.begin(), core_ranges.end()) {
-    ZoneScoped;
     this->validate_no_overlap();
 }
 
@@ -189,14 +187,13 @@ CoreRangeSet::CoreRangeSet(tt::stl::Span<const CoreCoord> core_coords) {
     *this = unmerged_set.merge_ranges();
 }
 
-void swap(CoreRangeSet& first, CoreRangeSet& second) { std::swap(first.ranges_, second.ranges_); }
+void swap(CoreRangeSet& first, CoreRangeSet& second) noexcept { std::swap(first.ranges_, second.ranges_); }
 
-CoreRangeSet::CoreRangeSet(const CoreRangeSet& other) { this->ranges_ = other.ranges_; }
+CoreRangeSet::CoreRangeSet(const CoreRangeSet& other) = default;
 
 CoreRangeSet::CoreRangeSet(CoreRangeSet&& other) noexcept { swap(*this, other); }
 
 CoreRangeSet::CoreRangeSet(std::vector<CoreRange>&& core_ranges) : ranges_(std::move(core_ranges)) {
-    ZoneScoped;
     this->validate_no_overlap();
 }
 
@@ -364,7 +361,7 @@ bool CoreRangeSet::contains(const CoreRangeSet& other) const {
 const std::vector<CoreRange>& CoreRangeSet::ranges() const { return this->ranges_; }
 
 std::string CoreRangeSet::str() const {
-    if (this->ranges().size() > 0) {
+    if (!this->ranges().empty()) {
         std::string core_range_set_str = "{";
         for (const auto& core_range : this->ranges_) {
             core_range_set_str += core_range.str() + ", ";
@@ -386,7 +383,7 @@ uint32_t CoreRangeSet::num_cores() const {
 }
 
 CoreRange CoreRangeSet::bounding_box() const {
-    TT_FATAL(this->ranges().size() > 0, "Cannot get bounding_box of an empty CoreRangeSet!");
+    TT_FATAL(!this->ranges().empty(), "Cannot get bounding_box of an empty CoreRangeSet!");
     size_t min_x = UINT32_MAX, min_y = UINT32_MAX, max_x = 0, max_y = 0;
     for (const auto& cr : this->ranges()) {
         min_x = std::min(min_x, cr.start_coord.x);
@@ -552,7 +549,6 @@ std::vector<CoreCoord> grid_to_cores_with_noop(
     const uint32_t grid_size_x,
     const uint32_t grid_size_y,
     const bool row_wise) {
-    ZoneScoped;
     std::vector<CoreCoord> cores;
     cores.reserve(grid_size_x * grid_size_y);
     TT_ASSERT(bbox_x < grid_size_x);
@@ -590,7 +586,6 @@ std::vector<CoreCoord> grid_to_cores_with_noop(
 // Noop cores are appended at the end with no guarantees on ordering
 std::vector<CoreCoord> grid_to_cores_with_noop(
     const CoreRangeSet& used_cores, const CoreRangeSet& all_cores, const bool row_wise) {
-    ZoneScoped;
     TT_ASSERT(all_cores.contains(used_cores));
     // Most likely a lot of optimizations to do here
     // Implemented this way for simplicity for now
@@ -635,13 +630,26 @@ std::vector<CoreCoord> corerange_to_cores(const CoreRangeSet& crs, std::optional
     return all_cores;
 }
 
-CoreRangeSet select_from_corerange(const CoreRangeSet& crs, uint32_t start_index, uint32_t end_index, bool row_wise) {
+CoreRangeSet select_from_corerangeset(
+    const CoreRangeSet& crs, uint32_t start_index, uint32_t end_index, bool row_wise) {
     auto all_cores = corerange_to_cores(crs, end_index + 1, row_wise);
     std::vector<CoreRange> selected_cores;
     for (uint32_t i = start_index; i <= end_index; i++) {
         selected_cores.push_back(CoreRange(all_cores[i], all_cores[i]));
     }
     return CoreRangeSet(selected_cores);
+}
+std::optional<CoreRange> select_contiguous_range_from_corerangeset(const CoreRangeSet& crs, uint32_t x, uint32_t y) {
+    for (const auto& core_range : crs.ranges()) {
+        const auto& start_coord = core_range.start_coord;
+        const auto& end_coord = core_range.end_coord;
+        if (start_coord.x + x > end_coord.x || start_coord.y + y > end_coord.y) {
+            continue;
+        }
+        CoreCoord new_end_coord = {start_coord.x + x, start_coord.y + y};
+        return CoreRange(start_coord, new_end_coord);
+    }
+    return std::nullopt;
 }
 
 bool operator!=(const CoreRangeSet& a, const CoreRangeSet& b) { return !(a == b); }

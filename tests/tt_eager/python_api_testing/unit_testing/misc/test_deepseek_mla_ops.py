@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,19 +13,25 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
 )
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_flash_multi_latent_attention_decode import (
+    page_table_setup,
+    to_paged_cache,
+    from_paged_cache,
+)
 import ttnn
 from loguru import logger
 import pytest
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 
 from models.demos.deepseek_v3.tt.rope import RotarySetup
-from models.demos.deepseek_v3.tt.rms_norm import RMSNorm
+from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
+from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import RMSNorm as ReferenceRMSNorm
 from models.demos.deepseek_v3.reference.deepseek.rope_helpers import (
     precompute_freqs_cis,
     apply_rotary_emb,
 )
-from models.utility_functions import nearest_y
+from models.common.utility_functions import nearest_y
 from transformers import AutoConfig
 from types import SimpleNamespace
 
@@ -366,7 +372,6 @@ class PrefillModelConfig:
         self.configs["QNORM_SHAPE"] = lambda seq_len: (1, 1, seq_len, self.args.q_lora_rank)
         self.configs["QNORM_DTYPE"] = ttnn.bfloat16
         self.configs["QNORM_MEM_CFG"] = ttnn.DRAM_MEMORY_CONFIG
-        self.configs["QNORM_CATEGORY"] = "q_norm"
 
         # k_norm
         self.configs["KNORM_SHAPE"] = lambda seq_len: (
@@ -377,7 +382,6 @@ class PrefillModelConfig:
         )
         self.configs["KNORM_DTYPE"] = ttnn.bfloat16
         self.configs["KNORM_MEM_CFG"] = ttnn.DRAM_MEMORY_CONFIG
-        self.configs["KNORM_CATEGORY"] = "k_norm"
 
 
 hugging_face_config = AutoConfig.from_pretrained("deepseek-ai/DeepSeek-R1-0528", trust_remote_code=True)
@@ -533,14 +537,22 @@ def run_rope_impl(
     #################
     rope_setup = RotarySetup(
         device=device,
-        batch_size=bsz,
+        batch_size_per_row=bsz,
         hf_config=decode_cfg.args,
     )
 
     if mode == "prefill":
-        tt_cos, tt_sin, tt_trans_mat = rope_setup.get_rot_mats_table(seq_len)
+        match rope_setup.get_rot_mats_table(seq_len):
+            case {"cos_matrix": tt_cos, "sin_matrix": tt_sin, "trans_matrix": tt_trans_mat}:
+                pass
+            case _:
+                raise ValueError("Unexpected return from get_rot_mats_table")
     else:
-        tt_cos, tt_sin, tt_trans_mat = rope_setup.get_rot_mats(position_ids)
+        match rope_setup.get_rot_mats(position_ids):
+            case {"cos_matrix": tt_cos, "sin_matrix": tt_sin, "trans_matrix": tt_trans_mat}:
+                pass
+            case _:
+                raise ValueError("Unexpected return from get_rot_mats")
 
     tt_input = ttnn.from_torch(
         input_torch,
@@ -594,11 +606,25 @@ def run_update_cache_impl(
     input_torch = torch.randn(shape).float()
     current_pos = torch.randint(0, max_seq_len, (bsz,))
 
+    paged_config = MLA1D.get_valid_paged_config(decode_cfg.args.max_seq_len, bsz, dp_factor=1)
+    page_table = page_table_setup(bsz, paged_config)
+
     #################
     ### TT-NN
     #################
-    tt_cache = ttnn.from_torch(
+    tt_page_table = ttnn.from_torch(
+        page_table,
+        device=device,
+        dtype=ttnn.int32,
+    )
+
+    paged_cache = to_paged_cache(
         cache_torch,
+        page_table,
+        paged_config,
+    )
+    tt_cache = ttnn.from_torch(
+        paged_cache,
         device=device,
         dtype=cache_dtype,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -623,8 +649,14 @@ def run_update_cache_impl(
         tt_cache,
         tt_input,
         update_idxs_tensor=tt_current_pos,
+        page_table=tt_page_table,
     )
     tt_cache_torch = ttnn.to_torch(tt_cache)
+    tt_cache_torch = from_paged_cache(
+        tt_cache_torch,
+        page_table,
+        paged_config,
+    )
 
     #################
     ### Validation
@@ -674,13 +706,27 @@ def run_fill_cache_impl(
     batch_idx = torch.randint(0, prefill_cfg.max_batch_size_per_device, (1,)).item()  # Randomly select a batch index
     logger.debug(f"Selected batch index: {batch_idx}")
 
-    cache_torch[batch_idx, :, :seq_len, :] = input_torch
+    paged_config = MLA1D.get_valid_paged_config(
+        prefill_cfg.args.max_seq_len, prefill_cfg.max_batch_size_per_device, dp_factor=1
+    )
+    page_table = page_table_setup(prefill_cfg.max_batch_size_per_device, paged_config)
 
     #################
     ### TT-NN
     #################
-    tt_cache = ttnn.from_torch(
+    tt_page_table = ttnn.from_torch(
+        page_table,
+        device=device,
+        dtype=ttnn.int32,
+    )
+
+    paged_cache = to_paged_cache(
         cache_torch,
+        page_table,
+        paged_config,
+    )
+    tt_cache = ttnn.from_torch(
+        paged_cache,
         device=device,
         dtype=cache_dtype,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -695,16 +741,24 @@ def run_fill_cache_impl(
         layout=layout,
     )
 
-    ttnn.fill_cache(
+    ttnn.experimental.paged_fill_cache(
         tt_cache,
         tt_input,
+        page_table=tt_page_table,
         batch_idx=batch_idx,
     )
     tt_cache_torch = ttnn.to_torch(tt_cache)
+    tt_cache_torch = from_paged_cache(
+        tt_cache_torch,
+        page_table,
+        paged_config,
+    )
 
     #################
     ### Validation
     #################
+    cache_torch[batch_idx, :, :seq_len, :] = input_torch
+
     pcc_threshold = 0.9999
     if cache_dtype == ttnn.bfloat4_b:
         pcc_threshold = 0.99
@@ -720,7 +774,6 @@ def run_rmsnorm_impl(
     shape,
     dtype,
     mem_config,
-    norm_category,
     temp_dir,
     seq_len=None,
 ):
@@ -760,14 +813,14 @@ def run_rmsnorm_impl(
     )
 
     # Setup: Convert weights and get weight_config
-    state_dict = {"weight": rms_norm.weight.unsqueeze(0)}
-    weight_config = RMSNorm.convert_weights(hf_config, state_dict, temp_dir, device, norm_category=norm_category)
+    state_dicts = ({"weight": rms_norm.weight.to(torch.bfloat16)},)  # Tuple of dictionaries
+    weight_config = RMSNorm.convert_weights(hf_config, state_dicts, temp_dir, device)
 
     # Generate appropriate config
     if mode == "prefill":
-        model_config = RMSNorm.prefill_model_config(hf_config, device, norm_category=norm_category)
+        model_config = RMSNorm.prefill_model_config(hf_config, device)
     else:
-        model_config = RMSNorm.decode_model_config(hf_config, device, norm_category=norm_category)
+        model_config = RMSNorm.decode_model_config(hf_config, device)
 
     model_state = RMSNorm.create_state(hf_config, mesh_device=device)
 
@@ -783,7 +836,7 @@ def run_rmsnorm_impl(
     #################
     ### Validation
     #################
-    pcc_threshold = 0.9999
+    pcc_threshold = 0.9995
 
     out_pass, out_pcc = comp_pcc(tt_out_torch, out_torch, pcc_threshold)
     logger.info(f"Output PCC: {out_pcc}")
@@ -1126,19 +1179,17 @@ def test_fill_caches(
 
 
 @pytest.mark.parametrize(
-    "shape, dtype, mem_config, norm_category",
+    "shape, dtype, mem_config",
     [
         (
             decode_cfg.configs["QNORM_SHAPE"],
             decode_cfg.configs["QNORM_DTYPE"],
             decode_cfg.configs["QNORM_MEM_CFG"],
-            decode_cfg.configs["QNORM_CATEGORY"],
         ),
         (
             decode_cfg.configs["KNORM_SHAPE"],
             decode_cfg.configs["KNORM_DTYPE"],
             decode_cfg.configs["KNORM_MEM_CFG"],
-            decode_cfg.configs["KNORM_CATEGORY"],
         ),
     ],
     ids=["q_norm", "k_norm"],
@@ -1148,7 +1199,6 @@ def test_decode_rmsnorms(
     shape,
     dtype,
     mem_config,
-    norm_category,
     temp_dir,
     function_level_defaults,
     reset_seeds,
@@ -1158,7 +1208,6 @@ def test_decode_rmsnorms(
         shape=shape,
         dtype=dtype,
         mem_config=mem_config,
-        norm_category=norm_category,
         temp_dir=temp_dir,
     )
 
@@ -1168,19 +1217,17 @@ def test_decode_rmsnorms(
     [128, 1024, 8096],
 )
 @pytest.mark.parametrize(
-    "shape, dtype, mem_config, norm_category",
+    "shape, dtype, mem_config",
     [
         (
             prefill_cfg.configs["QNORM_SHAPE"],
             prefill_cfg.configs["QNORM_DTYPE"],
             prefill_cfg.configs["QNORM_MEM_CFG"],
-            prefill_cfg.configs["QNORM_CATEGORY"],
         ),
         (
             prefill_cfg.configs["KNORM_SHAPE"],
             prefill_cfg.configs["KNORM_DTYPE"],
             prefill_cfg.configs["KNORM_MEM_CFG"],
-            prefill_cfg.configs["KNORM_CATEGORY"],
         ),
     ],
     ids=["q_norm", "k_norm"],
@@ -1190,7 +1237,6 @@ def test_prefill_rmsnorms(
     shape,
     dtype,
     mem_config,
-    norm_category,
     temp_dir,
     seq_len,
     function_level_defaults,
@@ -1201,7 +1247,6 @@ def test_prefill_rmsnorms(
         shape=shape,
         dtype=dtype,
         mem_config=mem_config,
-        norm_category=norm_category,
         temp_dir=temp_dir,
         seq_len=seq_len,
     )

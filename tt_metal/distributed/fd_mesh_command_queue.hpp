@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@
 
 #include "mesh_command_queue_base.hpp"
 
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 #include "dispatch/cq_shared_state.hpp"
@@ -29,7 +29,7 @@ using MeshCompletionReaderVariant =
 struct DeviceMemoryAddress {
     MeshCoordinate device_coord;
     CoreCoord virtual_core_coord;
-    DeviceAddr address;
+    DeviceAddr address{};
 };
 
 class FDMeshCommandQueue final : public MeshCommandQueueBase {
@@ -89,7 +89,7 @@ private:
     // When the device profiler is not enabled, launch messages are identical across all physical devices running the
     // same program, to reduce state managed on host. When the profiler is enabled, the host_assigned_id field in the
     // launch message must be unique across physical devices to accurately capture program execution time on host and
-    // device. This API is repsonsible for updating the launch message before writing it to each device (see
+    // device. This API is responsible for updating the launch message before writing it to each device (see
     // tt_metal/api/tt-metalium/dev_msgs.h for a description of how the host_assigned_id field is generated).
     void update_launch_messages_for_device_profiler(
         ProgramCommandSequence& program_cmd_seq, uint32_t program_runtime_id, IDevice* device);
@@ -99,7 +99,7 @@ private:
     // specific MeshCommandQueue attributes.
     // TODO: All Mesh level host state managed by this class should be moved out, since its not
     // tied to system memory anyway. Move out:
-    // 1. Event ID managment.
+    // 1. Event ID management.
     // 2. Bypass mode tracker.
     SystemMemoryManager& reference_sysmem_manager();
     MultiProducerSingleConsumerQueue<CompletionReaderVariant>& get_read_descriptor_queue(IDevice* device);
@@ -113,11 +113,11 @@ private:
     // Shared across all MeshCommandQueue instances for a MeshDevice.
     std::shared_ptr<CQSharedState> cq_shared_state_;
 
-    DispatchArray<uint32_t> expected_num_workers_completed_;
+    DispatchArray<uint32_t> expected_num_workers_completed_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_;
 
     DispatchArray<LaunchMessageRingBufferState> worker_launch_message_buffer_state_reset_;
-    DispatchArray<uint32_t> expected_num_workers_completed_reset_;
+    DispatchArray<uint32_t> expected_num_workers_completed_reset_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset_;
 
     // The following data structures are only popiulated when the MeshCQ is being used to trace workloads
@@ -168,6 +168,27 @@ private:
     // The backup prefetcher cache manager is used to stash away the prefetcher cache state during trace recording.
     std::unique_ptr<RingbufferCacheManager> dummy_prefetcher_cache_manager_;
 
+    // Used to define when the exception should be handled.
+    // The goal is to not throw exceptions in loop and do it just once
+    // Once this is set to true, whoever gets to the point to handle the exception,
+    // it will and set this back to false, so no other thread tries to handle it themselves
+    std::atomic<bool> should_handle_exception_{false};
+
+    // Used to store the exception pointer.
+    // Since the exception is captured inside a different thread that the main one,
+    // we need to store it and let the main thread handle it
+    // So python can catch it
+    std::exception_ptr thread_exception_ptr_;
+    // Exceptions are not compatible with std::atomic, so we need a muted to store it.
+    // Since a reader thread will be setting this while the main thread will be handling it,
+    // it must be thread safe
+    std::mutex exception_mutex_;
+
+    // We are in an unrecoverable state, we need to close as many processes as possible.
+    // When this is true, we are generally breaking locks and doing a bit of cleaning
+    // so the main thread can handle the exception
+    std::atomic<bool> thread_exception_state_ = false;
+
 protected:
     void write_shard_to_device(
         const MeshBuffer& buffer,
@@ -183,6 +204,10 @@ protected:
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     void submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking) override;
+    void finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
+    MeshEvent enqueue_record_event_to_host_nolock(
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
 
 public:
     FDMeshCommandQueue(
@@ -190,9 +215,12 @@ public:
         uint32_t id,
         std::shared_ptr<ThreadPool>& dispatch_thread_pool,
         std::shared_ptr<ThreadPool>& reader_thread_pool,
-        std::shared_ptr<CQSharedState>& cq_shared_state);
+        std::shared_ptr<CQSharedState>& cq_shared_state,
+        std::function<std::lock_guard<std::mutex>()> lock_api_function);
 
     ~FDMeshCommandQueue() override;
+
+    std::optional<MeshTraceId> trace_id() const override { return this->trace_id_; }
 
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override { return config_buffer_mgr_[index]; };
     void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) override;
@@ -225,7 +253,8 @@ public:
     void reset_worker_state(
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,
-        const vector_aligned<uint32_t>& go_signal_noc_data) override;
+        const vector_aligned<uint32_t>& go_signal_noc_data,
+        const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) override;
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;
     void record_end() override;
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;

@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include <optional>
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "tt-metalium/buffer.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/mesh_device.hpp"
@@ -76,9 +76,7 @@ Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor,
             conv_weight_tensor.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
 
     return Tensor(
-        conv_weight_tensor.host_storage().transform(compute),
-        output_spec,
-        conv_weight_tensor.distributed_tensor_config());
+        conv_weight_tensor.host_storage().transform(compute), output_spec, conv_weight_tensor.tensor_topology());
 }
 
 Tensor transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel) {
@@ -95,15 +93,13 @@ Tensor transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, 
     switch (conv_weight_tensor.dtype()) {
         case DataType::BFLOAT16:
             return _transform_weights_for_conv_transpose2d<::bfloat16>(to_mirror_tensor, mirror_kernel);
-        case DataType::FLOAT32:
-            return _transform_weights_for_conv_transpose2d<float>(to_mirror_tensor, mirror_kernel);
+        case DataType::FLOAT32: return _transform_weights_for_conv_transpose2d<float>(to_mirror_tensor, mirror_kernel);
         case DataType::UINT32:
             return _transform_weights_for_conv_transpose2d<uint32_t>(to_mirror_tensor, mirror_kernel);
         default: TT_THROW("Unsupported data type for transform_weights_for_conv_transpose2d", to_mirror_tensor.dtype());
     }
 };
 
-template <typename T>
 ttnn::Tensor prepare_conv_transpose2d_weights(
     const ttnn::Tensor& weight_tensor,
     const ttnn::MemoryConfig& input_memory_config,
@@ -120,7 +116,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     std::array<uint32_t, 2> dilation,
     const bool has_bias,
     uint32_t groups,
-    T* device,
+    MeshDevice* device,
     DataType input_dtype,
     const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
@@ -155,7 +151,6 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
         std::nullopt);
 }
 
-template <typename T>
 ttnn::Tensor prepare_conv_transpose2d_bias(
     const ttnn::Tensor& bias_tensor,
     const ttnn::MemoryConfig& input_memory_config,
@@ -170,7 +165,7 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
-    T* device,
+    MeshDevice* device,
     DataType input_dtype,
     const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
@@ -195,92 +190,6 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
         conv_config_,
         compute_config_);
 }
-
-template ttnn::Tensor prepare_conv_transpose2d_weights(
-    const ttnn::Tensor& weight_tensor,
-    const ttnn::MemoryConfig& input_memory_config,
-    Layout input_layout,
-    const std::string& weights_format,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
-    std::array<uint32_t, 2> dilation,
-    const bool has_bias,
-    uint32_t groups,
-    IDevice* device,
-    DataType input_dtype,
-    const std::optional<const DataType>& output_dtype,
-    const std::optional<const Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    bool mirror_kernel);
-
-template ttnn::Tensor prepare_conv_transpose2d_weights(
-    const ttnn::Tensor& weight_tensor,
-    const ttnn::MemoryConfig& input_memory_config,
-    Layout input_layout,
-    const std::string& weights_format,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
-    std::array<uint32_t, 2> dilation,
-    const bool has_bias,
-    uint32_t groups,
-    tt::tt_metal::distributed::MeshDevice* device,
-    DataType input_dtype,
-    const std::optional<const DataType>& output_dtype,
-    const std::optional<const Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    bool mirror_kernel);
-
-template ttnn::Tensor prepare_conv_transpose2d_bias(
-    const ttnn::Tensor& bias_tensor,
-    const ttnn::MemoryConfig& input_memory_config,
-    Layout input_layout,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
-    std::array<uint32_t, 2> dilation,
-    uint32_t groups,
-    IDevice* device,
-    DataType input_dtype,
-    const std::optional<const DataType>& output_dtype,
-    const std::optional<const Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_);
-
-template ttnn::Tensor prepare_conv_transpose2d_bias(
-    const ttnn::Tensor& bias_tensor,
-    const ttnn::MemoryConfig& input_memory_config,
-    Layout input_layout,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
-    std::array<uint32_t, 2> dilation,
-    uint32_t groups,
-    tt::tt_metal::distributed::MeshDevice* device,
-    DataType input_dtype,
-    const std::optional<const DataType>& output_dtype,
-    const std::optional<const Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
 }  // namespace conv_transpose2d
 }  // namespace operations::conv

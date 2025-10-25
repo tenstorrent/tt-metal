@@ -4,7 +4,7 @@
 
 #include <errno.h>
 #include <fmt/base.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <ttnn/operations/functions.hpp>
@@ -14,7 +14,7 @@
 #include <stdexcept>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/shape.hpp>
@@ -24,7 +24,6 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -56,7 +55,7 @@ int main(int argc, char** argv) {
 
         auto run_operations = [&shapes, device] {
             for (const auto& shape : shapes) {
-                for (auto bcast_dim : magic_enum::enum_values<ttnn::BcastOpDim>()) {
+                for (auto bcast_dim : enchantum::values_generator<ttnn::BcastOpDim>) {
                     auto input_shape_a = shape;
                     if (bcast_dim == ttnn::BcastOpDim::H) {
                         input_shape_a[-1] = 32;
@@ -72,8 +71,8 @@ int main(int argc, char** argv) {
                     Tensor b = ttnn::zeros(
                         ttnn::Shape({1, 1, TILE_HEIGHT, TILE_WIDTH}), DataType::BFLOAT16, Layout::TILE, *device);
 
-                    for (auto bcast_math : magic_enum::enum_values<ttnn::BcastOpMath>()) {
-                        Tensor c = ttnn::bcast(ttnn::DefaultQueueId, a, b, bcast_math, bcast_dim);
+                    for (auto bcast_math : enchantum::values_generator<ttnn::BcastOpMath>) {
+                        Tensor c = ttnn::bcast(a, b, bcast_math, bcast_dim);
                         Tensor d = c.cpu();
 
                         ////////////////////////////////////////////////////////////////////////////
@@ -88,28 +87,28 @@ int main(int argc, char** argv) {
             {
                 Tensor a = ttnn::random::random(Shape({1, 1, 32, 4544})).to_layout(Layout::TILE).to_device(device);
                 Tensor b = ttnn::zeros(ttnn::Shape({1, 1, 32, 4544}), DataType::BFLOAT16, Layout::TILE, *device);
-                Tensor c = ttnn::bcast(ttnn::DefaultQueueId, a, b, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::H);
+                Tensor c = ttnn::bcast(a, b, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::H);
                 Tensor d = c.cpu();
             }
 
             {
                 Tensor a = ttnn::random::random(Shape({1, 1, 32, 4544})).to_layout(Layout::TILE).to_device(device);
                 Tensor b = ttnn::zeros(ttnn::Shape({1, 1, 32, 4544}), DataType::BFLOAT16, Layout::TILE, *device);
-                Tensor c = ttnn::bcast(ttnn::DefaultQueueId, a, b, ttnn::BcastOpMath::ADD, ttnn::BcastOpDim::H);
+                Tensor c = ttnn::bcast(a, b, ttnn::BcastOpMath::ADD, ttnn::BcastOpDim::H);
                 Tensor d = c.cpu();
             }
 
             {
                 Tensor a = ttnn::random::random(Shape({1, 71, 32, 32})).to_layout(Layout::TILE).to_device(device);
                 Tensor b = ttnn::zeros(ttnn::Shape({1, 1, 32, 32}), DataType::BFLOAT16, Layout::TILE, *device);
-                Tensor c = ttnn::bcast(ttnn::DefaultQueueId, a, b, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::HW);
+                Tensor c = ttnn::bcast(a, b, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::HW);
                 Tensor d = c.cpu();
             }
 
             {
                 Tensor a = ttnn::random::random(Shape({1, 71, 32, 64})).to_layout(Layout::TILE).to_device(device);
                 Tensor b = ttnn::zeros(ttnn::Shape({1, 1, 32, 32}), DataType::BFLOAT16, Layout::TILE, *device);
-                Tensor c = ttnn::bcast(ttnn::DefaultQueueId, a, b, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::HW);
+                Tensor c = ttnn::bcast(a, b, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::HW);
                 Tensor d = c.cpu();
             }
         };

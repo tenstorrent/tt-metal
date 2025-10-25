@@ -68,13 +68,15 @@ Information relevant to programming Blackhole while it is being brought up.
 
 Blackhole added a small (4 x 16B cachelines) write-through data cache in L1. Writing an address on one core and reading it from another only requires the reader to invalidate if the address was previously read.
 
-Invalidating the cache can be done via calls to `invalidate_l1_cache()`. Hardware can clear the cache at some randomized time interval but this is slower than explicitly invalidating the cache. By default the hardware timeout is disabled but can be enabled by setting env var `TT_METAL_ENABLE_HW_CACHE_INVALIDATION`
+The data cache is disabled by default but can be enabled globally through an env var:
+```
+export TT_METAL_ENABLE_L1_DATA_CACHE_RISCVS=<BR,NC,TR,ER>
+```
+where the values specify which riscs to enable cache on.
 
-The cache can be disabled through an env var:
-```
-export TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS=<BR,NC,TR,ER>
-```
-where the values specify which riscs to disable cache on.
+Alternatively, the data cache can be enabled on kernel by kernel basis by calling `set_l1_data_cache<true>()`. This needs to be accompanied with a `set_l1_data_cache<false>()` call before kernel exits.
+
+Invalidating the cache can be done via calls to `invalidate_l1_cache()`. Hardware can clear the cache at some randomized time interval but this is slower than explicitly invalidating the cache. By default the hardware timeout is disabled but can be enabled by setting env var `TT_METAL_ENABLE_HW_CACHE_INVALIDATION`
 
 ### Ethernet Cores
 
@@ -88,13 +90,13 @@ Runtime has not enabled access to program RISC-V on DRAM yet.
 
 ### NoC
 
-Non-rectangular multicast shapes and strided multicast has been brought up and tested. See gtest `DispatchFixture.DRAMtoL1MulticastExcludeRegionUpLeft` for example on usage.
+Non-rectangular multicast shapes and strided multicast has been brought up and tested. See gtest `MeshDispatchFixture.DRAMtoL1MulticastExcludeRegionUpLeft` for example on usage.
 
 On previous architectures there are instances in kernels where NoC commands are issued without explicit flushes. These were causing ND mismatches or hangs on BH because data and semaphore signals were getting updated faster than NoC has a chance to service the command and are resolved by adding flushes. Previous architectures did not need this because of higher RISC to L1 latency compared to NoC latency.
 
 ## Debug
 
-Debug tools are functional on BH and it is reccomended to use Watcher when triaging Op failures to catch potential alignment issues. Disabling the L1 cache can be helpful to identify missed cache invalidations.
+Debug tools are functional on BH and it is recommended to use Watcher when triaging Op failures to catch potential alignment issues. Disabling the L1 cache can be helpful to identify missed cache invalidations.
 
 ## Resetting
 

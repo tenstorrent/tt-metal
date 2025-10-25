@@ -4,12 +4,12 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <matmul_common/bmm_op.hpp>
 #include <algorithm>
 #include "tt-metalium/core_coord.hpp"
@@ -42,7 +42,7 @@ void golden_matmul(
             idx_b = j;
             c_f = 0;
             for (int k_m = 0; k_m < K; k_m++) {
-                float_tmp = a[idx_a].to_float() * b[idx_b].to_float();
+                float_tmp = static_cast<float>(a[idx_a]) * static_cast<float>(b[idx_b]);
                 c_f += float_tmp;
                 idx_a += 1;
                 idx_b += N;
@@ -61,20 +61,22 @@ void matmul_multicore_reuse_mcast(
     uint32_t N,
     uint32_t K,
     uint32_t B,
-    IDevice* device) {
+    std::shared_ptr<distributed::MeshDevice> mesh_device) {
     /*
      * Setup program to execute along with its buffers and kernels to use
      * Core range is just single core
      */
-    CommandQueue& cq = device->command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program{};
 
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
-    uint32_t single_tile_size = detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
     // uint32_t single_tile_size = 2 * 1024;
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = mesh_device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
@@ -212,27 +214,16 @@ void matmul_multicore_reuse_mcast(
         single_tile_size * Nt * Kt;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
     uint32_t dram_buffer_C_size =
         single_tile_size * Mt * Nt;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    tt_metal::InterleavedBufferConfig dram_config_A{
-        .device = device,
-        .size = dram_buffer_A_size,
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config_A{.size = dram_buffer_A_size};
+    distributed::ReplicatedBufferConfig buffer_config_B{.size = dram_buffer_B_size};
+    distributed::ReplicatedBufferConfig buffer_config_C{.size = dram_buffer_C_size};
+    distributed::DeviceLocalBufferConfig dram_config{
+        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
 
-    tt_metal::InterleavedBufferConfig dram_config_B{
-        .device = device,
-        .size = dram_buffer_B_size,
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
+    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config_A, dram_config, mesh_device.get());
+    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config_B, dram_config, mesh_device.get());
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config_C, dram_config, mesh_device.get());
 
-    tt_metal::InterleavedBufferConfig dram_config_C{
-        .device = device,
-        .size = dram_buffer_C_size,
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
-
-    auto src0_dram_buffer = CreateBuffer(dram_config_A);
-    auto src1_dram_buffer = CreateBuffer(dram_config_B);
-    auto dst_dram_buffer = CreateBuffer(dram_config_C);
     uint32_t src0_addr = src0_dram_buffer->address();
     uint32_t src1_addr = src1_dram_buffer->address();
     uint32_t dst_addr = dst_dram_buffer->address();
@@ -264,13 +255,12 @@ void matmul_multicore_reuse_mcast(
     /*
      * Compile time arguments
      */
-    bool src0_is_dram = src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool src1_is_dram = src1_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
 
-    bool dst_is_dram = dst_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    // std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t) output_cb_index, (uint32_t)dst_is_dram};
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args;
+    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
 
     /*
      * Create Kernels (Reader, Writer, Compute)
@@ -362,12 +352,12 @@ void matmul_multicore_reuse_mcast(
             CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core_y + 1};
             CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_r - 1};
 
-            auto left_core_physical = device->worker_core_from_logical_core(left_core);
-            auto left_core_plus_one_physical = device->worker_core_from_logical_core(left_core_plus_one);
-            auto right_core_physical = device->worker_core_from_logical_core(right_core);
-            auto top_core_physical = device->worker_core_from_logical_core(top_core);
-            auto top_core_plus_one_physical = device->worker_core_from_logical_core(top_core_plus_one);
-            auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+            auto left_core_physical = mesh_device->worker_core_from_logical_core(left_core);
+            auto left_core_plus_one_physical = mesh_device->worker_core_from_logical_core(left_core_plus_one);
+            auto right_core_physical = mesh_device->worker_core_from_logical_core(right_core);
+            auto top_core_physical = mesh_device->worker_core_from_logical_core(top_core);
+            auto top_core_plus_one_physical = mesh_device->worker_core_from_logical_core(top_core_plus_one);
+            auto bottom_core_physical = mesh_device->worker_core_from_logical_core(bottom_core);
 
             std::vector<uint32_t> mm_reader_args = {
                 (std::uint32_t)src0_dram_buffer->address(),   // in0_buffer_addr
@@ -466,10 +456,11 @@ void matmul_multicore_reuse_mcast(
 
     /* Launch program & read in output buffer result into the host vector */
 
-    EnqueueWriteBuffer(cq, src0_dram_buffer, a.data(), false);
-    EnqueueWriteBuffer(cq, src1_dram_buffer, b.data(), false);
-    EnqueueProgram(cq, program, false);
-    EnqueueReadBuffer(cq, dst_dram_buffer, output.data(), true);
+    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
+    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);
 }
 
 ///////////////////////////////////////
@@ -477,14 +468,10 @@ void matmul_multicore_reuse_mcast(
 int main() {
     bool pass = true;
 
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        TT_THROW("Test not supported w/ slow dispatch, exiting");
-    }
-
     try {
         /* Silicon accelerator setup */
         constexpr int device_id = 0;
-        IDevice* device = CreateDevice(device_id);
+        std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Matmul Parameters Setup
@@ -521,7 +508,7 @@ int main() {
 
         /* Calling the MatMul host program. Read in result into a host vector */
         std::vector<bfloat16> result_vec(dram_buffer_C_size / sizeof(bfloat16));
-        matmul_multicore_reuse_mcast(src0_vec, src1_vec, result_vec, false, M, N, K, B, device);
+        matmul_multicore_reuse_mcast(src0_vec, src1_vec, result_vec, false, M, N, K, B, mesh_device);
         result_vec = untilize_nfaces(result_vec, M, N);
 
         fmt::print("Output vector of size {}\n", result_vec.size());
@@ -530,7 +517,7 @@ int main() {
         fmt::print("Metalium vs Golden -- PCC = {}\n", pearson);
         TT_FATAL(pearson > 0.98, "PCC not high enough. Result PCC: {}, Expected PCC: 0.98", pearson);
 
-        pass &= CloseDevice(device);
+        pass &= mesh_device->close();
 
     } catch (const std::exception& e) {
         fmt::print(stderr, "Test failed with exception!\n");

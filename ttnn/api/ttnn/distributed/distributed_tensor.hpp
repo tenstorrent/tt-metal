@@ -15,64 +15,8 @@
 
 namespace ttnn::distributed {
 
-struct MeshMapperConfig {
-    // Specifies the tensor should be replicated across devices.
-    struct Replicate {};
-
-    // Specifies the tensor should be sharded along the specified dimension.
-    struct Shard {
-        int dim = 0;
-    };
-
-    // Specifies placements for each dimension of the shape.
-    // The size of `placements` must match the dimensions of the shape.
-    //
-    // For example, sharding a 2x8 tensor over 2x2 mesh with {Replicate(), Shard{1}} will yield the following result:
-    //
-    //    Input Tensor [2, 8]:
-    // +----+----+----+----+----+----+---+-----+
-    // |  0 |  1 |  2 |  3 |  4 |  5 |  6 |  7 |
-    // |----+----+----+----+----+----+---+-----+
-    // |  8 |  9 | 10 | 11 | 12 | 13 | 14 | 15 |
-    // +----+----+----+----+----+----+---+-----+
-    //
-    //    Shape [2, 2]:
-    // +-------+-------+
-    // | (0,0) | (0,1) |
-    // +-------+-------+
-    // | (1,0) | (1,1) |
-    // +-------+-------+
-    //
-    // Distributed Tensor on Mesh (placements = {Replicate{}, Shard{1}}):
-    //
-    // +-----------------------------+-----------------------------+
-    // |     (0,0)                   |     (0,1)                   |
-    // |    +----+----+----+----+    |    +----+----+----+----+    |
-    // |    |  0 |  1 |  2 |  3 |    |    |  4 |  5 |  6 |  7 |    |
-    // |    +----+----+----+----+    |    +----+----+----+----+    |
-    // |    |  8 |  9 | 10 | 11 |    |    | 12 | 13 | 14 | 15 |    |
-    // |    +----+----+----+----+    |    +----+----+----+----+    |
-    // +-----------------------------+-----------------------------+
-    // |     (1,0)                   |     (1,1)                   |
-    // |    +----+----+----+----+    |    +----+----+----+----+    |
-    // |    |  0 |  1 |  2 |  3 |    |    |  4 |  5 |  6 |  7 |    |
-    // |    +----+----+----+----+    |    +----+----+----+----+    |
-    // |    |  8 |  9 | 10 | 11 |    |    | 12 | 13 | 14 | 15 |    |
-    // |    +----+----+----+----+    |    +----+----+----+----+    |
-    // +-----------------------------+-----------------------------+
-    //
-
-    using Placement = std::variant<Replicate, Shard>;
-    tt::stl::SmallVector<Placement> placements;
-
-    // If provided, the sharding will be performed according to this shape, but re-mapped to the mesh device shape in
-    // either row-major order, or preserving the original coordinates (if the shape fits within the mesh device
-    // entirely).
-    std::optional<ttnn::MeshShape> mesh_shape_override = std::nullopt;
-};
-
-std::ostream& operator<<(std::ostream& os, const MeshMapperConfig::Placement& placement);
-std::ostream& operator<<(std::ostream& os, const MeshMapperConfig& config);
+using MeshMapperConfig = tt::tt_metal::distributed::MeshMapperConfig;
+using MeshComposerConfig = tt::tt_metal::distributed::MeshComposerConfig;
 
 // Mapper interface used for distributing a tensor onto a mesh.
 class TensorToMesh {
@@ -100,8 +44,6 @@ public:
         const tt::tt_metal::TensorLayout& layout,
         T pad_value = 0) const;
 
-    tt::tt_metal::DistributedTensorConfig config() const;
-
 private:
     class Impl;
 
@@ -121,18 +63,6 @@ std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_d
 // Shorthand for specifying a MeshMapperConfig with 1D mesh shape, and sharding the tensor along a single dimension of
 // the tensor.
 std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int dim);
-
-struct MeshComposerConfig {
-    // Specifies dimension of the tensor to concatenate.
-    tt::stl::SmallVector<int> dims;
-
-    // If provided, the concatenation will be performed according to this shape, but re-mapped to the mesh device shape
-    // in either row-major order, or preserving the original coordinates (if the shape fits within the mesh device
-    // entirely).
-    std::optional<ttnn::MeshShape> mesh_shape_override = std::nullopt;
-};
-
-std::ostream& operator<<(std::ostream& os, const MeshComposerConfig& config);
 
 // Composer interface used for aggregating a tensor distributed over a mesh.
 class MeshToTensor {
@@ -175,7 +105,7 @@ Tensor distribute_tensor(
     const Tensor& tensor,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt,
-    ttnn::QueueId cq_id = ttnn::DefaultQueueId);
+    std::optional<ttnn::QueueId> cq_id = std::nullopt);
 
 // Creates a distributed tensor from a span of logical data specified in `buffer`.
 // `global_shape` must match the size of `buffer`; shapes of shards will be derived automatically based on the `mapper`,
@@ -189,7 +119,7 @@ Tensor create_distributed_tensor(
     const tt::tt_metal::TensorLayout& shard_layout,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt,
-    ttnn::QueueId cq_id = ttnn::DefaultQueueId,
+    std::optional<ttnn::QueueId> cq_id = std::nullopt,
     T pad_value = 0);
 
 // Overload for unowned spans of data.
@@ -200,7 +130,7 @@ Tensor create_distributed_tensor(
     const tt::tt_metal::TensorLayout& shard_layout,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt,
-    ttnn::QueueId cq_id = ttnn::DefaultQueueId,
+    std::optional<ttnn::QueueId> cq_id = std::nullopt,
     T pad_value = 0);
 
 // Aggregates a multi-device tensor into a host tensor according to the `composer`.

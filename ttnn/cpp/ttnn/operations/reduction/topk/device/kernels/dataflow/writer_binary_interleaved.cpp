@@ -10,24 +10,22 @@ void kernel_main() {
 
     constexpr uint32_t values_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t output_ind_cb_index = get_compile_time_arg_val(1);
-    constexpr bool values_is_dram = get_compile_time_arg_val(2) == 1;
-    constexpr bool output_ind_is_dram = get_compile_time_arg_val(3) == 1;
-    constexpr uint32_t Ht = get_compile_time_arg_val(4);
-    constexpr uint32_t Kt = get_compile_time_arg_val(5);
+    constexpr uint32_t Ht = get_compile_time_arg_val(2);
+    constexpr uint32_t Kt = get_compile_time_arg_val(3);
+
+    constexpr auto interleaved_accessor0_args = TensorAccessorArgs<4>();
+    constexpr auto interleaved_accessor1_args =
+        TensorAccessorArgs<interleaved_accessor0_args.next_compile_time_args_offset()>();
 
     // can amortize the noc reads by doing them side by side for the two tensors
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes_values = get_tile_size(values_cb_index);
-    const DataFormat data_format_values = get_dataformat(values_cb_index);
 
-    const InterleavedAddrGenFast<values_is_dram> interleaved_accessor0 = {
-        .bank_base_address = dst_addr0, .page_size = tile_bytes_values, .data_format = data_format_values};
+    const auto interleaved_accessor0 = TensorAccessor(interleaved_accessor0_args, dst_addr0, tile_bytes_values);
 
     const uint32_t tile_bytes_ind = get_tile_size(output_ind_cb_index);
-    const DataFormat data_format_ind = get_dataformat(output_ind_cb_index);
 
-    const InterleavedAddrGenFast<output_ind_is_dram> interleaved_accessor1 = {
-        .bank_base_address = dst_addr1, .page_size = tile_bytes_ind, .data_format = data_format_ind};
+    const auto interleaved_accessor1 = TensorAccessor(interleaved_accessor1_args, dst_addr1, tile_bytes_ind);
 
     // Get Kt rows of values and then Kt rows of indices from compute kernel
     for (uint32_t j = 0; j < Ht; ++j) {

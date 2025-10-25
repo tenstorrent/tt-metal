@@ -15,8 +15,8 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/fabric.hpp>
-#include <tt-metalium/kernel.hpp>
-#include <ttnn/tensor/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 using namespace tt::constants;
 
@@ -37,8 +37,7 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
     for (const auto& connection : socket_connection_config) {
         if (socket_mesh_device->get_device(connection.receiver_core.device_coord)->id() == target_device->id()) {
             receiver_core_coord = connection.receiver_core.core_coord;
-            receiver_fabric_node_id =
-                output_tensor.mesh_device()->get_device_fabric_node_id(connection.sender_core.device_coord);
+            receiver_fabric_node_id = output_tensor.device()->get_fabric_node_id(connection.sender_core.device_coord);
             sender_fabric_node_id = mesh_socket.get_fabric_node_id(
                 tt::tt_metal::distributed::SocketEndpoint::SENDER, connection.sender_core.device_coord);
             break;
@@ -77,8 +76,7 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
             packet_header_cb_num_pages * packet_header_cb_page_size, {{packet_header_cb_index, tt::DataFormat::UInt32}})
             .set_page_size(packet_header_cb_index, packet_header_cb_page_size);
 
-    tt::tt_metal::CBHandle cb_packet_header_worker =
-        CreateCircularBuffer(program, receiver_core_coord, cb_packet_header_config);
+    CreateCircularBuffer(program, receiver_core_coord, cb_packet_header_config);
 
     const auto output_accessor_args = tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer());
     auto output_accessor_compile_time_args = output_accessor_args.get_compile_time_args();
@@ -105,8 +103,7 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
             tt::tt_metal::CircularBufferConfig(
                 2 * num_pages_per_block * socket_aligned_page_size, {{scratch_buffer_cb_index, data_format}})
                 .set_page_size(scratch_buffer_cb_index, socket_aligned_page_size);
-        tt::tt_metal::CBHandle cb_scratch_buffer_worker =
-            CreateCircularBuffer(program, receiver_core_coord, cb_scratch_buffer_config);
+        CreateCircularBuffer(program, receiver_core_coord, cb_scratch_buffer_config);
     }
 
     tt::tt_metal::KernelHandle reader_kernel = 0;

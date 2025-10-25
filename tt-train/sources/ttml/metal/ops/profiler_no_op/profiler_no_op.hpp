@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@
 namespace ttml::metal::ops::profiler_no_op {
 
 struct ProfilerNoopOperation {
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor);
+    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const std::string& identifier);
 };
 
 }  // namespace ttml::metal::ops::profiler_no_op

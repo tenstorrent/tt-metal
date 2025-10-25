@@ -7,10 +7,10 @@
 #include <limits>
 #include <numeric>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_assignment.hpp"
-#include <umd/device/types/arch.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -176,12 +176,8 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
             if (std::find(worker_phy_y.begin(), worker_phy_y.end(), y_coord) == worker_phy_y.end()) {
                 non_worker_rows.push_back(y_coord);
             }
-            if (y_coord > max_worker_y_physical) {
-                max_worker_y_physical = y_coord;
-            }
-            if (y_coord < min_worker_y_physical) {
-                min_worker_y_physical = y_coord;
-            }
+            max_worker_y_physical = std::max<uint32_t>(y_coord, max_worker_y_physical);
+            min_worker_y_physical = std::min<uint32_t>(y_coord, min_worker_y_physical);
         }
     }
     std::vector<CoreCoord> dram_interface_workers;

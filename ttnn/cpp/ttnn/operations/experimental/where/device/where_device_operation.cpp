@@ -1,5 +1,5 @@
 
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,10 +12,9 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/command_queue.hpp>
 
 #include <tracy/Tracy.hpp>
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 
 using namespace tt::tt_metal;
 
@@ -70,7 +69,7 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
     WhereDeviceOperation::validate_on_program_cache_hit(attributes, args);
 
     TT_FATAL(
-        args.condition_tensor.get_layout() == Layout::TILE,
+        args.condition_tensor.layout() == Layout::TILE,
         "Condition tensor used in the where operation is required to be tiled!");
 }
 
@@ -82,7 +81,7 @@ void WhereDeviceOperation::validate_on_program_cache_hit(
 WhereDeviceOperation::spec_return_value_t WhereDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& args) {
     if (args.output_tensor.has_value()) {
-        return args.output_tensor->get_tensor_spec();
+        return args.output_tensor->tensor_spec();
     }
 
     fail_on_shape_mismatch(args.condition_tensor, args.true_value_tensor, args.false_value_tensor);
@@ -153,7 +152,7 @@ WhereDeviceOperation::invoke(
         operation_attributes_t{
             .memory_config = memory_config.value_or(
                 output_tensor.has_value() ? output_tensor->memory_config() : condition_tensor.memory_config()),
-            .dtype = dtype.value_or(condition_tensor.get_dtype()),
+            .dtype = dtype.value_or(condition_tensor.dtype()),
             .worker_grid = std::move(worker_grid),
             .compute_kernel_config = std::nullopt},
         tensor_args_t{

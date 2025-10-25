@@ -37,6 +37,7 @@ set(TT_METAL_TESTS_SRCS
     test_compile_sets_kernel_binaries.cpp
     test_compile_program.cpp
     test_clean_init.cpp
+    test_single_dm_l1_write.cpp
 )
 
 foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
@@ -66,12 +67,15 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/debug_tools)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/device)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dispatch)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/eth)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/hal_codegen)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/integration)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/llk)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/perf_microbenchmark)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/noc)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/lightmetal)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/sfpi)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/misc)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tunneling)
 
 add_custom_target(
     metal_tests
@@ -81,6 +85,7 @@ add_custom_target(
         unit_tests_api
         unit_tests_data_movement
         unit_tests_debug_tools
+        unit_tests_inspector
         unit_tests_device
         unit_tests_dispatch
         unit_tests_eth
@@ -89,6 +94,8 @@ add_custom_target(
         unit_tests_noc
         unit_tests_lightmetal
         unit_tests_sfpi
+        unit_tests_misc
+        unit_tests_tunneling
 )
 
 add_library(metalium_test_files INTERFACE)
@@ -101,7 +108,11 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(GLOB_RECURSE kernels test_kernels/*)
+file(
+    GLOB_RECURSE kernels
+    test_kernels/*
+    perf_microbenchmark/routing/kernels/*
+)
 target_sources(
     metalium_test_files
     PUBLIC
@@ -109,7 +120,10 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS
             ${CMAKE_CURRENT_SOURCE_DIR}/../../.. # FIXME
-        FILES ${kernels}
+        FILES
+            ${kernels}
+            perf_microbenchmark/common/kernel_utils.hpp
+            perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp
 )
 
 install(

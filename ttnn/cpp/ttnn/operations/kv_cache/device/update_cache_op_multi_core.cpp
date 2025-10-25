@@ -8,7 +8,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 
@@ -25,10 +25,10 @@ operation::ProgramWithCallbacks update_cache_multi_core(
     Program program{};
 
     tt::DataFormat cache_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(cache_tensor.dtype());
-    uint32_t cache_single_tile_size = tt::tt_metal::detail::TileSize(cache_cb_data_format);
+    uint32_t cache_single_tile_size = tt::tile_size(cache_cb_data_format);
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
     tt::tt_metal::IDevice* device = input_tensor.device();
 
@@ -36,7 +36,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     tt::DataFormat interm_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    uint32_t interm_single_tile_size = tt::tt_metal::detail::TileSize(interm_cb_data_format);
+    uint32_t interm_single_tile_size = tt::tile_size(interm_cb_data_format);
 
     uint32_t Wt = cache_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
 
@@ -70,7 +70,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(
 
     CoreRangeSet all_cores, core_group_1, core_group_2;
 
-    std::optional<ShardSpec> shard_spec = input_tensor.shard_spec();
+    const std::optional<ShardSpec>& shard_spec = input_tensor.shard_spec();
 
     uint32_t num_input_tiles;
     if (shard_spec.has_value()) {
@@ -147,27 +147,22 @@ operation::ProgramWithCallbacks update_cache_multi_core(
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = cache_tensor.buffer();
 
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     const uint32_t u_range = std::min(static_cast<uint32_t>(32), Bcache);
     const uint32_t u_count = u_range / granularity;
 
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)dst_is_dram,
-        (std::uint32_t)src_is_dram,
-        (std::uint32_t)src0_cb_index,
-        (std::uint32_t)src1_cb_index,
-        (std::uint32_t)granularity,
-        (std::uint32_t)u_count};
+        (std::uint32_t)src0_cb_index, (std::uint32_t)src1_cb_index, (std::uint32_t)granularity, (std::uint32_t)u_count};
+    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)dst_is_dram,
         (std::uint32_t)output_cb_index,
         (std::uint32_t)interm0_cb_index,
         (std::uint32_t)interm1_cb_index,
         (std::uint32_t)interm2_cb_index,
         (std::uint32_t)granularity,
         (std::uint32_t)u_count};
+    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_kernel_defines;
     if (shard_spec.has_value()) {
@@ -321,7 +316,7 @@ operation::ProgramWithCallbacks fill_cache_multi_core(
     Program program{};
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     // TODO: For interleaved and kv_heads > 1, we assert that each core only gets 1 tile along seq_len
     // For sharded, each core gets shard_shape[0] number of tiles along seq_len.
@@ -334,7 +329,7 @@ operation::ProgramWithCallbacks fill_cache_multi_core(
     uint32_t cache_HtWt = cache_tensor.padded_shape()[-2] * Wt / TILE_HEIGHT;
     uint32_t cache_CHtWt = cache_tensor.padded_shape()[1] * cache_HtWt;
     uint32_t update_idxt = update_idx / TILE_HEIGHT;
-    uint32_t start_idx = batch_idx * cache_CHtWt + update_idxt * Wt;
+    uint32_t start_idx = (batch_idx * cache_CHtWt) + (update_idxt * Wt);
     tt::tt_metal::IDevice* device = input_tensor.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -346,7 +341,7 @@ operation::ProgramWithCallbacks fill_cache_multi_core(
 
     CoreRangeSet all_cores, core_group_1, core_group_2;
 
-    std::optional<ShardSpec> shard_spec = input_tensor.shard_spec();
+    const std::optional<ShardSpec>& shard_spec = input_tensor.shard_spec();
 
     uint32_t num_input_tiles;
     if (shard_spec.has_value()) {
@@ -388,11 +383,11 @@ operation::ProgramWithCallbacks fill_cache_multi_core(
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = cache_tensor.buffer();
 
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram};
+    std::vector<uint32_t> reader_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_kernel_defines;
     if (shard_spec.has_value()) {
@@ -434,9 +429,9 @@ operation::ProgramWithCallbacks fill_cache_multi_core(
                 num_blocks_written * Wt,
             });
 
-        const uint32_t cache_start_id = start_idx                                     // user batch start
-                                        + num_blocks_written / input_Ht * cache_HtWt  // cache head offset
-                                        + (num_blocks_written % input_Ht) * Wt;       // seq_len offset
+        const uint32_t cache_start_id = start_idx                                       // user batch start
+                                        + (num_blocks_written / input_Ht * cache_HtWt)  // cache head offset
+                                        + ((num_blocks_written % input_Ht) * Wt);       // seq_len offset
 
         tt::tt_metal::SetRuntimeArgs(
             program,
@@ -472,7 +467,7 @@ operation::ProgramWithCallbacks fill_cache_multi_core(
         const auto update_idx = static_cast<const UpdateCache*>(operation)->update_idx;
 
         uint32_t update_idxt = update_idx / TILE_HEIGHT;
-        uint32_t start_idx = batch_idx * cache_CHtWt + update_idxt * Wt;
+        uint32_t start_idx = (batch_idx * cache_CHtWt) + (update_idxt * Wt);
 
         auto src_buffer = input_tensors.at(1).buffer();
 
@@ -497,9 +492,9 @@ operation::ProgramWithCallbacks fill_cache_multi_core(
             }
 
             {
-                const uint32_t cache_start_id = start_idx                                     // user batch start
-                                                + num_blocks_written / input_Ht * cache_HtWt  // cache head offset
-                                                + (num_blocks_written % input_Ht) * Wt;       // seq_len offset
+                const uint32_t cache_start_id = start_idx                                       // user batch start
+                                                + (num_blocks_written / input_Ht * cache_HtWt)  // cache head offset
+                                                + ((num_blocks_written % input_Ht) * Wt);       // seq_len offset
 
                 auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();

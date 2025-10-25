@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,12 +6,13 @@
 
 #include <core/ttnn_all_includes.hpp>
 #include <cstdint>
+#include <enchantum/enchantum.hpp>
 #include <ttnn/tensor/types.hpp>
 
 #include "autograd/auto_context.hpp"
-#include "autograd/module_base.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "modules/module_base.hpp"
 #include "msgpack_file.hpp"
 #include "optimizers/optimizer_base.hpp"
 #include "optimizers/sgd.hpp"
@@ -81,22 +82,17 @@ void write_ttnn_tensor(MsgPackFile& file, std::string_view name, const tt::tt_me
     // we currently assume that there are two types of runs: single device and DDP
     // once we decide to use other parallelization techniques (tensor parallel, FSDP) we need to update this code
     if (data_type == tt::tt_metal::DataType::BFLOAT16) {
-        auto* device = &ttml::autograd::ctx().get_device();
-        ttml::core::MeshToXTensorVariant<float> composer = ttml::core::VectorMeshToXTensor<float>(device->shape());
-        auto data_all_devices = ttml::core::to_xtensor<float>(tensor, composer);
+        auto data_all_devices = ttml::core::to_xtensor<float>(tensor, core::IdentityComposer{});
         // pick weights from first device
         auto data = data_all_devices.front();
         file.put(std::string(name) + "/data", std::span<const float>(data.data(), data.size()));
     } else if (data_type == tt::tt_metal::DataType::UINT32) {
-        auto* device = &ttml::autograd::ctx().get_device();
-        ttml::core::MeshToXTensorVariant<uint32_t> composer =
-            ttml::core::VectorMeshToXTensor<uint32_t>(device->shape());
-        auto data_all_devices = ttml::core::to_xtensor<uint32_t>(tensor, composer);
+        auto data_all_devices = ttml::core::to_xtensor<uint32_t>(tensor, ttml::core::IdentityComposer{});
         // pick weights from first device
         auto data = data_all_devices.front();
         file.put(std::string(name) + "/data", std::span<const uint32_t>(data.data(), data.size()));
     } else {
-        throw std::runtime_error(fmt::format("Unsupported data type: {}", magic_enum::enum_name(data_type)));
+        throw std::runtime_error(fmt::format("Unsupported data type: {}", enchantum::to_string(data_type)));
     }
 }
 
@@ -124,7 +120,7 @@ void read_ttnn_tensor(MsgPackFile& file, std::string_view name, tt::tt_metal::Te
         tensor = core::from_vector<uint32_t, tt::tt_metal::DataType::UINT32>(
             data, shape, &ttml::autograd::ctx().get_device(), layout);
     } else {
-        throw std::runtime_error(fmt::format("Unsupported data type: {}", magic_enum::enum_name(data_type)));
+        throw std::runtime_error(fmt::format("Unsupported data type: {}", enchantum::to_string(data_type)));
     }
 }
 
@@ -176,19 +172,18 @@ void write_optimizer(MsgPackFile& file, std::string_view name, const optimizers:
 
 void read_optimizer(MsgPackFile& file, std::string_view name, optimizers::OptimizerBase* optimizer) {
     assert(optimizer);
-    size_t steps = 0;
     auto state_dict = optimizer->get_state_dict();
     read_state_dict(file, name, state_dict);
     optimizer->set_state_dict(state_dict);
 }
 
-void write_module(MsgPackFile& file, std::string_view name, const autograd::ModuleBase* module) {
+void write_module(MsgPackFile& file, std::string_view name, const modules::ModuleBase* module) {
     assert(module);
     auto named_parameters = module->parameters();
     write_named_parameters(file, name, named_parameters);
 }
 
-void read_module(MsgPackFile& file, std::string_view name, autograd::ModuleBase* module) {
+void read_module(MsgPackFile& file, std::string_view name, modules::ModuleBase* module) {
     assert(module);
     auto named_parameters = module->parameters();
     read_named_parameters(file, name, named_parameters);

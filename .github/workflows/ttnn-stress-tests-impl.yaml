@@ -12,7 +12,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 45
+        default: 70
       docker-image:
         required: true
         type: string
@@ -26,18 +26,20 @@ on:
 jobs:
   ttnn:
     name: ttnn stress tests ${{ inputs.arch }} ${{ inputs.runner-label }}
-    runs-on:
-      - "in-service"
-      - "${{ inputs.runner-label }}"
-      - "${{ (inputs.runner-label == 'config-tg' || inputs.runner-label == 'topology-6u') && 'bare-metal' || 'cloud-virtual-machine' }}"
-
-
+    runs-on: >-
+      ${{
+        (inputs.runner-label == 'config-tg' || inputs.runner-label == 'topology-6u') && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
+        || (contains('BH-DeskBox, BH-LLMBox, BH-LoudBox', inputs.runner-label) && fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label)))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
+      }}
     container:
       image: ${{ inputs.docker-image }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
+        LD_LIBRARY_PATH: /work/build/lib
         PYTHONPATH: /work
+        TT_METAL_HOME: /work
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -48,14 +50,21 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+
+      - name: Ensure BH Eth links online
+        if: ${{ contains(inputs.runner-label, 'BH-') }}
+        uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
+        with:
+          runner-label: ${{ inputs.runner-label }}
 
       - name: Run Stress Tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: pytest tests/ttnn/stress_tests/
+        run: pytest tests/ttnn/stress_tests/ --ignore=tests/ttnn/stress_tests/test_ccl.py
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

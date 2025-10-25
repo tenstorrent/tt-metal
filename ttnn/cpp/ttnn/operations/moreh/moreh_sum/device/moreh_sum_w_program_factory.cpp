@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "moreh_sum_device_operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/reduction/generic/device/common.hpp"
@@ -29,7 +30,6 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
     const auto& shape = input.padded_shape();
     const auto [W, H, other_dims_product] = extract_spatial_dims(shape);
 
-    uint32_t HW = H * W;
     uint32_t Wt = W / tt::constants::TILE_WIDTH;
     uint32_t Ht = H / tt::constants::TILE_HEIGHT;
 
@@ -52,19 +52,17 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t src0_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
+    uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
     // Scaler datatype is hardcoded bfloat16 due to tile creation in reader
     tt::DataFormat scaler_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t scaler_single_tile_size = tt::tt_metal::detail::TileSize(scaler_cb_data_format);
+    uint32_t scaler_single_tile_size = tt::tile_size(scaler_cb_data_format);
     tt::DataFormat mask_w_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t mask_w_single_tile_size = tt::tt_metal::detail::TileSize(mask_w_cb_data_format);
+    uint32_t mask_w_single_tile_size = tt::tile_size(mask_w_cb_data_format);
     tt::DataFormat intermed_cb_data_format = (fp32_dest_acc_en) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat intermed1_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t intermed_single_tile_size = tt::tt_metal::detail::TileSize(intermed_cb_data_format);
+    uint32_t intermed_single_tile_size = tt::tile_size(intermed_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
-
-    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
+    uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
     tt::tt_metal::IDevice* device = input.device();
 
@@ -87,28 +85,28 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
         tt::tt_metal::CircularBufferConfig(
             num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
             .set_page_size(src0_cb_index, src0_single_tile_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     tt::tt_metal::CircularBufferConfig cb_scaler_config =
         tt::tt_metal::CircularBufferConfig(
             num_input_tiles * scaler_single_tile_size, {{tt::CBIndex::c_2, scaler_cb_data_format}})
             .set_page_size(tt::CBIndex::c_2, scaler_single_tile_size);
-    auto cb_scaler = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
 
     tt::tt_metal::CircularBufferConfig cb_mask_w_config =
         tt::tt_metal::CircularBufferConfig(mask_w_single_tile_size, {{tt::CBIndex::c_3, mask_w_cb_data_format}})
             .set_page_size(tt::CBIndex::c_3, mask_w_single_tile_size);
-    auto cb_mask_w = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_mask_w_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_mask_w_config);
 
     tt::tt_metal::CircularBufferConfig cb_intermed0_config =
         tt::tt_metal::CircularBufferConfig(intermed_single_tile_size, {{tt::CBIndex::c_24, intermed_cb_data_format}})
             .set_page_size(tt::CBIndex::c_24, intermed_single_tile_size);
-    auto cb_intermed0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
 
     tt::tt_metal::CircularBufferConfig cb_intermed1_config =
         tt::tt_metal::CircularBufferConfig(intermed_single_tile_size, {{tt::CBIndex::c_25, intermed1_cb_data_format}})
             .set_page_size(tt::CBIndex::c_25, intermed_single_tile_size);
-    auto cb_intermed1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed1_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed1_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = 2;
@@ -116,16 +114,17 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
         tt::tt_metal::CircularBufferConfig(
             num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
             .set_page_size(output_cb_index, dst_single_tile_size);
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    class bfloat16 bfloat_scaler_value = *(new class bfloat16(scaler));
+    bfloat16 bfloat_scaler_value(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     tt::tt_metal::Buffer* src_buffer = input.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, packed_scaler_value};
+    std::vector<uint32_t> reader_compile_time_args = {};
+    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+    reader_compile_time_args.push_back(packed_scaler_value);
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines{};
     if (do_mask_w) {
@@ -158,7 +157,7 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
     if (fp32_dest_acc_en) {
         unpack_to_dest_mode[tt::CBIndex::c_24] = UnpackToDestMode::UnpackToDestFp32;
     }
-    auto reduce_compute_kernel_group_1_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         compute_kernel_name,
         core_group_1,
@@ -178,7 +177,7 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
             origin_W,
         };
 
-        auto reduce_compute_kernel_group_2_id = tt::tt_metal::CreateKernel(
+        tt::tt_metal::CreateKernel(
             program,
             compute_kernel_name,
             core_group_2,
@@ -242,7 +241,7 @@ void MorehSumOperation::MorehSumWFactory::override_runtime_arguments(
     auto src_dram_buffer = tensor_args.input.buffer();
     auto dst_dram_buffer = tensor_return_value.buffer();
 
-    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
+    for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         {

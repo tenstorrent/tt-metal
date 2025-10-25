@@ -20,7 +20,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" PyTorch DeepSeek model."""
+"""PyTorch DeepSeek model."""
 import math
 import warnings
 from typing import List, Optional, Tuple, Union
@@ -29,11 +29,11 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache
+from transformers.generation.utils import GenerationMixin
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.modeling_outputs import (
     BaseModelOutputWithPast,
@@ -51,6 +51,7 @@ from transformers.utils import (
 from transformers.utils.import_utils import is_torch_fx_available
 
 from .configuration_deepseek import DeepseekV3Config
+from .reference_utils import topk_bitonic
 
 # This makes `_prepare_4d_causal_attention_mask` a leaf function in the FX graph.
 # It means that the function will not be traced through and simply appear as a node in the graph.
@@ -84,7 +85,7 @@ class DeepseekV3RMSNorm(nn.Module):
         DeepseekV3RMSNorm is equivalent to T5LayerNorm
         """
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.weight = nn.Parameter(torch.randn(hidden_size))
         self.variance_epsilon = eps
 
     def forward(self, hidden_states):
@@ -126,7 +127,8 @@ class DeepseekV3RotaryEmbedding(nn.Module):
         self.register_buffer("cos_cached", emb.cos().to(dtype), persistent=False)
         self.register_buffer("sin_cached", emb.sin().to(dtype), persistent=False)
 
-    def forward(self, x, seq_len=None):
+    def forward(self, x, seq_len=None, meta_style=False):
+        self.meta_style = meta_style
         # x: [bs, num_attention_heads, seq_len, head_size]
         if self.max_seq_len_cached is None or seq_len > self.max_seq_len_cached:
             self._set_cos_sin_cache(seq_len=seq_len, device=x.device, dtype=x.dtype)
@@ -238,6 +240,7 @@ class DeepseekV3YarnRotaryEmbedding(DeepseekV3RotaryEmbedding):
         beta_slow=1,
         mscale=1,
         mscale_all_dim=0,
+        meta_style=False,
     ):
         self.scaling_factor = scaling_factor
         self.original_max_position_embeddings = original_max_position_embeddings
@@ -245,6 +248,7 @@ class DeepseekV3YarnRotaryEmbedding(DeepseekV3RotaryEmbedding):
         self.beta_slow = beta_slow
         self.mscale = mscale
         self.mscale_all_dim = mscale_all_dim
+        self.meta_style = meta_style
         super().__init__(dim, max_position_embeddings, base, device)
 
     def _set_cos_sin_cache(self, seq_len, device, dtype):
@@ -276,21 +280,30 @@ class DeepseekV3YarnRotaryEmbedding(DeepseekV3RotaryEmbedding):
             / yarn_get_mscale(self.scaling_factor, self.mscale_all_dim)
         )
 
-        emb = torch.cat((freqs, freqs), dim=-1)
+        if self.meta_style:
+            emb = torch.stack((freqs, freqs), dim=-1).flatten(-2)
+        else:
+            emb = torch.cat((freqs, freqs), dim=-1)
+
         self.register_buffer("cos_cached", (emb.cos() * _mscale).to(dtype), persistent=False)
         self.register_buffer("sin_cached", (emb.sin() * _mscale).to(dtype), persistent=False)
 
 
 # Copied from transformers.models.llama.modeling_llama.rotate_half
-def rotate_half(x):
+def rotate_half(x, meta_style=False):
     """Rotates half the hidden dims of the input."""
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
-    return torch.cat((-x2, x1), dim=-1)
+    if meta_style:
+        x1 = x[..., ::2]
+        x2 = x[..., 1::2]
+        return torch.stack((-x2, x1), dim=-1).flatten(-2)
+    else:
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
 
 
 # Copied from transformers.models.llama.modeling_llama.apply_rotary_pos_emb
-def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
+def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1, meta_style=False):
     """Applies Rotary Position Embedding to the query and key tensors.
 
     Args:
@@ -314,14 +327,15 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
     cos = cos[position_ids].unsqueeze(unsqueeze_dim)
     sin = sin[position_ids].unsqueeze(unsqueeze_dim)
 
-    b, h, s, d = q.shape
-    q = q.view(b, h, s, d // 2, 2).transpose(4, 3).reshape(b, h, s, d)
+    if not meta_style:
+        b, h, s, d = q.shape
+        q = q.view(b, h, s, d // 2, 2).transpose(4, 3).reshape(b, h, s, d)
 
-    b, h, s, d = k.shape
-    k = k.view(b, h, s, d // 2, 2).transpose(4, 3).reshape(b, h, s, d)
+        b, h, s, d = k.shape
+        k = k.view(b, h, s, d // 2, 2).transpose(4, 3).reshape(b, h, s, d)
 
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
+    q_embed = (q * cos) + (rotate_half(q, meta_style) * sin)
+    k_embed = (k * cos) + (rotate_half(k, meta_style) * sin)
     return q_embed, k_embed
 
 
@@ -343,7 +357,7 @@ class DeepseekV3MLP(nn.Module):
 
 
 class MoEGate(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, use_bitonic_sort=True):
         super().__init__()
         self.config = config
         self.top_k = config.num_experts_per_tok
@@ -353,6 +367,7 @@ class MoEGate(nn.Module):
         self.topk_method = config.topk_method
         self.n_group = config.n_group
         self.topk_group = config.topk_group
+        self.training = False
 
         # topk selection algorithm
         self.norm_topk_prob = config.norm_topk_prob
@@ -361,6 +376,11 @@ class MoEGate(nn.Module):
         if self.topk_method == "noaux_tc":
             self.e_score_correction_bias = nn.Parameter(torch.empty((self.n_routed_experts)))
         self.reset_parameters()
+        # initatialize whether to use bitonic topk or torch.topk
+        self.use_bitonic_sort = use_bitonic_sort
+        self.topk_fn = torch.topk
+        if self.use_bitonic_sort:
+            self.topk_fn = topk_bitonic
 
     def reset_parameters(self) -> None:
         import torch.nn.init as init
@@ -381,10 +401,13 @@ class MoEGate(nn.Module):
         if self.topk_method == "noaux_tc":
             assert not self.training
             scores_for_choice = scores.view(bsz * seq_len, -1) + self.e_score_correction_bias.unsqueeze(0)
-            group_scores = (
-                scores_for_choice.view(bsz * seq_len, self.n_group, -1).topk(2, dim=-1)[0].sum(dim=-1)
+            group_scores = self.topk_fn(
+                scores_for_choice.view(bsz * seq_len, self.n_group, -1), k=2, dim=-1, sorted=True
+            )[0].sum(
+                dim=-1
             )  # [n, n_group]
-            group_idx = torch.topk(group_scores, k=self.topk_group, dim=-1, sorted=False)[1]  # [n, top_k_group]
+
+            group_idx = self.topk_fn(group_scores, k=self.topk_group, dim=-1, sorted=True)[1]  # [n, top_k_group]
             group_mask = torch.zeros_like(group_scores)  # [n, n_group]
             group_mask.scatter_(1, group_idx, 1)  # [n, n_group]
             score_mask = (
@@ -393,7 +416,7 @@ class MoEGate(nn.Module):
                 .reshape(bsz * seq_len, -1)
             )  # [n, e]
             tmp_scores = scores_for_choice.masked_fill(~score_mask.bool(), float("-inf"))  # [n, e]
-            _, topk_idx = torch.topk(tmp_scores, k=self.top_k, dim=-1, sorted=False)
+            _, topk_idx = self.topk_fn(tmp_scores, k=self.top_k, dim=-1, sorted=True)
             topk_weight = scores.gather(1, topk_idx)
         else:
             raise NotImplementedError(f"insupportable TopK function for MoE gating: {self.topk_method}")
@@ -416,6 +439,7 @@ class DeepseekV3MoE(nn.Module):
         super().__init__()
         self.config = config
         self.num_experts_per_tok = config.num_experts_per_tok
+        self.training = False
 
         if hasattr(config, "ep_size") and config.ep_size > 1:
             assert config.ep_size == dist.get_world_size()
@@ -675,17 +699,16 @@ class DeepseekV3Attention(nn.Module):
         q = q.view(bsz, q_len, self.num_heads, self.q_head_dim).transpose(1, 2)
         q_nope, q_pe = torch.split(q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
 
+        # KV b1 projection
+        kv_b1_proj = self.kv_b_proj.weight.view(self.num_heads, -1, self.kv_lora_rank)[:, : self.qk_nope_head_dim]
+        q_nope = torch.matmul(q_nope, kv_b1_proj)
+
         compressed_kv = self.kv_a_proj_with_mqa(hidden_states)
         compressed_kv, k_pe = torch.split(compressed_kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
-        k_pe = k_pe.view(bsz, q_len, 1, self.qk_rope_head_dim).transpose(1, 2)
-        kv = (
-            self.kv_b_proj(self.kv_a_layernorm(compressed_kv))
-            .view(bsz, q_len, self.num_heads, self.qk_nope_head_dim + self.v_head_dim)
-            .transpose(1, 2)
-        )
+        k_pe = k_pe.view(bsz, 1, q_len, self.qk_rope_head_dim)
+        k_nope = self.kv_a_layernorm(compressed_kv).view(bsz, 1, q_len, self.kv_lora_rank)
 
-        k_nope, value_states = torch.split(kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
-        kv_seq_len = value_states.shape[-2]
+        kv_seq_len = k_nope.shape[-2]
         if past_key_value is not None:
             if self.layer_idx is None:
                 raise ValueError(
@@ -694,21 +717,22 @@ class DeepseekV3Attention(nn.Module):
                     "with a layer index."
                 )
             kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
-        cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+        cos, sin = self.rotary_emb(k_nope, seq_len=kv_seq_len, meta_style=True)
 
-        q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids)
+        q_pe, k_pe = apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids, meta_style=True)
 
-        query_states = k_pe.new_empty(bsz, self.num_heads, q_len, self.q_head_dim)
-        query_states[:, :, :, : self.qk_nope_head_dim] = q_nope
-        query_states[:, :, :, self.qk_nope_head_dim :] = q_pe
+        query_states = k_pe.new_empty(bsz, self.num_heads, q_len, self.kv_lora_rank + self.qk_rope_head_dim)
+        query_states[:, :, :, : self.kv_lora_rank] = q_nope
+        query_states[:, :, :, self.kv_lora_rank :] = q_pe
 
-        key_states = k_pe.new_empty(bsz, self.num_heads, q_len, self.q_head_dim)
-        key_states[:, :, :, : self.qk_nope_head_dim] = k_nope
-        key_states[:, :, :, self.qk_nope_head_dim :] = k_pe
+        key_states = k_pe.new_empty(bsz, 1, q_len, self.kv_lora_rank + self.qk_rope_head_dim)
+        key_states[:, :, :, : self.kv_lora_rank] = k_nope
+        key_states[:, :, :, self.kv_lora_rank :] = k_pe
         if past_key_value is not None:
             cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
-            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
-
+            key_states, _ = past_key_value.update(
+                key_states, torch.empty((*key_states.shape[:-1], 0)), self.layer_idx, cache_kwargs
+            )
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) * self.softmax_scale
 
         if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
@@ -727,7 +751,16 @@ class DeepseekV3Attention(nn.Module):
         # upcast attention to fp32
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
         attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
+
+        # KV and shared, so V is just a slice of K
+        value_states = key_states[:, :, :, : self.kv_lora_rank]
         attn_output = torch.matmul(attn_weights, value_states)
+
+        # KV b2 projection
+        kv_b2_proj = self.kv_b_proj.weight.view(self.num_heads, -1, self.kv_lora_rank)[:, -self.v_head_dim :].transpose(
+            1, 2
+        )
+        attn_output = torch.matmul(attn_output, kv_b2_proj)
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.v_head_dim):
             raise ValueError(
@@ -1109,7 +1142,7 @@ DeepseekV3_START_DOCSTRING = r"""
     "The bare DeepseekV3 Model outputting raw hidden-states without any specific head on top.",
     DeepseekV3_START_DOCSTRING,
 )
-class DeepseekV3PreTrainedModel(PreTrainedModel):
+class DeepseekV3PreTrainedModel(PreTrainedModel, GenerationMixin):
     config_class = DeepseekV3Config
     base_model_prefix = "model"
     supports_gradient_checkpointing = True
@@ -1118,16 +1151,16 @@ class DeepseekV3PreTrainedModel(PreTrainedModel):
     _supports_flash_attn_2 = True
     _supports_cache_class = True
 
-    def _init_weights(self, module):
-        std = self.config.initializer_range
-        if isinstance(module, nn.Linear):
-            module.weight.data.normal_(mean=0.0, std=std)
-            if module.bias is not None:
-                module.bias.data.zero_()
-        elif isinstance(module, nn.Embedding):
-            module.weight.data.normal_(mean=0.0, std=std)
-            if module.padding_idx is not None:
-                module.weight.data[module.padding_idx].zero_()
+    # def _init_weights(self, module):
+    # std = self.config.initializer_range
+    # if isinstance(module, nn.Linear):
+    #     module.weight.data.normal_(mean=0.0, std=std)
+    #     if module.bias is not None:
+    #         module.bias.data.zero_()
+    # elif isinstance(module, nn.Embedding):
+    #     module.weight.data.normal_(mean=0.0, std=std)
+    #     if module.padding_idx is not None:
+    #         module.weight.data[module.padding_idx].zero_()
 
 
 DeepseekV3_INPUTS_DOCSTRING = r"""
@@ -1288,14 +1321,14 @@ class DeepseekV3Model(DeepseekV3PreTrainedModel):
         if self._use_flash_attention_2:
             # 2d mask is passed through the layers
             attention_mask = attention_mask if (attention_mask is not None and 0 in attention_mask) else None
-        else:
-            # 4d mask is passed through the layers
-            attention_mask = _prepare_4d_causal_attention_mask(
-                attention_mask,
-                (batch_size, seq_length),
-                inputs_embeds,
-                past_key_values_length,
-            )
+        # else: # NOTE: in testing, both for the full model and for separate modules, we use the -inf mask format, not the ones with 1s and 0s
+        #     # 4d mask is passed through the layers
+        #     attention_mask = _prepare_4d_causal_attention_mask(
+        #         attention_mask,
+        #         (batch_size, seq_length),
+        #         inputs_embeds,
+        #         past_key_values_length,
+        #     )
 
         # embed positions
         hidden_states = inputs_embeds
@@ -1303,7 +1336,7 @@ class DeepseekV3Model(DeepseekV3PreTrainedModel):
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
-        next_decoder_cache = None
+        next_decoder_cache = past_key_values
 
         for decoder_layer in self.layers:
             if output_hidden_states:
@@ -1355,7 +1388,7 @@ class DeepseekV3ForCausalLM(DeepseekV3PreTrainedModel):
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
         # Initialize weights and apply final processing
-        self.post_init()
+        # self.post_init()
 
     def get_input_embeddings(self):
         return self.model.embed_tokens

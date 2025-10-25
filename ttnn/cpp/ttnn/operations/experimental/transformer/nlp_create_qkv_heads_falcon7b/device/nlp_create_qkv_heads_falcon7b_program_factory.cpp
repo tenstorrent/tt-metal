@@ -4,9 +4,9 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include "nlp_create_qkv_heads_falcon7b_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -19,7 +19,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_fa
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     TT_ASSERT(in0_buffer->size() % single_tile_size == 0);
 
@@ -65,15 +65,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_fa
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool out_is_dram = q_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)in0_is_dram,
-    };
+    std::vector<uint32_t> reader_compile_time_args;
+    tt_metal::TensorAccessorArgs(*in0_buffer).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)out_is_dram,
         (std::uint32_t)q_num_tiles_per_tensor,
         (std::uint32_t)kv_num_tiles_per_tensor,
         (std::uint32_t)q_out_h_tiles,
@@ -81,6 +75,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_fa
         (std::uint32_t)q_out_c,
         (std::uint32_t)q_out_HtWt,
     };
+    tt_metal::TensorAccessorArgs(*q_buffer).append_to(writer_compile_time_args);
+    tt_metal::TensorAccessorArgs(*k_buffer).append_to(writer_compile_time_args);
+    tt_metal::TensorAccessorArgs(*v_buffer).append_to(writer_compile_time_args);
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -120,7 +117,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_fa
         };
 
         uint32_t q_out_h_dim = num_blocks_written % q_out_h_tiles;
-        uint32_t q_out_tensor_tile_id = num_blocks_written / q_out_h_tiles * q_out_CHtWt + q_out_h_dim * q_out_w_tiles;
+        uint32_t q_out_tensor_tile_id =
+            (num_blocks_written / q_out_h_tiles * q_out_CHtWt) + (q_out_h_dim * q_out_w_tiles);
 
         std::vector<uint32_t> writer_runtime_args = {
             (std::uint32_t)q_buffer->address(),            // q_tensor_addr

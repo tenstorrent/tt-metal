@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "losses.hpp"
 
 #include <core/ttnn_all_includes.hpp>
+#include <stdexcept>
 #include <ttnn/types.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -32,21 +33,65 @@ autograd::TensorPtr mse_loss(
 
 autograd::TensorPtr cross_entropy_loss(
     const autograd::TensorPtr& prediction, const autograd::TensorPtr& target, ReduceType reduce) {
-    auto loss = ttml::metal::cross_entropy_fw(prediction->get_value(), target->get_value());
-    auto shape = ttnn::Shape({1, 1, 1, 1});
-    autograd::TensorPtr out = autograd::create_tensor(core::from_vector({0.F}, shape, &autograd::ctx().get_device()));
-    ttnn::moreh_mean(
-        loss,
-        std::nullopt,
-        true,
-        std::nullopt,
-        out->get_value(),
-        std::nullopt,
-        /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
+    if (reduce != ReduceType::NONE && reduce != ReduceType::MEAN) {
+        throw std::logic_error(fmt::format(
+            "Unsupported cross entropy reduction type, only NONE and MEAN are supported. Got: {}",
+            enchantum::to_string(reduce)));
+    }
 
-    autograd::GradFunction grad = [target, prediction, out]() {
-        auto volume = target->get_value().logical_volume();
-        float scaler = 1.0F / static_cast<float>(volume);
+    auto prediction_shape = prediction->get_shape();
+    auto target_shape = target->get_shape();
+
+    if (prediction_shape.rank() != 4U || target_shape.rank() != 2U) {
+        throw std::logic_error(
+            fmt::format(
+                "Cross entropy loss expects: prediction rank = 4, target rank = 2.\n"
+                "Got: prediction shape {}, target shape {}",
+                prediction_shape,
+                target_shape));
+    }
+
+    if (prediction_shape[0] != target_shape[0]) {
+        throw std::logic_error(
+            fmt::format(
+                "Cross entropy loss: batch dimension (dim 0) must match.\n"
+                "Got: prediction shape {}, target shape {}",
+                prediction_shape,
+                target_shape));
+    }
+
+    if (prediction_shape[-2] != target_shape[-1]) {
+        throw std::logic_error(
+            fmt::format(
+                "Cross entropy loss: prediction dim -2 must equal target dim -1.\n"
+                "Got: prediction shape {}, target shape {}",
+                prediction_shape,
+                target_shape));
+    }
+
+    auto loss = ttml::metal::cross_entropy_fw(prediction->get_value(), target->get_value());
+    autograd::TensorPtr out;
+
+    if (reduce == ReduceType::NONE) {
+        out = autograd::create_tensor(loss);
+    } else {
+        auto shape = ttnn::Shape({1, 1, 1, 1});
+        out = autograd::create_tensor(core::empty(shape, &autograd::ctx().get_device(), loss.memory_config()));
+        ttnn::moreh_mean(
+            loss,
+            std::nullopt,
+            true,
+            std::nullopt,
+            out->get_value(),
+            std::nullopt,
+            /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
+    }
+    autograd::GradFunction grad = [target, prediction, out, reduce]() {
+        float scaler = 1.0F;
+        if (reduce == ReduceType::MEAN) {
+            auto volume = target->get_value().logical_volume();
+            scaler = 1.0F / static_cast<float>(volume);
+        }
         auto grad =
             ttml::metal::cross_entropy_bw(prediction->get_value(), target->get_value(), out->get_grad(), scaler);
         prediction->add_grad(grad);
@@ -54,7 +99,6 @@ autograd::TensorPtr cross_entropy_loss(
 
     auto links = autograd::get_links(prediction);
     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
-
     return out;
 }
 

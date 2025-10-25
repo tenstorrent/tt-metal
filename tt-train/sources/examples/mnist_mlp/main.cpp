@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,6 +23,7 @@
 #include "ops/losses.hpp"
 #include "optimizers/sgd.hpp"
 #include "serialization/serializable.hpp"
+#include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "utils.hpp"
 
 using ttml::autograd::TensorPtr;
@@ -123,14 +124,10 @@ float evaluate(DataLoader &test_dataloader, Model &model, size_t num_targets) {
     model_to_eval(model);
     float num_correct = 0;
     float num_samples = 0;
-    auto *device = &ttml::autograd::ctx().get_device();
     for (const auto &[data, target] : test_dataloader) {
         auto output = run_model(model, data);
-        ttml::core::MeshToXTensorVariant<float> composer = ttml::core::VectorMeshToXTensor<float>(device->shape());
-        ttml::core::MeshToXTensorVariant<uint32_t> target_composer =
-            ttml::core::VectorMeshToXTensor<uint32_t>(device->shape());
-        auto output_xtensor = ttml::core::to_xtensor(output->get_value(), composer)[0];
-        auto target_xtensor = ttml::core::to_xtensor<uint32_t>(target->get_value(), target_composer)[0];
+        auto output_xtensor = ttml::core::to_xtensor(output->get_value(), ttml::core::IdentityComposer{})[0];
+        auto target_xtensor = ttml::core::to_xtensor<uint32_t>(target->get_value(), ttml::core::IdentityComposer{})[0];
         auto output_vec = std::vector<float>(output_xtensor.begin(), output_xtensor.end());
         auto target_vec = std::vector<uint32_t>(target_xtensor.begin(), target_xtensor.end());
         for (size_t i = 0; i < output_vec.size(); i += num_targets) {
@@ -173,10 +170,14 @@ int main(int argc, char **argv) {
     ttml::datasets::InMemoryDataset<std::vector<uint8_t>, uint8_t> test_dataset(
         dataset.test_images, dataset.test_labels);
 
+    if (enable_tp) {
+        ttml::ttnn_fixed::distributed::enable_fabric(2U);
+    }
+
     auto *device = &ttml::autograd::ctx().get_device();
     device->enable_program_cache();
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [num_features, num_targets, device](std::vector<DatasetSample> &&samples) {
+        [device](std::vector<DatasetSample> &&samples) {
             const uint32_t batch_size = samples.size();
             std::vector<float> data;
             std::vector<uint32_t> targets;
@@ -242,9 +243,8 @@ int main(int argc, char **argv) {
     LossAverageMeter loss_meter;
     int training_step = 0;
 
-    auto get_loss_value = [device](const TensorPtr &loss) {
-        ttml::core::MeshToXTensorVariant<float> composer = ttml::core::VectorMeshToXTensor<float>(device->shape());
-        auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), composer);
+    auto get_loss_value = [](const TensorPtr &loss) {
+        auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
         // sum of loss xtensors
         float loss_float =
             std::accumulate(loss_xtensors.begin(), loss_xtensors.end(), 0.0F, [](float acc, auto &xtensor) {

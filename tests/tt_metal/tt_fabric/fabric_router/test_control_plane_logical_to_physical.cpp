@@ -7,7 +7,7 @@
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 
 #include <filesystem>
 #include <functional>
@@ -17,6 +17,7 @@
 #include <unordered_set>
 #include <set>
 #include <string>
+#include <optional>
 
 #include "fabric_fixture.hpp"
 
@@ -27,11 +28,11 @@ namespace fabric_router_tests {
 // LogicalToPhysicalConversionFixture for adjacency map and lookup
 class LogicalToPhysicalConversionFixture : public ::testing::Test {
 protected:
-    std::unordered_map<chip_id_t, std::vector<chip_id_t>> test_adjacency_map;
+    std::unordered_map<ChipId, std::vector<ChipId>> test_adjacency_map_;
 
-    std::vector<chip_id_t> get_adjacent_chips(chip_id_t chip_id) const {
-        auto it = test_adjacency_map.find(chip_id);
-        if (it != test_adjacency_map.end()) {
+    std::vector<ChipId> get_adjacent_chips(ChipId chip_id) const {
+        auto it = test_adjacency_map_.find(chip_id);
+        if (it != test_adjacency_map_.end()) {
             return it->second;
         }
         return {};
@@ -39,9 +40,9 @@ protected:
 
     // Helper function to verify physical chip ID mapping
     void verify_physical_chip_ids(
-        const std::vector<chip_id_t>& physical_chip_ids,
+        const std::vector<ChipId>& physical_chip_ids,
         size_t expected_size,
-        const std::vector<std::pair<size_t, chip_id_t>>& expected_mappings = {}) {
+        const std::vector<std::pair<size_t, ChipId>>& expected_mappings = {}) {
         // Basic size verification
         EXPECT_EQ(physical_chip_ids.size(), expected_size);
 
@@ -50,11 +51,11 @@ protected:
 
         // Verify no unmapped chips (no -1 values)
         for (size_t i = 0; i < physical_chip_ids.size(); ++i) {
-            EXPECT_NE(physical_chip_ids[i], static_cast<chip_id_t>(-1)) << "Chip at index " << i << " is not mapped";
+            EXPECT_NE(physical_chip_ids[i], static_cast<ChipId>(-1)) << "Chip at index " << i << " is not mapped";
         }
 
         // Verify no duplicate chip IDs
-        std::unordered_set<chip_id_t> unique_chips(physical_chip_ids.begin(), physical_chip_ids.end());
+        std::unordered_set<ChipId> unique_chips(physical_chip_ids.begin(), physical_chip_ids.end());
         EXPECT_EQ(unique_chips.size(), physical_chip_ids.size()) << "Duplicate chip IDs found in mapping";
 
         // Verify specific mappings if provided
@@ -72,7 +73,7 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIdsWithConfigu
     //        3-4-5
     //        | | |
     //        6-7-8
-    test_adjacency_map = {
+    test_adjacency_map_ = {
         {0, {1, 3}},
         {1, {0, 2, 4}},
         {2, {1, 5}},
@@ -83,11 +84,11 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIdsWithConfigu
         {7, {4, 6, 8}},
         {8, {5, 7}}};
 
-    std::set<chip_id_t> user_chip_ids = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+    std::set<ChipId> user_chip_ids = {0, 1, 2, 3, 4, 5, 6, 7, 8};
     tt::tt_metal::distributed::MeshShape mesh_shape(3, 3);
 
     auto topology_info = build_mesh_adjacency_map(
-        user_chip_ids, mesh_shape, [this](chip_id_t chip_id) { return this->get_adjacent_chips(chip_id); });
+        user_chip_ids, mesh_shape, [this](ChipId chip_id) { return this->get_adjacent_chips(chip_id); });
 
     auto physical_chip_ids = convert_2d_mesh_adjacency_to_row_major_vector(topology_info);
 
@@ -115,13 +116,13 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIds3x2Rectangl
     //        2-3
     //        | |
     //        4-5
-    test_adjacency_map = {{0, {1, 2}}, {1, {0, 3}}, {2, {0, 3, 4}}, {3, {1, 2, 5}}, {4, {2, 5}}, {5, {3, 4}}};
+    test_adjacency_map_ = {{0, {1, 2}}, {1, {0, 3}}, {2, {0, 3, 4}}, {3, {1, 2, 5}}, {4, {2, 5}}, {5, {3, 4}}};
 
-    std::set<chip_id_t> user_chip_ids = {0, 1, 2, 3, 4, 5};
+    std::set<ChipId> user_chip_ids = {0, 1, 2, 3, 4, 5};
     tt::tt_metal::distributed::MeshShape mesh_shape(3, 2);
 
     auto topology_info = build_mesh_adjacency_map(
-        user_chip_ids, mesh_shape, [this](chip_id_t chip_id) { return this->get_adjacent_chips(chip_id); });
+        user_chip_ids, mesh_shape, [this](ChipId chip_id) { return this->get_adjacent_chips(chip_id); });
 
     auto physical_chip_ids = convert_2d_mesh_adjacency_to_row_major_vector(topology_info);
 
@@ -148,7 +149,7 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIds4x8LargeMes
     //        G-H-I-J-K-L-M-N
     //        | | | | | | | |
     //        O-P-Q-R-S-T-U-V
-    test_adjacency_map = {
+    test_adjacency_map_ = {
         {0, {1, 8}},
         {1, {0, 2, 9}},
         {2, {1, 3, 10}},
@@ -182,12 +183,12 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIds4x8LargeMes
         {30, {22, 29, 31}},
         {31, {23, 30}}};
 
-    std::set<chip_id_t> user_chip_ids = {0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15,
-                                         16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31};
+    std::set<ChipId> user_chip_ids = {0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15,
+                                      16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31};
     tt::tt_metal::distributed::MeshShape mesh_shape(4, 8);
 
     auto topology_info = build_mesh_adjacency_map(
-        user_chip_ids, mesh_shape, [this](chip_id_t chip_id) { return this->get_adjacent_chips(chip_id); });
+        user_chip_ids, mesh_shape, [this](ChipId chip_id) { return this->get_adjacent_chips(chip_id); });
 
     auto physical_chip_ids = convert_2d_mesh_adjacency_to_row_major_vector(topology_info);
 
@@ -221,7 +222,7 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIdsOverlapping
     // This creates a topology where some chips have more than 4 neighbors,
     // which breaks the corner detection logic. This test demonstrates that
     // the current algorithm doesn't handle irregular topologies well.
-    test_adjacency_map = {
+    test_adjacency_map_ = {
         {0, {1, 3, 4}},        // Extra connection to 4
         {1, {0, 2, 3, 4, 5}},  // Extra connections to 3 and 5
         {2, {1, 5}},
@@ -232,7 +233,7 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIdsOverlapping
         {7, {3, 4, 5, 6, 8}},  // Extra connections from 3, 4, 5
         {8, {5, 7}}};
 
-    std::set<chip_id_t> user_chip_ids = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+    std::set<ChipId> user_chip_ids = {0, 1, 2, 3, 4, 5, 6, 7, 8};
     tt::tt_metal::distributed::MeshShape mesh_shape(3, 3);
 
     // This test should fail because the topology has irregular connectivity
@@ -241,7 +242,7 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIdsOverlapping
     EXPECT_THROW(
         {
             auto topology_info = build_mesh_adjacency_map(
-                user_chip_ids, mesh_shape, [this](chip_id_t chip_id) { return this->get_adjacent_chips(chip_id); });
+                user_chip_ids, mesh_shape, [this](ChipId chip_id) { return this->get_adjacent_chips(chip_id); });
             auto physical_chip_ids = convert_2d_mesh_adjacency_to_row_major_vector(topology_info);
         },
         std::exception)
@@ -266,7 +267,7 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIdsMissingConn
     // - Expected vs actual corner count
     // - Adjacency matrix showing all connections
     // - Grid visualization attempt
-    test_adjacency_map = {
+    test_adjacency_map_ = {
         {0, {1, 3}},
         {1, {0, 2, 4}},
         {2, {1, 5}},
@@ -277,7 +278,7 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIdsMissingConn
         {7, {6, 8}},  // Missing connection from 4
         {8, {5, 7}}};
 
-    std::set<chip_id_t> user_chip_ids = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+    std::set<ChipId> user_chip_ids = {0, 1, 2, 3, 4, 5, 6, 7, 8};
     tt::tt_metal::distributed::MeshShape mesh_shape(3, 3);
 
     // This test should fail because the missing connection creates an irregular
@@ -285,7 +286,7 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIdsMissingConn
     EXPECT_THROW(
         {
             auto topology_info = build_mesh_adjacency_map(
-                user_chip_ids, mesh_shape, [this](chip_id_t chip_id) { return this->get_adjacent_chips(chip_id); });
+                user_chip_ids, mesh_shape, [this](ChipId chip_id) { return this->get_adjacent_chips(chip_id); });
             auto physical_chip_ids = convert_2d_mesh_adjacency_to_row_major_vector(topology_info);
         },
         std::exception)
@@ -303,7 +304,7 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIdsMissingChip
     // All connections involving chip 4 are removed from the topology
     // This creates a topology where the remaining chips have irregular
     // connectivity patterns that don't match the expected 4-corner pattern.
-    test_adjacency_map = {
+    test_adjacency_map_ = {
         {0, {1, 3}},  // No connection to 4
         {1, {0, 2}},  // No connection to 4
         {2, {1, 5}},  // No connection to 4
@@ -315,7 +316,7 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIdsMissingChip
         // Note: chip 4 is completely missing from adjacency_data
     };
 
-    std::set<chip_id_t> user_chip_ids = {0, 1, 2, 3, 5, 6, 7, 8};  // 4 not in user_chip_ids
+    std::set<ChipId> user_chip_ids = {0, 1, 2, 3, 5, 6, 7, 8};  // 4 not in user_chip_ids
     tt::tt_metal::distributed::MeshShape mesh_shape(3, 3);
 
     // This test should fail because the missing chip creates an irregular
@@ -323,7 +324,7 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIdsMissingChip
     EXPECT_THROW(
         {
             auto topology_info = build_mesh_adjacency_map(
-                user_chip_ids, mesh_shape, [this](chip_id_t chip_id) { return this->get_adjacent_chips(chip_id); });
+                user_chip_ids, mesh_shape, [this](ChipId chip_id) { return this->get_adjacent_chips(chip_id); });
             auto physical_chip_ids = convert_2d_mesh_adjacency_to_row_major_vector(topology_info);
         },
         std::exception)
@@ -339,15 +340,19 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIds4x1Mesh) {
     //        2
     //        |
     //        3
-    test_adjacency_map = {{0, {1}}, {1, {0, 2}}, {2, {1, 3}}, {3, {2}}};
+    test_adjacency_map_ = {{0, {1}}, {1, {0, 2}}, {2, {1, 3}}, {3, {2}}};
 
-    std::set<chip_id_t> user_chip_ids = {0, 1, 2, 3};
+    std::set<ChipId> user_chip_ids = {0, 1, 2, 3};
     tt::tt_metal::distributed::MeshShape mesh_shape(4, 1);
 
     auto topology_info = build_mesh_adjacency_map(
-        user_chip_ids, mesh_shape, [this](chip_id_t chip_id) { return this->get_adjacent_chips(chip_id); });
+        user_chip_ids, mesh_shape, [this](ChipId chip_id) { return this->get_adjacent_chips(chip_id); });
 
-    auto physical_chip_ids = convert_1d_mesh_adjacency_to_row_major_vector(topology_info);
+    auto adj_map_sorter = [&](const IntraMeshAdjacencyMap& topology_info) {
+        return std::make_pair(topology_info.adjacency_map, 0);  // Start with chip 0
+    };
+
+    auto physical_chip_ids = convert_1d_mesh_adjacency_to_row_major_vector(topology_info, adj_map_sorter);
 
     // Verify all chip mappings for 4x1 mesh
     verify_physical_chip_ids(
@@ -361,16 +366,20 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIds4x1Mesh) {
 TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIds1x8Mesh) {
     // Test 1x8 large 1D mesh shape
     // Shape: 0-1-2-3-4-5-6-7
-    test_adjacency_map = {
+    test_adjacency_map_ = {
         {0, {1}}, {1, {0, 2}}, {2, {1, 3}}, {3, {2, 4}}, {4, {3, 5}}, {5, {4, 6}}, {6, {5, 7}}, {7, {6}}};
 
-    std::set<chip_id_t> user_chip_ids = {0, 1, 2, 3, 4, 5, 6, 7};
+    std::set<ChipId> user_chip_ids = {0, 1, 2, 3, 4, 5, 6, 7};
     tt::tt_metal::distributed::MeshShape mesh_shape(1, 8);
 
     auto topology_info = build_mesh_adjacency_map(
-        user_chip_ids, mesh_shape, [this](chip_id_t chip_id) { return this->get_adjacent_chips(chip_id); });
+        user_chip_ids, mesh_shape, [this](ChipId chip_id) { return this->get_adjacent_chips(chip_id); });
 
-    auto physical_chip_ids = convert_1d_mesh_adjacency_to_row_major_vector(topology_info);
+    auto adj_map_sorter = [&](const IntraMeshAdjacencyMap& topology_info) {
+        return std::make_pair(topology_info.adjacency_map, 0);  // Start with chip 0
+    };
+
+    auto physical_chip_ids = convert_1d_mesh_adjacency_to_row_major_vector(topology_info, adj_map_sorter);
 
     // Verify all chip mappings for 1x8 mesh
     verify_physical_chip_ids(
@@ -378,6 +387,68 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIds1x8Mesh) {
         8,
         {
             {0, 0}, {1, 1}, {2, 2}, {3, 3}, {4, 4}, {5, 5}, {6, 6}, {7, 7}  // horizontal line
+        });
+}
+
+TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIds1x8MeshOn2x4Physical) {
+    // Test 1x8 large 1D mesh shape
+    // Shape: 4-0-3-6
+    //        | | | |
+    //        5-1-2-7
+    test_adjacency_map_ = {
+        {0, {1, 4, 3}},
+        {1, {0, 2, 5}},
+        {2, {1, 7, 3}},
+        {3, {0, 2, 6}},
+        {4, {0, 5}},
+        {5, {4, 1}},
+        {6, {7, 3}},
+        {7, {6, 2}}};
+
+    std::set<ChipId> user_chip_ids = {0, 1, 2, 3, 4, 5, 6, 7};
+    tt::tt_metal::distributed::MeshShape mesh_shape(1, 8);
+
+    auto topology_info = build_mesh_adjacency_map(
+        user_chip_ids, mesh_shape, [this](ChipId chip_id) { return this->get_adjacent_chips(chip_id); });
+
+    auto adj_map_sorter = [&](const IntraMeshAdjacencyMap& topology_info) {
+        return std::make_pair(topology_info.adjacency_map, 0);  // Start with chip 0
+    };
+    auto physical_chip_ids = convert_1d_mesh_adjacency_to_row_major_vector(topology_info, adj_map_sorter);
+
+    // Verify all chip mappings for 1x8 mesh
+    verify_physical_chip_ids(
+        physical_chip_ids,
+        8,
+        {
+            {0, 0}, {1, 4}, {2, 5}, {3, 1}, {4, 2}, {5, 7}, {6, 6}, {7, 3}  // horizontal line
+        });
+}
+
+TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIds1x1Mesh) {
+    // Test 1x1 single chip mesh shape
+    // Shape: 0
+    // Single chip with no neighbors
+    test_adjacency_map_ = {{0, {}}};
+
+    std::set<ChipId> user_chip_ids = {0};
+    tt::tt_metal::distributed::MeshShape mesh_shape(1, 1);
+
+    auto topology_info = build_mesh_adjacency_map(
+        user_chip_ids, mesh_shape, [this](ChipId chip_id) { return this->get_adjacent_chips(chip_id); });
+
+    auto adj_map_sorter = [&](const IntraMeshAdjacencyMap& topology_info) {
+        return std::make_pair(topology_info.adjacency_map, 0);  // Start with chip 0
+    };
+
+    auto physical_chip_ids = convert_1d_mesh_adjacency_to_row_major_vector(topology_info, adj_map_sorter);
+
+    // Verify chip mapping for 1x1 mesh
+    verify_physical_chip_ids(
+        physical_chip_ids,
+        1,
+        {
+            {0, 0}  // single chip
         });
 }
 
@@ -389,18 +460,18 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIdsLooped1DMes
     //        |       |
     //        --------
     // All chips have 2 neighbors (no corners in looped topology)
-    test_adjacency_map = {
+    test_adjacency_map_ = {
         {0, {1, 3}},  // Connected to both ends
         {1, {0, 2}},
         {2, {1, 3}},
         {3, {0, 2}}  // Connected to both ends
     };
 
-    std::set<chip_id_t> user_chip_ids = {0, 1, 2, 3};
+    std::set<ChipId> user_chip_ids = {0, 1, 2, 3};
     tt::tt_metal::distributed::MeshShape mesh_shape(1, 4);
 
     auto topology_info = build_mesh_adjacency_map(
-        user_chip_ids, mesh_shape, [this](chip_id_t chip_id) { return this->get_adjacent_chips(chip_id); });
+        user_chip_ids, mesh_shape, [this](ChipId chip_id) { return this->get_adjacent_chips(chip_id); });
 
     auto physical_chip_ids = convert_1d_mesh_adjacency_to_row_major_vector(topology_info);
 
@@ -414,18 +485,18 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIdsLooped2DMes
     //        | |
     //        2-3
     // All chips have 4 neighbors (no corners in torus topology)
-    test_adjacency_map = {
+    test_adjacency_map_ = {
         {0, {1, 2, 1, 2}},  // Connected to all 4 directions (wrapped)
         {1, {0, 3, 0, 3}},  // Connected to all 4 directions (wrapped)
         {2, {3, 0, 3, 0}},  // Connected to all 4 directions (wrapped)
         {3, {2, 1, 2, 1}}   // Connected to all 4 directions (wrapped)
     };
 
-    std::set<chip_id_t> user_chip_ids = {0, 1, 2, 3};
+    std::set<ChipId> user_chip_ids = {0, 1, 2, 3};
     tt::tt_metal::distributed::MeshShape mesh_shape(2, 2);
 
     auto topology_info = build_mesh_adjacency_map(
-        user_chip_ids, mesh_shape, [this](chip_id_t chip_id) { return this->get_adjacent_chips(chip_id); });
+        user_chip_ids, mesh_shape, [this](ChipId chip_id) { return this->get_adjacent_chips(chip_id); });
 
     auto physical_chip_ids = convert_2d_mesh_adjacency_to_row_major_vector(topology_info);
 
@@ -439,7 +510,7 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIdsWithStartin
     //        3-4-5
     //        | | |
     //        6-7-8
-    test_adjacency_map = {
+    test_adjacency_map_ = {
         {0, {1, 3}},
         {1, {0, 2, 4}},
         {2, {1, 5}},
@@ -450,11 +521,11 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIdsWithStartin
         {7, {4, 6, 8}},
         {8, {5, 7}}};
 
-    std::set<chip_id_t> user_chip_ids = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+    std::set<ChipId> user_chip_ids = {0, 1, 2, 3, 4, 5, 6, 7, 8};
     tt::tt_metal::distributed::MeshShape mesh_shape(3, 3);
 
     auto topology_info = build_mesh_adjacency_map(
-        user_chip_ids, mesh_shape, [this](chip_id_t chip_id) { return this->get_adjacent_chips(chip_id); }, 4);
+        user_chip_ids, mesh_shape, [this](ChipId chip_id) { return this->get_adjacent_chips(chip_id); }, 4);
 
     // Test with default northwest corner chip ID (should use chip 0)
     auto physical_chip_ids_default = convert_2d_mesh_adjacency_to_row_major_vector(topology_info);
@@ -469,6 +540,35 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIdsWithStartin
         { auto physical_chip_ids_invalid = convert_2d_mesh_adjacency_to_row_major_vector(topology_info, 99); },
         std::exception)
         << "Should throw when northwest corner chip ID is not in mesh container";
+}
+
+TEST_F(LogicalToPhysicalConversionFixture, TestConvert2DUsesProvidedNECorner) {
+    // 3x3 mesh
+    test_adjacency_map_ = {
+        {0, {1, 3}},
+        {1, {0, 2, 4}},
+        {2, {1, 5}},
+        {3, {0, 4, 6}},
+        {4, {1, 3, 5, 7}},
+        {5, {2, 4, 8}},
+        {6, {3, 7}},
+        {7, {4, 6, 8}},
+        {8, {5, 7}}};
+
+    std::set<ChipId> user_chip_ids = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+    tt::tt_metal::distributed::MeshShape mesh_shape(3, 3);
+
+    auto topology_info = build_mesh_adjacency_map(
+        user_chip_ids, mesh_shape, [this](ChipId chip_id) { return this->get_adjacent_chips(chip_id); });
+
+    // Default embedding (auto-identify NE)
+    auto physical_chip_ids_default = convert_2d_mesh_adjacency_to_row_major_vector(topology_info);
+
+    // Provide NE corner explicitly = chip 2 (top-right in this canonical 3x3)
+    auto physical_chip_ids_with_ne = convert_2d_mesh_adjacency_to_row_major_vector(topology_info, std::nullopt, 2);
+
+    // Must match the default embedding if NE is correct
+    EXPECT_EQ(physical_chip_ids_with_ne, physical_chip_ids_default);
 }
 
 }  // namespace fabric_router_tests
