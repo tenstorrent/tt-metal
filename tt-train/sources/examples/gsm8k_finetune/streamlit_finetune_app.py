@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
 #!/usr/bin/env python3
 """
 Streamlit LLM Fine-tuning Application
@@ -50,7 +53,7 @@ if "data_collection_paused" not in st.session_state:
 
 def parse_output_file(file_path="output.txt"):
     """Parse the output.txt file to extract training metrics.
-    
+
     Returns:
         dict with 'current' (latest data point) and 'all' (list of all data points)
     """
@@ -68,13 +71,13 @@ def parse_output_file(file_path="output.txt"):
         pattern = (
             r"LR:\s*([\d.e+-]+),\s*training_loss:\s*([\d.]+),\s*val_loss:\s*([\d.]+),\s*step:\s*(\d+),\s*epoch:\s*(\d+)"
         )
-        
+
         all_data = []
         for line in lines:
             line = line.strip()
             if not line:
                 continue
-                
+
             match = re.search(pattern, line)
             if match:
                 lr, train_loss, val_loss, step, epoch = match.groups()
@@ -87,15 +90,12 @@ def parse_output_file(file_path="output.txt"):
                     "timestamp": datetime.now(),
                 }
                 all_data.append(data_point)
-        
+
         if not all_data:
             return None
-            
-        return {
-            "current": all_data[-1],  # Most recent data point
-            "all": all_data  # All data points
-        }
-        
+
+        return {"current": all_data[-1], "all": all_data}  # Most recent data point  # All data points
+
     except Exception as e:
         st.error(f"Error parsing output.txt: {e}")
 
@@ -135,7 +135,7 @@ def create_loss_plot(history_df, eval_every=None):
     if eval_every is not None and eval_every > 0:
         # Filter to only show validation loss at eval_every intervals
         # This includes step 0 and steps that are multiples of eval_every
-        val_mask = ((history_df["step"]+1) % eval_every == 0) | (history_df["step"] == 0)
+        val_mask = ((history_df["step"] + 1) % eval_every == 0) | (history_df["step"] == 0)
         val_df = history_df[val_mask]
     else:
         # If eval_every not provided, show all validation points
@@ -205,7 +205,7 @@ def create_training_yaml(config_dict, output_path="/home/ubuntu/tt-metal/tt-trai
     """Create a training YAML configuration file."""
     training_config = {
         "batch_size": config_dict["batch_size"],
-        "validation_batch_size" : config_dict["validation_batch_size"],
+        "validation_batch_size": config_dict["validation_batch_size"],
         "max_steps": config_dict["max_steps"],
         "gradient_accumulation_steps": config_dict["gradient_accumulation"],
         "eval_every": config_dict["eval_every"],
@@ -245,7 +245,7 @@ def create_training_yaml(config_dict, output_path="/home/ubuntu/tt-metal/tt-trai
         f.write("device_config:\n")
         # Handle mesh_shape as flow sequence, others as block style
         f.write(f"  enable_ddp: {device_config['enable_ddp']}\n")
-        mesh_shape_flow = yaml.dump(device_config['mesh_shape'], default_flow_style=True).strip()
+        mesh_shape_flow = yaml.dump(device_config["mesh_shape"], default_flow_style=True).strip()
         f.write(f"  mesh_shape: {mesh_shape_flow}\n")
 
     return output_path
@@ -365,11 +365,11 @@ def main():
         # Device selection
         st.subheader("Device Settings")
         devices_options = [
-            "N150", # [1,1]
-            "N300", # [1,2]
-            "LoudBox", # [1, 8]
-            "Galaxy", # [1, 32]
-            "3-tier" # [???]
+            "N150",  # [1,1]
+            "N300",  # [1,2]
+            "LoudBox",  # [1, 8]
+            "Galaxy",  # [1, 32]
+            "3-tier",  # [???]
         ]
         selected_devices = st.selectbox("Devices", devices_options, index=2)
         # Dataset selection
@@ -402,7 +402,9 @@ def main():
 
         col1, col2 = st.columns(2)
         with col1:
-            batch_size = st.number_input("Batch Size", min_value=1, max_value=64, value=64, step=1, help="Training batch size per device")
+            batch_size = st.number_input(
+                "Batch Size", min_value=1, max_value=64, value=64, step=1, help="Training batch size per device"
+            )
 
             max_steps = st.number_input("Max Steps", min_value=10, max_value=100000, value=60, step=100)
 
@@ -412,7 +414,9 @@ def main():
             hold_steps = st.number_input("Hold Steps", min_value=0, max_value=10000, value=40, step=10)
 
         eval_every = st.number_input("Eval Every", min_value=10, max_value=1000, value=20, step=10)
-        validation_batch_size = st.number_input("Validation Batch Size", min_value=1, max_value=32, value=4, step=1, help="Validation batch size per device")
+        validation_batch_size = st.number_input(
+            "Validation Batch Size", min_value=1, max_value=32, value=4, step=1, help="Validation batch size per device"
+        )
 
         gradient_accumulation = st.number_input(
             "Gradient Accumulation Steps", min_value=1, max_value=128, value=8, step=1
@@ -420,7 +424,12 @@ def main():
 
         max_seq_length = st.number_input("Max Sequence Length", min_value=128, max_value=4096, value=512, step=128)
 
-        effective_batch_size = batch_size * gradient_accumulation * device_mesh_shapes[selected_devices][0] * device_mesh_shapes[selected_devices][1]
+        effective_batch_size = (
+            batch_size
+            * gradient_accumulation
+            * device_mesh_shapes[selected_devices][0]
+            * device_mesh_shapes[selected_devices][1]
+        )
         st.markdown(f"Effective batch size: **{effective_batch_size}**")
         st.markdown(f"Effective num. tokens per batch: **{effective_batch_size * max_seq_length}**")
 
@@ -452,7 +461,7 @@ def main():
                     "min_lr": min_lr,
                     "max_lr": max_lr,
                     "batch_size": batch_size,
-                    "validation_batch_size" : validation_batch_size,
+                    "validation_batch_size": validation_batch_size,
                     "max_steps": max_steps,
                     "warmup_steps": warmup_steps,
                     "hold_steps": hold_steps,
@@ -461,7 +470,7 @@ def main():
                     "max_seq_length": max_seq_length,
                     "yaml_dir": yaml_output_dir,
                     "enable_ddp": True if selected_devices != "N150" else False,
-                    "mesh_shape": device_mesh_shapes[selected_devices]
+                    "mesh_shape": device_mesh_shapes[selected_devices],
                 }
                 success, message = start_training(config)
                 if success:
@@ -589,11 +598,13 @@ def main():
             test_data = parse_output_file(output_file)
             if test_data:
                 st.success("File parsed successfully!")
-                st.json({
-                    "current_step": test_data["current"]["step"],
-                    "total_data_points": len(test_data["all"]),
-                    "current_data": test_data["current"]
-                })
+                st.json(
+                    {
+                        "current_step": test_data["current"]["step"],
+                        "total_data_points": len(test_data["all"]),
+                        "current_data": test_data["current"],
+                    }
+                )
             else:
                 st.error("Failed to parse file")
                 if os.path.exists(output_file):
@@ -620,7 +631,7 @@ def main():
             if parsed_data:
                 current_data = parsed_data["current"]
                 all_data = parsed_data["all"]
-                
+
                 # If we have no history yet, load all data from file
                 if len(st.session_state.training_history) == 0:
                     st.session_state.training_history = all_data

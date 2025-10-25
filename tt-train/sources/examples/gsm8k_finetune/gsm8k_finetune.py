@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """
 GSM8K Fine-tuning Script
 Fine-tunes a Llama model on the GSM8K math word problems dataset using TT-Metal.
@@ -30,6 +34,7 @@ import tt_serialization  # noqa: F401
 
 # Configuration
 CONFIG = "training_shakespeare_tinyllama.yaml"
+
 
 class SpeedrunScheduler:
     """Linear warmup -> optional hold -> linear decay; optional beta1 warmup."""
@@ -109,7 +114,6 @@ class CollateFn:
             # Concatenate question + answer
             combined_length = len(x_tokens) + len(y_tokens)
             if combined_length > self.max_sequence_length:
-
                 # Truncate if too long, prioritizing keeping the answer
                 available_space = self.max_sequence_length - len(y_tokens)
                 if available_space > 0:
@@ -119,7 +123,7 @@ class CollateFn:
 
                 else:
                     # If answer is too long, just use the answer
-                    data_np[i, :self.max_sequence_length] = y_tokens[:self.max_sequence_length]
+                    data_np[i, : self.max_sequence_length] = y_tokens[: self.max_sequence_length]
                     x_tokens = []
 
             else:
@@ -138,7 +142,6 @@ class CollateFn:
         )  # Shape: [batch, seq_len]
         y_np[:, 0:-1] = X_np[:, 0, 0, 1:]  # Shift left by 1
 
-
         loss_scaler_np = np.full((batch_size, 1, self.max_sequence_length, 1), 1.0, dtype=np.float32)
         for i, mask_len in enumerate(mask_lens):
             loss_scaler_np[i, :, :mask_len, :] = 0.0
@@ -152,20 +155,23 @@ class CollateFn:
     def __call__(self, batch):
         return self.collate_fn(batch)
 
+
 def get_batch_generator(dataloader, batch_size, max_sequence_length, padded_vocab_size, tokenizer, device_config=None):
     """Custom data generator for GSM8K dataset."""
     mapper = None
     if device_config is not None:
         device = ttml.autograd.AutoContext.get_instance().get_device()
         mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
-    
+
     while True:
         for batch in dataloader:
             X_np, y_np, loss_scaler_np = batch
 
             X = ttml.autograd.Tensor.from_numpy(X_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32, mapper)
             y = ttml.autograd.Tensor.from_numpy(y_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32, mapper)
-            loss_scaler = ttml.autograd.Tensor.from_numpy(loss_scaler_np, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16, mapper)
+            loss_scaler = ttml.autograd.Tensor.from_numpy(
+                loss_scaler_np, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16, mapper
+            )
 
             yield (X, y, loss_scaler)
 
@@ -243,7 +249,7 @@ def generate_text_tt(
     out = tokenizer.decode(generated_tokens)
     if return_with_prompt:
         out = tokenizer.decode(prompt_tokens)
-    
+
     ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.ENABLED)
     return out
 
@@ -307,11 +313,13 @@ def validate(
     tt_model.train()
     return np.mean(cur_val_losses)
 
+
 def adjust_logits(logits, binary_mask, add_mask):
     masked_logits = binary_mask * logits
     masked_logits = masked_logits + add_mask
 
     return masked_logits
+
 
 def get_loss_over_devices(loss):
     device = ttml.autograd.AutoContext.get_instance().get_device()
@@ -319,9 +327,10 @@ def get_loss_over_devices(loss):
     loss_numpy = loss.to_numpy(composer=composer)
     return loss_numpy.mean()
 
+
 def tokenize_dataset(data, tokenizer):
-    X = [sample['question'] for sample in data]
-    y = [sample['answer'] for sample in data]
+    X = [sample["question"] for sample in data]
+    y = [sample["answer"] for sample in data]
 
     X = tokenizer(X, return_tensors="np", add_special_tokens=False)["input_ids"]
     y = tokenizer(y, return_tensors="np", add_special_tokens=False)["input_ids"]
@@ -336,7 +345,7 @@ class TokenizedDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return self.len
-    
+
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
 
@@ -352,25 +361,23 @@ def train():
     if os.path.isfile(override_config_path):
         print("Applying training overrides...")
         override_config = get_config(override_config_path)
+
         def deep_update(a: dict, b: dict) -> dict:
             for k, v in b.items():
-                if (
-                    k in a
-                    and isinstance(a[k], dict)
-                    and isinstance(v, dict)
-                ):
+                if k in a and isinstance(a[k], dict) and isinstance(v, dict):
                     deep_update(a[k], v)  # recursive update
                 else:
-                    a[k] = v              # overwrite or add
+                    a[k] = v  # overwrite or add
             return a
+
         deep_update(yaml_config, override_config)
 
         # pretty output of yaml config
         import yaml
+
         print("Loaded YAML config:")
         print(yaml.dump(yaml_config, sort_keys=False, default_flow_style=False))
-        print('*********************************\n\n')
-
+        print("*********************************\n\n")
 
     training_config = TrainingConfig(yaml_config)
     scheduler_config = SchedulerConfig(yaml_config)
@@ -463,7 +470,14 @@ def train():
         training_dataloader, batch_size, max_sequence_length, padded_vocab_size, tokenizer, device_config
     )
 
-    val_batch_generator = get_batch_generator(testing_dataloader, training_config.validation_batch_size * num_devices, max_sequence_length, padded_vocab_size, tokenizer, device_config)
+    val_batch_generator = get_batch_generator(
+        testing_dataloader,
+        training_config.validation_batch_size * num_devices,
+        max_sequence_length,
+        padded_vocab_size,
+        tokenizer,
+        device_config,
+    )
 
     tokens_per_batch = batch_size * max_sequence_length
     print("Tokens per micro-batch:", tokens_per_batch)
@@ -483,7 +497,6 @@ def train():
     total_steps = 0
     last_val_loss = 0
     accum_steps = training_config.gradient_accumulation_steps
-
 
     # ========== Training Loop ===========
     for opt_step in bar:
@@ -512,11 +525,11 @@ def train():
             micro_losses.append(get_loss_over_devices(loss))
 
             # Scale for accumulation and backward
-            scaled_loss = ttml.ops.binary.mul(loss, 1.0 / float(accum_steps))   # check if accum_steps > 1 
+            scaled_loss = ttml.ops.binary.mul(loss, 1.0 / float(accum_steps))  # check if accum_steps > 1
             scaled_loss.backward(False)
             ttml.autograd.AutoContext.get_instance().reset_graph()
 
-        #Synchronize gradients if DDP is enabled
+        # Synchronize gradients if DDP is enabled
         if device_config.enable_ddp:
             ttml.core.distributed.synchronize_parameters(tt_model.parameters())
 
@@ -534,8 +547,7 @@ def train():
         bar.set_postfix(postfix, refresh=False)
 
         # Validation every eval_every steps
-        if total_steps % training_config.eval_every == 0 or \
-            total_steps + 1 == training_config.steps:
+        if total_steps % training_config.eval_every == 0 or total_steps + 1 == training_config.steps:
             last_val_loss = validate(
                 tt_model,
                 tokenizer,
@@ -548,7 +560,7 @@ def train():
                 total_steps,
             )
             val_losses.append(last_val_loss)
-            
+
         with open("output.txt", "a") as f:
             f.write(
                 f"LR: {lr_now:.6f}, training_loss: {step_loss:.4f}, val_loss: {last_val_loss:.4f}, step: {total_steps}, epoch: 1\n"
