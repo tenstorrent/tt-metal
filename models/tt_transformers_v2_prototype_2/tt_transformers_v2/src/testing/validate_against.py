@@ -250,6 +250,8 @@ _validation_registry = ValidationRegistry()
 #   - higher_is_better_metrics = {"pcc", "cosine_similarity"} --> clean up groupings
 # - what use does cosine_similarity have? can we remove it?
 # - work on ds_r1_qwen model validation using new decorator
+# - generate unit test automatically from the failed validations
+# - checkpoint validation --> essentially checking from_torch against a reference checkpoint
 # }todo))
 def __validate_against(
     reference_fn: Callable,
@@ -391,12 +393,12 @@ def __validate_against(
 
             for metric_name, metric_fn in metrics_to_use.items():
                 try:
-                    value = metric_fn(impl_comparable, ref_comparable)
-                    computed_metrics[metric_name] = value
-
                     # Check tolerance
                     if metric_name in tolerances:
+                        value = metric_fn(impl_comparable, ref_comparable)
+                        computed_metrics[metric_name] = value
                         threshold = tolerances[metric_name]
+
                         if metric_name in higher_is_better_metrics:
                             # For correlation metrics: value should be >= threshold
                             if value < threshold:
