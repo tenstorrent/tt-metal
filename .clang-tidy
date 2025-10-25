@@ -172,8 +172,6 @@ Checks: >
   -readability-non-const-parameter,
   -readability-qualified-auto,
   -readability-redundant-casting,
-  -readability-redundant-member-init,
-  -readability-redundant-string-init,
   -readability-reference-to-constructed-temporary,
   -readability-static-accessed-through-instance,
   -readability-suspicious-call-argument,
