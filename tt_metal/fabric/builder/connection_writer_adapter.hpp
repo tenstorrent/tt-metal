@@ -98,7 +98,7 @@ private:
 
     void emit_ct_args(std::vector<uint32_t>& ct_args_out, size_t num_fwd_paths) const override;
 
-    std::unordered_set<uint32_t> downstream_edms_connected_by_vc_set = {};
+    std::unordered_set<uint32_t> downstream_edms_connected_by_vc_set;
 
     // holds which downstream cores a given receiver/inbound channel VC can feed into
     std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_receiver_channels> downstream_edms_connected_by_vc = {};

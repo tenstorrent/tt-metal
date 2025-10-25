@@ -79,7 +79,7 @@ private:
     int device_core_frequency{};
 
     // Thread pool used for processing data when dumping results
-    std::shared_ptr<ThreadPool> thread_pool{};
+    std::shared_ptr<ThreadPool> thread_pool;
 
     // Last fast dispatch read performed flag
     bool is_last_fd_read_done{};

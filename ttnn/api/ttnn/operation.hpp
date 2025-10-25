@@ -133,8 +133,8 @@ struct OpPerformanceModelGeneral {
     int ideal_compute_ns = 1;
     int ideal_bandwidth_ns = 1;
     int ideal_ns = 1;
-    std::vector<int> inputs_bytes = {};
-    std::vector<int> outputs_bytes = {};
+    std::vector<int> inputs_bytes;
+    std::vector<int> outputs_bytes;
 
     OpPerformanceModelGeneral(Tensors input_tensors, const OutputTensors& output_tensors, int ideal_compute_cycles) :
         ideal_compute_cycles(ideal_compute_cycles) {

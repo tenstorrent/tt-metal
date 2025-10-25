@@ -535,7 +535,7 @@ int main(int argc, char** argv) {
     //                      Initial Runtime Args Parse
     ////////////////////////////////////////////////////////////////////////////
     std::vector<std::string> input_args(argv, argv + argc);
-    std::string arch_name = "";
+    std::string arch_name;
     try {
         std::tie(arch_name, input_args) =
             test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");

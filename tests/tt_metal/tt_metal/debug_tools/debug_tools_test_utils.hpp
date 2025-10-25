@@ -156,7 +156,7 @@ inline bool FileContainsAllStrings(const std::string& file_name, const std::vect
     }
 
     // Reached EOF with strings yet to find.
-    std::string missing_strings = "";
+    std::string missing_strings;
     for (const auto &s : must_contain_set) {
         missing_strings.append(&", \""[missing_strings.empty() ? 2 : 0]).append(s).push_back('"');
     }
@@ -202,7 +202,7 @@ inline bool FileContainsAllStringsInOrder(const std::string& file_name, const st
     }
 
     // Reached EOF with strings yet to find.
-    std::string missing_strings = "";
+    std::string missing_strings;
     for (const auto &s : must_contain_queue) {
         missing_strings.append(&", \""[missing_strings.empty() ? 2 : 0]).append(s).push_back('"');
     }

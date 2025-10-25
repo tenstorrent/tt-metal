@@ -368,7 +368,7 @@ TEST(Cluster, TestMeshFullConnectivity) {
     // T3K cluster type is inferred based on number of chips and number of connections for MMIO and Remote chips
     // If it is missing all connections between chips, it will be set to N300
     // Allow forcing cluster type to enforce error checking if system is expected to be T3K
-    std::string cluster_type_str = "";
+    std::string cluster_type_str;
     std::tie(cluster_type_str, input_args) =
         test_args::get_command_option_and_remaining_args(input_args, "--cluster-type", "");
     tt::tt_metal::ClusterType cluster_type = cluster.get_cluster_type();
@@ -425,7 +425,7 @@ TEST(Cluster, TestMeshFullConnectivity) {
     }
 
     std::optional<FabricType> target_system_topology = std::nullopt;
-    std::string target_system_topology_str = "";
+    std::string target_system_topology_str;
     std::tie(target_system_topology_str, input_args) =
         test_args::get_command_option_and_remaining_args(input_args, "--system-topology", "");
     if (not target_system_topology_str.empty()) {

@@ -1317,7 +1317,7 @@ std::string SlidingWindowConfig::to_string() const {
 
 auto fmt::formatter<ttnn::operations::sliding_window::ParallelConfig>::format(
     const ttnn::operations::sliding_window::ParallelConfig& t, format_context& ctx) const -> format_context::iterator {
-    std::string shard_scheme_str = "";
+    std::string shard_scheme_str;
     if (t.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
         shard_scheme_str = "HEIGHT_SHARDED";
     } else if (t.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
@@ -1327,7 +1327,7 @@ auto fmt::formatter<ttnn::operations::sliding_window::ParallelConfig>::format(
     } else {
         shard_scheme_str = "NOT_SHARDED";
     }
-    std::string shard_orientation_str = "";
+    std::string shard_orientation_str;
     if (t.shard_orientation == ShardOrientation::COL_MAJOR) {
         shard_orientation_str = "COL_MAJOR";
     } else if (t.shard_orientation == ShardOrientation::ROW_MAJOR) {

@@ -266,7 +266,7 @@ struct PhysicalMeshConfig {
     std::string mesh_descriptor_path;
     std::vector<std::vector<EthCoord>> eth_coord_mapping;
 
-    PhysicalMeshConfig() : mesh_descriptor_path(""), eth_coord_mapping({}) {
+    PhysicalMeshConfig() : eth_coord_mapping({}) {
         // Default path to the mesh descriptor.
     }
 };
