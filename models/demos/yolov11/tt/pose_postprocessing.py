@@ -90,9 +90,27 @@ def decode_pose_keypoints_cpu(output, anchors, strides):
     else:
         raise ValueError(f"Unexpected stride shape: {strides.shape}")
 
+    # Debug: Check intermediate values
+    print(f"\n[DEBUG] Keypoint decoding:")
+    print(f"  kpt_x range: [{kpt_x.min():.2f}, {kpt_x.max():.2f}]")
+    print(f"  kpt_x shape: {kpt_x.shape}")
+    print(f"  anchor_x shape: {anchor_x.shape}, range: [{anchor_x.min():.2f}, {anchor_x.max():.2f}]")
+    print(f"  stride_val shape: {stride_val.shape}, range: [{stride_val.min():.2f}, {stride_val.max():.2f}]")
+    print(f"  Sample anchor_x[0,0,0:10]: {anchor_x[0,0,0:10]}")
+    print(f"  Sample stride_val[0,0,0:10]: {stride_val[0,0,0:10]}")
+
     # Apply keypoint decoding formula (NO sigmoid on x,y!)
     # Formula: (x * 2 - 0.5 + anchor) * stride
-    kpt_x_decoded = (kpt_x * 2.0 - 0.5 + anchor_x) * stride_val
+    term1 = kpt_x * 2.0
+    term2 = term1 - 0.5
+    term3 = term2 + anchor_x
+    kpt_x_decoded = term3 * stride_val
+
+    print(f"  After x*2: [{term1.min():.2f}, {term1.max():.2f}]")
+    print(f"  After -0.5: [{term2.min():.2f}, {term2.max():.2f}]")
+    print(f"  After +anchor: [{term3.min():.2f}, {term3.max():.2f}]")
+    print(f"  After *stride: [{kpt_x_decoded.min():.2f}, {kpt_x_decoded.max():.2f}]")
+
     kpt_y_decoded = (kpt_y * 2.0 - 0.5 + anchor_y) * stride_val
 
     # Apply sigmoid only to visibility

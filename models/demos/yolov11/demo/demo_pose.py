@@ -141,7 +141,15 @@ def process_images(dataset, res, batch_size):
     return torch_input_tensor, orig_images, paths_images
 
 
-def postprocess_pose(preds, orig_images, paths_images, input_size=(640, 640), conf_threshold=0.7, nms_threshold=0.45):
+def postprocess_pose(
+    preds,
+    orig_images,
+    paths_images,
+    input_size=(640, 640),
+    conf_threshold=0.7,
+    nms_threshold=0.45,
+    use_raw_keypoints=False,
+):
     """
     Postprocess pose predictions with proper coordinate transformation
 
@@ -359,12 +367,10 @@ def run_inference_and_save_pose(
         logger.info(f"  Conf: [{preds_raw[:, 4, :].min():.4f}, {preds_raw[:, 4, :].max():.4f}]")
         logger.info(f"  Kpts RAW: [{preds_raw[:, 5:56, :].min():.2f}, {preds_raw[:, 5:56, :].max():.2f}]")
 
-        # SKIP CPU decoding for now - use raw keypoints
-        # The visualization will need to handle raw values differently
+        # For now: Use raw TTNN output without decoding
+        # and let postprocess handle it differently for TTNN
         preds = preds_raw
-
-        logger.info(f"Using RAW keypoints (no CPU decoding):")
-        logger.info(f"  Will interpret raw values in visualization")
+        logger.warning("TTNN: Using raw keypoint values (visualization will skip keypoints)")
 
     logger.info(f"Inference complete. Processing {len(orig_images)} images...")
 
