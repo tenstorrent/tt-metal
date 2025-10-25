@@ -174,7 +174,7 @@ struct DestPrintTestConfig {
 
     size_t num_tiles = DEFAULT_NUM_TILES;
     tt::DataFormat data_format = tt::DataFormat::Invalid;
-    CoreCoord core = {};
+    CoreCoord core;
     bool remap = false;
     bool swizzle = false;
     std::string reader_kernel;

@@ -209,7 +209,7 @@ class RunTimeOptions {
     bool enable_fabric_telemetry = false;
 
     // Mock cluster initialization using a provided cluster descriptor
-    std::string mock_cluster_desc_path = "";
+    std::string mock_cluster_desc_path;
 
     // Consolidated target device selection
     TargetDevice runtime_target_device_ = TargetDevice::Silicon;

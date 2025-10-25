@@ -84,7 +84,7 @@ HWCommandQueue::HWCommandQueue(
     NOC noc_index,
     uint32_t completion_queue_reader_core) :
     manager_(device->sysmem_manager()),
-    completion_queue_thread_{},
+
     id_(id),
     completion_queue_reader_core_(completion_queue_reader_core),
     device_(device),

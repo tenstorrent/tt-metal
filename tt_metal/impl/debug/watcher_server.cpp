@@ -87,7 +87,7 @@ private:
     FILE* kernel_file_ = nullptr;
     FILE* kernel_elf_file_ = nullptr;
 
-    std::string exception_message_ = "";
+    std::string exception_message_;
     std::mutex exception_message_mutex_;
 
     inline static const std::string LOG_FILE_PATH = "generated/watcher/";
@@ -507,7 +507,7 @@ void WatcherServer::Impl::poll_watcher_data() {
     auto sleep_duration = std::chrono::milliseconds(rtoptions.get_watcher_interval());
 
     // Print to the user which features are disabled via env vars.
-    std::string disabled_features = "";
+    std::string disabled_features;
     auto& disabled_features_set = rtoptions.get_watcher_disabled_features();
     if (!disabled_features_set.empty()) {
         for (auto& feature : disabled_features_set) {

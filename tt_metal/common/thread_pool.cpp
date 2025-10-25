@@ -174,7 +174,7 @@ private:
 // across threads.
 class NumaAwareExecutor {
 public:
-    NumaAwareExecutor(uint32_t physical_device_id) : tasks_() {
+    NumaAwareExecutor(uint32_t physical_device_id) {
         // Set the priority for this process to 0 (niceness value in linux)
         thread_binding::set_process_priority(0);
         worker = std::thread([this]() {

@@ -210,7 +210,7 @@ struct SenderMemoryMap {
 
     // Default constructor
     SenderMemoryMap() :
-        common(),
+
         credit_addresses(0, 0),
         packet_headers(0, 0),
         payload_buffers(0, 0),
@@ -326,8 +326,7 @@ struct ReceiverMemoryMap {
     uint32_t payload_chunk_size_;
 
     // Default constructor
-    ReceiverMemoryMap() :
-        common(), payload_chunks(0, 0), atomic_counters(0, 0), credit_headers(0, 0), payload_chunk_size_(0) {}
+    ReceiverMemoryMap() : payload_chunks(0, 0), atomic_counters(0, 0), credit_headers(0, 0), payload_chunk_size_(0) {}
 
     ReceiverMemoryMap(
         uint32_t l1_unreserved_base,

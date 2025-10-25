@@ -137,7 +137,7 @@ protected:
         this->num_devices_ = this->devices_.size();
     }
 
-    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_{};
+    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
     std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
     size_t num_devices_{};
 };

@@ -80,7 +80,7 @@ void check_built_dir(const std::filesystem::path& dir_path, const std::filesyste
 }  // namespace
 
 std::string get_default_root_path() {
-    const std::string emptyString("");
+    const std::string emptyString;
     const std::string home_path = parse_env<std::string>("HOME", emptyString);
     if (!home_path.empty() && std::filesystem::exists(home_path)) {
         return home_path + "/.cache/tt-metal-cache/";
