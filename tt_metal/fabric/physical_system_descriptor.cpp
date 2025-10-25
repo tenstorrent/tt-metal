@@ -29,7 +29,11 @@ namespace {
 
 // This reimplements tt::Cluster::get_bus_id() and should be moved to tt::umd::Cluster
 inline uint16_t get_bus_id(const std::unique_ptr<tt::umd::Cluster>& cluster, ChipId chip) {
-    return cluster->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().pci_bus;
+    // Prefer cached value from cluster descriptor (available for silicon and our simulator/mock descriptors)
+    auto cluster_desc = cluster->get_cluster_description();
+    uint16_t bus_id = cluster_desc->get_bus_id(chip);
+
+    return bus_id;
 }
 
 // This reimplements tt::Cluster::get_arch() and should be moved to tt::umd::Cluster
@@ -145,25 +149,25 @@ PhysicalSystemDescriptor::PhysicalSystemDescriptor(
     const Hal* hal,
     const llrt::RunTimeOptions& rtoptions,
     bool run_discovery) :
-    PhysicalSystemDescriptor(cluster, distributed_context, hal, rtoptions.get_mock_enabled(), run_discovery) {}
+    PhysicalSystemDescriptor(cluster, distributed_context, hal, rtoptions.get_target_device(), run_discovery) {}
 
 PhysicalSystemDescriptor::PhysicalSystemDescriptor(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     const Hal* hal,
-    bool using_mock_cluster_descriptor,
+    tt::TargetDevice target_device_type,
     bool run_discovery) :
     distributed_context_(distributed_context),
     hal_(hal),
     cluster_(cluster),
-    using_mock_cluster_desc_(using_mock_cluster_descriptor) {
+    target_device_type_(target_device_type) {
     if (run_discovery) {
         this->run_discovery();
     }
 }
 
 PhysicalSystemDescriptor::PhysicalSystemDescriptor(const std::string& mock_proto_desc_path) :
-    cluster_(null_cluster), distributed_context_(nullptr), hal_(nullptr), using_mock_cluster_desc_(false) {
+    cluster_(null_cluster), distributed_context_(nullptr), hal_(nullptr), target_device_type_(TargetDevice::Silicon) {
     auto proto_desc = deserialize_physical_system_descriptor_from_text_proto_file(mock_proto_desc_path);
     this->merge(std::move(proto_desc));
 }
@@ -249,7 +253,7 @@ void PhysicalSystemDescriptor::clear() {
 
 void PhysicalSystemDescriptor::run_local_discovery() {
     this->clear();
-    if (using_mock_cluster_desc_) {
+    if (target_device_type_ != TargetDevice::Silicon) {
         cluster_desc_ = std::make_unique<tt::umd::ClusterDescriptor>(*cluster_->get_cluster_description());
     } else {
         cluster_desc_ = tt::umd::Cluster::create_cluster_descriptor("", {}, umd::IODeviceType::PCIe);
@@ -268,7 +272,7 @@ void PhysicalSystemDescriptor::run_local_discovery() {
 
     auto add_local_asic_descriptor = [&](AsicID src_unique_id, ChipId src_chip_id) {
         auto [tray_id, asic_location] =
-            get_asic_position(cluster_, get_arch(cluster_desc_), src_chip_id, using_mock_cluster_desc_);
+            get_asic_position(cluster_, get_arch(cluster_desc_), src_chip_id, target_device_type_ != TargetDevice::Silicon);
         asic_descriptors_[src_unique_id] = ASICDescriptor{
             TrayID{tray_id}, asic_location, cluster_desc_->get_board_type(src_chip_id), src_unique_id, hostname};
     };
@@ -299,6 +303,7 @@ void PhysicalSystemDescriptor::run_local_discovery() {
         }
     }
 
+    // Populate exit nodes for cross-host connections
     for (const auto& [local_chip_id, eth_link_info] : cross_host_eth_connections) {
         auto local_unique_id = AsicID{chip_unique_ids.at(local_chip_id)};
         // This ASIC has no local ethernet connections, but is connected to this host
@@ -323,6 +328,7 @@ void PhysicalSystemDescriptor::run_local_discovery() {
                 .eth_conn = EthConnection(eth_chan, dst_chan, false)});
         }
     }
+
     system_graph_.host_connectivity_graph[hostname] = {};
 }
 
@@ -361,8 +367,8 @@ void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
 
     // Merging PhysicalSystemDescriptors using mock and real clusters is undefined and unsupported
     TT_FATAL(
-        is_using_mock_cluster() == other.is_using_mock_cluster(),
-        "Cannot merge physical and mock cluster physical system descriptors.");
+        target_device_type_ == other.target_device_type_,
+        "Cannot merge physical and mock/simulation cluster physical system descriptors.");
 }
 
 void PhysicalSystemDescriptor::remove_unresolved_nodes() {
@@ -894,6 +900,10 @@ AisleID PhysicalSystemDescriptor::get_aisle_id(const std::string& hostname) {
 
 HallID PhysicalSystemDescriptor::get_hall_id(const std::string& hostname) {
     TT_THROW("Querying Host Hall ID requires the Cable Spec which is not currently supported.");
+}
+
+bool PhysicalSystemDescriptor::is_using_mock_cluster() const {
+    return target_device_type_ == TargetDevice::Mock || target_device_type_ == TargetDevice::Simulator;
 }
 
 }  // namespace tt::tt_metal
