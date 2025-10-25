@@ -7,6 +7,7 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.vanilla_unet.tt.common import (
     VANILLA_UNET_L1_SMALL_SIZE,
     VANILLA_UNET_PCC_WH,
@@ -19,6 +20,7 @@ from models.experimental.functional_unet.tt.model_preprocessing import create_un
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+@run_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": VANILLA_UNET_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("batch, input_channels, input_height, input_width", [(1, 3, 480, 640)])
 def test_vanilla_unet_model(

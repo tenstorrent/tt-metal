@@ -10,6 +10,7 @@ from ttnn.device import is_wormhole_b0
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.vanilla_unet.tt.common import (
     VANILLA_UNET_L1_SMALL_SIZE,
     VANILLA_UNET_PCC_WH,
@@ -30,6 +31,7 @@ from models.tt_cnn.tt.pipeline import (
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+@run_for_wormhole_b0()
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, expected_device_perf_fps",
@@ -67,6 +69,7 @@ def create_unet_pipeline_model(model):
     return run
 
 
+@run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "device_params",
@@ -82,7 +85,7 @@ def create_unet_pipeline_model(model):
 @pytest.mark.parametrize("num_iterations", [32])
 @pytest.mark.parametrize(
     "batch, input_channels, input_height, input_width, expected_compile_time, expected_throughput_fps",
-    [(1, 3, 480, 640, 30.0, 180)],
+    [(1, 3, 480, 640, 30.0, 190)],
 )
 def test_vanilla_unet_perf_e2e(
     num_iterations,
@@ -123,12 +126,16 @@ def test_vanilla_unet_perf_e2e(
     dram_input_memory_config = get_memory_config_for_persistent_dram_tensor(
         ttnn_input_tensor.shape, ttnn.TensorMemoryLayout.WIDTH_SHARDED, device.dram_grid_size()
     )
+    dram_output_memory_config = get_memory_config_for_persistent_dram_tensor(
+        [1, 1, batch, ttnn_input_tensor.shape[-1]], ttnn.TensorMemoryLayout.WIDTH_SHARDED, device.dram_grid_size()
+    )
 
     pipeline = create_pipeline_from_config(
-        config=PipelineConfig(use_trace=True, num_command_queues=2),
+        config=PipelineConfig(use_trace=True, num_command_queues=2, all_transfers_on_separate_command_queue=True),
         model=run_model,
         device=device,
         dram_input_memory_config=dram_input_memory_config,
+        dram_output_memory_config=dram_output_memory_config,
         l1_input_memory_config=configs.l1_input_memory_config,
     )
 
@@ -169,6 +176,7 @@ def test_vanilla_unet_perf_e2e(
     logger.info(f"PCC check was successful ({pcc_message:.5f} > {VANILLA_UNET_PCC_WH:.5f})")
 
 
+@run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params",
     [
