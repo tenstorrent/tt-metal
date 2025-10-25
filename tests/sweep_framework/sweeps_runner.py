@@ -22,8 +22,6 @@ import enlighten
 from faster_fifo import Queue
 
 # tt
-from tracy.common import PROFILER_LOGS_DIR
-from tracy.process_ops_logs import get_device_data_generate_report
 from framework.device_fixtures import default_device
 from framework.elastic_config import *
 from framework.statuses import VectorValidity, TestStatus
@@ -32,7 +30,7 @@ from framework.sweeps_logger import sweeps_logger as logger
 from framework.vector_source import VectorSourceFactory
 from framework.result_destination import ResultDestinationFactory
 from framework.serialize import deserialize, deserialize_vector_structured
-from sweep_utils.roofline_utils import get_updated_message
+from sweep_utils.perf_utils import _run_with_cache_comparison, _run_single
 
 
 @dataclass
@@ -223,57 +221,6 @@ def get_devices(test_module):
         return default_device()
 
 
-def gather_single_test_perf(device, test_passed):
-    if device is None or device.get_num_devices() > 1:
-        logger.error("Multi-device perf is not supported. Failing.")
-        return None
-
-    # Read profiler data from device
-    logger.info("Reading profiler data from device")
-    import ttnn
-
-    ttnn.ReadDeviceProfiler(device)
-    logger.info("Reading profiler data from device done")
-    try:
-        opPerfData = get_device_data_generate_report(
-            PROFILER_LOGS_DIR, None, None, None, export_csv=False, cleanup_device_log=True
-        )
-    except Exception as e:
-        logger.warning(f"Failed to get device profiler data: {e}")
-        opPerfData = []
-
-    if not test_passed:
-        return None
-    elif opPerfData == []:
-        logger.warning("No profiling data available. Using dummy data for testing purposes.")
-
-        dummy_data = {
-            "DEVICE FW DURATION [ns]": 0,
-            "DEVICE KERNEL DURATION [ns]": 0,
-            "OP TO OP LATENCY [ns]": 0,
-            "DEVICE BRISC FW DURATION [ns]": 0,
-            "DEVICE NCRISC FW DURATION [ns]": 0,
-        }
-        return dummy_data
-    elif len(opPerfData) > 1:
-        logger.info("Composite op detected in device perf measurement. Will aggregate results.")
-        try:
-            for key in opPerfData[0].keys():
-                value = opPerfData[0][key]
-                for i in range(1, len(opPerfData)):
-                    if key in opPerfData[i]:
-                        if type(value) == str:
-                            opPerfData[0][key] = str(float(value) + float(opPerfData[i][key]))
-                        else:
-                            opPerfData[0][key] = value + opPerfData[i][key]
-            return opPerfData[0]
-        except Exception as e:
-            logger.info(e)
-            return None
-    else:
-        return opPerfData[0]
-
-
 def get_hostname():
     return subprocess.check_output(["uname", "-n"]).decode("ascii").strip()
 
@@ -362,159 +309,14 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
                 return
             test_vector = deserialize_vector_structured(test_vector)
             try:
-                # Clear program cache per test vector for cache comparison measurements
                 if config.measure_perf_with_cache:
-                    # For cache comparison, clear before first run
-                    num_entries_before = (
-                        device.num_program_cache_entries()
-                        if hasattr(device, "num_program_cache_entries")
-                        else "unknown"
+                    status, message, e2e_perf, device_perf = _run_with_cache_comparison(
+                        test_module, test_vector, device, config
                     )
-                    logger.info(f"Clearing program cache for --perf-with-cache (entries before: {num_entries_before})")
-                    device.disable_and_clear_program_cache()
-                    device.enable_program_cache()  # Re-enable for cache comparison
-                    num_entries_after = (
-                        device.num_program_cache_entries()
-                        if hasattr(device, "num_program_cache_entries")
-                        else "unknown"
-                    )
-                    logger.info(f"Program cache cleared and re-enabled (entries after: {num_entries_after})")
-
-                    # TODO: tt-metal #80925:Clear kernel cache when made available in ttnn. e2e perf is not available without ability to clear the kernel cache.
-
-                    # First run (without cache) - measure uncached performance
-                    results_uncached = test_module.run(**test_vector, device=device)
-                    if type(results_uncached) == list:
-                        status_uncached, message_uncached = results_uncached[0]
-                        e2e_perf_uncached = results_uncached[1] / 1000000  # Nanoseconds to milliseconds
-                    else:
-                        status_uncached, message_uncached = results_uncached
-                        e2e_perf_uncached = None
-
-                    # Gather device perf for uncached run if enabled
-                    device_perf_uncached = None
-                    if config.measure_device_perf:
-                        device_perf_uncached = gather_single_test_perf(device, status_uncached)
-                        # Clear the profiler log file for the next run to isolate device perf measurements for uncached and cached
-                        from tracy.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
-                        import os
-
-                        device_log_path = os.path.join(PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG)
-                        if os.path.exists(device_log_path):
-                            os.remove(device_log_path)
-
-                    # Second run (with cache) - measure cached performance
-                    results_cached = test_module.run(**test_vector, device=device)
-                    if type(results_cached) == list:
-                        status_cached, message_cached = results_cached[0]
-                        e2e_perf_cached = results_cached[1] / 1000000  # Nanoseconds to milliseconds
-                    else:
-                        status_cached, message_cached = results_cached
-                        e2e_perf_cached = None
-
-                    # Gather device perf for cached run if enabled
-                    device_perf_cached = None
-                    if config.measure_device_perf:
-                        device_perf_cached = gather_single_test_perf(device, status_cached)
-
-                    # Check both run statuses and combine results
-                    if not status_uncached:
-                        # Uncached run failed
-                        if status_cached:
-                            # Uncached failed but cached passed
-                            status = False
-                            message = f"UNCACHED RUN FAILED: {message_uncached} (cached run passed: {message_cached})"
-                        else:
-                            # Both failed
-                            status = False
-                            message = f"BOTH RUNS FAILED - Uncached: {message_uncached}, Cached: {message_cached}"
-                    elif not status_cached:
-                        # Uncached passed but cached failed
-                        status = False
-                        message = f"CACHED RUN FAILED: {message_cached} (uncached run passed: {message_uncached})"
-                    else:
-                        # Both passed - verify messages are consistent
-                        status = True
-                        # Check if messages differ (they should be the same for correctness validation)
-                        if str(message_uncached) != str(message_cached):
-                            # Messages differ - this is a correctness issue
-                            message = (
-                                f"BOTH RUNS PASSED BUT MESSAGES DIFFER - "
-                                f"Uncached: {message_uncached}, Cached: {message_cached}"
-                            )
-                            logger.warning(
-                                f"Message mismatch between cached and uncached runs: "
-                                f"uncached={message_uncached}, cached={message_cached}"
-                            )
-                        else:
-                            # Messages match - use uncached message as canonical
-                            message = message_uncached
-
-                    # Store both performance metrics
-                    e2e_perf = {"uncached": e2e_perf_uncached, "cached": e2e_perf_cached}
-
-                    # Combine device perf results if available
-                    if config.measure_device_perf:
-                        device_perf = {"uncached": device_perf_uncached, "cached": device_perf_cached}
-                        # Update message with both device perf results
-                        if device_perf_uncached or device_perf_cached:
-                            message = get_updated_message(message, device_perf)
-                        # Simplify device_perf to only include essential metrics
-                        simplified_perf = {}
-                        if device_perf_uncached:
-                            simplified_perf["uncached"] = {}
-                            for key in [
-                                "DEVICE FW DURATION [ns]",
-                                "DEVICE KERNEL DURATION [ns]",
-                                "OP TO OP LATENCY [ns]",
-                                "DEVICE BRISC FW DURATION [ns]",
-                                "DEVICE NCRISC FW DURATION [ns]",
-                            ]:
-                                if key in device_perf_uncached:
-                                    simplified_perf["uncached"][key] = device_perf_uncached[key]
-                        if device_perf_cached:
-                            simplified_perf["cached"] = {}
-                            for key in [
-                                "DEVICE FW DURATION [ns]",
-                                "DEVICE KERNEL DURATION [ns]",
-                                "OP TO OP LATENCY [ns]",
-                                "DEVICE BRISC FW DURATION [ns]",
-                                "DEVICE NCRISC FW DURATION [ns]",
-                            ]:
-                                if key in device_perf_cached:
-                                    simplified_perf["cached"][key] = device_perf_cached[key]
-                        output_queue.put([status, message, e2e_perf, simplified_perf])
-                    else:
-                        output_queue.put([status, message, e2e_perf, None])
+                    output_queue.put([status, message, e2e_perf, device_perf if config.measure_device_perf else None])
                 else:
-                    # Standard single run
-                    results = test_module.run(**test_vector, device=device)
-                    if type(results) == list:
-                        status, message = results[0]
-                        e2e_perf = results[1] / 1000000  # Nanoseconds to milliseconds
-                    else:
-                        status, message = results
-                        e2e_perf = None
-
-                    if config.measure_device_perf:
-                        # Standard device perf measurement for single run
-                        perf_result = gather_single_test_perf(device, status)
-                        message = get_updated_message(message, perf_result)
-                        # Simplify perf_result to only include essential metrics to avoid serialization issues
-                        simplified_perf = {}
-                        if perf_result:
-                            for key in [
-                                "DEVICE FW DURATION [ns]",
-                                "DEVICE KERNEL DURATION [ns]",
-                                "OP TO OP LATENCY [ns]",
-                                "DEVICE BRISC FW DURATION [ns]",
-                                "DEVICE NCRISC FW DURATION [ns]",
-                            ]:
-                                if key in perf_result:
-                                    simplified_perf[key] = perf_result[key]
-                        output_queue.put([status, message, e2e_perf, simplified_perf])
-                    else:
-                        output_queue.put([status, message, e2e_perf, None])
+                    status, message, e2e_perf, device_perf = _run_single(test_module, test_vector, device, config)
+                    output_queue.put([status, message, e2e_perf, device_perf if config.measure_device_perf else None])
             except Exception as e:
                 if config.main_proc_verbose:
                     logger.exception(e)
@@ -640,7 +442,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                         # Test passed but was expected to fail - this is unexpected
                         result["status"] = TestStatus.XPASS
                         logger.warning(
-                            f"UNEXPECTED PASS: Test in XFail suite '{suite_name}' passed unexpectedly: {vector_id}"
+                            f"UNEXPECTED PASS: Test in XFail suite '{suite_name}' passed unexpectedly: {input_hash}"
                         )
                     elif result["status"] in [
                         TestStatus.FAIL_ASSERT_EXCEPTION,
@@ -651,7 +453,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                         # Test failed as expected in XFail suite
                         result["status"] = TestStatus.XFAIL
                         logger.info(
-                            f"EXPECTED FAILURE: Test in XFail suite '{suite_name}' failed as expected: {vector_id}"
+                            f"EXPECTED FAILURE: Test in XFail suite '{suite_name}' failed as expected: {input_hash}"
                         )
                     # Note: FAIL_CRASH_HANG is still treated as a real failure even in XFail suites
                     # since crashes/hangs are infrastructure issues, not test logic failures
