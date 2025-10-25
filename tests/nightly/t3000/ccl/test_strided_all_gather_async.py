@@ -175,6 +175,7 @@ def run_strided_all_gather_impl(
         signpost("stop")
     else:
         for i in range(num_iters):
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
             tt_all_gather_out_tensor = run_op(i)
             tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
 
@@ -192,6 +193,7 @@ def run_strided_all_gather_impl(
 
             tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
             tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
+
             tt_ag_out = tt_ag_out[:, :, :, 0 : expected_tensor.shape[3]]
             eq, output = comp_pcc(tt_ag_out, expected_tensor, allowed_pcc)
             logger.info(f"{output}, iteration {i}")
@@ -205,12 +207,20 @@ def run_strided_all_gather_impl(
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, layout, ag_input_dtype",
+    "ag_output_shape, dim, num_workers_per_link, tiles_per_chunk, layout, ag_input_dtype",
     [
-        ([1, 1, 4096, 4096], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 32, 256], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 32, 512], 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 32, 512], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 32, 512], 3, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 32, 768], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
-        "dit_shape",  # this one triggers the default chunks_per_sync
+        "1tile1chunk1worker",
+        "1tile1chunk2worker",
+        "1tile2chunk1worker",
+        "2tile1chunk1worker",
+        "1tile3chunk1worker",
     ],
 )
 @pytest.mark.parametrize(
@@ -251,6 +261,8 @@ def test_strided_all_gather_async(
     enable_trace,
     all_gather_topology,
     num_iters,
+    num_workers_per_link,
+    tiles_per_chunk,
 ):
     run_strided_all_gather_impl(
         mesh_device,
@@ -265,4 +277,6 @@ def test_strided_all_gather_async(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
+        num_workers_per_link=num_workers_per_link,
+        chunks_per_sync=tiles_per_chunk,
     )
