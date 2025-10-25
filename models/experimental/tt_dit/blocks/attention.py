@@ -10,13 +10,13 @@ import torch
 import ttnn
 
 from ..layers.linear import ColParallelLinear
-from ..layers.module import Module, Parameter
+from ..layers.module import Module, Parameter, UnregisteredModule
 from ..layers.normalization import RMSNorm
 from ..utils.padding import PaddingConfig, pad_weight_tensor
 from ..utils.substate import pop_substate
 
 if TYPE_CHECKING:
-    from typing import Any
+    pass
 
     from ..parallel.config import DiTParallelConfig
     from ..parallel.manager import CCLManager
@@ -344,12 +344,3 @@ def _apply_rope(x: ttnn.Tensor, freqs_cis: tuple[ttnn.Tensor, ttnn.Tensor]) -> t
     sin = sin.reshape([1, 1, *sin.shape])
 
     return x * cos + ttnn.alt_complex_rotate90(x) * sin
-
-
-# TODO: move to module.py
-class UnregisteredModule:
-    def __init__(self, module: Module) -> None:
-        self.module = module
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
-        return self.module(*args, **kwargs)
