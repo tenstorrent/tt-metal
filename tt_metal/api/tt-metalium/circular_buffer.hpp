@@ -29,7 +29,7 @@ class GlobalCircularBuffer;
 class CircularBufferImpl;
 class CircularBuffer {
 public:
-    explicit CircularBuffer(CircularBufferImpl* impl);
+    explicit CircularBuffer(const CircularBufferImpl* impl);
     CBHandle id() const;
     const CoreRangeSet& core_ranges() const;
     std::size_t size() const;

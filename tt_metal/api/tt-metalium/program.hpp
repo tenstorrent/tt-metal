@@ -13,7 +13,7 @@ namespace tt::tt_metal {
 
 // Fwd declares
 struct ProgramDescriptor;
-class CircularBufferImpl;
+class CircularBuffer;
 
 namespace detail {
 class ProgramImpl;
@@ -46,7 +46,7 @@ public:
     //////////////////////////////
 
     // Used in ops.
-    std::span<const std::shared_ptr<CircularBufferImpl>> circular_buffers() const;
+    std::vector<std::shared_ptr<CircularBuffer>> circular_buffers() const;
 
     // debug/test/internal usage.
     detail::ProgramImpl& impl() { return *internal_; }
