@@ -11,6 +11,10 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::sliding_window {
+
+bool SlidingWindowConfig::operator<(const SlidingWindowConfig& rhs) const {
+    return this->to_string() < rhs.to_string();
+}
 std::size_t SlidingWindowConfig::get_hash() const { return std::hash<std::string>{}(to_string()); }
 
 std::array<uint32_t, 4> get_pair_n4_padding(
@@ -262,8 +266,14 @@ std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
         return pad_metadata;
     }
 }
-
+std::map<SlidingWindowConfig, std::vector<uint32_t>> sliding_window_op_trace_metadata_cache;
 std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& config) {
+    if (sliding_window_op_trace_metadata_cache.contains(config)) {
+        log_trace(tt::LogOp, "Op Trace Metadata Cache hit for config {}", config);
+        return sliding_window_op_trace_metadata_cache[config];
+    }
+    log_trace(tt::LogOp, "Op Trace Metadata Cache MISS!!! for config {}", config);
+
     ttnn::Shape output_shape = config.get_output_shape();
     uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
     std::vector<uint32_t> op_trace_metadata(output_nhw, 0);
@@ -300,11 +310,19 @@ std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& conf
             }
         }
     }
+    sliding_window_op_trace_metadata_cache[config] = op_trace_metadata;
     return op_trace_metadata;
 }
 
-std::vector<ShardBoundary> generate_shard_boundaries(
-    const SlidingWindowConfig& config, const std::vector<uint32_t>& op_trace_metadata) {
+std::map<SlidingWindowConfig, std::vector<ShardBoundary>> sliding_window_shard_boundary_cache;
+std::vector<ShardBoundary> generate_shard_boundaries(const SlidingWindowConfig& config) {
+    if (sliding_window_shard_boundary_cache.contains(config)) {
+        log_trace(tt::LogOp, "Shard Boundary Cache hit for config {}", config);
+        return sliding_window_shard_boundary_cache[config];
+    }
+    log_trace(tt::LogOp, "Shard Boundary Cache MISS!!! for config {}", config);
+
+    auto op_trace_metadata = generate_op_trace_metadata(config);
     std::vector<ShardBoundary> shard_boundaries;
 
     const uint32_t num_cores = config.num_cores_nhw;
@@ -355,7 +373,7 @@ std::vector<ShardBoundary> generate_shard_boundaries(
             boundary,
             boundary.input_range.end - boundary.input_range.start);
     };
-
+    sliding_window_shard_boundary_cache[config] = shard_boundaries;
     return shard_boundaries;
 }
 
@@ -401,20 +419,11 @@ uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& sha
 
 uint32_t calculate_precise_halo_output_elems(
     const SlidingWindowConfig& config, const std::array<uint32_t, 2>& shard_shape) {
-    log_info(tt::LogOp, "Calculating precise halo for config: {}", config.to_string());
     // Generate metadata for precise calculation
-    auto op_trace_metadata = generate_op_trace_metadata(config);
-    auto shard_boundaries = generate_shard_boundaries(config, op_trace_metadata);
+    auto shard_boundaries = generate_shard_boundaries(config);
 
     // Get precise max sticks per core
     uint32_t max_out_nsticks_per_core = generate_max_out_nsticks_per_core(shard_boundaries);
-
-    // Return total elements: max_sticks * stick_width
-    log_info(
-        tt::LogOp,
-        "Precise max_out_nsticks_per_core = {}, shard_shape[1]: {}",
-        max_out_nsticks_per_core,
-        shard_shape[1]);
     return max_out_nsticks_per_core * shard_shape[1];
 }
 
