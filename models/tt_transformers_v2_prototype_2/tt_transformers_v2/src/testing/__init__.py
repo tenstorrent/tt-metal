@@ -2,6 +2,7 @@
 
 # Validation framework
 # Metrics
+from .auto_compose import to_torch_auto_compose
 from .metrics import (
     DEFAULT_METRICS,
     comp_allclose,
@@ -36,4 +37,6 @@ __all__ = [
     "compute_cosine_similarity",
     "comp_allclose",
     "DEFAULT_METRICS",
+    # Auto compose
+    "to_torch_auto_compose",
 ]

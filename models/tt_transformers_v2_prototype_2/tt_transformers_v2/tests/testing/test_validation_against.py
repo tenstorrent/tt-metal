@@ -8,16 +8,19 @@ against reference PyTorch implementations with automatic metrics collection.
 
 import os
 
+import pytest
 import torch
 import ttnn
 
 from tt_transformers_v2.src.testing import (
+    clear_validation_results,
     compute_max_abs_error,
     compute_pcc,
     device_validate_against,
     enable_validation,
     get_validation_registry,
     host_validate_against,
+    to_torch_auto_compose,
 )
 
 # ============================================================================
@@ -32,7 +35,40 @@ def torch_rms_norm(x, weight, eps=1e-6):
     return weight * x
 
 
-class ValidatedRMSNorm:
+class HostValidatedRMSNorm:
+    """RMS Normalization with validation decorator using old input_map pattern"""
+
+    def __init__(self, weight: torch.Tensor, eps: float, device):
+        self.eps = eps
+        self.weight = ttnn.from_torch(
+            weight.unsqueeze(0).unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
+
+    @host_validate_against(
+        reference_fn=torch_rms_norm,
+        input_to_torch=lambda args, kwargs: (
+            (
+                to_torch_auto_compose(args[1]),
+                to_torch_auto_compose(args[0].weight),
+            ),
+            {},
+        ),
+        tolerances={
+            "max_abs_error": 1e-2,
+            "mean_abs_error": 1e-3,
+            "pcc": 0.99,
+        },
+    )
+    def __call__(self, x):
+        # x shape: [1, seq_len, hidden_size]
+        x_squared = ttnn.mul(x, x)
+        mean_x_squared = ttnn.mean(x_squared, dim=-1, keepdim=True)
+        rms = ttnn.sqrt(ttnn.add(mean_x_squared, self.eps))
+        x_normed = ttnn.mul(x, ttnn.reciprocal(rms))
+        return ttnn.mul(x_normed, self.weight)
+
+
+class DeviceValidatedRMSNorm:
     """RMS Normalization - ultra-clean pattern: NO conversions needed!"""
 
     def __init__(self, weight: torch.Tensor, eps: float, device):
@@ -58,38 +94,7 @@ class ValidatedRMSNorm:
         tolerances={
             "max_abs_error": 1e-2,
             "mean_abs_error": 1e-3,
-        },
-    )
-    def __call__(self, x):
-        # x shape: [1, seq_len, hidden_size]
-        x_squared = ttnn.mul(x, x)
-        mean_x_squared = ttnn.mean(x_squared, dim=-1, keepdim=True)
-        rms = ttnn.sqrt(ttnn.add(mean_x_squared, self.eps))
-        x_normed = ttnn.mul(x, ttnn.reciprocal(rms))
-        return ttnn.mul(x_normed, self.weight)
-
-
-class ValidatedRMSNormOldStyle:
-    """RMS Normalization with validation decorator using old input_map pattern"""
-
-    def __init__(self, weight: torch.Tensor, eps: float, device):
-        self.eps = eps
-        self.weight_torch = weight  # Keep for reference
-        self.weight = ttnn.from_torch(
-            weight.unsqueeze(0).unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-        )
-
-    @host_validate_against(
-        reference_fn=torch_rms_norm,
-        input_to_torch=lambda args, kwargs: (
-            # Convert TTNN input to PyTorch for reference
-            (ttnn.to_torch(args[1]).squeeze(0), args[0].weight_torch),
-            {"eps": args[0].eps},
-        ),
-        output_to_torch=lambda x: ttnn.to_torch(x).squeeze(0),  # Convert impl ttnn → torch to match ref
-        tolerances={
-            "max_abs_error": 1e-2,
-            "mean_abs_error": 1e-3,
+            "pcc": 0.99,
         },
     )
     def __call__(self, x):
@@ -108,8 +113,8 @@ class ValidatedRMSNormOldStyle:
 
 @host_validate_against(
     reference_fn=torch.matmul,
-    input_to_torch=lambda args, kwargs: ((ttnn.to_torch(args[0]).squeeze(0), ttnn.to_torch(args[1]).squeeze(0)), {}),
-    output_to_torch=lambda x: ttnn.to_torch(x).squeeze(0),
+    # input_to_torch=lambda args, kwargs: ((ttnn.to_torch(args[0]).squeeze(0), ttnn.to_torch(args[1]).squeeze(0)), {}),
+    # output_to_torch=lambda x: ttnn.to_torch(x).squeeze(0),
     metrics={
         "max_abs_error": compute_max_abs_error,
         "pcc": compute_pcc,
@@ -122,6 +127,24 @@ class ValidatedRMSNormOldStyle:
 def ttnn_matmul(a, b):
     """TTNN matrix multiplication with validation"""
     return ttnn.matmul(a, b)
+
+
+# make a test case to show how to directly use auto_compose to convert ttnn to torch
+@host_validate_against(
+    reference_fn=torch.matmul,
+    input_to_torch=lambda args, kwargs: ((to_torch_auto_compose(args[1]), to_torch_auto_compose(args[0])), {}),
+    metrics={
+        "max_abs_error": compute_max_abs_error,
+        "pcc": compute_pcc,
+    },
+    tolerances={
+        "max_abs_error": 1e-1,
+        "pcc": 0.99,
+    },
+)
+def ttnn_matmul_reverse(a, b):
+    """TTNN matrix multiplication with validation"""
+    return ttnn.matmul(b, a)
 
 
 # ============================================================================
@@ -202,14 +225,23 @@ def demo():
     batch_size = 1
     seq_len = 32
 
-    weight = torch.randn(hidden_size)
-    rms_norm = ValidatedRMSNorm(weight, eps=1e-6, device=device)
+    weight = torch.randn(hidden_size).to(torch.bfloat16)
+    rms_norm = DeviceValidatedRMSNorm(weight, eps=1e-6, device=device)
 
     x = torch.randn(batch_size, seq_len, hidden_size, dtype=torch.bfloat16)
     x_tt = ttnn.from_torch(x.unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     output = rms_norm(x_tt)
-    print("   RMSNorm validation complete")
+    print("   Device-Validated RMSNorm validation complete")
+
+    rms_norm = HostValidatedRMSNorm(weight, eps=1e-6, device=device)
+
+    x = torch.randn(batch_size, seq_len, hidden_size, dtype=torch.bfloat16)
+    x_tt = ttnn.from_torch(x.unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    # Invoke and check registry
+    _ = rms_norm(x_tt)
+    print("   Host-Validated RMSNorm validation complete")
 
     # Example 2: Matrix multiplication validation
     print("\n2. Testing matrix multiplication validation...")
@@ -222,14 +254,13 @@ def demo():
     b_tt = ttnn.from_torch(b.unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     output = ttnn_matmul(a_tt, b_tt)
+    output_reverse = ttnn_matmul_reverse(b_tt, a_tt)
     print("   Matmul validation complete")
 
-    # Print validation report
-    print("\n")
-    registry = get_validation_registry()
-    registry.print_report()
-
     # Demonstrate enabling/disabling validation
+    registry = get_validation_registry()
+    print(f"   Validation registry: {len(registry.results)} results")
+
     print("\n3. Testing validation control...")
     enable_validation(False)
     print("   Validation disabled - functions run without validation")
@@ -242,9 +273,58 @@ def demo():
     enable_validation(True)
     print("   Validation re-enabled")
 
+    # Print validation report
+    print("\n")
+    registry.print_report()
+
     # Cleanup
     ttnn.close_mesh_device(device)
 
 
 if __name__ == "__main__":
     demo()
+
+
+# ============================================================================
+# PyTest: HostValidatedRMSNorm
+# ============================================================================
+
+
+@pytest.fixture(scope="module")
+def ttnn_device_fixture():
+    """Provide a single-device TTNN mesh for tests or skip if unavailable."""
+    device_ids = ttnn.get_device_ids()
+    if len(device_ids) == 0:
+        pytest.skip("No TTNN devices found")
+    mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape([1, 1]))
+    yield mesh_device
+    ttnn.close_mesh_device(mesh_device)
+
+
+def test_host_validated_rmsnorm_passes_and_records(ttnn_device_fixture):
+    """Runs HostValidatedRMSNorm and checks validation registry captures a passing result."""
+    enable_validation(True)
+    clear_validation_results()
+
+    # Small, stable sizes to keep numeric errors low
+    hidden_size = 512
+    batch_size = 1
+    seq_len = 32
+
+    # Create module and input
+    weight = torch.randn(hidden_size)
+    rms_norm = HostValidatedRMSNorm(weight, eps=1e-6, device=ttnn_device_fixture)
+
+    x = torch.randn(batch_size, seq_len, hidden_size, dtype=torch.bfloat16)
+    x_tt = ttnn.from_torch(x.unsqueeze(0), device=ttnn_device_fixture, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    # Invoke and check registry
+    _ = rms_norm(x_tt)
+    registry = get_validation_registry()
+    assert len(registry.results) >= 1, "Expected at least one validation result recorded"
+
+    last_result = registry.results[-1]
+    assert "max_abs_error" in last_result.metrics
+    assert "mean_abs_error" in last_result.metrics
+
+    assert last_result.passed, f"Validation failed with errors: {last_result.errors}"
