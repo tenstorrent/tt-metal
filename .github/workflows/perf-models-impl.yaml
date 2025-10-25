@@ -12,6 +12,10 @@ on:
       docker-image:
         required: true
         type: string
+      model:
+        required: false
+        type: string
+        default: "all"
       extra-tag:
         required: false
         type: string
@@ -24,28 +28,84 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        test-info: [
-          {name: "N300 WH B0", model-group: "llm_javelin", timeout: 20, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
-          {name: "N300 WH B0", model-group: "cnn_javelin", timeout: 10, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
-          {name: "N300 WH B0", model-group: "other_magic_env", timeout: 45, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
-          # Doesn't work on blackhole P150 {name: "P150 BH", model-group: "llm_javelin", timeout: 20, arch: blackhole, runs-on: ["P150", "pipeline-functional", "cloud-virtual-machine", "${{ inputs.extra-tag }}"], machine-type: "virtual_machine"},
-          {name: "P150 BH", model-group: "cnn_javelin", timeout: 10, arch: blackhole, runs-on: ["P150", "pipeline-functional", "cloud-virtual-machine", "${{ inputs.extra-tag }}"], machine-type: "virtual_machine"},
-          {name: "P150 BH", model-group: "other_magic_env", timeout: 45, arch: blackhole, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
-        ]
+        include:
+          # LLM Models - N300 WH B0 only
+          - {model: "falcon7b", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/falcon7b_common/tests", timeout: 20, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "mamba", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/wormhole/mamba/tests", timeout: 20, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          
+          # CNN Models - Both platforms
+          - {model: "functional_unet", arch: "wormhole_b0", platform: "N300", test-path: "models/experimental/functional_unet/tests", timeout: 10, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: "--timeout=480"}
+          - {model: "functional_unet", arch: "blackhole", platform: "P150", test-path: "models/experimental/functional_unet/tests", timeout: 10, runs-on: ["P150", "pipeline-functional", "cloud-virtual-machine", "${{ inputs.extra-tag }}"], machine-type: "virtual_machine", extra-args: "--timeout=480"}
+          - {model: "stable_diffusion", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/wormhole/stable_diffusion/tests", timeout: 10, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: "--timeout=480"}
+          - {model: "stable_diffusion", arch: "blackhole", platform: "P150", test-path: "models/demos/blackhole/stable_diffusion/tests", timeout: 10, runs-on: ["P150", "pipeline-functional", "cloud-virtual-machine", "${{ inputs.extra-tag }}"], machine-type: "virtual_machine", extra-args: "--timeout=480"}
+          
+          # Other Models - Both platforms
+          - {model: "yolov10x", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/yolov10x/tests/perf/", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "yolov10x", arch: "blackhole", platform: "P150", test-path: "models/demos/yolov10x/tests/perf/", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "sentence_bert", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/sentence_bert/tests/perf/", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "sentence_bert", arch: "blackhole", platform: "P150", test-path: "models/demos/sentence_bert/tests/perf/", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "resnet50", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "resnet50", arch: "blackhole", platform: "P150", test-path: "models/demos/blackhole/resnet50/tests/test_perf_e2e_resnet50.py", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "yolov11", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/yolov11/tests/perf/", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "yolov11", arch: "blackhole", platform: "P150", test-path: "models/demos/yolov11/tests/perf/", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "yolov11m", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/yolov11m/tests/perf/", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "yolov11m", arch: "blackhole", platform: "P150", test-path: "models/demos/yolov11m/tests/perf/", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "bert_tiny", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/wormhole/bert_tiny/tests/test_performance.py", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "bert_tiny", arch: "blackhole", platform: "P150", test-path: "models/demos/wormhole/bert_tiny/tests/test_performance.py", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "yolov4", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/yolov4/tests/perf/", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "yolov4", arch: "blackhole", platform: "P150", test-path: "models/demos/yolov4/tests/perf/", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "yolov7", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/yolov7/tests/perf/", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "yolov7", arch: "blackhole", platform: "P150", test-path: "models/demos/yolov7/tests/perf/", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "distilbert", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/wormhole/distilbert/tests/test_perf_distilbert.py", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "distilbert", arch: "blackhole", platform: "P150", test-path: "models/demos/wormhole/distilbert/tests/test_perf_distilbert.py", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "segformer", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/segformer/tests/perf/", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "segformer", arch: "blackhole", platform: "P150", test-path: "models/demos/segformer/tests/perf/", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "metal_BERT_large_11", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/metal_BERT_large_11/tests/", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "metal_BERT_large_11", arch: "blackhole", platform: "P150", test-path: "models/demos/metal_BERT_large_11/tests/", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "yolov8s_world", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/yolov8s_world/tests/perf/", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "yolov8s_world", arch: "blackhole", platform: "P150", test-path: "models/demos/yolov8s_world/tests/perf/", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "yolov8s", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/yolov8s/tests/perf/", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "yolov8s", arch: "blackhole", platform: "P150", test-path: "models/demos/yolov8s/tests/perf/", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "yolov6l", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/yolov6l/tests/perf/", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "yolov6l", arch: "blackhole", platform: "P150", test-path: "models/demos/yolov6l/tests/perf/", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "mobilenetv2", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/mobilenetv2/tests/perf/", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "mobilenetv2", arch: "blackhole", platform: "P150", test-path: "models/demos/mobilenetv2/tests/perf/", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "vgg_unet", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/vgg_unet/tests/", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "vgg_unet", arch: "blackhole", platform: "P150", test-path: "models/demos/vgg_unet/tests/", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "yolov9c", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/yolov9c/tests/perf/", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "yolov9c", arch: "blackhole", platform: "P150", test-path: "models/demos/yolov9c/tests/perf/", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "vanilla_unet", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/vanilla_unet/tests/perf/", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "vanilla_unet", arch: "blackhole", platform: "P150", test-path: "models/demos/vanilla_unet/tests/perf/", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "yolov8x", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/yolov8x/tests/perf/", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "yolov8x", arch: "blackhole", platform: "P150", test-path: "models/demos/yolov8x/tests/perf/", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "swin_v2", arch: "wormhole_b0", platform: "N300", test-path: "models/experimental/swin_v2/tests/perf/", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "swin_v2", arch: "blackhole", platform: "P150", test-path: "models/experimental/swin_v2/tests/perf/", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "swin_s", arch: "wormhole_b0", platform: "N300", test-path: "models/experimental/swin_s/tests/perf/", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "swin_s", arch: "blackhole", platform: "P150", test-path: "models/experimental/swin_s/tests/perf/", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "yolov5x", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/yolov5x/tests/perf/", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "yolov5x", arch: "blackhole", platform: "P150", test-path: "models/demos/yolov5x/tests/perf/", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "vovnet", arch: "wormhole_b0", platform: "N300", test-path: "models/experimental/vovnet/tests/perf/", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "vovnet", arch: "blackhole", platform: "P150", test-path: "models/experimental/vovnet/tests/perf/", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "yolov12x", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/yolov12x/tests/perf/", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "yolov12x", arch: "blackhole", platform: "P150", test-path: "models/demos/yolov12x/tests/perf/", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "ufld_v2", arch: "wormhole_b0", platform: "N300", test-path: "models/demos/ufld_v2/tests/perf/", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "ufld_v2", arch: "blackhole", platform: "P150", test-path: "models/demos/ufld_v2/tests/perf/", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "efficientnetb0", arch: "wormhole_b0", platform: "N300", test-path: "models/experimental/efficientnetb0/tests/perf/", timeout: 45, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
+          - {model: "efficientnetb0", arch: "blackhole", platform: "P150", test-path: "models/experimental/efficientnetb0/tests/perf/", timeout: 45, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", extra-args: ""}
 
-    name: "${{ matrix.test-info.model-group }} ${{ matrix.test-info.name }}"
-    runs-on: ${{ matrix.test-info.runs-on }}
+    name: "${{ matrix.model }} (${{ matrix.platform }} ${{ matrix.arch }})"
+    runs-on: ${{ matrix.runs-on }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ matrix.test-info.arch }}
+        ARCH_NAME: ${{ matrix.arch }}
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
         GTEST_OUTPUT: xml:/work/generated/test_reports/
-        HF_HUB_CACHE: ${{ ((matrix.test-info.arch == 'wormhole_b0' || (matrix.test-info.arch == 'blackhole' && matrix.test-info.model-group == 'cnn_javelin')) && '/mnt/MLPerf/huggingface/hub') || '' }}
+        HF_HUB_CACHE: ${{ ((matrix.arch == 'wormhole_b0' || (matrix.arch == 'blackhole' && (matrix.model == 'functional_unet' || matrix.model == 'stable_diffusion'))) && '/mnt/MLPerf/huggingface/hub') || '' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -62,186 +122,12 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Run falcon7b model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
+      - name: Run ${{ matrix.model }} model_perf test
+        timeout-minutes: ${{ matrix.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
-          commands: pytest -n auto models/demos/falcon7b_common/tests -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'llm_javelin' }}
-      - name: Run mamba model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/wormhole/mamba/tests -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'llm_javelin' }}
-      - name: Run functional_unet model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/experimental/functional_unet/tests -m models_performance_bare_metal --timeout=480
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' }}
-      - name: Run stable_diffusion model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/stable_diffusion/tests -m models_performance_bare_metal --timeout=480
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' }}
-      - name: Run yolov10x model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/yolov10x/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run sentence_bert model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/sentence_bert/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run resnet50 model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/resnet50/tests/test_perf_e2e_resnet50.py -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run yolov11 model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/yolov11/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run yolov11m model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/yolov11m/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run bert_tiny model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/wormhole/bert_tiny/tests/test_performance.py -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run yolov4 model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/yolov4/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run yolov7 model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/yolov7/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run distilbert model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/wormhole/distilbert/tests/test_perf_distilbert.py -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run segformer model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/segformer/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run metal_BERT_large_11 model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/metal_BERT_large_11/tests/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run yolov8s_world model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/yolov8s_world/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run yolov8s model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/yolov8s/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run yolov6l model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/yolov6l/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run mobilenetv2 model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/mobilenetv2/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run vgg_unet model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/vgg_unet/tests/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run yolov9c model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/yolov9c/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run vanilla_unet model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/vanilla_unet/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run yolov8x model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/yolov8x/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run swin_v2 model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/experimental/swin_v2/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run swin_s model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/experimental/swin_s/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run yolov5x model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/yolov5x/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run vovnet model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/experimental/vovnet/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run yolov12x model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/yolov12x/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run ufld_v2 model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/ufld_v2/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run efficientnetb0 model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/experimental/efficientnetb0/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+          commands: pytest -n auto ${{ matrix.test-path }} -m models_performance_bare_metal ${{ matrix.extra-args }}
+        if: ${{ !cancelled() && (inputs.model == 'all' || inputs.model == matrix.model) }}
       - name: Merge all the generated reports
         timeout-minutes: 10
         run: |
@@ -253,7 +139,7 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         env:
-          ARCH_NAME: ${{ matrix.test-info.arch }}
+          ARCH_NAME: ${{ matrix.arch }}
         run: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
 
       - name: Upload benchmark data
@@ -284,7 +170,7 @@ jobs:
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
-          name: perf-report-csv-${{ matrix.test-info.model-group }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
+          name: perf-report-csv-${{ matrix.model }}-${{ matrix.arch }}-${{ matrix.machine-type }}
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
