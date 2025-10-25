@@ -268,7 +268,7 @@ class TtLlamaMLP(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        ttnn.deallocate(w2_in)
+        # ttnn.deallocate(w2_in)
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out, cluster_axis=0, num_links=3, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="FF2"
         )
