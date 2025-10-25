@@ -226,7 +226,7 @@ void kernel_main() {
                     output_page_size,
                     input_tensor_Wt,
                     output_tensor_Wt,
-                    my_chip_id,
+                    actual_sender_chip_id,
                     mux_connection,
                     pkt_scatter_hdr,
                     pkt_unicast_hdr,
