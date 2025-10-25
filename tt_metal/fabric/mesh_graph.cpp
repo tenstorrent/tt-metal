@@ -19,7 +19,7 @@
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_graph_descriptor.hpp>
-#include <protobuf/mesh_graph_descriptor.pb.h>
+#include "protobuf/mesh_graph_descriptor.pb.h"
 
 // Implementation of hash function for port_id_t
 std::size_t std::hash<tt::tt_fabric::port_id_t>::operator()(const tt::tt_fabric::port_id_t& p) const {
@@ -226,7 +226,10 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
     // This is to make sure emtpy elements are filled
     for (const auto& mesh : mgd.all_meshes()) {
         const auto& mesh_instance = mgd.get_instance(mesh);
+        const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(mesh_instance.desc);
         this->intra_mesh_connectivity_[mesh_instance.local_id].resize(mesh_instance.sub_instances.size());
+        this->intra_mesh_relaxed_policy_[MeshId(mesh_instance.local_id)] =
+            (mesh_desc->channels().policy() == proto::Policy::RELAXED);
     }
 
     for (const auto& connection : mgd.connections_by_type("MESH")) {
@@ -546,6 +549,7 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         }
 
         this->inter_mesh_connectivity_[*mesh_id].resize(this->intra_mesh_connectivity_[*mesh_id].size());
+        this->intra_mesh_relaxed_policy_[MeshId(*mesh_id)] = true;
 
         // Print Mesh
         std::stringstream ss;
@@ -789,6 +793,12 @@ std::filesystem::path MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type
         return std::filesystem::path(root_dir) / MESH_GRAPH_DESCRIPTOR_DIR / it->second;
     }
     TT_THROW("Cannot find mesh graph descriptor for cluster type {}", cluster_type);
+}
+
+bool MeshGraph::is_intra_mesh_policy_relaxed(MeshId mesh_id) const {
+    auto it = intra_mesh_relaxed_policy_.find(mesh_id);
+    TT_FATAL(it != intra_mesh_relaxed_policy_.end(), "No mode for mesh_id {}", *mesh_id);
+    return it->second;
 }
 
 }  // namespace tt::tt_fabric

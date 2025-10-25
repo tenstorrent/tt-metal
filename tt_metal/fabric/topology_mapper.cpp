@@ -307,8 +307,12 @@ std::unordered_map<MeshId, LogicalAdjacencyMap> TopologyMapper::build_adjacency_
         auto adjacent_map = mesh_graph_.get_intra_mesh_connectivity()[*mesh_id][fabric_node_id.chip_id];
 
         std::vector<tt::tt_fabric::FabricNodeId> adjacents;
+        bool relaxed = mesh_graph_.is_intra_mesh_policy_relaxed(mesh_id);
         for (const auto& [neighbor_chip_id, edge] : adjacent_map) {
-            adjacents.push_back(tt::tt_fabric::FabricNodeId(mesh_id, neighbor_chip_id));
+            size_t repeat_count = relaxed ? 1 : edge.connected_chip_ids.size();
+            for (size_t i = 0; i < repeat_count; ++i) {
+                adjacents.push_back(tt::tt_fabric::FabricNodeId(mesh_id, neighbor_chip_id));
+            }
         }
         return adjacents;
     };
@@ -335,7 +339,10 @@ std::unordered_map<MeshId, PhysicalAdjacencyMap> TopologyMapper::build_adjacency
             for (const auto& neighbor : physical_system_descriptor_.get_asic_neighbors(asic_id)) {
                 // Make sure that the neighbor is in the mesh
                 if (mesh_hostnames.contains(physical_system_descriptor_.get_host_name_for_asic(neighbor))) {
-                    adjacents.push_back(neighbor);
+                    auto connections = physical_system_descriptor_.get_eth_connections(asic_id, neighbor);
+                    for (size_t i = 0; i < connections.size(); ++i) {
+                        adjacents.push_back(neighbor);
+                    }
                 }
             }
             return adjacents;
@@ -384,228 +391,100 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
             log_to_idx[log_nodes[i]] = i;
         }
 
-        std::vector<std::vector<size_t>> log_adj_idx(n_log);
-        for (size_t i = 0; i < n_log; ++i) {
-            for (const auto& neigh : log_adj.at(log_nodes[i])) {
-                log_adj_idx[i].push_back(log_to_idx.at(neigh));
-            }
-            std::sort(log_adj_idx[i].begin(), log_adj_idx[i].end());
-        }
-
         std::unordered_map<tt::tt_metal::AsicID, size_t> phys_to_idx;
-        for (size_t i = 0; i < n_phys; ++i) {
-            phys_to_idx[phys_nodes[i]] = i;
+        for (size_t j = 0; j < n_phys; ++j) {
+            phys_to_idx[phys_nodes[j]] = j;
         }
 
-        std::vector<std::vector<size_t>> phys_adj_idx(n_phys);
-        for (size_t i = 0; i < n_phys; ++i) {
-            for (const auto& neigh : phys_adj.at(phys_nodes[i])) {
-                auto it = phys_to_idx.find(neigh);
-                if (it != phys_to_idx.end()) {
-                    phys_adj_idx[i].push_back(it->second);
-                }
+        std::vector<std::unordered_map<size_t, size_t>> log_adj_count(n_log);
+        for (size_t i = 0; i < n_log; ++i) {
+            const auto& vec = log_adj.at(log_nodes[i]);
+            auto& count = log_adj_count[i];
+            for (const auto& neigh : vec) {
+                count[log_to_idx.at(neigh)]++;
             }
-            std::sort(phys_adj_idx[i].begin(), phys_adj_idx[i].end());
         }
+
+        std::vector<std::unordered_map<size_t, size_t>> phys_adj_count(n_phys);
+        for (size_t j = 0; j < n_phys; ++j) {
+            const auto& vec = phys_adj.at(phys_nodes[j]);
+            auto& count = phys_adj_count[j];
+            for (const auto& neigh : vec) {
+                count[phys_to_idx.at(neigh)]++;
+            }
+        }
+
+        bool relaxed = mesh_graph_.is_intra_mesh_policy_relaxed(mesh_id);
+
+        std::vector<size_t> log_deg(n_log, 0);
+        for (size_t i = 0; i < n_log; ++i) {
+            const auto& m = log_adj_count[i];
+            for (const auto& p : m) {
+                log_deg[i] += relaxed ? 1 : p.second;
+            }
+        }
+
+        std::vector<size_t> phys_deg(n_phys, 0);
+        for (size_t j = 0; j < n_phys; ++j) {
+            const auto& m = phys_adj_count[j];
+            for (const auto& p : m) {
+                phys_deg[j] += relaxed ? 1 : p.second;
+            }
+        }
+
+        // Sort log_order by decreasing log_deg
+        std::vector<size_t> log_order(n_log);
+        std::iota(log_order.begin(), log_order.end(), 0);
+        std::stable_sort(
+            log_order.begin(), log_order.end(), [&](size_t a, size_t b) { return log_deg[a] > log_deg[b]; });
+
+        // Sort phys_order by decreasing phys_deg
+        std::vector<size_t> phys_order(n_phys);
+        std::iota(phys_order.begin(), phys_order.end(), 0);
+        std::stable_sort(
+            phys_order.begin(), phys_order.end(), [&](size_t a, size_t b) { return phys_deg[a] > phys_deg[b]; });
 
         // mapping[logical_index] = physical_index
         std::vector<int> mapping(n_log, -1);
         std::vector<bool> used(n_phys, false);
-
-        // Precompute degrees for pruning
-        std::vector<size_t> log_deg(n_log, 0);
-        for (size_t i = 0; i < n_log; ++i) {
-            log_deg[i] = log_adj_idx[i].size();
-        }
-        std::vector<size_t> phys_deg(n_phys, 0);
-        for (size_t j = 0; j < n_phys; ++j) {
-            phys_deg[j] = phys_adj_idx[j].size();
-        }
-
-        // We'll select the next logical node dynamically: pick the unmapped node
-        // with the most already-mapped neighbors (most-constraining), tie-break by MRV.
-        auto select_next_logical = [&](const std::vector<int>& mapping_ref, const std::vector<bool>& used_ref) {
-            size_t best_li = n_log;
-            size_t best_mapped_neigh = 0;
-            size_t best_cand_count = (std::numeric_limits<size_t>::max)();
-
-            for (size_t li = 0; li < n_log; ++li) {
-                if (mapping_ref[li] != -1) {
-                    continue;
-                }
-                size_t mapped_neigh_count = 0;
-                for (size_t v : log_adj_idx[li]) {
-                    if (mapping_ref[v] != -1) {
-                        mapped_neigh_count++;
-                    }
-                }
-                // Compute candidate count under current partial assignment
-                size_t cand_count = 0;
-                for (size_t j = 0; j < n_phys; ++j) {
-                    if (used_ref[j] || phys_deg[j] < log_deg[li]) {
-                        continue;
-                    }
-                    bool ok_local = true;
-                    for (size_t v : log_adj_idx[li]) {
-                        int pj = mapping_ref[v];
-                        if (pj == -1) {
-                            continue;
-                        }
-                        // logical edge must be present physically
-                        if (!std::binary_search(
-                                phys_adj_idx[j].begin(), phys_adj_idx[j].end(), static_cast<size_t>(pj))) {
-                            ok_local = false;
-                            break;
-                        }
-                    }
-                    if (ok_local) {
-                        cand_count++;
-                    }
-                }
-                if (best_li == n_log || mapped_neigh_count > best_mapped_neigh ||
-                    (mapped_neigh_count == best_mapped_neigh && cand_count < best_cand_count)) {
-                    best_li = li;
-                    best_mapped_neigh = mapped_neigh_count;
-                    best_cand_count = cand_count;
-                }
-            }
-            return best_li;
-        };
-
-        // Memoization of failed states: include prefix mapping to avoid false negatives
-        std::unordered_set<std::uint64_t> failed_states;
-        auto hash_state = [&](size_t /*pos*/) -> std::uint64_t {
-            const std::uint64_t fnv_offset = 1469598103934665603ull;
-            const std::uint64_t fnv_prime = 1099511628211ull;
-            std::uint64_t h = fnv_offset;
-            for (size_t li = 0; li < n_log; ++li) {
-                if (mapping[li] != -1) {
-                    std::uint64_t pairh =
-                        (static_cast<std::uint64_t>(li) << 32) ^ static_cast<std::uint64_t>(mapping[li] + 1);
-                    h ^= pairh;
-                    h *= fnv_prime;
-                }
-            }
-            return h;
-        };
 
         std::function<bool(size_t)> dfs = [&](size_t pos) -> bool {
             if (pos == n_log) {
                 return true;
             }
 
-            std::uint64_t key = hash_state(pos);
-            if (failed_states.find(key) != failed_states.end()) {
-                return false;
-            }
+            size_t li = log_order[pos];
 
-            // Select next logical node dynamically
-            size_t li = (pos == 0) ? 0 : select_next_logical(mapping, used);
-            if (li == n_log) {
-                return false;
-            }
-
-            // Candidate generation with symmetry breaking for first two assignments
-            std::vector<size_t> candidates;
-            candidates.reserve(n_phys);
-
-            if (pos == 0) {
-                // Try all viable anchors; rely on consistency + forward checking to prune
-                for (size_t j = 0; j < n_phys; ++j) {
-                    if (!used[j] && phys_deg[j] >= log_deg[li]) {
-                        candidates.push_back(j);
-                    }
+            for (size_t jj = 0; jj < n_phys; ++jj) {
+                size_t j = phys_order[jj];
+                if (used[j]) {
+                    continue;
                 }
-            } else {
-                for (size_t j = 0; j < n_phys; ++j) {
-                    if (used[j] || phys_deg[j] < log_deg[li]) {
-                        continue;
-                    }
-                    candidates.push_back(j);
+                if (phys_deg[j] < log_deg[li]) {
+                    continue;
                 }
-            }
 
-            // Order candidates by degree gap, then index for determinism
-            std::sort(candidates.begin(), candidates.end(), [&](size_t a, size_t b) {
-                size_t da =
-                    (phys_deg[a] >= log_deg[li]) ? (phys_deg[a] - log_deg[li]) : (std::numeric_limits<size_t>::max)();
-                size_t db =
-                    (phys_deg[b] >= log_deg[li]) ? (phys_deg[b] - log_deg[li]) : (std::numeric_limits<size_t>::max)();
-                if (da != db) {
-                    return da < db;
-                }
-                return a < b;
-            });
-
-            for (size_t j : candidates) {
-                // Local consistency: enforce that logical edges are present physically (allow extra phys edges)
                 bool ok = true;
-                for (size_t lk = 0; lk < n_log; ++lk) {
+                for (const auto& p : log_adj_count[li]) {
+                    size_t lk = p.first;
+                    size_t log_count = p.second;
                     int pk_i = mapping[lk];
                     if (pk_i == -1) {
                         continue;
                     }
                     size_t pk = static_cast<size_t>(pk_i);
-                    bool log_connected = std::binary_search(log_adj_idx[li].begin(), log_adj_idx[li].end(), lk);
-                    bool phys_connected = std::binary_search(phys_adj_idx[j].begin(), phys_adj_idx[j].end(), pk);
-                    if (log_connected && !phys_connected) {
-                        ok = false;
-                        break;
-                    }
-                }
-                if (!ok) {
-                    continue;
-                }
+                    size_t phys_count = phys_adj_count[j][pk];  // defaults to 0
 
-                // Forward checking: ensure candidate has enough unused neighbors to satisfy future edges
-                // Count unassigned logical neighbors of li
-                std::vector<size_t> unassigned_neighbors;
-                for (size_t v : log_adj_idx[li]) {
-                    if (mapping[v] == -1) {
-                        unassigned_neighbors.push_back(v);
-                    }
-                }
-                // Collect unused physical neighbors of j
-                std::vector<size_t> unused_phys_neighbors;
-                for (size_t pj : phys_adj_idx[j]) {
-                    if (!used[pj]) {
-                        unused_phys_neighbors.push_back(pj);
-                    }
-                }
-                if (unused_phys_neighbors.size() < unassigned_neighbors.size()) {
-                    continue;  // not enough capacity to satisfy pending logical edges
-                }
-                // For each future logical neighbor v, verify there exists at least one viable unused physical neighbor
-                for (size_t v : unassigned_neighbors) {
-                    bool has_candidate = false;
-                    for (size_t pj : unused_phys_neighbors) {
-                        // Degree feasibility
-                        if (phys_deg[pj] < log_deg[v]) {
-                            continue;
-                        }
-                        // Check consistency with already assigned neighbors of v
-                        bool consistent = true;
-                        for (size_t lv = 0; lv < n_log; ++lv) {
-                            int pk2_i = mapping[lv];
-                            if (pk2_i == -1) {
-                                continue;
-                            }
-                            size_t pk2 = static_cast<size_t>(pk2_i);
-                            bool log_conn2 = std::binary_search(log_adj_idx[v].begin(), log_adj_idx[v].end(), lv);
-                            bool phys_conn2 = std::binary_search(phys_adj_idx[pj].begin(), phys_adj_idx[pj].end(), pk2);
-                            if (log_conn2 && !phys_conn2) {
-                                consistent = false;
-                                break;
-                            }
-                        }
-                        if (consistent) {
-                            has_candidate = true;
+                    if (relaxed) {
+                        if (log_count > 0 && phys_count == 0) {
+                            ok = false;
                             break;
                         }
-                    }
-                    if (!has_candidate) {
-                        ok = false;
-                        break;
+                    } else {
+                        if (log_count > phys_count) {
+                            ok = false;
+                            break;
+                        }
                     }
                 }
                 if (!ok) {
@@ -620,8 +499,6 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
                 mapping[li] = -1;
                 used[j] = false;
             }
-
-            failed_states.insert(key);
             return false;
         };
 
@@ -634,7 +511,8 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
 
         for (size_t i = 0; i < n_log; ++i) {
             FabricNodeId fn = log_nodes[i];
-            tt::tt_metal::AsicID asic = phys_nodes[mapping[i]];
+            size_t j = static_cast<size_t>(mapping[i]);
+            tt::tt_metal::AsicID asic = phys_nodes[j];
             fabric_node_id_to_asic_id_.emplace(fn, asic);
             asic_id_to_fabric_node_id_.emplace(asic, fn);
         }
