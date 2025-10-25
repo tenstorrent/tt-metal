@@ -7,7 +7,9 @@ import pytest
 import ttnn
 
 from loguru import logger
-from models.utility_functions import tt2torch_tensor
+from models.common.utility_functions import (
+    tt2torch_tensor,
+)
 from tests.ttnn.utils_for_testing import check_with_pcc
 
 from models.experimental.transfuser.reference.config import GlobalConfig

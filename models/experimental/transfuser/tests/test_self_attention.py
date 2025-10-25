@@ -12,7 +12,7 @@ from models.experimental.transfuser.reference.self_attention import SelfAttentio
 from models.experimental.transfuser.tt.self_attn import TTSelfAttention
 
 from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_linear_bias, preprocess_linear_weight
-from models.utility_functions import (
+from models.common.utility_functions import (
     tt2torch_tensor,
 )
 from tests.ttnn.utils_for_testing import check_with_pcc

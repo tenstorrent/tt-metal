@@ -12,7 +12,9 @@ from models.experimental.transfuser.reference.lidar_center_net import LidarCente
 from models.experimental.transfuser.tt.head import TTLidarCenterNetHead
 
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.utility_functions import tt2torch_tensor
+from models.common.utility_functions import (
+    tt2torch_tensor,
+)
 from tests.ttnn.utils_for_testing import check_with_pcc
 
 
