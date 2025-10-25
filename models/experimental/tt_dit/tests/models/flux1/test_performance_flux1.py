@@ -51,10 +51,15 @@ def test_flux1_pipeline_performance(
     model_location_generator,
     is_ci_env,
     galaxy_type,
+    monkeypatch,
 ) -> None:
     """Performance test for Flux.1 pipeline with detailed timing analysis. We use the dev variant"""
 
     benchmark_profiler = BenchmarkProfiler()
+
+    # use new hugging face cache location in CI. Remove after complete migration.
+    if is_ci_env:
+        monkeypatch.setenv("HF_HUB_CACHE", "/mnt/MLPerf/huggingface/hub")
 
     # Skip 4U.
     if galaxy_type == "4U":
