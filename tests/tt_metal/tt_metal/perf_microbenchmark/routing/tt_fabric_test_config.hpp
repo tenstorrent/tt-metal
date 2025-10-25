@@ -202,7 +202,6 @@ inline TrafficPatternType merge_patterns(const TrafficPatternType& base, const T
     merged.size = specific.size.has_value() ? specific.size : base.size;
     merged.num_packets = specific.num_packets.has_value() ? specific.num_packets : base.num_packets;
     merged.atomic_inc_val = specific.atomic_inc_val.has_value() ? specific.atomic_inc_val : base.atomic_inc_val;
-    merged.atomic_inc_wrap = specific.atomic_inc_wrap.has_value() ? specific.atomic_inc_wrap : base.atomic_inc_wrap;
     merged.mcast_start_hops = specific.mcast_start_hops.has_value() ? specific.mcast_start_hops : base.mcast_start_hops;
 
     // Special handling for nested destination
@@ -286,12 +285,16 @@ public:
     std::optional<std::string> get_yaml_config_path();
     bool check_filter(ParsedTestConfig& test_config, bool fine_grained);
     void apply_overrides(std::vector<ParsedTestConfig>& test_configs);
-    std::vector<ParsedTestConfig> generate_default_configs();
     std::optional<uint32_t> get_master_seed();
     bool dump_built_tests();
     std::string get_built_tests_dump_file_name(const std::string& default_file_name);
     bool has_help_option();
     void print_help();
+
+    // Progress monitoring options
+    bool show_progress();
+    uint32_t get_progress_interval();
+    uint32_t get_hung_threshold();
 
 private:
     const std::vector<std::string>& input_args_;
@@ -455,6 +458,7 @@ private:
         resolved_test.benchmark_mode = parsed_test.benchmark_mode;
         resolved_test.global_sync = parsed_test.global_sync;
         resolved_test.global_sync_val = parsed_test.global_sync_val;
+        resolved_test.enable_flow_control = parsed_test.enable_flow_control;
 
         // Resolve defaults
         if (parsed_test.defaults.has_value()) {
@@ -474,7 +478,7 @@ private:
         SenderConfig resolved_sender;
         resolved_sender.device = resolve_device_identifier(parsed_sender.device, device_info_provider_);
         resolved_sender.core = parsed_sender.core;
-        resolved_sender.link_id = parsed_sender.link_id;  // Transfer link ID
+        resolved_sender.link_id = parsed_sender.link_id.value_or(0);  // Default to link 0 if not specified
 
         resolved_sender.patterns.reserve(parsed_sender.patterns.size());
         for (const auto& parsed_pattern : parsed_sender.patterns) {
@@ -491,12 +495,15 @@ private:
         resolved_pattern.size = parsed_pattern.size;
         resolved_pattern.num_packets = parsed_pattern.num_packets;
         resolved_pattern.atomic_inc_val = parsed_pattern.atomic_inc_val;
-        resolved_pattern.atomic_inc_wrap = parsed_pattern.atomic_inc_wrap;
         resolved_pattern.mcast_start_hops = parsed_pattern.mcast_start_hops;
 
         if (parsed_pattern.destination.has_value()) {
             resolved_pattern.destination = resolve_destination_config(parsed_pattern.destination.value());
         }
+
+        // Credit info fields (will be populated by GlobalAllocator during resource allocation)
+        resolved_pattern.sender_credit_info = std::nullopt;
+        resolved_pattern.credit_return_batch_size = std::nullopt;
 
         return resolved_pattern;
     }
@@ -524,9 +531,13 @@ private:
             for (const auto& p : p_config.patterns.value()) {
                 if (p.iterations.has_value()) {
                     max_iterations = std::max(max_iterations, p.iterations.value());
-                    // Edge Case: If both iterations and all_to_one are supplied, iterations will override the number of iterations set by all_to_one
+                    // Edge Case: If both iterations and all_to_one are supplied, iterations will override the number of
+                    // iterations set by all_to_one
                     if (p.type == "all_to_one") {
-                        log_warning(tt::LogTest, "'iterations' specified alongside 'all_to_one' test, `iterations` will be followed instead of auto-generating iterations based on number of devices");
+                        log_warning(
+                            tt::LogTest,
+                            "'iterations' specified alongside 'all_to_one' test, `iterations` will be followed instead "
+                            "of auto-generating iterations based on number of devices");
                     }
                 } else if (p.type == "all_to_one") {
                     // Dynamically calculate iterations for all_to_one patterns based on number of devices
@@ -717,10 +728,6 @@ private:
             TT_FATAL(
                 !pattern.atomic_inc_val.has_value(),
                 "Test '{}': 'atomic_inc_val' should not be specified for 'unicast_write' ntype.",
-                test.name);
-            TT_FATAL(
-                !pattern.atomic_inc_wrap.has_value(),
-                "Test '{}': 'atomic_inc_wrap' should not be specified for 'unicast_write' ntype.",
                 test.name);
         }
 
@@ -1090,7 +1097,8 @@ private:
             const auto& sync_val = sync_patterns_and_sync_val_pair.second;
 
             // Create sender config with all split sync patterns
-            SenderConfig sync_sender = {.device = src_device, .patterns = sync_patterns};
+            // Sync always uses link 0 (no override allowed)
+            SenderConfig sync_sender = {.device = src_device, .patterns = sync_patterns, .link_id = 0};
 
             test.global_sync_configs.push_back(std::move(sync_sender));
 
@@ -1116,7 +1124,6 @@ private:
         base_sync_pattern.size = 0;                                     // No payload, just sync signal
         base_sync_pattern.num_packets = 1;                              // Single sync signal
         base_sync_pattern.atomic_inc_val = 1;                           // Increment by 1
-        base_sync_pattern.atomic_inc_wrap = 0xFFFF;                     // Large wrap value
 
         // Topology-specific routing - get multi-directional hops first
         auto [multi_directional_hops, global_sync_val] =
@@ -1471,10 +1478,6 @@ private:
             out << YAML::Key << "atomic_inc_val";
             out << YAML::Value << config.atomic_inc_val.value();
         }
-        if (config.atomic_inc_wrap) {
-            out << YAML::Key << "atomic_inc_wrap";
-            out << YAML::Value << config.atomic_inc_wrap.value();
-        }
         if (config.mcast_start_hops) {
             out << YAML::Key << "mcast_start_hops";
             out << YAML::Value << config.mcast_start_hops.value();
@@ -1495,10 +1498,8 @@ private:
             to_yaml(out, config.core.value());
         }
 
-        if (config.link_id) {
-            out << YAML::Key << "link_id";
-            out << YAML::Value << config.link_id.value();
-        }
+        out << YAML::Key << "link_id";
+        out << YAML::Value << config.link_id;
 
         out << YAML::Key << "patterns";
         out << YAML::Value;
