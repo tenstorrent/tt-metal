@@ -1581,25 +1581,25 @@ void run_sender_channel_step_impl(
     if (completions_since_last_check) {
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
-        
-        if constexpr (IS_ELASTIC_SENDER_CHANNEL[sender_channel_index]) {
 
+        if constexpr (IS_ELASTIC_SENDER_CHANNEL[sender_channel_index]) {
 // <<<<<<< HEAD
         if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
             local_sender_channel_worker_interface
                 .template notify_persistent_connection_of_free_space<enable_deadlock_avoidance>(
                     completions_since_last_check);
 // =======
-//             static_assert(SKIP_CONNECTION_LIVENESS_CHECK || !IS_ELASTIC_SENDER_CHANNEL[sender_channel_index], "Only persistent connections are currently supported in elastic channel mode. See issue ___ for more details.")
-//             auto chunks_cleared = elastic_channel.advance_n_completion_credits(acks_since_last_check);
-//             if (chunks_cleared) {
-//                 elastic_channel.release_chunks(chunks_cleared);
-//                 if (elastic_channel.empty()) {
-//                     elastic_channel.acquire_new_chunk();
-//                     elastic_channel.notify_producer_of_new_chunk();
-//                 }
-//             }
+            // static_assert(SKIP_CONNECTION_LIVENESS_CHECK || !IS_ELASTIC_SENDER_CHANNEL[sender_channel_index], "Only persistent connections are currently supported in elastic channel mode. See issue ___ for more details.")
+            // auto chunks_cleared = elastic_channel.advance_n_completion_credits(acks_since_last_check);
+            // if (chunks_cleared) {
+            //     elastic_channel.release_slots(chunks_cleared);
+            //     if (elastic_channel.empty()) {
+            //         elastic_channel.acquire_new_chunk();
+            //         elastic_channel.notify_producer_of_new_chunk();
+            //     }
+            // }
 // >>>>>>> cbbe9c392f (checkpoint)
+
         } else {
             if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
                 local_sender_channel_worker_interface
@@ -1622,6 +1622,18 @@ void run_sender_channel_step_impl(
         }
     }
 
+    if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
+        // send new credits if the chunk is completed
+        // CHECKLIST:
+        // 1) Where do we advance through the chunk
+        //    A: in send_next_data
+        // 2) Where do we release the chunk
+        //    A: we release the chunk when we get an ack from the receiver and it's the last slot
+        // 3) Where do we acquire a new chunk after send (but before ack)
+        //    A:
+        // 4) Verify that in the path between 2) and 3), we don't possibly lose the last
+        //    chunk to another channel (which would cause starvation)
+    }
     if constexpr (!SKIP_CONNECTION_LIVENESS_CHECK) {
         auto check_connection_status =
             !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();

@@ -188,6 +188,7 @@ struct ChannelBuffersPool {
         }
     }
 
+    [[nodiscard]]
     FORCE_INLINE chunk_t* get_free_chunk() {
         ASSERT(!free_chunks.is_empty());
         return free_chunks.pop();

@@ -216,7 +216,4 @@ private:
     uint8_t sync_noc_cmd_buf;
 };
 
-template <uint8_t EDM_SENDER_CHANNEL_NUM_BUFFERS>
-using EdmToEdmSender = RouterElasticChannelWriterAdapter<EDM_SENDER_CHANNEL_NUM_BUFFERS>;
-
 }  // namespace tt::tt_fabric

@@ -630,7 +630,7 @@ struct ElasticSenderChannelWorkerInterface : public EdmChannelWorkerInterface<
         static_assert(SKIP_CONNECTION_LIVENESS_CHECK || !IS_ELASTIC_SENDER_CHANNEL[sender_channel_index], "Only persistent connections are currently supported in elastic channel mode. See issue ___ for more details.")
         auto chunks_cleared = elastic_channel.advance_n_completion_credits(acks_since_last_check);
         if (chunks_cleared) {
-            elastic_channel.release_chunks(chunks_cleared);
+            elastic_channel.release_slots(chunks_cleared);
             if (elastic_channel.empty()) {
                 elastic_channel.acquire_new_chunk();
                 elastic_channel.notify_producer_of_new_chunk();
