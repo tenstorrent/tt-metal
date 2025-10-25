@@ -145,3 +145,10 @@ TEST(FabricLiteBuild, BuildOnly) {
 }
 
 TEST_P(FabricLite, Init) { EXPECT_GT(desc.tunnels_from_mmio.size(), 0) << "No tunnels found"; }
+
+TEST_P(FabricLite, MultipleInits) {
+    // Expect the binary to only be copied once to the remote chip for multiple inits
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    // auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    ASSERT_TRUE(lite_fabric::BinaryWritten(cluster, desc.tunnels_from_mmio[0].mmio_cxy_virtual()));
+}

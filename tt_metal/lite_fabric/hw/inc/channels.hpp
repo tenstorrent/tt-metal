@@ -18,8 +18,8 @@
 namespace lite_fabric {
 
 // Linked from main
-extern bool on_mmio_chip;
-extern volatile HostInterface* host_interface;
+extern volatile tt_l1_ptr bool* on_mmio_chip;
+extern volatile tt_l1_ptr HostInterface* host_interface;
 extern RemoteReceiverChannelsType remote_receiver_channels;
 extern LocalSenderChannelsType local_sender_channels;
 extern WriteTridTracker receiver_channel_0_trid_tracker;
@@ -138,7 +138,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_reques
         } break;
 
         case lite_fabric::NocSendTypeEnum::NOC_READ: {
-            if (!on_mmio_chip) {
+            if (!*on_mmio_chip) {
                 const uint64_t src_address = header.command_fields.noc_read.noc_address;
                 // This assumes nobody else is using the sender channel on device 1 because
                 // the tunnel depth is only 1 at the moment
@@ -232,7 +232,7 @@ FORCE_INLINE void run_receiver_channel_step() {
     auto receiver_buffer_index = completion_counter.get_buffer_index();
     bool next_trid_flushed = receiver_channel_0_trid_tracker.transaction_flushed(receiver_buffer_index);
     bool can_send_completion = unflushed_writes && next_trid_flushed;
-    if (on_mmio_chip) {
+    if (*on_mmio_chip) {
         can_send_completion =
             can_send_completion &&
             (((host_interface->d2h.fabric_receiver_channel_index + 1) % RECEIVER_NUM_BUFFERS_ARRAY[CHANNEL_INDEX]) !=
@@ -246,7 +246,7 @@ FORCE_INLINE void run_receiver_channel_step() {
 
         receiver_channel_0_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
         completion_counter.increment();
-        if (on_mmio_chip) {
+        if (*on_mmio_chip) {
             host_interface->d2h.fabric_receiver_channel_index =
                 tt::tt_fabric::wrap_increment<RECEIVER_NUM_BUFFERS_ARRAY[CHANNEL_INDEX]>(
                     host_interface->d2h.fabric_receiver_channel_index);
