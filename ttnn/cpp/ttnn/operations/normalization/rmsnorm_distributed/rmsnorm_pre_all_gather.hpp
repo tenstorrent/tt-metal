@@ -6,6 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_types.hpp"
+#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_distributed_types.hpp"
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -20,7 +21,9 @@ struct ExecuteRMSNormPreAllGather {
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         const std::optional<const LayerNormProgramConfig>& program_config = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<bool>& use_2d_core_grid = std::nullopt);
+        const std::optional<bool>& use_2d_core_grid = std::nullopt,
+        const LayerNormDistributedDefaultProgramConfig& distributed_program_config =
+            LayerNormDistributedDefaultProgramConfig{});
 };
 
 }  // namespace operations::normalization
