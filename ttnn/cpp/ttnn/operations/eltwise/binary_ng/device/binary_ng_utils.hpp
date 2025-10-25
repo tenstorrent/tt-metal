@@ -92,6 +92,16 @@ void add_activation_defines(
 
 uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype, bool is_quant_op);
 
-std::map<std::string, std::string> make_dataflow_defines(DataType dtype, DataType b_dtype);
+std::map<std::string, std::string> make_dataflow_defines(
+    DataType dtype, std::optional<DataType> b_dtype = std::nullopt);
+
+struct AllShardSpecs {
+    tt::tt_metal::ShardSpec a_shard_spec;
+    tt::tt_metal::ShardSpec b_shard_spec;
+    tt::tt_metal::ShardSpec c_shard_spec;
+};
+
+tt::tt_metal::ShardSpec adjust_to_shape(
+    const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);
 
 }  // namespace ttnn::operations::binary_ng
