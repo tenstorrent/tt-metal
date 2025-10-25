@@ -566,7 +566,7 @@ on:
       measure_device_perf:
         description: "Measure device performance using device profiler (--device-perf flag)."
         type: boolean
-        default: false
+        default: true
       arch:
         required: true
         type: choice
@@ -608,7 +608,7 @@ jobs:
     with:
       build-wheel: true
       version: "22.04"
-      tracy: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.measure_device_perf == 'true' }}
+      tracy: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.measure_device_perf == 'true') }}
   ttnn-generate-sweeps:
     name: Generate Sweep Vectors ${{ inputs.arch }} ${{ inputs.runner-label }}
     needs: build-artifact
@@ -705,7 +705,7 @@ jobs:
           # Use smaller batch size for comprehensive runs (Wed/Sat schedule or manual comprehensive dispatch)
           # Also use smaller batch size when device performance measurement is enabled to avoid timeouts
           # Use larger batch size for nightly runs (Mon/Tue/Thu/Fri schedule or manual nightly dispatch)
-          device_perf_enabled = "${{ github.event.inputs.measure_device_perf }}" == "true"
+          device_perf_enabled = "${{ github.event_name }}" == "schedule" or "${{ github.event.inputs.measure_device_perf }}" == "true"
           if "${{ github.event.schedule }}" == "0 4 * * 3" or "${{ github.event.schedule }}" == "0 5 * * 6" or "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" or device_perf_enabled:
               BATCH_SIZE = 3  # Smaller batches for comprehensive runs or when device performance measurement is enabled (must stay under 256 total batches due to GitHub Actions limit)
           else:
@@ -885,12 +885,12 @@ jobs:
             SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
           fi
 
-          # Set device performance flag (only for manual dispatch, not scheduled runs)
+          # Enable device performance for scheduled runs and when requested on manual dispatch
           DEVICE_PERF_FLAG=""
-          if [[ "${{ github.event_name }}" != "schedule" ]]; then
-            if [[ "${{ github.event.inputs.measure_device_perf }}" == "true" ]]; then
-              DEVICE_PERF_FLAG="--device-perf"
-            fi
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            DEVICE_PERF_FLAG="--device-perf"
+          elif [[ "${{ github.event.inputs.measure_device_perf }}" == "true" ]]; then
+            DEVICE_PERF_FLAG="--device-perf"
           fi
 
           # Check if batch contains colon (suite-specific execution)
