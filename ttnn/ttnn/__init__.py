@@ -91,6 +91,10 @@ def manage_config(name, value):
 from ttnn._ttnn.multi_device import (
     CppMeshToTensor,
     CppTensorToMesh,
+    BidirectionalFabricSocket,
+    FabricSocket,
+    ISocket,
+    MPISocket,
     PlacementReplicate,
     PlacementShard,
     MeshMapperConfig,
