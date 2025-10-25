@@ -32,6 +32,12 @@
 #include "ttnn/tensor/layout/layout.hpp"
 #include "types.hpp"
 
+namespace ttnn {
+namespace distributed {
+class TensorToMesh;
+}
+}  // namespace ttnn
+
 namespace tt {
 
 namespace tt_metal {
@@ -318,6 +324,31 @@ void write_tensor(
 
 Tensor set_tensor_id(const Tensor& tensor);
 
+enum class host_buffer_data_type {
+    FLOAT32,
+    FLOAT64,
+    FLOAT16,
+    BFLOAT16,
+    INT8,
+    INT16,
+    INT32,
+    INT64,
+    UINT8,
+    UINT16,
+    UINT32,
+    UINT64,
+    BOOL
+};
+
+Tensor convert_python_tensor_to_tt_tensor(
+    const ttnn::Shape& tensor_shape,
+    const TensorLayout& tensor_layout,
+    const host_buffer_data_type& host_data_type,
+    std::function<HostBuffer(DataType)> get_host_data,
+    tt::tt_metal::distributed::MeshDevice* device,
+    std::optional<ttnn::QueueId> cq_id,
+    float pad_value,
+    const ttnn::distributed::TensorToMesh* mesh_mapper);
 }  // namespace tt_metal
 
 }  // namespace tt

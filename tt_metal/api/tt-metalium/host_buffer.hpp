@@ -65,6 +65,11 @@ public:
     // Returns the memory pin of the host buffer.
     MemoryPin pin() const { return pin_; }
 
+    const std::type_info& type_info() const {
+        TT_FATAL(type_info_ != nullptr, "Type info was not assigned for the host buffer");
+        return *type_info_;
+    }
+
 private:
     MemoryPin pin_;
     tt::stl::Span<std::byte> view_;
