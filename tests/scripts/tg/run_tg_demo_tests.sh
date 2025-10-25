@@ -88,8 +88,8 @@ run_tg_llama3_8b_dp_tests() {
 
   echo "LOG_METAL: Running run_tg_llama3_8b_dp_tests"
 
-  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
-  LLAMA_DIR=$llama8b MESH_DEVICE=TG pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1000; fail+=$?
+  llama8b=meta-llama/Llama-3.1-8B-Instruct
+  HF_MODEL=$llama8b MESH_DEVICE=TG pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1000; fail+=$?
   echo "LOG_METAL: Llama3 8B tests for $llama8b completed"
 
   if [[ $fail -ne 0 ]]; then
@@ -102,8 +102,8 @@ run_tg_llama3_70b_dp_tests() {
 
   echo "LOG_METAL: Running run_tg_llama3_70b_dp_tests"
 
-  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
-  LLAMA_DIR=$llama70b MESH_DEVICE=TG pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1000; fail+=$?
+  llama70b=meta-llama/Llama-3.3-70B-Instruct
+  HF_MODEL=$llama70b MESH_DEVICE=TG pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1000; fail+=$?
   echo "LOG_METAL: Llama3 70B tests for $llama70b completed"
 
   if [[ $fail -ne 0 ]]; then

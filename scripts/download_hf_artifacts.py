@@ -11,14 +11,20 @@ from loguru import logger
 
 
 BH_MODELS = [
-    "meta-llama/Llama-3.1-8B-Instruct",
     "distil-whisper/distil-large-v3",
+    "meta-llama/Llama-3.1-8B-Instruct",
+    # "meta-llama/Llama-3.3-70B-Instruct",  # is loaded from different path (/mnt/MLPerf/...)
 ]
 
 TG_MODELS = [
+    "emrecan/bert-base-turkish-cased-mean-nli-stsb-tr",
+    # "deepseek-ai/DeepSeek-R1-0528",  # weights loading is custom (not using transformers)
     "meta-llama/Llama-3.1-8B-Instruct",
     "meta-llama/Llama-3.3-70B-Instruct",
-    "deepseek-ai/DeepSeek-R1-0528",
+    # "openai/gpt-oss-20b",   # weights loading is custom (not using transformers)
+    # "openai/gpt-oss-120b",  # weights loading is custom (not using transformers)
+    "stabilityai/stable-diffusion-3.5-large",
+    "tiiuae/falcon-7b-instruct",
 ]
 
 UPSTREAM_MODELS = [
