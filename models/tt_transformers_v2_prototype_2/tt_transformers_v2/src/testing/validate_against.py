@@ -245,13 +245,14 @@ _validation_registry = ValidationRegistry()
 
 # todo)){
 # - rename match_signature to validate_on_device = False
-# - add checks to device_validate_against to make sure the signatures match
+# - also enable non-decorator use of validate_against --> see pytest.mark.parametrize for inspiration @line25 of test_auto_compose.py
 # - refactor metrics and tolerances to group them by metrics type
 #   - higher_is_better_metrics = {"pcc", "cosine_similarity"} --> clean up groupings
 # - what use does cosine_similarity have? can we remove it?
 # - work on ds_r1_qwen model validation using new decorator
 # - generate unit test automatically from the failed validations
 # - checkpoint validation --> essentially checking from_torch against a reference checkpoint
+# - add checks to device_validate_against to make sure the signatures match
 # }todo))
 def __validate_against(
     reference_fn: Callable,
