@@ -537,37 +537,31 @@ def run_all_to_all_dispatch_test(
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
-    "batches_per_device, seq_len, num_iters, warmup_iters",
+    "batches_per_device, seq_len, num_iters, warmup_iters, input_memory_config, output_memory_config",
     [
-        (16, 2, 2, 1),
-        (1, 3, 2, 1),
+        (16, 2, 2, 1, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),  # b16s2, dram-dram
+        (1, 3, 2, 1, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),  # b1s3, l1-l1
     ],
-    ids=["b16s2", "b1s3"],
+    ids=["b16s2-dram", "b1s3-l1"],
 )
 @pytest.mark.parametrize("num_links", ["MAX_LINKS"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize(
-    "input_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram_input", "l1_input"]
-)
-@pytest.mark.parametrize(
-    "output_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram_output", "l1_output"]
-)
 def test_all_to_all_dispatch_no_trace(
     mesh_device,
     trace_mode,
     mesh_shape,
     cluster_axis,
-    batches_per_device,
     experts_per_device,
     select_experts_k,
     hidden_size,
+    batches_per_device,
     seq_len,
     num_iters,
     warmup_iters,
-    num_links,
-    dtype,
     input_memory_config,
     output_memory_config,
+    num_links,
+    dtype,
     device_params,
 ):
     if cluster_axis is None:

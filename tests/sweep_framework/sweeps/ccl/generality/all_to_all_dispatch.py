@@ -9,7 +9,7 @@ import ttnn
 
 from loguru import logger
 from tests.sweep_framework.sweep_utils.ccl_common import device_context, mesh_shape_iterator
-from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_dispatch_t3000 import run_all_to_all_dispatch_test
+from tests.nightly.t3000.ccl.test_all_to_all_dispatch import run_all_to_all_dispatch_test
 
 
 # Override the default timeout in seconds for hang detection.

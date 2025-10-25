@@ -10,8 +10,8 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_combine_t3000 import get_experts_on_device
-from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_dispatch_t3000 import (
+from tests.nightly.t3000.ccl.test_all_to_all_combine import get_experts_on_device
+from tests.nightly.t3000.ccl.test_all_to_all_dispatch import (
     gen_expert_mapping,
     get_expert_indices,
     get_metadata_tensor,
