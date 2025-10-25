@@ -156,12 +156,7 @@ ttnn::Tensor bound_matmul(
     }
 
     if (parameters.user_fused_activation.has_value() && !has_user_grid) {
-        const UnaryOpType& op_type = parameters.user_fused_activation.value().op_type;
-
-        // Gelu must have approximation disabled for model accuracy. Other activations are run as-is.
-        auto activation = (op_type == UnaryOpType::GELU)
-                              ? ttnn::operations::unary::EltwiseUnaryWithParam{op_type, static_cast<float>(false)}
-                              : ttnn::operations::unary::EltwiseUnaryWithParam{op_type};
+        const ttnn::operations::unary::EltwiseUnaryWithParam activation = parameters.user_fused_activation.value();
 
         output_tensor = ttnn::operations::unary::Unary_chain::invoke(
             output_tensor, {activation}, parameters.output_mem_config, optional_output_tensor);
