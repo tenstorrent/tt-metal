@@ -412,18 +412,9 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                 uint32_t global_worker_count = num_links * num_workers_per_direction;
                 uint32_t base_pages_per_worker = single_batch_head_num_pages / global_worker_count;
                 uint32_t remainder = single_batch_head_num_pages % global_worker_count;
-                uint32_t input_tile_id_start =
-                    global_worker_id * base_pages_per_worker + std::min(global_worker_id, remainder);
-                uint32_t input_tile_id_end =
-                    (global_worker_id + 1) * base_pages_per_worker + std::min(global_worker_id + 1, remainder);
+                uint32_t tiles_per_core = base_pages_per_worker + global_worker_id < remainder ? 1 : 0;
 
-                // Heuristic is based on a sweep of large shapes. This will be used when total chunks per worker is
-                // larger than 160. Doing it less frequently adds performance cost to many shapes. Sweep test:
-                // tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_T3K.py
-                constexpr uint32_t HEURISTIC_MAX_CHUNKS_PER_SYNC = 160;
-                uint32_t chunks_per_sync_val = chunks_per_sync.value_or(std::min(
-                    std::max((input_tile_id_end - input_tile_id_start) / num_tiles_to_write_per_packet, (uint32_t)1),
-                    HEURISTIC_MAX_CHUNKS_PER_SYNC));
+                uint32_t tiles_per_chunk_val = chunks_per_sync.value_or(0);
                 log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
                 uint32_t self_write_done_semaphore;
@@ -442,7 +433,7 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                     static_cast<uint32_t>(topology),  // topology
                     dir,                              // direction
                     fuse_op,                          // fused op
-                    chunks_per_sync_val,
+                    tiles_per_chunk_val,
                     global_worker_count,
                 };
                 tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
@@ -456,22 +447,20 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                 reader_kernel_ids.push_back(worker_sender_reader_kernel_id);
 
                 std::vector<uint32_t> reader_rt_args = {
-                    input_tensor.buffer()->address(),                         // input_tensor_address
-                    output_tensor.buffer()->address(),                        // output_tensor_address
-                    input_tensor_Wt,                                          // width in tiles of the output shard
-                    input_tensor_Ht,                                          // height in tiles of the output shard
-                    input_tensor_C,                                           // num input channels
-                    output_tensor_Wt,                                         // width in tiles of entire output
-                    output_tensor_Ht,                                         // height in tiles of entire output
-                    output_tensor_C,                                          // num output channels
-                    dim,                                                      // dim to gather on
-                    batch_head_size,                                          // product of the first two dims
-                    global_worker_id,                                         //
-                    input_tile_id_end,                                        //
-                    ring_size,                                                // ring_size
-                    semaphore.at(dir).address(),                              // out_ready_semaphore_forward
-                    input_tile_id_start % input_tensor_Wt,                    // start_pages_read_in_row
-                    input_tile_id_start / input_tensor_Wt * output_tensor_Wt  // start_row_offset
+                    input_tensor.buffer()->address(),   // input_tensor_address
+                    output_tensor.buffer()->address(),  // output_tensor_address
+                    input_tensor_Wt,                    // width in tiles of the output shard
+                    input_tensor_Ht,                    // height in tiles of the output shard
+                    input_tensor_C,                     // num input channels
+                    output_tensor_Wt,                   // width in tiles of entire output
+                    output_tensor_Ht,                   // height in tiles of entire output
+                    output_tensor_C,                    // num output channels
+                    dim,                                // dim to gather on
+                    batch_head_size,                    // product of the first two dims
+                    global_worker_id,                   //
+                    tiles_per_core,                     //
+                    ring_size,                          // ring_size
+                    semaphore.at(dir).address(),        // out_ready_semaphore_forward
                 };
                 if (fuse_op) {
                     reader_rt_args.push_back(self_write_done_semaphore);
@@ -508,7 +497,7 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                     fuse_op,                          // fused op
                     static_cast<uint32_t>(topology),  // topology
                     dir,                              // direction
-                    chunks_per_sync_val,
+                    tiles_per_chunk_val,
                     global_worker_count,
                 };
                 strided_fabric_mux_connection_ct_args(
@@ -553,13 +542,11 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                     dim,                                                         // dim to gather on
                     batch_head_size,                                             // product of the first two dims
                     global_worker_id,                                            //
-                    input_tile_id_end,                                           //
+                    tiles_per_core,                                              //
                     virtual_core.x,                                              // out_ready_sem_noc0_x
                     virtual_core.y,                                              // out_ready_sem_noc0_y
                     ring_size,                                                   // ring_size
                     semaphore.at(dir).address(),                                 // out_ready_semaphore_forward
-                    input_tile_id_start % input_tensor_Wt,                       // start_pages_read_in_row
-                    input_tile_id_start / input_tensor_Wt * output_tensor_Wt,    // start_row_offset
                     barrier_semaphore.has_value() && !using_persistent_buffers,  // use synchronize barrier semaphore
                     barrier_semaphore.has_value()                                // synchronize barrier semaphore
                         ? barrier_semaphore.value().address()
