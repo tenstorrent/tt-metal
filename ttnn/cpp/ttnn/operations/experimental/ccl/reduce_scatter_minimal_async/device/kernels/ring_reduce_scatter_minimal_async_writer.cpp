@@ -20,7 +20,7 @@
 
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
-using namespace tt::tt_fabric::linear::experimental;
+using namespace tt::tt_fabric::experimental::linear;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS

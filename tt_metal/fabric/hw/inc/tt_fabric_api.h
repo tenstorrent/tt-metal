@@ -97,12 +97,7 @@ void fabric_set_route(
 }
 
 void fabric_set_unicast_route(
-    volatile tt_l1_ptr MeshPacketHeader* packet_header,
-    uint16_t my_dev_id,  // Ignore this: Dynamic Routing does not need src chip ID
-    uint16_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    uint16_t ew_dim  // Ignore this: Dynamic Routing does not need mesh dimensions
-) {
+    volatile tt_l1_ptr MeshPacketHeader* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id) {
     packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
     // Minimize writes to L1 by doing 1 u64 write (decomposed to 2 u32 writes) instead of 4 u16 writes
     packet_header->mcast_params_64 = 0;
