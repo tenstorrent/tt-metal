@@ -655,13 +655,17 @@ def clear_compile_cache():
 
 
 @pytest.fixture(autouse=True)
-def reset_default_device():
+def reset_default_device(request):
     import ttnn
 
     device = ttnn.GetDefaultDevice()
     yield
     if device is not None:
         ttnn.SetDefaultDevice(device)
+    elif "device" in request.fixturenames:
+        # if the test used a device, but there was no default device, we need to clear the default device
+        # there is no C++ API to clear the default device, so we are setting it to None
+        ttnn.SetDefaultDevice(None)
 
 
 def get_devices(request):
