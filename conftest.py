@@ -311,10 +311,9 @@ def device(request, device_params):
 
     yield device
 
+    # Restore the original default device BEFORE closing the test-specific one
+    ttnn.SetDefaultDevice(original_default_device)
     ttnn.close_device(device)
-
-    if original_default_device:
-        ttnn.SetDefaultDevice(original_default_device)
 
 
 @pytest.fixture(scope="function")
@@ -660,13 +659,16 @@ def clear_compile_cache():
 
 
 @pytest.fixture(autouse=True)
-def reset_default_device():
+def reset_default_device(request):
     import ttnn
 
     device = ttnn.GetDefaultDevice()
     yield
     if device is not None:
         ttnn.SetDefaultDevice(device)
+    elif "device" in request.fixturenames:
+        # if the test used a device, but there was no default device, we need to clear the default device
+        ttnn.SetDefaultDevice(None)
 
 
 def get_devices(request):
