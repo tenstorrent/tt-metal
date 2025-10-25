@@ -11,6 +11,7 @@
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 
 #include <vector>
+#include <ostream>
 
 namespace tt::tt_fabric {
 
@@ -64,7 +65,14 @@ public:
      */
     size_t get_receiver_channel_base_address(size_t channel_id) const;
 
+    size_t get_num_sender_channels() const { return num_used_sender_channels; }
+    size_t get_num_receiver_channels() const { return num_used_receiver_channels; }
+
+    // Override virtual print method from base class
+    void print(std::ostream& os) const override;
+
 private:
+    friend class FabricRemoteChannelsAllocator;
     /*
      * Helper function that decides the number of buffer slots for each channel.
     */
@@ -79,7 +87,7 @@ private:
 
     // Configuration parameters
     size_t num_used_sender_channels = 0;
-    size_t num_receiver_channels = 0;
+    size_t num_used_receiver_channels = 0;
     size_t channel_buffer_size_bytes = 0;
     size_t available_channel_buffering_space = 0;
     size_t max_l1_loading_size = 0;
@@ -119,5 +127,55 @@ private:
     std::array<size_t, builder_config::num_sender_channels> remote_sender_channels_base_address = {};
     std::array<size_t, builder_config::num_receiver_channels> remote_receiver_channels_base_address = {};
 };
+
+// Implementation of virtual print method
+inline void FabricStaticSizedChannelsAllocator::print(std::ostream& os) const {
+    os << "FabricStaticSizedChannelsAllocator {\n";
+
+    // Configuration parameters
+    os << "  Configuration:\n";
+    os << "    num_used_sender_channels: " << num_used_sender_channels << "\n";
+    os << "    num_used_receiver_channels: " << num_used_receiver_channels << "\n";
+    os << "    channel_buffer_size_bytes: " << channel_buffer_size_bytes << " B\n";
+    os << "    available_channel_buffering_space: " << available_channel_buffering_space << " B\n";
+    os << "    buffer_region_start: 0x" << std::hex << buffer_region_start << std::dec << "\n";
+    os << "    max_l1_loading_size: 0x" << std::hex << max_l1_loading_size << std::dec << "\n";
+
+    // Sender channels
+    if (num_used_sender_channels > 0) {
+        os << "  Sender Channels:\n";
+        for (size_t i = 0; i < num_used_sender_channels; ++i) {
+            os << "    Channel " << i << ":\n";
+            os << "      base_address: 0x" << std::hex << sender_channels_base_address[i] << std::dec << "\n";
+            os << "      num_buffers: " << sender_channels_num_buffers[i] << "\n";
+            os << "      size_bytes: " << sender_channels_size_bytes[i] << " B\n";
+            if (remote_sender_channels_num_buffers[i] > 0) {
+                os << "      remote_base_address: 0x" << std::hex << remote_sender_channels_base_address[i] << std::dec
+                   << "\n";
+                os << "      remote_num_buffers: " << remote_sender_channels_num_buffers[i] << "\n";
+                os << "      remote_size_bytes: " << remote_sender_channels_size_bytes[i] << " B\n";
+            }
+        }
+    }
+
+    // Receiver channels
+    if (num_used_receiver_channels > 0) {
+        os << "  Receiver Channels:\n";
+        for (size_t i = 0; i < num_used_receiver_channels; ++i) {
+            os << "    Channel " << i << ":\n";
+            os << "      base_address: 0x" << std::hex << receiver_channels_base_address[i] << std::dec << "\n";
+            os << "      num_buffers: " << receiver_channels_num_buffers[i] << "\n";
+            os << "      size_bytes: " << receiver_channels_size_bytes[i] << " B\n";
+            if (remote_receiver_channels_num_buffers[i] > 0) {
+                os << "      remote_base_address: 0x" << std::hex << remote_receiver_channels_base_address[i]
+                   << std::dec << "\n";
+                os << "      remote_num_buffers: " << remote_receiver_channels_num_buffers[i] << "\n";
+                os << "      remote_size_bytes: " << remote_receiver_channels_size_bytes[i] << " B\n";
+            }
+        }
+    }
+
+    os << "}";
+}
 
 }  // namespace tt::tt_fabric
