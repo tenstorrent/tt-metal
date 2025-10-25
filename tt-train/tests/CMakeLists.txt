@@ -12,6 +12,8 @@ set(SOURCES
     model/gpt2s_test.cpp
     model/linear_regression_full_test.cpp
     model/weight_tying_test.cpp
+    model/bert_polymorphism_test.cpp
+    model/bert_weight_loading_test.cpp
     ttnn_fixed/concat_op_test.cpp
     ttnn_fixed/distributed/distributed_ttnn_ops_test.cpp
     ttnn_fixed/trivial_ttnn_ops_test.cpp
@@ -43,6 +45,7 @@ set(SOURCES
     ops/cross_entropy_fw_op_test.cpp
     ops/positional_embedding_test.cpp
     ops/layer_norm_op_test.cpp
+    modules/layer_norm_epsilon_test.cpp
     ops/distributed/comm_ops_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
@@ -54,6 +57,10 @@ set(SOURCES
     ops/softmax_test.cpp
     ops/silu_op_test.cpp
     ops/sdpa_fw_op_test.cpp
+    ops/slice_repeat_ops_test.cpp
+    ops/binary_ops_test.cpp
+    ops/scaled_dot_product_attention_test.cpp
+    ops/gelu_op_test.cpp
 )
 
 add_executable(ttml_tests ${SOURCES})

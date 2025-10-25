@@ -31,7 +31,14 @@ autograd::TensorPtr embedding_op(const autograd::TensorPtr& tensor, const autogr
         auto tensor_shape = tensor->get_value().logical_shape();
         out_grad = ttnn::reshape(
             out_grad, ttnn::Shape({1, 1, tensor_shape[0] * tensor_shape[-1], out_grad.logical_shape()[-1]}));
-        auto weight_grad = ttnn::embedding_bw(tensor->get_value(), weight->get_value(), out_grad);
+
+        // embedding_bw requires index tensor in ROW_MAJOR layout
+        auto tensor_value = tensor->get_value();
+        if (tensor_value.layout() != ttnn::Layout::ROW_MAJOR) {
+            tensor_value = ttnn::to_layout(tensor_value, ttnn::Layout::ROW_MAJOR);
+        }
+
+        auto weight_grad = ttnn::embedding_bw(tensor_value, weight->get_value(), out_grad);
         weight->add_grad(weight_grad);
     };
 
