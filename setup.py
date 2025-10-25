@@ -291,7 +291,8 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["ls", "-hal", "runtime"], cwd=source_dir, env=build_env)
 
         # Copy needed C++ shared libraries and runtime assets into wheel (sfpi, FW etc)
-        lib_patterns = ["_ttnn.so", "_ttnncpp.so", "libtt_metal.so", "libdevice.so", "libtt_stl.so"]
+        # lib naming: We install libtt-nn.so now; keep _ttnncpp.so as a symlink for compatibility
+        lib_patterns = ["_ttnn.so", "libtt-nn.so*", "_ttnncpp.so", "libtt_metal.so", "libdevice.so", "libtt_stl.so"]
         runtime_patterns = [
             "hw/**/*",
         ]
