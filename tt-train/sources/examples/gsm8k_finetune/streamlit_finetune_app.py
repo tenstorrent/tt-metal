@@ -1,7 +1,7 @@
+#!/usr/bin/env python3
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-#!/usr/bin/env python3
 """
 Streamlit LLM Fine-tuning Application
 Real-time monitoring and control interface for LLM fine-tuning.
