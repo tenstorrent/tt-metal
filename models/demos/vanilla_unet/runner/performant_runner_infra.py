@@ -8,7 +8,7 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import divup, is_wormhole_b0
+from models.common.utility_functions import divup, is_blackhole, is_wormhole_b0
 from models.demos.vanilla_unet.common import load_torch_model
 from models.demos.vanilla_unet.tests.pcc.test_ttnn_unet import create_custom_preprocessor
 from models.demos.vanilla_unet.ttnn.common import get_mesh_mappers
@@ -66,10 +66,10 @@ class VanillaUNetPerformanceRunnerInfra:
         self.output_tensor = self.ttnn_model(self.device, self.input_tensor)
 
     def _setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=16):
-        if is_wormhole_b0():
+        if is_wormhole_b0() or is_blackhole():
             core_grid = ttnn.CoreGrid(y=8, x=8)
         else:
-            raise RuntimeError("Unsupported device: Only Wormhole B0 is currently supported.")
+            raise RuntimeError("Unsupported device: Only Wormhole B0 and Blackhole are currently supported.")
 
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
 

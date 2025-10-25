@@ -7,10 +7,18 @@ from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import divup
+from models.common.utility_functions import divup, is_blackhole, is_grayskull, is_wormhole_b0
 from models.demos.vit.common import load_torch_model
-from models.demos.vit.tt import ttnn_optimized_sharded_vit_wh
-from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
+from models.demos.vit.tests.vit_helper_funcs import get_batch, get_data_loader
+
+if is_wormhole_b0():
+    from models.demos.wormhole.vit.tt import ttnn_optimized_sharded_vit_wh as ttnn_optimized_sharded_vit
+elif is_blackhole():
+    from models.demos.blackhole.vit.tt import ttnn_optimized_sharded_vit_bh as ttnn_optimized_sharded_vit
+elif is_grayskull():
+    from models.demos.grayskull.vit.tt import ttnn_optimized_sharded_vit_gs as ttnn_optimized_sharded_vit
+else:
+    from models.demos.vit.tt import ttnn_optimized_sharded_vit
 
 
 class VitTestInfra:
@@ -46,13 +54,13 @@ class VitTestInfra:
         model = load_torch_model(model_location_generator, embedding=True)
         config = model.config
 
-        self.config = ttnn_optimized_sharded_vit_wh.update_model_config(config, batch_size)
+        self.config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
         image_processor = AutoImageProcessor.from_pretrained(model_name)
 
         self.parameters = preprocess_model_parameters(
             initialize_model=lambda: model,
             device=device,
-            custom_preprocessor=ttnn_optimized_sharded_vit_wh.custom_preprocessor,
+            custom_preprocessor=ttnn_optimized_sharded_vit.custom_preprocessor,
         )
 
         # cls_token & position embeddings expand to batch_size
@@ -144,7 +152,7 @@ class VitTestInfra:
 
     def run(self, tt_input_tensor=None):
         self.output_tensor = None
-        self.output_tensor = ttnn_optimized_sharded_vit_wh.vit(
+        self.output_tensor = ttnn_optimized_sharded_vit.vit(
             self.config,
             self.input_tensor,
             self.cls_token,
