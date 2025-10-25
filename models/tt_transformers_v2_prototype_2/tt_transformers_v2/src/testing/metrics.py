@@ -51,6 +51,7 @@ def compute_max_abs_error(impl, ref):
             diff = ttnn.subtract(impl, ref)
             abs_diff = ttnn.abs(diff)
             max_val = ttnn.max(abs_diff)
+            # todo)) use to_torch_auto_compose here instead of to_torch
             return ttnn.to_torch(max_val).item()  # Convert only final scalar
         elif torch.is_tensor(impl) and torch.is_tensor(ref):
             # PyTorch path - both must be torch tensors
@@ -87,6 +88,7 @@ def compute_mean_abs_error(impl, ref):
             diff = ttnn.subtract(impl, ref)
             abs_diff = ttnn.abs(diff)
             mean_val = ttnn.mean(abs_diff)
+            # todo)) use to_torch_auto_compose here instead of to_torch
             return ttnn.to_torch(mean_val).item()
         elif torch.is_tensor(impl) and torch.is_tensor(ref):
             # PyTorch path - both must be torch tensors
@@ -97,6 +99,7 @@ def compute_mean_abs_error(impl, ref):
         return float("inf")
 
 
+# todo)) remove this metric
 def compute_cosine_similarity(impl, ref):
     """
     Compute cosine similarity between two tensors.
