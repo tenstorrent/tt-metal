@@ -217,7 +217,8 @@ def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std):
 
     tt_input_tensor = ttnn.from_torch(tt_input_tensor, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
-    torch_output = torch_model(torch_input_tensor)
+    with torch.no_grad():
+        torch_output = torch_model(torch_input_tensor)
     tt_output = tt_model(tt_input_tensor)
 
     tt_output_torch = ttnn.to_torch(tt_output)
@@ -293,7 +294,8 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, re
         tt_input_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
     )
 
-    torch_output = torch_model(torch_input_tensor)
+    with torch.no_grad():
+        torch_output = torch_model(torch_input_tensor)
     tt_output = tt_model(tt_input_tensor, logical_h=logical_h)
 
     concat_dims = [None, None]
@@ -410,7 +412,8 @@ def test_wan_conv3d(
     else:
         torch_cache_tensor = tt_cache_tensor = None
 
-    torch_output = torch_model(torch_input_tensor, cache_x=torch_cache_tensor)
+    with torch.no_grad():
+        torch_output = torch_model(torch_input_tensor, cache_x=torch_cache_tensor)
     tt_output = tt_model(tt_input_tensor, cache_x_BTHWC=tt_cache_tensor, logical_h=logical_h)
 
     concat_dims = [None, None]
@@ -537,11 +540,12 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
         tt_feat_cache = [None, None]
         tt_feat_idx = [0]
 
-    torch_output = torch_model(
-        torch_input_tensor,
-        feat_cache=torch_feat_cache,
-        feat_idx=torch_feat_idx,
-    )
+    with torch.no_grad():
+        torch_output = torch_model(
+            torch_input_tensor,
+            feat_cache=torch_feat_cache,
+            feat_idx=torch_feat_idx,
+        )
 
     tt_output = tt_model(
         tt_input_tensor,
@@ -659,11 +663,12 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
             torch_feat_cache.append(None)
             tt_feat_cache.append(None)
 
-    torch_output = torch_model(
-        torch_input_tensor,
-        feat_cache=torch_feat_cache,
-        feat_idx=torch_feat_idx,
-    )
+    with torch.no_grad():
+        torch_output = torch_model(
+            torch_input_tensor,
+            feat_cache=torch_feat_cache,
+            feat_idx=torch_feat_idx,
+        )
 
     tt_output = tt_model(
         tt_input_tensor,
@@ -789,11 +794,12 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, upsample_out_dim, cach
             torch_feat_cache.append(None)
             tt_feat_cache.append(None)
 
-    torch_output = torch_model(
-        torch_input_tensor,
-        feat_cache=torch_feat_cache,
-        feat_idx=torch_feat_idx,
-    )
+    with torch.no_grad():
+        torch_output = torch_model(
+            torch_input_tensor,
+            feat_cache=torch_feat_cache,
+            feat_idx=torch_feat_idx,
+        )
 
     tt_output, new_logical_h = tt_model(
         tt_input_tensor,
@@ -917,11 +923,12 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
         )
 
         logger.info(f"running torch model")
-        torch_output = torch_model(
-            torch_input_tensor,
-            feat_cache=torch_feat_cache,
-            feat_idx=torch_feat_idx,
-        )
+        with torch.no_grad():
+            torch_output = torch_model(
+                torch_input_tensor,
+                feat_cache=torch_feat_cache,
+                feat_idx=torch_feat_idx,
+            )
 
         logger.info(f"running tt model")
         tt_output, new_logical_h = tt_model(
@@ -1090,11 +1097,12 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, ch
         )
 
         logger.info(f"running torch model")
-        torch_output = torch_model(
-            torch_input_tensor,
-            feat_cache=torch_feat_cache,
-            feat_idx=torch_feat_idx,
-        )
+        with torch.no_grad():
+            torch_output = torch_model(
+                torch_input_tensor,
+                feat_cache=torch_feat_cache,
+                feat_idx=torch_feat_idx,
+            )
         logger.info(f"torch output shape: {torch_output.shape}")
 
         logger.info(f"running tt model")
@@ -1296,10 +1304,11 @@ def test_wan_decoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
     if not skip_check:
         logger.info(f"running torch model")
         start = time.time()
-        torch_output = torch_model.decode(
-            torch_input_tensor,
-            return_dict=False,
-        )[0]
+        with torch.no_grad():
+            torch_output = torch_model.decode(
+                torch_input_tensor,
+                return_dict=False,
+            )[0]
         logger.info(f"torch time taken: {time.time() - start}")
         logger.info(f"torch output shape: {torch_output.shape}")
 
