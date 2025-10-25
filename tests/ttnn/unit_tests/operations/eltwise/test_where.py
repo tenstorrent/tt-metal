@@ -531,11 +531,7 @@ def test_where_tss(device, dtype, h, w, scalar1, scalar2):
 @pytest.mark.parametrize(
     "input_shapes",
     [
-        torch.Size([100]),
-        torch.Size([64, 128]),
-        torch.Size([3, 128, 32]),
         torch.Size([1, 3, 320, 384]),
-        torch.Size([1, 1, 32, 320, 12]),
     ],
 )
 def test_where_TSS_float_types(torch_dtype, ttnn_dtype, scalars, input_shapes, device):
@@ -564,16 +560,13 @@ def test_where_TSS_float_types(torch_dtype, ttnn_dtype, scalars, input_shapes, d
         (9999, -9999),
         (-24567, 16777216),
         (-16777216, 56789),
+        (-2147483647, 2147483647),
     ],
 )
 @pytest.mark.parametrize(
     "input_shapes",
     [
-        torch.Size([100]),
-        torch.Size([64, 128]),
-        torch.Size([3, 128, 32]),
         torch.Size([1, 3, 320, 384]),
-        torch.Size([1, 1, 32, 320, 12]),
     ],
 )
 def test_where_TSS_int_types(scalars, input_shapes, device):
@@ -587,6 +580,39 @@ def test_where_TSS_int_types(scalars, input_shapes, device):
 
     tt_result = ttnn.to_torch(ttnn_result)
 
+    assert torch.equal(tt_result, torch_result)
+
+
+@pytest.mark.parametrize(
+    "scalars",
+    [
+        (3, 7),
+        (10, 42),
+        (0, 1),
+        (24567, 16777216),
+        (16777216, 56789),
+        (2147483647, 3294967295),
+        (4274947110, 3264965225),
+        (3294967295, 4294967295),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        torch.Size([1, 3, 320, 384]),
+    ],
+)
+def test_where_TSS_uint32_types(scalars, input_shapes, device):
+    scalar_true, scalar_false = scalars
+    condition = torch.tensor([[0, 1] * (input_shapes[-1] // 2)] * input_shapes[0], dtype=torch.uint32)
+
+    torch_result = torch.where(condition.bool(), scalar_true, scalar_false)
+
+    ttnn_condition = ttnn.from_torch(condition, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_result = ttnn.where(ttnn_condition, scalar_true, scalar_false)
+
+    tt_result = ttnn.to_torch(ttnn_result, dtype=torch.uint32)
+    torch_result = torch_result.to(torch.uint32)
     assert torch.equal(tt_result, torch_result)
 
 

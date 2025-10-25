@@ -25,9 +25,8 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
 
     const auto& input = tensor_args.input;
     const auto& ops_chain = args.op_chain;
-    float value1 = 0.0f;
-    float value2 = 0.0f;
-
+    uint32_t packed_scalar1 = 0u;
+    uint32_t packed_scalar2 = 0u;
     tt::tt_metal::Program program = CreateProgram();
 
     auto shard_spec = input.shard_spec().value();
@@ -135,11 +134,13 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
 
     if (!ops_chain[0].empty()) {
         switch (ops_chain[0].type()) {
-            case UnaryOpType::HARDSHRINK: value1 = *ops_chain[0].get_param_if<float>(0); break;
+            case UnaryOpType::HARDSHRINK:
+                packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
+                break;
             case UnaryOpType::WHERE_TSS:
-                value1 = *ops_chain[0].get_param_if<float>(0);
-                value2 = *ops_chain[0].get_param_if<float>(1);
-                if (input.dtype() == DataType::INT32) {
+                packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
+                packed_scalar2 = utils::pack_scalar_runtime_arg(ops_chain[0], 1, input.dtype());
+                if (input.dtype() == DataType::INT32 || input.dtype() == DataType::UINT32) {
                     unary_defines["FILL_INT"] = "fill_tile_int";
                 } else {
                     unary_defines["FILL_FLOAT"] = "fill_tile";
@@ -160,8 +161,6 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
 
     auto path = utils::get_compute_kernel_path(ops_chain[0].type(), compute_root_sharded, input.dtype());
 
-    const auto packed_scalar1 = utils::pack_scalar_runtime_arg(value1, input.dtype());
-    const auto packed_scalar2 = utils::pack_scalar_runtime_arg(value2, input.dtype());
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
         path,
