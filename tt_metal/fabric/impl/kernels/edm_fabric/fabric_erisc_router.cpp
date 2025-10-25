@@ -2315,7 +2315,6 @@ void initialize_state_for_txq1_active_mode_sender_side() {
 }
 
 void kernel_main() {
-    RISC_POST_STATUS(tt::tt_fabric::EDMStatus::INITIALIZATION_STARTED);
     set_l1_data_cache<true>();
     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
     static_assert(
@@ -2330,7 +2329,6 @@ void kernel_main() {
             initialize_state_for_txq1_active_mode_sender_side();
         }
     }
-    RISC_POST_STATUS(tt::tt_fabric::EDMStatus::TXQ_INITIALIZED);
 
     //
     // COMMON CT ARGS (not specific to sender or receiver)
@@ -2377,8 +2375,6 @@ void kernel_main() {
         init_ptr_val<to_sender_packets_completed_streams[3]>(0);
         init_ptr_val<to_sender_packets_completed_streams[4]>(0);
     }
-
-    RISC_POST_STATUS(tt::tt_fabric::EDMStatus::STREAM_REG_INITIALIZED);
 
     if constexpr (code_profiling_enabled_timers_bitfield != 0) {
         clear_code_profiling_buffer(code_profiling_buffer_base_addr);
@@ -2528,7 +2524,6 @@ void kernel_main() {
         }
     }
 
-    RISC_POST_STATUS(tt::tt_fabric::EDMStatus::STARTED);
     *edm_status_ptr = tt::tt_fabric::EDMStatus::STARTED;
 
     //////////////////////////////
@@ -2632,8 +2627,6 @@ void kernel_main() {
         tt::tt_fabric::EdmChannelWorkerInterfaces<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY>::make(
             std::make_index_sequence<NUM_SENDER_CHANNELS>{});
 
-    RISC_POST_STATUS(tt::tt_fabric::EDMStatus::OBJECT_SETUP_IN_PROGRESS);
-
     // TODO: change to TMP.
     std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>
         downstream_edm_noc_interfaces_vc0;
@@ -2705,8 +2698,6 @@ void kernel_main() {
         }
     }
 
-    RISC_POST_STATUS(tt::tt_fabric::EDMStatus::EDM_VC0_SETUP_COMPLETE);
-
     if constexpr (enable_deadlock_avoidance && is_receiver_channel_serviced[0]) {
         if (has_downstream_edm_vc1_buffer_connection) {
             const auto teardown_sem_address =
@@ -2756,8 +2747,6 @@ void kernel_main() {
         }
     }
 
-    RISC_POST_STATUS(tt::tt_fabric::EDMStatus::EDM_VC1_SETUP_COMPLETE);
-
     // initialize the local receiver channel buffers
     local_receiver_channels.init(
         local_receiver_buffer_addresses.data(),
@@ -2802,8 +2791,6 @@ void kernel_main() {
         edm_to_downstream_noc>
         receiver_channel_1_trid_tracker;
     receiver_channel_1_trid_tracker.init();
-
-    RISC_POST_STATUS(tt::tt_fabric::EDMStatus::WORKER_INTERFACES_INITIALIZED);
 
 #ifdef ARCH_BLACKHOLE
     // A Blackhole hardware bug requires all noc inline writes to be non-posted so we hardcode to false here
@@ -2874,7 +2861,6 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
 
-    RISC_POST_STATUS(tt::tt_fabric::EDMStatus::ETHERNET_HANDSHAKE_COMPLETE);
     // if enable the tensix extension, then before open downstream connection, need to wait for downstream tensix ready
     // for connection.
     if constexpr (num_downstream_tensix_connections) {
@@ -2928,8 +2914,6 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
 
-    RISC_POST_STATUS(tt::tt_fabric::EDMStatus::VCS_OPENED);
-
     if constexpr (is_receiver_channel_serviced[0] and NUM_ACTIVE_ERISCS > 1) {
         // Two erisc mode requires us to reorder the cmd buf programming/state setting
         // because we need to reshuffle some of our cmd_buf/noc assignments around for
@@ -2968,9 +2952,6 @@ void kernel_main() {
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
     }
-
-    RISC_POST_STATUS(tt::tt_fabric::EDMStatus::ROUTING_TABLE_INITIALIZED);
-
     WAYPOINT("FSCW");
     wait_for_static_connection_to_ready(
         local_sender_channel_worker_interfaces, local_sender_channel_free_slots_stream_ids_ordered);
@@ -2979,8 +2960,6 @@ void kernel_main() {
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
     }
-
-    RISC_POST_STATUS(tt::tt_fabric::EDMStatus::INITIALIZATION_COMPLETE);
 
     //////////////////////////////
     //////////////////////////////
