@@ -13,12 +13,22 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config utilities for real-world configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_binary_traced_config
+
 # Ref: https://github.com/tenstorrent/pytorch2.0_ttnn/blob/main/docs/operations/aten.add.Tensor.md
 
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
+
+# Load master configurations for real-world test cases from traced models
+loader = MasterConfigLoader()
+# Default: Run exact 6 traced configs (each with paired input shapes and memory configs)
+model_traced_params = loader.get_suite_parameters("add")
+# To run all combinations: loader.get_suite_parameters("add", all_cases=True)
+
 parameters = {
     "nightly": {
         "input_shape": [
@@ -526,6 +536,8 @@ parameters = {
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
+    # Real-world configurations from traced models
+    "model_traced": model_traced_params,
 }
 
 
@@ -535,15 +547,28 @@ parameters = {
 # If you defined a device_mesh_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_shape,
-    input_a_dtype,
-    input_b_dtype,
-    input_a_layout,
-    input_b_layout,
-    input_a_memory_config,
-    input_b_memory_config,
+    input_a_dtype=ttnn.bfloat16,
+    input_b_dtype=ttnn.bfloat16,
+    input_a_layout=ttnn.TILE_LAYOUT,
+    input_b_layout=ttnn.TILE_LAYOUT,
+    input_a_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    input_b_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    traced_config_name=None,
     *,
     device,
 ) -> list:
+    # Unpack traced config if provided (for model_traced suite)
+    if traced_config_name:
+        (
+            input_shape,
+            input_a_dtype,
+            input_b_dtype,
+            input_a_layout,
+            input_b_layout,
+            input_a_memory_config,
+            input_b_memory_config,
+        ) = unpack_binary_traced_config(traced_config_name)
+
     torch.manual_seed(0)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
@@ -560,7 +585,9 @@ def run(
 
     golden_function = ttnn.get_golden_function(ttnn.add)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
-
+    print(f"input_shape: {input_shape}")
+    print(f"input_a_memory_config: {input_a_memory_config}")
+    print(f"input_b_memory_config: {input_b_memory_config}")
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         dtype=input_a_dtype,
