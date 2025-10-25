@@ -318,7 +318,11 @@ static_assert(
     "Special marker 0 not found. This implies some arguments were misaligned between host and device. Double check the "
     "CT args.");
 
-constexpr size_t SKIP_LIVENESS_CHECK_ARG_IDX = SPECIAL_MARKER_0_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+constexpr size_t IS_ELASTIC_SENDER_CHANNEL_ARRAY_IDX = SPECIAL_MARKER_0_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+constexpr std::array<bool, NUM_SENDER_CHANNELS> IS_ELASTIC_SENDER_CHANNEL =
+    fill_array_with_next_n_args<bool, IS_ELASTIC_SENDER_CHANNEL_ARRAY_IDX, NUM_SENDER_CHANNELS>();
+
+constexpr size_t SKIP_LIVENESS_CHECK_ARG_IDX = IS_ELASTIC_SENDER_CHANNEL_ARRAY_IDX + NUM_SENDER_CHANNELS;
 constexpr std::array<bool, NUM_SENDER_CHANNELS> sender_ch_live_check_skip =
     fill_array_with_next_n_args<bool, SKIP_LIVENESS_CHECK_ARG_IDX, NUM_SENDER_CHANNELS>();
 

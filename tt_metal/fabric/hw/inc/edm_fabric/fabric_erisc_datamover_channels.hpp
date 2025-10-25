@@ -462,8 +462,13 @@ struct EdmChannelWorkerInterface {
         static_cast<DERIVED*>(this)->template notify_worker_of_read_counter_update_impl<enable_noc_flush>();
     }
 
+// <<<<<<< HEAD
     FORCE_INLINE void increment_local_read_counter(int32_t inc_val) {
         static_cast<DERIVED*>(this)->increment_read_counter_impl(inc_val);
+// =======
+//     FORCE_INLINE void advance_completion_pointer(int32_t inc_val) {
+//         local_read_counter.counter += inc_val;
+// >>>>>>> cbbe9c392f (checkpoint)
     }
 
     FORCE_INLINE void copy_read_counter_to_worker_location_info() const {
@@ -622,7 +627,15 @@ struct ElasticSenderChannelWorkerInterface : public EdmChannelWorkerInterface<
 
     template <bool enable_deadlock_avoidance>
     FORCE_INLINE void notify_persistent_connection_of_free_space_impl(int32_t inc_val) {
-        // TODO: Issue #26311
+        static_assert(SKIP_CONNECTION_LIVENESS_CHECK || !IS_ELASTIC_SENDER_CHANNEL[sender_channel_index], "Only persistent connections are currently supported in elastic channel mode. See issue ___ for more details.")
+        auto chunks_cleared = elastic_channel.advance_n_completion_credits(acks_since_last_check);
+        if (chunks_cleared) {
+            elastic_channel.release_chunks(chunks_cleared);
+            if (elastic_channel.empty()) {
+                elastic_channel.acquire_new_chunk();
+                elastic_channel.notify_producer_of_new_chunk();
+            }
+        }
     }
 
     template <bool SKIP_CONNECTION_LIVENESS_CHECK>

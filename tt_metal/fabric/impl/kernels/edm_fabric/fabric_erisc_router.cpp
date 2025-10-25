@@ -1567,6 +1567,10 @@ void run_sender_channel_step_impl(
             outbound_to_receiver_channel_pointers,
             remote_receiver_channel,
             perf_telemetry_recorder);
+        if constexpr (IS_ELASTIC_SENDER_CHANNEL[sender_channel_index]) {
+            // This will grab a new chunk if one is available and notify the producers
+            local_sender_channel.advance_to_next_cached_buffer_slot_addr();
+        }
         increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
     }
 
@@ -1576,24 +1580,43 @@ void run_sender_channel_step_impl(
     if (completions_since_last_check) {
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
+        
+        if constexpr (IS_ELASTIC_SENDER_CHANNEL[sender_channel_index]) {
 
+// <<<<<<< HEAD
         if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
             local_sender_channel_worker_interface
                 .template notify_persistent_connection_of_free_space<enable_deadlock_avoidance>(
                     completions_since_last_check);
+// =======
+//             static_assert(SKIP_CONNECTION_LIVENESS_CHECK || !IS_ELASTIC_SENDER_CHANNEL[sender_channel_index], "Only persistent connections are currently supported in elastic channel mode. See issue ___ for more details.")
+//             auto chunks_cleared = elastic_channel.advance_n_completion_credits(acks_since_last_check);
+//             if (chunks_cleared) {
+//                 elastic_channel.release_chunks(chunks_cleared);
+//                 if (elastic_channel.empty()) {
+//                     elastic_channel.acquire_new_chunk();
+//                     elastic_channel.notify_producer_of_new_chunk();
+//                 }
+//             }
+// >>>>>>> cbbe9c392f (checkpoint)
         } else {
-            // Connection liveness checks are only done for connections that are not persistent
-            // For those connections, it's unsafe to use free-slots counters held in stream registers
-            // due to the lack of race avoidant connection protocol. Therefore, we update our read counter
-            // instead because these connections will be read/write counter based instead
-            local_sender_channel_worker_interface.increment_local_read_counter(completions_since_last_check);
-            if (channel_connection_established) {
+            if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
                 local_sender_channel_worker_interface
-                    .template notify_worker_of_read_counter_update<enable_read_counter_update_noc_flush>();
+                    .template update_persistent_connection_copy_of_free_slots<enable_deadlock_avoidance>(
+                        completions_since_last_check);
             } else {
-                local_sender_channel_worker_interface.copy_read_counter_to_worker_location_info();
-                // If not connected, we update the read counter in L1 as well so the next connecting worker
-                // is more likely to see space available as soon as it tries connecting
+                // Connection liveness checks are only done for connections that are not persistent
+                // For those connections, it's unsafe to use free-slots counters held in stream registers
+                // due to the lack of race avoidant connection protocol. Therefore, we update our read counter
+                // instead because these connections will be read/write counter based instead
+                local_sender_channel_worker_interface.increment_local_read_counter(completions_since_last_check);
+                if (channel_connection_established) {
+                    local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
+                } else {
+                    local_sender_channel_worker_interface.copy_read_counter_to_worker_location_info();
+                    // If not connected, we update the read counter in L1 as well so the next connecting worker
+                    // is more likely to see space available as soon as it tries connecting
+                }
             }
         }
     }

@@ -950,6 +950,10 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     ct_args.insert(ct_args.end(), main_args_part2.begin(), main_args_part2.end());
 
     for (size_t i = 0; i < num_sender_channels; i++) {
+        ct_args.push_back(this->is_sender_channel_elastic_array[i]);
+    }
+
+    for (size_t i = 0; i < num_sender_channels; i++) {
         ct_args.push_back(this->sender_channel_connection_liveness_check_disable_array[i]);
     }
 
