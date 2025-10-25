@@ -69,8 +69,7 @@ TEST_F(MeshDeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
 
         program = CreateProgram();
         kernel_handle = CreateKernel(program, kernel_file, CoreCoord(0, 0), config);
-        // Note:  Force JIT compile for this test.  Otherwise it may reuse the binary from previous runs and not update
-        // the timestamp.
+        // Note:  Force JIT compile for this test.  Otherwise it may reuse the binary and not update the timestamp.
         {
             auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
             bool saved = rtoptions.get_force_jit_compile();
