@@ -309,7 +309,7 @@ def test_sd35_transformer2d_model(
     timestep = torch.randn((B,), dtype=torch_dtype)
 
     # Clone inputs for TT model (to avoid in-place modifications)
-    spatial_input_nhwc_tt = spatial_input_nchw.permute(0, 2, 3, 1).clone()
+    spatial_input_nhwc_tt = tt_model.patchify(spatial_input_nchw.permute(0, 2, 3, 1)).clone()
     prompt_input_tt = prompt_input.clone()
     pooled_projections_tt = pooled_projections.clone()
     timestep_tt = timestep.clone()
@@ -324,10 +324,7 @@ def test_sd35_transformer2d_model(
         )
 
     # Convert inputs to TT tensors with proper sharding
-    # Spatial: sharded on sequence dimension (sp_axis) and feature dimension (tp_axis)
-    tt_spatial = bf16_tensor(
-        spatial_input_nhwc_tt, device=submesh_device, mesh_axis=sp_axis, shard_dim=1
-    )  # Sharded on H
+    tt_spatial = bf16_tensor(spatial_input_nhwc_tt, device=submesh_device, mesh_axis=sp_axis, shard_dim=2)
 
     # Prompt: replicated
     prompt_4d = prompt_input_tt.unsqueeze(0)
