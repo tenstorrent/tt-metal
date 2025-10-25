@@ -535,6 +535,7 @@ Result conv2d_DRAM(
                 output_dtype,
                 std::make_optional(input_tensor_on_device.memory_config()),
                 kernel_size,
+                stride,
                 dilation,
                 padding_n4,
                 groups,
@@ -722,6 +723,7 @@ Result conv2d_L1(
             tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
                                                          : std::nullopt,
             kernel_size,
+            stride,
             dilation,
             padding_n4,
             groups,

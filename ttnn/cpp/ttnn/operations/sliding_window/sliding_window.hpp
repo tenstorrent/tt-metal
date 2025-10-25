@@ -58,6 +58,7 @@ struct SlidingWindowConfig {
     bool ceil_mode = false;
     bool is_avg_pool = false;
 
+    bool operator<(const SlidingWindowConfig& other) const;
     std::string to_string() const;
     bool has_parallel_config() const;
     /**
@@ -114,13 +115,15 @@ std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config);
 
 std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& config);
 
-std::vector<ShardBoundary> generate_shard_boundaries(
-    const SlidingWindowConfig& config, const std::vector<uint32_t>& op_trace_metadata);
+std::vector<ShardBoundary> generate_shard_boundaries(const SlidingWindowConfig& config);
 
 std::vector<PixelMetadata> generate_tensor_metadata(
     const std::vector<bool>& pad_metadata, const SlidingWindowConfig& config, uint32_t shard_height);
 
 uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& shard_boundaries);
+
+uint32_t calculate_precise_halo_output_elems(
+    const SlidingWindowConfig& config, const std::array<uint32_t, 2>& shard_shape);
 
 std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplace_halo_kernel_config_tensors(
     const std::vector<PixelMetadata>& tensor_metadata,

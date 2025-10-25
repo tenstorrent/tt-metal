@@ -171,6 +171,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     tt::tt_metal::DataType output_datatype,
     std::optional<const MemoryConfig> input_memory_config,
     const std::array<uint32_t, 2>& kernel_size,
+    const std::array<uint32_t, 2>& stride,
     const std::array<uint32_t, 2>& dilation,
     const std::array<uint32_t, 4>& padding,
     uint32_t groups,
@@ -263,15 +264,6 @@ struct ConvDRAMParamters {
     bool enable_bias;
     bool mm_conv;
 };
-
-uint32_t estimate_halo_output_elems(
-    std::array<uint32_t, 2> halo_input_shard_shape,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> dilation,
-    std::array<uint32_t, 4> padding);
 
 std::pair<Conv2dSliceConfig, Conv2dConfig> determine_conv2d_slice_config(
     std::optional<Conv2dSliceConfig> slice_config, const ConvDRAMParamters& params, MeshDevice* device);
