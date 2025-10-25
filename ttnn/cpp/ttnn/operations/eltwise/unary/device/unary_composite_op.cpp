@@ -542,12 +542,12 @@ Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig
             ttnn::eqz(logit_input, output_mem_config),
             t_inf,
             ttnn::where(
-                ttnn::eq(logit_input, 1.0, std::nullopt, output_mem_config),
+                ttnn::eq(logit_input, 1.0f, std::nullopt, output_mem_config),
                 tt::tt_metal::hal::get_inf(),
                 ttnn::log(log_input, true, output_mem_config)));
     } else {
         logit_result = ttnn::where(
-            ttnn::eq(logit_input, 1.0, std::nullopt, output_mem_config),
+            ttnn::eq(logit_input, 1.0f, std::nullopt, output_mem_config),
             t_inf,
             ttnn::where(
                 ttnn::ltz(log_input, output_mem_config),

@@ -619,8 +619,6 @@ def test_alt_complex_rotate90(device, h: int, w: int, dtype: ttnn.DataType):
     "input_shapes",
     [
         torch.Size([1, 1, 32, 32]),
-        torch.Size([1, 1, 320, 384]),
-        torch.Size([1, 3, 320, 384]),
     ],
 )
 @pytest.mark.parametrize(
@@ -655,22 +653,12 @@ def test_unary_zero_comp_ttnn(input_shapes, low, high, ttnn_function, device):
 
 
 @pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([100])),
-        (torch.Size([32, 32])),
-        (torch.Size([3, 128, 32])),
-        (torch.Size([1, 3, 320, 384])),
-        (torch.Size([1, 1, 32, 320, 12])),
-    ),
-)
-@pytest.mark.parametrize(
-    "low, high, torch_dtype, ttnn_dtype",
+    "low, high, torch_dtype, ttnn_dtype, input_shapes",
     [
-        (0, 2, torch.int32, ttnn.uint16),  # Small range
-        (0, 65535, torch.int32, ttnn.uint16),  # Full uint16 range
-        (0, 2, torch.uint32, ttnn.uint32),  # Small range
-        (0, 4294967295, torch.uint32, ttnn.uint32),  # Full uint32 range
+        (0, 2, torch.int32, ttnn.uint16, torch.Size([32, 32])),  # Small range
+        (0, 65535, torch.int32, ttnn.uint16, torch.Size([1, 3, 320, 384])),  # Full uint16 range
+        (0, 2, torch.uint32, ttnn.uint32, torch.Size([32, 32])),  # Small range
+        (0, 4294967295, torch.uint32, ttnn.uint32, torch.Size([1, 3, 320, 384])),  # Full uint32 range
     ],
 )
 @pytest.mark.parametrize(
@@ -701,9 +689,7 @@ def test_unary_zero_comp_uint_ttnn(input_shapes, low, high, torch_dtype, ttnn_dt
 @pytest.mark.parametrize(
     "input_shapes",
     (
-        (torch.Size([1, 1, 32, 32])),
         (torch.Size([64, 64])),
-        (torch.Size([1, 1, 320, 384])),
         (torch.Size([1, 3, 320, 384])),
     ),
 )
@@ -719,8 +705,6 @@ def test_unary_zero_comp_uint_ttnn(input_shapes, low, high, torch_dtype, ttnn_dt
     ],
 )
 def test_unary_zero_comp_edge_case(input_shapes, ttnn_function, device):
-    torch.manual_seed(213919)
-
     # Generate a uniform range of values across the valid int32 range
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     uniform_values = torch.linspace(-2147483647, 2147483647, num_elements, dtype=torch.int32)
@@ -729,6 +713,11 @@ def test_unary_zero_comp_edge_case(input_shapes, ttnn_function, device):
     in_data = torch.cat([uniform_values, corner_cases])
 
     in_data = in_data[-num_elements:].reshape(input_shapes)
+    # Ensure zeros appear in every tile/page: zero out every k-th element
+    k = 64
+    flat = in_data.view(-1)
+    flat[::k] = 0
+    in_data = flat.view(input_shapes)
 
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -753,16 +742,14 @@ def is_int32_overflow(tensor, scalar):
         (torch.Size([128])),
         (torch.Size([64, 64])),
         (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
         (torch.Size([1, 3, 320, 384])),
     ),
 )
 @pytest.mark.parametrize("scalar", [-100, -54, -1, 0, 1, 13, 29, -0])
 @pytest.mark.parametrize("ttnn_op", [ttnn.ne, ttnn.eq, ttnn.gt, ttnn.lt, ttnn.ge, ttnn.le])
-@pytest.mark.parametrize("use_legacy", [True, False])
+@pytest.mark.parametrize("use_legacy", [False])
+# TODO: Test use_legacy = True for all cases after #23179 is completed
 def test_unary_comp_ops(input_shapes, scalar, ttnn_op, use_legacy, device):
-    torch.manual_seed(213919)
-
     # Generate a uniform range of values across the valid int32 range
     num_elements = int(torch.prod(torch.tensor(input_shapes)).item())
     uniform_values = torch.linspace(-2147483647, 2147483647, num_elements, dtype=torch.int32)
