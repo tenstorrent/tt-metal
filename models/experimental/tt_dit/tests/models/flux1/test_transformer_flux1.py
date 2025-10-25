@@ -204,6 +204,7 @@ def test_transformer(
     spatial_seq_len: int,
     prompt_seq_len: int,
     id: str,
+    model_location_generator,
 ) -> None:
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
 
@@ -211,9 +212,8 @@ def test_transformer(
     tp_factor = tuple(submesh_device.shape)[tp_axis]
 
     # Flux.1 variant "dev" is like "schnell" but with additional guidance parameter.
-    torch_model = reference.FluxTransformer2DModel.from_pretrained(
-        "black-forest-labs/FLUX.1-dev", subfolder="transformer"
-    )
+    model_name = model_location_generator(f"black-forest-labs/FLUX.1-dev", model_subdir="transformer")
+    torch_model = reference.FluxTransformer2DModel.from_pretrained(model_name, subfolder="transformer")
     assert isinstance(torch_model, reference.FluxTransformer2DModel)
     torch_model.eval()
 
