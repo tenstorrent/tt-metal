@@ -192,7 +192,7 @@ def test_vanilla_unet_perf_e2e(
 @pytest.mark.parametrize("num_iterations", [32])
 @pytest.mark.parametrize(
     "batch, input_channels, input_height, input_width, expected_compile_time, expected_throughput_fps",
-    [(1, 3, 480, 640, 30.0, 350)],
+    [(1, 3, 480, 640, 30.0, 360)],
 )
 def test_vanilla_unet_perf_e2e_multi_device(
     num_iterations,
