@@ -29,14 +29,6 @@ TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmar
 
 for out-of-box matmul configurations.
 
-for manually selected matmul configurations, or using:
-
-```bash
-TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf_out_of_box
-```
-
-for out-of-box matmul configurations.
-
 
 ## Design of Experiments
 
