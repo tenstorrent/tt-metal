@@ -71,7 +71,7 @@ def gather_single_test_perf(device, test_passed):
         return opPerfData[0]
 
 
-def _prepare_program_cache_for_comparison(device) -> None:
+def prepare_program_cache_for_comparison(device) -> None:
     num_entries_before = (
         device.num_program_cache_entries() if hasattr(device, "num_program_cache_entries") else "unknown"
     )
@@ -84,7 +84,7 @@ def _prepare_program_cache_for_comparison(device) -> None:
     logger.info(f"Program cache cleared and re-enabled (entries after: {num_entries_after})")
 
 
-def _execute_test_once(test_module, test_vector: dict, device) -> Tuple[bool, Any, Optional[float]]:
+def execute_test(test_module, test_vector: dict, device) -> Tuple[bool, Any, Optional[float]]:
     results = test_module.run(**test_vector, device=device)
     if isinstance(results, list):
         status, message = results[0]
@@ -95,7 +95,7 @@ def _execute_test_once(test_module, test_vector: dict, device) -> Tuple[bool, An
     return status, message, e2e_ms
 
 
-def _simplify_device_perf(perf: Optional[dict]) -> dict:
+def simplify_device_perf(perf: Optional[dict]) -> dict:
     if not perf:
         return {}
     simplified: Dict[str, Any] = {}
@@ -105,14 +105,14 @@ def _simplify_device_perf(perf: Optional[dict]) -> dict:
     return simplified
 
 
-def _run_with_cache_comparison(
+def run_with_cache_comparison(
     test_module, test_vector: dict, device, config: Any
 ) -> Tuple[bool, Any, Dict[str, Optional[float]], Optional[Dict[str, dict]]]:
     # Prepare program cache state
-    _prepare_program_cache_for_comparison(device)
+    prepare_program_cache_for_comparison(device)
 
     # First run (without cache)
-    status_uncached, message_uncached, e2e_uncached_ms = _execute_test_once(test_module, test_vector, device)
+    status_uncached, message_uncached, e2e_uncached_ms = execute_test(test_module, test_vector, device)
 
     device_perf_uncached = None
     if getattr(config, "measure_device_perf", False):
@@ -126,7 +126,7 @@ def _run_with_cache_comparison(
             _os.remove(device_log_path)
 
     # Second run (with cache)
-    status_cached, message_cached, e2e_cached_ms = _execute_test_once(test_module, test_vector, device)
+    status_cached, message_cached, e2e_cached_ms = execute_test(test_module, test_vector, device)
 
     device_perf_cached = None
     if getattr(config, "measure_device_perf", False):
@@ -167,23 +167,23 @@ def _run_with_cache_comparison(
 
         simplified_perf: Dict[str, dict] = {}
         if device_perf_uncached:
-            simplified_perf["uncached"] = _simplify_device_perf(device_perf_uncached)
+            simplified_perf["uncached"] = simplify_device_perf(device_perf_uncached)
         if device_perf_cached:
-            simplified_perf["cached"] = _simplify_device_perf(device_perf_cached)
+            simplified_perf["cached"] = simplify_device_perf(device_perf_cached)
         return status, message, e2e_perf, simplified_perf
     else:
         return status, message, e2e_perf, None
 
 
-def _run_single(
+def run_single(
     test_module, test_vector: dict, device, config: Any
 ) -> Tuple[bool, Any, Optional[float], Optional[dict]]:
-    status, message, e2e_ms = _execute_test_once(test_module, test_vector, device)
+    status, message, e2e_ms = execute_test(test_module, test_vector, device)
 
     if getattr(config, "measure_device_perf", False):
         perf_result = gather_single_test_perf(device, status)
         message = get_updated_message(message, perf_result)
-        simplified_perf = _simplify_device_perf(perf_result)
+        simplified_perf = simplify_device_perf(perf_result)
         return status, message, e2e_ms, simplified_perf
     else:
         return status, message, e2e_ms, None

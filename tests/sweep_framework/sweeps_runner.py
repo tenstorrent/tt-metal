@@ -30,7 +30,7 @@ from framework.sweeps_logger import sweeps_logger as logger
 from framework.vector_source import VectorSourceFactory
 from framework.result_destination import ResultDestinationFactory
 from framework.serialize import deserialize, deserialize_vector_structured
-from sweep_utils.perf_utils import _run_with_cache_comparison, _run_single
+from sweep_utils.perf_utils import run_with_cache_comparison, run_single
 
 
 @dataclass
@@ -310,12 +310,12 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
             test_vector = deserialize_vector_structured(test_vector)
             try:
                 if config.measure_perf_with_cache:
-                    status, message, e2e_perf, device_perf = _run_with_cache_comparison(
+                    status, message, e2e_perf, device_perf = run_with_cache_comparison(
                         test_module, test_vector, device, config
                     )
                     output_queue.put([status, message, e2e_perf, device_perf if config.measure_device_perf else None])
                 else:
-                    status, message, e2e_perf, device_perf = _run_single(test_module, test_vector, device, config)
+                    status, message, e2e_perf, device_perf = run_single(test_module, test_vector, device, config)
                     output_queue.put([status, message, e2e_perf, device_perf if config.measure_device_perf else None])
             except Exception as e:
                 if config.main_proc_verbose:
