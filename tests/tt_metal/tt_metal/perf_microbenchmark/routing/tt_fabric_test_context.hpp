@@ -112,7 +112,10 @@ const std::unordered_map<BandwidthStatistics, std::string> BandwidthStatisticsHe
 
 class TestContext {
 public:
-    void init(std::shared_ptr<TestFixture> fixture, const tt::tt_fabric::fabric_tests::AllocatorPolicies& policies) {
+    void init(
+        std::shared_ptr<TestFixture> fixture,
+        const tt::tt_fabric::fabric_tests::AllocatorPolicies& policies,
+        bool use_dynamic_policies = true) {
         fixture_ = std::move(fixture);
         allocation_policies_ = policies;
 
@@ -122,6 +125,9 @@ public:
         // Create allocator with memory maps
         this->allocator_ = std::make_unique<tt::tt_fabric::fabric_tests::GlobalAllocator>(
             *this->fixture_, *this->fixture_, policies, sender_memory_map_, receiver_memory_map_);
+
+        // Set whether to use dynamic policies
+        this->allocator_->set_use_dynamic_policies(use_dynamic_policies);
     }
 
     uint32_t get_randomized_master_seed() const { return fixture_->get_randomized_master_seed(); }
