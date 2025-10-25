@@ -303,6 +303,8 @@ def device(request, device_params):
     if is_tg_cluster() and not device_id:
         device_id = first_available_tg_device()
 
+    original_default_device = ttnn.GetDefaultDevice()
+
     updated_device_params = get_updated_device_params(device_params)
     device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
     ttnn.SetDefaultDevice(device)
@@ -310,6 +312,9 @@ def device(request, device_params):
     yield device
 
     ttnn.close_device(device)
+
+    if original_default_device:
+        ttnn.SetDefaultDevice(original_default_device)
 
 
 @pytest.fixture(scope="function")
@@ -655,17 +660,13 @@ def clear_compile_cache():
 
 
 @pytest.fixture(autouse=True)
-def reset_default_device(request):
+def reset_default_device():
     import ttnn
 
     device = ttnn.GetDefaultDevice()
     yield
     if device is not None:
         ttnn.SetDefaultDevice(device)
-    elif "device" in request.fixturenames:
-        # if the test used a device, but there was no default device, we need to clear the default device
-        # there is no C++ API to clear the default device, so we are setting it to None
-        ttnn.SetDefaultDevice(None)
 
 
 def get_devices(request):
