@@ -10,7 +10,7 @@
 #include <ttnn/operations/functions.hpp>
 #include "tools/profiler/op_profiler.hpp"
 
-#include <umd/device/tt_cluster_descriptor.h>  // tt_ClusterDescriptor
+#include <umd/device/cluster_descriptor.hpp>  // ClusterDescriptor
 
 namespace tt {
 using namespace constants;
@@ -19,10 +19,19 @@ namespace primary {
 
 void Prod_op::validate(const std::vector<tt::tt_metal::Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    TT_FATAL(input_tensor_a.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operands need to be on device!");
+    TT_FATAL(
+        input_tensor_a.storage_type() == tt::tt_metal::StorageType::DEVICE,
+        "Operands need to be on device! Got storage type: {}",
+        input_tensor_a.storage_type());
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
-    TT_FATAL((input_tensor_a.layout() == tt::tt_metal::Layout::TILE), "Input Layout must be tilized");
-    TT_FATAL(input_tensor_a.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED, "Error");
+    TT_FATAL(
+        (input_tensor_a.layout() == tt::tt_metal::Layout::TILE),
+        "Input Layout must be tilized, got layout: {}",
+        input_tensor_a.layout());
+    TT_FATAL(
+        input_tensor_a.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+        "Memory layout must be INTERLEAVED, got: {}",
+        input_tensor_a.memory_config().memory_layout());
     TT_FATAL(
         input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16,
         "Error - unsupported data type for prod, expected BFLOAT16 but got {}.",

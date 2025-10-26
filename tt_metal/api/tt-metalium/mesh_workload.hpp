@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,7 @@
 
 namespace tt::tt_metal::distributed {
 
+class MeshWorkload;
 class MeshWorkloadImpl;
 
 class MeshCommandQueue;
@@ -29,6 +30,8 @@ public:
     ~MeshWorkload();
     MeshWorkload(MeshWorkload&& other) noexcept;
     MeshWorkload& operator=(MeshWorkload&& other) noexcept;
+    // Requirement: In one MeshWorkload, device ranges for different programs must not share devices; each device can
+    // belong to only one program. Not all devices need a program—leaving some devices unassigned is allowed.
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs();
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const;
@@ -45,7 +48,6 @@ public:
 private:
     std::unique_ptr<MeshWorkloadImpl> pimpl_;
 
-private:
     friend void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
     friend FDMeshCommandQueue;
 };

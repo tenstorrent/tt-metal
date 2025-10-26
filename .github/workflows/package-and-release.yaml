@@ -1,15 +1,28 @@
 name: Package and release
 on:
   workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Dry-run: If true, do not upload tag or draft release."
+        required: false
+        default: false
+        type: boolean
+      release-type:
+        description: "Type of release to create. One of 'dev', 'rc', or 'prod'. If not provided, the type will be inferred from the git ref."
+        required: false
+        default: "dev"
+        type: string
+
   schedule:
-    # Create rc every day at EOD of PST Mon-Fri + night of Sunday to kick off
-    # releases for beginning of work week
+    # Create dev every day at EOD of PST Mon-Fri + night of Sunday to kick off
+    # dev testing and builds for beginning of work week
     - cron: "0 0 * * *"
 
 permissions:
   contents: write
   packages: write
-
+  actions: write
+  id-token: write
 
 # Some explanation:
 # is-release-candidate is always true, unless the workflow is manually dispatched on a tag
@@ -18,125 +31,127 @@ permissions:
 # if we are promoting a release candidate, don't rerun the tests
 
 jobs:
-  get-params:
+  release-precheck:
     runs-on: ubuntu-latest
     outputs:
-      is-release-candidate: ${{ steps.get-is-release-candidate.outputs.is-release-candidate }}
+      is-release-candidate: ${{ steps.get-is-release-candidate-and-tag-type.outputs.is-release-candidate }}
+      tag-type: ${{ steps.get-is-release-candidate-and-tag-type.outputs.tag-type }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Get is-release-candidate
-        id: get-is-release-candidate
+      - name: Set default release-type for cron job
+        id: set-release-type
         run: |
-          # A workflow dispatch on a tag is considered a release run for us.
-          isReleaseCandidate=${{ !(github.ref_type == 'tag' && github.event_name == 'workflow_dispatch') }}
-          echo "is-release-candidate=$isReleaseCandidate" >> "$GITHUB_OUTPUT"
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            echo "Cron job detected, setting default release-type to 'dev'"
+            echo "RELEASE_TYPE=dev" >> "$GITHUB_ENV"
+            echo "Using release-type: dev"
+          else
+            echo "RELEASE_TYPE=${{ inputs.release-type }}" >> "$GITHUB_ENV"
+            echo "Using release-type: ${{ inputs.release-type }}"
+          fi
+      - name: Get is-release-candidate and tag-type
+        id: get-is-release-candidate-and-tag-type
+        run: |
+          if [[ "$RELEASE_TYPE" != "" && "$RELEASE_TYPE" != "null" ]]; then
+            if [[ "$RELEASE_TYPE" != "dev" && "$RELEASE_TYPE" != "rc" && "$RELEASE_TYPE" != "prod" ]]; then
+              echo "Invalid release-type: $RELEASE_TYPE. Must be one of 'dev', 'rc', or 'prod'."
+              exit 1
+            fi
+            echo "Processing release-type: $RELEASE_TYPE"
+            if [[ "$RELEASE_TYPE" == "prod" ]]; then
+              echo "is-release-candidate=false" >> "$GITHUB_OUTPUT"
+              echo "tag-type=" >> "$GITHUB_OUTPUT"
+            elif [[ "$RELEASE_TYPE" == "rc" ]]; then
+              echo "is-release-candidate=true" >> "$GITHUB_OUTPUT"
+              echo "tag-type=rc" >> "$GITHUB_OUTPUT"
+            else
+              echo "is-release-candidate=true" >> "$GITHUB_OUTPUT"
+              echo "tag-type=dev" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "ERROR: RELEASE_TYPE is empty or null - this should not happen!"
+            echo "This indicates a problem with the 'Set default release-type for cron job' step."
+            exit 1
+          fi
+
       - name: Get should-create-release
         id: get-should-create-release
         run: |
           # Run once to check for errors
-          ./scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }}
-          shouldCreateRelease=$(scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }})
+          ./scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate-and-tag-type.outputs.is-release-candidate) && '--release-candidate' || '' }}
+          shouldCreateRelease=$(scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate-and-tag-type.outputs.is-release-candidate) && '--release-candidate' || '' }})
           if [ "$shouldCreateRelease" != "true" ]; then
             echo "should-create-release is false, no release needed. Exiting workflow."
             exit 1
           fi
           echo "should-create-release is true, proceeding with release workflow."
-  build-artifact:
-    needs: create-tag
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      version: 22.04
-      build-wheel: true
-  build-artifact-profiler:
-    needs: create-tag
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      version: 22.04
-      tracy: true
-      build-wheel: true
-  test-wheels:
-    needs: [build-artifact, get-params]
-    if: needs.get-params.outputs.is-release-candidate == 'true'
-    uses: ./.github/workflows/_test-wheels-impl.yaml
-    with:
-      from-precompiled: true
-    secrets: inherit
-  single-card-demos:
-    needs: build-artifact
-    uses: ./.github/workflows/single-card-demo-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      arch: wormhole_b0
-  t3000-demos:
-    needs: [build-artifact, get-params]
-    if: needs.get-params.outputs.is-release-candidate == 'true'
-    uses: ./.github/workflows/t3000-demo-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  t3000-model-perf:
-    needs: [build-artifact, build-artifact-profiler, get-params]
-    if: needs.get-params.outputs.is-release-candidate == 'true'
-    uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      build-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-  galaxy-4u-demos:
-    needs: [build-artifact, get-params]
-    if: needs.get-params.outputs.is-release-candidate == 'true'
-    uses: ./.github/workflows/tg-demo-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  galaxy-6u-demos:
-    needs: [build-artifact, get-params]
-    if: needs.get-params.outputs.is-release-candidate == 'true'
-    uses: ./.github/workflows/tg-demo-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: topology-6u
-  blackhole-demos:
-    needs: [build-artifact, get-params]
-    if: needs.get-params.outputs.is-release-candidate == 'true'
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
-    with:
-      runner-label: BH
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
   create-tag:
-    needs: get-params
+    needs: release-precheck
     uses: ./.github/workflows/release-verify-or-create-tag.yaml
+    secrets: inherit
     with:
       fetch_depth: 0
       bump_each_commit: false
-      release_candidate_suffix: ${{ needs.get-params.outputs.is-release-candidate && fromJSON(needs.get-params.outputs.is-release-candidate) }}
+      # tag-type is now set in release-precheck and passed as output
+      tag-type: ${{ needs.release-precheck.outputs.tag-type }}
+      dry-run: ${{ inputs.dry-run || false }}
+
+
+  build-test-publish:
+    needs: [create-tag, release-precheck]
+    uses: ./.github/workflows/release-build-test-publish.yaml
+    secrets: inherit
+    strategy:
+      matrix:
+        version: [22.04, 24.04]
+    with:
+      version: ${{ matrix.version }}
+      dry-run: ${{ inputs.dry-run || false }}
+      tag-version: ${{ needs.create-tag.outputs.version }}
+      is-release-candidate: ${{ needs.release-precheck.outputs.is-release-candidate }}
+
+  publish-to-pypi:
+    needs: [build-test-publish, create-tag]
+    runs-on: ubuntu-latest
+    if: ${{ github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run }}
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ttnn/
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Download ALL wheels (separate folders)
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          pattern: eager-dist-*
+          path: artifacts
+          merge-multiple: false
+
+      - name: Remove profiler artifacts
+        run: |
+          find artifacts -maxdepth 1 -type d -name '*profiler*' -print -exec rm -rf {} +
+
+      - name: Flatten into dist/
+        run: |
+          mkdir -p dist
+          # copy wheel/sdist files from remaining artifact dirs
+          find artifacts -type f -name '*.whl' -exec cp {} dist/ \;
+          find artifacts -type f -name '*.tar.gz' -exec cp {} dist/ \;
+          ls -l dist
+
+      - name: Publish to PyPI (Trusted Publishing)
+        if: ${{ !inputs.dry-run }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+
+
   create-changelog:
-    needs: create-tag
+    needs: [create-tag]
     permissions: read-all
     runs-on: ubuntu-latest
     steps:
@@ -156,6 +171,7 @@ jobs:
         with:
           name: changelog
           path: CHANGELOG.txt
+
   create-release-notes:
     needs: create-changelog
     permissions: read-all
@@ -164,7 +180,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Download changelog
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: changelog
       - name: Create note about generating pipeline
@@ -185,13 +201,14 @@ jobs:
         with:
           name: release-notes
           path: RELEASE_NOTES.txt
+
   # Candidate for breaking up
   create-and-upload-draft-release:
-    needs: [create-tag, create-release-notes, build-artifact, test-wheels]
+    needs: [create-tag, create-release-notes]
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
-    if: github.ref != 'refs/heads/main'
+    if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -204,16 +221,15 @@ jobs:
       - name: Create VERSION
         run: echo ${{ needs.create-tag.outputs.version }} > VERSION
       - name : Download release notes
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: release-notes
       - name : Download changelog
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: changelog
-      - name: Release
-        # A major release has not been tagged yet, so we need to do this to avoid
-        # Node 16 deprecation warning message
+      - name: Release (skipped for dry run)
+        if: ${{ !inputs.dry-run }}
         uses: softprops/action-gh-release@4634c16e79c963813287e889244c50009e7f0981
         with:
           tag_name: ${{ needs.create-tag.outputs.version }}
@@ -226,53 +242,143 @@ jobs:
             CHANGELOG.txt
             README.md
             INSTALLING.md
-            models/MODEL_UPDATES.md
+            models/docs/MODEL_UPDATES.md
             tt-metalium.tar.gz
           fail_on_unmatched_files: true
-  create-docker-release-image:
-    needs: [
-      build-artifact,
-      create-tag,
-      create-and-upload-draft-release
-    ]
-    uses: ./.github/workflows/publish-release-image.yaml
-    secrets: inherit
-    if: github.ref != 'refs/heads/main'
-    with:
-      base-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      version: ${{ needs.create-tag.outputs.version }}
-      is_major_version:  ${{ needs.get-params.outputs.is-release-candidate !='true' }}
-  release-docs:
-    needs: [
-      build-artifact,
-      get-params,
-      create-tag,
-      create-and-upload-draft-release
-    ]
-    if: ${{ needs.get-params.outputs.is-release-candidate !='true' }}
-    uses: ./.github/workflows/docs-latest-public.yaml
-    with:
-      version: ${{ needs.create-tag.outputs.version }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    secrets: inherit
-  publish-to-pypi:
-    name: >-
-      Publish Python 🐍 distribution 📦 to PyPI
-    needs: [build-artifact, test-wheels]
+
+  check-stable-for-new-commits:
     runs-on: ubuntu-latest
-    if: github.ref != 'refs/heads/main'
-    environment:
-      name: pypi
-      url: https://pypi.org/project/ttnn/
-    permissions:
-      id-token: write  # IMPORTANT: mandatory for trusted publishing
+    #Only run on schedule or main branch pushes
+    if: ${{ github.event_name == 'schedule' || github.ref == 'refs/heads/main' }}
     steps:
-    - name: Download all the dists
-      uses: actions/download-artifact@v4
-      with:
-        name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-        path: dist/
-    - name: Publish distribution 📦 to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Checkout stable branch
+        uses: actions/checkout@v4
+        with:
+          ref: stable
+          fetch-depth: 0
+      - name: Fetch all tags
+        run: git fetch --tags --force origin
+      - name: Get latest release candidate version
+        id: get-latest-release
+        run: |
+          # Get the latest release candidate (pre-release with -rc suffix)
+          # Sort by published_at in descending order to ensure we get the most recent
+          latestRCVersion=$(curl -s https://api.github.com/repos/tenstorrent/tt-metal/releases | jq -r 'sort_by(.published_at) | reverse | .[] | select(.prerelease == true and (.tag_name | contains("-rc"))) | .tag_name' | head -1)
+
+          # Get the latest production release
+          latestProdVersion=$(curl -s https://api.github.com/repos/tenstorrent/tt-metal/releases/latest | jq -r .tag_name)
+
+          echo "Latest RC version: $latestRCVersion"
+          echo "Latest production version: $latestProdVersion"
+
+          # Function to compare semantic versions
+          # Returns: 0 if v1 > v2, 1 if v1 < v2, 2 if v1 == v2
+          compare_versions() {
+            # Remove 'v' prefix and any suffix (like -rc1) for comparison
+            v1=$(echo "$1" | sed 's/^v//' | sed 's/-.*$//')
+            v2=$(echo "$2" | sed 's/^v//' | sed 's/-.*$//')
+
+            # Use sort -V to compare semantic versions
+            [ "$v1" = "$v2" ] && return 2
+            printf '%s\n%s\n' "$v1" "$v2" | sort -V -C 2>/dev/null && return 1 || return 0
+          }
+
+          # Determine which version to use based on release workflow logic
+          if [ -z "$latestRCVersion" ] || [ "$latestRCVersion" = "null" ]; then
+            echo "No release candidate found, using latest production release"
+            latestReleaseVersion="$latestProdVersion"
+          else
+            compare_versions "$latestRCVersion" "$latestProdVersion"
+            comparison_result=$?
+
+            case $comparison_result in
+              2) # Equal versions
+                echo "RC and production versions are equal ($latestRCVersion ≈ $latestProdVersion), using production release"
+                latestReleaseVersion="$latestProdVersion"
+                ;;
+              0) # RC > Production
+                echo "RC version ($latestRCVersion) is newer than production ($latestProdVersion), using RC"
+                latestReleaseVersion="$latestRCVersion"
+                ;;
+              1) # RC < Production
+                echo "Production version ($latestProdVersion) is newer than RC ($latestRCVersion), using production"
+                latestReleaseVersion="$latestProdVersion"
+                ;;
+            esac
+          fi
+
+          echo "Selected version for comparison: $latestReleaseVersion"
+          echo "latest-release-version=$latestReleaseVersion" >> "$GITHUB_OUTPUT"
+      - name: Check for new commits since latest release
+        id: check-new-commits
+        run: |
+          latestReleaseVersion="${{ steps.get-latest-release.outputs.latest-release-version }}"
+          echo "Latest release version: $latestReleaseVersion"
+
+          # Get the commit hash of the latest release tag
+          latestReleaseCommit=$(git rev-list -n 1 "$latestReleaseVersion" 2>/dev/null || echo "")
+
+          if [ -z "$latestReleaseCommit" ]; then
+            echo "Could not find commit for latest release tag: $latestReleaseVersion"
+            echo "Assuming there are new commits to be safe"
+            echo "has-new-commits=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Get the latest commit on stable branch
+          stableLatestCommit=$(git rev-parse HEAD)
+
+          echo "Latest release commit: $latestReleaseCommit"
+          echo "Stable branch latest commit: $stableLatestCommit"
+
+          # Check if there are any commits on stable since the latest release
+          newCommitsCount=$(git rev-list --count "$latestReleaseCommit..HEAD" 2>/dev/null || echo "0")
+          echo "Number of new commits since latest release: $newCommitsCount"
+
+          if [ "$newCommitsCount" -gt 0 ]; then
+            echo "Found $newCommitsCount new commits since latest release"
+            echo "has-new-commits=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No new commits found since latest release"
+            echo "has-new-commits=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Trigger RC release workflow
+        #This is only run if there are new commits on stable
+        if: ${{ steps.check-new-commits.outputs.has-new-commits == 'true' }}
+        uses: benc-uk/workflow-dispatch@v1
+        with:
+          workflow: package-and-release.yaml
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: stable
+          inputs: |
+            {
+              "release-type": "rc",
+              "dry-run": "${{ inputs.dry-run || 'false' }}"
+            }
+      - name: Log no action needed
+        if: ${{ steps.check-new-commits.outputs.has-new-commits == 'false' }}
+        run: |
+          echo "No new commits found since latest release. No RC release needed."
+
+  trigger-prod-after-rc-success:
+    needs: [build-test-publish, release-precheck, create-tag]
+    runs-on: ubuntu-latest
+    # Only trigger if we are on an RC and the RC build-test-publish succeeded
+    if: ${{ needs.release-precheck.outputs.tag-type == 'rc' && success() }}
+    steps:
+      - name: Wait for RC workflow completion
+        run: |
+          echo "RC build-test-publish completed successfully"
+          echo "RC was built on tag: ${{ needs.create-tag.outputs.version }}"
+          echo "Preparing to trigger prod release workflow on the same commit"
+      - name: Trigger prod release workflow on same commit
+        uses: benc-uk/workflow-dispatch@v1
+        with:
+          workflow: package-and-release.yaml
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ needs.create-tag.outputs.version }}
+          inputs: |
+            {
+              "release-type": "prod",
+              "dry-run": "${{ inputs.dry-run || 'false' }}"
+            }

@@ -16,28 +16,28 @@ namespace ttnn::operations::experimental::auto_format {
 
 struct FormatParams {
     ttnn::Shape pad_shape;
-    float pad_value;
-    tt::tt_metal::Layout target_layout;
+    float pad_value{};
+    tt::tt_metal::Layout target_layout{tt::tt_metal::Layout::INVALID};
 };
 
 class AutoFormat {
 private:
-    inline static tt::tt_metal::IDevice* device = nullptr;
+    inline static tt::tt_metal::distributed::MeshDevice* device = nullptr;
 
-    AutoFormat() {}
+    AutoFormat() = default;
 
 public:
     /**
      * Sets the default device to be used for auto-formatting operations
      * @param dev Pointer to the device to be used
      */
-    static void SetDefaultDevice(tt::tt_metal::IDevice* dev);
+    static void SetDefaultDevice(tt::tt_metal::distributed::MeshDevice* dev);
 
     /**
      * Gets the default device used for auto-formatting operations
      * @return Pointer to the default device
      */
-    static tt::tt_metal::IDevice* GetDefaultDevice();
+    static tt::tt_metal::distributed::MeshDevice* GetDefaultDevice();
 
     /**
      * Pads a shape to align with tile dimensions
@@ -74,7 +74,7 @@ public:
      */
     static Tensor move_tensor_to_device_and_pad(
         const Tensor& input,
-        tt::tt_metal::IDevice* device,
+        tt::tt_metal::distributed::MeshDevice* device,
         tt::tt_metal::Layout target_layout,
         std::optional<tt::tt_metal::MemoryConfig> target_mem_config);
 
@@ -87,7 +87,7 @@ public:
      */
     static Tensor move_tensor_to_device(
         const Tensor& input,
-        tt::tt_metal::IDevice* device,
+        tt::tt_metal::distributed::MeshDevice* device,
         const tt::tt_metal::MemoryConfig& mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
     /**
@@ -110,7 +110,7 @@ public:
      */
     static Tensor format_input_tensor(
         const Tensor& input,
-        tt::tt_metal::IDevice* device,
+        tt::tt_metal::distributed::MeshDevice* device,
         const ttnn::Shape& padded_shape,
         float pad_value,
         tt::tt_metal::Layout target_layout,
@@ -128,7 +128,7 @@ public:
     static Tensor format_output_tensor(
         const Tensor& output,
         const ttnn::Shape& shape,
-        tt::tt_metal::IDevice* device,
+        tt::tt_metal::distributed::MeshDevice* device,
         tt::tt_metal::Layout target_layout,
         std::optional<tt::tt_metal::MemoryConfig> target_mem_config = std::nullopt);
 };

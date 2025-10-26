@@ -16,9 +16,12 @@ void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 2, "Error, Input tensor size should be 2 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& buffer_tensor = input_tensors[1];
-    const auto& layout = input_tensors[0].layout();
-    const auto& dtype = input_tensors[0].dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
+    TT_FATAL(
+        (tt::tt_metal::hal::get_arch_name() != "blackhole") ||
+            (input_tensor.memory_config().buffer_type() != BufferType::DRAM),
+        "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
+        "by the fabric api");
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
     TT_FATAL(
         this->ring_size % 2 == 0,
@@ -88,41 +91,22 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
     const ttnn::MeshCoordinate& coord,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    log_debug(tt::LogOp, "DEBUG: create_program is called");
-    const auto mesh_view = this->mesh_device->get_view();
-    std::vector<IDevice*> devices =
-        (this->cluster_axis == 0) ? mesh_view.get_devices_on_column(coord[1]) : mesh_view.get_devices_on_row(coord[0]);
+    log_debug(tt::LogOp, "DEBUG: all_reduce_async create_program at physical coordinate {} is called", coord);
 
-    IDevice* target_device =
-        input_tensors[0].mesh_device() ? input_tensors[0].mesh_device()->get_device(coord) : input_tensors[0].device();
+    uint32_t device_index = ccl::get_linearized_index_from_physical_coord(input_tensors[0], coord, this->cluster_axis);
 
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
-    uint32_t device_index = 0;
-    for (uint32_t i = 0; i < ring_size; ++i) {
-        if (devices.at(i) == target_device) {
-            device_index = i;
-            if (i != 0) {
-                backward_device = devices.at(i - 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices.at(ring_size - 1);
-            }
-            if (i != ring_size - 1) {
-                forward_device = devices.at(i + 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices.at(0);
-            }
-        }
-    }
+    std::optional<MeshCoordinate> forward_coord =
+        ccl::get_physical_neighbor_from_physical_coord(input_tensors[0], coord, 1, this->topology, this->cluster_axis);
+
+    std::optional<MeshCoordinate> backward_coord =
+        ccl::get_physical_neighbor_from_physical_coord(input_tensors[0], coord, -1, this->topology, this->cluster_axis);
 
     auto input_tensor_shape = input_tensors[0].padded_shape();
-    auto input_tensor_buffer_layout = input_tensors[0].buffer()->buffer_layout();
-    auto input_tensor_page_layout = input_tensors[0].layout();
 
     auto input_tensor_memory_config = input_tensors[0].memory_config();
     auto output_tensor_memory_config = output_tensors[0].memory_config();
-    uint32_t input_shard_num_cores = input_tensor_memory_config.shard_spec()->grid.num_cores();
-    uint32_t output_shard_num_cores = output_tensor_memory_config.shard_spec()->grid.num_cores();
+    [[maybe_unused]] uint32_t input_shard_num_cores = input_tensor_memory_config.shard_spec()->grid.num_cores();
+    [[maybe_unused]] uint32_t output_shard_num_cores = output_tensor_memory_config.shard_spec()->grid.num_cores();
 
     log_debug(tt::LogOp, "input_tensor_shape: {}", input_tensor_shape);
     log_debug(tt::LogOp, "input_tensor_memory_config: {}", input_tensor_memory_config);
@@ -142,9 +126,9 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
     return all_reduce_async_minimal_multi_core_with_workers(
         input_tensors[0],
         input_tensors[1],
-        target_device,
-        forward_device,
-        backward_device,
+        coord,
+        forward_coord,
+        backward_coord,
         output_tensors[0],
         this->dtype,
         this->num_links,
@@ -153,7 +137,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
         this->topology,
         this->semaphore,
         this->sub_device_id,
-        this->use_noc1_only);
+        this->use_noc1_only,
+        this->use_optimal_ccl_for_llama);
 }
 
 tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
@@ -168,6 +153,11 @@ tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(const std::ve
         this->output_mem_config,
         this->topology,
         this->cluster_axis,
+        this->sub_device_id.has_value(),
+        this->sub_device_id.has_value()
+            ? input_tensors[0].device()->worker_cores(
+                  tt::tt_metal::HalProgrammableCoreType::TENSIX, this->sub_device_id.value())
+            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         input_shape,
         input_memory_layout,
         input_dtype,
@@ -190,8 +180,9 @@ Tensor all_reduce_async_impl(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    bool use_noc1_only) {
-    const auto mesh_view = mesh_device.get_view();
+    bool use_noc1_only,
+    bool use_optimal_ccl_for_llama) {
+    const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-reduce invoked with cluster_axis API on >2D mesh, which is currently unsupported");
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
@@ -206,6 +197,7 @@ Tensor all_reduce_async_impl(
                    multi_device_global_semaphore,
                    subdevice_id,
                    use_noc1_only,
+                   use_optimal_ccl_for_llama,
                    cluster_axis,
                    &mesh_device},
                {input_tensor, buffer_tensor})
@@ -224,19 +216,21 @@ Tensor all_reduce_async(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    bool use_noc1_only) {
+    bool use_noc1_only,
+    bool use_optimal_ccl_for_llama) {
     return all_reduce_async_impl(
         input_tensor,
         buffer_tensor,
         cluster_axis,
-        *(input_tensor.mesh_device()),
+        *(input_tensor.device()),
         topology,
         multi_device_global_semaphore,
         dtype,
         memory_config,
         num_preferred_links,
         subdevice_id,
-        use_noc1_only);
+        use_noc1_only,
+        use_optimal_ccl_for_llama);
 }
 
 std::vector<Tensor> all_reduce_async(
@@ -250,7 +244,8 @@ std::vector<Tensor> all_reduce_async(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    bool use_noc1_only) {
+    bool use_noc1_only,
+    bool use_optimal_ccl_for_llama) {
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
     for (size_t i = 0; i < input_tensors.size(); ++i) {
@@ -265,7 +260,8 @@ std::vector<Tensor> all_reduce_async(
             memory_config,
             num_preferred_links,
             subdevice_id,
-            use_noc1_only));
+            use_noc1_only,
+            use_optimal_ccl_for_llama));
     }
     return output_tensors;
 }

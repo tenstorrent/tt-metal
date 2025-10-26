@@ -12,14 +12,21 @@ namespace ttnn::operations::data_movement {
 
 struct ShardedToInterleavedDeviceOperation {
     const tt::tt_metal::MemoryConfig output_mem_config;
-    const tt::tt_metal::DataType output_dtype;
+    const tt::tt_metal::DataType output_dtype{};
     const bool is_l1_aligned = false;
 
-    void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
+    void validate_with_output_tensors(
+        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
+    std::vector<ttnn::TensorSpec> compute_output_specs(
+        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
+    std::vector<Tensor> create_output_tensors(
+        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
-
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> create_op_performance_model(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        std::vector<Tensor>& output_tensors) const;
     static constexpr auto attribute_names = std::make_tuple("output_mem_config", "output_dtype");
     auto attribute_values() const {
         return std::make_tuple(std::cref(this->output_mem_config), std::cref(this->output_dtype));

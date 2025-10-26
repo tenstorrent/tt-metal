@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,9 +9,9 @@ import numpy as np
 import ttnn
 
 from loguru import logger
-from models.utility_functions import is_blackhole, torch_random
+from models.common.utility_functions import is_blackhole, torch_random
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
-from models.utility_functions import skip_for_blackhole, run_for_blackhole, skip_for_wormhole_b0
+from models.common.utility_functions import skip_for_blackhole, run_for_blackhole, skip_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -83,8 +83,16 @@ def test_fold_transpose(device):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32, ttnn.int32),
-    ids=["bfloat16", "float", "int32"],
+    (
+        ttnn.bfloat16,
+        ttnn.int32,
+        ttnn.float32,
+    ),
+    ids=[
+        "bfloat16",
+        "int32",
+        "float",
+    ],
 )
 def test_transpose_hc_unit(dtype, device):
     logger.info("transpose on C H dim")
@@ -117,8 +125,16 @@ def test_transpose_wh_bfp4(device):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32, ttnn.int32),
-    ids=["bfloat16", "float", "int32"],
+    (
+        ttnn.bfloat16,
+        ttnn.int32,
+        ttnn.float32,
+    ),
+    ids=[
+        "bfloat16",
+        "int32",
+        "float",
+    ],
 )
 def test_transpose_hc_program_cache(dtype, device):
     N = 3
@@ -147,8 +163,16 @@ def test_transpose_hc_program_cache(dtype, device):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32, ttnn.int32),
-    ids=["bfloat16", "float", "int32"],
+    (
+        ttnn.bfloat16,
+        ttnn.int32,
+        ttnn.float32,
+    ),
+    ids=[
+        "bfloat16",
+        "int32",
+        "float",
+    ],
 )
 def test_transpose_cn_program_cache(dtype, device):
     N = 3
@@ -168,8 +192,18 @@ def test_transpose_cn_program_cache(dtype, device):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, ttnn.int32),
-    ids=["bfloat16", "float", "bfloat8_b", "int32"],
+    (
+        ttnn.bfloat16,
+        ttnn.int32,
+        ttnn.float32,
+        ttnn.bfloat8_b,
+    ),
+    ids=[
+        "bfloat16",
+        "int32",
+        "float",
+        "bfloat8_b",
+    ],
 )
 def test_transpose_wh_program_cache(dtype, device):
     N = 3
@@ -200,8 +234,16 @@ def test_transpose_wh_program_cache(dtype, device):
 @skip_for_blackhole("GH #15234")
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat8_b, ttnn.float32, ttnn.int32),
-    ids=["bfloat8_b", "float", "int32"],
+    (
+        ttnn.bfloat8_b,
+        ttnn.int32,
+        ttnn.float32,
+    ),
+    ids=[
+        "bfloat8_b",
+        "int32",
+        "float",
+    ],
 )
 def test_transpose_wh_sharded_program_cache(dtype, device):
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -634,8 +676,16 @@ def test_transpose_bfloat8_b(device, shape, swap_dims):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32, ttnn.int32),
-    ids=["bfloat16", "float", "int32"],
+    (
+        ttnn.bfloat16,
+        ttnn.int32,
+        ttnn.float32,
+    ),
+    ids=[
+        "bfloat16",
+        "int32",
+        "float",
+    ],
 )
 @pytest.mark.parametrize(
     "shape",
@@ -649,8 +699,16 @@ def test_transpose_hc(dtype, shape, device):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32, ttnn.int32),
-    ids=["bfloat16", "float", "int32"],
+    (
+        ttnn.bfloat16,
+        ttnn.int32,
+        ttnn.float32,
+    ),
+    ids=[
+        "bfloat16",
+        "int32",
+        "float",
+    ],
 )
 @pytest.mark.parametrize(
     "shape",
@@ -674,8 +732,16 @@ def test_transpose_2D(dtype, shape, layout, device):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32, ttnn.int32),
-    ids=["bfloat16", "float", "int32"],
+    (
+        ttnn.bfloat16,
+        ttnn.int32,
+        ttnn.float32,
+    ),
+    ids=[
+        "bfloat16",
+        "int32",
+        "float",
+    ],
 )
 @pytest.mark.parametrize(
     "shape",
@@ -1219,3 +1285,42 @@ def test_transpose_21803(device):
 
         if torch.any(torch.isinf(torch_output)) or (torch.any(torch.isnan(torch_output))):
             assert False, f"Found infinity values at iteration {i} in ttnn but not in pytorch"
+
+
+def test_transpose_29126(device):
+    # Test DRAM sharding, which uses the same code path as DRAM interleaved
+    dram_cores = device.dram_grid_size().x  # WH has 12 dram cores, P150 has 8, P100 has 7
+    dram_weight_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(dram_cores - 1, 0),
+            )
+        }
+    )
+
+    h = 1024 * dram_cores
+    w = 2048
+
+    shard_spec = ttnn.ShardSpec(
+        dram_weight_grid,
+        (ttnn.core.roundup(ttnn.core.divup(h, dram_cores), ttnn.TILE_SIZE), w),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+    torch_input = torch.randn(h, w)
+    torch_output = torch_input.transpose(-1, -2)
+
+    ttnn_input = ttnn.as_tensor(
+        torch_input,
+        dtype=ttnn.float32,
+        device=device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(-1, -2), mesh_shape=(1, 1)),
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=memory_config,
+    )
+    ttnn_output = ttnn.transpose(ttnn_input, -1, -2, memory_config=memory_config)
+    ttnn_output = ttnn.to_torch(ttnn_output.cpu())
+
+    assert_with_pcc(torch_output, ttnn_output, 0.9999)

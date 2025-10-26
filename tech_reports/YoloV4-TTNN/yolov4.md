@@ -128,7 +128,7 @@ The diagram below illustrates that using HEIGHT_SHARDED for the first convolutio
 #### How to generate the graph?
 1. Generate the Performance Sheet:
    - First, build the profiler using the command: ./scripts/build_scripts/build_with_profiler_opt.sh.
-   - Next, execute the command: ./tt_metal/tools/profiler/profile_this.py -n <Folder_name> -c "pytest <path_to_test_file>".
+   - Next, execute the command: ./tools/tracy/profile_this.py -n <Folder_name> -c "pytest <path_to_test_file>".
    - Download the generated CSV file (the file path will be displayed in the terminal).
 2. Access the Analysis Tool:
    - Go throught this [comment](https://github.com/tenstorrent/tt-metal/issues/12468#issuecomment-2341711534).
@@ -190,7 +190,7 @@ class Conv:
         reshard=False,
         deallocate=True,
         height_sharding=True,
-        activation="",
+        activation=None,
         fused_op=True,
         width_sharding=False,
     ) -> None:
@@ -223,7 +223,6 @@ class Conv:
 
     def __call__(self, device, input_tensor):
         conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat16,
             weights_dtype=ttnn.bfloat8_b,
             math_fidelity=ttnn.MathFidelity.LoFi,
             activation=self.activation,
@@ -254,6 +253,7 @@ class Conv:
             input_height=self.input_params[1],
             input_width=self.input_params[2],
             conv_config=conv_config,
+            dtype=ttnn.bfloat16,
         )
         return output_tensor
 ```
@@ -269,7 +269,6 @@ Here are the convolution parameters that can be utilized to enhance the performa
 2. Set the dtype and weight_dtype to `BFLOAT8_b`
 ```py
                 conv_config = ttnn.Conv2dConfig(
-                           dtype=ttnn.bfloat8_b,
                             weights_dtype=ttnn.bfloat8_b,
                             )
 ```

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,14 @@ from sklearn.model_selection import train_test_split
 import ttnn
 
 
-def process_single_image(image_path, mask_path, model, output_dir, model_type="torch_model"):
+def process_single_image(
+    image_path,
+    mask_path,
+    model,
+    output_dir,
+    model_type="torch_model",
+    resolution=256,
+):
     """
     Process a single MRI image and its mask using the segmentation model
     """
@@ -26,7 +33,7 @@ def process_single_image(image_path, mask_path, model, output_dir, model_type="t
 
     # Read and preprocess image
     img = io.imread(image_path)
-    img_resized = cv2.resize(img, (256, 256))
+    img_resized = cv2.resize(img, (resolution, resolution))
 
     # Standardize the image
     img_processed = img_resized.astype(np.float64)
@@ -41,24 +48,17 @@ def process_single_image(image_path, mask_path, model, output_dir, model_type="t
         with torch.no_grad():
             predict = model(X)
     else:
-        # X = torch.from_numpy(X).float()
-
         n, c, h, w = X.shape
-        X = X.permute(0, 2, 3, 1)
-        X = X.reshape(1, 1, h * w * n, c)
-        ttnn_input = ttnn.from_torch(X, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        ttnn_input = ttnn.pad(ttnn_input, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
-
-        predict = model.execute_vgg_unet_trace_2cqs_inference(ttnn_input)
-        predict = ttnn.to_torch(predict)
+        predict = model.run(X)
+        predict = ttnn.to_torch(predict, mesh_composer=model.test_infra.mesh_composer)
         predict = predict.permute(0, 3, 1, 2)
-        predict = predict.reshape(1, 1, 256, 256)
+        predict = predict.reshape(1, 1, resolution, resolution)
         predict = predict.float()
     pred_mask = predict.squeeze().numpy().round()
 
     # Read original mask
     original_mask = io.imread(mask_path)
-    original_mask_resized = cv2.resize(original_mask, (256, 256))
+    original_mask_resized = cv2.resize(original_mask, (resolution, resolution))
 
     # Create visualization
     fig, axs = plt.subplots(1, 5, figsize=(30, 7))
@@ -107,58 +107,67 @@ def pos_neg_diagnosis(mask_path):
         return 0
 
 
-def prediction(test, model, model_type):
-    # empty list to store results
-    mask, image_id, has_mask = [], [], []
+def prediction(test, model, model_type, batch_size=1, resolution=256):
+    from math import ceil
 
-    # itetrating through each image in test data
-    for i in test.image_path:
-        # Creating a empty array of shape 1,256,256,1
-        X = np.empty((1, 256, 256, 3))
-        # read the image
-        img = io.imread(i)
-        # resizing the image and coverting them to array of type float64
-        img = cv2.resize(img, (256, 256))
-        img = np.array(img, dtype=np.float64)
+    # empty lists to store results
+    mask_list, image_id_list, has_mask_list = [], [], []
 
-        # standardising the image
-        img -= img.mean()
-        img /= img.std()
-        # converting the shape of image from 256,256,3 to 1,256,256,3
-        X[0,] = img
+    num_images = len(test.image_path)
+    num_batches = ceil(num_images / batch_size)
+
+    for batch_idx in range(num_batches):
+        start_idx = batch_idx * batch_size
+        end_idx = min((batch_idx + 1) * batch_size, num_images)
+        if (end_idx - start_idx) < batch_size:
+            logger.info(
+                f"Skipping last batch of size {(end_idx - start_idx)} as it is smaller than the specified batch size ({batch_size})."
+            )
+            break
+        batch_paths = test.image_path[start_idx:end_idx]
+
+        # Preallocate batch input array
+        X = np.empty((len(batch_paths), resolution, resolution, 3), dtype=np.float64)
+
+        # Load and preprocess images
+        for j, img_path in enumerate(batch_paths):
+            img = io.imread(img_path)
+            img = cv2.resize(img, (resolution, resolution))
+            img = np.array(img, dtype=np.float64)
+            img -= img.mean()
+            img /= img.std()
+            X[j] = img
+
         if model_type == "torch_model":
-            X = torch.from_numpy(X).permute(0, 3, 1, 2).float()
-            # make prediction of mask
+            X_tensor = torch.from_numpy(X).permute(0, 3, 1, 2).float()
             with torch.no_grad():
-                predict = model(X)
+                predictions = model(X_tensor)
         else:
-            X = torch.from_numpy(X).float()
-            n, h, w, c = X.shape
-            X = X.reshape(1, 1, h * w * n, c)
-            ttnn_input = ttnn.from_torch(X, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-            ttnn_input = ttnn.pad(ttnn_input, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
-            predict = model.execute_vgg_unet_trace_2cqs_inference(ttnn_input)
-            predict = ttnn.to_torch(predict)
-            predict = predict.permute(0, 3, 1, 2)
-            predict = predict.reshape(1, 1, 256, 256)
-            predict = predict.float()
+            X_tensor = torch.from_numpy(X).permute(0, 3, 1, 2).float()
+            predictions = model.run(X_tensor)
+            predictions = ttnn.to_torch(predictions, mesh_composer=model.test_infra.mesh_composer)
+            predictions = predictions.permute(0, 3, 1, 2)
+            predictions = predictions.reshape(batch_size, 1, resolution, resolution).float()
 
-        predict = predict.squeeze().numpy()
-        # if sum of predicted mask is 0 then there is not tumour
-        if predict.round().astype(int).sum() == 0:
-            image_id.append(i)
-            has_mask.append(0)
-            mask.append("No mask :)")
-        else:
-            # if the sum of pixel values are more than 0, then there is tumour
-            image_id.append(i)
-            has_mask.append(1)
-            mask.append(predict)
+        predictions_np = predictions.squeeze().numpy()
 
-    return pd.DataFrame({"image_path": image_id, "predicted_mask": mask, "has_mask": has_mask})
+        if batch_size == 1:
+            predictions_np = [predictions_np]  # Ensure it's iterable for bs=1
+
+        for idx_in_batch, pred_mask in enumerate(predictions_np):
+            img_path = batch_paths.iloc[idx_in_batch]
+            if pred_mask.round().astype(int).sum() == 0:
+                has_mask_list.append(0)
+                mask_list.append("No mask :)")
+            else:
+                has_mask_list.append(1)
+                mask_list.append(pred_mask)
+            image_id_list.append(img_path)
+
+    return pd.DataFrame({"image_path": image_id_list, "predicted_mask": mask_list, "has_mask": has_mask_list})
 
 
-def preprocess(path):
+def preprocess(path, mode="default", max_samples=None):
     base_path = path
     relative_path = "lgg-mri-segmentation/kaggle_3m/"
 
@@ -172,7 +181,7 @@ def preprocess(path):
                 image_path = sub_dir_path + "/" + filename
                 data_map.extend([dir_name, image_path])
         except Exception as e:
-            print(e)
+            logger.info(e)
 
     df = pd.DataFrame({"patient_id": data_map[::2], "path": data_map[1::2]})
     df_imgs = df[~df["path"].str.contains("mask")]  # if have not mask
@@ -226,18 +235,24 @@ def preprocess(path):
     brain_df_train["mask"] = brain_df_train["mask"].apply(lambda x: str(x))
     brain_df_train.info()
 
-    brain_df_mask = brain_df[brain_df["mask"] == 1]
+    brain_df_mask = brain_df[brain_df["mask"] == 1].reset_index(drop=True)
     brain_df_mask.shape
 
-    X_train, X_val = train_test_split(brain_df_mask, test_size=0.15)
-    X_test, X_val = train_test_split(X_val, test_size=0.5)
+    if mode == "eval":
+        if max_samples is not None:
+            return brain_df_mask.iloc[:max_samples]
+        return brain_df_mask
+    else:
+        X_train, x_val = train_test_split(brain_df_mask, test_size=0.15)
+        x_test, x_val = train_test_split(x_val, test_size=0.5)
+        if max_samples is not None:
+            return x_test.iloc[:max_samples]
+        return x_test
 
-    return X_test
 
-
-def postprocess(df_pred, X_test, model_type):
+def postprocess(df_pred, x_test, model_type):
     # merging original and prediction df
-    df_pred = X_test.merge(df_pred, on="image_path")
+    df_pred = x_test.merge(df_pred, on="image_path")
     df_pred.head(10)
 
     # Define the output folder

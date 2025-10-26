@@ -9,6 +9,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::full_like {
@@ -51,7 +52,6 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
     auto input = tensor_args.input;
     auto fill_value = operation_attributes.fill_value;
     DataType dtype{operation_attributes.dtype};
-    Layout layout{operation_attributes.layout};
     IDevice* device = input.device();
     MemoryConfig memory_config{operation_attributes.memory_config};
 
@@ -60,10 +60,9 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
     Program program{};
 
     auto data_format = datatype_to_dataformat_converter(dtype);
-    uint32_t single_tile_size = TileSize(data_format);
+    uint32_t single_tile_size = tt::tile_size(data_format);
 
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const uint32_t num_cores_x = compute_with_storage_grid_size.x;
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
@@ -73,8 +72,8 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
 
     auto cb_value_config = tt::tt_metal::CircularBufferConfig(single_tile_size, {{cb_fill_value_id, data_format}})
                                .set_page_size(cb_fill_value_id, single_tile_size);
-    auto cb_fill_value = CreateCircularBuffer(program, all_cores, cb_value_config);
-    std::map<string, string> writer_defines;
+    CreateCircularBuffer(program, all_cores, cb_value_config);
+    std::map<std::string, std::string> writer_defines;
 
     switch (dtype) {
         case DataType::BFLOAT16: writer_defines["OUTPUT_DTYPE_BFLOAT16"] = "1"; break;
@@ -94,7 +93,8 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
         }
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)cb_fill_value_id};
+    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)cb_fill_value_id, TILE_HW, single_tile_size};
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     auto writer_id = CreateKernel(
         program,

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,14 +8,15 @@
 #include <memory>
 #include <random>
 
+#include "core/distributed/ccl_resources.hpp"
+#include "core/distributed/socket_manager.hpp"
 #include "core/mesh_device.hpp"
+#include "core/tt_profiler.hpp"
 #include "graph.hpp"
 
 namespace ttml::autograd {
 
 enum class GradMode { ENABLED, DISABLED };
-
-using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
 
 class AutoContext {
 public:
@@ -44,7 +45,8 @@ public:
 
     ~AutoContext() = default;  // to make it work with unique_ptr.
 
-    ttnn::distributed::MeshDevice& get_device();
+    [[nodiscard]] ttnn::distributed::MeshDevice& get_device();
+    [[nodiscard]] std::shared_ptr<ttnn::distributed::MeshDevice> get_device_ptr();
 
     [[nodiscard]] tt::tt_metal::distributed::MeshShape get_mesh_shape() const;
 
@@ -56,7 +58,16 @@ public:
 
     void initialize_distributed_context(int argc, char** argv);
 
-    [[nodiscard]] DistributedContext& get_distributed_context() const;
+    [[nodiscard]] std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> get_distributed_context()
+        const;
+
+    core::TTProfiler& get_profiler();
+    void close_profiler();
+
+    [[nodiscard]] core::distributed::CCLResources& get_ccl_resources();
+
+    void initialize_socket_manager(ttnn::distributed::SocketType socket_type);
+    [[nodiscard]] core::distributed::SocketManager& get_socket_manager();
 
 private:
     AutoContext();
@@ -69,7 +80,12 @@ private:
     tt::tt_metal::distributed::MeshShape m_mesh_shape = tt::tt_metal::distributed::MeshShape(1, 1);
     std::unique_ptr<core::MeshDevice> m_device;
 
-    std::shared_ptr<DistributedContext> m_distributed_context;
+    std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> m_distributed_context;
+    std::unique_ptr<core::TTProfiler> m_profiler;
+
+    std::unique_ptr<core::distributed::CCLResources> m_ccl_resources;
+
+    std::unique_ptr<core::distributed::SocketManager> m_socket_manager;
 
     friend class ttsl::Indestructible<AutoContext>;
 };

@@ -1,7 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <cstdint>
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "dataflow_api.h"
 #include "socket_api.h"
 
@@ -22,9 +23,7 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
-    constexpr uint32_t fabric_packet_header_cb_id = 0;
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr =
-        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
+    auto* socket_packet_header_addr = PacketHeaderPool::allocate_header();
 
     uint32_t worker_config_addr = get_write_ptr(config_cb_id);
     uint64_t worker_config_mcast_noc_addr = get_noc_multicast_addr(

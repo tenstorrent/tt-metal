@@ -12,21 +12,21 @@ void kernel_main() {
     uint32_t num_cols = get_arg_val<uint32_t>(3);  // number of cols to read
     uint32_t mask_h = get_arg_val<uint32_t>(4);
 
-    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t Ht = get_compile_time_arg_val(1);
-    constexpr uint32_t Wt = get_compile_time_arg_val(2);
-    constexpr uint32_t HtWt = get_compile_time_arg_val(3);
+    constexpr uint32_t Ht = get_compile_time_arg_val(0);
+    constexpr uint32_t Wt = get_compile_time_arg_val(1);
+    constexpr uint32_t HtWt = get_compile_time_arg_val(2);
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    const DataFormat data_format = get_dataformat(cb_id_in0);
+
+    constexpr auto src_args = TensorAccessorArgs<3>();
 
 #ifdef REDUCE_SCALER
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
-    constexpr uint32_t scaler = get_compile_time_arg_val(4);
+    constexpr uint32_t scaler = get_compile_time_arg_val(src_args.next_compile_time_args_offset());
     cb_reserve_back(cb_id_in2, 1);
     constexpr uint32_t num_zeros_reads = 2048 / MEM_ZEROS_SIZE;
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
@@ -57,8 +57,7 @@ void kernel_main() {
     generate_mask_h(cb_id_mask_h, mask_h);
 #endif
 
-    const InterleavedAddrGenFast<src_is_dram> s = {
-        .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
 
     uint32_t w = curr_col_in_batch;
 

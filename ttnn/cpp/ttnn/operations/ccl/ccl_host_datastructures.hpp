@@ -9,7 +9,7 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/distributed/types.hpp"
-#include <limits>
+#include <string>
 
 namespace ttnn {
 namespace ccl {
@@ -56,7 +56,7 @@ public:
     bool get_shard_grid_size() const;
     Tensor const& get_input_tensor(std::size_t i) const;
     Tensor const& get_output_tensor(std::size_t i) const;
-    std::map<string, string> emit_worker_defines() const;
+    std::map<std::string, std::string> emit_worker_defines() const;
 
 private:
     uint32_t page_size;
@@ -95,7 +95,7 @@ private:
         uint32_t num_eth_messages_to_forward;
         uint32_t channel;
         uint32_t largest_message_size_bytes;
-        uint32_t num_buffers;
+        uint32_t num_buffers{};
         bool is_sender;
     };
 
@@ -129,7 +129,7 @@ private:
     uint32_t num_senders;
     uint32_t num_receivers;
     std::size_t num_buffers_per_channel;
-    chip_id_t chip_id;
+    tt::ChipId chip_id;
 
     bool enable_sender;
     bool enable_receiver;
@@ -144,12 +144,12 @@ public:
     EriscDatamoverBuilder(
         uint32_t eth_buffer_size,
         uint32_t handshake_addr,
-        std::vector<uint32_t> const& local_semaphore_addresses,
-        std::vector<uint32_t> const& local_buffer_addresses,
+        const std::vector<uint32_t>& local_semaphore_addresses,
+        const std::vector<uint32_t>& local_buffer_addresses,
         ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
         ccl::EriscDataMoverTerminationMode termination_mode = ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED,
         std::size_t num_buffers_per_channel = 1,
-        chip_id_t chip_id = -1) :
+        tt::ChipId chip_id = -1) :
         local_semaphore_addresses(local_semaphore_addresses),
         local_buffer_addresses(local_buffer_addresses),
         eth_buffer_size_bytes(eth_buffer_size),
@@ -268,7 +268,7 @@ public:
     [[nodiscard]]
     std::vector<uint32_t> get_runtime_args() const {
         std::vector<uint32_t> args;
-        uint32_t size = 3 + active_channels.size() * 6;
+        uint32_t size = 3 + (active_channels.size() * 6);
         for (auto const& channel : active_channels) {
             size += channel.worker_coords.size();
         }
@@ -277,7 +277,7 @@ public:
         // Handshake address
         args.push_back(handshake_addr);
 
-        bool senders_below_receivers = active_channels.size() == 0 || this->active_channels.front().is_sender;
+        bool senders_below_receivers = active_channels.empty() || this->active_channels.front().is_sender;
 
         // Receiver channel args
         uint32_t receiver_channels_offset = senders_below_receivers ? this->num_senders : 0;
@@ -305,7 +305,7 @@ public:
     void dump_to_log() const {
         auto const rt_args = this->get_runtime_args();
         log_trace(tt::LogOp, "EDM RT Args:");
-        for (auto const& arg : rt_args) {
+        for ([[maybe_unused]] const auto& arg : rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
     };

@@ -9,6 +9,7 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_unary/exp.h"
 #include "compute_kernel_api/eltwise_unary/recip.h"
+#include "compute_kernel_api/eltwise_unary/comp.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/bcast.h"

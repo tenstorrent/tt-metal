@@ -23,6 +23,9 @@ tt::tt_metal::operation::ProgramWithCallbacks sdpa_multi_core(
     std::size_t q_chunk_size,
     std::size_t k_chunk_size,
     DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<SDPAProgramConfig> program_config);
+    std::optional<SDPAProgramConfig> program_config,
+    bool use_mla,
+    uint32_t head_dim_v = 0,
+    std::optional<uint32_t> sliding_window_size = std::nullopt);
 
 }  // namespace ttnn::operations::transformer::detail

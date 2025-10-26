@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/constants.hpp>
 #include "slice_write_op.hpp"
 #include "slice_write_program_factory.hpp"
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 using namespace tt::tt_metal;
@@ -15,7 +15,6 @@ namespace ttnn::operations::experimental {
 void SliceWriteDeviceOperation::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     using namespace tt::constants;
-    const bool has_step = std::any_of(this->step.cbegin(), this->step.cend(), [](uint32_t s) { return s != 1; });
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& output_tensor = output_tensors.at(0).value();
     const auto output_padded_shape = output_tensor.padded_shape();
@@ -50,13 +49,11 @@ void SliceWriteDeviceOperation::validate_with_output_tensors(
             this->slice_start[i],
             this->slice_end[i]);
     }
+    // If the input tensor is sharded, then rank should be 4
     TT_FATAL(
-        this->slice_start[-1] == 0,
-        "Slice write doesn't support slicing along the last dimension. Slice start [-1] should be 0");
-    TT_FATAL(
-        this->slice_end[-1] == output_padded_shape[-1],
-        "Slice write doesn't support slicing along the last dimension. Slice end [-1] should be equal to output shape "
-        "[-1]");
+        !input_tensor_a.is_sharded() || input_tensor_a.padded_shape().rank() == 4,
+        "Sharded input tensor should be of rank 4. Got {}",
+        input_tensor_a.padded_shape().rank());
 }
 
 std::vector<ttnn::Tensor> SliceWriteDeviceOperation::create_output_tensors(

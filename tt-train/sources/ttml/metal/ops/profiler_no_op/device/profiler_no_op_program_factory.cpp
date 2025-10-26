@@ -1,10 +1,12 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "profiler_no_op_program_factory.hpp"
 
 #include <core/ttnn_all_includes.hpp>
+#include <enchantum/enchantum.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/ops/common/program_utils.hpp"
 #include "profiler_no_op_device_operation_types.hpp"
@@ -38,50 +40,6 @@ struct CrossEntropyBackwardKernels {
     tt::tt_metal::KernelHandle reader;
     tt::tt_metal::KernelHandle writer;
 };
-
-/**
- *   Create and configure a circular buffer, returning both the configuration and the handle.
- */
-tt::tt_metal::CBHandle create_circular_buffer(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    uint32_t cb_index,
-    tt::DataFormat data_format,
-    uint32_t single_tile_size,
-    uint32_t num_tiles) {
-    tt::tt_metal::CircularBufferConfig cb_config =
-        tt::tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{cb_index, data_format}})
-            .set_page_size(cb_index, single_tile_size);
-
-    auto cb_handle = CreateCircularBuffer(program, core_ranges, cb_config);
-    return cb_handle;
-}
-
-/**
- *   Create a reader kernel with the given compile-time arguments.
- */
-tt::tt_metal::KernelHandle create_reader_kernel(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    const std::vector<uint32_t>& compile_time_args,
-    const std::map<std::string, std::string>& defines,
-    const std::string& kernel_path) {
-    return tt::tt_metal::CreateKernel(
-        program, kernel_path, core_ranges, tt::tt_metal::ReaderDataMovementConfig(compile_time_args, defines));
-}
-
-/**
- *   Create a writer kernel with the given compile-time arguments.
- */
-tt::tt_metal::KernelHandle create_writer_kernel(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    const std::vector<uint32_t>& compile_time_args,
-    const std::map<std::string, std::string>& defines,
-    const std::string& kernel_path) {
-    return tt::tt_metal::CreateKernel(
-        program, kernel_path, core_ranges, tt::tt_metal::WriterDataMovementConfig(compile_time_args, defines));
-}
 
 /**
  * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
@@ -137,23 +95,19 @@ ProfilerNoopProgramFactory::cached_program_t ProfilerNoopProgramFactory::create(
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.dtype());
     TT_FATAL(input_data_format == tt::DataFormat::Float16_b, "Input data format must be Float16_b");
 
-    uint32_t bfloat16_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
+    uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
 
-    auto padded_tensor_shape = input.padded_shape();
-    auto padded_tensor_volume = input.physical_volume();
+    auto tensor_shape = input.logical_shape();
+    TT_FATAL(tensor_shape.rank() == 4U, "Input tensor must be 4D");
 
-    TT_FATAL(
-        padded_tensor_volume % tt::constants::TILE_HW == 0, "Padded input tensor volume must be divisible by TILE_HW");
-    TT_FATAL(padded_tensor_shape.rank() == 4U, "Input tensor must be 4D");
-
-    uint32_t Wt = padded_tensor_shape[-1] / tt::constants::TILE_WIDTH;  // <- number of tiles in inner dimension
-    uint32_t Ht = padded_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
-    uint32_t NC = padded_tensor_shape[0] * padded_tensor_shape[1];
+    uint32_t Wt = (tensor_shape[-1] + tt::constants::TILE_WIDTH - 1U) /
+                  tt::constants::TILE_WIDTH;  // <- number of tiles in inner dimension
+    uint32_t Ht = (tensor_shape[-2] + tt::constants::TILE_HEIGHT - 1U) / tt::constants::TILE_HEIGHT;
+    uint32_t NC = tensor_shape[0] * tensor_shape[1];
     uint32_t total_rows_to_process = NC * Ht;
 
     // get number of free cores
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // compile arguments
@@ -169,7 +123,7 @@ ProfilerNoopProgramFactory::cached_program_t ProfilerNoopProgramFactory::create(
     const uint32_t twice_block_size = 2U * block_size;
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
 
-    auto cb_dataflow = create_circular_buffer(
+    [[maybe_unused]] auto cb_dataflow = create_circular_buffer(
         program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
 
     // -------------------------------------------------------------------------
@@ -180,28 +134,29 @@ ProfilerNoopProgramFactory::cached_program_t ProfilerNoopProgramFactory::create(
     TT_FATAL(
         input_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Input buffer must be in DRAM. Input buffer of type {}",
-        magic_enum::enum_name(input_buffer->buffer_type()));
+        enchantum::to_string(input_buffer->buffer_type()));
 
     auto* output_buffer = output.buffer();
     TT_FATAL(
         output_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Output buffer must be in DRAM. Output buffer of type {}",
-        magic_enum::enum_name(output_buffer->buffer_type()));
+        enchantum::to_string(output_buffer->buffer_type()));
 
     // configure defines
     std::map<std::string, std::string> defines;
 
     CrossEntropyBackwardKernels kernels;
-    kernels.reader = create_reader_kernel(
-        program,
-        all_cores,
-        /* reader_compile_args */
-        {block_size, Wt},
-        defines,
-        kReaderKernelPath);
+    {
+        std::vector<uint32_t> reader_compile_time_args{block_size, Wt};
+        tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
+        kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
+    }
 
-    kernels.writer = create_writer_kernel(
-        program, all_cores, /* writer_compile_args */ {block_size, Wt}, defines, kWriterKernelPath);
+    {
+        std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
+        tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
+        kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
+    }
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for profiler_no_op
@@ -248,8 +203,6 @@ void ProfilerNoopProgramFactory::override_runtime_arguments(
     auto& shared_variables = cached_program.shared_variables;
     auto& profiler_no_op_reader_kernel_id = shared_variables.reader_kernel_id;
     auto& profiler_no_op_writer_kernel_id = shared_variables.writer_kernel_id;
-    auto& core_group_1 = shared_variables.core_group_1;
-    auto& core_group_2 = shared_variables.core_group_2;
 
     uint32_t num_cores = shared_variables.num_cores;
     uint32_t num_cores_y = shared_variables.num_cores_y;

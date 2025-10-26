@@ -12,9 +12,9 @@ from loguru import logger
 from transformers import BloomConfig, BloomForCausalLM, BloomTokenizerFast
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from models import generation_utils
+from models.common import generation_utils
+from models.common.utility_functions import disable_persistent_kernel_cache, profiler
 from models.demos.grayskull.functional_bloom.tt import ttnn_functional_bloom, ttnn_optimized_functional_bloom
-from models.utility_functions import disable_persistent_kernel_cache, profiler
 
 
 def generate_next_token(

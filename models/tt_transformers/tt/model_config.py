@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import json
 import math
 import os
@@ -13,27 +14,29 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.tt_transformers.tt.common import (
     calculate_hidden_dim,
     encode_prompt_hf,
     encode_prompt_instruct,
-    freqs_to_rotation_matrix,
     get_base_model_name,
     get_out_subblock_w,
     nearest_multiple,
     num_to_core_range_set,
-    precompute_freqs,
+    rope_scaling_model_factory,
 )
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
+    convert_hf_to_meta_mllama,
     convert_meta_to_hf,
+    convert_vision_hf_to_meta,
     load_hf_state_dict,
     load_meta_state_dict,
     reverse_permute,
     standardize_hf_keys,
+    standardize_hf_keys_multimodal,
 )
-from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
@@ -69,6 +72,7 @@ class OpGroup(Enum):
     LI_QKV_PREFILL = "li_qkv_prefill"
     LI_O_PREFILL = "li_o_prefill"
     SDPA_PREFILL = "sdpa_prefill"
+    ACCURACY = "accuracy"  # This is a special group for accuracy mode, not an actual operator group
 
 
 class MathFidelitySetting(Enum):
@@ -77,6 +81,7 @@ class MathFidelitySetting(Enum):
     HIFI2_NA = "hifi2na"  # na specified `packer_l1_acc=False` and `fp32_dest_acc_en=False` in compute kernel config
     HIFI2_FP16 = "hifi2fp16"  # fp16 specified `fp32_dest_acc_en=False` in compute kernel config
     HIFI4 = "hifi4"
+    HIFI4_FP32 = "hifi4fp32"
 
 
 class ModelOptimizations:
@@ -97,23 +102,36 @@ class ModelOptimizations:
                 }
             )
         else:
-            if base_model_name.startswith("Llama-3") or base_model_name.startswith("Mistral-7B"):
+            if (
+                base_model_name.startswith("Llama-3")
+                or base_model_name.startswith("Mistral-7B")
+                or base_model_name.startswith("Phi-3-mini")
+                or base_model_name.startswith("phi-4")
+            ):
+                if model_name.startswith("phi-4"):
+                    logger.info(
+                        f"Model {model_name} is running out of DRAM memory for weight fetching under standard accuracy settings, using BFP8 for WQKV"
+                    )
                 logger.info(
-                    f"Llama 3 and Mistral 7B models test insensitive to attention precision, using BFP8 attention and kv-cache with FP16 MLP accumulation even in accuracy mode"
+                    f"Llama 3, Mistral 7B and Phi3-mini models test insensitive to attention precision, using BFP8 attention and kv-cache with FP16 MLP accumulation even in accuracy mode"
                 )
-                inst = cls(
-                    {
-                        "TensorPrecision": {
-                            TensorGroup.WQKV: PrecisionSetting.BFP8,
-                            TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
-                            TensorGroup.WO: PrecisionSetting.BFP8,
-                        },
-                        "OpFidelity": {
-                            OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2_FP16,
-                            OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
-                        },
-                    }
-                )
+                settings = {
+                    "TensorPrecision": {
+                        TensorGroup.WQKV: PrecisionSetting.BFP8,
+                        TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                        TensorGroup.WO: PrecisionSetting.BFP8,
+                    },
+                    "OpFidelity": {
+                        OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2_FP16,
+                        OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
+                    },
+                }
+                if model_name.startswith("Phi-3-mini"):  # TODO: Only do this for N150
+                    logger.info(
+                        f"Model {model_name} is running out of L1 memory under standard accuracy settings, using FP16 accumulate in attention prefill QKV Matmul"
+                    )
+                    settings["OpFidelity"][OpGroup.LI_QKV_PREFILL] = MathFidelitySetting.HIFI2_FP16
+                inst = cls(settings)
             else:
                 inst = cls(
                     {
@@ -163,12 +181,16 @@ class ModelOptimizations:
                 }
             )
         else:
-            inst = cls(
-                {
-                    "TensorPrecision": {TensorGroup.FF1_FF3: PrecisionSetting.BFP4},
-                    "OpFidelity": {OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI},
-                }
-            )
+            settings = {
+                "TensorPrecision": {TensorGroup.FF1_FF3: PrecisionSetting.BFP4},
+                "OpFidelity": {OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI},
+            }
+            if model_name.startswith("Phi-3-mini"):  # TODO: Only do this for N150
+                logger.info(
+                    f"Model {model_name} is running out of L1 memory under standard high-performance settings, using FP16 accumulate in attention prefill QKV Matmul"
+                )
+                settings["OpFidelity"][OpGroup.LI_QKV_PREFILL] = MathFidelitySetting.HIFI2_FP16
+            inst = cls(settings)
         inst.__name__ = "performance"
         return inst
 
@@ -248,6 +270,7 @@ class ModelOptimizations:
                 OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
                 OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
                 OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2,  # FP32 accumulate is important here
+                OpGroup.ACCURACY: MathFidelitySetting.HIFI4_FP32,
             },
         }
 
@@ -398,6 +421,10 @@ class ModelArgs:
         # Decoder
         "DECODE_RESIDUAL",
         "OUTPUT_MM",
+        # MoE
+        "GATE_W_LAYOUT",
+        "GATE_WEIGHTS",
+        "GATE_MM_OUTPUT",
     )
 
     LOCAL_LLAMA_PARAMS = {
@@ -410,8 +437,21 @@ class ModelArgs:
     }
 
     LOCAL_HF_PARAMS = {
+        "Llama-3.1-8B-Instruct": "models/tt_transformers/model_params/Llama-3.1-8B-Instruct",
+        "Llama-3.1-70B-Instruct": "models/tt_transformers/model_params/Llama-3.1-70B-Instruct",
+        "Llama-3.2-1B-Instruct": "models/tt_transformers/model_params/Llama-3.2-1B-Instruct",
+        "Llama-3.2-3B-Instruct": "models/tt_transformers/model_params/Llama-3.2-3B-Instruct",
+        "Llama-3.2-11B-Instruct": "models/tt_transformers/model_params/Llama-3.2-11B-Vision-Instruct",
+        "Llama-3.2-11B-Vision-Instruct": "models/tt_transformers/model_params/Llama-3.2-11B-Vision-Instruct",
+        "Llama-3.2-90B-Instruct": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
+        "Llama-3.2-90B-Vision-Instruct": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
         "Mistral-7B-Instruct-v0.3": "models/tt_transformers/model_params/Mistral-7B-Instruct-v0.3",
+        "Qwen2.5-VL-3B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-3B-Instruct",
+        "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
+        "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
     }
+
+    MAX_QKV_MM_SEQ_LEN = 2048
 
     def __init__(
         self,
@@ -421,6 +461,7 @@ class ModelArgs:
         max_batch_size=1,
         max_seq_len=1024 * 128,
         optimizations=None,
+        cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
@@ -440,10 +481,17 @@ class ModelArgs:
         self.tile_size = 32
         self.is_70b = False
         self.is_90b = False
+        self.fuse_qkv = False
+        self.fuse_mlp = False
+        self.trust_remote_code_hf = False
         self.from_hf_url = False  # updated below if true
         self.prefill_len_cutoff = 512 if is_blackhole() else 1024
         self.dummy_weights = dummy_weights
+        self.cache_hf_flag = cache_hf  # Whether to cache HF model to avoid multiple loads (uses extra memory)
         self.cached_hf_model = None  # Save any HF model object to avoid loading it multiple times for reference methods
+
+        self.rms_norm_add_unit_offset = False
+        self.embed_scale = None
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -465,6 +513,7 @@ class ModelArgs:
         elif HF_MODEL:
             self.CKPT_DIR = HF_MODEL
             self.TOKENIZER_PATH = HF_MODEL
+
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
             else:  # For HF models, always append the device name (e.g. N150/N300/T3K/TG) to the cache path
@@ -500,7 +549,7 @@ class ModelArgs:
 
         self.instruct = instruct
         # If the weights file contain the keyword `instruct` also set self.instruct to true
-        if "instruct" in self.CKPT_DIR.lower():
+        if any(keyword in self.CKPT_DIR.lower() for keyword in ("instruct", "it")):
             self.instruct = True
 
         # Check for supported batches since previous logic that contained the check was removed because it was unused
@@ -511,30 +560,20 @@ class ModelArgs:
         # Load model params
         if HF_MODEL:
             self.checkpoint_type = CheckpointType.HuggingFace
+            if self.base_model_name in ["Phi-3-mini-128k-instruct"]:
+                self.trust_remote_code_hf = True
             self._set_hf_params(self.CKPT_DIR)
         elif not dummy_weights:
             self.checkpoint_type = self.detect_checkpoint_type()
             self._set_model_params(self.CKPT_DIR)
         else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
             self.checkpoint_type = CheckpointType.Meta
-            if "3.2-1B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_1B_PARAMS"
-            elif "3.2-3B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_3B_PARAMS"
-            elif "3.1-8B" in self.CKPT_DIR:
-                local_params = "LLAMA3_1_8B_PARAMS"
-            elif "3.2-11B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_11B_PARAMS"
-            elif "3.1-70B" in self.CKPT_DIR:
-                local_params = "LLAMA3_1_70B_PARAMS"
-            elif "3.2-90B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_90B_PARAMS"
-            else:
+            local_params = self.__get_llama_local_params_name(self.CKPT_DIR)
+            if local_params is None:
                 raise ValueError(
                     f"No local params found for {self.CKPT_DIR}, dummy weights are not supported for this model"
                 )
             self._set_model_params(self.LOCAL_LLAMA_PARAMS[local_params])
-
         # Set the max number of tokens for each prefill chunk based on the model and device
         max_prefill_chunk_size_div1024 = os.getenv("MAX_PREFILL_CHUNK_SIZE")
         if max_prefill_chunk_size_div1024 is None:
@@ -548,9 +587,14 @@ class ModelArgs:
                 "Llama-3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Llama-3.2-90B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
-                "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
+                "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128},
+                "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
+                "Qwen2.5-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
+                "Qwen2.5-VL-72B": {"N150": None, "N300": None, "T3K": 32, "TG": None, "P150x4": None},
+                "DeepSeek-R1-Distill-Qwen-14B": {"N150": 4, "N300": 64, "T3K": 128, "TG": None, "P150x4": None},
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
             }
@@ -571,8 +615,13 @@ class ModelArgs:
             max_prefill_chunk_size_div1024 = int(max_prefill_chunk_size_div1024)
         self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
 
-        if self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B"] and self.device_name == "N150":
+        if (
+            self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-4b"]
+            and self.device_name == "N150"
+        ) or (self.base_model_name in ["Qwen2.5-7B"] and self.device_name == "N300"):
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
+            self.prefill_len_cutoff = 512
+        elif self.base_model_name in ["Mixtral-8x7B"] and self.device_name == "T3K":
             self.prefill_len_cutoff = 512
 
         if callable(optimizations):
@@ -603,12 +652,8 @@ class ModelArgs:
         # Update memory layouts (Tile, except MLP)
         self.model_config.update({f"{key}_TILE": ttnn.TILE_LAYOUT for key in self.OP_KEYS if "LAYOUT" in key})
 
-        self.cos, self.sin = precompute_freqs(
-            self.head_dim, self.max_seq_len * 2, self.rope_theta, self.rope_scaling_factor, self.orig_context_len
-        )  # for prefill
-        self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
-
         self.tokenizer = None if dummy_weights else self.create_tokenizer()
+        self.processor = None if dummy_weights else self.create_processor()
 
         if device is not None:  # Avoid issue with test_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
@@ -651,6 +696,12 @@ class ModelArgs:
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             )
+            self.compute_kernel_config_hifi4_fp32 = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+                dst_full_sync_en=False,
+            )
             self.compute_kernel_config_hifi2_na = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=False,
@@ -663,6 +714,15 @@ class ModelArgs:
                 fp32_dest_acc_en=True,
                 packer_l1_acc=False,
             )
+
+            # Configure data precision and math fidelity for tensors and kernels
+            self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
+            # Mixtral
+            self.model_config["MIXTRAL_PREFILL_MLP_COMPUTE_CONFIG"] = self.compute_kernel_config_lofi
+            self.model_config["MIXTRAL_GATE_MM_OUTPUT_KERNEL_CONFIG"] = self.compute_kernel_config_lofi
+            # end mixtral
+
+            self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
 
             # Create memory config for sharded tensors
             residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
@@ -709,8 +769,10 @@ class ModelArgs:
             # All Gather Matmul for Dense Out (DO)
             # TODO: Is there a better way to decide if fused all gather matmul should be used? And is there a better way to use the flag, instead of passing it into model_config?
             # NOTE: Fused all gather matmul only suppports a core grid of size num_devices x 1
+            # TODO: #26657 (self.num_devices == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG") should be refactored, and investigate if ACTUAL_DEVICE environment variable is still used
             self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] = (
-                self.ccl_topology() == ttnn.Topology.Ring
+                self.num_devices == 8
+                and os.getenv("ACTUAL_DEVICE", "") != "TG"
                 and (self.dim // self.tile_size // self.num_devices) % self.num_devices == 0
                 and self.num_devices > 1
             )
@@ -773,19 +835,38 @@ class ModelArgs:
                 grid_size=mlp2_grid(seq_len),
                 per_core_N=math.ceil(n_w2 / (self.tile_size * dram_shard_grid_width)) if mlp_w_dram_sharded else None,
             )
-
+            self.model_config["PREFILL_MIXTRAL_MLP_W1_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
+                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
+                k=self.dim // self.cluster_shape[0],
+                n=n_w1_w3,
+                grid_size=mlp1_3_grid(min(seq_len, self.prefill_len_cutoff)),
+                per_core_M=math.ceil(min(seq_len, self.prefill_len_cutoff) / self.tile_size / self.cluster_shape[1]),
+                per_core_N=math.ceil(n_w1_w3 / self.tile_size / self.cluster_shape[0]),
+                fused_activation=ttnn.UnaryOpType.SILU,
+            )
+            self.model_config["PREFILL_MIXTRAL_MLP_W3_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
+                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
+                k=self.dim // self.cluster_shape[0],
+                n=n_w1_w3,
+                grid_size=mlp1_3_grid(min(seq_len, self.prefill_len_cutoff)),
+                per_core_M=math.ceil(min(seq_len, self.prefill_len_cutoff) / self.tile_size / self.cluster_shape[1]),
+                per_core_N=math.ceil(n_w1_w3 / self.tile_size / self.cluster_shape[0]),
+            )
             # Attention output is not necessarily the same dimension as the self.dim, e.g. in Mistral
             k_dim = (
                 (self.n_heads * self.head_dim) // self.cluster_shape[0]
                 if self.is_galaxy
                 else (self.n_heads * self.head_dim) // self.num_devices
             )
+            # TODO: #26657 (if self.num_devices == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG") should be refactored, and investigate if ACTUAL_DEVICE environment variable is still used
             n_dim = (
                 self.dim // self.cluster_shape[1]
                 if self.is_galaxy
                 else (
                     1024
-                    if self.ccl_topology() == ttnn.Topology.Ring and 1024 % (self.dim / self.num_devices) == 0
+                    if self.num_devices == 8
+                    and os.getenv("ACTUAL_DEVICE", "") != "TG"
+                    and 1024 % (self.dim / self.num_devices) == 0
                     else self.dim
                 )
             )
@@ -795,7 +876,7 @@ class ModelArgs:
                 m=num_rows(seq_len),
                 k=k_dim,
                 n=n_dim,
-                grid_size=self.find_prefill_grid(num_rows(seq_len), n_dim // self.tile_size),
+                grid_size=self.find_prefill_grid(prefill_rows, k_dim // self.tile_size),
                 in0_block_w=1 if self.is_galaxy else None,
                 fuse_batch=seq_len <= 1024,
                 per_core_N=math.ceil(n_dim / (self.tile_size * dram_shard_grid_width)) if dram_sharded_wo else None,
@@ -838,14 +919,14 @@ class ModelArgs:
             )
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
-            self.MAX_QKV_MM_SEQ_LEN = 2048
             self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=max(
-                    1, 8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8)  # 8 rows
+                    1,
+                    8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8),  # 8 rows
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=math.ceil(
                     self.qkv_size / self.cluster_shape[1] / 32 / dram_shard_grid_width
@@ -856,13 +937,7 @@ class ModelArgs:
             )
 
             assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
-            self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
-                (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
-                ttnn.CoreGrid(y=8, x=8),
-                ttnn.ShardStrategy.HEIGHT,
-                ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
+            self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: self.get_xqkv_prefill_mem_cfg(seq_len)
 
             self.model_config["CREATE_QKV_DECODE_SHARD"] = (
                 ttnn.create_sharded_memory_config(
@@ -1228,7 +1303,10 @@ class ModelArgs:
 
             self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = _get_xattn_kv_prefill_mem_cfg
 
-            self.VISION_MAX_MM_SEQ = nearest_32(self.vision_chunk_ntok)
+            if self.is_multimodal:
+                self.VISION_MAX_MM_SEQ = (
+                    self.vision_chunk_ntok if "gemma-3" in self.base_model_name else nearest_32(self.vision_chunk_ntok)
+                )
 
             # RMS NORM
             self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"] = self.create_sharded_norm_config(attn_input_grid)
@@ -1267,6 +1345,33 @@ class ModelArgs:
             )
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
+    @staticmethod
+    def __get_llama_local_params_name(model_name):
+        if "3.2-1B" in model_name:
+            local_params = "LLAMA3_2_1B_PARAMS"
+        elif "3.2-3B" in model_name:
+            local_params = "LLAMA3_2_3B_PARAMS"
+        elif "3.1-8B" in model_name:
+            local_params = "LLAMA3_1_8B_PARAMS"
+        elif "3.2-11B" in model_name:
+            local_params = "LLAMA3_2_11B_PARAMS"
+        elif "3.1-70B" in model_name:
+            local_params = "LLAMA3_1_70B_PARAMS"
+        elif "3.2-90B" in model_name:
+            local_params = "LLAMA3_2_90B_PARAMS"
+        else:
+            local_params = None
+        return local_params
+
+    def get_xqkv_prefill_mem_cfg(self, seq_len):
+        return ttnn.create_sharded_memory_config(
+            (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
+            ttnn.CoreGrid(y=8, x=8),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
     def is_distributed_norm(self, mode):
         if not self.is_multichip:
             return False
@@ -1277,7 +1382,11 @@ class ModelArgs:
         return False
 
     def ccl_topology(self):
-        if self.num_devices == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG":  # T3K
+        # Use ring on a T3K or 6U galaxy submesh
+        if self.num_devices == 8 and ttnn.cluster.get_cluster_type() in [
+            ttnn.cluster.ClusterType.T3K,
+            ttnn.cluster.ClusterType.GALAXY,
+        ]:
             return ttnn.Topology.Ring
         elif self.num_devices > 1:  # All other multi chip devices
             return ttnn.Topology.Linear
@@ -1356,27 +1465,70 @@ class ModelArgs:
         return xs_1BSH
 
     def _get_text_prefix(self):
-        if "gemma-3" in self.model_name.lower():
-            return "language_model."
-        elif self.is_vision():
+        if self.is_llama_vision():
             return "text_model."
         else:
             return ""
 
+    def _get_vision_prefix(self):
+        return "visual."
+
+    def _get_hidden_activation_type(self, config):
+        activation_map = {
+            "gelu": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0),
+            "gelu_pytorch_tanh": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0),
+            "relu": ttnn.UnaryOpType.RELU,
+            "silu": ttnn.UnaryOpType.SILU,
+            "swish": ttnn.UnaryOpType.SILU,
+        }
+
+        hidden_activation = config.get("hidden_act") or config.get("hidden_activation")
+        if not hidden_activation:
+            # Default to SILU if no activation is specified
+            return ttnn.UnaryOpType.SILU
+
+        hidden_activation = hidden_activation.lower()
+        if hidden_activation not in activation_map:
+            raise NotImplementedError(f"Unsupported activation '{hidden_activation}'")
+
+        return activation_map.get(hidden_activation, ttnn.UnaryOpType.SILU)
+
+    def _set_model_specific_params(self):
+        # Gemma3 specific params
+        is_gemma3 = "gemma-3" in self.base_model_name.lower()
+        if is_gemma3:
+            self.rms_norm_add_unit_offset = True
+
+            self.embed_scale = self.dim**0.5
+
     def _set_params_from_dict(self, config, is_hf=False):
+        eos_token_id = config.get("eos_token_id", None)
+        self.image_token_index = config.get("image_token_index", None)
+
         # Try to get text_config, if it doesn't exist everything is text config
         text_config = config.get("text_config", config)
+        self.eos_token_id = None if isinstance(eos_token_id, int) else eos_token_id
+        layer_types = text_config["layer_types"] if "layer_types" in text_config else None
 
         # Common params with different names between Meta and HF
         self.dim = text_config.get("dim", text_config.get("hidden_size"))
         self.n_heads = text_config.get("n_heads", text_config.get("num_attention_heads"))
         self.n_kv_heads = text_config.get("n_kv_heads", text_config.get("num_key_value_heads"))
         self.n_layers = text_config.get("n_layers", text_config.get("num_hidden_layers"))
+        # multimodal llama additionally adds cross attention layers
+        # they are calculated in HF but not calculated in Meta
+        self.n_layers -= len(text_config.get("cross_attention_layers", ()))
+
+        self.sliding_window_pattern = (
+            [lt == "sliding_attention" for lt in layer_types] if layer_types is not None else [False] * self.n_layers
+        )
+
         self.full_model_n_layers = self.n_layers
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
         self.vocab_size = text_config["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
-        self.head_dim = text_config.get("head_dim", self.dim // self.n_heads)
+        self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
+        self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
         if is_hf:
             self.max_context_len = text_config.get("max_position_embeddings")
         else:
@@ -1389,12 +1541,22 @@ class ModelArgs:
             self.hidden_dim = text_config["intermediate_size"]
             self.ffn_dim_multiplier = None
             self.multiple_of = None
+
+            # temporary solution for using HF_MODEL for LLaMA until llama_model references are removed
+            local_params = self.__get_llama_local_params_name(self.model_name)
+            if local_params in self.LOCAL_LLAMA_PARAMS:
+                params_file = os.path.join(self.LOCAL_LLAMA_PARAMS[local_params], "params.json")
+                if os.path.exists(params_file):
+                    with open(params_file, "r") as f:
+                        params = json.load(f)
+                    self.ffn_dim_multiplier = params["ffn_dim_multiplier"]
+                    self.multiple_of = params["multiple_of"]
         else:
             self.ffn_dim_multiplier = text_config["ffn_dim_multiplier"]
             self.multiple_of = text_config["multiple_of"]
             self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
 
-        if "_name_or_path" in config:
+        if "_name_or_path" in config and config["_name_or_path"]:
             if is_hf:
                 normalized_path = os.path.normpath(config["_name_or_path"])
                 # For HF paths, they might end with `<model_name>/snapshots/<snapshot_id>/`
@@ -1417,6 +1579,8 @@ class ModelArgs:
         if self.num_devices:
             # Default padding cores for each model, 0 if not set here
             default_padded_cores = {
+                "Qwen2.5-VL-72B": 32,
+                "Qwen2.5-VL-32B": 16,
                 "Qwen2.5-72B": 32,
                 "Qwen2.5-7B": 16,
                 "QwQ-32B": 16,
@@ -1436,43 +1600,36 @@ class ModelArgs:
                     )
                     self.hidden_dim = padded_hidden_dim
 
+        self.layer_types = text_config.get("layer_types", None)
+
         # RoPE params
         self.rope_theta = text_config.get("rope_theta")
-        # If use_scaled_rope is not present, assume setting rope_scaling means use scaled rope
-        # If it is present and is set to false, do not use scaled rope
-        # Setting self.rope_scaling_factor to None is our way of saying do not use scaled rope
+        self.rope_theta_local = text_config.get("rope_local_base_freq", None)
+
         rope_scaling_params = text_config.get("rope_scaling", None)
-        if rope_scaling_params:
-            self.rope_scaling_factor = rope_scaling_params.get("factor", None)
-            self.orig_context_len = rope_scaling_params.get("original_max_position_embeddings", self.max_context_len)
-        else:
-            self.rope_scaling_factor = None
-            self.orig_context_len = None
+        self.original_max_context_len = text_config.get("original_max_position_embeddings", None)
+        self.rope_scaling = (
+            rope_scaling_model_factory(rope_scaling_params, original_max_context_len=self.original_max_context_len)
+            if rope_scaling_params
+            else None
+        )
 
-        # Vision params (Meta-specific)
-        self.vision_chunk_size = config.get("vision_chunk_size", -1)
-        self.vision_max_num_chunks = config.get("vision_max_num_chunks", 4)
-        self.vision_num_cross_attention_layers = config.get("vision_num_cross_attention_layers", -1)
+        self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
 
-        # Vision constants
-        self.vision_dim = 1280
-        self.vision_mlp_ratio = 4
-        self.vision_hidden_dim = int(self.vision_dim * self.vision_mlp_ratio)
-        self.vision_act_layer = ttnn.UnaryOpType.GELU
-        self.vision_dropout = 0.0
-        self.vision_attn_n_heads = 16
-        self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
-        self.vision_n_layers = 32
-        self.vision_n_global_layers = 8
-        self.vision_max_num_tiles = 4
-        self.vision_patch_size = 14
-        self.vision_in_channels = 3
+        # Configurable MLP activation type
+        self.mlp_activation_type = self._get_hidden_activation_type(text_config)
+
+        self._set_vision_params(config)
+        self.is_multimodal = "vision_config" in config or self.is_llama_vision()
 
         self.state_dict_text_prefix = self._get_text_prefix()
+        self.state_dict_vision_prefix = self._get_vision_prefix()
+
+        self._set_model_specific_params()
 
     @property
     def use_scaled_rope(self):
-        return self.rope_scaling_factor is not None
+        return self.rope_scaling is not None
 
     @property
     def base_model_name(self):
@@ -1500,8 +1657,9 @@ class ModelArgs:
             params = json.load(f)
         self._set_params_from_dict(params)
 
-        # Meta-style config dicts don't specity model name or rope_scaling_factor so hard-code these
+        # Meta-style config dicts don't specify model name or rope_scaling_factor so hard-code these
         # Set the model name based on the checkpoint directory being loaded
+        self.orig_context_len = 8192
         if "3.2-1B" in checkpoint_dir:
             self.model_name = "Llama-3.2-1B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 32
@@ -1512,6 +1670,8 @@ class ModelArgs:
             self.model_name = "Llama-3.1-8B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
         elif "3.2-11B" in checkpoint_dir:
+            logger.warning(f"-Vision is removed from model_name {self.model_name}")
+            # TODO: do not remove "-Vision" part
             self.model_name = "Llama-3.2-11B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8  # shared with 3.1-8B
         elif "3.1-70B" in checkpoint_dir:
@@ -1519,12 +1679,62 @@ class ModelArgs:
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
         elif "3.2-90B" in checkpoint_dir:
+            logger.warning(f"-Vision is removed from model_name {self.model_name}")
+            # TODO: do not remove "-Vision" part
             self.model_name = "Llama-3.2-90B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
             self.is_90b = True
         else:
+            self.rope_scaling_factor = None
+            self.orig_context_len = None
             logger.warning(f"Unknown Meta-style model: {checkpoint_dir}")
-        self.orig_context_len = 8192
+        self.rope_scaling = (
+            rope_scaling_model_factory(
+                {
+                    "rope_type": "llama3",
+                    "factor": self.rope_scaling_factor,
+                    "original_max_position_embeddings": self.orig_context_len,
+                }
+            )
+            if self.rope_scaling_factor is not None
+            else None
+        )
+
+    def _set_vision_params(self, config):
+        vision_config = config.get("vision_config", config)
+
+        self.vision_chunk_size = vision_config.get("vision_chunk_size", vision_config.get("image_size", -1))
+        self.image_size = vision_config.get("image_size", -1)
+        self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", vision_config.get("max_num_tiles", 4))
+        self.vision_num_cross_attention_layers = vision_config.get(
+            "vision_num_cross_attention_layers", vision_config.get("num_global_layers", -1)
+        )
+        self.vision_dim = vision_config.get("hidden_size", 1280)
+
+        intermediate_size = vision_config.get("intermediate_size", self.vision_dim * 4)
+        self.vision_mlp_ratio = intermediate_size // self.vision_dim
+        self.vision_hidden_dim = int(self.vision_dim * self.vision_mlp_ratio)
+        self.vision_attn_n_heads = vision_config.get("num_attention_heads", 16)
+        self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
+
+        self.vision_n_layers = vision_config.get("num_hidden_layers", 32)
+        self.vision_patch_size = vision_config.get("patch_size", 14)
+        self.vision_in_channels = vision_config.get("num_channels", 3)
+
+        self.vision_dropout = vision_config.get("attention_dropout", 0.0)
+        self.mm_tokens_per_image = vision_config.get("mm_tokens_per_image", config.get("mm_tokens_per_image", 256))
+
+        # Optional vision activation layer, defaults to GELU
+        act_layer = vision_config.get("act_layer", "gelu").lower()
+        self.vision_act_layer = {
+            "gelu": ttnn.UnaryOpType.GELU,
+            "relu": ttnn.UnaryOpType.RELU,
+            "silu": ttnn.UnaryOpType.SILU,
+        }.get(act_layer, ttnn.UnaryOpType.GELU)
+
+        # Optional tuning knobs
+        self.vision_max_num_tiles = vision_config.get("max_num_tiles", 4)
+        self.vision_n_global_layers = vision_config.get("n_global_layers", vision_config.get("num_global_layers", 8))
 
     def _set_hf_params(self, checkpoint_dir):
         if self.from_hf_url:
@@ -1534,16 +1744,62 @@ class ModelArgs:
                 logger.info(
                     f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}"
                 )
-                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name]).to_dict()
+                self.hf_config = AutoConfig.from_pretrained(
+                    self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
+                )
             else:
-                config = AutoConfig.from_pretrained(self.CKPT_DIR).to_dict()
+                self.hf_config = AutoConfig.from_pretrained(
+                    self.CKPT_DIR,
+                    trust_remote_code=self.trust_remote_code_hf,
+                    local_files_only=os.getenv("CI") == "true",
+                )
 
+            config = self.hf_config.to_dict()
         else:
             config_file = os.path.join(checkpoint_dir, "config.json")
             assert os.path.exists(config_file), f"config.json file not found at {config_file}"
             with open(config_file, "r") as f:
                 config = json.load(f)
         self._set_params_from_dict(config, is_hf=True)
+
+        # compatibility with _set_params
+        if "llama" in self.model_name.lower():
+            self.orig_context_len = 8192
+            if "3.2-1B" in checkpoint_dir:
+                self.rope_scaling_factor = 32
+            elif "3.2-3B" in checkpoint_dir:
+                self.rope_scaling_factor = 32
+            elif "3.1-8B" in checkpoint_dir:
+                self.rope_scaling_factor = 8
+            elif "3.2-11B" in checkpoint_dir:
+                logger.warning(f"-Vision is removed from model_name {self.model_name}")
+                # TODO: do not remove "-Vision" part
+                self.model_name = "Llama-3.2-11B" + ("-Instruct" if self.instruct else "")
+                self.rope_scaling_factor = 8  # shared with 3.1-8B
+            elif "3.1-70B" in checkpoint_dir:
+                self.rope_scaling_factor = 8
+                self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
+            elif "3.2-90B" in checkpoint_dir:
+                logger.warning(f"-Vision is removed from model_name {self.model_name}")
+                # TODO: do not remove "-Vision" part
+                self.model_name = "Llama-3.2-90B" + ("-Instruct" if self.instruct else "")
+                self.rope_scaling_factor = 8
+                self.is_90b = True
+            else:
+                self.rope_scaling_factor = None
+                self.orig_context_len = None
+                logger.warning(f"Unknown Meta-style model: {checkpoint_dir}")
+            self.rope_scaling = (
+                rope_scaling_model_factory(
+                    {
+                        "rope_type": "llama3",
+                        "factor": self.rope_scaling_factor,
+                        "original_max_position_embeddings": self.orig_context_len,
+                    }
+                )
+                if self.rope_scaling_factor is not None
+                else None
+            )
 
     def __repr__(self):
         return f"""ModelArgs(
@@ -1556,7 +1812,7 @@ class ModelArgs:
     ffn_dim_multiplier={self.ffn_dim_multiplier},
     norm_eps={self.norm_eps},
     rope_theta={self.rope_theta},
-    rope_scaling_factor={self.rope_scaling_factor},
+    rope_scaling_factor={self.rope_scaling.factor if self.rope_scaling is not None else None},
     max_batch_size={self.max_batch_size},
     max_seq_len={self.max_seq_len},
     vision_chunk_size={self.vision_chunk_size},
@@ -1564,19 +1820,33 @@ class ModelArgs:
     vision_num_cross_attention_layers={self.vision_num_cross_attention_layers}
 )"""
 
-    def is_vision(self):
-        return self.vision_chunk_size > 0
+    def is_llama_vision(self):
+        return ("llama" in self.CKPT_DIR.lower()) and ("vision" in self.CKPT_DIR.lower())
 
-    def get_state_dict_prefix(self, module_name, layer_num):
+    def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
         text_prefix = self.state_dict_text_prefix
+        vision_prefix = self.state_dict_vision_prefix
+
         layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
-        module_map = {
+
+        text_module_map = {
             "MLP": "feed_forward",
             "Attention": "attention",
             "TransformerBlock": "",
             "": "",  # If no module is given, just get layer prefix
         }
-        return text_prefix + layer_prefix + module_map[module_name]
+
+        vision_module_map = {
+            "MLP": "mlp.",
+            "Attention": "self_attn.",
+            "TransformerBlock": "",
+            "": "",
+        }
+
+        module_map = vision_module_map if is_vision else text_module_map
+        prefix = vision_prefix if is_vision else text_prefix
+
+        return prefix + layer_prefix + module_map[module_name]
 
     def weight_cache_path(self, dtype):
         # Keep the weight cache separate for generative and instruct weights
@@ -1593,16 +1863,37 @@ class ModelArgs:
     def get_model_config(self):
         return self.model_config
 
+    def get_hf_model_cls(self):
+        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForVision2Seq
+
+        if not self.is_multimodal:
+            return AutoModelForCausalLM
+
+        for model_cls in (AutoModelForVision2Seq, AutoModelForImageTextToText):
+            if type(self.hf_config) in model_cls._model_mapping:
+                return model_cls
+
+        raise ValueError(f"Unknown model for config {type(self.hf_config)}")
+
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
+        # by default, the model is not a mixture-of-expert. This will be set to True if we find any `.experts.` in the keys
         if self.dummy_weights:
             if self.checkpoint_type == CheckpointType.HuggingFace:
-                from transformers import AutoConfig, AutoModelForCausalLM
+                from transformers import AutoConfig
 
-                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
-                config.num_layers = self.n_layers
-                config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config)
+                config = AutoConfig.from_pretrained(
+                    self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
+                )
+                if hasattr(config, "text_config"):
+                    config.text_config.num_layers = self.n_layers
+                    config.text_config.num_hidden_layers = self.n_layers
+                else:
+                    config.num_layers = self.n_layers
+                    config.num_hidden_layers = self.n_layers
+
+                model_cls = self.get_hf_model_cls()
+                model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
                 state_dict = model.state_dict()
             else:
                 reference_model = Transformer(self)
@@ -1611,28 +1902,122 @@ class ModelArgs:
                 state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
         elif self.checkpoint_type == CheckpointType.Meta:
             state_dict = load_meta_state_dict(self.CKPT_DIR, self.n_layers)
+            self.is_mixture_of_experts = any(["experts" in k for k in state_dict.keys()])
         else:
             assert self.checkpoint_type == CheckpointType.HuggingFace
             if self.from_hf_url:
-                from transformers import AutoConfig, AutoModelForCausalLM
-
-                model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
-                self.cached_hf_model = model
+                model_cls = self.get_hf_model_cls()
+                model = model_cls.from_pretrained(
+                    self.CKPT_DIR,
+                    torch_dtype="auto",
+                    trust_remote_code=self.trust_remote_code_hf,
+                    local_files_only=os.getenv("CI") == "true"
+                    # Note that the default setting is torch.dtype.float32, but model weights are
+                    # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
+                    # unnecessary cast.
+                )
+                if self.cache_hf_flag:
+                    self.cached_hf_model = model
                 state_dict = model.state_dict()
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
+            self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
 
         if self.checkpoint_type == CheckpointType.HuggingFace:
-            state_dict = standardize_hf_keys(state_dict)
-            state_dict = convert_hf_to_meta(state_dict, self.head_dim)
+            if self.is_multimodal:
+                state_dict = standardize_hf_keys_multimodal(state_dict)
+                if self.is_llama_vision():
+                    state_dict = convert_hf_to_meta_mllama(state_dict, self.head_dim, self.hf_config)
+                else:
+                    state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
+            else:
+                self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
+                self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
+                state_dict = standardize_hf_keys(state_dict)
+                state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
         for k in keys_dict:
             if any([r in k for r in remv]):
                 state_dict.pop(k)
-
+        if getattr(self, "is_mixture_of_experts", False):
+            self.initialize_mixture_of_experts_configs()
+            self.moe = True
+            self.num_experts = max([int(item[-11]) + 1 for item in keys_dict if "block_sparse_moe.experts" in item])
         return state_dict
+
+    def initialize_mixture_of_experts_configs(self):
+        # Porting mixtral to llama
+        self.model_config["FF1_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=2,  # K = 4096 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
+            per_core_N=7,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 4096 for num_device=8
+            fuse_batch=True,
+            fused_activation=ttnn.UnaryOpType.SILU,
+            mcast_in0=True,
+        )
+        self.model_config["FF3_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=2,  # K = 4096 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
+            per_core_N=7,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 4096 for num_device=8
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+        self.model_config["FF2_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=7,  # K = 14336 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            # Issue #8959: Increasing subblock to 2 results in hangs -> Potentially related to di/dt hangs.
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
+            per_core_N=2,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 4096 for num_device=8
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+        self.model_config["PREFILL_MLP_W1_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=1,  # how much inner dim you take each time
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=1,  # 32, #16,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=56,  # N / TILE_WIDTH / Grid_Size
+            transpose_mcast=False,
+            fused_activation=ttnn.UnaryOpType.SILU,
+            fuse_batch=False,
+        )
+        self.model_config["PREFILL_MLP_W3_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=1,  # how much inner dim you take each time
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=1,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=56,  # N / TILE_WIDTH / Grid_Size
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+
+        self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=1,  # how much inner dim you take each time
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=1,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=16,  # N / TILE_WIDTH / Grid_Size
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+        # end Porting mixtral to llama
 
     def create_dram_sharded_mem_config(self, k, n):
         """Create DRAM-sharded memory config for width-sharded tensors"""
@@ -1667,6 +2052,9 @@ class ModelArgs:
         )  # TODO: Needed for TG hang workaround
 
         if in0_block_w is None:
+            assert (
+                k % (self.tile_size * grid_size[1]) == 0
+            ), f"Input width must be divisible by tile size times grid size"
             in0_block_w = self.find_largest_divisor(k // (self.tile_size * grid_size[1]))
 
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -1795,7 +2183,7 @@ class ModelArgs:
                 return i
         return 1  # Fallback to 1 if no divisor found
 
-    def dram_matmul_config(self, m: int, k: int, n: int, num_cores=None):
+    def dram_matmul_config(self, m: int, k: int, n: int, num_cores=None, fused_activation=None):
         # in0_block_w must evenly divide k and be no larger than tile_size * num_cores
         if num_cores is None:
             # num_cores = self.dram_shard_core_grid_for_k(k).num_cores
@@ -1808,7 +2196,7 @@ class ModelArgs:
             in0_block_w=self.find_largest_divisor(k // (self.tile_size * num_cores)),
             per_core_M=math.ceil(m / self.tile_size),
             per_core_N=math.ceil(n / (self.tile_size * num_cores)),
-            fused_activation=None,
+            fused_activation=fused_activation,
         )
 
     def matmul_1d_config(
@@ -1957,12 +2345,114 @@ class ModelArgs:
             # Create a HuggingFace AutoTokenizer
             from transformers import AutoTokenizer
 
-            tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
+            # Mapping of base model names to their known tokenizer paths
+            # These are the original models that have proper tokenizers
+            base_model_tokenizer_mapping = {
+                "gemma-3-4b-it": "google/gemma-3-4b-it",
+                "Qwen2.5-0.5B": "Qwen/Qwen2.5-Coder-0.5B-Instruct",
+                "Qwen2.5-1.5B": "Qwen/Qwen2.5-1.5B-Instruct",
+                "Qwen2.5-3B": "Qwen/Qwen2.5-3B-Instruct",
+                "Qwen2.5-7B": "Qwen/Qwen2.5-7B-Instruct",
+                "Qwen2.5-14B": "Qwen/Qwen2.5-14B-Instruct",
+                "Qwen2.5-32B": "Qwen/Qwen2.5-32B-Instruct",
+                "Qwen2.5-72B": "Qwen/Qwen2.5-72B-Instruct",
+                "Llama-3.1-8B": "meta-llama/Llama-3.1-8B-Instruct",
+                "Llama-3.1-70B": "meta-llama/Llama-3.1-70B-Instruct",
+                "Llama-3.2-1B": "meta-llama/Llama-3.2-1B-Instruct",
+                "Llama-3.2-3B": "meta-llama/Llama-3.2-3B-Instruct",
+                "Llama-3.2-11B": "meta-llama/Llama-3.2-11B-Vision-Instruct",
+                "Llama-3.2-90B": "meta-llama/Llama-3.2-90B-Vision-Instruct",
+                "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
+                "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
+            }
+
+            logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
+            logger.info(f"Model name: {self.model_name}")
+            logger.info(f"Base model name: {self.base_model_name}")
+
+            try:
+                # Try to load tokenizer from the original model path
+                # If there is no Processor, it will return Tokenizer (useful for multimodal models)
+                tokenizer = AutoTokenizer.from_pretrained(
+                    self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true"
+                )
+                logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
+            except Exception as e:
+                logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
+
+                # Try to use base model tokenizer as fallback
+                fallback_tokenizer_path = base_model_tokenizer_mapping.get(self.base_model_name)
+
+                # If no direct match, try to infer from model name patterns
+                if not fallback_tokenizer_path:
+                    model_name_lower = self.model_name.lower()
+                    if "qwen2.5" in model_name_lower and "0.5b" in model_name_lower:
+                        fallback_tokenizer_path = "Qwen/Qwen2.5-Coder-0.5B-Instruct"
+                    elif "qwen2.5" in model_name_lower and "1.5b" in model_name_lower:
+                        fallback_tokenizer_path = "Qwen/Qwen2.5-1.5B-Instruct"
+                    elif "qwen2.5" in model_name_lower and "3b" in model_name_lower:
+                        fallback_tokenizer_path = "Qwen/Qwen2.5-3B-Instruct"
+                    elif "qwen2.5" in model_name_lower and "7b" in model_name_lower:
+                        fallback_tokenizer_path = "Qwen/Qwen2.5-7B-Instruct"
+                    elif "qwen2.5" in model_name_lower and "14b" in model_name_lower:
+                        fallback_tokenizer_path = "Qwen/Qwen2.5-14B-Instruct"
+                    elif "qwen2.5" in model_name_lower and "32b" in model_name_lower:
+                        fallback_tokenizer_path = "Qwen/Qwen2.5-32B-Instruct"
+                    elif "qwen2.5" in model_name_lower and "72b" in model_name_lower:
+                        fallback_tokenizer_path = "Qwen/Qwen2.5-72B-Instruct"
+                    elif "llama" in model_name_lower and "3.1" in model_name_lower and "8b" in model_name_lower:
+                        fallback_tokenizer_path = "meta-llama/Llama-3.1-8B-Instruct"
+                    elif "llama" in model_name_lower and "3.1" in model_name_lower and "70b" in model_name_lower:
+                        fallback_tokenizer_path = "meta-llama/Llama-3.1-70B-Instruct"
+                    elif "llama" in model_name_lower and "3.2" in model_name_lower and "1b" in model_name_lower:
+                        fallback_tokenizer_path = "meta-llama/Llama-3.2-1B-Instruct"
+                    elif "llama" in model_name_lower and "3.2" in model_name_lower and "3b" in model_name_lower:
+                        fallback_tokenizer_path = "meta-llama/Llama-3.2-3B-Instruct"
+                    elif "mistral" in model_name_lower and "7b" in model_name_lower:
+                        fallback_tokenizer_path = "mistralai/Mistral-7B-Instruct-v0.3"
+                    elif (
+                        "phi-3-mini" in model_name_lower
+                        and "128k" in model_name_lower
+                        and "instruct" in model_name_lower
+                    ):
+                        fallback_tokenizer_path = "microsoft/Phi-3-mini-128k-instruct"
+
+                if fallback_tokenizer_path:
+                    logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
+                    try:
+                        tokenizer = AutoTokenizer.from_pretrained(
+                            fallback_tokenizer_path, local_files_only=os.getenv("CI") == "true"
+                        )
+                        logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
+                    except Exception as fallback_e:
+                        logger.error(f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}")
+                        raise fallback_e
+                else:
+                    logger.error(f"No fallback tokenizer found for base model: {self.base_model_name}")
+                    raise e
 
             # Add meta-compatible stop token list to the HF tokenizer
             if not "stop_tokens" in tokenizer.__dict__:
                 tokenizer.stop_tokens = [tokenizer.eos_token_id]
+                # Phi-3-mini uses "<|end|>" as EOS token
+                if "phi-3-mini" in self.base_model_name.lower():
+                    tokenizer.stop_tokens.append(tokenizer.encode("<|end|>")[0])
             return tokenizer
+
+    def create_processor(self):
+        processor = None
+        if self.checkpoint_type == CheckpointType.HuggingFace:
+            from transformers import AutoProcessor
+
+            try:
+                processor = AutoProcessor.from_pretrained(
+                    self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true"
+                )
+                logger.info(f"Successfully loaded processor from {self.TOKENIZER_PATH}")
+            except Exception as e:
+                logger.warning(f"Failed to load processor from {self.TOKENIZER_PATH}: {e}")
+
+        return processor
 
     def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
         if self.checkpoint_type == CheckpointType.Meta:
@@ -1977,7 +2467,6 @@ class ModelArgs:
                 except ValueError as e:
                     logger.warning(f"Failed to encode chat prompt, are you sure this is an instruct model? Error: {e}")
                     logger.warning(f"Falling back to base model encoding with no chat template")
-
             return self.tokenizer.encode(prompt_text, add_special_tokens=False)
 
     def reference_lm_head(self):
@@ -2001,27 +2490,52 @@ class ModelArgs:
                 model.load_state_dict(self.load_state_dict())
             return model
         else:
-            from transformers import AutoConfig, AutoModelForCausalLM
+            from transformers import AutoConfig
+
+            model_cls = self.get_hf_model_cls()
 
             # HF is much faster at loading from a checkpoint than generating from config
             # so use that by preference unless we don't have a checkpoint
             if self.dummy_weights and not load_checkpoint:
-                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
-                config.num_layers = self.n_layers
-                config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config)
-            else:
-                if self.cached_hf_model is None:
-                    model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
-                    self.cached_hf_model = model
+                config = AutoConfig.from_pretrained(
+                    self.LOCAL_HF_PARAMS[self.model_name],
+                    trust_remote_code=self.trust_remote_code_hf,
+                    local_files_only=os.getenv("CI") == "true",
+                )
+                if hasattr(config, "text_config"):
+                    config.text_config.num_layers = self.n_layers
+                    config.text_config.num_hidden_layers = self.n_layers
                 else:
+                    config.num_layers = self.n_layers
+                    config.num_hidden_layers = self.n_layers
+                model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+            else:
+                if self.cache_hf_flag and self.cached_hf_model is None:
+                    model = model_cls.from_pretrained(
+                        self.CKPT_DIR,
+                        torch_dtype="auto",
+                        local_files_only=os.getenv("CI") == "true",
+                        trust_remote_code=self.trust_remote_code_hf,
+                    )
+                    self.cached_hf_model = model
+                elif self.cache_hf_flag and self.cached_hf_model is not None:
                     model = self.cached_hf_model
-                # HACK: Assume that we want the language model layers only
-                if hasattr(model, "language_model"):
-                    model = model.language_model
-                model.model.layers = model.model.layers[: self.n_layers]
+                else:
+                    # No caching - load fresh each time
+                    model = model_cls.from_pretrained(
+                        self.CKPT_DIR,
+                        torch_dtype="auto",
+                        trust_remote_code=self.trust_remote_code_hf,
+                        local_files_only=os.getenv("CI") == "true",
+                    )
+
+            # HACK: Assume that we want the language model layers only
+            if hasattr(model, "language_model"):
+                model.model = model.language_model
+                # We keep language_model because transformers don't let us change or delete it
+            model.model.layers = model.model.layers[: self.n_layers]
             if wrap:
-                wrapper = HfModelWrapper(model, self.head_dim)
+                wrapper = HfModelWrapper(model, self.head_dim, config=self.hf_config)
                 return wrapper
             else:
                 return model
@@ -2038,6 +2552,31 @@ class ModelArgs:
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
             return layer
 
+    def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
+        if self.checkpoint_type == CheckpointType.HuggingFace:
+            from transformers import AutoConfig
+
+            model_cls = self.get_hf_model_cls()
+
+            if self.dummy_weights and not load_checkpoint:
+                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
+                config.num_layers = self.n_layers
+                config.num_hidden_layers = self.n_layers
+                model = model_cls.from_config(config)
+            else:
+                if self.cached_hf_model is None:
+                    model = model_cls.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")
+                    self.cached_hf_model = model
+                else:
+                    model = self.cached_hf_model
+                model.model.layers = model.model.layers[: self.n_layers]
+
+            if wrap:
+                wrapper = HfModelWrapper(model, self.head_dim)
+                return wrapper
+            else:
+                return model
+
     def reference_mlp(self):
         if self.checkpoint_type == CheckpointType.Meta:
             from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import FeedForward
@@ -2047,14 +2586,16 @@ class ModelArgs:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].mlp
             layer._load_state_dict = layer.load_state_dict
-            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+            layer.load_state_dict = lambda x: layer._load_state_dict(
+                convert_meta_to_hf(x, self.head_dim, fuse_mlp=self.fuse_mlp)
+            )
             return layer
 
     def reference_embedding(self, reference_model=None):
         if self.checkpoint_type == CheckpointType.Meta:
-            from models.tt_transformers.tt.common import HostEmbedding
+            from models.tt_transformers.tt.common import HostEmbedding, HostScaledEmbedding
 
-            return HostEmbedding(self)
+            return HostEmbedding(self) if self.embed_scale is None else HostScaledEmbedding(self)
         else:
             if reference_model is None:
                 model = self.reference_transformer(wrap=False)
@@ -2074,12 +2615,17 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            # TODO: Generalize for other HF models
+            use_position_embeddings = layer.__class__.__name__ != "Phi3DecoderLayer" or self.base_model_name in (
+                "phi-4",
+            )
             model_name_env = os.getenv("HF_MODEL")
-            if model_name_env is not None and "mistral" in model_name_env.lower():
-                wrapper = HfDecoderWrapper(layer, self.head_dim, layer.self_attn.rotary_emb)
+            if hasattr(model.model, "rotary_emb_local"):
+                rotary_emb_local = model.model.rotary_emb_local
             else:
-                wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
+                rotary_emb_local = None
+            wrapper = HfDecoderWrapper(
+                layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None, rotary_emb_local
+            )
             return wrapper
 
     def reference_attention(self):
@@ -2090,7 +2636,7 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
-            use_position_embeddings = layer.__class__.__name__ == "Qwen3Attention"
+            use_position_embeddings = "position_embeddings" in inspect.signature(layer.forward).parameters
             wrapper = HfAttentionWrapper(
                 layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
             )
@@ -2196,7 +2742,7 @@ class HfAttentionWrapper:
 
         if self.rotary_emb is not None:
             position_embeddings = self.rotary_emb(x, position_ids)
-            output, _ = self.attention(
+            output, *_ = self.attention(
                 x,
                 position_embeddings=position_embeddings,
                 past_key_value=self.past_key_value,
@@ -2217,7 +2763,11 @@ class HfAttentionWrapper:
         return self.forward(*args, **kwargs)
 
     def load_state_dict(self, state_dict):
-        return self.attention.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim))
+        try:  # Checking for fused qkv layer
+            fuse_qkv = hasattr(self.attention, "qkv_proj")
+        except:
+            fuse_qkv = False
+        return self.attention.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv))
 
     @property
     def cache_k(self):
@@ -2244,34 +2794,46 @@ class HfAttentionWrapper:
 
 
 class HfDecoderWrapper:
-    def __init__(self, decoder, head_dim, rotary_emb):
+    def __init__(self, decoder, head_dim, rotary_emb, rotary_emb_local=None):
         from transformers import DynamicCache
 
         self.decoder = decoder
         self.head_dim = head_dim
         self.rotary_emb = rotary_emb
+        self.rotary_emb_local = rotary_emb_local
         self.past_key_values = DynamicCache()
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
-        # TODO: Generalize for other HF models
-        model_name_env = os.getenv("HF_MODEL")
-        if model_name_env is not None and "mistral" in model_name_env.lower():
-            position_embeddings = self.rotary_emb(x, x.shape[1])
-        else:
+        position_embeddings = None
+        if self.rotary_emb is not None:
             position_embeddings = self.rotary_emb(x, position_ids)
 
         if mask is not None:
             while len(mask.shape) < 4:
                 mask = mask.unsqueeze(0)
-        result = self.decoder.forward(
-            x,
-            position_embeddings=position_embeddings,
-            past_key_value=self.past_key_values,
-            use_cache=True,
-            position_ids=position_ids,
-            attention_mask=mask,
-        )
+
+        if self.rotary_emb_local is not None:
+            position_embeddings_local = self.rotary_emb_local(x, position_ids)
+            result = self.decoder.forward(
+                x,
+                position_embeddings_global=position_embeddings,
+                position_embeddings_local=position_embeddings_local,
+                past_key_value=self.past_key_values,
+                use_cache=True,
+                position_ids=position_ids,
+                attention_mask=mask,
+            )
+        else:
+            result = self.decoder.forward(
+                x,
+                position_embeddings=position_embeddings,
+                past_key_value=self.past_key_values,
+                use_cache=True,
+                position_ids=position_ids,
+                attention_mask=mask,
+            )
+
         output = result[0]
         return output
 
@@ -2279,15 +2841,21 @@ class HfDecoderWrapper:
         return self.forward(*args, **kwargs)
 
     def load_state_dict(self, state_dict):
-        return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim))
+        try:  # Checking for fused qkv and mlp layers
+            fuse_qkv = hasattr(self.decoder.self_attn, "qkv_proj")
+            fuse_mlp = hasattr(self.decoder.mlp, "gate_up_proj")
+        except:
+            fuse_qkv, fuse_mlp = False, False
+        return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp))
 
 
 class HfModelWrapper:
-    def __init__(self, model, head_dim):
+    def __init__(self, model, head_dim, config=None):
         from transformers import DynamicCache
 
         self.model = model
         self.head_dim = head_dim
+        self.config = config
         self.past_key_values = DynamicCache()
 
     def forward(self, inputs_embeds, start_pos, mode="decode"):
@@ -2309,36 +2877,62 @@ class HfModelWrapper:
         return self.forward(*args, **kwargs)
 
     def load_state_dict(self, state_dict):
-        return self.model.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim))
+        try:  # Checking for fused qkv and mlp layers
+            fuse_qkv = hasattr(self.model.model.layers[0].self_attn, "qkv_proj")
+            fuse_mlp = hasattr(self.model.model.layers[0].mlp, "gate_up_proj")
+        except:
+            fuse_qkv, fuse_mlp = False, False
+        return self.model.load_state_dict(
+            convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp, self.config)
+        )
 
     def eval(self):
         self.model.eval()
 
     @property
     def cache_k(self):
-        [(k, v)] = self.past_key_values.to_legacy_cache()
-        hf_k = k.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
-        batch_size, seq_len, n_heads, head_dim = hf_k.shape
+        kvs = self.past_key_values.to_legacy_cache()
+        meta_ks = []
+        for k, v in kvs:
+            hf_k = k.permute(
+                0, 2, 1, 3
+            )  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
+            batch_size, seq_len, n_heads, head_dim = hf_k.shape
 
-        meta_k = torch.zeros_like(hf_k)
-        for b in range(batch_size):
-            for s in range(seq_len):
-                # Flatten just heads and head_dim
-                flat = hf_k[b, s].flatten()
-                # Apply reverse_permute
-                transformed = reverse_permute(flat.unsqueeze(-1), n_heads, flat.shape[0], 1).squeeze(-1)
-                # Restore heads and head_dim shape
-                meta_k[b, s] = transformed.reshape(n_heads, head_dim)
+            meta_k = torch.zeros_like(hf_k)
+            for b in range(batch_size):
+                for s in range(seq_len):
+                    # Flatten just heads and head_dim
+                    flat = hf_k[b, s].flatten()
+                    # Apply reverse_permute
+                    transformed = reverse_permute(flat.unsqueeze(-1), n_heads, flat.shape[0], 1).squeeze(-1)
+                    # Restore heads and head_dim shape
+                    meta_k[b, s] = transformed.reshape(n_heads, head_dim)
 
-        return meta_k
+            meta_ks.append(meta_k)
+
+        return meta_ks
 
     @property
     def cache_v(self):
-        [(k, v)] = self.past_key_values.to_legacy_cache()
-        return v.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
+        kvs = self.past_key_values.to_legacy_cache()
+        return [
+            v.permute(0, 2, 1, 3) for k, v in kvs
+        ]  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
 
 class DecodersPrecision:
+    @classmethod
+    def from_string(cls, optimizations: str):
+        if optimizations == "performance":
+            return cls.performance
+        elif optimizations == "accuracy":
+            return cls.accuracy
+        else:
+            raise ValueError(
+                f"Invalid optimization configuration: {optimizations}. Allowed values are 'performance' or 'accuracy'"
+            )
+
     @classmethod
     def accuracy(cls, num_decoders, model_name):
         inst = cls._precision_factory(num_decoders, model_name, ModelOptimizations.accuracy)
@@ -2377,6 +2971,7 @@ class DecodersPrecision:
             MathFidelitySetting.HIFI2_NA: configuration.compute_kernel_config_hifi2_na,
             MathFidelitySetting.HIFI2_FP16: configuration.compute_kernel_config_hifi2_fp16,
             MathFidelitySetting.HIFI4: configuration.compute_kernel_config_hifi4,
+            MathFidelitySetting.HIFI4_FP32: configuration.compute_kernel_config_hifi4_fp32,
         }
         return math_fidelity_setting_lookup[self.decoder_optimizations[decoder_id].op_fidelity_settings[op]]
 
@@ -2457,6 +3052,7 @@ def determine_device_name(mesh_device):
             1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
             2: "P300",
             4: "P150x4",
+            8: "P150x8",
         }
     elif is_wormhole_b0():
         dict_device_names = {

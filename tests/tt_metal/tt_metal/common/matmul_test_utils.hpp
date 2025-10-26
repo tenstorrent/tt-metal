@@ -4,12 +4,15 @@
 
 #pragma once
 
+#include <string>
+
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 #include "llrt.hpp"
 
 namespace tt::tt_metal {
@@ -57,15 +60,14 @@ inline std::vector<bfloat16> get_col_slice(
     int cols_per_slice = cols / total_col_slices;
     for (int r = 0; r < rows; r++) {
         for (int c = cols_per_slice * col_slice_index; c < cols_per_slice * (col_slice_index + 1); c++) {
-            result.push_back(data.at(r * cols + c));
+            result.push_back(data.at((r * cols) + c));
         }
     }
     return result;
 }
 
-inline void print_faces(std::vector<bfloat16> data, string name) {
+inline void print_faces(std::vector<bfloat16> data, const std::string& name) {
     std::cout << name << ": " << std::endl;
-    int index = 0;
 
     int tile_index = 0;
     int face_index = 0;
@@ -79,7 +81,7 @@ inline void print_faces(std::vector<bfloat16> data, string name) {
                 face_index = 0;
             }
         }
-        std::cout << data.at(i).to_float() << ", ";
+        std::cout << static_cast<float>(data.at(i)) << ", ";
         if ((i + 1) % 16 == 0) {
             std::cout << std::endl;
         }
@@ -98,7 +100,7 @@ inline std::vector<std::uint32_t> transpose_tiles(
     for (int c = 0; c < col_tiles; c += in0_block_w) {
         for (int r = 0; r < row_tiles; r++) {
             for (int k = 0; k < in0_block_w; k++) {
-                int offset = tile_size * col_tiles * r + c * tile_size + k * tile_size;
+                int offset = (tile_size * col_tiles * r) + (c * tile_size) + (k * tile_size);
                 for (int i = 0; i < tile_size; i++) {
                     result.push_back(data.at(offset + i));
                 }
@@ -120,7 +122,7 @@ inline bool move_tiles_to_dram(
         for (int j = 0; j < tiles_c; j++) {
             tile.clear();
             tile.insert(tile.end(), tensor.begin() + start_index, tensor.begin() + start_index + tile_size);
-            uint32_t dram_addr = (tile_id / device->num_dram_channels()) * tile_size_bytes + dram_buffer_addr;
+            uint32_t dram_addr = ((tile_id / device->num_dram_channels()) * tile_size_bytes) + dram_buffer_addr;
             int dram_channel = tile_id % device->num_dram_channels();
 
             pass &= tt_metal::detail::WriteToDeviceDRAMChannel(device, dram_channel, dram_addr, tile);
@@ -132,13 +134,15 @@ inline bool move_tiles_to_dram(
 }
 
 inline bool move_tiles_to_dram(
-    tt_metal::IDevice* device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, std::shared_ptr<Buffer> buffer) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    std::vector<uint32_t> tensor,
+    int tiles_r,
+    int tiles_c,
+    const std::shared_ptr<distributed::MeshBuffer>& buffer) {
     bool pass = true;
     int tile_size = 512;  // 32*32 packed into uint32_t
-    int tile_size_bytes = 32 * 32 * 2;
     int start_index = 0;
-    int tile_id = 0;
-    CommandQueue& cq = device->command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     std::vector<uint32_t> tile;
     std::vector<uint32_t> tiles;
     for (int i = 0; i < tiles_r; i++) {
@@ -151,7 +155,7 @@ inline bool move_tiles_to_dram(
         }
     }
 
-    EnqueueWriteBuffer(cq, buffer, tiles, false);
+    distributed::WriteShard(cq, buffer, tiles, distributed::MeshCoordinate(0, 0));
     return pass;
 }
 

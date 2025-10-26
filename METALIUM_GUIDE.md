@@ -105,16 +105,11 @@ void kernel_main() {
 
     const uint32_t tile_size_bytes = get_tile_size(cb_in0);
 
-    const InterleavedAddrGenFast<true> a = {
-        .bank_base_address = a_addr,
-        .page_size = tile_size_bytes,
-        .data_format = DataFormat::Float16_b
-    };
-    const InterleavedAddrGenFast<true> b = {
-        .bank_base_address = b_addr,
-        .page_size = tile_size_bytes,
-        .data_format = DataFormat::Float16_b
-    };
+    constexpr auto args_a = TensorAccessorArgs<0>();
+    const auto a = TensorAccessor(args_a, a_addr, tile_size_bytes);
+
+    constexpr auto args_b = TensorAccessorArgs<args_a.next_compile_time_args_offset()>();
+    const auto b = TensorAccessor(args_b, b_addr, tile_size_bytes);
 
     // Read inputs from DRAM into circular buffers
     for (uint32_t i = 0; i < n_tiles; i++) {
@@ -193,11 +188,8 @@ void kernel_main() {
 
     const uint32_t tile_size_bytes = get_tile_size(cb_out);
 
-    const InterleavedAddrGenFast<true> c = {
-        .bank_base_address = c_addr,
-        .page_size = tile_size_bytes,
-        .data_format = DataFormat::Float16_b
-    };
+    constexpr auto args_c = TensorAccessorArgs<0>();
+    const auto c = TensorAccessor(args_c, c_addr, tile_size_bytes);
 
     // Read outputs from circular buffers into DRAM
     for (uint32_t i = 0; i < n_tiles; i++) {
@@ -238,7 +230,7 @@ The 32×32 tile size allows hardware to process data efficiently within a few cl
 
 <img width="900" alt="image" src="docs/source/common/images/matmul-blocked-row-column-diagram.webp">
 
-GPUs often struggle to efficiently supply data to their tensor cores because their architectures are primarily designed around vector operations. This can lead to less optimal memory access patterns for tensor workloads. In contrast, Tenstorrent hardware is built for tile-based computation from the start—both the vector and matrix units operate natively on 32×32 tiles. This approach leads to more predictable performance and a simpler programming model. For detailed performance numbers, see the [Matrix Multiplcation performance report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/GEMM_FLOPS/GEMM_FLOPS.md) as well as the [Convolution Networks on Tenstorrent Chips](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md) report.
+GPUs often struggle to efficiently supply data to their tensor cores because their architectures are primarily designed around vector operations. This can lead to less optimal memory access patterns for tensor workloads. In contrast, Tenstorrent hardware is built for tile-based computation from the start—both the vector and matrix units operate natively on 32×32 tiles. This approach leads to more predictable performance and a simpler programming model. For detailed performance numbers, see the [Matrix Multiplication performance report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/GEMM_FLOPS/GEMM_FLOPS.md) as well as the [Convolution Networks on Tenstorrent Chips](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md) report.
 
 ### Where is the cache hierarchy
 
@@ -297,7 +289,7 @@ Metalium functions as the base layer for Tenstorrent's software stack. Higher-le
 
 Metalium follows a similar design philosophy to OpenCL, which is reflected in its API structure. The process of executing code on a Tenstorrent device involves the following steps:
 
-* Initialize and open a device connection
+* Initialize and open a device
 * Allocate memory buffers for input and output data
 * Transfer input data to device buffers
 * Compile data movement and compute kernels
@@ -309,11 +301,11 @@ Metalium follows a similar design philosophy to OpenCL, which is reflected in it
 
 The following example demonstrates vector addition implementation using the Metalium API. This code shows the complete workflow: device initialization, buffer allocation, kernel compilation, circular buffer configuration, program execution, and result retrieval.
 
-First, we initialize the device connection and allocate the necessary buffers:
+First, we initialize the device connection and allocate the necessary buffers. In Metalium, everything belongs to a mesh. Even a single chip is treated as a 1x1 mesh. This design exnables seamless scaling from one chip to multiple chips:
 
 ```c++
-IDevice* device = CreateDevice(/*device_id=*/0);
-CommandQueue& cq = dev->command_queue(/*cq_id=*/0);
+auto device = MeshDevice::create_unit_mesh(/*device_id=*/0);
+CommandQueue& cq = device->mesh_command_queue(/*cq_id=*/0);
 Program program = tt::tt_metal::CreateProgram();
 
 constexpr uint32_t n_tiles = 64;
@@ -322,20 +314,22 @@ constexpr size_t tile_size_bytes = elements_per_tile * sizeof(bfloat16);
 constexpr size_t buffer_size_bytes = n_tiles * tile_size_bytes;
 constexpr size_t page_size_bytes = tile_size_bytes; // We choose to use one tile per page
 
-InterleavedBufferConfig dram_buffer_config{
-    .device = device,
-    .size = buffer_size_bytes,
-    .page_size = page_size_bytes,
-    .buffer_type = BufferType::DRAM};
-auto a = CreateBuffer(dram_buffer_config);
-auto b = CreateBuffer(dram_buffer_config);
-auto c = CreateBuffer(dram_buffer_config);
+DeviceLocalBufferConfig dram_config{
+    .page_size = tile_size_bytes,
+    .buffer_type = BufferType::DRAM}
+
+ReplicatedBufferConfig buffer_config{
+    .size = n_tiles * tile_size_bytes
+};
+auto a = MeshBuffer::create(buffer_config, dram_config, device.get());
+auto b = MeshBuffer::create(buffer_config, dram_config, device.get());
+auto c = MeshBuffer::create(buffer_config, dram_config, device.get());
 
 std::vector<uint32_t> a_data = create_random_vector_of_bfloat16(buffer_size_bytes, 2, 42, -1.0f);
 std::vector<bfloat16> b_data(n_tiles * elements_per_tile, 3.14159f);
 
-EnqueueWriteBuffer(cq, a, a_data, /*blocking=*/false);
-EnqueueWriteBuffer(cq, b, b_data, /*blocking=*/false);
+EnqueueWriteMeshBuffer(cq, a, a_data, /*blocking=*/false);
+EnqueueWriteMeshBuffer(cq, b, b_data, /*blocking=*/false);
 ```
 
 Next, we allocate the circular buffers required for inter-kernel communication. Each circular buffer is configured to hold two or more tiles worth of data, enabling the reader kernel to fetch new data while the compute kernel processes the previous tile. This overlapping of data movement and computation significantly improves overall throughput. While increasing the number of tiles per circular buffer can further enhance performance, developers should carefully evaluate memory usage constraints and recognize the diminishing returns associated with larger buffer sizes. The circular buffer configuration utilizes buffers 0, 1, and 16 for inter-kernel communication. These specific buffer IDs are arbitrary selections - any unique identifiers would function equivalently. The key requirement is that each circular buffer must have a distinct ID to prevent conflicts during execution.
@@ -376,16 +370,21 @@ CBHandle cb_out = CreateCircularBuffer(
 Then, we compile the kernels for data movement and computation. For simplicity, this example targets a single Tensix at coordinates (0, 0). Runtime arguments are then configured for each kernel to specify their operational parameters.
 
 ```c++
+std::vector<uint32_t> reader_args;
+TensorAccessorArgs(*a).append_to(reader_args);
+TensorAccessorArgs(*b).append_to(reader_args);
 auto reader = CreateKernel(
     program,
     "path/to/reader_kernel.cpp",
     core,
-    DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_args});
+std::vector<uint32_t> writer_args;
+TensorAccessorArgs(*c).append_to(writer_args);
 auto writer = CreateKernel(
     program,
     "path/to/writer_kernel.cpp",
     core,
-    DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = writer_args});
 auto compute = CreateKernel(
     program,
     "path/to/compute_kernel.cpp",
@@ -396,12 +395,14 @@ SetRuntimeArgs(program, writer, core, {c->address(), n_tiles});
 SetRuntimeArgs(program, compute, core, {n_tiles});
 ```
 
-Following setting the arguments, the program is enqueued for execution, synchronized for completion, and the computational results are retrieved.
+Following setting the arguments, the program is added to a `MeshWorkload` and is enqueued for execution, synchronized for completion, and the computational results are retrieved.
 
 ```c++
-EnqueueProgram(cq, program, /*blocking=*/true);
+MeshWorkload workload;
+workload.add_program(MeshCoordinateRange(device->shape()), std::move(program));
+EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
 std::vector<bfloat16> c_data(n_tiles * elements_per_tile, 0.0f);
-EnqueueReadBuffer(cq, c, c_data, /*blocking=*/true);
+EnqueueReadMeshBuffer(cq, c, c_data, /*blocking=*/true);
 ```
 
 ### Register control and Data Flow within the Compute Kernels
@@ -487,7 +488,7 @@ inline void calculate_sine() {
 }
 ```
 
-For Blackhole (and Wormhole) processors, the availability of `float_to_int16` instruction enables reliable value shifting to the [-π, π] range. The implementation then applies a MacLaurin series calculation for sine computation (utilizing the same mathematical approach but with processor-specific function naming). Additionally, the ITERATIONS parameter differs between processor generations (not shown in code here, it is set by an ourside source): Grayskull requires 4 iterations, while Wormhole and Blackhole require 8 iterations to accommodate their reduced vector width of 32 elements compared to Grayskull's 64-element vectors.
+For Blackhole (and Wormhole) processors, the availability of `float_to_int16` instruction enables reliable value shifting to the [-π, π] range. The implementation then applies a MacLaurin series calculation for sine computation (utilizing the same mathematical approach but with processor-specific function naming). Additionally, the ITERATIONS parameter differs between processor generations (not shown in code here, it is set by an outside source): Grayskull requires 4 iterations, while Wormhole and Blackhole require 8 iterations to accommodate their reduced vector width of 32 elements compared to Grayskull's 64-element vectors.
 
 ```c++
 // tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_trigonometry.h
@@ -516,7 +517,7 @@ While Metalium supports custom vectorized computation implementations, developer
 
 Fast dispatch implements asynchronous command queuing by dedicating one RISC-V core per queue on the device to process queued operations. Unlike GPUs that use specialized on-chip schedulers built into the GPU-host runtime, Tenstorrent assigns one RISC-V core per command queue for command processing. This core is typically placed on an unused Ethernet tile, which minimizes impact on computational performance while taking advantage of the architecture's ability for any core to access any other core.
 
-When fast dispatch is disabled (by setting the `TT_METAL_SLOW_DISPATCH_MODE` environment variable to `1`), the asynchronous dispatch mechanism is bypassed. This disables command queue functionality and prevents asynchronous I/O operations between the host and device. In slow dispatch mode, the CPU must wait for each operation to complete before proceeding to the next instruction. Synchronous API calls such as `ReadFromBuffer` must be used instead of their asynchronous counterparts like `EnqueueReadBuffer`.
+When fast dispatch is disabled (by setting the `TT_METAL_SLOW_DISPATCH_MODE` environment variable to `1`), the asynchronous dispatch mechanism is bypassed. This disables command queue functionality and prevents asynchronous I/O operations between the host and device. In slow dispatch mode, the CPU must wait for each operation to complete before proceeding to the next instruction. Synchronous API calls such as `ReadFromBuffer` must be used instead of their asynchronous counterparts like `EnqueueReadMeshBuffer`.
 
 Fast dispatch is much faster - Slow dispatch forces the host CPU to actively manage all operations, including data transfers to and from the device. This creates significant CPU overhead and prevents the host from performing other tasks while waiting for device operations. Fast dispatch stores command sequences in host memory and allows the device to fetch and execute them independently. Freeing the CPU to handle other work (or simply idle and reduce power) while the device processes commands, resulting in better overall system utilization.
 
@@ -525,7 +526,7 @@ Fast dispatch is much faster - Slow dispatch forces the host CPU to actively man
 
 ```c++
 // Fast dispatch. Can be async or the process waits until completion
-EnqueueReadBuffer(queue, buffer, host_ptr, /*blocking=*/false);
+EnqueueReadMeshBuffer(queue, buffer, host_ptr, /*blocking=*/false);
 
 // Slow dispatch. No queue. But also CPU has to do all the job
 ReadFromBuffer(buffer, host_ptr);
@@ -536,8 +537,9 @@ Unlike OpenCL's command queue which optionally supports out-of-order execution, 
 ```c++
 // Wait for the current tail operation on queue 0 to complete
 // before proceeding on command queue 1
-auto event = EnqueueRecordEvent(device->command_queue(0));
-EnququeWaitForEvent(device->command_queue(1), event);
+auto event = std::make_shared<Event>();
+device->command_queue(0).enqueue_record_event(event);
+device->command_queue(1).enqueue_wait_for_event(event);
 ```
 
 ### SPMD in Metalium
@@ -579,7 +581,7 @@ for(uint32_t y = core_range.start.y; y < core_range.end.y; y++) {
 }
 ```
 
-Metalium provides the `tt::tt_metal::split_work_to_cores` utility function to distribute work across available cores for SPMD execution. The function takes the total number of tiles and available cores, then calculates how to divide the work when it cannot be evenly distributed. The function returns two groups of cores: a primary group that handles more tiles per core, and a secondary group that handles fewer, along with the tile count for each group. Minimizing workload inbalance between cores (if work can be evenly distributed, the secondary group will be empty.)
+Metalium provides the `tt::tt_metal::split_work_to_cores` utility function to distribute work across available cores for SPMD execution. The function takes the total number of tiles and available cores, then calculates how to divide the work when it cannot be evenly distributed. The function returns two groups of cores: a primary group that handles more tiles per core, and a secondary group that handles fewer, along with the tile count for each group. Minimizing workload imbalance between cores (if work can be evenly distributed, the secondary group will be empty.)
 
 ```c++
 auto core_grid = device->compute_with_storage_grid_size();
@@ -595,7 +597,7 @@ auto [num_cores, // number of cores utilized
 Only create kernels on cores that have been assigned work (i.e., those in `all_cores` or `core_group_*`). Avoid creating kernels on unused cores, as this can cause undefined behavior or crashes if kernels are created but runtime arguments are not set on the core. If there is not enough work, some cores may remain idle—do not assign kernels to them.
 
 ```c++
-// `all_cores` is guarenteed to be the union of `core_group_1` and `core_group_2`.
+// `all_cores` is guaranteed to be the union of `core_group_1` and `core_group_2`.
 for (const auto& core : all_cores) {
     // Good
     CreateKernel(program, "/path/to/reader.cpp", all_cores, DataMovementConfig{...});

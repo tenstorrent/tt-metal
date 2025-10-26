@@ -10,7 +10,6 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
@@ -23,11 +22,7 @@
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/types.hpp"
 
-namespace tt {
-
-namespace tt_metal {
-
-namespace tensor_impl {
+namespace tt::tt_metal::tensor_impl {
 
 // Empty structs to facilitate Tensor template logic.
 struct bfloat4_b {};
@@ -48,9 +43,9 @@ std::vector<OutputDataType> cast_vec(tt::stl::Span<const InputDataType> data_to_
     std::vector<OutputDataType> converted_data;
     for (auto datum : data_to_convert) {
         if constexpr (std::is_same_v<OutputDataType, float> and std::is_same_v<InputDataType, bfloat16>) {
-            converted_data.push_back(datum.to_float());
+            converted_data.push_back(static_cast<float>(datum));
         } else if constexpr (std::is_same_v<OutputDataType, uint32_t> and std::is_same_v<InputDataType, bfloat16>) {
-            converted_data.push_back((uint32_t)datum.to_uint16());
+            converted_data.push_back((uint32_t)std::bit_cast<uint16_t>(datum));
         } else {
             converted_data.push_back(static_cast<OutputDataType>(datum));
         }
@@ -174,49 +169,34 @@ bool logical_matches_physical(const TensorSpec& tensor_spec);
 //                           Data reader, writer, and initializers
 // ======================================================================================
 
-std::shared_ptr<Buffer> allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor_spec);
-
-std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
+std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
     distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec);
 
-template <typename T>
-void read_data_from_device_buffer(CommandQueue& cq, Buffer& device_buffer, void* host_buffer_data, bool blocking) {
-    EnqueueReadBuffer(cq, device_buffer, host_buffer_data, blocking);
-}
-
-template <typename T>
-void read_data_from_device_buffer(Buffer& device_buffer, std::vector<T>& host_buffer) {
-    ::tt::tt_metal::detail::ReadFromBuffer(device_buffer, host_buffer);
-}
+HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec);
 
 // ======================================================================================
 //                                         .to_host() and .to_device()
 // ======================================================================================
 
 template <typename T>
-Tensor to_host(const Tensor& tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
+Tensor to_host(const Tensor& tensor, bool blocking = true, std::optional<QueueId> cq_id = std::nullopt);
 
-// TODO: #17215 - This will eventually subsume `to_host`, when "mesh buffer" backed tensors become the default.
 template <typename T>
-Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
+void copy_to_host(
+    const Tensor& device_tensor,
+    Tensor& host_tensor,
+    bool blocking = true,
+    std::optional<QueueId> cq_id = std::nullopt);
 
 template <typename T>
 Tensor to_device(
     const Tensor& tensor,
-    IDevice* target_device,
-    const MemoryConfig& memory_config,
-    QueueId cq_id = ttnn::DefaultQueueId);
-
-// TODO: #17215 - This will eventually subsume `to_device`, when "mesh buffer" backed tensors become the default.
-template <typename T>
-Tensor to_device_mesh_tensor(
-    const Tensor& tensor,
     distributed::MeshDevice* mesh_device,
-    const MemoryConfig& memory_config,
-    QueueId cq_id = ttnn::DefaultQueueId);
+    ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt,
+    std::optional<QueueId> cq_id = std::nullopt);
 
 template <typename T>
-void copy_to_mesh_tensor(const Tensor& host_tensor, Tensor& mesh_tensor, QueueId cq_id = ttnn::DefaultQueueId);
+void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id = std::nullopt);
 
 // ======================================================================================
 //                                  .to_layout()
@@ -253,19 +233,24 @@ enum class TensorPrintProfile {
     Full,
 };
 
-extern TensorPrintProfile TTNN_TENSOR_PRINT_PROFILE;
+enum class SciMode {
+    Enable,
+    Disable,
+    Default,
+};
+
+struct PrintOptions {
+    TensorPrintProfile profile = TensorPrintProfile::Short;
+    SciMode sci_mode = SciMode::Default;
+    int precision = 4;
+};
+
+extern PrintOptions TTNN_PRINT_OPTIONS;
 
 template <typename T>
-std::string to_string(
-    const Tensor& tensor,
-    std::optional<DataType> original_dtype = std::nullopt,
-    std::optional<Layout> original_layout = std::nullopt);
+std::string to_string(const Tensor& tensor);
 
 template <typename T>
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id);
 
-}  // namespace tensor_impl
-
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal::tensor_impl

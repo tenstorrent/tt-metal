@@ -7,10 +7,6 @@
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_unary_sfpu_typecast.h"
-#define MAIN math_main()
-#define MATH(x) x
-#else
-#define MATH(x)
 #endif
 
 namespace ckernel {
@@ -37,7 +33,8 @@ namespace ckernel {
  *  Bfp4_b <-> Bfp8_b
  *  Bfp4_b <-> Float16_b
  *  Bfp4_b <-> Float32
- *  UInt16 -> UInt32
+ *  UInt16 <-> UInt32
+ *  UInt16 <-> Int32
  *
  * For input/output to be UInt32, Int32, or Float32, Dest must be in 32 bit mode.
  *
@@ -49,7 +46,7 @@ namespace ckernel {
  * | IN_DTYPE       | Input data format                                                          | uint32_t | Must be valid tt::DataFormat                          | True     |
  * | OUT_DTYPE      | Desired output data format                                                 | uint32_t | Must be valid tt::DataFormat                          | True     |
  */
- // clang-format on
+// clang-format on
 template <uint32_t IN_DTYPE, uint32_t OUT_DTYPE>
 ALWI void typecast_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_typecast<APPROX, IN_DTYPE, OUT_DTYPE>(idst)));

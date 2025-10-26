@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <functional>
-#include <random>
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -40,7 +39,7 @@ std::vector<std::uint32_t> transpose_tiles(
     return result;
 }
 
-void print_faces(std::vector<bfloat16> data, string name) {
+void print_faces(std::vector<bfloat16> data, std::string name) {
     std::cout << name << ": " << std::endl;
     int index = 0;
 
@@ -56,7 +55,7 @@ void print_faces(std::vector<bfloat16> data, string name) {
                 face_index = 0;
             }
         }
-        std::cout << data.at(i).to_float() << ", ";
+        std::cout << static_cast<float>(data.at(i)) << ", ";
         if ((i + 1) % 16 == 0) {
             std::cout << std::endl;
         }

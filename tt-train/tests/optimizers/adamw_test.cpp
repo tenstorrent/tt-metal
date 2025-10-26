@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "fmt/base.h"
 #include "modules/linear_module.hpp"
 #include "ops/losses.hpp"
 
@@ -28,6 +29,7 @@ protected:
 
 TEST_F(AdamWFullTest, AdamWTest) {
     using namespace ttml::ops;
+    ttml::autograd::ctx().set_seed(42);
     auto* device = &ttml::autograd::ctx().get_device();
     const size_t batch_size = 32;
     const size_t num_features = 64;
@@ -45,14 +47,14 @@ TEST_F(AdamWFullTest, AdamWTest) {
     }
 
     auto data_tensor = ttml::autograd::create_tensor(
-        ttml::core::from_vector(features, ttml::core::create_shape({batch_size, 1, 1, num_features}), device));
+        ttml::core::from_vector(features, ttnn::Shape({batch_size, 1, 1, num_features}), device));
 
-    auto targets_tensor = ttml::autograd::create_tensor(
-        ttml::core::from_vector(targets, ttml::core::create_shape({batch_size, 1, 1, 1}), device));
+    auto targets_tensor =
+        ttml::autograd::create_tensor(ttml::core::from_vector(targets, ttnn::Shape({batch_size, 1, 1, 1}), device));
 
     auto model = ttml::modules::LinearLayer(num_features, 1);
     auto adamw_config = ttml::optimizers::AdamWConfig();
-    adamw_config.lr = 1e-4F;
+    adamw_config.lr = 1e-2F;
     adamw_config.weight_decay = 0.F;
     auto optimizer = ttml::optimizers::AdamW(model.parameters(), adamw_config);
 
@@ -69,7 +71,6 @@ TEST_F(AdamWFullTest, AdamWTest) {
         optimizer.step();
         ttml::autograd::ctx().reset_graph();
     }
-
     EXPECT_LT(losses.back(), losses.front());
     EXPECT_LT(losses.back(), 1e-3F);
 }

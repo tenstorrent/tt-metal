@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,8 +9,6 @@
 #include <tt-metalium/mesh_socket.hpp>
 
 namespace tt::tt_metal::distributed {
-
-enum class SocketEndpoint : uint8_t { SENDER, RECEIVER };
 
 // Utiity struct used for Sender and Receiver Hanshaking.
 // Each endpoint (sender/receiver) needs to know the following about its peer:
@@ -27,6 +25,7 @@ struct SocketPeerDescriptor {
     DeviceAddr data_buffer_address = 0;
     std::vector<uint32_t> mesh_ids;
     std::vector<uint32_t> chip_ids;
+    multihost::Tag exchange_tag = multihost::Tag{0};
 };
 
 // Create send/receive socket config buffers
@@ -40,14 +39,26 @@ std::shared_ptr<MeshBuffer> create_socket_data_buffer(
 // Write socket config data to allocated buffers
 void write_socket_configs(
     const std::shared_ptr<MeshBuffer>& config_buffer,
-    const std::shared_ptr<MeshBuffer>& peer_config_buffer,
-    const std::shared_ptr<MeshBuffer>& socket_data_buffer,
-    const SocketConfig& config,
+    const SocketPeerDescriptor& local_descriptor,
+    const SocketPeerDescriptor& peer_descriptor,
     SocketEndpoint socket_endpoint);
 
-//  =============== Additional utility functions  ===============
+SocketPeerDescriptor generate_local_endpoint_descriptor(
+    const MeshSocket& socket_endpoint, std::optional<multihost::DistributedContextId> context_id = std::nullopt);
 
-// Given a MeshDevice and a logical device coordinate, determine the device's physical mesh id
-uint32_t get_physical_mesh_id(const MeshDevice* mesh_device, const MeshCoordinate& coord);
+void forward_descriptor_to_peer(
+    const SocketPeerDescriptor& desc,
+    SocketEndpoint socket_endpoint_type,
+    const std::shared_ptr<const multihost::DistributedContext>& context);
+
+SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
+    const SocketPeerDescriptor& desc,
+    SocketEndpoint socket_endpoint_type,
+    const std::shared_ptr<const multihost::DistributedContext>& context);
+
+std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> generate_fabric_node_id_map(
+    const SocketConfig& config,
+    const SocketPeerDescriptor& sender_descriptor,
+    const SocketPeerDescriptor& receiver_descriptor);
 
 }  // namespace tt::tt_metal::distributed

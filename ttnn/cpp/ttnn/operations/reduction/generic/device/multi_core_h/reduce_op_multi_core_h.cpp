@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
 using namespace tt::constants;
@@ -33,27 +35,24 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     tt_metal::Program program = tt_metal::CreateProgram();
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
+    uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
     tt::DataFormat scaler_cb_data_format = DataFormat::Float16_b;
-    uint32_t scaler_single_tile_size = tt_metal::detail::TileSize(scaler_cb_data_format);
+    uint32_t scaler_single_tile_size = tt::tile_size(scaler_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
-
-    uint32_t num_tiles = a.physical_volume() / TILE_HW;
+    uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
     tt_metal::IDevice* device = a.device();
 
-    bool in_sharded = a.is_sharded();
-    bool out_sharded = output.is_sharded();
+    bool use_width_sharding = a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+                              output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto num_cols = NC * Wt;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_cols);
 
     // Current sharding only supports width, and that input and output are sharded
-    if (in_sharded) {
+    if (use_width_sharding) {
         all_cores = a.shard_spec().value().grid;
         num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
@@ -65,7 +64,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     uint32_t src0_cb_index = CBIndex::c_0;
     uint32_t src1_cb_index = CBIndex::c_1;
     CBHandle cb_src1 = 0;
-    if (in_sharded) {
+    if (use_width_sharding) {
         uint32_t num_shard_tiles = a.shard_spec().value().numel() / TILE_HW;
         uint32_t num_input_tiles = 2;
         tt_metal::CircularBufferConfig cb_src0_config =
@@ -93,11 +92,11 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     tt_metal::CircularBufferConfig cb_scaler_config =
         tt_metal::CircularBufferConfig(1 * scaler_single_tile_size, {{scaler_cb_index, scaler_cb_data_format}})
             .set_page_size(scaler_cb_index, scaler_single_tile_size);
-    auto cb_scaler = tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
 
     uint32_t output_cb_index = CBIndex::c_3;
     CBHandle cb_output;
-    if (out_sharded) {
+    if (use_width_sharding) {
         uint32_t num_output_tiles = output.shard_spec().value().numel() / TILE_HW;
         tt_metal::CircularBufferConfig cb_output_config =
             tt_metal::CircularBufferConfig(
@@ -116,14 +115,14 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     }
     tt_metal::Buffer* src0_buffer = a.buffer();
     tt_metal::KernelHandle reader_kernel_id;
-    bfloat16 bfloat_scaler_value = bfloat16(scaler);
+    bfloat16 bfloat_scaler_value = bfloat16::truncate(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
 
-    uint32_t chunk_size = out_sharded ? 1 : ttnn::get_dest_reg_count(compute_kernel_config);
+    uint32_t chunk_size = use_width_sharding ? 1 : ttnn::get_dest_reg_count(compute_kernel_config);
 
-    if (in_sharded) {
+    if (use_width_sharding) {
         std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index};
-        std::map<string, string> reader_defines;
+        std::map<std::string, std::string> reader_defines;
         reader_defines["REDUCE_SCALER"] = "1";
         reader_kernel_id = tt_metal::CreateKernel(
             program,
@@ -132,25 +131,21 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             all_cores,
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     } else {
-        bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-        std::vector<uint32_t> reader_compile_time_args = {
-            (std::uint32_t)src0_is_dram, Ht, Wt, HtWt, chunk_size, packed_scaler_value};
-
-        std::map<string, string> reader_defines;
-        reader_defines["REDUCE_SCALER"] = "1";
+        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, chunk_size, packed_scaler_value};
+        TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
         reader_kernel_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
-            "reader_unary_transpose_wh_interleaved_input_cols_partitioned.cpp",
+            "reader_unary_transpose_wh_universal_input_cols_partitioned.cpp",
             all_cores,
-            tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
+            tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     }
 
     tt_metal::Buffer* dst_buffer = output.buffer();
     tt_metal::KernelHandle writer_kernel_id;
 
-    if (out_sharded) {
+    if (use_width_sharding) {
         std::vector<uint32_t> writer_ct_args = {
             output_cb_index,
         };
@@ -160,16 +155,16 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             all_cores,
             WriterDataMovementConfig(writer_ct_args));
     } else {
-        bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
+        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
         writer_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_universal_start_id.cpp",
             all_cores,
             tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }
-    std::map<string, string> reduce_defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::H);
+    std::map<std::string, std::string> reduce_defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::H);
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         Ht,                         // Ht
         num_cols_per_core_group_1,  // Wt
@@ -177,7 +172,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
         chunk_size,                 // Column Chunk Size
     };
 
-    auto reduce_compute_kernel_group_1_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h.cpp",
         core_group_1,
@@ -195,7 +190,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             chunk_size,                 // Column Chunk Size
         };
 
-        auto reduce_compute_kernel_group_2_id = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h.cpp",
             core_group_2,
@@ -208,7 +203,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
     const auto& cores =
         grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, false);
-    if (in_sharded && out_sharded) {
+    if (use_width_sharding) {
         uint32_t shard_Wt = num_cols_per_core_group_1 / NC;
         uint32_t shard_row_size = shard_Wt * src0_single_tile_size;
         uint32_t shard_batch_size = shard_row_size * Ht;
@@ -234,7 +229,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
                 reader_kernel_id,
                 core,
                 {a.buffer()->address(),
-                 num_cols_read / Wt * HtWt + num_cols_read % Wt,
+                 (num_cols_read / Wt * HtWt) + (num_cols_read % Wt),
                  num_cols_read % Wt,
                  num_cols_per_core});
 
@@ -264,10 +259,11 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
         auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
 
-        bool src_sharded = input_tensors.at(0).memory_config().is_sharded();
-        bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
+        bool use_width_sharding =
+            input_tensors.at(0).memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+            output_tensors.at(0).memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
-        if (src_sharded && out_sharded) {
+        if (use_width_sharding) {
             UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer);
             UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
         } else {

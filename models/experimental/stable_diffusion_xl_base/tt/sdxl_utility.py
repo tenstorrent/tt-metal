@@ -31,6 +31,18 @@ def prepare_gn_mask(device, C, G, num_cores):
     return input_mask_tensor
 
 
+def prepare_gn_mask_negative_mask(device, C, G, num_cores):
+    input_mask_tensor = ttnn.create_group_norm_input_negative_mask(C, G, num_cores)
+    input_mask_tensor = ttnn.from_torch(
+        input_mask_tensor,
+        dtype=ttnn.DataType.BFLOAT8_B,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    return input_mask_tensor
+
+
 def prepare_gn_beta_gamma(device, weights, bias, num_cores):
     gamma = ttnn.create_group_norm_weight_bias_rm(weights, weights.shape[0], num_cores)
     beta = ttnn.create_group_norm_weight_bias_rm(bias, bias.shape[0], num_cores)
@@ -58,21 +70,10 @@ def prepare_linear_params(device, weights, bias, dtype):
 
 
 def prepare_conv_params(
-    device,
     weights,
     bias,
     dtype,
-    fp32_dest_acc_en=False,
-    math_fidelity=ttnn.MathFidelity.HiFi2,
-    packer_l1_acc=False,
 ):
-    compute_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=math_fidelity,
-        fp32_dest_acc_en=fp32_dest_acc_en,
-        packer_l1_acc=packer_l1_acc,
-    )
-
     dtype = ttnn.float32 if dtype == ttnn.bfloat8_b else dtype
     tt_weights = ttnn.from_torch(weights, dtype)
     tt_bias = ttnn.from_torch(bias, dtype) if bias is not None else None
@@ -83,26 +84,16 @@ def prepare_conv_params(
         "kernel_size": (tt_weights.shape[2], tt_weights.shape[3]),
     }
 
-    return compute_config, tt_weights, tt_bias, conv_params
+    return tt_weights, tt_bias, conv_params
 
 
 def prepare_split_conv_params(
-    device,
     weights,
     bias,
     dtype,
     split_in,
     split_out,
-    fp32_dest_acc_en=False,
-    math_fidelity=ttnn.MathFidelity.HiFi2,
 ):
-    compute_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=math_fidelity,
-        fp32_dest_acc_en=fp32_dest_acc_en,
-        packer_l1_acc=False,
-    )
-
     dtype = ttnn.float32 if dtype == ttnn.bfloat8_b else dtype  # TODO: figure out why PCC drops when dtype is used
 
     Cout, Cin, _, _ = weights.shape
@@ -155,7 +146,7 @@ def prepare_split_conv_params(
         ]
         for tt_w_out in tt_weights
     ]
-    return compute_config, tt_weights, tt_bias, conv_params
+    return tt_weights, tt_bias, conv_params
 
 
 def split_conv2d(
@@ -169,6 +160,7 @@ def split_conv2d(
     compute_config,
     conv_config,
     conv_params,
+    conv_dtype,
     stride,
     padding,
     dilation,
@@ -212,6 +204,8 @@ def split_conv2d(
                 memory_config=None,
                 return_output_dim=True,
                 return_weights_and_bias=True,
+                dtype=conv_dtype,
+                slice_config=ttnn.Conv2dL1FullSliceConfig,
             )
 
             device_weights[idx_out].append(d_w)
@@ -222,7 +216,9 @@ def split_conv2d(
                 dram_intermediate = ttnn.to_memory_config(intermediate, ttnn.DRAM_MEMORY_CONFIG)
                 intermediate.deallocate(True)
             else:
-                dram_intermediate = ttnn.add(dram_intermediate, intermediate, output_tensor=dram_intermediate)
+                dram_intermediate = ttnn.add(
+                    dram_intermediate, intermediate, output_tensor=dram_intermediate, use_legacy=False
+                )
                 intermediate.deallocate(True)
 
         if dram_intermediate.memory_config() != ttnn.DRAM_MEMORY_CONFIG:

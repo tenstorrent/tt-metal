@@ -10,6 +10,8 @@ import torch.nn as nn
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_grayskull
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import reshard_for_output_channels_divisibility
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attention_down_block_2d_new_conv import (
     cross_attention_down_block_2d,
 )
@@ -28,7 +30,6 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
     get_default_compute_config,
     pre_process_input,
 )
-from models.utility_functions import is_grayskull
 
 fp32_accum = True
 
@@ -199,6 +200,7 @@ class UNet2DConditionModel:
             num_groups=self.norm_num_groups,
             input_nhw=batch_size * input_height * input_width,
             is_height_sharded=False,
+            is_row_major=True,
         )
 
         if not self.fallback_on_groupnorm:
@@ -351,11 +353,11 @@ class UNet2DConditionModel:
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED if in_channels < 320 else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         )
         conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat8_b,
             weights_dtype=ttnn.bfloat8_b,
-            activation="",
             shard_layout=shard_layout,
             reshard_if_not_optimal=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
         compute_config = get_default_compute_config(self.device)
 
@@ -372,33 +374,19 @@ class UNet2DConditionModel:
             "groups": 1,
             "device": self.device,
             "conv_config": conv_config,
+            "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }
 
-        if not ttnn.is_tensor_storage_on_device(self.conv_in_weights):
-            self.conv_in_weights = ttnn.prepare_conv_weights(
-                weight_tensor=self.conv_in_weights,
-                weights_format="OIHW",
-                input_memory_config=sample.memory_config(),
-                input_layout=sample.get_layout(),
-                has_bias=True,
-                **conv_kwargs,
-            )
-            self.conv_in_bias = ttnn.prepare_conv_bias(
-                bias_tensor=self.conv_in_bias,
-                input_memory_config=sample.memory_config(),
-                input_layout=sample.get_layout(),
-                **conv_kwargs,
-            )
-            self.conv_in_weights = ttnn.to_device(self.conv_in_weights, self.device)
-            self.conv_in_bias = ttnn.to_device(self.conv_in_bias, self.device)
-
-        sample = ttnn.conv2d(
+        sample, [self.conv_in_weights, self.conv_in_bias] = ttnn.conv2d(
             input_tensor=sample,
             weight_tensor=self.conv_in_weights,
             bias_tensor=self.conv_in_bias,
             **conv_kwargs,
             compute_config=compute_config,
+            dtype=ttnn.bfloat8_b,
+            return_weights_and_bias=True,
         )
+        sample = reshard_for_output_channels_divisibility(sample, out_channels)
         sample = ttnn.reallocate(sample)  # TODO: Test remove
 
         # con_in completes
@@ -414,7 +402,7 @@ class UNet2DConditionModel:
         down_block_res_samples = (sample_copied_to_dram,)
         output_channel = block_out_channels[0]
         for i, (down_block_type, down_block) in enumerate(zip(self.down_block_types, self.down_blocks)):
-            ttnn.DumpDeviceProfiler(self.device)
+            ttnn.ReadDeviceProfiler(self.device)
             logger.info(f"Down block {i}")
             input_channel = output_channel
             output_channel = block_out_channels[i]
@@ -499,7 +487,7 @@ class UNet2DConditionModel:
         only_cross_attention = list(reversed(only_cross_attention))
         output_channel = reversed_block_out_channels[0]
         for i, (up_block_type, up_block) in enumerate(zip(self.up_block_types, self.up_blocks)):
-            ttnn.DumpDeviceProfiler(self.device)
+            ttnn.ReadDeviceProfiler(self.device)
             logger.info(f"Up block {i}")
             is_final_block = i == len(block_out_channels) - 1
 
@@ -633,12 +621,11 @@ class UNet2DConditionModel:
         sample = ttnn.sharded_to_interleaved(sample, ttnn.L1_MEMORY_CONFIG, sample.dtype)
 
         conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat8_b,
             weights_dtype=ttnn.bfloat8_b,
-            activation="",
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             act_block_h_override=64,
             reshard_if_not_optimal=True,
+            enable_act_double_buffer=True,
         )
         compute_config = get_default_compute_config(self.device)
 
@@ -655,33 +642,20 @@ class UNet2DConditionModel:
             "groups": 1,
             "device": self.device,
             "conv_config": conv_config,
+            "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }
 
-        if not ttnn.is_tensor_storage_on_device(self.conv_out_weights):
-            self.conv_out_weights = ttnn.prepare_conv_weights(
-                weight_tensor=self.conv_out_weights,
-                weights_format="OIHW",
-                input_memory_config=sample.memory_config(),
-                input_layout=sample.get_layout(),
-                has_bias=True,
-                **conv_kwargs_1,
-            )
-            self.conv_out_bias = ttnn.prepare_conv_bias(
-                bias_tensor=self.conv_out_bias,
-                input_memory_config=sample.memory_config(),
-                input_layout=sample.get_layout(),
-                **conv_kwargs_1,
-            )
-            self.conv_out_weights = ttnn.to_device(self.conv_out_weights, self.device)
-            self.conv_out_bias = ttnn.to_device(self.conv_out_bias, self.device)
-
-        sample = ttnn.conv2d(
+        sample, [self.conv_out_weights, self.conv_out_bias] = ttnn.conv2d(
             input_tensor=sample,
             **conv_kwargs_1,
             weight_tensor=self.conv_out_weights,
             bias_tensor=self.conv_out_bias,
             compute_config=compute_config,
+            dtype=ttnn.bfloat8_b,
+            return_weights_and_bias=True,
         )
+        sample = reshard_for_output_channels_divisibility(sample, self.conv_out_out_channels)
+
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
         sample = ttnn.clone(sample, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
         sample = ttnn.reshape(

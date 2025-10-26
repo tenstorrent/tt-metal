@@ -15,13 +15,6 @@ namespace ttnn::operations::binary_ng {
 
 enum class KernelName {
     ReaderNoBcast,
-    ReaderRowBcast,
-    ReaderColBcast,
-    ReaderScalarBcast,
-    WriterNoBcast,
-    WriterRowBcast,
-    WriterColBcast,
-    WriterScalarBcast,
     WriterScalar,
     ComputeNoBcast,
     ComputeBcast,
@@ -32,6 +25,8 @@ enum class KernelName {
     ReaderColBcastNg,
     ReaderRowBColABcastNg,
     ReaderScalarBcastNg,
+    ComputeRowBcastNg,
+    ComputeRowColBcastNg,
 };
 
 struct BinaryNgKernelConfig {
@@ -60,6 +55,7 @@ struct OpConfig {
         LCM,
         LEFT_SHIFT,
         RIGHT_SHIFT,
+        LOGICAL_RIGHT_SHIFT,
         BITWISE_AND,
         BITWISE_OR,
         BITWISE_XOR,
@@ -67,24 +63,30 @@ struct OpConfig {
         REQUANT,
         DEQUANT,
         MAXIMUM,
-        MINIMUM
+        MINIMUM,
+        XLOGY,
+        LT,
+        GT,
+        GE,
+        LE,
+        HYPOT,
     };
 
     template <class EnumT>
-    OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>);
+    OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std::optional<DataType> dtype = std::nullopt);
 
     std::map<std::string, std::string> as_defines(DataType dtype) const;
 
-    std::optional<unary::UnaryOpType> process_lhs{};
-    std::optional<unary::UnaryOpType> process_rhs{};
-    std::optional<unary::UnaryOpType> postprocess{};
+    std::optional<unary::UnaryOpType> process_lhs;
+    std::optional<unary::UnaryOpType> process_rhs;
+    std::optional<unary::UnaryOpType> postprocess;
     std::variant<FpuBinaryOp, SfpuBinaryOp> binary_op;
     bool is_sfpu_op() const;
 };
 
 void add_activation_defines(
     std::map<std::string, std::string>& defines,
-    tt::stl::Span<const unary::UnaryWithParam> activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> activations,
     std::string_view operand,
     std::optional<DataType> dtype = std::nullopt);
 

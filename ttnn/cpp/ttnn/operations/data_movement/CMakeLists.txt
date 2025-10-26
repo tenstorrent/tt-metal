@@ -6,12 +6,90 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_data_movement)
 set_target_properties(
     ttnn_op_data_movement
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(
+    GLOB_RECURSE kernels
+    bcast/device/kernels/*
+    concat/device/kernels/*
+    common/kernels/*
+    fill_pad/device/kernels/*
+    fill_rm/device/kernels/*
+    flip/device/kernels/*
+    fold/device/kernels/*
+    gather/device/kernels/*
+    copy/device/kernels/*
+    moe_expert_token_remap/device/kernels/*
+    non_zero_indices/device/kernels/*
+    move/device/kernels/*
+    pad/device/kernels/*
+    permute/device/kernels/*
+    reshape_on_device/device/kernels/*
+    repeat/device/device/*
+    reshape_view/device/device/*
+    scatter/device/kernels/*
+    sort/device/kernels/*
+    split/device/kernels/*
+    tilize/device/kernels/*
+    sharded/device/kernels/*
+    slice/device/kernels/*
+    tilize_with_val_padding/device/kernels/*
+    transpose/device/kernels/*
+    untilize/device/kernels/*
+    untilize_with_unpadding/device/kernels/*
+)
 target_sources(
     ttnn_op_data_movement
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES
+            bcast/bcast.hpp
+            bcast/bcast_types.hpp
+            concat/concat.hpp
+            copy/copy.hpp
+            copy/device/copy_device_operation.hpp
+            flip/flip.hpp
+            pad/pad.hpp
+            permute/permute.hpp
+            repeat/repeat.hpp
+            reshape_view/reshape.hpp
+            reshape_view/reshape_common.hpp
+            sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
+            sharded/reshard/device/reshard_op.hpp
+            sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.hpp
+            slice/slice.hpp
+            tilize_with_val_padding/tilize_with_val_padding.hpp
+            tilize_with_val_padding/tilize_with_val_padding_common.hpp
+            tilize_with_val_padding/device/tilize_with_val_padding_op.hpp
+            transpose/transpose.hpp
+            untilize/untilize.hpp
+            untilize_with_unpadding/untilize_with_unpadding.hpp
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES
+            ${kernels}
+            reshape_view/device/device/dataflow/reader_reshape_tiled.cpp
+            reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
+            reshape_view/device/device/rm_reshape_interleaved.cpp
+            reshape_view/device/hostdevcommon/common.hpp
+            tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp
+            untilize/device/kernels/dataflow/reader_unary_start_id.cpp
+            untilize/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multi_core.cpp
+            untilize/device/kernels/compute/pack_untilize_variable_num_blocks.cpp
+            tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_dims_split_rows_multicore.cpp
+            tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_multicore_both_dims.cpp
+            untilize/device/kernels/compute/common.cpp
+            untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multicore.cpp
+            tilize/device/kernels/compute/tilize_wh.cpp
+            untilize/device/kernels/compute/pack_untilize.cpp
+            untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_wh_multicore.cpp
+            untilize/device/kernels/compute/pack_untilize_wh.cpp
     PRIVATE
         bcast/bcast.cpp
         bcast/bcast_types.cpp
@@ -50,6 +128,12 @@ target_sources(
         indexed_fill/device/indexed_fill_op.cpp
         indexed_fill/device/indexed_fill_op_multi_core_program_factory.cpp
         indexed_fill/indexed_fill.cpp
+        moe_expert_token_remap/moe_expert_token_remap.cpp
+        moe_expert_token_remap/device/moe_expert_token_remap_device_operation.cpp
+        moe_expert_token_remap/device/moe_expert_token_remap_program_factory.cpp
+        moe_routing_remap/moe_routing_remap.cpp
+        moe_routing_remap/device/moe_routing_remap_device_operation.cpp
+        moe_routing_remap/device/moe_routing_remap_program_factory.cpp
         move/device/move_device_operation.cpp
         move/device/move_program_factory.cpp
         move/move.cpp
@@ -75,11 +159,16 @@ target_sources(
         reshape_view/device/reshape_device_operation.cpp
         reshape_view/reshape.cpp
         roll/roll.cpp
+        scatter/scatter.cpp
+        scatter/tosa_scatter.cpp
+        scatter/device/scatter_device_operation.cpp
+        scatter/device/scatter_program_factory.cpp
         sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.cpp
         sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.cpp
         sharded/interleaved_to_sharded/interleaved_to_sharded.cpp
         sharded/reshard/device/reshard_op.cpp
         sharded/reshard/device/reshard_program_factory.cpp
+        sharded/reshard/device/nd_reshard_program_factory.cpp
         sharded/reshard/reshard.cpp
         sharded/sharded_common.cpp
         sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.cpp
@@ -91,6 +180,7 @@ target_sources(
         sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial.cpp
         slice/device/slice_op.cpp
         slice/device/slice_program_factory.cpp
+        slice/device/slice_program_factory_stride.cpp
         slice/slice.cpp
         split/device/split_op.cpp
         split/device/split_program_factory.cpp
@@ -114,42 +204,24 @@ target_sources(
         untilize_with_unpadding/device/untilize_with_unpadding_program_factory.cpp
         untilize_with_unpadding/untilize_with_unpadding.cpp
         view/view.cpp
-)
-
-file(
-    GLOB_RECURSE kernels
-    common/kernels/*
-    flip/device/kernels/*
-    move/device/kernels/*
-    permute/device/kernels/*
-    sharded/device/kernels/*
-    transpose/device/kernels/*
-)
-target_sources(
-    ttnn_op_data_movement
-    PUBLIC
-        FILE_SET kernels
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES
-            ${kernels}
-            reshape_view/device/device/dataflow/reader_reshape_tiled.cpp
-            reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
-            reshape_view/device/device/rm_reshape_interleaved.cpp
-            reshape_view/device/hostdevcommon/common.hpp
+        sort/sort.cpp
+        sort/device/sort_device_operation.cpp
+        sort/device/sort_program_factory.cpp
+        gather/gather.cpp
+        gather/device/gather_device_operation.cpp
+        gather/device/gather_program_factory.cpp
+        gather/tosa/gather_tosa.cpp
 )
 
 target_include_directories(ttnn_op_data_movement PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_data_movement
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_data_movement PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS
         ttnn_op_data_movement
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
     FILE_SET
     kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/data_movement

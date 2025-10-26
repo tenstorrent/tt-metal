@@ -20,7 +20,8 @@ ttnn::Tensor PagedUpdateCacheOperation::invoke(
     const std::optional<bool> share_cache = std::nullopt,
     const std::optional<const Tensor>& page_table = std::nullopt,
     const uint32_t batch_offset = 0,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt) {
     auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config);
     const bool share_cache_arg = share_cache.has_value() ? share_cache.value() : false;
     tt::tt_metal::operation::run(
@@ -31,7 +32,8 @@ ttnn::Tensor PagedUpdateCacheOperation::invoke(
             batch_offset,                    // .batch_offset
             PagedUpdateCacheOpType::UPDATE,  // .op_type
             kernel_config_val,               // .compute_kernel_config
-            share_cache_arg                  // .share_cache
+            share_cache_arg,                 // .share_cache
+            mesh_coords,                     // .mesh_coords
         },
         {cache_tensor, input_tensor},
         {update_idxs_tensor, page_table});  // Optional inputs for UPDATE
@@ -49,7 +51,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> PagedFusedUpdateCacheOperation::invoke(
     const std::optional<bool> share_cache = std::nullopt,
     const std::optional<const Tensor>& page_table = std::nullopt,
     const uint32_t batch_offset = 0,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt) {
     auto kernel_config_val = init_device_compute_kernel_config(input_tensor1.device()->arch(), compute_kernel_config);
     const bool share_cache_arg = share_cache.has_value() ? share_cache.value() : false;
     tt::tt_metal::operation::run(
@@ -60,7 +63,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> PagedFusedUpdateCacheOperation::invoke(
             batch_offset,                          // .batch_offset
             PagedUpdateCacheOpType::FUSED_UPDATE,  // .op_type
             kernel_config_val,                     // .compute_kernel_config
-            share_cache_arg                        // .share_cache
+            share_cache_arg,                       // .share_cache
+            mesh_coords,                           // .mesh_coords
         },
         {cache_tensor1, input_tensor1, cache_tensor2, input_tensor2},
         {update_idxs_tensor, page_table});  // Optional inputs for FUSED_UPDATE
@@ -74,7 +78,8 @@ ttnn::Tensor PagedFillCacheOperation::invoke(
     const Tensor& page_table,
     const std::optional<const Tensor>& batch_idx_tensor,
     const uint32_t batch_idx_fallback,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt) {
     auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config);
 
     std::vector<std::optional<const Tensor>> optional_inputs_for_run;
@@ -86,7 +91,8 @@ ttnn::Tensor PagedFillCacheOperation::invoke(
             0,                             // .batch_offset (0 for fill)
             PagedUpdateCacheOpType::FILL,  // .op_type
             kernel_config_val,             // .compute_kernel_config
-            false  // .share_cache (false for fill, can be made a param if needed for future FILL variants)
+            false,        // .share_cache (false for fill, can be made a param if needed for future FILL variants)
+            mesh_coords,  // .mesh_coords (optional, can be used to restrict operation to specific mesh coordinates)
         },
         {cache_tensor, input_tensor, page_table},  // Mandatory inputs for FILL
         {std::nullopt, std::nullopt});

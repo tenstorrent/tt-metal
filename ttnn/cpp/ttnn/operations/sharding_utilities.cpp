@@ -6,7 +6,7 @@
 // Contains utility functions for partitioning shards work between multiple cores.
 //
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include "ttnn/tensor/types.hpp"
@@ -38,7 +38,7 @@ NewShardingConfig get_shard_specs(int32_t start_stick, int32_t end_stick, const 
         int32_t last_in_h_i = ((end_stick - 1) % (pc.in_w * pc.in_h)) / pc.in_w;
         int32_t initial_skip = 0;
         if ((start_stick % (pc.in_h * pc.in_w) == 0) || (start_stick % pc.stride_h != 0)) {
-            int32_t halo_nsticks = (pc.in_w + 2 * pc.pad_w) * pc.pad_h + pc.window_w / 2;
+            int32_t halo_nsticks = ((pc.in_w + 2 * pc.pad_w) * pc.pad_h) + (pc.window_w / 2);
             initial_skip = halo_nsticks;
         }
         switch (nsticks_per_core) {
@@ -278,11 +278,9 @@ NewShardingConfig get_shard_specs(int32_t start_stick, int32_t end_stick, const 
 
     // Figure out how to allocate full image rows to first partial image, full images, or last partial image
     // This also affects skip after first_partial_right_aligned_row
-    int32_t image_row_start_idx = start_stick / pc.in_w;
     int32_t image_row_start_idx_after_partial_right_aligned_row =
         (start_stick + first_partial_right_aligned_row_width) / pc.in_w;
     int32_t image_row_end_idx = (end_stick - 1) / pc.in_w;
-    int32_t image_start_idx = image_row_start_idx / pc.in_h;
     int32_t image_start_idx_after_partial_right_aligned_row =
         image_row_start_idx_after_partial_right_aligned_row / pc.in_h;
     int32_t image_start_height_after_partial_right_aligned_row =
@@ -312,7 +310,7 @@ NewShardingConfig get_shard_specs(int32_t start_stick, int32_t end_stick, const 
 
     // Full images
     int32_t image_rows_after_first_partial_image =
-        sticks_after_first_partial_row / pc.in_w - first_partial_image_num_rows;
+        (sticks_after_first_partial_row / pc.in_w) - first_partial_image_num_rows;
     if (to_print) {
         log_debug(tt::LogOp, "image_rows_after_first_partial_image: {}", image_rows_after_first_partial_image);
     }
@@ -355,19 +353,17 @@ NewShardingConfig get_shard_specs_with_halo(
 
     // NOTE: all cores have the exact same sized halo, including the left cores' left halo, which is initial_skip
     // (padding), and right cores' right halo
-    int32_t halo_nsticks = (pc.in_w + 2 * pc.pad_w) * pc.pad_h + pc.window_w / 2;
 
-    int32_t halo_nsticks_nopad = pc.in_w + pc.window_w / 2;
+    int32_t halo_nsticks_nopad = pc.in_w + (pc.window_w / 2);
     int32_t halo_start_stick =
         start_stick - halo_nsticks_nopad;  // this will be -ve for initial cores where start_stick < halo_nsticks
     int32_t halo_end_stick = end_stick + halo_nsticks_nopad;
-    int32_t nsticks_with_halo = halo_end_stick - halo_start_stick;
 
     // calculate in_start_id of my current batch
     int32_t batch_start = (start_stick / (pc.in_h * pc.in_w)) * (pc.in_h * pc.in_w);
 
     // pad sticks before the data sticks begin, add edge pads
-    int32_t initial_skip = halo_start_stick < batch_start ? ((batch_start - halo_start_stick) + 2 * pc.pad_w) : 0;
+    int32_t initial_skip = halo_start_stick < batch_start ? ((batch_start - halo_start_stick) + (2 * pc.pad_w)) : 0;
 
     // start with the first valid stick incl. halo
     // start_stick = halo_start_stick < 0 ? 0 : halo_start_stick;
@@ -381,9 +377,7 @@ NewShardingConfig get_shard_specs_with_halo(
     int32_t batch_i = curr_stick / (pc.in_h * pc.in_w);
     int32_t curr_batch_stick = curr_stick % (pc.in_h * pc.in_w);
     int32_t in_h_i = curr_batch_stick / pc.in_w;
-    int32_t in_w_i = curr_batch_stick % pc.in_w;
 
-    int32_t last_in_w_i = (end_stick - 1) % pc.in_w;
     int32_t last_in_h_i = ((end_stick - 1) % (pc.in_w * pc.in_h)) / pc.in_w;
 
     int32_t pad_size = in_h_i * 2 * pc.pad_w;
@@ -419,7 +413,6 @@ NewShardingConfig get_shard_specs_with_halo(
     TT_ASSERT(curr_stick % pc.in_w == 0);
 
     // full rows
-    int32_t total_full_rows = (end_stick - curr_stick) / pc.in_w;
 
     // figure out how many of total full rows belong to partial top image, full images, and partial bottom image
 
@@ -527,7 +520,6 @@ std::tuple<InOutShardingConfig, InOutShardingConfig> get_inout_shard_specs(
     }
 
     // calculate start_id of my current batch
-    int32_t batch_start_stick = (start_stick / (pc.out_h * pc.out_w)) * (pc.out_h * pc.out_w);
 
     // calculate output sticks coords and corresponding input window's center stick coords:
     int32_t start_batch_i = start_stick / (pc.out_h * pc.out_w);
@@ -536,16 +528,16 @@ std::tuple<InOutShardingConfig, InOutShardingConfig> get_inout_shard_specs(
     int32_t start_out_w_i = start_batch_stick % pc.out_w;
     int32_t start_in_h_i = start_out_h_i * pc.stride_h;
     int32_t start_in_w_i = start_out_w_i * pc.stride_w;
-    int32_t start_batch_in_stick = start_in_h_i * (pc.in_w + 2 * pc.pad_w) + start_in_w_i;
-    int32_t start_in_stick = start_batch_i * (pc.in_w + 2 * pc.pad_w) * (pc.in_h + pc.pad_h) + start_batch_in_stick;
+    int32_t start_batch_in_stick = (start_in_h_i * (pc.in_w + 2 * pc.pad_w)) + start_in_w_i;
+    int32_t start_in_stick = (start_batch_i * (pc.in_w + 2 * pc.pad_w) * (pc.in_h + pc.pad_h)) + start_batch_in_stick;
 
     int32_t end_batch_i = (end_stick - 1) / (pc.out_h * pc.out_w);
     int32_t end_out_w_i = (end_stick - 1) % pc.out_w;
     int32_t end_out_h_i = ((end_stick - 1) % (pc.out_w * pc.out_h)) / pc.out_w;
     int32_t end_in_h_i = end_out_h_i * pc.stride_h;
     int32_t end_in_w_i = end_out_w_i * pc.stride_w;
-    int32_t end_batch_in_stick = end_in_h_i * (pc.in_w + 2 * pc.pad_w) + end_in_w_i;
-    int32_t end_in_stick = end_batch_i * (pc.in_w + 2 * pc.pad_w) * (pc.in_h + pc.pad_h) + end_batch_in_stick;
+    int32_t end_batch_in_stick = (end_in_h_i * (pc.in_w + 2 * pc.pad_w)) + end_in_w_i;
+    int32_t end_in_stick = (end_batch_i * (pc.in_w + 2 * pc.pad_w) * (pc.in_h + pc.pad_h)) + end_batch_in_stick;
 
     int32_t curr_out_stick = start_stick;
     int32_t curr_in_stick = start_in_stick;
@@ -699,11 +691,9 @@ ShardingConfig get_specs_for_sharding_partition(
 
     // Figure out how to allocate full image rows to first partial image, full images, or last partial image
     // This also affects skip after first_partial_right_aligned_row
-    uint32_t image_row_start_idx = start_stick / in_w;
     uint32_t image_row_start_idx_after_partial_right_aligned_row =
         (start_stick + first_partial_right_aligned_row_width) / in_w;
     uint32_t image_row_end_idx = end_stick / in_w;
-    uint32_t image_start_idx = image_row_start_idx / in_h;
     uint32_t image_start_idx_after_partial_right_aligned_row =
         image_row_start_idx_after_partial_right_aligned_row / in_h;
     uint32_t image_start_height_after_partial_right_aligned_row =
@@ -733,7 +723,7 @@ ShardingConfig get_specs_for_sharding_partition(
 
     // Full images
     uint32_t image_rows_after_first_partial_image =
-        sticks_after_first_partial_row / in_w - first_partial_image_num_rows;
+        (sticks_after_first_partial_row / in_w) - first_partial_image_num_rows;
     uint32_t num_full_images = image_rows_after_first_partial_image / in_h;
     uint32_t skip_after_full_image = num_full_images > 0 ? pad_h * (in_w + 2 * pad_w) : 0;
 

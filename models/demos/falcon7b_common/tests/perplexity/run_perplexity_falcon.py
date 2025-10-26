@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -11,6 +12,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 import ttnn
+from models.common.utility_functions import tt_tensors_to_torch_tensors
 from models.datasets.llm_dataset_utils import (
     calculate_acc_metrics,
     prepare_textgen_dataloader,
@@ -20,7 +22,7 @@ from models.datasets.llm_dataset_utils import (
 from models.demos.falcon7b_common.tests.test_utils import initialize_kv_cache, load_hf_model
 from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.falcon7b_common.tt.model_config import get_model_config
-from models.utility_functions import tt_tensors_to_torch_tensors
+from models.tt_transformers.tt.common import get_hf_tt_cache_path
 
 
 def calculate_perplexity(
@@ -120,8 +122,6 @@ def run_test_perplexity(
     batch_size,
     max_seq_len,
     model_config_str,
-    model_location_generator,
-    get_tt_cache_path,
     mesh_device,
     num_samples,
     expected_acc_metrics,
@@ -138,7 +138,7 @@ def run_test_perplexity(
 
     # Load HF model
     logger.info("Loading HuggingFace model...")
-    hugging_face_reference_model, state_dict = load_hf_model(model_location_generator, model_version)
+    hugging_face_reference_model, state_dict = load_hf_model(model_version)
     configuration = hugging_face_reference_model.config
 
     # Prepare dataset
@@ -151,9 +151,7 @@ def run_test_perplexity(
     if not use_hf_model:
         # Load tt-metal model config
         model_config = get_model_config(model_config_str, max_seq_len, batch_size)
-        tt_cache_path = get_tt_cache_path(
-            model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
-        )
+        tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
         # Load tt-metal model
         logger.info("Moving weights (all layers) to device; might take some time...")

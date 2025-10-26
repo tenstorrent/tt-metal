@@ -10,12 +10,12 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_image_mlp import TtLlamaImageFeedForward
-from models.utility_functions import comp_allclose, comp_pcc, nearest_32, skip_for_grayskull
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "batch, num_chunks",
     ((1, 4),),
@@ -29,6 +29,7 @@ from models.utility_functions import comp_allclose, comp_pcc, nearest_32, skip_f
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_mlp_inference(batch, num_chunks, mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
 
@@ -57,8 +58,10 @@ def test_mlp_inference(batch, num_chunks, mesh_device, reset_seeds, ensure_gc):
     )
     reference_model.load_state_dict(partial_state_dict)
 
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = TtLlamaImageFeedForward(
         mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
         args=model_args,
         state_dict=state_dict,
         state_dict_prefix=first_layer_prefix,

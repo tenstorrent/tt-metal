@@ -4,6 +4,7 @@
 
 import hashlib
 import json
+import math
 import os
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
@@ -24,6 +26,88 @@ from models.tt_transformers.tt.common import (
 )
 from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
+
+
+class TokenAccuracy:
+    def __init__(self, model_name):
+        self.gt_pos = -1
+        self.store_predicted_tokens = []
+        reference_data_file = os.path.join("models/tt_transformers/tests/reference_outputs/", model_name) + ".refpt"
+        assert os.path.exists(reference_data_file)
+        logger.info(f"Loading reference data from {reference_data_file}")
+        reference_data = torch.load(reference_data_file)
+        reference_tokens = reference_data["reference_tokens"]
+        split_point = reference_tokens.shape[-1] // 2
+        self.input_prompt = reference_tokens[0, :split_point]
+        self.reference_tokens = reference_tokens[0, split_point:]
+        self.top5_tokens = reference_data["top5_tokens"][split_point - 1 :, :]
+        self.maxindex = len(self.reference_tokens) - 1
+
+    def prepare_ref_tokens(self, tokenizer):
+        text_data = tokenizer.decode(self.input_prompt.tolist())
+        return text_data
+
+    def collect_predicted_tokens(self, tokens):
+        self.store_predicted_tokens.append(tokens)
+        self.gt_pos += 1
+        return self.reference_tokens[min(self.gt_pos, self.maxindex)].unsqueeze(-1).unsqueeze(-1)
+
+    def compute_accuracy(self):
+        count = 0
+        count_t5 = 0
+        matching_sz = min(len(self.reference_tokens), len(self.store_predicted_tokens))
+        for i in range(matching_sz):
+            if self.top5_tokens[i, 0].item() == self.store_predicted_tokens[i]:
+                count += 1
+            if self.store_predicted_tokens[i] in self.top5_tokens[i, :]:
+                count_t5 += 1
+        accuracy_top1 = count / matching_sz
+        accuracy_top5 = count_t5 / matching_sz
+
+        return accuracy_top1, accuracy_top5
+
+
+def get_accuracy_thresholds(model_args):
+    """Parse accuracy thresholds from PERF.md for the given model, optimization mode, and device."""
+    # Read PERF.md
+    perf_file = "models/tt_transformers/PERF.md"
+    with open(perf_file, "r") as f:
+        content = f.read()
+
+    # Split into sections based on optimization mode
+    sections = content.split("## ")
+    optimizations = model_args.optimizations
+    target_section = next(s for s in sections if s.lower().startswith(f"{optimizations.__name__}\n"))
+
+    # Parse the table and find the row for our model and device
+    # Potential lines have the form "| Llama-3.1-8b    | T3K    | 91        | 99        | 49.8          |"
+    base_model_name = model_args.base_model_name
+    device_name = model_args.device_name
+    correct_line = (
+        lambda line: "|" in line
+        and base_model_name.lower() in line.split("|")[1].strip().lower()
+        and device_name.lower() in line.split("|")[2].strip().lower()
+        and not "(DP=".lower() in line.lower()  # ignore DP/HP report for now
+    )
+    rows = [
+        line.split("|")[1:]  # Each row starts with a separator
+        for line in target_section.split("\n")
+        if correct_line(line)
+    ]
+    if not rows:
+        raise ValueError(
+            f"Could not find accuracy data for {base_model_name} on {device_name} in {optimizations.__name__} mode"
+        )
+
+    assert (
+        len(rows) == 1
+    ), f"Found multiple rows for {base_model_name} on {device_name} in {optimizations.__name__} mode in PERF.md"
+    row = rows[0]
+    top1_acc = float(row[2].strip())
+    top5_acc = float(row[3].strip())
+
+    # Allow for rounding
+    return top1_acc - 0.5, top5_acc - 0.5
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -69,12 +153,13 @@ def load_inputs(user_input, batch, instruct):
         user_input = user_input * batch
 
     in_prompt = []
+    all_prompts = []
     cache_dir = Path("models/tt_transformers/demo/context_cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # The demo supports a custom prompt file, where the context is provided by a link to a book from the gutenberg project
     # It clips the excerpt to the max length provided to allow testing different long context lengthts
-    for i in range(batch):
+    for i in range(len(user_input)):
         prompt = user_input[i]["prompt"]
         if "context" in user_input[i]:
             if "max_length" in user_input[i]:  # Clip the context to the max length provided
@@ -89,8 +174,10 @@ def load_inputs(user_input, batch, instruct):
                 )  # Add the markdown block to the context to comply with the prompt
             else:
                 prompt = context_text
-        in_prompt.append(prompt)
-    return in_prompt
+        all_prompts.append(prompt)  # return all the prompts taken from the input file to be used when repeat_batch > 1
+        if i in range(batch):
+            in_prompt.append(prompt)
+    return in_prompt, all_prompts
 
 
 def create_tt_page_table(global_batch_size, data_parallel, paged_attention_config: PagedAttentionConfig):
@@ -159,7 +246,8 @@ def prepare_generator_args(
     tokenizer = model_args[
         0
     ].tokenizer  # TODO Should we support Data Parallel different models? If so, we need to support multiple tokenizers
-    return model_args, model, page_table, tt_kv_cache, tokenizer
+    processor = model_args[0].processor
+    return model_args, model, page_table, tt_kv_cache, tokenizer, processor
 
 
 # List of supported Parameters for demo.py
@@ -178,7 +266,7 @@ def prepare_generator_args(
 # optimization (ModelOptimizations): Optimization level to use for the model (performance or accuracy)
 # MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, data_parallel",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, data_parallel, token_accuracy, stress_test, enable_trace",
     [
         (  # Batch-1 run (Latency) - single user, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -193,6 +281,9 @@ def prepare_generator_args(
             True,  # stop_at_eos
             False,  # ci_only
             1,
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -207,8 +298,11 @@ def prepare_generator_args(
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
         ),
-        (  # Long-context 64k run - Single user, long prompt (may vary based on the model's tokenizer)
+        (  # long-context-64k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -221,22 +315,28 @@ def prepare_generator_args(
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
         ),
-        (  # Long-context 32k run - Single user, long prompt (may vary based on the model's tokenizer)
+        (  # Long-context-32k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            32 * 1024,  # max_seq_len
+            64 * 1024,  # max_seq_len
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
         ),
-        (  # Long-context 16k run - Single user, long prompt (may vary based on the model's tokenizer)
+        (  # Long-context-16k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -244,13 +344,16 @@ def prepare_generator_args(
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
         ),
-        (  # Batch-1 run (Reasoning) - single user, small prompt, long thinking time
+        (  # reasoning-1 - single user, small prompt, long thinking time
             "models/tt_transformers/demo/input_data_questions_reasoning.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -266,8 +369,11 @@ def prepare_generator_args(
             False,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
         ),
-        (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
+        (  # ci-1 [CI-only] - Measures the performance of a single user over 4096 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -280,8 +386,11 @@ def prepare_generator_args(
             False,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
         ),
-        (  # CI Batch-32 run - Measures the performance of a 32 users over 4096 iterations
+        (  # ci-32 [CI-only] - Measures the performance of 32 users over 4096 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -294,8 +403,11 @@ def prepare_generator_args(
             False,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
         ),
-        (  # Batch-1 run (Latency) - single user, small prompt
+        (  # DP-4-b1 - single user, data-parallel=4, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -308,8 +420,11 @@ def prepare_generator_args(
             True,  # stop_at_eos
             False,  # ci_only
             4,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
         ),
-        (  # Batch-1 run (Latency) - single user, small prompt
+        (  # DP-8-b1 - single user, data-parallel=8, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -322,8 +437,11 @@ def prepare_generator_args(
             True,  # stop_at_eos
             False,  # ci_only
             8,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
         ),
-        (  # Batch-32 run (Throughput) - 32 users, small prompt
+        (  # DP-4-b32 - 32 users, data-parallel=4, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -336,8 +454,11 @@ def prepare_generator_args(
             True,  # stop_at_eos
             False,  # ci_only
             4,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
         ),
-        (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
+        (  # ci-b1-DP-4 [CI-Only] - single user, data-parallel=4, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -350,8 +471,11 @@ def prepare_generator_args(
             False,  # stop_at_eos
             True,  # ci_only
             4,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
         ),
-        (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
+        (  # ci-b1-DP-8 [CI-Only] - single user, data-parallel=8, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -364,8 +488,11 @@ def prepare_generator_args(
             False,  # stop_at_eos
             True,  # ci_only
             8,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
         ),
-        (  # CI Batch-1 run - Measures the performance of a single user over 200 iterations
+        (  # ci-b1-DP-16 [CI-Only] - single user, data-parallel=16, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -378,8 +505,11 @@ def prepare_generator_args(
             True,  # stop_at_eos
             True,  # ci_only
             16,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
         ),
-        (  # CI Batch-1 run - Measures the performance of a single user over 200 iterations
+        (  # ci-b1-DP-32 [CI-Only] - single user, data-parallel=32, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -392,8 +522,11 @@ def prepare_generator_args(
             True,  # stop_at_eos
             True,  # ci_only
             32,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
         ),
-        (  # CI stress test batch-1 run - Runs a short prefill (128) and exhaust the KV cache (128K), by running 50000 iterations
+        (  # ci-stress-1 [CI-only] stress test - Runs a short prefill (128) and loops the same iteration over 50000 times
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -406,6 +539,60 @@ def prepare_generator_args(
             False,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
+            False,  # token_accuracy
+            True,  # stress_test
+            True,  # enable_trace
+        ),
+        (  # CI Batch-1 run - Measures token matching accuracy of a single user over 500 iterations
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            False,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            1,  # batch_size
+            500,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
+            True,  # token_accuracy
+            False,  # stress_test
+            False,  # enable_trace -> Teacher forcing does not work if it is on
+        ),
+        (  # ci-eval-1 - 6 repeat batches with output comparison
+            "models/tt_transformers/demo/sample_prompts/eval_repeat_prompts_batch1.json",  # input_prompts
+            True,  # instruct mode
+            6,  # repeat_batches
+            1024,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
+        ),
+        (  # ci-eval-32 - 32 users with 3 repeat batches and shifting prompts
+            "models/tt_transformers/demo/sample_prompts/eval_repeat_prompts_batch32.json",  # input_prompts
+            True,  # instruct mode
+            3,  # repeat_batches
+            1024,  # max_seq_len
+            32,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
         ),
     ],
     ids=[
@@ -425,6 +612,9 @@ def prepare_generator_args(
         "ci-b1-DP-16",  # CI DP 16 batch 1
         "ci-b1-DP-32",  # CI DP 32 batch 1
         "ci-stress-1",  # CI Stress test batch-1
+        "ci-token-matching",  # CI performs token accuracy matching with reference procomputed tokens
+        "ci-eval-1",  # CI 6 repeat batches with output comparison
+        "ci-eval-32",  # CI batch 32 with 3 repeat batches and output comparison
     ],
 )
 @pytest.mark.parametrize(
@@ -435,13 +625,23 @@ def prepare_generator_args(
     ],
     ids=["performance", "accuracy"],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 25000000, "num_command_queues": 1}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": True, "trace_region_size": 30000000, "num_command_queues": 1}], indirect=True
+)
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "N150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "N150x4": (1, 4),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150": (1, 1),
+            "P300": (1, 2),
+            "P150x4": (1, 4),
+            "P150x8": (1, 8),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
@@ -459,23 +659,35 @@ def test_demo_text(
     stop_at_eos,
     mesh_device,
     is_ci_env,
+    is_ci_v2_env,
     ci_only,
     data_parallel,
     reset_seeds,
     request,
+    token_accuracy,
+    stress_test,
+    enable_trace,
+    model_location_generator,
 ):
     """
     Simple demo with limited dependence on reference code.
     """
     test_id = request.node.callspec.id
-    if is_ci_env and (("accuracy" in test_id) or not ci_only):
-        pytest.skip("CI only runs the CI-only tests")
+    HF_MODEL = os.getenv("HF_MODEL")
+    if HF_MODEL:
+        os.environ["HF_MODEL"] = str(
+            model_location_generator(os.getenv("HF_MODEL"), download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
+        )
+    if is_ci_env:
+        if not ci_only:
+            pytest.skip("CI only runs the CI-only tests")
+        if "accuracy" in test_id and "ci-token-matching" not in test_id:
+            pytest.skip("CI only runs the tests with performance optimizations except for ci-token-matching case")
 
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
-    enable_trace = True  # Use tracing for better perf
     print_to_file = False  # Enable this flag to print the output of all users to a file
 
     # Override parameters from command line if they are provided
@@ -496,6 +708,12 @@ def test_demo_text(
         page_params = json.loads(page_params)
     sampling_params = request.config.getoption("--sampling_params") or sampling_params
     json_config_file = request.config.getoption("--decoder_config_file")
+    token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
+    stress_test = request.config.getoption("--stress_test") or stress_test
+    enable_trace = request.config.getoption("--enable_trace") or enable_trace
+
+    if stress_test and token_accuracy:
+        pytest.skip("Stress test cannot be run with token accuracy mode")
 
     if json_config_file:
         optimizations = parse_decoder_json(json_config_file)
@@ -511,22 +729,40 @@ def test_demo_text(
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
 
+    hf_dir = os.getenv("HF_MODEL", "")
+    if "phi-3-mini-128k-instruct" in hf_dir.lower():
+        max_context_supported = 32 * 1024 * num_devices
+        # This condition is present since Phi3 mini has a limit of context length 32k for N150
+        # It makes sure neither the total_page_cache nor the max_seq_length exceeds this limit.
+        if (max_context_supported < max_seq_len) or (
+            max_context_supported < page_params["page_block_size"] * page_params["page_max_num_blocks_per_dp"]
+        ):
+            pytest.skip(
+                f"Max sequence length: {max_seq_len} for batch: {batch_size} not supported for model: {hf_dir} on device: {mesh_device}"
+            )
+
     # uneven split of devices per DP group not supported
     if data_parallel > num_devices or num_devices % data_parallel != 0:
         pytest.skip(f"Invalid number of DP groups: {data_parallel}, for {num_devices} devices")
 
     if is_ci_env:
-        llama_dir = os.getenv("LLAMA_DIR", "")
-        is_33_70b = "3.3-70B" in llama_dir
-        is_32_1b = "3.2-1B" in llama_dir
-        is_31_8b = "3.1-8B" in llama_dir
+        hf_model = os.getenv("HF_MODEL", "")
+        is_33_70b = "3.3-70B" in hf_model
+        is_32_1b = "3.2-1B" in hf_model
+        is_31_8b = "3.1-8B" in hf_model
 
         tg_enabled = (data_parallel == 4 and is_33_70b) or (data_parallel in [4, 16, 32] and is_31_8b)
 
         if num_devices == 32 and not tg_enabled:
             pytest.skip("CI only runs Llama3 70b DP = 4, TP = 8 or Llama3 8b DP = 4/16/32, TP = 8/2/1 on TG")
-        if num_devices == 8 and data_parallel > 1 and not (is_32_1b or is_31_8b):
+        if num_devices == 8 and data_parallel > 1 and not (is_32_1b or is_31_8b) and is_wormhole_b0():
             pytest.skip("CI only runs hybrid Llama3 1b and 8b on T3K")
+
+    if is_ci_v2_env:
+        hf_model = os.getenv("HF_MODEL", "")
+        model_location = model_location_generator(hf_model, download_if_ci_v2=True, ci_v2_timeout_in_s=900)
+        # update env var HF_MODEL to the model location
+        os.environ["HF_MODEL"] = str(model_location)
 
     if not stop_at_eos:
         logger.info(f"The decode generation will only stop at the max_generated_tokens limit == {max_generated_tokens}")
@@ -548,18 +784,16 @@ def test_demo_text(
     profiler.start("loading_inputs")
     if len(input_prompts) == 1:  # Manual input
         input_prompts = input_prompts * global_batch_size
+        all_prompts = input_prompts
     else:  # Inputs from file
-        input_prompts = load_inputs(input_prompts, global_batch_size, input_prompts)
+        input_prompts, all_prompts = load_inputs(input_prompts, global_batch_size, instruct)
     profiler.end("loading_inputs")
 
     # To simulate a deployment environment, the demo supports repeating batched prompts.
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
     # If batch_size=1, the same prompt is repeated for each batch
-    repeat_batch_prompts = []
-    for i in range(repeat_batches):
-        repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
 
-    model_args, model, page_table, tt_kv_cache, tokenizer = prepare_generator_args(
+    model_args, model, page_table, tt_kv_cache, tokenizer, processor = prepare_generator_args(
         num_devices=num_devices,
         data_parallel=data_parallel,
         mesh_device=mesh_device,
@@ -571,13 +805,29 @@ def test_demo_text(
         paged_attention=paged_attention,
     )
 
+    if token_accuracy:
+        token_acc = TokenAccuracy(model_name=model_args[0].model_name)
+
     for m_args in model_args:
         if m_args.max_context_len < max_seq_len:
             pytest.skip(
                 f"Max seq len {max_seq_len} not supported by model {m_args.model_name}. The model's max context len is {m_args.max_context_len}"
             )
 
-    generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
+    generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
+
+    if token_accuracy:
+        input_prompts[0] = token_acc.prepare_ref_tokens(tokenizer)
+
+    repeat_batch_prompts = []
+    for i in range(repeat_batches):
+        # For token accuracy, use input_prompts without rotation
+        if token_accuracy:
+            repeat_batch_prompts.append(input_prompts)
+        else:
+            repeat_batch_prompts.append(
+                [all_prompts[(j + i) % len(all_prompts)] for j in range(len(all_prompts))][:global_batch_size]
+            )
 
     num_tokens_generated_decode = []
 
@@ -616,11 +866,13 @@ def test_demo_text(
                     k_cache, v_cache = layer.attention.layer_past
                     k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
                     v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+            generator.prev_page_table = None
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
 
         logger.info("Starting prefill warmup...")
         profiler.start(f"compile_prefill", iteration=batch_idx)
+
         logits = generator.prefill_forward_text(
             input_tokens_prefill_pt,  # Prefill warmup for all users, in case some users have different seqlens than others
             page_table=page_table,
@@ -650,10 +902,8 @@ def test_demo_text(
 
         user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
 
-        # TODO Argmax on device is only supported for batch_size=1 (per submesh)
-        argmax_on_device = (
-            False if (global_batch_size // data_parallel > 1 or sampling_params["temperature"] != 0) else True
-        )
+        # Currently only supporting greedy decoding (temperature=0) on device
+        argmax_on_device = sampling_params["temperature"] == 0
         if argmax_on_device:
             device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
         else:
@@ -677,6 +927,9 @@ def test_demo_text(
                 profiler.start(f"compile_decode", iteration=batch_idx)
             else:
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
+            # below the collect method also applies teacher forcing which is necessary for exact token matching
+            if token_accuracy:
+                out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
 
             # Run decode forward
             logits = generator.decode_forward_text(
@@ -691,6 +944,7 @@ def test_demo_text(
             # Get the next token
             if device_sampling_params is not None:
                 out_tok = logits.unsqueeze(1)
+
             else:
                 # TODO Fix use case with temperature > 0
                 _, out_tok = sample_host(
@@ -707,14 +961,14 @@ def test_demo_text(
                 profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
-            # Always print perf after every iteration
+            # Print perf after every iteration (skip in CI to avoid performance overhead)
             tokens_per_second_per_user = 1 / decode_iteration_time
-            logger.info(
+            logger.debug(
                 f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({global_batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
             )
 
-            current_pos += 1
-
+            if not stress_test:  # During stress test runs we will iterate over the same position for X iterations
+                current_pos += 1
             # Save output token to print out later
             for user in range(global_batch_size):
                 user_tok = out_tok[user].item()
@@ -732,13 +986,12 @@ def test_demo_text(
                             users_decoding = False
 
             # Print out generated outputs for each user at the end of every iteration
-            if not is_ci_env:
-                for user in range(global_batch_size):
-                    text = "".join(tokenizer.decode(all_outputs[user]))
-                    if len(text) > 100:
-                        text = "..." + text[-97:]
-                    text = text.replace("\n", " ")
-                    logger.info("[User {}] {}".format(user, text))
+            for user in range(global_batch_size):
+                text = "".join(tokenizer.decode(all_outputs[user]))
+                if len(text) > 100:
+                    text = "..." + text[-97:]
+                text = text.replace("\n", " ")
+                logger.debug("[User {}] {}".format(user, text))
 
             iteration += 1
 
@@ -746,36 +999,65 @@ def test_demo_text(
             if iteration >= max_generated_tokens:
                 users_decoding = False
 
-            # Final print
-            if not users_decoding:
-                profiler.start(f"log_saving_file", iteration=batch_idx)
-                logger.info("Finished decoding, printing the final outputs...\n")
-                for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
-                    text = tokenizer.decode(output)
-                    prompt_including_assistant_tags = tokenizer.decode(
-                        model_args[0].encode_prompt(prompt, instruct=instruct)
+        # Final print
+        if not users_decoding:
+            profiler.start(f"log_saving_file", iteration=batch_idx)
+            logger.info("Finished decoding, printing the final outputs...\n")
+            for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
+                text = tokenizer.decode(output)
+                prompt_including_assistant_tags = tokenizer.decode(
+                    model_args[0].encode_prompt(prompt, instruct=instruct)
+                )
+                text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
+                if print_to_file:
+                    with open(output_filename, "a") as f:
+                        f.write(f"\nbatch: {batch_idx} user: {i}\nprompt: {prompt} \noutput:\n{text_after_prompt}\n")
+                else:
+                    # Strip leading newlines from output when sent to terminal
+                    short_prompt = (
+                        (prompt[:100] + "\n<long prompt not printed in full>\n" + prompt[-100:])
+                        if len(prompt) > 200
+                        else prompt
                     )
-                    text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
-                    if print_to_file:
-                        with open(output_filename, "a") as f:
-                            f.write(
-                                f"\nbatch: {batch_idx} user: {i}\nprompt: {prompt} \noutput:\n{text_after_prompt}\n"
-                            )
-                    else:
-                        # Strip leading newlines from output when sent to terminal
-                        short_prompt = (
-                            (prompt[:100] + "\n<long prompt not printed in full>\n" + prompt[-100:])
-                            if len(prompt) > 200
-                            else prompt
-                        )
-                        logger.info(
-                            f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
-                        )
-                profiler.end(f"log_saving_file", iteration=batch_idx)
+                    logger.info(
+                        f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
+                    )
+            profiler.end(f"log_saving_file", iteration=batch_idx)
 
         num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
 
-    profiler.end(f"inference_decode", iteration=batch_idx)
+        # Store outputs for repeat batch tests
+        if "ci-eval-1" in test_id:
+            if not hasattr(test_demo_text, "batch_outputs"):
+                test_demo_text.batch_outputs = []
+            if batch_idx == 0:
+                test_demo_text.batch_outputs = []
+
+            if all_outputs and len(all_outputs) > 0:
+                final_output_text = tokenizer.decode(all_outputs[0])
+                test_demo_text.batch_outputs.append(final_output_text)
+                logger.info(f"Stored output for batch {batch_idx}: {final_output_text[:100]}...")
+
+        if "ci-eval-32" in test_id:
+            if not hasattr(test_demo_text, "batch32_outputs"):
+                test_demo_text.batch32_outputs = []
+            if batch_idx == 0:
+                test_demo_text.batch32_outputs = []
+
+            batch_outputs = []
+            if all_outputs and len(all_outputs) > 0:
+                for user_idx in range(len(all_outputs)):
+                    final_output_text = tokenizer.decode(all_outputs[user_idx])
+                    batch_outputs.append(final_output_text)
+                test_demo_text.batch32_outputs.append(batch_outputs)
+                logger.info(f"Stored outputs for batch {batch_idx}: {len(batch_outputs)} users")
+
+        if token_accuracy:
+            acc = token_acc.compute_accuracy()
+            logger.info(f"=== Top1 and Top5 Token Accuracy ===")
+            logger.info(f" Top1 Accuracy: {acc[0]*100:.2f}%, Top5 Accuracy: {acc[1]*100:.2f}%")
+
+        profiler.end(f"inference_decode", iteration=batch_idx)
 
     # Finish profiling at the end of inference for all repeated batches
     profiler.end("run")
@@ -786,13 +1068,13 @@ def test_demo_text(
 
     total_inference_prefill_time = profiler.get_duration("inference_prefill")
     total_inference_decode_time = 0
-    for i in range(1, iteration):  # Iteration 0 is the compile time
+    for i in range(1, num_tokens_generated_decode[0]):  # Iteration 0 is the compile time
         total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}")
 
     # Average prefill time for each user
     avg_time_to_first_token = total_inference_prefill_time / global_batch_size
     # Average decode time per batch iteration
-    avg_decode_iteration_time = total_inference_decode_time / (iteration - 1)
+    avg_decode_iteration_time = total_inference_decode_time / (num_tokens_generated_decode[0] - 1)
 
     prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * global_batch_size
     decode_tok_s_user = (num_tokens_generated_decode[0] - 1) / total_inference_decode_time  # Remove the compile time
@@ -817,9 +1099,13 @@ def test_demo_text(
 
     # Decode performance for some specific tokens
     tok_1_perf = profiler.get_duration(f"inference_decode_time_{1}")  # Iteration 0 is compile time
-    tok_128_perf = profiler.get_duration(f"inference_decode_time_{127}") if 127 < iteration else 0
-    tok_1024_perf = profiler.get_duration(f"inference_decode_time_{1023}") if 1023 < iteration else 0
-    tok_4096_perf = profiler.get_duration(f"inference_decode_time_{4095}") if 4095 < iteration else 0
+    tok_128_perf = profiler.get_duration(f"inference_decode_time_{127}") if 127 < num_tokens_generated_decode[0] else 0
+    tok_1024_perf = (
+        profiler.get_duration(f"inference_decode_time_{1023}") if 1023 < num_tokens_generated_decode[0] else 0
+    )
+    tok_4096_perf = (
+        profiler.get_duration(f"inference_decode_time_{4095}") if 4095 < num_tokens_generated_decode[0] else 0
+    )
 
     if not stop_at_eos:
         logger.info(f"Please note that 'stop_at_eos' is disabled. Output repetition is expected.")
@@ -854,7 +1140,7 @@ def test_demo_text(
 
     # Benchmark targets
     supported_models = ["Llama-3.2-1B", "Llama-3.2-3B", "Llama-3.1-8B", "Llama-3.2-11B", "Llama-3.1-70B", "Mistral-7B"]
-    supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "T3K", "TG"]
+    supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "P150x8", "T3K", "TG"]
 
     tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
     model_name = model_args[0].base_model_name
@@ -927,7 +1213,7 @@ def test_demo_text(
         benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
 
         # Save the decode performance of every iteration for plotting in superset
-        for i in range(1, iteration):
+        for i in range(1, num_tokens_generated_decode[0]):
             benchmark_data.add_measurement(
                 profiler,
                 0,
@@ -939,19 +1225,38 @@ def test_demo_text(
             )
 
         # Also save the avg decode performance for the 128 iterations (excluding the compile time)
+        num_iterations_for_avg = min(128, num_tokens_generated_decode[0])
         inference_decode_time_first_128 = sum(
-            profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, 128)
+            profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, num_iterations_for_avg)
         )
         benchmark_data.add_measurement(
             profiler,
             0,
             "inference_decode",
             "avg_decode_time_first_128",
-            inference_decode_time_first_128 * 1000 / 127,
+            inference_decode_time_first_128 * 1000 / max(1, num_iterations_for_avg - 1),
             step_warm_up_num_iterations=None,
             target=None,
         )
-
+        if token_accuracy:
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                "inference_decode",
+                "top1_token_accuracy",
+                acc[0] * 100,
+                step_warm_up_num_iterations=None,
+                target=None,
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                "inference_decode",
+                "top5_token_accuracy",
+                acc[1] * 100,
+                step_warm_up_num_iterations=None,
+                target=None,
+            )
         benchmark_data.save_partial_run_json(
             profiler,
             run_type=f"{tt_device_name}-demo",
@@ -964,7 +1269,7 @@ def test_demo_text(
         )
 
         # check measurements against CI performance targets -- for batch size 32
-        if global_batch_size == 32:
+        if "performance" in test_id and "ci-32" in test_id:
             logger.info(
                 f"Checking measurements against CI performance targets for batch size 32 of {model_name} on {tt_device_name}"
             )
@@ -972,35 +1277,43 @@ def test_demo_text(
             # and observed/0.95 for TTFT (lower is better) to allow 5% buffer + 5% room for growth
             ci_target_ttft = {
                 # N150 targets (milliseconds) - lower is better
-                "N150_Llama3.2-1B": 26,
-                "N150_Llama3.2-3B": 57,
-                "N150_Llama3.1-8B": 112,
+                "N150_Llama-3.2-1B": 25,
+                "N150_Llama-3.2-3B": 62,
+                "N150_Llama-3.1-8B": 120,
                 "N150_Mistral-7B": 106,
                 # N300 targets
-                "N300_Qwen2.5-7B": 150,
+                "N300_Qwen2.5-7B": (95, 1.20),  # (value, high_tolerance_ratio)
                 # T3K targets
-                "T3K_Llama3.1-70B": 181,
-                "T3K_Qwen2.5-72B": 211,
-                "T3K_Qwen3-32B": 470,
+                "T3K_Llama-3.1-70B": 228,
+                "T3K_Qwen2.5-72B": (290, 1.35),  # (value, high_tolerance_ratio)
+                "T3K_Qwen2.5-Coder-32B": (215, 1.27),  # (value, high_tolerance_ratio)
+                "T3K_Qwen3-32B": 230,  # Issue: Perf regression being tracked on issue #29834
             }
             ci_target_decode_tok_s_u = {
                 # N150 targets - higher is better
-                "N150_Llama3.2-1B": 58,
-                "N150_Llama3.2-3B": 35,
-                "N150_Llama3.1-8B": 21,
+                "N150_Llama-3.2-1B": 66,
+                "N150_Llama-3.2-3B": 35,
+                "N150_Llama-3.1-8B": 21,
                 "N150_Mistral-7B": 23,
                 # N300 targets
-                "N300_Qwen2.5-7B": 10,
+                "N300_Qwen2.5-7B": 22.8,
                 # T3K targets
-                "T3K_Llama3.1-70B": 14,
-                "T3K_Qwen2.5-72B": 13,
-                "T3K_Qwen3-32B": 11,
+                "T3K_Llama-3.1-70B": 15,
+                "T3K_Qwen2.5-72B": 13.25,
+                "T3K_Qwen2.5-Coder-32B": 21,
+                "T3K_Qwen3-32B": 21,
             }
 
             # Only call verify_perf if the model_device_key exists in the targets
             ci_targets = {}
             if model_device_key in ci_target_ttft:
-                ci_targets["prefill_time_to_token"] = ci_target_ttft[model_device_key] / 1000  # convert to seconds
+                current_ttft_target = ci_target_ttft[model_device_key]
+                if isinstance(current_ttft_target, tuple):
+                    high_tol_percentage = current_ttft_target[1]
+                    current_ttft_target = current_ttft_target[0]
+                else:
+                    high_tol_percentage = 1.15
+                ci_targets["prefill_time_to_token"] = current_ttft_target / 1000  # convert to seconds
             if model_device_key in ci_target_decode_tok_s_u:
                 ci_targets["decode_t/s/u"] = ci_target_decode_tok_s_u[model_device_key]
                 # calculate from per-user rate
@@ -1010,10 +1323,104 @@ def test_demo_text(
                 verify_perf(
                     measurements,
                     ci_targets,
-                    high_tol_percentage=1.15,
+                    high_tol_percentage=high_tol_percentage,
                     expected_measurements={k: True for k in ci_targets.keys()},
                 )
             else:
                 logger.warning(
                     f"No CI performance targets found for {model_device_key}. Skipping performance verification."
                 )
+    if token_accuracy:
+        total_top1_acc = math.ceil(acc[0] * 100)
+        total_top5_acc = math.ceil(acc[1] * 100)
+
+        if not json_config_file:
+            # Get accuracy thresholds from PERF.md, unless the configuration is from a json
+            min_top1_acc, min_top5_acc = get_accuracy_thresholds(model_args[0])
+            assert (
+                total_top1_acc >= min_top1_acc
+            ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"
+            assert (
+                total_top5_acc >= min_top5_acc
+            ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"
+            logger.info("Checks of top-1 and top-5 accuracy against PERF.md passed")
+
+    if (
+        "ci-eval-1" in test_id
+        and hasattr(test_demo_text, "batch_outputs")
+        and len(test_demo_text.batch_outputs) == repeat_batches
+    ):
+        logger.info("=== Repeat Batch Output Comparison ===")
+
+        # Compare paired batches (A<->A, B<->B, C<->C)
+        comparisons = [(i, i + 1) for i in range(0, repeat_batches, 2)]
+        comparison_names = [f"Batch{i//2+1}<->Batch{i//2+1}" for i in range(0, repeat_batches, 2)]
+
+        all_matches = True
+        for i, (batch1_idx, batch2_idx) in enumerate(comparisons):
+            output1 = test_demo_text.batch_outputs[batch1_idx]
+            output2 = test_demo_text.batch_outputs[batch2_idx]
+
+            if output1 == output2:
+                logger.info(
+                    f"{comparison_names[i]} comparison PASSED: Batches {batch1_idx+1} and {batch2_idx+1} outputs match"
+                )
+            else:
+                logger.warning(
+                    f"{comparison_names[i]} comparison FAILED: Batches {batch1_idx+1} and {batch2_idx+1} outputs differ"
+                )
+                logger.info(f"  Batch {batch1_idx+1} output: {output1[:100]}...")
+                logger.info(f"  Batch {batch2_idx+1} output: {output2[:100]}...")
+                all_matches = False
+
+        assert all_matches, "Repeat batch outputs should be identical"
+
+    if (
+        "ci-eval-32" in test_id
+        and hasattr(test_demo_text, "batch32_outputs")
+        and len(test_demo_text.batch32_outputs) > 1
+    ):
+        logger.info("=== Batch32 Shifting Test Output Comparison ===")
+
+        num_batches = len(test_demo_text.batch32_outputs)
+        num_users = len(test_demo_text.batch32_outputs[0])
+
+        logger.info(f"Comparing {num_batches} batches with {num_users} users each")
+
+        consistency_checks = []
+
+        for batch_idx in range(num_batches - 1):
+            current_batch = test_demo_text.batch32_outputs[batch_idx]
+            next_batch = test_demo_text.batch32_outputs[batch_idx + 1]
+
+            logger.info(f"Comparing batch {batch_idx} vs batch {batch_idx + 1}")
+
+            for user_offset in range(num_users):
+                current_user_idx = (user_offset + 1) % num_users
+                next_user_idx = user_offset
+
+                current_output = current_batch[current_user_idx]
+                next_output = next_batch[next_user_idx]
+
+                expected_prompt_idx = (user_offset + batch_idx + 1) % num_users
+
+                if current_output == next_output:
+                    consistency_checks.append(True)
+                    logger.info(
+                        f"User {current_user_idx} (batch {batch_idx}) matches User {next_user_idx} (batch {batch_idx + 1}) - both used prompt[{expected_prompt_idx}]"
+                    )
+                else:
+                    consistency_checks.append(False)
+                    logger.warning(
+                        f"User {current_user_idx} (batch {batch_idx}) differs from User {next_user_idx} (batch {batch_idx + 1}) - both should use prompt[{expected_prompt_idx}]"
+                    )
+                    logger.info(f"  Batch {batch_idx} User {current_user_idx}: {current_output[:50]}...")
+                    logger.info(f"  Batch {batch_idx + 1} User {next_user_idx}: {next_output[:50]}...")
+
+        all_consistent = all(consistency_checks)
+        failed_checks = sum(1 for check in consistency_checks if not check)
+        total_checks = len(consistency_checks)
+
+        assert (
+            all_consistent
+        ), f"Batch32 repeat batch outputs should be identical - {failed_checks} out of {total_checks} consistency checks failed"

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,13 +7,19 @@
 #include "ops/cross_entropy_bw/cross_entropy_bw.hpp"
 #include "ops/cross_entropy_fw/cross_entropy_fw.hpp"
 #include "ops/profiler_no_op/profiler_no_op.hpp"
+#include "ops/rmsnorm_bw/rmsnorm_bw.hpp"
 #include "ops/rmsnorm_fw/rmsnorm_fw.hpp"
+#include "ops/sdpa_fw/sdpa_fw.hpp"
+#include "ops/silu_bw/silu_bw.hpp"
 #include "ops/softmax/softmax.hpp"
 
 namespace ttml::metal {
 
 constexpr auto rmsnorm_fw =
     ttnn::register_operation<"ttml::metal::rmsnorm_fw", ttml::metal::ops::rmsnorm_fw::RMSNormForwardOperation>();
+
+constexpr auto rmsnorm_bw =
+    ttnn::register_operation<"ttml::metal::rmsnorm_bw", ttml::metal::ops::rmsnorm_bw::RMSNormBackwardOperation>();
 
 constexpr auto cross_entropy_fw = ttnn::register_operation<
     "ttml::metal::cross_entropy_fw",
@@ -28,5 +34,11 @@ constexpr auto softmax =
 
 constexpr auto profiler_no_op =
     ttnn::register_operation<"ttml::metal::profiler_no_op", ttml::metal::ops::profiler_no_op::ProfilerNoopOperation>();
+
+constexpr auto silu_bw =
+    ttnn::register_operation<"ttml::metal::silu_bw", ttml::metal::ops::silu_bw::SiLUBackwardOperation>();
+
+constexpr auto sdpa_fw =
+    ttnn::register_operation<"ttml::metal::sdpa_fw", ttml::metal::ops::sdpa_fw::SDPAForwardOperation>();
 
 }  // namespace ttml::metal

@@ -1,39 +1,68 @@
 # VGG Unet
-## How to run (256 x 256 resolution)
 
-To run the inference, make sure to build the project, activate the environment, and set the appropriate environment variables.
-For more information, refer to the [installation and build guide](https://docs.tenstorrent.com/tt-metalium/latest/get_started/get_started.html#install-and-build).
+## Platforms:
+    Wormhole (n150, n300)
 
-Command to run the inference pipeline with random weights and random tensor:
+## Introduction
+The VGG-UNet model performs brain tumor segmentation on MRI images. It takes an MRI scan as input and outputs a pixel-wise mask that highlights the regions where a tumor is present. In simple terms, it automatically identifies and outlines brain tumors in medical images to assist doctors in diagnosis and treatment planning.
 
+## Prerequisites
+- Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
+- Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
+
+## How to Run
+### Inference pipeline with random weights and random tensor:
 ```sh
-pytest tests/ttnn/integration_tests/vgg_unet/test_vgg_unet.py::test_vgg_unet[0-pretrained_weight_false]
+pytest models/demos/vgg_unet/tests/pcc/test_vgg_unet.py::test_vgg_unet[0-pretrained_weight_false]
 ```
 
-To use the model with the trained weights, follow these steps:
-
-- Download the weights from this [link](https://drive.google.com/file/d/1XZi_W5Pj4jLSI31WUAlYf0SWQMu0wL6X/view).
-
-- Place the downloaded file in the models/demos/vgg_unet directory.
-
-- Set the use_pretrained_weight option to True.
-
-If running on Wormhole N300, the following environment variable needs to be set:
-
+### Inference pipeline with trained weights:
 ```sh
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+pytest models/demos/vgg_unet/tests/pcc/test_vgg_unet.py::test_vgg_unet[0-pretrained_weight_true]
 ```
 
-Execute the following command:
-
-```sh
-pytest tests/ttnn/integration_tests/vgg_unet/test_vgg_unet.py::test_vgg_unet[0-pretrained_weight_true]
-```
-### E2E performant
-- end-2-end perf with Trace+2CQs is 77 FPS <br>
-
-
+### Performant Model with Trace+2CQ
+#### Single Device (BS=1):
 Use the following command to run the e2e perf with trace 2cq:
 ```sh
-pytest models/demos/vgg_unet/tests/test_e2e_performant.py
+pytest models/demos/vgg_unet/tests/perf/test_e2e_performant.py::test_vgg_unet_e2e
 ```
+- end-2-end perf with Trace+2CQs is 198 FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
+
+#### Multi Device (DP=2, n300):
+Use the following command to run the e2e perf with trace 2cq:
+```sh
+pytest models/demos/vgg_unet/tests/perf/test_e2e_performant.py::test_vgg_unet_e2e_dp
+```
+- end-2-end perf with Trace+2CQs is 318 FPS
+
+### Performant Demo with Trace+2CQ
+#### Single Device (BS=1):
+Use the following command to run performant model demo (supports single and multiple images):
+```sh
+pytest models/demos/vgg_unet/demo/demo.py::test_demo
+```
+
+#### Multi Device (DP=2, n300):
+Use the following command to run performant model demo:
+```sh
+pytest models/demos/vgg_unet/demo/demo.py::test_demo_dp
+```
+
+### Performant Data evaluation with Trace+2CQ:
+#### Single Device (BS=1):
+Use the following command to run the performant evaluation with Trace+2CQs:
+```sh
+pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet
+```
+
+#### Multi Device (DP=2, n300):
+Use the following command to run the performant evaluation with Trace+2CQs:
+```sh
+pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet_dp
+```
+
+## Details
+- Entry point for the model is `models/demos/vgg_unet/ttnn/ttnn_vgg_unet.py`
+- Batch Size: 1
+- Support Input Resolution: 256x256 (Height, Width)

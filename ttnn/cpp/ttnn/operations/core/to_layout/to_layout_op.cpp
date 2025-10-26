@@ -34,8 +34,7 @@ bool requires_padding_change(const ttnn::Tensor& tensor, ttnn::Layout layout) {
     // It's okay for conversion to tile layout to preserve arbitrary padding as long as it satisfies the alignment
     TensorSpec padded_spec(
         tensor.padded_shape(),
-        tt::tt_metal::TensorLayout(
-            tensor.dtype(), tt::tt_metal::PageConfig(layout, std::move(tile)), tensor.memory_config()));
+        tt::tt_metal::TensorLayout(tensor.dtype(), tt::tt_metal::PageConfig(layout, tile), tensor.memory_config()));
     return tensor.padded_shape() != padded_spec.padded_shape();
 }
 
@@ -142,7 +141,7 @@ Tensor to_layout_impl(
             if (tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
                 // ttnn::tilize_with_val_padding doesn't support height sharded tensors
                 // workaround by applying padding and then tilizing
-                SmallVector<std::pair<uint32_t, uint32_t>> padding = {
+                SmallVector<std::array<uint32_t, 2>> padding = {
                     {0, 0},
                     {0, 0},
                     {0, padded_output_shape[2] - output_shape[2]},

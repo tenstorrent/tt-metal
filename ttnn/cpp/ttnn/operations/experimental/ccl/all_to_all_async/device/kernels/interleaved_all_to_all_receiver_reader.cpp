@@ -45,11 +45,10 @@ void kernel_main() {
     uint32_t out_row_end = out_row_start + input_shard_row_tiles;
     uint32_t out_col_end = out_col_start + input_shard_col_tiles;
 
-    constexpr bool is_dram = true;
-    auto input_tensor_addrgen = InterleavedAddrGenFast<is_dram>{
-        .bank_base_address = input_buffer_addr, .page_size = page_size, .data_format = get_dataformat(cb_id)};
-    auto intermediate_tensor_addrgen = InterleavedAddrGenFast<is_dram>{
-        .bank_base_address = intermediate_buffer_addr, .page_size = page_size, .data_format = get_dataformat(cb_id)};
+    constexpr auto input_tensor_args = TensorAccessorArgs<10>();
+    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_buffer_addr, page_size);
+    constexpr auto intermediate_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
+    auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_buffer_addr, page_size);
 
     if (my_ring_id == remote_device_ring_id) {
         // Follows same logic as sender reader for local copy.
@@ -101,7 +100,7 @@ void kernel_main() {
                 uint32_t current_chunk_id = packet_id / chunk_granularity;
                 uint32_t wait_chunk_id = current_chunk_id + 1;  // Chunks are 1-based
                 // Ensure that current chunk has been sent
-                while (*global_semaphore_ptr < wait_chunk_id);
+                noc_semaphore_wait_min(global_semaphore_ptr, wait_chunk_id);
 
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                     uint32_t global_id = sender_relative_ring_id + packet_id * NUM_SENDERS;
@@ -121,5 +120,5 @@ void kernel_main() {
     }
 
     // Reset global semaphore
-    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr) = 0;
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr), 0);
 }

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,10 +10,9 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     compare_results_batch_norm,
 )
 from itertools import product
-from models.utility_functions import skip_for_grayskull
+from models.common.utility_functions import comp_pcc
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "input_shapes",
     [
@@ -120,7 +119,6 @@ def test_batch_norm_tests_fp32(
     assert comp_BN_Output
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize("eps", [1.0, 1e-05])
 @pytest.mark.parametrize("channel_size", [1, 4])
 @pytest.mark.parametrize("weight", [True, False])
@@ -164,7 +162,6 @@ def test_BN_fp32_full_value(device, channel_size, eps, weight, bias):
     assert status_2 and status_1
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "input_shapes",
     [
@@ -422,3 +419,105 @@ def test_batch_norm_output_Default(input_shapes, device):
     torch_result = torch.nn.functional.batch_norm(input=in_data, running_mean=mean_data, running_var=var_data)
     comp_BN_Output = compare_results_batch_norm([tt_output], [torch_result])
     assert comp_BN_Output
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        torch.Size([2, 3, 64, 64]),
+    ],
+)
+@pytest.mark.parametrize(
+    "training, weight, bias",
+    [
+        (True, True, True),
+        (True, False, False),
+        (False, True, True),
+        (False, False, False),
+    ],
+)
+def test_batch_norm_compute_config(input_shapes, training, weight, bias, device):
+    N, H, W, C = input_shapes
+    d_type = "float32"
+    torch.manual_seed(0)
+
+    # Generate the inputs
+    torch_input_tensor, tt_input_tensor = data_gen_with_range_batch_norm(
+        input_shapes, 5, 10, device, is_input=True, testing_dtype=d_type
+    )
+    torch_mean_tensor, tt_mean_tensor = data_gen_with_range_batch_norm(
+        input_shapes, 4, 10, device, testing_dtype=d_type
+    )
+    torch_var_tensor, tt_var_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 20, device, testing_dtype=d_type)
+    torch_weight_tensor, tt_weight_tensor = (
+        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=d_type) if weight else (None, None)
+    )
+    torch_bias_tensor, tt_bias_tensor = (
+        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=d_type) if bias else (None, None)
+    )
+
+    # Compute the torch result
+    torch_output_tensor = torch.nn.functional.batch_norm(
+        input=torch_input_tensor,
+        running_mean=torch_mean_tensor,
+        running_var=torch_var_tensor,
+        weight=torch_weight_tensor,
+        bias=torch_bias_tensor,
+        training=training,
+    )
+
+    # Helper function to execute batch_norm for a given compute config
+    # and return torch and tt tensors to compare
+    def do_batch_norm_for_config(compute_config):
+        tt_mean = ttnn.clone(tt_mean_tensor)
+        tt_var = ttnn.clone(tt_var_tensor)
+
+        tt_output_tensor = ttnn.batch_norm(
+            input=tt_input_tensor,
+            running_mean=tt_mean,
+            running_var=tt_var,
+            training=training,
+            weight=tt_weight_tensor,
+            bias=tt_bias_tensor,
+            compute_kernel_config=compute_config,
+        )
+
+        if training:
+            tt_tensors = [ttnn.to_torch(tt_mean), ttnn.to_torch(tt_var)]
+            torch_tensors = [torch_mean_tensor, torch_var_tensor]
+        else:
+            tt_tensors = [ttnn.to_torch(tt_output_tensor)]
+            torch_tensors = [torch_output_tensor]
+
+        return torch_tensors, tt_tensors
+
+    def compute_pccs_for_tensors(torch_tensors, tt_tensors):
+        pccs = []
+        for torch_tensor, tt_tensor in zip(torch_tensors, tt_tensors):
+            _, pcc = comp_pcc(torch_tensor, tt_tensor)
+            pccs.append(pcc)
+        return pccs
+
+    # Execute low-accuracy groupnorm
+    config_low = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+    )
+    torch_tensors, tt_tensors = do_batch_norm_for_config(config_low)
+    pccs_low = compute_pccs_for_tensors(torch_tensors, tt_tensors)
+
+    # Execute high-accuracy groupnorm
+    config_high = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+    )
+    torch_tensors, tt_tensors = do_batch_norm_for_config(config_high)
+    pccs_high = compute_pccs_for_tensors(torch_tensors, tt_tensors)
+
+    assert all(
+        high > low for high, low in zip(pccs_high, pccs_low)
+    ), "High-accuracy config should have higher PCC than low-accuracy config"

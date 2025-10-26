@@ -1,10 +1,13 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+#include <string.h>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "rand_device_operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::rand {
 
@@ -22,7 +25,6 @@ RandDeviceOperation::ProgramFactory::cached_program_t RandDeviceOperation::Progr
     tensor_return_value_t& output) {
     IDevice* device = output.device();
     auto grid = device->compute_with_storage_grid_size();
-    auto core_h = grid.y;
 
     uint32_t units_to_divide = output.physical_volume() / constants::TILE_HW;
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
@@ -46,22 +48,22 @@ RandDeviceOperation::ProgramFactory::cached_program_t RandDeviceOperation::Progr
     CircularBufferConfig cb_intermed_config =
         CircularBufferConfig(intermed_num_tiles * intermed_tile_size, {{intermed_cb_id, tt::DataFormat::Float32}})
             .set_page_size(intermed_cb_id, intermed_tile_size);
-    CBHandle cb_intermed = tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed_config);
 
     constexpr uint32_t dst_cb_id = CBIndex::c_0;
     CircularBufferConfig cb_output_config =
         CircularBufferConfig(in_out_num_tiles * dtype_tile_size, {{dst_cb_id, out_data_format}})
             .set_page_size(dst_cb_id, dtype_tile_size);
-    CBHandle cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/rand/device/kernels/";
-    const uint32_t output_is_dram = output.buffer()->buffer_type() == BufferType::DRAM ? 1 : 0;
-    const std::vector<uint32_t> writer_compile_time_args{intermed_cb_id, dst_cb_id, output_is_dram};
+    std::vector<uint32_t> writer_compile_time_args{intermed_cb_id, dst_cb_id};
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
     const std::string writer_file_path = kernels_dir_path + "writer_uniform.cpp";
     const std::vector<uint32_t> compute_compile_time_args{intermed_cb_id};
     const std::string compute_file_path = kernels_dir_path + "compute_uniform.cpp";
 
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     switch (output_dtype) {
         case DataType::BFLOAT16: writer_defines["OUTPUT_DTYPE_BFLOAT16"] = "1"; break;
         case DataType::FLOAT32: writer_defines["OUTPUT_DTYPE_FLOAT32"] = "1"; break;
@@ -100,7 +102,7 @@ RandDeviceOperation::ProgramFactory::cached_program_t RandDeviceOperation::Progr
         union {
             float f;
             uint32_t u;
-        } f2u_from, f2u_to;
+        } f2u_from{}, f2u_to{};
         f2u_from.f = operation_attributes.from;
         f2u_to.f = operation_attributes.to - eps;  // -eps make sure that generated number is < operation_attributes.to
 

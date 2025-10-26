@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
+#include <string>
 
 #include "binary_device_operation.hpp"
 #include "ttnn/operations/eltwise/binary/device/eltwise_multi_core_program_factory_common.hpp"
@@ -11,8 +11,8 @@
 #include <tt-metalium/work_split.hpp>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::binary {
 
@@ -22,7 +22,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using ttnn::operations::unary::UnaryWithParam;
+    using ttnn::operations::unary::EltwiseFusedActivations;
     using namespace tt::constants;
 
     const auto& a = tensor_args.input_tensor_a;
@@ -30,25 +30,22 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     auto& output = tensor_return_value;
     const auto& op_type = operation_attributes.binary_op_type;
 
-    std::vector<UnaryWithParam> fused_activations =
-        operation_attributes.activations.value_or(std::vector<UnaryWithParam>{});
+    auto fused_activations = operation_attributes.activations.value_or(EltwiseFusedActivations{});
 
     Program program{};
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
+    uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
     tt::DataFormat src1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b->dtype());
-    uint32_t src1_single_tile_size = tt_metal::detail::TileSize(src1_cb_data_format);
+    uint32_t src1_single_tile_size = tt::tile_size(src1_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
+    uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
     tt::DataFormat interim_cb0_format = src0_cb_data_format;
     tt::DataFormat interim_cb1_format = src1_cb_data_format;
 
     tt_metal::Buffer* src0_buffer = a.buffer();
     tt_metal::Buffer* src1_buffer = b->buffer();
-
-    tt_metal::IDevice* device = a.device();
 
     std::optional<ShardSpec> shard_spec = std::nullopt;
     bool src0_sharded = a.memory_config().is_sharded();
@@ -99,7 +96,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     }
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src1_config);
 
-    std::map<string, string> eltwise_defines = utils::get_defines(
+    std::map<std::string, std::string> eltwise_defines = utils::get_defines(
         op_type, a.dtype(), output.dtype(), fused_activations, operation_attributes.input_tensor_a_activation);
 
     if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN0_0") != eltwise_defines.end()) {
@@ -107,24 +104,24 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
             op_type == BinaryOpType::LOGADDEXP2) {
             interim_cb0_format = tt::DataFormat::Float16_b;
         }
-        uint32_t interim0_single_tile_size = tt_metal::detail::TileSize(interim_cb0_format);
+        uint32_t interim0_single_tile_size = tt::tile_size(interim_cb0_format);
         tt_metal::CircularBufferConfig cb_interm_config =
             tt_metal::CircularBufferConfig(
                 max_block_size * interim0_single_tile_size, {{tt::CBIndex::c_3, interim_cb0_format}})
                 .set_page_size(tt::CBIndex::c_3, interim0_single_tile_size);
-        auto cb_interm = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm_config);
+        tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm_config);
     }
     if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN1_0") != eltwise_defines.end()) {
         if (op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP ||
             op_type == BinaryOpType::LOGADDEXP2) {
             interim_cb1_format = tt::DataFormat::Float16_b;
         }
-        uint32_t interim1_single_tile_size = tt_metal::detail::TileSize(interim_cb1_format);
+        uint32_t interim1_single_tile_size = tt::tile_size(interim_cb1_format);
         tt_metal::CircularBufferConfig cb_interm2_config =
             tt_metal::CircularBufferConfig(
                 max_block_size * interim1_single_tile_size, {{tt::CBIndex::c_4, interim_cb1_format}})
                 .set_page_size(tt::CBIndex::c_4, interim1_single_tile_size);
-        auto cb_interm2 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm2_config);
+        tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm2_config);
     }
 
     uint32_t output_cb_index = tt::CBIndex::c_2;
@@ -137,25 +134,25 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     }
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_output_config);
 
-    std::map<string, string> reader_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_or_width_sharded};
     if (src0_sharded) {
         reader_defines["IN0_SHARDED"] = "1";
+    } else {
+        TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     }
     if (src1_sharded) {
         reader_defines["IN1_SHARDED"] = "1";
+    } else {
+        TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
     }
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     if (out_sharded) {
         writer_defines["OUT_SHARDED"] = "1";
     }
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)src0_is_dram, (std::uint32_t)src1_is_dram, (std::uint32_t)block_or_width_sharded};
-
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
         program,

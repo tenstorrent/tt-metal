@@ -4,16 +4,16 @@
 
 import pytest
 
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.falcon7b_common.demo.demo import run_falcon_demo_kv
-from models.utility_functions import is_wormhole_b0
 
 
 @pytest.mark.parametrize(
     "perf_mode, max_seq_len, expected_perf_metrics, greedy_sampling, expected_greedy_output_path",
     (
-        (True, 128, {"prefill_t/s": 11070, "decode_t/s": 3710, "decode_t/s/u": 14.5}, False, None),
-        (True, 1024, {"prefill_t/s": 12200, "decode_t/s": 3434, "decode_t/s/u": 13.4}, False, None),
-        (True, 2048, {"prefill_t/s": 10700, "decode_t/s": 3203, "decode_t/s/u": 12.5}, False, None),
+        (True, 128, {"prefill_t/s": 10900, "decode_t/s": 3737, "decode_t/s/u": 14.6}, False, None),
+        (True, 1024, {"prefill_t/s": 13300, "decode_t/s": 3379, "decode_t/s/u": 13.2}, False, None),
+        (True, 2048, {"prefill_t/s": 11600, "decode_t/s": 3174, "decode_t/s/u": 12.4}, False, None),
         (True, 128, None, False, None),
         (True, 1024, None, False, None),
         (True, 2048, None, False, None),
@@ -41,8 +41,6 @@ def test_demo_multichip(
     greedy_sampling,  # Option to use greedy decoding instead of top-k/p
     expected_greedy_output_path,  # Path for expected outputs for greedy decoding
     user_input,
-    model_location_generator,
-    get_tt_cache_path,
     mesh_device,
     is_ci_env,
 ):
@@ -70,8 +68,6 @@ def test_demo_multichip(
         batch_size=batch_size,
         max_seq_len=max_seq_len,
         model_config_strs_prefill_decode=["BFLOAT16-DRAM", "BFLOAT16-L1_SHARDED"],
-        model_location_generator=model_location_generator,
-        get_tt_cache_path=get_tt_cache_path,
         mesh_device=mesh_device,
         perf_mode=perf_mode,
         greedy_sampling=greedy_sampling,

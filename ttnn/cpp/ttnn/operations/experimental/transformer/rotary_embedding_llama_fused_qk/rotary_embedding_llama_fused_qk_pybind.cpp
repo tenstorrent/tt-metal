@@ -20,7 +20,6 @@ void py_bind_rotary_embedding_llama_fused_qk(pybind11::module& module) {
         module,
         ttnn::experimental::rotary_embedding_llama_fused_qk,
         R"doc(
-
             Applies rotary embeddings to both `q_input_tensor` and `k_input_tensor` in parallel using precomputed sine and cosine values. This function is optimized for parallel execution, and both input tensors should share the same batch size and head dimensions.
 
             Args:

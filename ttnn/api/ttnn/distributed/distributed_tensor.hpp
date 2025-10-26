@@ -9,71 +9,16 @@
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/memory_pin.hpp>
 
+#include "tt_stl/span.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
 
 namespace ttnn::distributed {
 
-struct MeshMapperConfig {
-    // Specifies the tensor should be replicated across devices.
-    struct Replicate {};
+using MeshMapperConfig = tt::tt_metal::distributed::MeshMapperConfig;
+using MeshComposerConfig = tt::tt_metal::distributed::MeshComposerConfig;
 
-    // Specifies the tensor should be sharded along the specified dimension.
-    struct Shard {
-        int dim = 0;
-    };
-
-    // Specifies placements for each dimension of the shape.
-    // The size of `placements` must match the dimensions of the shape.
-    //
-    // For example, sharding a 2x8 tensor over 2x2 mesh with {Replicate(), Shard{1}} will yield the following result:
-    //
-    //    Input Tensor [2, 8]:
-    // +----+----+----+----+----+----+---+-----+
-    // |  0 |  1 |  2 |  3 |  4 |  5 |  6 |  7 |
-    // |----+----+----+----+----+----+---+-----+
-    // |  8 |  9 | 10 | 11 | 12 | 13 | 14 | 15 |
-    // +----+----+----+----+----+----+---+-----+
-    //
-    //    Shape [2, 2]:
-    // +-------+-------+
-    // | (0,0) | (0,1) |
-    // +-------+-------+
-    // | (1,0) | (1,1) |
-    // +-------+-------+
-    //
-    // Distributed Tensor on Mesh (placements = {Replicate{}, Shard{1}}):
-    //
-    // +-----------------------------+-----------------------------+
-    // |     (0,0)                   |     (0,1)                   |
-    // |    +----+----+----+----+    |    +----+----+----+----+    |
-    // |    |  0 |  1 |  2 |  3 |    |    |  4 |  5 |  6 |  7 |    |
-    // |    +----+----+----+----+    |    +----+----+----+----+    |
-    // |    |  8 |  9 | 10 | 11 |    |    | 12 | 13 | 14 | 15 |    |
-    // |    +----+----+----+----+    |    +----+----+----+----+    |
-    // +-----------------------------+-----------------------------+
-    // |     (1,0)                   |     (1,1)                   |
-    // |    +----+----+----+----+    |    +----+----+----+----+    |
-    // |    |  0 |  1 |  2 |  3 |    |    |  4 |  5 |  6 |  7 |    |
-    // |    +----+----+----+----+    |    +----+----+----+----+    |
-    // |    |  8 |  9 | 10 | 11 |    |    | 12 | 13 | 14 | 15 |    |
-    // |    +----+----+----+----+    |    +----+----+----+----+    |
-    // +-----------------------------+-----------------------------+
-    //
-
-    using Placement = std::variant<Replicate, Shard>;
-    tt::stl::SmallVector<Placement> placements;
-
-    // If provided, the sharding will be performed according to this shape, but re-mapped to the mesh device shape in
-    // either row-major order, or preserving the original coordinates (if the shape fits within the mesh device
-    // entirely).
-    std::optional<ttnn::MeshShape> mesh_shape_override = std::nullopt;
-};
-
-std::ostream& operator<<(std::ostream& os, const MeshMapperConfig::Placement& placement);
-std::ostream& operator<<(std::ostream& os, const MeshMapperConfig& config);
-
-// Distributes a host tensor onto a multi-device configuration.
+// Mapper interface used for distributing a tensor onto a mesh.
 class TensorToMesh {
 public:
     ~TensorToMesh();
@@ -84,11 +29,9 @@ public:
 
     static TensorToMesh create(const MeshDevice& mesh_device, const MeshMapperConfig& config);
 
-    // Distributes a tensor onto a mesh.
-    // The input tensor is expected to be a "single device" tensor with `HostStorage`; the output tensor will be a
-    // distributed tensor with `MultiDeviceHostStorage`.
-    // TODO: #15840 - eliminate the distinction between `HostStorage` and `MultiDeviceHostStorage`. This means possibly
-    // removing this API, and instead relying on the overload that accepts the span of logical data.
+    // Maps a tensor onto a mesh.
+    // The input tensor is expected to be host-side tensor consisting of 1 device shard (i.e., mapped to 1x1 mesh).
+    // The output tensor will be a host-side tensor mapped to a mesh of the same shape as the mesh device.
     Tensor operator()(const Tensor& tensor) const;
 
     // Overload that takes in a span of logical data; used in situations where the tensor object might not be
@@ -100,8 +43,6 @@ public:
         const tt::tt_metal::MemoryPin& buffer_pin,
         const tt::tt_metal::TensorLayout& layout,
         T pad_value = 0) const;
-
-    tt::tt_metal::DistributedTensorConfig config() const;
 
 private:
     class Impl;
@@ -123,19 +64,7 @@ std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_d
 // the tensor.
 std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int dim);
 
-struct MeshComposerConfig {
-    // Specifies dimension of the tensor to concatenate.
-    tt::stl::SmallVector<int> dims;
-
-    // If provided, the concatenation will be performed according to this shape, but re-mapped to the mesh device shape
-    // in either row-major order, or preserving the original coordinates (if the shape fits within the mesh device
-    // entirely).
-    std::optional<ttnn::MeshShape> mesh_shape_override = std::nullopt;
-};
-
-std::ostream& operator<<(std::ostream& os, const MeshComposerConfig& config);
-
-// Composer interface that aggregates a multi-device tensor into a host tensor.
+// Composer interface used for aggregating a tensor distributed over a mesh.
 class MeshToTensor {
 public:
     ~MeshToTensor();
@@ -146,14 +75,12 @@ public:
 
     static MeshToTensor create(const MeshDevice& mesh_device, const MeshComposerConfig& config);
 
-    // Composes multi-device tensor into a single tensor.
-    // The input tensor is expected to be distributed over a mesh; the output tensor will be a "single device" tensor
-    // with `HostStorage`.
-    // TODO: #15840 - eliminate the distinction between `HostStorage` and `MultiDeviceHostStorage`. This means possibly
-    // removing this API, and instead relying on the overload that returns the vector of logical data.
+    // Composes a tensor distributed over a mesh.
+    // The input tensor is expected to be distributed over a mesh of the same shape as the mesh device.
+    // The output tensor will be a host-side tensor consisting of 1 device shard (i.e., mapped to 1x1 mesh).
     Tensor compose(const Tensor& tensor) const;
 
-    // Overload that returns a pair of logical data composed of a multi-device tensor and its shape.
+    // Overload that returns a pair of logical data and its shape, composed from a tensor distributed over a mesh.
     template <typename T>
     std::pair<std::vector<T>, Shape> compose(const Tensor& tensor) const;
 
@@ -178,7 +105,7 @@ Tensor distribute_tensor(
     const Tensor& tensor,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt,
-    ttnn::QueueId cq_id = ttnn::DefaultQueueId);
+    std::optional<ttnn::QueueId> cq_id = std::nullopt);
 
 // Creates a distributed tensor from a span of logical data specified in `buffer`.
 // `global_shape` must match the size of `buffer`; shapes of shards will be derived automatically based on the `mapper`,
@@ -192,7 +119,18 @@ Tensor create_distributed_tensor(
     const tt::tt_metal::TensorLayout& shard_layout,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt,
-    ttnn::QueueId cq_id = ttnn::DefaultQueueId,
+    std::optional<ttnn::QueueId> cq_id = std::nullopt,
+    T pad_value = 0);
+
+// Overload for unowned spans of data.
+template <typename T>
+Tensor create_distributed_tensor(
+    tt::stl::Span<const T> buffer,
+    const ttnn::Shape& global_shape,
+    const tt::tt_metal::TensorLayout& shard_layout,
+    const TensorToMesh& mapper,
+    std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt,
+    std::optional<ttnn::QueueId> cq_id = std::nullopt,
     T pad_value = 0);
 
 // Aggregates a multi-device tensor into a host tensor according to the `composer`.

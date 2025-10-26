@@ -1,10 +1,14 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include <enchantum/enchantum.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/routing_table_generator.hpp>
+#include <utility>
 
 namespace tt::tt_metal::distributed {
 
@@ -23,6 +27,10 @@ struct MeshCoreCoord {
 struct SocketConnection {
     MeshCoreCoord sender_core;
     MeshCoreCoord receiver_core;
+
+    bool operator==(const SocketConnection& other) const {
+        return sender_core == other.sender_core && receiver_core == other.receiver_core;
+    }
 };
 
 // Specifies how memory is allocated for this socket.
@@ -46,9 +54,12 @@ struct SocketConfig {
     SocketMemoryConfig socket_mem_config;
     // Specifies the ranks of the sender and receiver hosts in a multi-host context.
     // Used for inital handshaking and validation of the socket configs.
-    uint32_t sender_rank = 0;
-    uint32_t receiver_rank = 0;
+    multihost::Rank sender_rank{0};
+    multihost::Rank receiver_rank{0};
+    std::shared_ptr<multihost::DistributedContext> distributed_context = nullptr;
 };
+
+enum class SocketEndpoint : uint8_t { SENDER, RECEIVER };
 
 // Socket Handle exposed to the user.
 // A user can use this object to allocate and open multiple connections between two different MeshDevices
@@ -57,8 +68,9 @@ struct SocketConfig {
 // through the socket_config object.
 class MeshSocket {
 public:
+    MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketConfig& config);
     // Sockets can only be created in sender/receiver pairs.
-    static std::pair<MeshSocket, MeshSocket> create_sockets(
+    static std::pair<MeshSocket, MeshSocket> create_socket_pair(
         const std::shared_ptr<MeshDevice>& sender,
         const std::shared_ptr<MeshDevice>& receiver,
         const SocketConfig& config);
@@ -69,16 +81,55 @@ public:
     // Access the underlying configuration of the instantiated socket (connectivity of senders/receivers and the socket
     // memory config).
     const SocketConfig& get_config() const;
+    // Access the socket endpoint type (SENDER or RECEIVER).
+    SocketEndpoint get_socket_endpoint_type() const { return socket_endpoint_type_; }
+
+    tt::tt_fabric::FabricNodeId get_fabric_node_id(SocketEndpoint endpoint, const MeshCoordinate& coord) const;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("config", "socket_endpoint_type", "fabric_node_id_map");
+    auto attribute_values() const { return std::forward_as_tuple(config_, socket_endpoint_type_, fabric_node_id_map_); }
 
 private:
     MeshSocket(
         std::shared_ptr<MeshBuffer> data_buffer,
         std::shared_ptr<MeshBuffer> config_buffer,
-        const SocketConfig& config) :
-        data_buffer_(data_buffer), config_buffer_(config_buffer), config_(config) {}
+        const SocketConfig& config,
+        SocketEndpoint socket_endpoint_type) :
+        data_buffer_(std::move(data_buffer)),
+        config_buffer_(std::move(config_buffer)),
+        config_(config),
+        socket_endpoint_type_(socket_endpoint_type) {}
+    void connect_with_peer(const std::shared_ptr<multihost::DistributedContext>& context);
+
     std::shared_ptr<MeshBuffer> data_buffer_;
     std::shared_ptr<MeshBuffer> config_buffer_;
     SocketConfig config_;
+    SocketEndpoint socket_endpoint_type_;
+    // TODO: replace with enchantum::array
+    std::
+        array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, enchantum::count<SocketEndpoint>>
+            fabric_node_id_map_;
 };
 
 }  // namespace tt::tt_metal::distributed
+
+namespace std {
+template <>
+struct hash<tt::tt_metal::distributed::MeshCoreCoord> {
+    size_t operator()(const tt::tt_metal::distributed::MeshCoreCoord& coord) const noexcept;
+};
+template <>
+struct hash<tt::tt_metal::distributed::SocketConnection> {
+    size_t operator()(const tt::tt_metal::distributed::SocketConnection& conn) const noexcept;
+};
+template <>
+struct hash<tt::tt_metal::distributed::SocketConfig> {
+    size_t operator()(const tt::tt_metal::distributed::SocketConfig& config) const noexcept;
+};
+template <>
+struct hash<tt::tt_metal::distributed::MeshSocket> {
+    size_t operator()(const tt::tt_metal::distributed::MeshSocket& socket) const noexcept;
+};
+
+}  // namespace std

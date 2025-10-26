@@ -74,7 +74,6 @@ def run_conv(
         shard_layout = None
 
     conv_config = ttnn.Conv1dConfig(
-        dtype=output_dtype,
         weights_dtype=weights_dtype,
         shard_layout=shard_layout,
         deallocate_activation=deallocate_activation,
@@ -109,6 +108,7 @@ def run_conv(
         conv_config=conv_config,
         compute_config=compute_config,
         groups=groups,
+        dtype=output_dtype,
         return_output_dim=True,
         return_weights_and_bias=True,
     )
@@ -354,13 +354,12 @@ def test_squeezebert_conv1d(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, groups",
-    ((1, 32, 32, 1024, 3, 1, 1, 1),),
+    (
+        (1, 32, 32, 1024, 3, 1, 1, 1),
+        (2, 512, 512, 1024, 7, 1, 3, 512),
+    ),
 )
 @pytest.mark.parametrize("prepare_weights", [True, False])
-@pytest.mark.parametrize(
-    "preprocess_weights_on_device",
-    [True, False],
-)
 def test_with_prepare_weights(
     device,
     batch_size,
@@ -372,11 +371,7 @@ def test_with_prepare_weights(
     padding,
     groups,
     prepare_weights,
-    preprocess_weights_on_device,
 ):
-    if prepare_weights and preprocess_weights_on_device:
-        pytest.skip("preprocess_weights_on_device isn't needed when prepare_weights is True")
-
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_length]
     conv_weight_shape = [output_channels, input_channels // groups, kernel_size]
@@ -408,20 +403,19 @@ def test_with_prepare_weights(
             input_height=input_length,
             input_width=1,
             kernel_size=(kernel_size, 1),
-            stride=(1, 1),
-            padding=(1, 0),
+            stride=(stride, 1),
+            padding=(padding, 0),
             dilation=(1, 1),
             has_bias=False,
-            groups=1,
+            groups=groups,
             device=device,
+            input_dtype=ttnn.bfloat16,
         )
 
     conv_config = ttnn.Conv1dConfig(
-        dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
         shard_layout=None,
         deallocate_activation=False,
-        preprocess_weights_on_device=preprocess_weights_on_device,
     )
 
     tt_output_tensor_on_device, out_length = ttnn.conv1d(
@@ -437,6 +431,7 @@ def test_with_prepare_weights(
         input_length=input_length,
         conv_config=conv_config,
         groups=groups,
+        dtype=ttnn.bfloat16,
         return_output_dim=True,
     )
 

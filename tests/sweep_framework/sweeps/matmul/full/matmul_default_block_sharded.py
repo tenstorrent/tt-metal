@@ -19,7 +19,7 @@ from tests.ttnn.utils_for_testing import (
     start_measuring_time,
     stop_measuring_time,
 )
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
 TIMEOUT = 15
@@ -175,7 +175,7 @@ def test_matmul(
     input_layout,
     compute_kernel_config,
 ):
-    run_matmul(
+    (result, msg), e2e_perf = run_matmul(
         device,
         block_sharded_specs,
         n_size,
@@ -190,6 +190,8 @@ def test_matmul(
         input_layout,
         compute_kernel_config,
     )
+    assert result, msg
+    logger.info(f"e2e_perf: {e2e_perf}")
 
 
 def run(

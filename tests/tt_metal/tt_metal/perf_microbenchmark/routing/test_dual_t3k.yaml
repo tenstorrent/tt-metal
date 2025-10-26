@@ -1,0 +1,63 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+Tests:
+  # ======================================================================================
+  # Test 1: Inter-Mesh Directed Traffic
+  # ======================================================================================
+  - name: InterMeshCrossTraffic
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 2048
+      num_packets: 250
+    senders:
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [1, [0, 0]]
+      - device: [0, [1, 3]]
+        patterns:
+          - destination:
+              device: [1, [1, 3]]
+      - device: [0, [0, 2]]
+        patterns:
+          - destination:
+              device: [1, [1, 1]]
+
+  # ======================================================================================
+  # Test 2: Parameterized All to AllUnicast Test
+  # ======================================================================================
+  - name: UnicastAlltoAll
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    parametrization_params:
+      size: [512, 1024, 2048, 4096]
+      num_packets: [50, 100]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+    defaults:
+      ftype: unicast
+    patterns:
+      - type: all_to_all
+        iterations: 25
+
+  # ======================================================================================
+  # Test 3: Random Pairing Extended
+  # ======================================================================================
+  - name: UnicastRandomPairingExtended
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    parametrization_params:
+      size: [1024, 2048]
+      num_packets: [100, 250]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+    patterns:
+      - type: full_device_random_pairing
+        iterations: 3

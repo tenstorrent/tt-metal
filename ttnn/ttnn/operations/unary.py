@@ -21,6 +21,21 @@ def register_ttnn_cpp_unary_function(unary_function):
             result += 3.434189657547
             return result
 
+        def torch_hardmish(x):
+            x_f32 = x.to(torch.float32)
+            result_f32 = x_f32 * torch.clamp(x_f32 + 2.8, min=0.0, max=5.0) / 5
+
+            if x.dtype == torch.bfloat16:
+                # Simulate SFPSTORE truncating
+                result_int32 = result_f32.view(torch.int32)
+                shifted_int32 = torch.bitwise_right_shift(result_int32, 16)
+                truncated_int16 = shifted_int32.to(torch.int16)
+                final_result = truncated_int16.view(torch.bfloat16)
+            else:
+                final_result = result_f32
+
+            return final_result
+
         name_to_golden_function = {
             "abs": torch.abs,
             "atan": torch.atan,
@@ -71,7 +86,6 @@ def register_ttnn_cpp_unary_function(unary_function):
             "softplus": torch.nn.functional.softplus,
             "sigmoid_accurate": torch.sigmoid,
             "asinh": torch.asinh,
-            "atanh": torch.atanh,
             "cbrt": torch_cbrt,
             "cosh": torch.cosh,
             "deg2rad": torch.deg2rad,
@@ -81,6 +95,7 @@ def register_ttnn_cpp_unary_function(unary_function):
             "lgamma": torch.lgamma,
             "log1p": torch.log1p,
             "mish": lambda _x: torch.nn.functional.mish(_x.to(torch.float)),
+            "hardmish": lambda _x: torch_hardmish(_x),
             "multigammaln": torch_multigammaln,
             "rad2deg": torch.rad2deg,
             "sinh": torch.sinh,
@@ -154,7 +169,6 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.sigmoid_accurate,
     # Other unaries (composite operations - tt_eager dependency)
     ttnn.asinh,
-    ttnn.atanh,
     ttnn.cbrt,
     ttnn.cosh,
     ttnn.deg2rad,
@@ -164,6 +178,7 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.lgamma,
     ttnn.log1p,
     ttnn.mish,
+    ttnn.hardmish,
     ttnn.multigammaln,
     ttnn.rad2deg,
     ttnn.sinh,
@@ -179,8 +194,12 @@ for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
 def _golden_function_asin(input_tensor_a, *args, device, **kwargs):
     import torch
 
-    return torch.nan_to_num(
-        torch.asin(input_tensor_a), nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf()
+    result = torch.asin(input_tensor_a)
+    # ttnn returns inf instead of nan for bfloat16, so mask NaNs to inf in torch.asin
+    return (
+        result.masked_fill_((input_tensor_a < -1) | (input_tensor_a > 1), float("inf"))
+        if input_tensor_a.dtype == torch.bfloat16
+        else result
     )
 
 
@@ -190,8 +209,12 @@ ttnn.attach_golden_function(ttnn.asin, golden_function=_golden_function_asin)
 def _golden_function_acos(input_tensor_a, *args, device, **kwargs):
     import torch
 
-    return torch.nan_to_num(
-        torch.acos(input_tensor_a), nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf()
+    result = torch.acos(input_tensor_a)
+    # ttnn returns inf instead of nan for bfloat16, so mask NaNs to inf in torch.acos
+    return (
+        result.masked_fill_((input_tensor_a < -1) | (input_tensor_a > 1), float("inf"))
+        if input_tensor_a.dtype == torch.bfloat16
+        else result
     )
 
 
@@ -206,6 +229,20 @@ def _golden_function_acosh(input_tensor_a, *args, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn.acosh, golden_function=_golden_function_acosh)
+
+
+def _golden_function_atanh(input_tensor_a, *args, **kwargs):
+    import torch
+
+    result = torch.atanh(input_tensor_a)
+    return (
+        result.masked_fill_((input_tensor_a <= -1) | (input_tensor_a >= 1), float("inf"))
+        if input_tensor_a.dtype == torch.bfloat16
+        else result
+    )
+
+
+ttnn.attach_golden_function(ttnn.atanh, golden_function=_golden_function_atanh)
 
 
 def _golden_function_reciprocal(input_tensor_a, *args, device, **kwargs):
@@ -237,7 +274,7 @@ def _golden_function_elu(input_tensor_a, *args, alpha=1.0, **kwargs):
 ttnn.attach_golden_function(ttnn.elu, golden_function=_golden_function_elu)
 
 
-def _golden_function_hardtanh(input_tensor_a, min_val=-1.0, max_val=1.0, *args, **kwargs):
+def _golden_function_hardtanh(input_tensor_a, *args, min_val=-1.0, max_val=1.0, **kwargs):
     import torch
 
     return torch.nn.functional.hardtanh(input_tensor_a, min_val, max_val)
@@ -391,6 +428,8 @@ def _golden_function_bitwise_left_shift(input_tensor_a, shift_amt, *args, **kwar
 
 
 ttnn.attach_golden_function(ttnn.bitwise_left_shift, golden_function=_golden_function_bitwise_left_shift)
+
+ttnn.attach_golden_function(ttnn.logical_left_shift, golden_function=_golden_function_bitwise_left_shift)
 
 
 def _golden_function_bitwise_right_shift(input_tensor_a, shift_amt, *args, **kwargs):

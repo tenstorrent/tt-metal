@@ -10,9 +10,7 @@
 
 #include <mutex>
 #include <stack>
-#include <typeindex>
 #include <unordered_map>
-#include <functional>
 #include <any>
 namespace ttnn::graph {
 
@@ -27,6 +25,14 @@ public:
     bool hook_deallocate(tt::tt_metal::Buffer* buffer) override;
 
     bool hook_program(tt::tt_metal::Program* program) override;
+
+    bool hook_write_to_device(const tt::tt_metal::Buffer* buffer) override;
+
+    bool hook_read_from_device(tt::tt_metal::Buffer* buffer) override;
+
+    bool hook_read_from_device(const tt::tt_metal::distributed::MeshBuffer* mesh_buffer) override;
+
+    bool hook_write_to_device(const tt::tt_metal::distributed::MeshBuffer* mesh_buffer) override;
 
     ~ProcessorHooks() override = default;
 
@@ -70,7 +76,6 @@ public:
         std::vector<std::string> arguments;
         std::vector<int> connections;
     };
-    using ProcessFunc = std::function<void(const std::any&)>;
 
 private:
     std::shared_ptr<ProcessorHooks> hook;
@@ -82,26 +87,25 @@ private:
     std::unordered_map<std::int64_t, int> tensor_id_to_counter;
     int last_finished_op_id = -1;
     std::vector<Vertex> graph;
-    std::unordered_map<std::type_index, ProcessFunc> begin_function_any_map;
-    std::unordered_map<std::type_index, ProcessFunc> end_function_any_map;
 
     int add_tensor(const Tensor& t);
     int add_buffer(const tt::tt_metal::Buffer* buffer);
 
-    void begin_function_process_ref_vector(const std::any& any_val);
-    void begin_function_process_ref_vector_optional(const std::any& any_val);
-    void begin_function_process_ref_vector_optional_const(const std::any& any_val);
-    void begin_function_process_ref_tensor(const std::any& any_val);
-    void begin_function_process_ref_const_tensor(const std::any& any_val);
-    void begin_function_process_ref_optional_tensor(const std::any& any_val);
-    void begin_function_process_ref_optional_tensor_const(const std::any& any_val);
-    void begin_function_process_ref_optional_const_tensor(const std::any& any_val);
+    void begin_function_process(const Tensor& tensor);
 
-    void end_function_process_vector(const std::any& any_val);
-    void end_function_process_vector_optional(const std::any& any_val);
-    void end_function_process_vector_optional_const(const std::any& any_val);
-    void end_function_process_tensor(const std::any& any_val);
-    void end_function_process_optional_tensor(const std::any& any_val);
+    template <typename T>
+    void begin_function_process(const std::optional<T>& tensor_opt);
+
+    template <typename T>
+    void begin_function_process(const std::vector<T>& tensor_vec);
+
+    void end_function_process(const Tensor& tensor);
+
+    template <typename T>
+    void end_function_process(const std::optional<T>& tensor_opt);
+
+    template <typename T>
+    void end_function_process(const std::vector<T>& tensor_vec);
 
     void track_function_end_impl();
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_align.hpp"
@@ -30,7 +30,7 @@ public:
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
     void add_prefetch_relay_linear() {
-        this->cmd_write_offsetB += sizeof(CQPrefetchCmd);
+        this->cmd_write_offsetB += sizeof(CQPrefetchCmdLarge);
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
@@ -39,12 +39,20 @@ public:
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
-    void add_data(uint32_t cmd_write_offset_incrementB) { this->cmd_write_offsetB += cmd_write_offset_incrementB; }
+    template <bool pcie_aligned = true>
+    void add_data(uint32_t cmd_write_offset_incrementB) {
+        this->cmd_write_offsetB += cmd_write_offset_incrementB;
+        if constexpr (not pcie_aligned) {
+            this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+        }
+    }
+
+    void add_alignment() { this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment); }
 
     template <bool flush_prefetch = true, bool inline_data = false>
     void add_dispatch_write_linear(uint32_t data_sizeB) {
         this->add_prefetch_relay_inline();
-        this->cmd_write_offsetB += sizeof(CQDispatchCmd);
+        this->cmd_write_offsetB += sizeof(CQDispatchCmdLarge);
 
         if constexpr (flush_prefetch) {
             if constexpr (inline_data) {
@@ -109,11 +117,12 @@ public:
 
     template <bool inline_data = false>
     void add_dispatch_write_paged(uint32_t page_size, uint32_t pages) {
-        uint32_t data_sizeB = page_size * pages;
         this->add_prefetch_relay_inline();
         this->cmd_write_offsetB += sizeof(CQDispatchCmd);
         if constexpr (inline_data) {
-            this->add_data(tt::align(data_sizeB, this->pcie_alignment));
+            uint32_t data_sizeB = page_size * pages;
+            this->add_data(data_sizeB);
+            this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
         }
     }
 
@@ -154,7 +163,6 @@ public:
         static_assert(
             std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
             std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
-        bool multicast = std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value;
 
         uint32_t packed_write_max_multicast_sub_cmds =
             get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
@@ -233,6 +241,9 @@ public:
 
     // Clear calculator state
     void clear() { this->cmd_write_offsetB = 0; }
+
+    // Update state
+    void update_write_offset_bytes(uint32_t update_valueB) { this->cmd_write_offsetB += update_valueB; }
 
 private:
     void add_prefetch_relay_inline() { this->cmd_write_offsetB += sizeof(CQPrefetchCmd); }

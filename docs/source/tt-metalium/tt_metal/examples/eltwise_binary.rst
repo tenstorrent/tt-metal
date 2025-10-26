@@ -9,7 +9,7 @@ Although looking trivial, this example introduces essential concepts that are us
 
 We'll go through any new code section by section. This builds on top of
 previous examples. Note that we have this exact, full example program is located under
-``tt_metal/programming_examples/eltwise_binary``, so you can follow along.
+``tt_metal/programming_examples/metal_example_eltwise_binary``, so you can follow along.
 
 To build and execute, you may use the following commands. Note that we include
 the necessary environment variables here, but you may possibly need more
@@ -20,15 +20,15 @@ depending on the most up-to-date installation methods.
     export TT_METAL_HOME=</path/to/tt-metal>
     ./build_metal.sh --build-programming-examples
     # To run the example
-    ./build/programming_examples/eltwise_binary
+    ./build/programming_examples/metal_example_eltwise_binary
 
 Program setup
 -------------
 
 Initializing Metalium is almost the same as before. To recap, we need to
 
-1. Open a device (again we are using device 0)
-2. Obtain the command queue to issue down/uploads and program execution
+1. Create a mesh device (even single devices are treated as a 1x1 mesh)
+2. Obtain the mesh command queue to issue data down/uploads and program execution
 3. Create a program object to hold our kernels
 4. Define the core we are going to use (in this case, only one at {0, 0})
 5. Some basic constants for tile and total buffer sizes
@@ -36,30 +36,32 @@ Initializing Metalium is almost the same as before. To recap, we need to
 .. code-block:: cpp
 
     constexpr int device_id = 0;
-    IDevice* device = CreateDevice(device_id);
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
-    CommandQueue& cq = device->command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 
     Program program = CreateProgram();
 
     constexpr CoreCoord core = {0, 0};
     constexpr uint32_t n_tiles = 64;
-    constexpr uint32_t elements_per_tile = TILE_WIDTH * TILE_HEIGHT;
+    constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
     constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
 
 This time, instead of 2 DRAM buffers to copy data out and back, we will create 3 buffers. 2 as data sources and 1 as the output. Page size is set to one tile. This is the most common setting for buffers in Metalium as the compute engines expect to operate on tiles of data.
 
 .. code-block:: cpp
 
-    InterleavedBufferConfig config{
-        .device = device,                       // The device to create the buffer on
-        .size = n_tiles * tile_size_bytes,      // The size of the buffer in bytes
-        .page_size = tile_size_bytes,           // The page size of the buffer in bytes. In this case, will be
-                                                // one tile per page.
+    distributed::DeviceLocalBufferConfig dram_config{
+        .page_size = tile_size_bytes,
         .buffer_type = BufferType::DRAM};       // This is a DRAM buffer.
-    auto src0_dram_buffer = CreateBuffer(config);
-    auto src1_dram_buffer = CreateBuffer(config);
-    auto dst_dram_buffer = CreateBuffer(config);
+
+    distributed::ReplicatedBufferConfig buffer_config{
+        .size = n_tiles * tile_size_bytes       // Total bytes per device (replicated across the mesh).
+    };
+
+    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
 
 Data preparation and upload is the same as before. For this example, buffer 0 will be filled with random values, and buffer 1 will be filled with a constant of -1 just for demonstration purposes. The data is then uploaded to the device asynchronously like before.
 
@@ -74,13 +76,13 @@ Data preparation and upload is the same as before. For this example, buffer 0 wi
         val = bfloat16(distribution(rng));
     }
     // Upload the data from host to the device.
-    EnqueueWriteBuffer(cq, src0_dram_buffer, a_data, false);
-    EnqueueWriteBuffer(cq, src1_dram_buffer, b_data, false);
+    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a_data, false);
+    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b_data, false);
 
 Circular buffers
 ----------------
 
-Here we introduce a new concept: circular buffers. They are communication channels between the different kernel on a Tensix. Conceptually they act as pipes between different kernels. There are in total 16 circular buffers supported on a Tensix. To utilize them, the host program must allocate the circular buffers and utilize the appropriate circular buffer index in the kernel.
+Here we introduce a new concept: circular buffers. They are communication channels between the different kernel on a Tensix. Conceptually they act as pipes between different kernels. There are in total 32 circular buffers supported on a Tensix. To utilize them, the host program must allocate the circular buffers and utilize the appropriate circular buffer index in the kernel.
 
 
 
@@ -125,19 +127,24 @@ In the previous example (DRAM loopback), we used a single kernel to perform the 
 
 .. code-block:: cpp
 
+    std::vector<uint32_t> reader_args;
+    TensorAccessorArgs(*src0_dram_buffer->get_backing_buffer()).append_to(reader_args);
+    TensorAccessorArgs(*src1_dram_buffer->get_backing_buffer()).append_to(reader_args);
     auto reader = CreateKernel(
         program,
-        "tt_metal/programming_examples/eltwise_binary/kernels/dataflow/read_tiles.cpp",
+        "eltwise_binary/kernels/dataflow/read_tiles.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_args});
+    std::vector<uint32_t> writer_args;
+    TensorAccessorArgs(*dst_dram_buffer->get_backing_buffer()).append_to(writer_args);
     auto writer = CreateKernel(
         program,
-        "tt_metal/programming_examples/eltwise_binary/kernels/dataflow/write_tile.cpp",
+        "eltwise_binary/kernels/dataflow/write_tile.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = writer_args});
     auto compute = CreateKernel(
         program,
-        "tt_metal/programming_examples/eltwise_binary/kernels/compute/tiles_add.cpp",
+        "eltwise_binary/kernels/compute/tiles_add.cpp",
         core,
         ComputeConfig{.math_fidelity = MathFidelity::HiFi4});
 
@@ -161,16 +168,11 @@ To do so, the reader creates 2 interleaved address generators. Unlike on most pr
 
         const uint32_t tile_size_bytes = get_tile_size(cb_in0);
 
-        const InterleavedAddrGenFast<true> in0 = {
-            .bank_base_address = in0_addr,
-            .page_size = tile_size_bytes,
-            .data_format = DataFormat::Float16_b,
-        };
-        const InterleavedAddrGenFast<true> in1 = {
-            .bank_base_address = in1_addr,
-            .page_size = tile_size_bytes,
-            .data_format = DataFormat::Float16_b,
-        };
+        constexpr auto in0_args = TensorAccessorArgs<0>();
+        const auto in0 = TensorAccessor(in0_args, in0_addr, tile_size_bytes);
+
+        constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
+        const auto in1 = TensorAccessor(in1_args, in1_addr, tile_size_bytes);
 
         for (uint32_t i = 0; i < n_tiles; i++) {
             cb_reserve_back(cb_in0, 1);
@@ -186,7 +188,7 @@ To do so, the reader creates 2 interleaved address generators. Unlike on most pr
         }
     }
 
-The compute kernel is a bit more complicated. It is responsible for performing the actual computation. After the initialization calls to configure the matrix engine to perform addition on the input tiles, it enters a loop then waits for the destination registers to be available. Please refer to the Programming Model section for more information on this. In short, the destination registers are a set of 16 registers that are used send data in and out of the computation engines. 8 of them can be used at a time. Once the destination registers are available, it waits for the reader kernel to make data available in the circular buffers. Once there is data, it adds the first tile from each buffer together and writes the result to destination register 0. Wait for space on the output circular buffer, and pushes the computed tile into it. Finally, it marks the input as consumed, output as produced and computation done.
+The compute kernel performs the actual elementwise addition. It initializes the matrix engine for addition, then enters a loop. Inside the loop, it waits for data to be available in the input circular buffers, and for the destination registers to be free. The destination registers (16 in total, with 8 usable at a time) are used to transfer data to and from the computation engines. The kernel adds the input tiles, writes the result to destination register 0, waits to be sure the result is ready, and waits for the output circular buffer to have space, and pushes the computed tile into it. Finally, it marks the input tiles as consumed, the output tile as produced, and releases the registers.
 
 .. code-block:: cpp
 
@@ -206,18 +208,23 @@ The compute kernel is a bit more complicated. It is responsible for performing t
 
         // Loop over all the tiles and perform the computation
         for (uint32_t i = 0; i < n_tiles; i++) {
-            acquire_dst();
             cb_wait_front(cb_in0, 1);
             cb_wait_front(cb_in1, 1);
 
+            tile_regs_acquire();
+
             add_tiles(cb_in0, cb_in1, /*offset_0*/0, /*offset_1*/0, dst_reg_id);
+
+            tile_regs_commit();
+            tile_regs_wait();
 
             cb_reserve_back(cb_out0, 1);
             pack_tile(dst_reg, cb_out0); // copy result to out0
+            tile_regs_release();
+
             cb_push_back(cb_out0, 1);
             cb_pop_front(cb_in0, 1);
             cb_pop_front(cb_in1, 1);
-            release_dst();
         }
     }
     }
@@ -237,11 +244,8 @@ The writer kernel looks similar to the reader kernel. Instead of reading, it wri
 
         const uint32_t tile_size_bytes = get_tile_size(cb_out0);
 
-        const InterleavedAddrGenFast<true> out = {
-            .bank_base_address = out_addr,
-            .page_size = tile_size_bytes,
-            .data_format = DataFormat::Float16_b,
-        };
+        constexpr auto out_args = TensorAccessorArgs<0>();
+        const auto out = TensorAccessor(out_args, out_addr, tile_size_bytes);
 
         for (uint32_t i = 0; i < n_tiles; i++) {
             cb_wait_front(cb_out0, 1);
@@ -262,8 +266,11 @@ Then the host program sets the kernel arguments and launches the program. There 
     SetRuntimeArgs(program, writer, core, {dst_dram_buffer->address(), n_tiles});
     SetRuntimeArgs(program, compute, core, {n_tiles});
 
-    EnqueueProgram(cq, program, false);
-    Finish(cq);
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
 Download the result and verify output
 -------------------------------------
@@ -273,7 +280,7 @@ Finally, we download the result and verify the output. Again we read the data in
 .. code-block:: cpp
 
     std::vector<bfloat16> result_vec;
-    EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, /*blocking=*/true);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
 
     constexpr float eps = 1e-2f; // loose tolerance because of the nature of bfloat16
     TT_FATAL(result_vec.size() == a_data.size(), "Result vector size mismatch");
@@ -292,9 +299,9 @@ Validation and teardown
 
 .. code-block:: cpp
 
-   pass &= CloseDevice(device);
+   pass &= mesh_device->close();
 
-We now use ``CloseDevice`` to teardown our device. This releases resources associated with the device.
+We now use ``mesh_device->close()`` to teardown our mesh device. This releases resources associated with the device.
 
 Next we will explore the use of the vector engine (SFPU) to perform the same operation.
 :ref:`Eltwise sfpu example<Eltwise sfpu example>`.

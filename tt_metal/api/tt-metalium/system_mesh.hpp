@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,8 @@
 #include <vector>
 
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/maybe_remote.hpp>
+#include <tt-metalium/routing_table_generator.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -32,21 +34,30 @@ public:
     SystemMesh(SystemMesh&&) = delete;
     SystemMesh& operator=(SystemMesh&&) = delete;
 
-    // Returns the shape of the system mesh
-    const MeshShape& get_shape() const;
+    // Returns the shape of the system mesh; this is the global mesh shape in distributed context
+    const MeshShape& shape() const;
 
-    // Returns the physical device ID for a given logical coordinate
-    int get_physical_device_id(const MeshCoordinate& coord) const;
+    // Returns the local shape of the system mesh; this is the local mesh shape in distributed context
+    const MeshShape& local_shape() const;
 
-    // Returns the physical mesh ID for a given logical coordinate
-    uint32_t get_physical_mesh_id(const MeshCoordinate& coord) const;
+    // Wrapper structure with device IDs, fabric node IDs, and mesh shape ordered in row-major order according to the
+    // requested `shape`.
+    struct MappedDevices {
+        // Device ID is set for host-local devices only.
+        std::vector<MaybeRemote<int>> device_ids;
 
-    // Returns the global device coordinate for a given physical device ID
-    MeshCoordinate get_global_device_coordinate(int physical_device_id) const;
+        // Fabric node ID is set for host-local and host-remote devices globally.
+        std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
 
-    // Returns the physical device IDs mapped to a MeshDevice
-    std::vector<int> get_mapped_physical_device_ids(
-        const MeshShape& shape, const std::optional<MeshCoordinate>& offset = std::nullopt) const;
+        // Shape of requested mesh if provided, otherwise the system mesh global shape.
+        MeshShape mesh_shape;
+    };
+
+    // Returns devices that should be mapped to a MeshDevice according to the shape and offset.
+    // If `shape` is not provided, the system mesh global shape is used.
+    // If `offset` is not provided, an N-dimensional zero-coordinate is used (based on system mesh dims).
+    MappedDevices get_mapped_devices(
+        const std::optional<MeshShape>& shape, const std::optional<MeshCoordinate>& offset = std::nullopt) const;
 };
 
 }  // namespace tt::tt_metal::distributed

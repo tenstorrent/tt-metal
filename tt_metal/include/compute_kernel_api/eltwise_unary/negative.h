@@ -9,10 +9,6 @@
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_unary_sfpu_negative.h"
-#define MAIN math_main()
-#define MATH(x) x
-#else
-#define MATH(x)
 #endif
 
 namespace ckernel {
@@ -33,5 +29,7 @@ ALWI void negative_tile_init() { MATH((llk_math_eltwise_unary_sfpu_negative_init
  */
  // clang-format on
 ALWI void negative_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_negative<APPROX>(idst))); }
+
+ALWI void negative_tile_int32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_negative_int<APPROX>(idst))); }
 
 }  // namespace ckernel

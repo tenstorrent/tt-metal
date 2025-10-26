@@ -20,6 +20,9 @@ struct ScaledDotProductAttention {
     const bool is_causal;
     const std::optional<int64_t> chunk_start_idx;
     const DeviceComputeKernelConfig compute_kernel_config;
+    const std::optional<bool> use_mla;
+    const std::optional<uint32_t> head_dim_v;
+    const std::optional<uint32_t> sliding_window_size;
 
     void validate(
         const std::vector<Tensor>& input_tensors,

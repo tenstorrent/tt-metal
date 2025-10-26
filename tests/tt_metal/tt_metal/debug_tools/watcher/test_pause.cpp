@@ -6,14 +6,13 @@
 #include <gtest/gtest.h>
 #include <stdint.h>
 #include <functional>
-#include <initializer_list>
-#include <map>
 #include <set>
 #include <string>
 #include <unordered_set>
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
@@ -24,8 +23,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
-#include "umd/device/types/xy_pair.h"
-#include <tt-metalium/utils.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher pause feature.
@@ -36,9 +34,15 @@ using namespace tt::tt_metal;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-void RunTest(WatcherFixture* fixture, IDevice* device) {
+void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Set up program
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
+    workload.add_program(device_range, std::move(program));
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     // Test runs on a 5x5 grid
     CoreCoord xy_start = {0, 0};
@@ -46,17 +50,17 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
 
     // Create all kernels
     auto brisc_kid = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_pause.cpp",
         CoreRange(xy_start, xy_end),
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     auto ncrisc_kid = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_pause.cpp",
         CoreRange(xy_start, xy_end),
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     auto trisc_kid = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_pause.cpp",
         CoreRange(xy_start, xy_end),
         ComputeConfig{});
@@ -67,9 +71,9 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
     const std::vector<uint32_t> args = { delay_cycles };
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
-            SetRuntimeArgs(program, brisc_kid, CoreCoord{x, y}, args);
-            SetRuntimeArgs(program, ncrisc_kid, CoreCoord{x, y}, args);
-            SetRuntimeArgs(program, trisc_kid, CoreCoord{x, y}, args);
+            SetRuntimeArgs(program_, brisc_kid, CoreCoord{x, y}, args);
+            SetRuntimeArgs(program_, ncrisc_kid, CoreCoord{x, y}, args);
+            SetRuntimeArgs(program_, trisc_kid, CoreCoord{x, y}, args);
         }
     }
 
@@ -92,13 +96,13 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
             eth_core_ranges.insert(CoreRange(core, core));
         }
         erisc_kid = CreateKernel(
-            program,
+            program_,
             "tests/tt_metal/tt_metal/test_kernels/misc/watcher_pause.cpp",
             eth_core_ranges,
             tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
 
         for (const auto& core : device->get_active_ethernet_cores(true)) {
-            SetRuntimeArgs(program, erisc_kid, core, args);
+            SetRuntimeArgs(program_, erisc_kid, core, args);
         }
     }
     if (has_ieth_cores) {
@@ -113,30 +117,26 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
             eth_core_ranges.insert(CoreRange(core, core));
         }
         ierisc_kid = CreateKernel(
-            program,
+            program_,
             "tests/tt_metal/tt_metal/test_kernels/misc/watcher_pause.cpp",
             eth_core_ranges,
-            tt_metal::EthernetConfig{
-                .eth_mode = Eth::IDLE,
-                .noc = tt_metal::NOC::NOC_0
-            }
-        );
+            tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0});
 
         for (const auto& core : device->get_inactive_ethernet_cores()) {
-            SetRuntimeArgs(program, ierisc_kid, core, args);
+            SetRuntimeArgs(program_, ierisc_kid, core, args);
         }
     }
 
     // Run the program
-    fixture->RunProgram(device, program);
+    fixture->RunProgram(mesh_device, workload);
 
     // Check that the pause message is present for each core in the watcher log.
-    vector<string> expected_strings;
+    vector<std::string> expected_strings;
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
             CoreCoord virtual_core = device->worker_core_from_logical_core({x, y});
             for (auto &risc_str : {"brisc", "ncrisc", "trisc0", "trisc1", "trisc2"}) {
-                string expected = fmt::format("{}:{}", virtual_core.str(), risc_str);
+                std::string expected = fmt::format("{}:{}", virtual_core.str(), risc_str);
                 expected_strings.push_back(expected);
             }
         }
@@ -144,14 +144,14 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
     if (has_eth_cores) {
         for (const auto& core : device->get_active_ethernet_cores(true)) {
             CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
-            string expected = fmt::format("{}:erisc", virtual_core.str());
+            std::string expected = fmt::format("{}:erisc", virtual_core.str());
             expected_strings.push_back(expected);
         }
     }
     if (has_ieth_cores) {
         for (const auto& core : device->get_inactive_ethernet_cores()) {
             CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
-            string expected = fmt::format("{}:ierisc", virtual_core.str());
+            std::string expected = fmt::format("{}:ierisc", virtual_core.str());
             expected_strings.push_back(expected);
         }
     }
@@ -161,8 +161,8 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
 }
 }
 
-TEST_F(WatcherFixture, TensixTestWatcherPause) {
-    for (IDevice* device : this->devices_) {
-        this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, device);
+TEST_F(MeshWatcherFixture, TensixTestWatcherPause) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, mesh_device);
     }
 }

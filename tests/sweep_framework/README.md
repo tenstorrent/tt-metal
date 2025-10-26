@@ -189,8 +189,7 @@ def mesh_device_fixture():
 
     assert ttnn.get_num_devices() >= 8, "Not T3000!"
 
-    device_ids = ttnn.get_t3k_physical_device_ids_ring()
-    num_devices_requested = len(device_ids)
+    num_devices_requested = 8
 
     mesh_device = ttnn.open_mesh_device(
         ttnn.MeshShape(1, num_devices_requested),
@@ -303,7 +302,7 @@ Options:
 
 `--clean` OPTIONAL: This setting is used to recover from mistakes in parameter generation, or if you have removed some test suites. If set, this flag will mark ALL vectors in the sweep as "archived", and regenerate all suites based on the current parameters in the sweep file.
 
-`--tag <tag>` OPTIONAL: This setting is used to assign a custom tag that will be assigned to your test vectors. This is to keep copies of vectors seperate from other developers / CI. By default, this will be your username. You are able to specify a tag when running tests using the runner.
+`--tag <tag>` OPTIONAL: This setting is used to assign a custom tag that will be assigned to your test vectors. This is to keep copies of vectors separate from other developers / CI. By default, this will be your username. You are able to specify a tag when running tests using the runner.
 
 ## Test Runner
 
@@ -330,26 +329,7 @@ The test runner reads in test vectors from the test vector database and executes
 
 **NOTE: The environment variables ELASTIC_USERNAME and ELASTIC_PASSWORD must be set to connect to the Elasticsearch database which is used to store and retrieve test data.**
 
-To run the test runner:
-`python3 tests/sweep_framework/sweeps_runner.py`
-
-Options:
-
-`--module-name <sweep_name>` OPTIONAL: If set, only the vectors that exist for the specified sweep will be run. If not set, all vectors for all sweeps will be run.
-
-`--suite-name <suite_name>` OPTIONAL: This must be set in conjunction with module name. If set, only the vectors from the specified suite will be run.
-
-`--elastic <corp/cloud/custom_url>` OPTIONAL: Default is `corp` which should be used on the internal VPN. Users on tt-cloud should set this to `cloud`. If there is a custom URL required, use `--elastic <custom_url>`.
-
-`--vector-id <vector_id>` OPTIONAL This must be set in conjunction with module name. If set, only the vector specified will be run. When vector id is specified, the test does not run in a subprocess which allows developers to use debug tools like gdb/lldb easily.
-
-`--watcher` OPTIONAL: This will run the tests with Watcher enabled. Watcher logs will be written to `generated/watcher/` and any Watcher exceptions raised will be caught.
-
-`--perf` OPTIONAL: This will enable e2e perf testing on the op tests that are written to support it. Each test will be run twice and the second result will be kept to avoid measuring compile time.
-
-`--dry-run` EXPERIMENTAL: This flag will print all the test vectors that would be run without the flag. This is best used piping stdout to a text file to avoid flooding the terminal.
-
-`--tag <tag>` OPTIONAL: This setting is used to assign a custom tag that will be used to search for test vectors. This is to keep copies of vectors seperate from other developers / CI. By default, this will be your username. You are able to specify a tag when generating tests using the generator. To run the CI suites of tests locally, use the `ci-main` tag.
+Go to [`tests/README.md`](../README.md) for the latest information on how to run the sweeps_runner.
 
 ## FAQ / Troubleshooting
 

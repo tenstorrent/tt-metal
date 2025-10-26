@@ -38,6 +38,7 @@ class Emb(torch.nn.Module):
         # "256seqlen"
     ),
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_mixtral_model_inference(t3k_mesh_device, reset_seeds, iterations, expected_top1, expected_top5):
     # TODO Currently topk test is supporting decode-only mode. Add prefill support.
 

@@ -33,7 +33,6 @@ auto check_shape(const ttnn::Tensor& input, const ttnn::Shape& output_shape) {
 
     // Validate broadcasting rules (checking from right to left)
     size_t input_ndim = input_shape.size();
-    size_t output_ndim = output_shape.size();
 
     for (int i = -1; i >= -static_cast<int>(input_ndim); --i) {
         // Check dimensions from the right side
@@ -55,7 +54,6 @@ auto check_shape(const ttnn::Tensor& input, const ttnn::Shape& output_shape) {
 
 namespace ttnn::operations::experimental {
 Tensor BcastTo::invoke(
-    QueueId queue_id,
     const Tensor& input,
     const Shape& output_shape,
     const std::optional<MemoryConfig>& memory_config,
@@ -74,6 +72,6 @@ Tensor BcastTo::invoke(
             output.value().dtype());
     }
 
-    return ttnn::prim::bcast_to(queue_id, input, output_shape, memory_config, output);
+    return ttnn::prim::bcast_to(input, output_shape, memory_config, output);
 }
 }  // namespace ttnn::operations::experimental

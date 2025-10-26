@@ -1,0 +1,139 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+import math
+
+import pytest
+import requests
+import torch
+from PIL import Image
+from transformers import SegformerImageProcessor
+from ttnn.model_preprocessing import ParameterDict, ParameterList, preprocess_model_parameters
+
+import ttnn
+from models.demos.segformer.common import load_config, load_torch_model
+from models.demos.segformer.reference.segformer_for_semantic_segmentation import (
+    SegformerForSemanticSegmentationReference,
+)
+from models.demos.segformer.tests.pcc.test_segformer_decode_head import (
+    create_custom_mesh_preprocessor as create_custom_preprocessor_deocde_head,
+)
+from models.demos.segformer.tests.pcc.test_segformer_model import (
+    create_custom_mesh_preprocessor as create_custom_preprocessor_model,
+)
+from models.demos.segformer.tt.ttnn_segformer_for_semantic_segmentation import TtSegformerForSemanticSegmentation
+from models.demos.utils.common_demo_utils import get_mesh_mappers
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+def create_custom_mesh_preprocessor(mesh_mapper=None):
+    def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
+        return custom_preprocessor(model, name, mesh_mapper)
+
+    def custom_preprocessor(model, name, mesh_mapper=None):
+        parameters = {}
+        if isinstance(model, SegformerForSemanticSegmentationReference):
+            parameters["segformer"] = {}
+            segformer_preprocess = create_custom_preprocessor_model(mesh_mapper)
+            parameters["segformer"] = segformer_preprocess(model.segformer, None, None, None)
+            parameters["decode_head"] = {}
+            deocde_preprocess = create_custom_preprocessor_deocde_head(mesh_mapper)
+            parameters["decode_head"] = deocde_preprocess(model.decode_head, None, None, None)
+
+        return parameters
+
+    return custom_mesh_preprocessor
+
+
+def move_to_device(object, device):
+    if isinstance(object, ParameterDict):
+        for name, value in list(object.items()):
+            if name in ["sr", "proj", "dwconv", "linear_fuse", "classifier"]:
+                continue
+            object[name] = move_to_device(value, device)
+        return object
+    elif isinstance(object, ParameterList):
+        for index, element in enumerate(object):
+            object[index] = move_to_device(element, device)
+        return object
+    elif isinstance(object, ttnn.Tensor):
+        return ttnn.to_device(object, device)
+    else:
+        return object
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_segformer_for_semantic_segmentation(device, model_location_generator):
+    min_channels = 8
+    processor = SegformerImageProcessor.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
+    url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+    image = Image.open(requests.get(url, stream=True).raw)
+    inputs = processor(images=image, return_tensors="pt")
+
+    config = load_config("configs/segformer_semantic_config.json")
+    reference_model = SegformerForSemanticSegmentationReference(config)
+    target_prefix = f""
+    reference_model = load_torch_model(
+        reference_model, target_prefix, module="semantic_sub", model_location_generator=model_location_generator
+    )
+
+    torch_output = reference_model(inputs.pixel_values)
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: reference_model,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
+        device=None,
+    )
+    parameters = move_to_device(parameters, device)
+
+    for i in range(4):
+        parameters["decode_head"]["linear_c"][i]["proj"]["weight"] = ttnn.to_device(
+            parameters["decode_head"]["linear_c"][i]["proj"]["weight"], device=device
+        )
+        parameters["decode_head"]["linear_c"][i]["proj"]["bias"] = ttnn.to_device(
+            parameters["decode_head"]["linear_c"][i]["proj"]["bias"], device=device
+        )
+
+    ttnn_model = TtSegformerForSemanticSegmentation(config, parameters)
+
+    sharded_input_enabled = 1
+
+    if not sharded_input_enabled:
+        ttnn_input_tensor = ttnn.from_torch(
+            inputs.pixel_values, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG, device=device
+        )
+    else:
+        n, c, h, w = inputs.pixel_values.shape
+        if c < min_channels:
+            c = min_channels
+        elif c % min_channels != 0:
+            c = ((c // min_channels) + 1) * min_channels
+        input_mem_config = ttnn.create_sharded_memory_config(
+            [n, c, h, w],
+            ttnn.CoreGrid(x=8, y=8),
+            ttnn.ShardStrategy.HEIGHT,
+        )
+        ttnn_input_tensor = ttnn.from_torch(
+            inputs.pixel_values,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=input_mem_config,
+        )
+
+    ttnn_output = ttnn_model(
+        device,
+        ttnn_input_tensor,
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+        parameters=parameters,
+    )
+
+    ttnn_output = ttnn.to_torch(ttnn_output.logits)
+    ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))
+    h = w = int(math.sqrt(ttnn_output.shape[-1]))
+    ttnn_final_output = torch.reshape(ttnn_output, (ttnn_output.shape[0], ttnn_output.shape[1], h, w))
+
+    assert_with_pcc(torch_output.logits, ttnn_final_output, pcc=0.979)

@@ -8,7 +8,11 @@ import torch
 
 from tests.didt.op_test_base import OpTestBase, get_blackhole_grid_size
 import ttnn
-from models.utility_functions import skip_for_blackhole, is_blackhole, skip_for_wormhole_b0
+from models.common.utility_functions import skip_for_blackhole, is_blackhole, skip_for_wormhole_b0
+
+NUM_DEVICES = ttnn.distributed.get_num_devices()
+MESH_X = NUM_DEVICES if NUM_DEVICES <= 8 else 8
+MESH_Y = 1 if NUM_DEVICES <= 8 else NUM_DEVICES / MESH_X
 
 
 class FF1Test(OpTestBase):
@@ -67,6 +71,7 @@ GELU_FIDELITY_PARAMETRIZATION_IDS = ["without_gelu", "with_gelu"]
         pytest.param(2, id="2chips"),
         pytest.param(8, id="8chips"),
         pytest.param((8, 4), id="galaxy"),
+        pytest.param((MESH_X, MESH_Y), id="all"),  # run on all available devices
     ],
     indirect=["mesh_device"],
 )
@@ -78,9 +83,6 @@ def test_ff1_matmul(
     determinism_check_interval,
     grid_size=(8, 8),
 ):
-    if is_blackhole() and mesh_device.get_num_devices() > 1:
-        pytest.skip("Multi-chip Blackhole has not been tested")
-
     per_core_M = 4
     per_core_N = 72
 
@@ -160,21 +162,38 @@ def test_ff1_matmul(
     ff1_test.run_op_test()
 
 
-@skip_for_blackhole("Multi-chip Blackhole has not been tested")
+def get_mesh_device_logical_chip_combinations():
+    """Generate mesh_device and logical_chip_id combinations dynamically"""
+    mesh_configs = [
+        (1, "1chips"),
+        (2, "2chips"),
+        (8, "8chips"),
+        ((8, 4), "galaxy"),
+    ]
+
+    combinations = []
+    for mesh_config, mesh_id in mesh_configs:
+        # Calculate total chips
+        if isinstance(mesh_config, tuple):
+            total_chips = mesh_config[0] * mesh_config[1]
+        else:
+            total_chips = mesh_config
+
+        # Generate combinations for this mesh configuration
+        for chip_id in range(total_chips):
+            combinations.append(pytest.param(mesh_config, chip_id, id=f"{mesh_id}_chip_{chip_id}"))
+
+    return combinations
+
+
 @pytest.mark.parametrize(
     "gelu, math_fidelity",
     GELU_FIDELITY_PARAMETRIZATION,
     ids=GELU_FIDELITY_PARAMETRIZATION_IDS,
 )
-@pytest.mark.parametrize("logical_chip_id", range(32), ids=[f"logical_chip_{i}_" for i in range(32)])
 @pytest.mark.parametrize(
-    "mesh_device",
-    [
-        pytest.param(1, id="1chips"),
-        pytest.param(2, id="2chips"),
-        pytest.param(8, id="8chips"),
-        pytest.param((8, 4), id="galaxy"),
-    ],
+    "mesh_device, logical_chip_id",
+    get_mesh_device_logical_chip_combinations(),
     indirect=["mesh_device"],
 )
 def test_specific_chip_ff1_matmul(
@@ -185,15 +204,13 @@ def test_specific_chip_ff1_matmul(
     didt_workload_iterations,
     determinism_check_interval,
 ):
-    assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
-
+    submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape((1, 1)))
     test_ff1_matmul(
-        mesh_device.get_device(logical_chip_id),
+        submesh_devices[logical_chip_id],
         gelu,
         math_fidelity,
         didt_workload_iterations,
         determinism_check_interval,
-        False,
     )
 
 

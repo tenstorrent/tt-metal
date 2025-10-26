@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include <utility>
+
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 
@@ -24,6 +26,27 @@ ttnn::Shape unsqueeze_shape_to_4D(const ttnn::Shape& shape);
 ttnn::Shape unsqueeze_shape_to_nd(const ttnn::Shape& shape, uint32_t n);
 
 ttnn::Shape squeeze_or_unsqueeze_shape_to_ND(const ttnn::Shape& shape, uint32_t n);
+std::vector<uint32_t> get_cycles_for_transaction_size(
+    uint32_t transaction_size,
+    bool is_dram,
+    bool is_local,
+    uint32_t num_transactions,
+    uint32_t num_cores,
+    int index,
+    bool is_read,
+    const std::map<uint32_t, std::array<float, 2>>& l1_local_bw,
+    const std::map<uint32_t, std::array<float, 2>>& l1_read_bw,
+    const std::map<uint32_t, std::array<float, 2>>& l1_write_bw,
+    const std::map<uint32_t, std::array<float, 2>>& dram_bw);
+int common_tm_bw_model(
+    const Tensor& input_tensor,
+    const Tensor& output_tensor,
+    bool output_only = false,
+    int compute_cycles = 0,
+    bool per_faceline = false,
+    bool split_op = false,
+    bool bcast_local = false,
+    bool concat_op = false);
 
 uint32_t get_estimated_size_of_cbs(
     const Tensor& input_tensor_a,
@@ -40,13 +63,13 @@ bool is_enough_space(
     uint32_t num_tiles_per_row);
 
 ttnn::Tensor pad_to_tile_vol(
-    QueueId queue_id,
-    const ttnn::Tensor& tensor,
-    float value,
-    bool use_multicore,
-    const std::optional<MemoryConfig>& memory_config);
+    const ttnn::Tensor& tensor, float value, bool use_multicore, const std::optional<MemoryConfig>& memory_config);
 
 uint32_t wrap_index(int index, int size);
+
+uint16_t float_to_uint16(float f);
+
+uint32_t pack_two_uint16_into_uint32(std::pair<uint16_t, uint16_t> two_uint16s);
 
 template <typename OpOutputType, typename... OpInputTypes>
 struct MassagedOperationParams {
@@ -73,19 +96,19 @@ public:
     using PostTransformFunc = std::function<OpOutputType(const OpOutputType&)>;
     using OpType = std::function<OpOutputType(OpInputTypes...)>;
 
-    MassagedOperation(MassagedOperationParams<OpOutputType, OpInputTypes...> params) :
+    MassagedOperation(const MassagedOperationParams<OpOutputType, OpInputTypes...>& params) :
         predicate_(params.predicate),
         pre_transform_(params.pre_transform),
         post_transform_(params.post_transform),
         operation_(params.operation) {}
 
-    inline bool should_format(OpInputTypes... args) const { return predicate_(args...); }
+    bool should_format(OpInputTypes... args) const { return predicate_(args...); }
 
-    inline OwnedArgsType pre_format(OpInputTypes... args) const { return pre_transform_(args...); }
+    OwnedArgsType pre_format(OpInputTypes... args) const { return pre_transform_(args...); }
 
-    inline OpOutputType post_format(OpOutputType output) const { return post_transform_(output); }
+    OpOutputType post_format(const OpOutputType& output) const { return post_transform_(output); }
 
-    inline OpOutputType operator()(OpInputTypes... args) const {
+    OpOutputType operator()(OpInputTypes... args) const {
         if (should_format(args...)) {
             auto formatted_input = pre_format(args...);
             auto op_output = std::apply(operation_, formatted_input);
@@ -162,7 +185,7 @@ public:
     OpType get_operation() const { return operation_; }
 
     // setters for all private members
-    void set_predicate(PredicateFunc predicate) { predicate_ = predicate; }
+    void set_predicate(PredicateFunc predicate) { predicate_ = std::move(predicate); }
     void set_pre_transform(PreTransformFunc pre_transform) { pre_transform_ = pre_transform; }
     void set_post_transform(PostTransformFunc post_transform) { post_transform_ = post_transform; }
     void set_operation(OpType operation) { operation_ = operation; }
@@ -198,6 +221,8 @@ std::pair<uint32_t, std::array<uint32_t, 2>> tensor_coord_to_height_sharded_coor
     const std::span<const uint32_t>& tensor_shape,
     const std::span<const uint32_t>& shard_shape,
     const std::span<const uint32_t>& tensor_coord);
+
+uint32_t get_num_pages(const ttnn::Tensor& tensor);
 
 }  // namespace data_movement
 }  // namespace operations

@@ -16,20 +16,22 @@ constexpr uint32_t CQ_DISPATCH_CMD_SIZE = 16;  // for L1 alignment
 
 // Prefetcher CMD ID enums
 enum CQPrefetchCmdId : uint8_t {
-    CQ_PREFETCH_CMD_ILLEGAL = 0,               // common error value
-    CQ_PREFETCH_CMD_RELAY_LINEAR = 1,          // relay banked/paged data from src_noc to dispatcher
-    CQ_PREFETCH_CMD_RELAY_PAGED = 2,           // relay banked/paged data from src_noc to dispatcher
-    CQ_PREFETCH_CMD_RELAY_PAGED_PACKED = 3,    // relay banked/paged data from multiple srcs to dispacher
-    CQ_PREFETCH_CMD_RELAY_INLINE = 4,          // relay (inline) data from CmdDatQ to dispatcher
-    CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH = 5,  // same as above, but doesn't flush the page to dispatcher
-    CQ_PREFETCH_CMD_EXEC_BUF = 6,              // execute commands from a buffer
-    CQ_PREFETCH_CMD_EXEC_BUF_END = 7,  // finish executing commands from a buffer (return), payload like relay_inline
-    CQ_PREFETCH_CMD_STALL = 8,         // drain pipe through dispatcher
-    CQ_PREFETCH_CMD_DEBUG = 9,         // log waypoint data to watcher, checksum
-    CQ_PREFETCH_CMD_TERMINATE = 10,    // quit
-    CQ_PREFETCH_CMD_PAGED_TO_RINGBUFFER = 11,    // Copy paged data to the ringbuffer
-    CQ_PREFETCH_CMD_SET_RINGBUFFER_OFFSET = 12,  // Set an offset in the ringbuffer for later reads.
-    CQ_PREFETCH_CMD_RELAY_RINGBUFFER = 13,       // Relay data from the ringbuffer to the dispatcher
+    CQ_PREFETCH_CMD_ILLEGAL = 0,       // common error value
+    CQ_PREFETCH_CMD_RELAY_LINEAR = 1,  // relay banked/paged data from src_noc to dispatcher
+    CQ_PREFETCH_CMD_RELAY_LINEAR_H =
+        2,  // relay linear from src_noc on prefetch_h chip to dispatcher. Must be only command in fetchq entry.
+    CQ_PREFETCH_CMD_RELAY_PAGED = 3,           // relay banked/paged data from src_noc to dispatcher
+    CQ_PREFETCH_CMD_RELAY_PAGED_PACKED = 4,    // relay banked/paged data from multiple srcs to dispacher
+    CQ_PREFETCH_CMD_RELAY_INLINE = 5,          // relay (inline) data from CmdDatQ to dispatcher
+    CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH = 6,  // same as above, but doesn't flush the page to dispatcher
+    CQ_PREFETCH_CMD_EXEC_BUF = 7,              // execute commands from a buffer
+    CQ_PREFETCH_CMD_EXEC_BUF_END = 8,  // finish executing commands from a buffer (return), payload like relay_inline
+    CQ_PREFETCH_CMD_STALL = 9,         // drain pipe through dispatcher
+    CQ_PREFETCH_CMD_DEBUG = 10,        // log waypoint data to watcher, checksum
+    CQ_PREFETCH_CMD_TERMINATE = 11,    // quit
+    CQ_PREFETCH_CMD_PAGED_TO_RINGBUFFER = 12,    // Copy paged data to the ringbuffer
+    CQ_PREFETCH_CMD_SET_RINGBUFFER_OFFSET = 13,  // Set an offset in the ringbuffer for later reads.
+    CQ_PREFETCH_CMD_RELAY_RINGBUFFER = 14,       // Relay data from the ringbuffer to the dispatcher
     CQ_PREFETCH_CMD_MAX_COUNT,                   // for checking legal IDs
 };
 
@@ -83,14 +85,23 @@ struct CQPrefetchBaseCmd {
     enum CQPrefetchCmdId cmd_id;
 } __attribute__((packed));
 
+// Flushes an extra page at the end (so it can only be used after CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH)
 struct CQPrefetchRelayLinearCmd {
+    uint16_t pad1;
+    uint64_t length;
+    uint32_t noc_xy_addr;
+    uint64_t addr;
+} __attribute__((packed));
+
+// Flushes an extra page at the end (so it can only be used after CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH). Must be only
+// command in fetchq entry.
+struct CQPrefetchRelayLinearHCmd {
     uint8_t pad1;
     uint16_t pad2;
     uint32_t noc_xy_addr;
-    uint32_t addr;
-    uint32_t length;
+    uint64_t addr;
+    uint32_t length;  // Length must be <= min(scratch_db_size, max command size) - sizeof(CQPrefetchHToPrefetchDHeader)
 } __attribute__((packed));
-;
 
 constexpr uint32_t CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK = 0xff;
 constexpr uint32_t CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT = 15;
@@ -169,10 +180,10 @@ struct CQPrefetchRelayRingbufferSubCmd {
     uint32_t length;
 } __attribute__((packed));
 
+// 16 byte commands.
 struct CQPrefetchCmd {
     CQPrefetchBaseCmd base;
     union {
-        CQPrefetchRelayLinearCmd relay_linear;
         CQPrefetchRelayPagedCmd relay_paged;
         CQPrefetchRelayPagedPackedCmd relay_paged_packed;
         CQPrefetchRelayInlineCmd relay_inline;
@@ -181,6 +192,16 @@ struct CQPrefetchCmd {
         CQPrefetchPagedToRingbufferCmd paged_to_ringbuffer;
         CQPrefetchSetRingbufferOffsetCmd set_ringbuffer_offset;
         CQPrefetchRelayRingbufferCmd relay_ringbuffer;
+    } __attribute__((packed));
+};
+
+// 32 byte commands.
+struct CQPrefetchCmdLarge {
+    CQPrefetchBaseCmd base;
+    union {
+        CQPrefetchRelayLinearHCmd relay_linear_h;
+        CQPrefetchRelayLinearCmd relay_linear;
+        uint8_t padding[32 - sizeof(CQPrefetchBaseCmd)];
     } __attribute__((packed));
 };
 
@@ -196,16 +217,15 @@ struct CQDispatchWriteCmd {
     uint8_t write_offset_index;
     uint8_t pad1;
     uint32_t noc_xy_addr;
-    uint32_t addr;
-    uint32_t length;
+    uint64_t addr;
+    uint64_t length;
 } __attribute__((packed));
 
 struct CQDispatchWriteHostCmd {
     uint8_t is_event;  // one flag, false=read buffer
     uint16_t pad1;
     uint32_t pad2;
-    uint32_t pad3;
-    uint32_t length;
+    uint64_t length;
 } __attribute__((packed));
 
 constexpr uint16_t CQ_DISPATCH_CMD_PAGED_WRITE_MAX_PAGE_INDEX = 0xFFFF;
@@ -229,6 +249,7 @@ enum CQDispatchCmdPackedWriteType {
     CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_LAUNCH = 0x2 << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
     CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_SEMS = 0x3 << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
     CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_EVENT = 0x4 << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
+    CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_GO_MSG_INDEX = 0x5 << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
 };
 
 struct CQDispatchWritePackedCmd {
@@ -260,7 +281,7 @@ struct CQDispatchWritePackedLargeSubCmd {
     uint8_t flags;
 } __attribute__((packed));
 
-constexpr inline __attribute__((always_inline)) uint32_t
+constexpr __attribute__((always_inline)) uint32_t
 get_packed_write_max_multicast_sub_cmds(uint32_t packed_write_max_unicast_sub_cmds) {
     uint32_t packed_write_max_multicast_sub_cmds = packed_write_max_unicast_sub_cmds *
                                                    sizeof(CQDispatchWritePackedUnicastSubCmd) /
@@ -326,9 +347,12 @@ struct CQDispatchSetUnicastOnlyCoresCmd {
     uint32_t num_unicast_only_cores;
 } __attribute__((packed));
 
+constexpr uint8_t CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET = 0xff;
+
 struct CQDispatchGoSignalMcastCmd {
     uint32_t go_signal;
-    uint8_t num_mcast_txns;
+    uint8_t multicast_go_offset;  // Index of the multicast go to write to. CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET - no
+                                  // multicast gos.
     uint8_t num_unicast_txns;
     uint8_t noc_data_start_index;
     uint32_t wait_count;
@@ -358,7 +382,6 @@ struct CQDispatchCmd {
     CQDispatchBaseCmd base;
 
     union {
-        CQDispatchWriteCmd write_linear;
         CQDispatchWriteHostCmd write_linear_host;
         CQDispatchWritePagedCmd write_paged;
         CQDispatchWritePackedCmd write_packed;
@@ -375,9 +398,19 @@ struct CQDispatchCmd {
     } __attribute__((packed));
 };
 
+// 32 byte commands.
+struct CQDispatchCmdLarge {
+    CQDispatchBaseCmd base;
+    union {
+        CQDispatchWriteCmd write_linear;
+        uint8_t padding[32 - sizeof(CQDispatchBaseCmd)];
+    } __attribute__((packed));
+};
+
 //////////////////////////////////////////////////////////////////////////////
 
 static_assert(sizeof(CQPrefetchBaseCmd) == sizeof(uint8_t));  // if this fails, padding above needs to be adjusted
 static_assert(sizeof(CQDispatchBaseCmd) == sizeof(uint8_t));  // if this fails, padding above needs to be adjusted
 static_assert((sizeof(CQPrefetchCmd) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
+static_assert((sizeof(CQPrefetchCmdLarge) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
 static_assert((sizeof(CQDispatchCmd) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);

@@ -5,7 +5,7 @@
 
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -40,8 +40,7 @@ std::vector<std::pair<size_t, size_t>> compute_evenly_split_sizes(size_t size, s
 
     auto compute_slice_offset = [num_larger_slices_total, larger_slice_size, smaller_slice_size](int64_t slice_index) {
         int64_t num_larger_slices = std::min(slice_index, num_larger_slices_total);
-        int64_t num_smaller_slices = std::min(slice_index - num_larger_slices, 0L);
-        return num_larger_slices * larger_slice_size + (slice_index - num_larger_slices) * smaller_slice_size;
+        return (num_larger_slices * larger_slice_size) + ((slice_index - num_larger_slices) * smaller_slice_size);
     };
 
     auto compute_slice_size_and_offset = [compute_slice_dim_size,
@@ -59,7 +58,7 @@ std::vector<std::pair<size_t, size_t>> compute_evenly_split_sizes(size_t size, s
 // // Outer vector = per worker command stream, inner vector = commands
 std::vector<std::vector<ttnn::ccl::v2::TensorSlice>> split_tensor_slices_across_workers_page_aligned(
     size_t num_workers, std::vector<ttnn::ccl::v2::TensorSlice> const& tensor_slices) {
-    TT_FATAL(tensor_slices.size() > 0, "Number of slices must be greater than 0");
+    TT_FATAL(!tensor_slices.empty(), "Number of slices must be greater than 0");
     // not split up across workers yet
 
     auto worker_slices_streams = std::vector<std::vector<ttnn::ccl::v2::TensorSlice>>(num_workers);

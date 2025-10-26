@@ -16,17 +16,40 @@
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
+#include <vector>
 
 namespace ttnn::operations::ccl {
 
+namespace detail {
+
+std::pair<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_cb_sizes(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& indices_tensor,
+    const ttnn::Tensor& mapping_tensor,
+    uint32_t num_links,
+    std::optional<uint32_t> axis);
+
+}  // namespace detail
+
 struct AllToAllDispatchDeviceOperation {
+    enum AllToAllTransferType {
+        FullPacket,  // All pages are sent to the intermediate buffer and then written to the output buffer later
+        PageByPage,  // Each page is sent directly to the output buffer to conserve L1 space via intermediates
+    };
     struct operation_attributes_t {
-        const tt::tt_metal::SubDeviceId subdevice_id;
+        const CoreRangeSet worker_core_range_set;
         const MemoryConfig output_mem_config;
         const std::optional<uint32_t> axis;
         const uint32_t num_links;
         const tt::tt_fabric::Topology topology;
-        const std::optional<GlobalSemaphore> cross_device_semaphore;
+        const AllToAllTransferType impl;
+        const uint32_t output_concat_dim;
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "worker_core_range_set", "output_mem_config", "axis", "num_links", "topology", "impl", "output_concat_dim");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                worker_core_range_set, output_mem_config, axis, num_links, topology, impl, output_concat_dim);
+        };
     };
     struct tensor_args_t {
         const Tensor input_tensor;
@@ -44,7 +67,9 @@ struct AllToAllDispatchDeviceOperation {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle ternary_reader_kernel_id;
             tt::tt_metal::KernelHandle binary_writer_kernel_id;
-            CoreCoord core;
+            std::vector<CoreCoord> cores;
+            const GlobalSemaphore init_semaphore;
+            const GlobalSemaphore cross_device_semaphore;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -59,7 +84,9 @@ struct AllToAllDispatchDeviceOperation {
             const ttnn::MeshCoordinate& mesh_coordinate,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value,
-            const ttnn::MeshCoordinateRangeSet& tensor_coords);
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            const GlobalSemaphore& init_semaphore,
+            const GlobalSemaphore& cross_device_semaphore);
 
         static void override_runtime_arguments(
             cached_mesh_workload_t& cached_program,
@@ -96,8 +123,9 @@ struct AllToAllDispatchDeviceOperation {
         uint32_t num_links,
         tt::tt_fabric::Topology topology,
         const ttnn::MemoryConfig& memory_config,
-        tt::tt_metal::SubDeviceId subdevice_id,
-        const std::optional<GlobalSemaphore>& global_semaphore);
+        const CoreRangeSet& worker_core_range_set,
+        AllToAllTransferType impl,
+        uint32_t output_concat_dim);
 };
 }  // namespace ttnn::operations::ccl
 

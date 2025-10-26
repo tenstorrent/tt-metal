@@ -3,10 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 import re
+from enum import Enum
+from types import SimpleNamespace
+from typing import Optional
 
 import torch
+from llama_models.llama3.api.datatypes import ImageMedia
 from loguru import logger
+from pydantic import AliasChoices, BaseModel, Field
 
 import ttnn
 
@@ -20,11 +26,92 @@ class HostEmbedding(torch.nn.Module):
         return self.emb(x)
 
 
+class HostScaledEmbedding(HostEmbedding):
+    def __init__(self, model_args):
+        super().__init__(model_args)
+        self.embed_scale = model_args.embed_scale
+
+    def forward(self, x):
+        return self.emb(x) * self.embed_scale
+
+
 # Default configuration for Paged Attention
 class PagedAttentionConfig:
     def __init__(self, block_size=32, max_num_blocks=1024):
         self.block_size = block_size
         self.max_num_blocks = max_num_blocks
+
+
+class RopeScalingType(str, Enum):
+    """Types of RoPE scaling."""
+
+    # DYNAMIC = "dynamic"
+    LINEAR = "linear"
+    YARN = "yarn"
+    LLAMA3 = "llama3"
+    PHI3 = "longrope"
+    DEFAULT = "default"
+
+
+class RopeScaling(BaseModel):
+    """RoPE scaling configuration."""
+
+    rope_type: RopeScalingType = Field(
+        validation_alias=AliasChoices("rope_type", "type"), exclude=True, description="RoPE scaling type"
+    )
+    factor: Optional[float] = None
+    original_max_position_embeddings: Optional[int] = None
+
+
+class RopeScalingLinear(RopeScaling):
+    """RoPE scaling configuration for linear."""
+
+
+class RopeScalingLlama3(RopeScaling):
+    """RoPE scaling configuration for Llama-3.x."""
+
+    # Llama-3.x specific parameters
+    low_freq_factor: Optional[float] = 1.0
+    high_freq_factor: Optional[float] = 4.0
+
+
+class RopeScalingYarn(RopeScaling):
+    """RoPE scaling configuration for Yarn."""
+
+    # Yarn-specific parameters
+    beta_fast: Optional[int] = 32
+    beta_slow: Optional[int] = 1
+    mscale: Optional[float] = 1.0
+    mscale_all_dim: Optional[float] = 0.0
+
+
+class RopeScalingPhi3(RopeScaling):
+    """RoPE scaling configuration for Phi3."""
+
+    # Phi3-specific parameters
+    long_factor: Optional[list]
+    short_factor: Optional[list]
+
+
+def rope_scaling_model_factory(
+    rope_scaling_params: dict, original_max_context_len: Optional[int] = None
+) -> RopeScaling:
+    rope_scaling_type = rope_scaling_params.get("rope_type") or rope_scaling_params.get("type")
+    if rope_scaling_type == RopeScalingType.LINEAR:
+        return RopeScalingLinear(**rope_scaling_params)
+    elif rope_scaling_type == RopeScalingType.LLAMA3:
+        return RopeScalingLlama3(**rope_scaling_params)
+    elif rope_scaling_type == RopeScalingType.YARN:
+        return RopeScalingYarn(**rope_scaling_params)
+    elif rope_scaling_type == RopeScalingType.PHI3:
+        return RopeScalingPhi3(original_max_position_embeddings=original_max_context_len, **rope_scaling_params)
+    elif rope_scaling_type in ["default", "mrope"]:
+        logger.warning(
+            f"Rope scaling type was set to {rope_scaling_type}, defaulting to no rope scaling as this rope type is not supported yet by TTT"
+        )
+        return None
+    else:
+        raise ValueError(f"Unexpected RoPE scaling type: {rope_scaling_type}")
 
 
 def encode_prompt_instruct(tokenizer, prompt_text, system_prompt_text=None):
@@ -155,16 +242,18 @@ def preprocess_inputs_prefill(
 def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
     """See https://huggingface.co/docs/transformers/main/en/chat_templating"""
     chat = []
-    if system_prompt_text:
-        chat.append({"role": "system", "content": system_prompt_text})
-    if prompt_text:
-        chat.append({"role": "user", "content": prompt_text})
-    return tokenizer.apply_chat_template(chat, tokenize=True, add_generation_prompt=True)
+    if isinstance(prompt_text, str):
+        if system_prompt_text:
+            chat.append({"role": "system", "content": system_prompt_text})
+        if prompt_text:
+            chat.append({"role": "user", "content": prompt_text})
+        return tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
+    else:
+        return tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
 
 
-def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
-    # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
-    # Values obtained from grid search
+def compute_llama3_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    """Llama-3.x specific scaling for rotary embeddings."""
     low_freq_factor = 1
     high_freq_factor = 4
 
@@ -184,7 +273,31 @@ def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: in
     return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
 
 
-def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
+def compute_linear_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    """Linear scaling for rotary embeddings."""
+    freqs /= scale_factor
+    return freqs
+
+
+def compute_default_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    """Default scaling for rotary embeddings."""
+    return freqs
+
+
+def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int, rope_type="llama3"):
+    # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
+
+    if rope_type == "default":
+        freqs = compute_default_parameters(freqs, scale_factor, orig_context_len)
+    elif rope_type == "linear":
+        freqs = compute_linear_parameters(freqs, scale_factor, orig_context_len)
+    elif rope_type == "llama3":
+        freqs = compute_llama3_parameters(freqs, scale_factor, orig_context_len)
+
+    return freqs
+
+
+def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len, rope_type="llama3"):
     """
     Precompute the frequency tensor for sine and cosine values with given dimensions.
 
@@ -199,7 +312,7 @@ def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end)
     if scale_factor is not None:
-        freqs = apply_scaling(freqs, scale_factor, orig_context_len)
+        freqs = apply_scaling(freqs, scale_factor, orig_context_len, rope_type=rope_type)
     freqs = torch.outer(t, freqs).float()
     return torch.cos(freqs), torch.sin(freqs)
 
@@ -278,7 +391,7 @@ def get_single_rot_mat(
 ):
     freqs_unscaled = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
     if scale_factor is not None:
-        freqs = apply_scaling(freqs_unscaled, scale_factor, orig_context_len)
+        freqs = apply_scaling(freqs_unscaled, scale_factor, orig_context_len, rope_type="llama3")
     rot_matrix = torch.zeros(dhead, dhead)
     # [INFO] freqs_unscaled and freqs are forced to float dtype above and it should be converted back to match dtype of rot_matrix
     sin_freqs, cos_freqs = torch.sin(freqs).to(rot_matrix.dtype), torch.cos(freqs).to(rot_matrix.dtype)
@@ -291,7 +404,7 @@ def get_single_rot_mat(
     # Support for start_pos different than 0
     freqs = start_pos * freqs_unscaled
     if scale_factor is not None:
-        freqs = apply_scaling(freqs, scale_factor, orig_context_len)
+        freqs = apply_scaling(freqs, scale_factor, orig_context_len, rope_type="llama3")
     current_rot_mat = torch.zeros(dhead, dhead)
     # [INFO] freqs_unscaled and freqs are forced to float dtype above and it should be converted back to match dtype of current_rot_mat
     sin_freqs, cos_freqs = torch.sin(freqs).to(current_rot_mat.dtype), torch.cos(freqs).to(current_rot_mat.dtype)
@@ -330,7 +443,12 @@ def num_to_core_range_set(x):
     )
 
 
-def copy_host_to_device(host_tensors, device_tensors=None, mesh_device=None):
+def copy_host_to_device(
+    host_tensors,
+    device_tensors=None,
+    mesh_device=None,
+    shard_specs=None,
+):
     """
     Helper function which copies host tensors to device tensors.
     If no device_tensors are provided, it creates new device tensors and returns them.
@@ -339,7 +457,10 @@ def copy_host_to_device(host_tensors, device_tensors=None, mesh_device=None):
         assert mesh_device is not None, "mesh_device is required when device_tensors is None"
         ret = []
         for i in range(len(host_tensors)):
-            on_device = ttnn.to_device(host_tensors[i], device=mesh_device) if host_tensors[i] else None
+            if shard_specs and shard_specs[i] is not None:
+                on_device = host_tensors[i].to(mesh_device, shard_specs[i]) if host_tensors[i] else None
+            else:
+                on_device = ttnn.to_device(host_tensors[i], device=mesh_device) if host_tensors[i] else None
             ret.append(on_device)
         return ret
     else:
@@ -374,11 +495,20 @@ def get_out_subblock_w(per_core_N, out_subblock_h):
     return out_subblock_w
 
 
-def first_five(tensor, mesh_device):
+def first_five(tensor, mesh_device, start=0, end=5):
     """
-    Helper function to return the first 5 elements of a tensor via torch
+    Helper function to return the first 5 elements of a tensor via torch, or optionally another slice
     """
-    return torch.Tensor(ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)))[0, 0, 0, :5]
+    return torch.Tensor(ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)))[
+        0, 0, 0, start:end
+    ]
+
+
+def last_five(tensor, mesh_device):
+    """
+    Helper function to return the last 5 elements of a tensor via torch
+    """
+    return torch.Tensor(ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)))[0, 0, 0, -5:]
 
 
 # Sample logits from a distribution
@@ -485,7 +615,7 @@ def pad_to_size(x: torch.Tensor, dim: int, size: int) -> torch.Tensor:
     if dim < 0:
         dim = x.dim() + dim
     assert isinstance(x, torch.Tensor), "Input must be a torch.Tensor"
-    assert -x.dim() <= dim < x.dim(), f"Dimension out of range (expected between {-x.dim()} and {x.dim()-1})"
+    assert -x.dim() <= dim < x.dim(), f"Dimension {dim} out of range (expected between {-x.dim()} and {x.dim() - 1})"
     dim = x.dim() + dim if dim < 0 else dim
 
     current_size = x.size(dim)
@@ -509,6 +639,36 @@ def get_base_model_name(model_name: str) -> str:
     # Remove the suffix after B- (case insensitive), e.g. "Llama-3.1-70B-Instruct" -> "Llama-3.1-70B"
     match = re.search(r"(.*?\d+[bB])-", model_name)
     return match.group(1) if match else model_name
+
+
+def get_hf_model_name(model_path: str) -> str:
+    # HF model name
+    if model_path.count("/") == 1:
+        return model_path
+
+    # HF cache path
+    pattern = r".*/?models--(?P<model_provider>[^/]+?)--(?P<model_name>[^/]+)/?"
+    match = pattern.search(pattern, model_path)
+    if match:
+        model_provider = match.group("model_provider")
+        model_name = match.group("model_name")
+        return f"{model_provider}/{model_name}"
+    raise ValueError(
+        f"Unsupported '{model_path}', please use HF model name or follow HF format with 'models--<model_provider>--<model_name>'"
+    )
+
+
+def get_hf_tt_cache_path(model_path: str) -> str:
+    tt_cache_home = os.getenv("TT_CACHE_HOME", "/mnt/MLPerf/huggingface/tt_cache/")
+    if not os.path.exists(tt_cache_home):
+        tt_cache_home = "model_cache"
+
+    model_name = get_hf_model_name(model_path)
+    tt_cache_path = os.path.join(tt_cache_home, model_name)
+    if not os.path.exists(tt_cache_path):
+        os.makedirs(tt_cache_path, exist_ok=True)
+
+    return tt_cache_path
 
 
 def create_tt_model(
@@ -551,3 +711,73 @@ def create_tt_model(
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None
 
     return tt_model_args, model, tt_kv_cache, state_dict
+
+
+def hf_multimodal_encode(messages, processor):
+    hf_messages = []
+
+    for msg in messages:
+        hf_content = []
+
+        for item in msg.content:
+            if isinstance(item, ImageMedia):
+                hf_content.append(
+                    {
+                        "type": "image",
+                        "image": item.image,
+                    }
+                )
+            elif isinstance(item, str):
+                hf_content.append(
+                    {
+                        "type": "text",
+                        "text": item,
+                    }
+                )
+
+        hf_messages.append(
+            {
+                "role": msg.role,
+                "content": hf_content,
+            }
+        )
+
+    encoded = processor.apply_chat_template(
+        hf_messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt"
+    ).to("cpu", dtype=torch.bfloat16)
+
+    return SimpleNamespace(
+        **encoded,
+        tokens=encoded["input_ids"].squeeze(0),
+        vision=SimpleNamespace(
+            images=encoded.get("pixel_values", None),
+            mask=None,
+        ),
+    )
+
+
+def get_decode_mask(args, mesh_device, paged_attention_config=None):
+    """Function to create a decoding mask for the attention mechanism."""
+    if paged_attention_config is not None:
+        max_seq_len = (paged_attention_config.max_num_blocks * paged_attention_config.block_size) // args.max_batch_size
+    else:
+        max_seq_len = args.max_seq_len
+    mask = torch.triu(
+        torch.full(
+            (args.max_batch_size, args.n_heads // mesh_device.shape[1], max_seq_len, max_seq_len),
+            -float("inf"),
+            dtype=torch.bfloat16,
+        ),
+        diagonal=1,
+    )
+    if args.sliding_window > 0:
+        mask += torch.tril(
+            torch.full(
+                (args.max_batch_size, args.n_heads // mesh_device.shape[1], max_seq_len, max_seq_len),
+                -float("inf"),
+                dtype=torch.bfloat16,
+            ),
+            diagonal=-args.sliding_window,
+        )
+
+    return mask

@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <allocator.hpp>
 #include <buffer_types.hpp>
-#include <command_queue.hpp>
+#include "dispatch/command_queue.hpp"
 #include <device.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
@@ -22,9 +22,10 @@
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "hal_types.hpp"
+#include "impl/context/metal_context.hpp"
 #include "mesh_command_queue.hpp"
 #include "mesh_device.hpp"
 #include <tt_stl/strong_type.hpp>
@@ -65,20 +66,31 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
     if (dynamic_cast<distributed::MeshDevice*>(device_)) {
         // Multi CQ support for MeshDevice is not currently available
         distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device_);
-        mesh_device->mesh_command_queue().reset_worker_state(
-            true, num_sub_devices, sub_device_manager->noc_mcast_unicast_data());
+        for (uint8_t cq_id = 0; cq_id < mesh_device->num_hw_cqs(); ++cq_id) {
+            mesh_device->mesh_command_queue(cq_id).reset_worker_state(
+                cq_id == 0,
+                num_sub_devices,
+                sub_device_manager->noc_mcast_unicast_data(),
+                sub_device_manager->get_core_go_message_mapping());
+        }
     } else {
         for (uint8_t cq_id = 0; cq_id < device_->num_hw_cqs(); ++cq_id) {
             auto& hw_cq = device_->command_queue(cq_id);
             // Only need to reset launch messages once, so reset on cq 0
-            hw_cq.reset_worker_state(cq_id == 0, num_sub_devices, sub_device_manager->noc_mcast_unicast_data());
+            hw_cq.reset_worker_state(
+                cq_id == 0,
+                num_sub_devices,
+                sub_device_manager->noc_mcast_unicast_data(),
+                sub_device_manager->get_core_go_message_mapping());
         }
     }
     sub_device_manager->reset_sub_device_stall_group();
 }
 
 void SubDeviceManagerTracker::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
-    TT_FATAL(!device_->using_slow_dispatch(), "Using sub device managers is unsupported with slow dispatch");
+    TT_FATAL(
+        tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch(),
+        "Using sub device managers is unsupported with slow dispatch");
     if (active_sub_device_manager_->id() == sub_device_manager_id) {
         return;
     }

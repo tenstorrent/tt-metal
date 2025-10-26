@@ -11,7 +11,7 @@ from loguru import logger
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import comp_pcc, divup
+from models.common.utility_functions import comp_pcc, divup
 import ttnn
 
 torch.manual_seed(0)
@@ -117,14 +117,14 @@ def test_torch_functional_falcon_generate_rotary_embeddings(model_name, input_sh
     # TODO: test reseting of cossin cache
     batch, num_kv_heads, query_length, head_dim = input_shape
     config = transformers.FalconConfig.from_pretrained(model_name)
-    model = transformers.models.falcon.modeling_falcon.FalconRotaryEmbedding(head_dim).eval()
+    model = transformers.models.falcon.modeling_falcon.FalconRotaryEmbedding(config).eval()
     value_layer = torch.rand(batch, num_kv_heads, query_length, head_dim, dtype=torch.float32)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         convert_to_ttnn=lambda *_: False,
     )
-    torch_cos, torch_sin = model.forward(value_layer, seq_len=query_length)
+    torch_cos, torch_sin = model.forward(value_layer, torch.arange(query_length).unsqueeze(0))
     functional_cos, functional_sin = torch_functional_generate_sin_cos_rotary_embedding(
         query_length, head_dim, rotary_embedding_cache={}
     )
@@ -133,7 +133,7 @@ def test_torch_functional_falcon_generate_rotary_embeddings(model_name, input_sh
     )
     ttnn_cos_pt, ttnn_sin_pt = ttnn.to_torch(ttnn_cos), ttnn.to_torch(ttnn_sin)
 
-    assert_with_pcc(torch_cos, functional_cos, 0.9999)
-    assert_with_pcc(torch_sin, functional_sin, 0.9999)
-    assert_with_pcc(torch_cos, ttnn_cos_pt, 0.9999)
-    assert_with_pcc(torch_sin, ttnn_sin_pt, 0.9999)
+    assert_with_pcc(torch_cos.squeeze(0), functional_cos, 0.9999)
+    assert_with_pcc(torch_sin.squeeze(0), functional_sin, 0.9999)
+    assert_with_pcc(torch_cos.squeeze(0), ttnn_cos_pt, 0.9999)
+    assert_with_pcc(torch_sin.squeeze(0), ttnn_sin_pt, 0.9999)

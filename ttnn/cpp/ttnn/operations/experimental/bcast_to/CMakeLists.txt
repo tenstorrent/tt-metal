@@ -6,27 +6,28 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_bcast_to)
 set_target_properties(
     ttnn_op_experimental_bcast_to
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(GLOB_RECURSE kernels device/kernels/*)
 target_sources(
     ttnn_op_experimental_bcast_to
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         bcast_to.cpp
         device/bcast_to_device_operation.cpp
         device/bcast_to_program_factory.cpp
         device/bcast_to_utils.cpp
-)
-
-file(GLOB_RECURSE kernels device/kernels/*)
-target_sources(
-    ttnn_op_experimental_bcast_to
-    PUBLIC
-        FILE_SET kernels
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${kernels}
 )
 
 target_include_directories(ttnn_op_experimental_bcast_to PRIVATE ${FixmeOpIncDirs})

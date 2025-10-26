@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gelu_backward_device_operation.hpp"
 #include "gelu_backward_program_factory.hpp"
 
-#include <magic_enum/magic_enum.hpp>
 #include <tt-metalium/constants.hpp>
 #include "tt-metalium/host_api.hpp"
 
@@ -137,7 +136,7 @@ std::tuple<GeluBackwardDeviceOperation::operation_attributes_t, GeluBackwardDevi
 GeluBackwardDeviceOperation::invoke(
     const Tensor& grad_output,
     const Tensor& input,
-    const string& approximate,
+    const std::string& approximate,
     DataType output_dtype,
     const MemoryConfig& output_memory_config,
     const std::optional<Tensor>& preallocated_output) {

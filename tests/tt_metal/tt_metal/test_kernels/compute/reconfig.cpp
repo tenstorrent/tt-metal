@@ -87,7 +87,7 @@ void MAIN {
         pack_reconfig_l1_acc(true);
 #endif
         // Configured already for CB_16, Bfp16_b
-        matmul_pack_tile(0, cb_out0, ublock_size_tiles);
+        pack_tile_block(0, cb_out0, ublock_size_tiles);
         // Reconfig for CB_17, Bfp8_b, then pack to CB_17
 #if (EXPLICIT_RECONFIG == 1)
         // Indices for old_output, new_output
@@ -99,7 +99,7 @@ void MAIN {
         // Not testing for L1 accumulation
         pack_reconfig_l1_acc(false);
 
-        matmul_pack_tile(0, cb_out1, ublock_size_tiles);
+        pack_tile_block(0, cb_out1, ublock_size_tiles);
         release_dst();
 
         cb_pop_front(cb_in0, ublock_size_tiles);

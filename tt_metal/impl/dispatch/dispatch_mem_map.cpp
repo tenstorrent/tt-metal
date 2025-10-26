@@ -1,20 +1,20 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <magic_enum/magic_enum.hpp>
-#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include <enchantum/enchantum.hpp>
+#include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/tt_align.hpp>
 
 #include "dispatch_mem_map.hpp"
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "command_queue_common.hpp"
 #include "control_plane.hpp"
 #include "dispatch_settings.hpp"
 #include "fabric/fabric_context.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include "utils.hpp"
+#include <tt_stl/enum.hpp>
 
 namespace tt::tt_metal {
 
@@ -48,14 +48,6 @@ uint32_t DispatchMemMap::prefetch_d_buffer_size() const { return settings.prefet
 
 uint32_t DispatchMemMap::prefetch_d_buffer_pages() const { return settings.prefetch_d_pages_; }
 
-uint32_t DispatchMemMap::mux_buffer_size(uint8_t num_hw_cqs) const {
-    return settings.tunneling_buffer_size_ / num_hw_cqs;
-}
-
-uint32_t DispatchMemMap::mux_buffer_pages(uint8_t num_hw_cqs) const {
-    return settings.tunneling_buffer_pages_ / num_hw_cqs;
-}
-
 uint32_t DispatchMemMap::dispatch_s_buffer_size() const { return settings.dispatch_s_buffer_size_; }
 
 uint32_t DispatchMemMap::dispatch_s_buffer_pages() const {
@@ -63,13 +55,13 @@ uint32_t DispatchMemMap::dispatch_s_buffer_pages() const {
 }
 
 uint32_t DispatchMemMap::get_device_command_queue_addr(const CommandQueueDeviceAddrType& device_addr_type) const {
-    uint32_t index = tt::utils::underlying_type<CommandQueueDeviceAddrType>(device_addr_type);
+    uint32_t index = ttsl::as_underlying_type<CommandQueueDeviceAddrType>(device_addr_type);
     TT_ASSERT(index < this->device_cq_addrs_.size());
     return device_cq_addrs_[index];
 }
 
 uint32_t DispatchMemMap::get_host_command_queue_addr(const CommandQueueHostAddrType& host_addr) const {
-    return tt::utils::underlying_type<CommandQueueHostAddrType>(host_addr) *
+    return ttsl::as_underlying_type<CommandQueueHostAddrType>(host_addr) *
            tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
 }
 
@@ -83,11 +75,12 @@ uint32_t DispatchMemMap::get_dispatch_message_addr_start() const {
     // Address of the first dispatch message entry. Remaining entries are each offset by
     // get_noc_stream_reg_space_size() bytes.
     return tt::tt_metal::MetalContext::instance().hal().get_noc_overlay_start_addr() +
-           tt::tt_metal::MetalContext::instance().hal().get_noc_stream_reg_space_size() * get_dispatch_stream_index(0) +
-           tt::tt_metal::MetalContext::instance()
-                   .hal()
-                   .get_noc_stream_remote_dest_buf_space_available_update_reg_index() *
-               sizeof(uint32_t);
+           (tt::tt_metal::MetalContext::instance().hal().get_noc_stream_reg_space_size() *
+            get_dispatch_stream_index(0)) +
+           (tt::tt_metal::MetalContext::instance()
+                .hal()
+                .get_noc_stream_remote_dest_buf_space_available_update_reg_index() *
+            sizeof(uint32_t));
 }
 
 uint32_t DispatchMemMap::get_dispatch_stream_index(uint32_t index) const {
@@ -127,11 +120,11 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
         DispatchSettings::DISPATCH_MESSAGE_ENTRIES <= DispatchSettings::DISPATCH_MESSAGES_MAX_OFFSET / l1_alignment + 1,
         "Number of dispatch message entries exceeds max representable offset");
 
-    constexpr uint8_t num_dev_cq_addrs = magic_enum::enum_count<CommandQueueDeviceAddrType>();
+    constexpr uint8_t num_dev_cq_addrs = enchantum::count<CommandQueueDeviceAddrType>;
     std::vector<uint32_t> device_cq_addr_sizes_(num_dev_cq_addrs, 0);
     for (auto dev_addr_idx = 0; dev_addr_idx < num_dev_cq_addrs; dev_addr_idx++) {
         CommandQueueDeviceAddrType dev_addr_type =
-            magic_enum::enum_cast<CommandQueueDeviceAddrType>(dev_addr_idx).value();
+            enchantum::cast<CommandQueueDeviceAddrType>(dev_addr_idx).value();
         if (dev_addr_type == CommandQueueDeviceAddrType::PREFETCH_Q_RD) {
             device_cq_addr_sizes_[dev_addr_idx] = settings.prefetch_q_rd_ptr_size_;
         } else if (dev_addr_type == CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD) {
@@ -155,7 +148,7 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
     device_cq_addrs_[0] = l1_base;
     for (auto dev_addr_idx = 1; dev_addr_idx < num_dev_cq_addrs; dev_addr_idx++) {
         device_cq_addrs_[dev_addr_idx] = device_cq_addrs_[dev_addr_idx - 1] + device_cq_addr_sizes_[dev_addr_idx - 1];
-        CommandQueueDeviceAddrType dev_addr_type = magic_enum::enum_value<CommandQueueDeviceAddrType>(dev_addr_idx);
+        auto dev_addr_type = *enchantum::index_to_enum<CommandQueueDeviceAddrType>(dev_addr_idx);
         if (dev_addr_type == CommandQueueDeviceAddrType::UNRESERVED) {
             device_cq_addrs_[dev_addr_idx] = align(device_cq_addrs_[dev_addr_idx], pcie_alignment);
         } else if (
@@ -166,7 +159,7 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
     }
 
     uint32_t prefetch_dispatch_unreserved_base =
-    device_cq_addrs_[tt::utils::underlying_type<CommandQueueDeviceAddrType>(
+    device_cq_addrs_[ttsl::as_underlying_type<CommandQueueDeviceAddrType>(
         CommandQueueDeviceAddrType::UNRESERVED)];
     cmddat_q_base_ = align(prefetch_dispatch_unreserved_base + settings.prefetch_q_size_, pcie_alignment);
     scratch_db_base_ = align(cmddat_q_base_ + settings.prefetch_cmddat_q_size_, pcie_alignment);

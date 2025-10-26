@@ -46,8 +46,6 @@ on:
         required: false
         type: boolean
         default: true
-        # FIXME(afuller): We need to fix our artifact naming to avoid conflicts if we
-        #     wish to make builds of differing types available in a single workflow.
         description: "Make resulting artifact available in the workflow"
       skip-tt-train:
         # FIXME: TT-Train needs to get fixed to not assume a specific toolchain.
@@ -65,6 +63,16 @@ on:
         type: boolean
         default: false
         description: "Build UMD tests"
+      fetch-depth:
+        required: false
+        type: number
+        default: 500
+        description: "Git fetch depth for the checkout step. Must be large enough to include all tags and history needed for `git describe`."
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: 'Commit SHA to test (default: HEAD)'
     outputs:
       ci-build-docker-image:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
@@ -78,6 +86,9 @@ on:
       basic-dev-docker-image:
         description: "Docker tag for the basic dev Docker image for basic development"
         value: ${{ jobs.build-docker-image.outputs.basic-dev-tag }}
+      basic-ttnn-runtime-docker-image:
+        description: "Docker tag for the basic TTNN runtime Docker image for running TTNN"
+        value: ${{ jobs.build-docker-image.outputs.basic-ttnn-runtime-tag }}
       packages-artifact-name:
         description: "Name to give download-artifact to get the packages"
         value: ${{ jobs.build-artifact.outputs.packages-artifact-name }}
@@ -150,8 +161,8 @@ jobs:
   build-artifact:
     name: "🛠️ Build ${{ inputs.build-type }} ${{ inputs.distro }} ${{ inputs.version }}"
     needs: build-docker-image
-    timeout-minutes: 45
-    runs-on: tt-beta-ubuntu-2204-large
+    timeout-minutes: 100
+    runs-on: tt-ubuntu-2204-large-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
@@ -169,7 +180,6 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
-        - /mnt/MLPerf/ccache:/mnt/MLPerf/ccache
       # Group 1457 is for the shared ccache drive
       # tmpfs is for efficiency
       options: >
@@ -200,7 +210,11 @@ jobs:
         run: |
           TOOLCHAIN="${{ inputs.toolchain }}"
           TOOLCHAIN_CLEANED=$(echo "$TOOLCHAIN" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
-          ARTIFACT_NAME="packages-${{ inputs.distro }}-${{ inputs.version }}-${{ inputs.architecture }}-${{ inputs.build-type }}-${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}"
+          # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness across parallel builds
+          # Sanitize ref/SHA by replacing invalid characters with hyphens
+          RAW_REF="${{ inputs.ref || github.sha }}"
+          SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
+          ARTIFACT_NAME="packages-${{ inputs.distro }}-${{ inputs.version }}-${{ inputs.architecture }}-${{ inputs.build-type }}-${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}-${SANITIZED_REF}-${{ github.run_id }}"
 
           echo "name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
@@ -209,7 +223,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          fetch-depth: 500 # Need enough history for `git describe`
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: ${{ inputs.fetch-depth }}
           fetch-tags: true # Need tags for `git describe`
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
 
@@ -231,8 +246,8 @@ jobs:
           echo "Args: ${args_fixme}"
           build_command="./build_metal.sh --build-dir build --build-type ${{ inputs.build-type }} --toolchain-path ${{ inputs.toolchain }} ${args_fixme} --enable-ccache --configure-only"
           echo "Build tracy: ${{ inputs.tracy }}"
-          if [ "${{ inputs.tracy }}" = "true" ]; then
-            build_command="$build_command --enable-profiler"
+          if [ "${{ inputs.tracy }}" = "false" ]; then
+            build_command="$build_command --disable-profiler"
           fi
           echo "Build distributed: ${{ inputs.distributed }}"
           if [ "${{ inputs.distributed }}" = "false" ]; then
@@ -250,7 +265,7 @@ jobs:
       - name: 🛠️ Compile
         run: |
           # --target install is for the tarball that should get replaced by proper packaging later
-          nice -19 cmake --build build --target install
+          cmake --build build --target install
 
       - name: 🛠️ Profile
         if: ${{ inputs.profile }}
@@ -285,16 +300,21 @@ jobs:
       - name: 'Tar files'
         if: ${{ inputs.publish-artifact }}
         run: |
-          ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools runtime"
+          ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib build/programming_examples build/test build/tools runtime"
           if [[ "${{ inputs.skip-tt-train }}" != "true" ]]; then
             ARTIFACT_PATHS="$ARTIFACT_PATHS build/tt-train data"
           fi
-          tar -cvhf /work/ttm_any.tar $ARTIFACT_PATHS
+          tar -I 'zstd --adapt=min=9 -T0' -cvhf /work/ttm_any.tar.zst $ARTIFACT_PATHS
 
       - name: Set build artifact name
         id: set_build_artifact_name
         run: |
-          BUILD_ARTIFACT_NAME="TTMetal_build_any${{ (inputs.tracy && '_profiler') || '' }}${{ (inputs.distributed == false && '_no_distributed') || '' }}"
+          TOOLCHAIN_CLEANED=$(echo "${{ inputs.toolchain }}" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
+          # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness across parallel builds
+          # Sanitize ref/SHA by replacing invalid characters with hyphens
+          RAW_REF="${{ inputs.ref || github.sha }}"
+          SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
+          BUILD_ARTIFACT_NAME="TTMetal_build_any_${{ inputs.version }}_${{ inputs.architecture }}_${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '_profiler') || '' }}${{ (inputs.distributed == false && '_no_distributed') || '' }}_${SANITIZED_REF}_${{ github.run_id }}"
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_ENV"
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
@@ -304,15 +324,16 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ env.build_artifact_name }}
-          path: /work/ttm_any.tar
+          path: /work/ttm_any.tar.zst
           if-no-files-found: error
+          compression-level: 0
 
   build-wheel:
     if: ${{ inputs.build-wheel }}
-    name: 🐍 Build wheel
+    name: 🐍 Build wheel (Python ${{ inputs.version == '22.04' && '3.10' || '3.12' }})
     needs: build-docker-image
     timeout-minutes: 30
-    runs-on: tt-beta-ubuntu-2204-large
+    runs-on: tt-ubuntu-2204-large-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
       wheel_artifact_name: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name }}
@@ -321,6 +342,17 @@ jobs:
         shell: bash
 
     steps:
+      - name: Set Python version based on OS version
+        id: set_python_version
+        run: |
+          if [ "${{ inputs.version }}" = "22.04" ]; then
+            PYTHON_VERSION="3.10"
+          else
+            PYTHON_VERSION="3.12"
+          fi
+          echo "python_version=${PYTHON_VERSION}" >> $GITHUB_OUTPUT
+          echo "Selected Python ${PYTHON_VERSION} for Ubuntu ${{ inputs.version }}"
+
       - name: Check Redis credentials
         # Failing internal jobs draws attention immediately so we can fix them and make them fast.
         # Forks will never have secrets; don't fail the job for them, they'll just run slower
@@ -339,7 +371,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          fetch-depth: 500 # Need enough history for `git describe`
+          fetch-depth: ${{ inputs.fetch-depth }}
           fetch-tags: true # Need tags for `git describe`
 
       - name: Set up Python 3.12
@@ -347,44 +379,50 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Determine Tracy build setting
+      - name: Configure Tracy profiler and ttnn wheel import testing
         run: |
           if [ "${{ inputs.tracy }}" = "true" ]; then
             echo "ENABLE_TRACY_BUILD=ON" >> $GITHUB_ENV
-            echo "CIBW_TEST_CMD=echo 'Skipping import test for profiler build'" >> $GITHUB_ENV
             echo "Building with Tracy profiler enabled"
           else
             echo "ENABLE_TRACY_BUILD=OFF" >> $GITHUB_ENV
-            echo "CIBW_TEST_CMD=python -c \"import ttnn\"" >> $GITHUB_ENV
             echo "Building without Tracy profiler"
           fi
 
       - name: 🐍 Build wheel
         uses: pypa/cibuildwheel@v2.23.2
         env:
+          CIBW_BUILD: "cp${{ steps.set_python_version.outputs.python_version == '3.10' && '310' || '312' }}-manylinux_x86_64*"
+          CIBW_SKIP: "*-musllinux_*"
           CIBW_BUILD_FRONTEND: build
           CIBW_ENVIRONMENT: >-
             CCACHE_REMOTE_ONLY=true
             CCACHE_TEMPDIR=/tmp/ccache
             CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
             CIBW_ENABLE_TRACY="${{ env.ENABLE_TRACY_BUILD }}"
-          CIBW_BEFORE_BUILD: mkdir -p /tmp/ccache && ccache -z && ccache -p
+            CIBW_BUILD_TYPE="${{ inputs.build-type }}"
+          CIBW_BEFORE_BUILD: "mkdir -p /tmp/ccache && ccache -z && ccache -p"
           CIBW_BEFORE_TEST: ccache -s
-          CIBW_TEST_COMMAND: ${{ env.CIBW_TEST_CMD }}
+          CIBW_TEST_COMMAND: 'python -c "import ttnn"'
           CIBW_MANYLINUX_X86_64_IMAGE: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
 
       - name: Set wheel artifact name
         id: set_wheel_artifact_name
         run: |
-          WHEEL_ARTIFACT_NAME="eager-dist-${{ inputs.distro }}-${{ inputs.version }}-any${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}"
-          echo "wheel_artifact_name=$WHEEL_ARTIFACT_NAME" >> "$GITHUB_ENV"
-          echo "wheel_artifact_name=$WHEEL_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+          PYTHON_VERSION_NODOT=$(echo "${{ steps.set_python_version.outputs.python_version }}" | tr -d '.')
+          # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness across parallel builds
+          # Sanitize ref/SHA by replacing invalid characters with hyphens
+          RAW_REF="${{ inputs.ref || github.sha }}"
+          SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
+          WHEEL_ARTIFACT_NAME="eager-dist-cp${PYTHON_VERSION_NODOT}-${{ inputs.distro }}-${{ inputs.version }}-any${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}-${SANITIZED_REF}-${{ github.run_id }}"
+          echo "wheel_artifact_name=${WHEEL_ARTIFACT_NAME}" >> $GITHUB_OUTPUT
+          echo "wheel_artifact_name=${WHEEL_ARTIFACT_NAME}" >> "$GITHUB_ENV"
 
       - name: ☁️ Upload wheel
         if: ${{ inputs.build-wheel }}
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
-          name: ${{ env.wheel_artifact_name }}
+          name: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name }}
           path: wheelhouse
           if-no-files-found: error

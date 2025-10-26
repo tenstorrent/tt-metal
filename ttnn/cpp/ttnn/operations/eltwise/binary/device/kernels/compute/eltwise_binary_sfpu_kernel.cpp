@@ -15,9 +15,12 @@
 #include "compute_kernel_api/add_int_sfpu.h"
 #include "compute_kernel_api/sub_int_sfpu.h"
 #include "compute_kernel_api/mul_int_sfpu.h"
+#include "compute_kernel_api/mul_int32_sfpu.h"
 #include "compute_kernel_api/binary_max_min.h"
+#include "compute_kernel_api/xlogy.h"
 #include "compute_kernel_api/gcd.h"
 #include "compute_kernel_api/lcm.h"
+#include "compute_kernel_api/binary_comp.h"
 
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 
@@ -123,6 +126,21 @@ void MAIN {
 #endif
 #ifdef MUL_INT_INIT
             MUL_INT_INIT
+#endif
+#ifdef MUL_INT32_INIT
+            MUL_INT32_INIT
+#endif
+#ifdef LT_INT32_INIT
+            LT_INT32_INIT
+#endif
+#ifdef GT_INT32_INIT
+            GT_INT32_INIT
+#endif
+#ifdef GE_INT32_INIT
+            GE_INT32_INIT
+#endif
+#ifdef LE_INT32_INIT
+            LE_INT32_INIT
 #endif
 #ifdef BITWISE_INIT
             BITWISE_INIT

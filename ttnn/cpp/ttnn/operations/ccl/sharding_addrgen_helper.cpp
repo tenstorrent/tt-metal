@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,9 +36,6 @@ std::vector<CoreCoord> get_shard_cores(const tt::tt_metal::Tensor& t) {
            t.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) &&
           shard_spec.orientation == ShardOrientation::COL_MAJOR));
     bool is_dram = t.memory_config().is_dram();
-    bool last = false;
-    uint32_t held_value = 0;
-    uint32_t concatenated_core = 0;
     for (uint32_t cr = 0; cr < core_ranges.size(); cr++) {
         TT_FATAL(
             core_ranges.at(cr).start_coord.x <= core_ranges.at(cr).end_coord.x,
@@ -144,7 +141,6 @@ void extend_sharding_run_time_args(const tt::tt_metal::Tensor& t, std::vector<ui
 
 std::vector<uint32_t> generate_compile_time_args(const tt::tt_metal::Tensor& t) {
     std::vector<uint32_t> args;
-    const tt::tt_metal::IDevice* device = t.device();
     TT_ASSERT(t.is_sharded());
     TT_FATAL(
         t.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||

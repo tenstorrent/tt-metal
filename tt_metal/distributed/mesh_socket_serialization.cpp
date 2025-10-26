@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
 #include "socket_peer_descriptor_generated.h"
+#include <tt-metalium/distributed_context.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -68,7 +69,8 @@ CoreCoord from_flatbuffer(const distributed::flatbuffer::CoreCoord* fb_core_coor
 }
 
 MeshCoordinate from_flatbuffer(const distributed::flatbuffer::MeshCoordinate* fb_mesh_coord) {
-    return MeshCoordinate(*(fb_mesh_coord->values()));
+    auto flat_buf = fb_mesh_coord->values();
+    return MeshCoordinate(tt::stl::Span<const uint32_t>{flat_buf->data(), flat_buf->size()});
 }
 
 MeshCoreCoord from_flatbuffer(const distributed::flatbuffer::MeshCoreCoord* fb_mesh_core_coord) {
@@ -136,7 +138,7 @@ std::vector<uint8_t> serialize_to_bytes(const SocketPeerDescriptor& socket_peer_
     auto mem_config_fb = to_flatbuffer(builder, socket_config.socket_mem_config);
     // Create the SocketConfig FlatBuffer
     auto socket_config_fb = distributed::flatbuffer::CreateSocketConfig(
-        builder, connections_vector_fb, mem_config_fb, socket_config.sender_rank, socket_config.receiver_rank);
+        builder, connections_vector_fb, mem_config_fb, *socket_config.sender_rank, *socket_config.receiver_rank);
     // Build the SocketPeerDescriptor FlatBuffer (root object)
     auto socket_peer_desc_fb = distributed::flatbuffer::CreateSocketPeerDescriptor(
         builder,
@@ -144,7 +146,8 @@ std::vector<uint8_t> serialize_to_bytes(const SocketPeerDescriptor& socket_peer_
         socket_peer_desc.config_buffer_address,
         socket_peer_desc.data_buffer_address,
         builder.CreateVector(socket_peer_desc.mesh_ids),
-        builder.CreateVector(socket_peer_desc.chip_ids));
+        builder.CreateVector(socket_peer_desc.chip_ids),
+        *(socket_peer_desc.exchange_tag));
 
     builder.Finish(socket_peer_desc_fb);
     // Extract the FlatBuffer data as a vector of bytes
@@ -168,8 +171,8 @@ SocketPeerDescriptor deserialize_from_bytes(const std::vector<uint8_t>& data) {
     // Chip IDs)
     socket_peer_desc.config.socket_connection_config = from_flatbuffer(socket_config_fb->socket_connections());
     socket_peer_desc.config.socket_mem_config = from_flatbuffer(socket_config_fb->socket_mem_config());
-    socket_peer_desc.config.sender_rank = socket_config_fb->sender_rank();
-    socket_peer_desc.config.receiver_rank = socket_config_fb->receiver_rank();
+    socket_peer_desc.config.sender_rank = multihost::Rank{socket_config_fb->sender_rank()};
+    socket_peer_desc.config.receiver_rank = multihost::Rank{socket_config_fb->receiver_rank()};
     socket_peer_desc.config_buffer_address = socket_peer_desc_fb->config_buffer_address();
     socket_peer_desc.data_buffer_address = socket_peer_desc_fb->data_buffer_address();
     if (socket_peer_desc_fb->mesh_ids()) {
@@ -180,6 +183,7 @@ SocketPeerDescriptor deserialize_from_bytes(const std::vector<uint8_t>& data) {
         socket_peer_desc.chip_ids.assign(
             socket_peer_desc_fb->chip_ids()->begin(), socket_peer_desc_fb->chip_ids()->end());
     }
+    socket_peer_desc.exchange_tag = multihost::Tag{socket_peer_desc_fb->exchange_tag()};
     return socket_peer_desc;
 }
 

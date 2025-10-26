@@ -2,14 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 import ttnn
 
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params
 
 
-class TtDownsample2D(nn.Module):
-    def __init__(self, device, state_dict, module_path, stride, padding, dilation, groups, model_config):
+class TtDownsample2D(LightweightModule):
+    def __init__(
+        self, device, state_dict, module_path, stride, padding, dilation, groups, model_config, debug_mode=False
+    ):
         super().__init__()
 
         self.device = device
@@ -17,24 +19,24 @@ class TtDownsample2D(nn.Module):
         self.padding = padding
         self.dilation = dilation
         self.groups = groups
+        self.debug_mode = debug_mode
 
         weights = state_dict[f"{module_path}.conv.weight"]
         bias = state_dict[f"{module_path}.conv.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
+        self.conv_output_dtype = model_config.get_conv_output_dtype()
         self.conv_config = model_config.get_conv_config(conv_path=module_path)
-        self.compute_config, self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
-            device,
+        self.compute_config = model_config.get_conv_compute_config(module_path=module_path)
+        self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
             weights,
             bias,
             self.conv_config.weights_dtype,
-            fp32_dest_acc_en=(self.conv_config.weights_dtype == ttnn.bfloat8_b)
-            and (self.conv_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         )
 
     def forward(self, hidden_states, input_shape):
         B, C, H, W = input_shape
 
-        [hidden_states, [H, W], [self.tt_weights, self.tt_bias]] = ttnn.conv2d(
+        [hidden_states, [H, W], [tt_weights, tt_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_weights,
             in_channels=self.conv_params["input_channels"],
@@ -50,12 +52,17 @@ class TtDownsample2D(nn.Module):
             input_width=W,
             conv_config=self.conv_config,
             compute_config=self.compute_config,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
             groups=self.groups,
             memory_config=None,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         C = self.conv_params["output_channels"]
+        if not self.debug_mode:
+            self.tt_weights = tt_weights
+            self.tt_bias = tt_bias
 
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
         return hidden_states, [C, H, W]

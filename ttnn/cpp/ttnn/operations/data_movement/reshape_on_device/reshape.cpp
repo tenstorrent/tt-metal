@@ -22,7 +22,7 @@ static Tensor manual_insertion(
     const Tensor& input_tensor,
     const ttnn::Shape& logical_shape,
     const ttnn::Shape& padded_shape,
-    IDevice* device,
+    tt::tt_metal::distributed::MeshDevice* device,
     const MemoryConfig& output_mem_config) {
     TT_ASSERT(input_tensor.layout() == Layout::ROW_MAJOR);
     TT_ASSERT(
@@ -31,14 +31,14 @@ static Tensor manual_insertion(
         logical_shape.volume(),
         input_tensor.logical_volume());
     auto cpu_tensor = input_tensor.cpu();
-    auto host_buffer = tt::tt_metal::host_buffer::get_host_buffer(cpu_tensor);
     auto output =
         Tensor(
-            std::move(host_buffer),
+            cpu_tensor.storage(),
             TensorSpec(
                 logical_shape,
                 TensorLayout::fromPaddedShape(
-                    DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
+                    DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)),
+            cpu_tensor.tensor_topology())
             .to_layout(Layout::ROW_MAJOR);
     if (device != nullptr) {
         output = output.to_device(device, output_mem_config);
@@ -48,7 +48,6 @@ static Tensor manual_insertion(
 }  // namespace detail
 
 ttnn::Tensor ReshapeOperation::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& logical_output_shape,
     const ttnn::Shape& padded_output_shape,
@@ -87,19 +86,17 @@ ttnn::Tensor ReshapeOperation::invoke(
 }
 
 ttnn::Tensor ReshapeOperation::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& logical_output_shape,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    return invoke(queue_id, input_tensor, logical_output_shape, logical_output_shape, memory_config_arg);
+    return invoke(input_tensor, logical_output_shape, logical_output_shape, memory_config_arg);
 }
 
 ttnn::Tensor ReshapeOperation::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     tt::stl::Span<const int32_t> shape_vector,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    return invoke(queue_id, input_tensor, infer_dims_for_reshape(input_tensor, shape_vector), memory_config_arg);
+    return invoke(input_tensor, infer_dims_for_reshape(input_tensor, shape_vector), memory_config_arg);
 }
 
 }  // namespace ttnn::operations::data_movement

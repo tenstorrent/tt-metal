@@ -18,16 +18,16 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(2);
 
-    constexpr bool input_in_dram = get_compile_time_arg_val(3) == 1;
-    constexpr uint32_t input_page_size = get_compile_time_arg_val(4);
-    const auto input = get_interleaved_addr_gen<input_in_dram, input_page_size>(input_buffer_src_addr);
+    constexpr uint32_t input_page_size = get_compile_time_arg_val(3);
+    constexpr uint32_t weight_stick_size = get_compile_time_arg_val(4);
 
-    constexpr bool weight_in_dram = get_compile_time_arg_val(5) == 1;
-    constexpr uint32_t weight_stick_size = get_compile_time_arg_val(6);
-    const auto weights = get_interleaved_addr_gen<weight_in_dram, weight_stick_size>(weight_buffer_src_addr);
+    constexpr uint32_t rows_per_block = get_compile_time_arg_val(5);  // Input elems per block
+    constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(6);
 
-    constexpr uint32_t rows_per_block = get_compile_time_arg_val(7);
-    constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(8);
+    constexpr auto input_args = TensorAccessorArgs<7>();
+    constexpr auto weights_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    const auto input = TensorAccessor(input_args, input_buffer_src_addr, input_page_size);
+    const auto weights = TensorAccessor(weights_args, weight_buffer_src_addr, weight_stick_size);
 
     prepare_local_cache(cb_id_in2, weights, weight_stick_size, /*pad_token_arg_idx=*/6);
 
@@ -35,9 +35,10 @@ void kernel_main() {
     uint32_t input_l1_addr = get_write_ptr(cb_id_in1);
     volatile tt_l1_ptr input_token_t* input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr input_token_t*>(input_l1_addr);
 
-    uint32_t curr_row = batch_offset;
-    uint32_t offset = weights_offset;
+    uint32_t curr_row = batch_offset;  // Number of pages/rows we have read from input so far
+    uint32_t offset = weights_offset;  // Which input elem we are on (bytes offset from start of row)
     uint32_t index = index_idx;
+    uint32_t input_elem_size_bytes = input_block_size_bytes / rows_per_block;
 
     bool read_indices = true;
     for (uint32_t i = 0; i < num_rows; ++i) {
@@ -56,14 +57,17 @@ void kernel_main() {
         cb_push_back(cb_id_in0, 1);
 
         index++;
-        if (index == rows_per_block) {
-            index = 0;
-            read_indices = true;
+        uint32_t total_bytes_into_page = offset + index * input_elem_size_bytes;
+        bool end_of_block = index == rows_per_block;
+        bool end_of_page = total_bytes_into_page == input_page_size;
+        if (end_of_block || end_of_page) {
             offset += input_block_size_bytes;
-            if (offset == input_page_size) {
+            if (end_of_page) {
                 offset = 0;
                 curr_row++;
             }
+            index = 0;
+            read_indices = true;
         }
     }
 }

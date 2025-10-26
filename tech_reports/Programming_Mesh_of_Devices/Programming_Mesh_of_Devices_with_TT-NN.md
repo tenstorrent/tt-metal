@@ -1,6 +1,6 @@
 # Programming Mesh of Devices with TT-NN
 
-Author: Joseph Chu
+Authors: Scale-Out Team
 
 ## Contents
 
@@ -11,6 +11,7 @@ Author: Joseph Chu
   - [2.2 MeshDevice Management](#22-meshdevice-management)
     - [2.2.1 MeshDevice Initialization/Close](#221-meshdevice-initializationclose)
     - [2.2.2 MeshDevice Visualization](#222-meshdevice-visualization)
+  - [2.3 Controlling Device Visibility](#23-controlling-device-visibility)
 - [3. Distributing Tensor to MeshDevice](#3-distributing-tensor-to-meshdevice)
   - [3.1 Distribution Strategies](#31-distribution-strategies)
   - [3.2 Programming Example: Sharding](#32-programming-example-sharding)
@@ -34,6 +35,9 @@ Author: Joseph Chu
   - [8.3 Hybrid Tensor and Data Parallel Programming Example](#83-hybrid-tensor-and-data-parallel-programming-example)
     - [8.3.1 Overview of Changes](#831-overview-of-changes)
     - [8.3.2 Key Components](#832-key-components)
+- [9. MeshDevice vs PyTorch Multi-Device Programming](#9-meshdevice-vs-pytorch-multi-device-programming)
+  - [9.1 Overview of Multi-Device Handling](#91-overview-of-multi-device-handling)
+  - [9.2 Code Comparison: Matrix Multiplication with All-Gather](#92-code-comparison-matrix-multiplication-with-all-gather)
 
 ## 1. Overview
 
@@ -50,28 +54,57 @@ These concepts are key to understanding how we scale models using **Data-Paralle
 
 ## 2. MeshDevice
 
+MeshDevice is a virtual device abstraction that bundles together multiple physical devices to enable efficient parallel execution across a mesh topology. This abstraction is natively supported at the runtime level, allowing for deep integration with the hardware and dispatch mechanisms. When operations are dispatched to a MeshDevice, command queues are utilized to distribute work across all constituent devices in parallel, significantly reducing dispatch overhead compared to sequential device-by-device execution.
+
+To optimize performance, MeshDevice implements several key optimizations:
+- **Kernel Compilation Broadcasting**: When kernels are compiled for execution on a MeshDevice, the compilation artifacts are automatically broadcasted to all devices in the mesh where applicable, avoiding redundant per-device compilation.
+- **Data Broadcasting**: For replicated tensors (where the same data needs to exist on multiple devices), the runtime leverages the replicated topology to minimize any host-side processing and efficiently broadcast data across devices.
+- **Unified Command Dispatch**: Operations are dispatched through mesh-aware command queues that coordinate execution across all devices, ensuring lock-step parallel execution.
+
+While MeshDevice provides these performance optimizations, it maintains explicit control over data distribution and communication patterns. MeshDevice does not hide the distributed nature of the computation - users must explicitly specify:
+- **Data Distribution**: How input tensors are distributed across devices (sharded or replicated) using mesh mappers
+- **Collective Communication**: When and how devices need to communicate using CCL operations like all-gather, reduce-scatter, etc.
+
+This explicit control allows users to optimize their applications for specific hardware topologies and workload characteristics. For detailed information on data distribution strategies, refer to [Section 3 (Distributing Tensor to MeshDevice)](#3-distributing-tensor-to-meshdevice). For collective communication patterns, see [Section 5 (MeshDevice and Collective Communication Library)](#5-meshdevice-and-collective-communication-library-ccl).
+
 ### 2.1 System Topology
 
-A MeshDevice can be instantiated over a collection of physically connected devices. The supported configurations are N300 (1x2), T3000 (2x4), Galaxy (8x4).
+A MeshDevice can be instantiated over a collection of physically connected devices. Examples of the supported configurations are: N300 (1x2), QuietBox (Wormhole) (2x4), Galaxy (8x4).
 
-With the N300 form-factor, it houses two wormhole chips. The host is connected to the "left" chip via PCIe and the "left" chip is connected to the "right" chip via two ethernet links. Each ethernet link has a 200 Gbps bi-directional bandwidth. For N300, one of the ethernet links connecting the "left" chip to the "right" chip is reserved for fast-dispatch. At the user-level, this means only a single ethernet link is made available for use. The N300 represents the smallest multi-device configuration that we can instantiate a MeshDevice over.
+The N300 form-factor houses two wormhole chips. The host is connected to the "left" chip via PCIe and the "left" chip is connected to the "right" chip via two ethernet links. Each ethernet link has a 200 Gbps bi-directional bandwidth. For N300, one of the ethernet links connecting the "left" chip to the "right" chip is reserved for fast-dispatch. At the user-level, this means only a single ethernet link is made available for use. The N300 represents the smallest multi-device configuration that we can instantiate a MeshDevice over.
 
 <!-- ![image1](images/image1.png){width=15 height=15} -->
 <img src="../EthernetMultichip/images/t3000.png" style="width:500px;"/>
 
-*Figure 1: T3000 System Topology. T3000 is composed of 4x N300 wormhole cards, totalling 8 wormhole chips, connected in a 2x4 mesh configuration. Each pair of wormhole-chips are connected via two ethernet links.*
+*Figure 1: QuietBox (Wormhole) System Topology. QuietBox (Wormhole) is composed of 4x N300 wormhole cards, totalling 8 wormhole chips, connected in a 2x4 mesh configuration. Each pair of wormhole-chips are connected via two ethernet links.*
 
 
 <img src="../EthernetMultichip/images/TG.png" style="width:500px;"/>
 
-*Figure 2: TG System Topology. TG is composed of 32x galaxy wormhole cards, totalling 32 wormhole chips, connected in a 8x4 mesh configuration. Each pair of wormhole-chips are connected via four ethernet links.*
+*Figure 2: Galaxy System Topology. Galaxy is composed of 32x galaxy wormhole cards, totalling 32 wormhole chips, connected in a 8x4 mesh configuration. Each pair of wormhole-chips are connected via four ethernet links.*
 
 
 [tt-topology](https://github.com/tenstorrent/tt-topology) can be used to flash multiple wormhole cards on a system to a specific ethernet routing configuration (linear, ring, mesh) and used to visualize the organization of the chip layout.
 
 <img src="images/image3.png" style="width:500px;"/>
 
-*Figure 3: T3000 Chip Layout dumped from tt-topology*
+*Figure 3: QuietBox (Wormhole) Chip Layout dumped from tt-topology*
+
+#### 2.1.1 SystemMesh Visualization
+
+```py
+ttnn.visualize_system_mesh()
+>
+SystemMesh Global Shape: MeshShape([1, 2])
+
+SystemMesh Local Shape: MeshShape([1, 2])
+
+   SystemMesh Global Shape: (1, 2) | Local Shape: (1, 2)
+┌──────────────────────────────┬──────────────────────────────┐
+│          Dev. ID: 0          │          Dev. ID: 1          │
+│            (0, 0)            │            (0, 1)            │
+└──────────────────────────────┴──────────────────────────────┘
+```
 
 
 ### 2.2 MeshDevice Management
@@ -107,6 +140,248 @@ ttnn.visualize_mesh_device(mesh_device)
 
 ##
 
+### 2.3 Controlling Device Visibility
+
+In multi-device systems, the set of *PCIe*-visible devices can be narrowed using the `TT_VISIBLE_DEVICES` environment variable.
+
+Set `TT_VISIBLE_DEVICES` to a comma-separated list of device IDs (matching `/dev/tenstorrent/<id>`) to restrict which devices are visible to your process. If unset, all devices are visible; if set, only the listed devices are available. This is useful for:
+
+- Partitioning devices to run independent jobs so that they do not collide.
+- **Running concurrent processes across different devices**, so each process uses its own card(s) without overlap.
+- Prototyping a smaller mesh inside a larger topology (for example, emulating an N300 within a T3000).
+- Emulating a multi-host configuration by simultaneously launching multiple processes working on independent parts of the available system mesh.
+
+#### Usage Examples
+
+1. Expose a single PCIe device. For N300, this exposes both the PCIe and the remote / ethernet-connected device.
+```bash
+TT_VISIBLE_DEVICES="0" python your_script.py
+```
+
+2. Expose two PCIe devices. On a T3000, using `TT_VISIBLE_DEVICES="0,1"` exposes two PCIe devices and their associated remote / ethernet-connected device. If PCIe device {0,1} is connected, then this effectively exposes a 2x2 mesh.
+```bash
+TT_VISIBLE_DEVICES="0,1" ./your_cpp_program
+```
+
+#### Running Concurrent Processes On A Single Host
+
+On a single host with multiple cards, you can run multiple independent processes concurrently, with each process having exclusive access to a different card. This enables running parallel workloads or independent experiments across different cards on the same host.
+
+**Important**:
+- `TT_VISIBLE_DEVICES` uses PCIe device IDs (matching `/dev/tenstorrent/<id>`). For example, a WH T3000 with 4 N300 boards has 8 total devices but only 4 PCIe-accessible devices (IDs 0-3).
+- When running concurrent processes, you must also set `TT_METAL_CACHE` to a unique path for each process to avoid kernel compilation conflicts.
+
+**Example: Running Two Concurrent Processes**
+
+```python
+import os
+import multiprocessing
+from pathlib import Path
+import torch
+import ttnn
+
+def run_on_device(process_name, pcie_device_id):
+    os.environ["TT_VISIBLE_DEVICES"] = str(pcie_device_id)
+    # Use separate cache directories to avoid compilation conflicts
+    os.environ["TT_METAL_CACHE"] = f"{Path.home()}/.cache/tt_metal_{pcie_device_id}"
+
+    # Your workload here
+    torch_a = torch.rand((32 * 32, 64), dtype=torch.bfloat16)
+    torch_b = torch.rand((32 * 32, 64), dtype=torch.bfloat16)
+
+    # Device ID is always 0 from this process's perspective since only one PCIe device is visible
+    device = ttnn.open_device(device_id=0)
+
+    a = ttnn.from_torch(
+        torch_a, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+    b = ttnn.from_torch(
+        torch_b, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+
+    output = ttnn.add(a, b)
+    print(f"{process_name}: {output}")
+
+    ttnn.close_device(device)
+
+if __name__ == "__main__":
+    # Run two processes concurrently, each on a different PCIe device
+    # For WH T3000: PCIe device IDs range from 0-3
+    processes = [
+        ("Process 1", "0"),
+        ("Process 2", "1"),
+    ]
+
+    jobs = []
+    for process_name, pcie_device_id in processes:
+        p = multiprocessing.Process(target=run_on_device, args=(process_name, pcie_device_id))
+        jobs.append(p)
+        p.start()
+
+    for job in jobs:
+        job.join()
+```
+
+For more examples, please see `tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh`.
+
+### 2.4 Distributed Process Launch with tt-run
+
+#### 2.4.1 Overview and Design Philosophy
+
+`tt-run` is a distributed process launcher for TT-Metal/TTNN workloads supporting both **single-host multi-process** and **multi-host distributed** configurations. It provides a declarative YAML-based interface to orchestrate MPI-based distributed execution, abstracting the complexity of environment management, device partitioning, and mesh topology configuration.
+
+**Design Patterns Supported**
+
+`tt-run` enables two primary distributed execution patterns:
+
+1. **SPMD "Big-Mesh" Pattern**: Multiple MPI ranks coordinate to present a single, unified logical mesh spanning multiple hosts. Each rank manages a local sub-mesh while executing identical program code. This pattern is ideal for:
+   - Tensor Parallelism (TP) across large meshes
+   - Data Parallelism (DP) with uniform data distribution
+   - Hybrid TP+DP workloads that scale uniformly across the mesh
+   - Described in detail: [TT-Distributed: Multi-Host Runtime](../../tech_reports/TT-Distributed/MultiHostMeshRuntime.md)
+
+2. **Multi-Mesh Pattern**: Different MPI ranks manage independent meshes, potentially running different workload stages. This pattern supports:
+   - Pipeline Parallelism where each rank handles different model layers
+   - Multi-model inference where independent models run on separate meshes
+   - Heterogeneous workloads requiring different mesh configurations per stage
+
+**Core Abstraction: Rank Bindings**
+
+The central concept in `tt-run` is the **rank binding**, which maps each MPI rank to:
+- A mesh identifier (`mesh_id`) - which logical mesh this rank belongs to
+- A mesh host rank (`mesh_host_rank`) - position within a multi-host mesh (for SPMD Big-Mesh)
+- Environment overrides - global and rank-specific environment variables
+
+**Mesh Graph Descriptors (MGD 2.0)**
+
+The Mesh Graph Descriptor defines the topology of the distributed system, including host topology for multi-host meshes and inter-mesh connections for multi-mesh scenarios.
+
+MGD 2.0 uses Protobuf text format (`.textproto` extension). For detailed schema documentation and examples, see: [`tt_metal/fabric/MGD_README.md`](../../tt_metal/fabric/MGD_README.md)
+
+**Automatic Environment Isolation**
+
+To ensure safe multi-process execution, `tt-run` automatically manages per-rank environments:
+- **TT_METAL_CACHE**: Unique cache directory per rank (default: `~/.cache/{hostname}_rank{N}`) prevents kernel compilation conflicts
+- **TT_VISIBLE_DEVICES**: Controls PCIe device visibility per rank (see [Section 2.3](#23-controlling-device-visibility)). By default, all devices are visible.
+- **TT_MESH_GRAPH_DESC_PATH**: Path to topology descriptor
+- **TT_MESH_ID** & **TT_MESH_HOST_RANK**: Mesh identification for runtime coordination
+
+#### 2.4.2 Configuration and Usage
+
+**Basic Configuration Example**
+
+```yaml
+rank_bindings:
+  - rank: 0
+    mesh_id: 0                 # Mesh identifier
+    mesh_host_rank: 0          # Position within multi-host mesh
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1"  # Devices visible to this rank
+
+  - rank: 1
+    mesh_id: 0
+    mesh_host_rank: 1
+    env_overrides:
+      TT_VISIBLE_DEVICES: "2,3"
+
+mesh_graph_desc_path: "mesh_descriptor.textproto"  # MGD 2.0 topology definition
+
+global_env:                    # Environment variables for all ranks
+  TT_METAL_LOGGER_LEVEL: "INFO"
+```
+
+**Command-Line Invocation**
+
+```bash
+tt-run --rank-binding config.yaml [--mpi-args "<mpi_args>"] <program> [args...]
+```
+
+Common options:
+- `--dry-run`: Preview generated MPI command without execution
+- `--verbose`: Enable detailed logging
+- `--mpi-args`: Pass additional MPI arguments (rankfiles, network options, etc.)
+
+#### 2.4.3 Usage Patterns
+
+**Pattern 1: SPMD Big-Mesh**
+
+Multiple ranks collaborate to form a single logical mesh spanning hosts. All ranks share the same `mesh_id` but have different `mesh_host_rank` values.
+
+```yaml
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides: {TT_VISIBLE_DEVICES: "0,1"}
+  - rank: 1
+    mesh_id: 0
+    mesh_host_rank: 1
+    env_overrides: {TT_VISIBLE_DEVICES: "2,3"}
+
+mesh_graph_desc_path: "dual_host_mesh.textproto"  # Multi-host topology
+```
+
+**Pattern 2: Multi-Mesh (Independent Meshes)**
+
+Each rank manages an independent mesh, enabling pipeline parallelism or multi-model scenarios. Ranks have different `mesh_id` values.
+
+```yaml
+rank_bindings:
+  - rank: 0
+    mesh_id: 0      # First pipeline stage
+    env_overrides: {TT_VISIBLE_DEVICES: "0"}
+  - rank: 1
+    mesh_id: 1      # Second pipeline stage
+    env_overrides: {TT_VISIBLE_DEVICES: "1"}
+
+mesh_graph_desc_path: "multi_mesh.textproto"
+```
+
+**Pattern 3: Single-Host Emulation**
+
+Emulate multi-host workloads on a single host by partitioning devices across processes:
+
+```yaml
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: "0,1"}}
+  - {rank: 1, mesh_id: 0, mesh_host_rank: 1, env_overrides: {TT_VISIBLE_DEVICES: "2,3"}}
+mesh_graph_desc_path: "emulated_dual_host.textproto"
+```
+
+**Pattern 4: Multi-Host Cluster Deployment**
+
+For multi-host clusters, combine rank bindings with MPI rankfiles to specify physical host assignments:
+
+```bash
+# Rankfile specifies physical host assignment
+# rank 0=host1 slot=0
+# rank 1=host2 slot=0
+
+tt-run --rank-binding config.yaml \
+       --mpi-args "--rankfile hosts.txt --mca btl tcp" \
+       python distributed_workload.py
+```
+
+
+**Example Files and Tests**
+
+Configuration examples:
+- `tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml` - Single-host multi-process configuration
+- `tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto` - T3000 mesh topology (MGD 2.0)
+- `tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto` - Galaxy mesh topology (MGD 2.0)
+
+Test scripts demonstrating `tt-run` usage:
+- `tests/scripts/run_t3000_unit_tests.sh` - T3000 multi-process test launcher
+- `tests/scripts/run_dual_galaxy_tests.sh` - Multi-host Galaxy test launcher
+- `tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh` - Device visibility examples
+
+**Related Documentation**
+
+- Section 2.3: [Controlling Device Visibility](#23-controlling-device-visibility) - for `TT_VISIBLE_DEVICES` details
+- Section 2.1: [System Topology](#21-system-topology) - for understanding mesh configurations
+- [`tt_metal/fabric/MGD_README.md`](../../tt_metal/fabric/MGD_README.md) - MGD 2.0 schema and examples
+- [TT-Distributed: Multi-Host Runtime](../../tech_reports/TT-Distributed/MultiHostMeshRuntime.md) - SPMD architecture details
+
 ## 3. Distributing Tensor to MeshDevice
 
 ### 3.1 Distribution Strategies
@@ -137,10 +412,23 @@ torch_tensor = torch.zeros(1, 1, 32, 64)
 torch_tensor[..., 0:32] = 1.0
 torch_tensor[..., 32:64] = 2.0
 
+# Create a mesh mapper. Given a mesh device shape, placements specify replication or sharding of data per each dimension of the mesh shape.
+mesh_mapper = ttnn.create_mesh_mapper(
+    mesh_device,
+    ttnn.MeshMapperConfig(
+        placements=[
+            # Replicate data across first dimension of the mesh
+            ttnn.PlacementReplicate(),
+            # Shard dimension 3 of tensor across second dimension of the mesh
+            ttnn.PlacementShard(3),
+        ],
+    ),
+)
+
 # Convert to ttnn.Tensor; MeshTensor holds buffers to two shards in host-memory
 mesh_tensor = ttnn.from_torch(
     torch_tensor,
-    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+    mesh_mapper=mesh_mapper,
     layout=ttnn.TILE_LAYOUT,
 )
 ```
@@ -161,6 +449,14 @@ ttnn.Tensor([[[[ 2.00000,  2.00000,  ...,  2.00000,  2.00000],
                [ 2.00000,  2.00000,  ...,  2.00000,  2.00000]]]], shape=Shape([1, 1, 32, 32]), dtype=DataType::FLOAT32, layout=Layout::TILE)
 
 ```
+
+We can visualize this tensor to see how it's stored in host-memory.
+
+```py
+ttnn.visualize_tensor(mesh_tensor)
+```
+
+<img src="images/image6_host_tensor_vis.png" style="width:500px;"/>
 
 Let's now transfer to device:
 
@@ -188,19 +484,13 @@ We now see that the following:
 - 32x32 chunk with elements of 1.0 is residing in Device 0 DRAM
 - 32x32 chunk with elements of 2.0 is residing in Device 1 DRAM
 
-We can also visualize this tensor distributed across our MeshDevice. The visualization will color devices that have shards resident to the device.
+We can also visualize this tensor distributed across our MeshDevice. The visualization will color devices that have shards resident to the device. For a strategy that uses replication to distribute a tensor across our MeshDevice, replicated shards will have the same color mapped to them.
 
 ```py
-ttnn.visualize_mesh_device(mesh_device, tensor=mesh_tensor)
-
->
-                  MeshDevice(rows=1, cols=2):
-┌──────────────────────────────┬──────────────────────────────┐
-│         Dev. ID: 0           │         Dev. ID: 1           │
-│            (0, 0)            │            (0, 1)            │
-│  ttnn.Shape([1, 1, 32, 32])  │  ttnn.Shape([1, 1, 32, 32])  │
-└──────────────────────────────┴──────────────────────────────┘
+ttnn.visualize_tensor(mesh_tensor)
 ```
+
+<img src="images/image7_device_tensor_vis.png" style="width:500px;"/>
 
 ## 4. Single-Program Multiple Device
 
@@ -263,7 +553,7 @@ output_tensor = ttnn.gelu(ttnn_tensor)
 
 ## 5. MeshDevice and Collective Communication Library (CCL)
 
-The Collective Communication Library (CCL) provides a set of operations for efficient device-to-device communication in a MeshDevice. See the [CCL Developer Guide](../EthernetMultichip/CclDeveloperGuide.md) for more comprehensive coverage. These operations are used as building blocks for implementing tensor-parallel and other distributed computing strategies.
+The Collective Communication Library (CCL) provides a set of operations for efficient device-to-device communication in a MeshDevice. These operations are used as building blocks for implementing tensor-parallel and other distributed computing strategies.
 
 ### 5.1 CCL Operations
 
@@ -273,8 +563,6 @@ CCL supports several collective operations, including:
 2. Reduce-Scatter (Ring)
 3. All-Reduce (planned)
 4. Send/Receive (planned)
-
-Our library of supported operations can be found [here](../EthernetMultichip/CclDeveloperGuide.md#op-list-op-list).
 
 ### 5.2 All-Gather
 
@@ -563,23 +851,24 @@ ttnn_output = ttnn_model(hidden_states)
 with ttnn.distribute(ttnn.ConcatMeshToTensor(mesh_device, dim=3)):
     assert_with_pcc(torch_output, ttnn.to_torch(ttnn_output), 0.98)
 ```
+
 ## 8. Programming Mesh of Devices Using Hybrid Tensor and Data Parallel
 
 ### 8.1 Llama-3.1 70B Hybrid Tensor and Data Parallel
 
 <img src="images/llama-3.1-70b-hybrid-dp-tp.png" style="width:500px;"/>
 
-*Figure 7: Llama-3.1 70B model mapped onto T3000 and Galaxy systems.*
+*Figure 7: Llama-3.1 70B model mapped onto QuietBox (Wormhole) and Galaxy systems.*
 
 
 ### 8.2 Llama-3.1 70B Performance Scaling
 
-| System  | Batch Size | tok/s/u | tok/s  |
-|---------|------------|---------|--------|
-| T3000   | 32         | 15.1    | 483.2  |
-| Galaxy  | 128        | 14.3    | 1835.5 |
+| System                | Batch Size  | tok/s/u | tok/s  |
+|-----------------------|-------------|---------|--------|
+| QuietBox (Wormhole)   | 32          | 15.1    | 483.2  |
+| Galaxy                | 128         | 14.3    | 1835.5 |
 
-*Table 1: Llama-3.1 70B model scaling from T3000 to Galaxy. Tokens per second (toks/s) throughput scales near-linear (3.8x) as we tile our model replicas across the Galaxy mesh.*
+*Table 1: Llama-3.1 70B model scaling from QuietBox (Wormhole) to Galaxy. Tokens per second (toks/s) throughput scales near-linear (3.8x) as we tile our model replicas across the Galaxy mesh.*
 
 
 ### 8.3 Hybrid Tensor and Data Parallel Programming Example
@@ -602,7 +891,7 @@ See `models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_p
 1. Submesh Creation
 
 ```py
-    submesh_devices: List[ttnn.MeshDevice] = mesh_device.create_submeshes((2, 4))
+    submesh_devices: List[ttnn.MeshDevice] = mesh_device.create_submeshes(ttnn.MeshShape(2, 4))
 ```
 
 2. Compile & Run the Model on Each Submesh
@@ -633,3 +922,128 @@ See `models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_p
 ```
 
 APIs will be further refined in future releases. A proposal for refined set of APIs can be found [here](https://github.com/tenstorrent/tt-metal/issues/13852).
+
+
+## 9. TT-NN MeshDevice vs PyTorch Multi-Device Programming
+
+### 9.1 Overview of Multi-Device Handling
+
+This section compares TT-NN's MeshDevice with PyTorch's approach to **single-node multi-device** programming. Note that PyTorch Distributed (torch.distributed) is designed for multi-node systems and is not the appropriate comparison here. Similarly, TT-NN's multi-node MeshDevice support is currently under development and not covered in this comparison.
+
+**MeshDevice in TT-NN (Single-Node):**
+
+MeshDevice provides a unified abstraction for managing multiple devices within a single node as a single logical entity. It bundles devices together for coordinated execution, enabling:
+- Automatic kernel compilation broadcasting across devices
+- Efficient data distribution and replication
+- Native runtime-level support for mesh topology-aware command dispatch
+- Explicit control over data distribution and collective communication operations
+
+**PyTorch Single-Node Multi-GPU Approach:**
+
+In PyTorch, single-node multi-GPU programming requires developers to either:
+- **Manual Management**: Explicitly place tensors on specific devices (`cuda:0`, `cuda:1`, etc.) and manually orchestrate data movement and synchronization between devices
+- **DataParallel**: Use `torch.nn.DataParallel` which automatically splits data across GPUs but operates in a single process with potential GIL bottlenecks
+- **DistributedDataParallel**: While primarily designed for multi-node, DDP can be used on single-node with multiple processes (one per GPU) for better performance than DataParallel
+
+For manual multi-GPU management in a single process, PyTorch provides no built-in abstractions for:
+- Coordinated command dispatch across devices
+- Efficient collective communication operations
+- Automatic kernel or data broadcasting
+
+### 9.2 Code Comparison: Matrix Multiplication with All-Gather
+
+The following examples demonstrate how to perform matrix multiplication followed by an all-gather operation across multiple devices.
+
+<table>
+<tr>
+<th>TT-NN MeshDevice</th>
+<th>PyTorch Single-Node Multi-GPU</th>
+</tr>
+<tr>
+<td>
+
+
+```python
+import ttnn
+import torch
+
+# Open a 1x2 MeshDevice
+mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 2))
+
+# Create input tensors
+# Note that ttnn.rand can be used here, however this example
+# demonstrates the use of mesh distribution APIs for generic inputs
+torch_input_a = torch.randn(1, 1, 128, 128, dtype=torch.bfloat16)
+torch_input_b = torch.randn(1, 1, 128, 256, dtype=torch.bfloat16)
+
+# Replicate input A and shard input B (each device gets 128x128)
+# Supplying `mesh_device` argument implicitly transfers the tensor to device
+input_a = ttnn.from_torch(
+    torch_input_a,
+    layout=ttnn.TILE_LAYOUT,
+    device=mesh_device,
+    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+)
+
+input_b = ttnn.from_torch(
+    torch_input_b,
+    layout=ttnn.TILE_LAYOUT,
+    device=mesh_device,
+    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+)
+
+# Perform matrix multiplication - done in parallel on 2 devices
+output = ttnn.matmul(input_a, input_b)
+
+# All-gather to collect results from all devices
+# The gathered tensor stores a copy of the concatenated tensor on each device
+gathered = ttnn.all_gather(output, dim=3, cluster_axis=0)
+
+```
+
+</td>
+<td>
+
+
+```python
+import torch
+
+# Check available GPUs
+num_gpus = torch.cuda.device_count()  # Assumes 2 GPUs
+devices = [torch.device(f'cuda:{i}') for i in range(num_gpus)]
+
+# Create input tensors
+torch_input_a = torch.randn(1, 1, 128, 128, dtype=torch.bfloat16)
+torch_input_b = torch.randn(1, 1, 128, 256, dtype=torch.bfloat16)
+
+# Replicate input A on all devices
+replicated_a = [torch_input_a.to(device) for device in devices]
+
+# Manually shard input B across devices (columns)
+shard_size = 256 // num_gpus
+sharded_b = []
+for i in range(num_gpus):
+    start_idx = i * shard_size
+    end_idx = start_idx + shard_size
+    shard = torch_input_b[:, :, :, start_idx:end_idx].to(devices[i])
+    sharded_b.append(shard)
+
+# Perform matrix multiplication on each device
+outputs = []
+for i in range(num_gpus):
+    with torch.cuda.device(devices[i]):
+        output = torch.matmul(replicated_a[i], sharded_b[i])
+        outputs.append(output)
+
+# Manual all-gather: copy all outputs to first device
+gathered = []
+for output in outputs:
+    gathered.append(output.to(devices[0]))
+
+# Concatenate gathered outputs along the column dimension to complete all-gather
+final_result = torch.cat(gathered, dim=3)
+```
+
+</td>
+</tr>
+</table>

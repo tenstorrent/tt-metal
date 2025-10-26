@@ -28,6 +28,10 @@
 #include "compute_kernel_api/eltwise_unary/sqrt.h"
 #endif
 
+#if SFPU_OP_RSQRT_INCLUDE
+#include "compute_kernel_api/eltwise_unary/rsqrt.h"
+#endif
+
 #if SFPU_OP_RECIP_INCLUDE
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #endif
@@ -60,8 +64,8 @@
 #include "compute_kernel_api/eltwise_unary/trigonometry.h"
 #endif
 
-#if SFPU_OP_REVERSE_FAMILY_INCLUDE
-#include "compute_kernel_api/eltwise_unary/reverseops.h"
+#if SFPU_OP_RSUB_INCLUDE
+#include "compute_kernel_api/eltwise_unary/rsub.h"
 #endif
 
 #if SFPU_OP_IDENTITY_INCLUDE
@@ -116,6 +120,10 @@
 #include "compute_kernel_api/eltwise_unary/softplus.h"
 #endif
 
+#if SFPU_OP_SELU_INCLUDE
+#include "compute_kernel_api/eltwise_unary/selu.h"
+#endif
+
 #if SFPU_OP_PRELU_INCLUDE
 #include "compute_kernel_api/eltwise_unary/prelu.h"
 #endif
@@ -130,6 +138,38 @@
 
 #if SFPU_OP_LOG1P_INCLUDE
 #include "compute_kernel_api/eltwise_unary/log1p.h"
+#endif
+
+#if SFPU_OP_UNARY_COMP_INCLUDE
+#include "compute_kernel_api/eltwise_unary/comp.h"
+#endif
+
+#if SFPU_OP_ACTIVATIONS_INCLUDE
+#include "compute_kernel_api/eltwise_unary/activations.h"
+#endif
+
+#if SFPU_OP_THRESHOLD_INCLUDE
+#include "compute_kernel_api/eltwise_unary/threshold.h"
+#endif
+
+#if SFPU_OP_WHERE_INCLUDE
+#include "compute_kernel_api/eltwise_unary/where.h"
+#endif
+
+#if SFPU_OP_CLAMP_INCLUDE
+#include "compute_kernel_api/eltwise_unary/clamp.h"
+#endif
+
+#if SFPU_OP_HARDTANH_INCLUDE
+#include "compute_kernel_api/eltwise_unary/hardtanh.h"
+#endif
+
+#if SFPU_OP_RPOW_INCLUDE
+#include "compute_kernel_api/eltwise_unary/rpow.h"
+#endif
+
+#if SFPU_OP_HARDMISH_INCLUDE
+#include "compute_kernel_api/eltwise_unary/hardmish.h"
 #endif
 
 #if SFPU_OP_COMPUTE_KERNEL_API_INCLUDE

@@ -6,6 +6,7 @@
 
 #include "moreh_sgd_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -48,7 +49,6 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     tt::tt_metal::IDevice* device = param_in.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t units_to_divide = num * Ht * Wt;
-    uint32_t core_w = grid.x;
     uint32_t core_h = grid.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
@@ -84,33 +84,33 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     ////////////////////////////////////////////////////////////////////////////
     //                         Kernels defines
     ////////////////////////////////////////////////////////////////////////////
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
+    std::map<std::string, std::string> compute_defines;
 
     if (weight_decay != 0) {
-        reader_defines["WEIGHT_DECAY"] = 1;
-        compute_defines["WEIGHT_DECAY"] = 1;
+        reader_defines["WEIGHT_DECAY"] = "1";
+        compute_defines["WEIGHT_DECAY"] = "1";
     }
 
     if (momentum != 0) {
-        reader_defines["MOMENTUM"] = 1;
-        compute_defines["MOMENTUM"] = 1;
-        writer_defines["MOMENTUM"] = 1;
+        reader_defines["MOMENTUM"] = "1";
+        compute_defines["MOMENTUM"] = "1";
+        writer_defines["MOMENTUM"] = "1";
     }
 
     if (momentum_initialized) {
-        reader_defines["MOMENTUM_INITIALIZED"] = 1;
-        compute_defines["MOMENTUM_INITIALIZED"] = 1;
+        reader_defines["MOMENTUM_INITIALIZED"] = "1";
+        compute_defines["MOMENTUM_INITIALIZED"] = "1";
     }
 
     if (nesterov) {
-        reader_defines["NESTEROV"] = 1;
-        compute_defines["NESTEROV"] = 1;
+        reader_defines["NESTEROV"] = "1";
+        compute_defines["NESTEROV"] = "1";
     }
 
     if (fp32_dest_acc_en) {
-        reader_defines["FP32_DEST_ACC_EN"] = 1;
+        reader_defines["FP32_DEST_ACC_EN"] = "1";
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
@@ -118,14 +118,17 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
 
-    const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(is_dram(param_in)),
-        static_cast<uint32_t>(is_dram(grad)),
-        static_cast<uint32_t>(momentum_buffer_in.has_value() ? is_dram(momentum_buffer_in.value()) : 0)};
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*param_in.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*grad.buffer()).append_to(reader_compile_time_args);
+    if (momentum_buffer_in.has_value()) {
+        TensorAccessorArgs(*momentum_buffer_in->buffer()).append_to(reader_compile_time_args);
+    }
 
-    std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(param_out))};
+    std::vector<uint32_t> writer_compile_time_args;
+    TensorAccessorArgs(*param_out.buffer()).append_to(writer_compile_time_args);
     if (has_momentum_buffer_out) {
-        writer_compile_time_args.push_back(static_cast<uint32_t>(is_dram(momentum_buffer_out.value())));
+        TensorAccessorArgs(*momentum_buffer_out->buffer()).append_to(writer_compile_time_args);
     }
 
     const auto reader_kernel_file =
@@ -164,20 +167,12 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto param_in_addr = param_in.buffer()->address();
-    const auto grad_addr = grad.buffer()->address();
-    const auto momentum_buffer_in_addr =
-        momentum_buffer_in.has_value() ? momentum_buffer_in.value().buffer()->address() : 0;
-
-    const auto param_out_addr = param_out.buffer()->address();
-    const auto momentum_buffer_out_addr =
-        momentum_buffer_out.has_value() ? momentum_buffer_out->buffer()->address() : 0;
 
     auto core_x_offset = 0;
     auto core_y_offset = 0;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
-        CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
+        CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};
         uint32_t num_tiles_per_core;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
@@ -190,7 +185,7 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
         union {
             float f;
             uint32_t u;
-        } u_lr, u_momentum, u_dampening, u_weight_decay, u_one;
+        } u_lr{}, u_momentum{}, u_dampening{}, u_weight_decay{}, u_one{};
         u_lr.f = lr;
         u_momentum.f = momentum;
         u_dampening.f = dampening;
@@ -238,7 +233,7 @@ void MorehSgdOperation::ProgramFactory::override_runtime_arguments(
     auto param_in_buffer = tensor_args.param_in.buffer();
     auto grad_buffer = tensor_args.grad.buffer();
     auto momentum_buffer_in_buffer =
-        tensor_args.momentum_buffer_in.has_value() ? tensor_args.momentum_buffer_in->buffer() : 0;
+        tensor_args.momentum_buffer_in.has_value() ? tensor_args.momentum_buffer_in->buffer() : nullptr;
 
     auto param_out_buffer = tensor_return_value.at(0)->buffer();
     auto momentum_buffer_out_buffer = tensor_return_value.at(1)->buffer();

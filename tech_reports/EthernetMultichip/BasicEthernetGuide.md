@@ -29,18 +29,14 @@ This documentation is intended to be used as a guide for a new developer, lookin
   key differences between programming single chip and multichip workloads
 * recommendations and best practices for writing custom multichip workloads
 
-It is recommended to also review the [CCL Developer Guide](CclDeveloperGuide.md) to learn about the CCL op library, what ops are available and how are they implemented.
-
 The document describes the multichip software stack bottom-up in the following sequence:
 
 1. How cores and ethernet are connected to build multi-chip clusters
 2. Sending data between chips and the APIs to accomplish those tasks
 3. How multichip workloads interact with the kernel dispatcher and the new challenges this brings
 4. Writing kernels to send data over ethernet
-5. A library of software components that can be used to build higher level (CCL) operations
-6. Incorporating the above to build CCL operations, such as *all-gather*
 
-Prior to reading this document, it is recommended the reader is familiar with Tenstorrent single chip programming concepts. This foundational information can be found here in the [TT-Metallium developer guide](https://tenstorrent.github.io/tt-metal/latest/tt-metalium/tt_metal/apis/index.html).
+Prior to reading this document, it is recommended the reader is familiar with Tenstorrent single chip programming concepts. This foundational information can be found here in the [TT-Metalium developer guide](https://tenstorrent.github.io/tt-metal/latest/tt-metalium/tt_metal/apis/index.html).
 
 It is recommended to the reader to be familiar with the following concepts before reading this document:
 
@@ -216,7 +212,7 @@ This asynchronous behavior puts the user at risk of race conditions if certain p
 
 Since Ethernet does not provide a mechanism for the sender to know when packets are sent from L1 over the Ethernet link the user must provide their own flow control.
 
-Although it is possible to implement custom flow-control with only the `eth_send_packet()` function, Metallium’s CCL provides the ethernet dataflow API which implements end to end flow control for a fixed number of ethernet channels with its helper functions. The [`erisc_info`](https://github.com/tenstorrent/tt-metal/blob/97b21652e1a00579882427a21e95db318bc0c079/tt_metal/hw/inc/ethernet/tunneling.h#L41) with [`eth_channel_sync_t`](https://github.com/tenstorrent/tt-metal/blob/97b21652e1a00579882427a21e95db318bc0c079/tt_metal/hw/inc/ethernet/tunneling.h#L17) is also provided as a book-keeping data-structure for the ethernet dataflow API functions to implement end-to-end-flow control.
+Although it is possible to implement custom flow-control with only the `eth_send_packet()` function, Metalium’s CCL provides the ethernet dataflow API which implements end to end flow control for a fixed number of ethernet channels with its helper functions. The [`erisc_info`](https://github.com/tenstorrent/tt-metal/blob/97b21652e1a00579882427a21e95db318bc0c079/tt_metal/hw/inc/ethernet/tunneling.h#L41) with [`eth_channel_sync_t`](https://github.com/tenstorrent/tt-metal/blob/97b21652e1a00579882427a21e95db318bc0c079/tt_metal/hw/inc/ethernet/tunneling.h#L17) is also provided as a book-keeping data-structure for the ethernet dataflow API functions to implement end-to-end-flow control.
 
 The fields used in the `ethernet_channel_sync_t` to implement flow control are the `bytes_sent` and `receiver_ack` fields. The `eth_channel_sync_t` is sent to the receiver to indicate payload status. The fields are used in the following way:
 
@@ -451,7 +447,7 @@ std::vector<CoreCoord> logical_eth_core_coords =
 // aggregate, connect to multiple other devices. We can filter for a connection
 // to a specific device, if desired. In this example, we arbitrarily decide we
 // want a link connected to device 1 from local device
-chip_id_t target_remote_device_id = 1;
+ChipId target_remote_device_id = 1;
 
 // Find an ethernet core on the desired target device that connects to our local chip
 auto match_iter = std::find_first_if(
@@ -577,7 +573,7 @@ The implementation of each device kernel is described in further detail in this 
 
 ### Receiver Kernel
 
-Intialization: initialize local data-structures and wait for go signal from setup kernel
+Initialization: initialize local data-structures and wait for go signal from setup kernel
 
 ```c++
 // This address resides in the eth_channel_sync data-structure for the Ethernet
@@ -789,7 +785,7 @@ std::vector<hop_eth_sockets> build_eth_sockets_list(
            if (edge_link_idx[pair_edge] == conn) {
              CoreCoord eth_sender_core = *eth_sender_core_iter;
              CoreCoord eth_receiver_core = receiver_core;
-             chip_id_t receiver_device_id = device_id;
+             ChipId receiver_device_id = device_id;
              sockets.push_back({
                receiver_device_id,
                eth_receiver_core,curr_device->id(),

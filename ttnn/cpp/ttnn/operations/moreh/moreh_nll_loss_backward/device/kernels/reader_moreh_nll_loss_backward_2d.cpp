@@ -36,24 +36,17 @@ void kernel_main() {
 
     const uint32_t target_tile_bytes = get_tile_size(cb_target);
 
-    constexpr bool target_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool weight_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr bool divisor_is_dram = get_compile_time_arg_val(2) == 1;
-    constexpr bool output_grad_is_dram = get_compile_time_arg_val(3) == 1;
+    constexpr auto target_args = TensorAccessorArgs<0>();
+    constexpr auto weight_args = TensorAccessorArgs<target_args.next_compile_time_args_offset()>();
+    constexpr auto divisor_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
+    constexpr auto output_grad_args = TensorAccessorArgs<divisor_args.next_compile_time_args_offset()>();
 
-    const InterleavedAddrGen<target_is_dram> addrg_target = {
-        .bank_base_address = target_addr, .page_size = target_tile_bytes};
-    const InterleavedAddrGenFast<output_grad_is_dram> addrg_output_grad = {
-        .bank_base_address = output_grad_addr,
-        .page_size = output_grad_tile_bytes,
-        .data_format = output_grad_data_format};
+    const auto addrg_target = TensorAccessor(target_args, target_addr, target_tile_bytes);
+    const auto addrg_output_grad = TensorAccessor(output_grad_args, output_grad_addr, output_grad_tile_bytes);
     constexpr uint32_t onetile = 1;
 
 #if defined(WEIGHT)
-    const InterleavedAddrGen<weight_is_dram> addrg_weight = {
-        .bank_base_address = weight_addr,
-        .page_size = weight_tile_bytes,
-    };
+    const auto addrg_weight = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
 
     // weight: (1, C)
     read_line(cb_weight, addrg_weight, weight_num_tile);
@@ -63,8 +56,7 @@ void kernel_main() {
 #endif
 
 #if defined(DIVISOR)
-    const InterleavedAddrGenFast<divisor_is_dram> addrg_divisor = {
-        .bank_base_address = divisor_addr, .page_size = divisor_tile_bytes, .data_format = divisor_data_format};
+    const auto addrg_divisor = TensorAccessor(divisor_args, divisor_addr, divisor_tile_bytes);
 
     read_tile(cb_divisor, addrg_divisor, 0);
 #endif

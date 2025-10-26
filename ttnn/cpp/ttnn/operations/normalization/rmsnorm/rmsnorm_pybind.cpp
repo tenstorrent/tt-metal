@@ -19,12 +19,20 @@ void bind_normalization_rms_norm(py::module& module) {
         module,
         ttnn::rms_norm,
         R"doc(
-            Compute rms_norm over :attr:`input_tensor`.
+            ``ttnn.rms_norm(input_tensor: ttnn.Tensor, epsilon: float = 1e-12, weight: Optional[ttnn.Tensor] = None, bias: Optional[ttnn.Tensor] = None, residual_input_tensor: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, program_config: Optional[ttnn.ProgramConfig] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None) -> ttnn.Tensor``
 
+            Computes RMS norm over :attr:`input_tensor`.
+            See `Root Mean Square Layer Normalization <https://arxiv.org/pdf/1910.07467>`_ for more details.
+
+            .. math::
+              \text{RMS_norm}(x, \gamma, \beta, \epsilon) = \frac{x}{\sqrt{\epsilon+\frac{1}{N}\sum_{i=1}^{N}x^{2}}} \cdot \gamma + \beta
+
+            Where:
+                - :math:`\gamma` and :math:`\beta` are optional scale and shift parameters
+                - :math:`\epsilon` is a small constant
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
@@ -35,12 +43,67 @@ void bind_normalization_rms_norm(py::module& module) {
             program_config (ttnn.ProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig): Defaults to `None`.
 
-
         Returns:
             ttnn.Tensor: the output tensor.
 
+        Note:
+            Supported data types and layouts by tensor:
 
-        )doc",
+            .. list-table:: input_tensor
+               :header-rows: 1
+
+               * - dtype
+                 - layout
+               * - BFLOAT16, FLOAT32, BFLOAT8_B
+                 - TILE
+
+            .. list-table:: residual_input_tensor
+               :header-rows: 1
+
+               * - dtype
+                 - layout
+               * - BFLOAT16, FLOAT32, BFLOAT8_B
+                 - TILE
+
+            .. list-table:: weight (gamma) and bias (beta)
+               :header-rows: 1
+
+               * - dtype
+                 - layout
+               * - BFLOAT16, FLOAT32
+                 - TILE, ROW_MAJOR
+
+            .. list-table:: output_tensor
+               :header-rows: 1
+
+               * - dtype
+                 - layout
+               * - BFLOAT16, FLOAT32, BFLOAT8_B (matching input)
+                 - TILE
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+
+        Limitations:
+            - All input tensors must be on-device and have a rank >= 1.
+            - Unsharded tensors must be interleaved, sharded inputs cannot be height-sharded.
+            - If `residual_input_tensor` is provided, it must match the :attr:`input_tensor`'s padded shape.
+            - If the `weight`/`bias` tensors are TILE layout: last padded dim must match :attr:`input_tensor`'s last padded dim.
+            - If the `weight`/`bias` tensors are ROW_MAJOR layout: last padded dim must be TILE_WIDTH.
+            - If the :attr:`input_tensor` is sharded, the :attr:`output` must also be sharded. In that case, the
+              :attr:`output` memory layout and buffer type must match the :attr:`input_tensor`'s memory configuration.
+
+        Example:
+            .. code-block:: python
+
+              h, w = 32, 64
+              batch_size = 1
+
+              input_tensor = ttnn.rand([batch_size, h, w], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
+              weight = ttnn.rand([w], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
+              output_tensor = ttnn.rms_norm(input_tensor, weight=weight)
+
+            )doc",
         ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::kw_only(),

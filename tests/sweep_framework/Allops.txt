@@ -13,7 +13,6 @@ ttnn.addcdiv
 ttnn.addcdiv_bw
 ttnn.addcmul
 ttnn.addcmul_bw
-ttnn.all_gather
 ttnn.allocate_tensor_on_device
 ttnn.angle
 ttnn.angle_bw
@@ -135,17 +134,18 @@ ttnn.experimental.mul
 ttnn.experimental.ne
 ttnn.experimental.nlp_concat_heads
 ttnn.experimental.nlp_concat_heads_decode
+ttnn.experimental.nlp_concat_heads_boltz
 ttnn.experimental.nlp_create_qkv_heads
 ttnn.experimental.nlp_create_qkv_heads_decode
 ttnn.experimental.nlp_create_qkv_heads_falcon7b
 ttnn.experimental.nlp_create_qkv_heads_segformer
 ttnn.experimental.nlp_create_qkv_heads_vit
+ttnn.experimental.nlp_create_qkv_heads_boltz
 ttnn.experimental.nlp_kv_cache_load_slice
 ttnn.experimental.paged_fill_cache
 ttnn.experimental.paged_fused_update_cache
 ttnn.experimental.paged_update_cache
 ttnn.experimental.prefix_scan
-ttnn.experimental.reduce_scatter_async
 ttnn.experimental.repeat_and_interleave_eltwise_mul
 ttnn.experimental.rotary_embedding
 ttnn.experimental.rotary_embedding_llama
@@ -361,7 +361,6 @@ ttnn.real_bw
 ttnn.reallocate
 ttnn.reciprocal
 ttnn.reciprocal_bw
-ttnn.reduce_scatter
 ttnn.reglu
 ttnn.relu
 ttnn.relu6

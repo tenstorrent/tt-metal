@@ -7,10 +7,44 @@
 #include "ttnn/run_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "untilize_program_factory.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
+
+uint32_t get_pf_type(bool output_is_sharded, const Tensor& tensor) {
+    auto device = tensor.device();
+    uint32_t max_l1_size =
+        (device->l1_size_per_core() / 2) - device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
+    uint32_t single_tile_size = tt::tile_size(input_cb_data_format);
+    // Determine the max number of tiles that can be in any CB at a given time (1 input CB + 1 output CB = 2 total CBs)
+    uint32_t max_tiles_per_cb = max_l1_size / (2 * single_tile_size);
+
+    // TODO : currently multi_core parallelization on column only works for single tile height tensors.
+    // Need to debug this to work on wide tensors that are higher than a single tile
+    const auto& tile_shape = tensor.tensor_spec().tile().get_tile_shape();
+    uint32_t tensor_width = tensor.padded_shape()[-1];
+    uint32_t tensor_height = tensor.physical_volume() / tensor_width;
+    uint32_t tile_height = tile_shape[0];
+    uint32_t tile_width = tile_shape[1];
+    uint32_t num_tiles_per_row = tensor_width / tile_width;
+    uint32_t num_tiles_per_col = tensor_height / tile_height;
+
+    // If the input is interleaved and an entire row of tiles can't fit in a CB at once
+    if (!tensor.is_sharded() && num_tiles_per_row > max_tiles_per_cb) {
+        // If the output is also interleaved and the tensor is only a single tile high, we can
+        // parellize the work column wise. Otherwise we have to resort to the single core implementation,
+        // as the current default multi core implementation processes an entire row of tiles at once.
+        if (!output_is_sharded && num_tiles_per_col == 1) {
+            return 0;
+        } else {
+            return 1;
+        }
+    }
+    return 2;
+}
 
 void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
     using namespace tt::constants;
@@ -129,6 +163,13 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
     if (output_memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         TT_FATAL(output_buffer_type == BufferType::L1, "We don't support DRAM block sharding");
     }
+
+    // Pack untilize is what allows uint32/int32 support, so if it is not enabled, we do not support uint32/int32
+    if (!this->use_pack_untilize) {
+        TT_FATAL(
+            input_tensor_a.dtype() != DataType::UINT32 && input_tensor_a.dtype() != DataType::INT32,
+            "Pack untilize must be enabled to support uint32/int32 data types");
+    }
 }
 
 std::vector<ttnn::TensorSpec> Untilize::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
@@ -144,6 +185,32 @@ std::vector<ttnn::TensorSpec> Untilize::compute_output_specs(const std::vector<T
             this->output_mem_config,
             input_tensor.logical_shape(),
             input_tensor.padded_shape()))};
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> Untilize::create_op_performance_model(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& output_tensor = output_tensors.at(0);
+    uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
+    uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
+    uint32_t single_tile_size = tile_width * tile_height * input_tensor.element_size();
+    uint32_t num_tiles = std::ceil((float)input_tensor.physical_volume() / (float)single_tile_size);
+    int compute_cycles = 0;
+    const int max_tiles_per_row = 8;
+    const int latency_untilize = 390;      // measured latency for untilize_block
+    const int latency_pack_untilize = 80;  // measured latency for pack_untilize_block
+    if (std::ceil((float)input_tensor.padded_shape()[-1] / (float)tile_width) <= max_tiles_per_row) {
+        compute_cycles = num_tiles * latency_pack_untilize;
+    } else {
+        compute_cycles = num_tiles * latency_untilize;
+    }
+
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor, false, compute_cycles);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
+        input_tensors, output_tensors, ideal_dev_clock_cycles);
+    return result;
 }
 
 operation::ProgramWithCallbacks Untilize::create_program(

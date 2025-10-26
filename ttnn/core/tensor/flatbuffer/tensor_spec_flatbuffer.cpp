@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,15 +7,6 @@
 namespace ttnn {
 namespace {
 
-CoreCoord from_flatbuffer(const flatbuffer::CoreCoord* core_coord) {
-    return CoreCoord{core_coord->x(), core_coord->y()};
-}
-
-CoreRange from_flatbuffer(const flatbuffer::CoreRange* core_range) {
-    return CoreRange{
-        {core_range->start()->x(), core_range->start()->y()}, {core_range->end()->x(), core_range->end()->y()}};
-}
-
 CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* core_range_set) {
     std::vector<CoreRange> ranges;
     for (const auto* range : *core_range_set->ranges()) {
@@ -23,18 +14,6 @@ CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* core_range_set) {
             CoreCoord{range->start()->x(), range->start()->y()}, CoreCoord{range->end()->x(), range->end()->y()});
     }
     return CoreRangeSet{ranges};
-}
-
-flatbuffers::Offset<flatbuffer::CoreCoord> to_flatbuffer(
-    flatbuffers::FlatBufferBuilder& builder, const CoreCoord& core_coord) {
-    return flatbuffer::CreateCoreCoord(builder, core_coord.x, core_coord.y);
-}
-
-flatbuffers::Offset<flatbuffer::CoreRange> to_flatbuffer(
-    flatbuffers::FlatBufferBuilder& builder, const CoreRange& core_range) {
-    auto start = flatbuffer::CreateCoreCoord(builder, core_range.start_coord.x, core_range.start_coord.y);
-    auto end = flatbuffer::CreateCoreCoord(builder, core_range.end_coord.x, core_range.end_coord.y);
-    return flatbuffer::CreateCoreRange(builder, start, end);
 }
 
 flatbuffers::Offset<flatbuffer::CoreRangeSet> to_flatbuffer(
@@ -129,14 +108,6 @@ tt::tt_metal::ShardOrientation from_flatbuffer(flatbuffer::ShardOrientation orie
     TT_THROW("Unsupported ShardOrientation from flatbuffer.");
 }
 
-tt::tt_metal::ShardMode from_flatbuffer(flatbuffer::ShardMode mode) {
-    switch (mode) {
-        case flatbuffer::ShardMode::Physical: return tt::tt_metal::ShardMode::PHYSICAL;
-        case flatbuffer::ShardMode::Logical: return tt::tt_metal::ShardMode::LOGICAL;
-    }
-    TT_THROW("Unsupported ShardMode from flatbuffer.");
-}
-
 flatbuffer::ShardOrientation to_flatbuffer(tt::tt_metal::ShardOrientation orientation) {
     switch (orientation) {
         case tt::tt_metal::ShardOrientation::ROW_MAJOR: return flatbuffer::ShardOrientation::RowMajor;
@@ -145,41 +116,61 @@ flatbuffer::ShardOrientation to_flatbuffer(tt::tt_metal::ShardOrientation orient
     TT_THROW("Unsupported ShardOrientation to flatbuffer.");
 }
 
-flatbuffer::ShardMode to_flatbuffer(tt::tt_metal::ShardMode shard_mode) {
-    switch (shard_mode) {
-        case tt::tt_metal::ShardMode::LOGICAL: return flatbuffer::ShardMode::Logical;
-        case tt::tt_metal::ShardMode::PHYSICAL: return flatbuffer::ShardMode::Physical;
+flatbuffer::ShardDistributionStrategy to_flatbuffer(tt::tt_metal::ShardDistributionStrategy strategy) {
+    switch (strategy) {
+        case tt::tt_metal::ShardDistributionStrategy::ROUND_ROBIN_1D:
+            return flatbuffer::ShardDistributionStrategy::ROUND_ROBIN_1D;
+        case tt::tt_metal::ShardDistributionStrategy::GRID_2D: return flatbuffer::ShardDistributionStrategy::GRID_2D;
     }
-    TT_THROW("Unsupported ShardMode to flatbuffer.");
+    TT_THROW("Unsupported ShardDistributionStrategy to flatbuffer.");
+}
+
+tt::tt_metal::ShardDistributionStrategy from_flatbuffer(flatbuffer::ShardDistributionStrategy strategy) {
+    switch (strategy) {
+        case flatbuffer::ShardDistributionStrategy::ROUND_ROBIN_1D:
+            return tt::tt_metal::ShardDistributionStrategy::ROUND_ROBIN_1D;
+        case flatbuffer::ShardDistributionStrategy::GRID_2D: return tt::tt_metal::ShardDistributionStrategy::GRID_2D;
+    }
+    TT_THROW("Unsupported ShardDistributionStrategy from flatbuffer.");
 }
 
 tt::tt_metal::ShardSpec from_flatbuffer(const flatbuffer::ShardSpec* spec) {
     CoreRangeSet grid = from_flatbuffer(spec->grid());
     std::array<uint32_t, 2> shape = {spec->shape_h(), spec->shape_w()};
     tt::tt_metal::ShardOrientation orientation = from_flatbuffer(spec->orientation());
-    tt::tt_metal::ShardMode mode = from_flatbuffer(spec->shard_mode());
-    if (const auto* fb_shard_shape = spec->physical_shard_shape()) {
-        std::array<uint32_t, 2> physical_shard_shape = {fb_shard_shape->height(), fb_shard_shape->width()};
-        return tt::tt_metal::ShardSpec(grid, shape, physical_shard_shape, orientation);
-    }
-    return tt::tt_metal::ShardSpec(grid, shape, orientation, mode);
+    return tt::tt_metal::ShardSpec(grid, shape, orientation);
 }
 
 flatbuffers::Offset<flatbuffer::ShardSpec> to_flatbuffer(
     const tt::tt_metal::ShardSpec& spec, flatbuffers::FlatBufferBuilder& builder) {
     flatbuffers::Offset<flatbuffer::ShardShape> physical_shard_shape = 0;
-    if (spec.physical_shard_shape.has_value()) {
-        const auto& phys_shape = *spec.physical_shard_shape;
-        physical_shard_shape = flatbuffer::CreateShardShape(builder, phys_shape[0], phys_shape[1]);
-    }
     return flatbuffer::CreateShardSpec(
         builder,
         to_flatbuffer(builder, spec.grid),
         spec.shape[0],
         spec.shape[1],
         to_flatbuffer(spec.orientation),
-        to_flatbuffer(spec.mode),
+        flatbuffer::ShardModeDeprecated::Physical,
         physical_shard_shape);
+}
+
+flatbuffers::Offset<flatbuffer::NdShardSpec> to_flatbuffer(
+    const tt::tt_metal::NdShardSpec& spec, flatbuffers::FlatBufferBuilder& builder) {
+    auto flat_shape = builder.CreateVector(spec.shard_shape.view().data(), spec.shard_shape.rank());
+    return flatbuffer::CreateNdShardSpec(
+        builder,
+        flat_shape,
+        to_flatbuffer(builder, spec.grid),
+        to_flatbuffer(spec.orientation),
+        to_flatbuffer(spec.shard_distribution_strategy));
+}
+
+tt::tt_metal::NdShardSpec from_flatbuffer(const flatbuffer::NdShardSpec* spec) {
+    return tt::tt_metal::NdShardSpec(
+        Shape(SmallVector<uint32_t>(spec->shard_shape()->cbegin(), spec->shard_shape()->cend())),
+        from_flatbuffer(spec->grid()),
+        from_flatbuffer(spec->orientation()),
+        from_flatbuffer(spec->shard_distribution_strategy()));
 }
 
 tt::tt_metal::TensorLayout from_flatbuffer(const flatbuffer::TensorLayout* layout) {
@@ -237,23 +228,37 @@ flatbuffers::Offset<flatbuffer::TensorLayout> to_flatbuffer(
 flatbuffers::Offset<flatbuffer::MemoryConfig> to_flatbuffer(
     const tt::tt_metal::MemoryConfig& config, flatbuffers::FlatBufferBuilder& builder) {
     flatbuffers::Offset<flatbuffer::ShardSpec> shard_spec = 0;
+    flatbuffers::Offset<flatbuffer::NdShardSpec> nd_shard_spec = 0;
     if (config.shard_spec().has_value()) {
         shard_spec = to_flatbuffer(*config.shard_spec(), builder);
     }
+    if (config.nd_shard_spec().has_value()) {
+        nd_shard_spec = to_flatbuffer(*config.nd_shard_spec(), builder);
+    }
     return flatbuffer::CreateMemoryConfig(
-        builder, to_flatbuffer(config.memory_layout()), to_flatbuffer(config.buffer_type()), shard_spec);
+        builder,
+        to_flatbuffer(config.memory_layout()),
+        to_flatbuffer(config.buffer_type()),
+        shard_spec,
+        nd_shard_spec,
+        config.created_with_nd_shard_spec());
 }
 
 tt::tt_metal::MemoryConfig from_flatbuffer(const flatbuffer::MemoryConfig* config) {
     std::optional<tt::tt_metal::ShardSpec> shard_spec;
+    std::optional<tt::tt_metal::NdShardSpec> nd_shard_spec;
     if (config->shard_spec()) {
         shard_spec = from_flatbuffer(config->shard_spec());
     }
-    return tt::tt_metal::MemoryConfig{
+    if (config->nd_shard_spec()) {
+        nd_shard_spec = from_flatbuffer(config->nd_shard_spec());
+    }
+    return tt::tt_metal::MemoryConfig::create_with_prepopulated_shard_specs(
         from_flatbuffer(config->memory_layout()),
         from_flatbuffer(config->buffer_type()),
         shard_spec,
-    };
+        nd_shard_spec,
+        config->created_with_nd_shard_spec());
 }
 
 flatbuffers::Offset<flatbuffer::TensorSpec> to_flatbuffer(

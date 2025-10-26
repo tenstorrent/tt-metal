@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
-from models.utility_functions import is_grayskull, is_wormhole_b0, is_blackhole
+from models.common.utility_functions import is_grayskull, is_wormhole_b0, is_blackhole
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
     run_multi_core_matmul_1d,
@@ -23,7 +23,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_i
     round_up,
 )
 from tracy import signpost
-from models.demos.llama3_subdevices.tt.prefetcher_common import get_core_ranges
+from models.demos.llama3_70b_galaxy.tt.prefetcher_common import get_core_ranges
 
 
 def run_prefetcher_mm(
@@ -108,13 +108,12 @@ def run_prefetcher_mm(
         padded_shapes.append((K_padded, N_padded))
         shard_shapes.append((K_per_shard, N_per_shard))
 
-    cluster_shape = None
     mesh_mapper = None
     mesh_composer = None
     if isinstance(device, ttnn._ttnn.multi_device.MeshDevice):
-        cluster_shape = device.shape
+        mesh_rows, mesh_cols = device.shape
         mesh_mapper = ReplicateTensorToMesh(device)
-        mesh_composer = ConcatMesh2dToTensor(device, dims=(0, 1), mesh_shape=cluster_shape)
+        mesh_composer = ConcatMesh2dToTensor(device, dims=(0, 1), mesh_shape=(mesh_rows, mesh_cols))
 
     pt_tensors = []
     for l in range(num_layers):

@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
 #include "moreh_mean_device_operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -26,8 +28,6 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
     const auto& shape = input.padded_shape();
 
     auto device = input.device();
-    auto kernel_config_val =
-        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
@@ -62,7 +62,6 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
 
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
     uint32_t num_input_tiles = 2;
-    uint32_t num_output_tiles = 2;
     CreateCircularBuffer(
         program,
         all_cores,
@@ -77,12 +76,13 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
         });
 
     float scaler = 1.0f / origin_H;
-    auto bfloat_scaler_value = *(new class bfloat16(scaler));
+    bfloat16 bfloat_scaler_value(scaler);
     auto packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
-    std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(is_dram(input)), Ht, Wt, HtWt, packed_scaler_value};
+    std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt};
+    TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
+    reader_compile_time_args.push_back(packed_scaler_value);
 
-    std::map<string, string> reader_defines;
+    std::map<std::string, std::string> reader_defines;
     reader_defines["REDUCE_SCALER"] = "1";
     if (do_mask_h) {
         reader_defines["DO_MASK_H"] = "1";
@@ -94,8 +94,8 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
         reader_compile_time_args,
         reader_defines);
 
-    std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(CBIndex::c_16), static_cast<uint32_t>(is_dram(output))};
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(CBIndex::c_16)};
+    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
     const auto writer_kernel_id = CreateWriteKernel(
         program,
@@ -106,13 +106,13 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ///////////////////////////////////////////////////////////////////////////
-    string compute_kernel_name = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp";
+    std::string compute_kernel_name = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp";
     auto reduce_op = ReduceOpMath::SUM;
     auto reduce_dim = ReduceOpDim::H;
-    std::map<string, string> compute_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
+    std::map<std::string, std::string> compute_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
-        compute_defines["FP32_DEST_ACC_EN"] = 1;
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
         unpack_to_dest_mode[tt::CBIndex::c_24] = UnpackToDestMode::UnpackToDestFp32;
     }
     std::vector<uint32_t> compute_kernel_args_group_1 = {
@@ -155,7 +155,7 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
             reader_kernel_id,
             core,
             {input.buffer()->address(),
-             tile_offset / Wt * HtWt + tile_offset % Wt,
+             (tile_offset / Wt * HtWt) + (tile_offset % Wt),
              tile_offset % Wt,
              units_per_core,
              mask_h});
@@ -187,7 +187,7 @@ void MorehMeanOperation::MorehMeanHFactory::override_runtime_arguments(
     auto src_buffer_address = tensor_args.input.buffer()->address();
     auto dst_buffer_address = tensor_return_value.buffer()->address();
 
-    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
+    for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
 
         {

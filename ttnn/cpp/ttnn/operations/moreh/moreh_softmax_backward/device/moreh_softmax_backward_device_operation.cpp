@@ -14,7 +14,7 @@ bool is_moreh_softmax_backward_w_small_available(const Tensor& tensor) {
 
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
 
-    auto tile_size = tt::tt_metal::detail::TileSize(data_format);
+    auto tile_size = tt::tile_size(data_format);
 
     int32_t cb_usage = 0;        // bytes
     cb_usage += Wt * tile_size;  // output
@@ -35,7 +35,7 @@ bool is_moreh_softmax_backward_h_small_available(const Tensor& tensor) {
 
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
 
-    auto tile_size = tt::tt_metal::detail::TileSize(data_format);
+    auto tile_size = tt::tile_size(data_format);
 
     int32_t cb_usage = 0;        // bytes
     cb_usage += Ht * tile_size;  // output
@@ -145,7 +145,6 @@ MorehSoftmaxBackwardOpParallelizationStrategy MorehSoftmaxBackwardOperation::get
     const auto& output = tensor_args.output_tensor;
     const auto strategy = operation_attributes.strategy;
     const auto dim = operation_attributes.dim;
-    const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     auto rank = output.logical_shape().rank();
     if (strategy == MorehSoftmaxBackwardOpParallelizationStrategy::NONE) {

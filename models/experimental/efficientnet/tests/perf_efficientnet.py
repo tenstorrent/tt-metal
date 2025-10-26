@@ -8,7 +8,7 @@ from loguru import logger
 import torchvision
 import pytest
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch2tt_tensor,
     profiler,
     disable_persistent_kernel_cache,

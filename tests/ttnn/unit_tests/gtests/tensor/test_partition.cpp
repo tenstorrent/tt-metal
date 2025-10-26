@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,17 +26,11 @@
 
 #include "ttnn/tensor/xtensor/partition.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
-namespace tt {
-namespace tt_metal {
-class Tensor;
-}  // namespace tt_metal
-}  // namespace tt
 
 namespace ttnn {
 namespace {
 
 using ::testing::SizeIs;
-using ::tt::tt_metal::Tensor;
 using ::ttnn::experimental::xtensor::chunk;
 using ::ttnn::experimental::xtensor::chunk_ndim;
 using ::ttnn::experimental::xtensor::concat;
@@ -214,7 +208,7 @@ TEST(PartitionTest, DimensionOutofRange) {
 TEST(PartitionTest, EmptyInput) {
     std::vector<xt::xarray<int>> input;
     EXPECT_NO_THROW(concat(input, 0));
-    EXPECT_TRUE(xt::allclose(concat(input, 0).expr(), xt::xarray<int>{}));
+    EXPECT_TRUE(concat(input, 0).data().empty());
 }
 
 TEST(PartitionTest, ChunkDoesNotAccessData) {
@@ -238,8 +232,8 @@ TEST(PartitionTest, ChunkDoesNotAccessData) {
     struct Handler {
         static void segfault_handler(int signum) { siglongjmp(jmp_env, /*val=*/1); }
     };
-    struct sigaction old_action;
-    struct sigaction new_action;
+    struct sigaction old_action{};
+    struct sigaction new_action{};
     memset(&new_action, 0, sizeof(new_action));
     new_action.sa_handler = Handler::segfault_handler;
     sigemptyset(&new_action.sa_mask);
@@ -254,7 +248,7 @@ TEST(PartitionTest, ChunkDoesNotAccessData) {
     bool segfault_occurred = false;
     if (sigsetjmp(jmp_env, /*savemask=*/1) == 0) {
         // `volatile` ensures the read is not optimized away.
-        volatile uint8_t x = protected_span[0];
+        [[maybe_unused]] volatile uint8_t x = protected_span[0];
     } else {
         segfault_occurred = true;
     }
@@ -359,7 +353,7 @@ TEST(PartitionTest, ChunkNdimFewerChunksThanRequested) {
 
     for (size_t i = 0; i < 3; ++i) {
         for (size_t j = 0; j < 4; ++j) {
-            size_t chunk_idx = i * 4 + j;
+            size_t chunk_idx = (i * 4) + j;
             EXPECT_FLOAT_EQ(chunks[chunk_idx](0, 0), tensor(i, j));
         }
     }
@@ -594,7 +588,7 @@ TEST(PartitionTest, ConcatNdimThreeDimensions) {
     // Create 8 small tensors of shape (1, 1, 2)
     std::vector<xt::xarray<int>> expressions;
     for (int i = 0; i < 8; ++i) {
-        xt::xarray<int> tensor = {{{i * 2, i * 2 + 1}}};
+        xt::xarray<int> tensor = {{{i * 2, (i * 2) + 1}}};
         expressions.push_back(tensor);
     }
 
@@ -661,7 +655,7 @@ TEST(PartitionTest, ConcatNdimRowMajorOrder) {
     // Create 6 small tensors of shape (1, 2)
     std::vector<xt::xarray<int>> expressions;
     for (int i = 0; i < 6; ++i) {
-        xt::xarray<int> tensor = {{i * 2, i * 2 + 1}};
+        xt::xarray<int> tensor = {{i * 2, (i * 2) + 1}};
         expressions.push_back(tensor);
     }
 

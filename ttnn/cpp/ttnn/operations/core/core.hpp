@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/to_dtype/to_dtype_op.hpp"
@@ -26,26 +28,12 @@ ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, int rank);
 
 ttnn::Tensor to_device(
     const ttnn::Tensor& tensor,
-    IDevice* device,
-    const std::optional<MemoryConfig>& memory_config,
-    ttnn::QueueId cq_id = ttnn::DefaultQueueId);
-
-ttnn::Tensor to_device(
-    const ttnn::Tensor& tensor,
     MeshDevice* mesh_device,
     const std::optional<MemoryConfig>& memory_config,
-    ttnn::QueueId cq_id = ttnn::DefaultQueueId);
+    std::optional<QueueId> queue_id = std::nullopt);
 
-ttnn::Tensor allocate_tensor_on_device(
-    const Shape& shape,
-    DataType data_type,
-    Layout layout,
-    MeshDevice* mesh_device,
-    const std::optional<MemoryConfig>& memory_config);
-
-ttnn::Tensor allocate_tensor_on_device(const ttnn::TensorSpec& spec, MeshDevice* device);
-
-ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
+ttnn::Tensor from_device(
+    const ttnn::Tensor& tensor, bool blocking = true, std::optional<QueueId> queue_id = std::nullopt);
 
 void deallocate(Tensor& tensor, bool force = true);
 

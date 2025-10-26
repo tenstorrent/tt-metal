@@ -30,7 +30,7 @@ void bind_all_gather_matmul_async(pybind11::module& module, const ccl_operation_
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& weight_tensor,
-               ttnn::Tensor& persistent_output_buffer,
+               const std::optional<ttnn::Tensor>& persistent_output_buffer,
                const uint32_t dim,
                const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
                const CoreCoord all_gather_core_grid_offset,
@@ -38,6 +38,7 @@ void bind_all_gather_matmul_async(pybind11::module& module, const ccl_operation_
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config_ag,
                const ttnn::ccl::Topology topology,
+               const std::optional<GlobalSemaphore>& barrier_semaphore,
                std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
                const std::optional<ttnn::MemoryConfig>& memory_config_mm,
                const bool transpose_a,
@@ -46,7 +47,10 @@ void bind_all_gather_matmul_async(pybind11::module& module, const ccl_operation_
                const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
                const std::optional<const std::string>& activation,
                const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-               const std::optional<const ttnn::CoreGrid> core_grid) -> std::vector<ttnn::Tensor> {
+               const std::optional<const ttnn::CoreGrid> core_grid,
+               std::optional<uint32_t> chunks_per_sync,
+               std::optional<uint32_t> num_workers_per_link,
+               std::optional<uint32_t> num_buffers_per_channel) -> std::vector<ttnn::Tensor> {
                 return self(
                     input_tensor,
                     weight_tensor,
@@ -58,6 +62,7 @@ void bind_all_gather_matmul_async(pybind11::module& module, const ccl_operation_
                     num_links,
                     memory_config_ag,
                     topology,
+                    barrier_semaphore,
                     sub_device_id,
                     memory_config_mm,
                     transpose_a,
@@ -66,7 +71,10 @@ void bind_all_gather_matmul_async(pybind11::module& module, const ccl_operation_
                     program_config,
                     activation,
                     compute_kernel_config,
-                    core_grid);
+                    core_grid,
+                    chunks_per_sync,
+                    num_workers_per_link,
+                    num_buffers_per_channel);
             },
             py::arg("input_tensor"),
             py::arg("weight_tensor"),
@@ -79,6 +87,7 @@ void bind_all_gather_matmul_async(pybind11::module& module, const ccl_operation_
             py::arg("num_links") = 1,
             py::arg("memory_config_ag") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Ring,
+            py::arg("barrier_semaphore") = std::nullopt,
             py::arg("subdevice_id") = std::nullopt,
             py::arg("memory_config_mm") = std::nullopt,
             py::arg("transpose_a") = false,
@@ -87,7 +96,10 @@ void bind_all_gather_matmul_async(pybind11::module& module, const ccl_operation_
             py::arg("program_config") = std::nullopt,
             py::arg("activation") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("core_grid") = std::nullopt});
+            py::arg("core_grid") = std::nullopt,
+            py::arg("chunks_per_sync") = std::nullopt,
+            py::arg("num_workers_per_link") = std::nullopt,
+            py::arg("num_buffers_per_channel") = std::nullopt});
 }
 
 }  // namespace detail
@@ -109,6 +121,7 @@ void py_bind_all_gather_matmul_async(pybind11::module& module) {
         Keyword Args:
             * :attr:`bias` (ttnn.Tensor): the bias tensor to be added. If specified, needs to be on the device. Defaults to `None`.
             * :attr:`num_links` (int): Number of links to use for the all-gather operation.
+            * :attr:`topology` (ttnn.Topology): Communication topology for the all-gather. Defaults to `ttnn.Topology.Ring`.
             * :attr:`memory_config_ag` (Optional[ttnn.MemoryConfig]): Memory configuration for the All Gather operation.
             * :attr:`memory_config_mm` (Optional[ttnn.MemoryConfig]): Memory configuration for the Matmul operation.
             * :attr:`transpose_a` (bool)

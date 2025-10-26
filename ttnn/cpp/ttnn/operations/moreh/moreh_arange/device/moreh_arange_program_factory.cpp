@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_arange_device_operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
@@ -35,7 +36,7 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
         });
 
     // Create write kernel
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     switch (dtype) {
         case DataType::BFLOAT16: writer_defines["OUTPUT_DTYPE_BFLOAT16"] = "1"; break;
         case DataType::INT32: writer_defines["OUTPUT_DTYPE_INT32"] = "1"; break;
@@ -43,14 +44,16 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
         default: break;
     }
 
-    uint32_t dst_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> writer_compile_time_args = {};
+    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+
     auto kernel_id = CreateWriteKernel(
         program,
         operation_attributes.untilize_out
             ? "ttnn/cpp/ttnn/operations/moreh/moreh_arange/device/kernels/writer_moreh_arange_rm.cpp"
             : "ttnn/cpp/ttnn/operations/moreh/moreh_arange/device/kernels/writer_moreh_arange.cpp",
         all_cores,
-        {dst_is_dram},
+        writer_compile_time_args,
         writer_defines);
 
     // Set runtime arguments

@@ -87,9 +87,8 @@ def ttnn_vgg16(
             if conv_ttnn_params[iter_conv_id][0] > 128:
                 h_sharding = False
             conv_config = ttnn.Conv2dConfig(
-                dtype=model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=model_config["WEIGHTS_DTYPE"],
-                activation="relu",
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
                 deallocate_activation=False,
                 reallocate_halo_output=False,
                 shard_layout=(
@@ -136,6 +135,7 @@ def ttnn_vgg16(
                     input_layout=tt_x.get_layout(),
                     has_bias=True,
                     **conv_kwargs,
+                    input_dtype=model_config["ACTIVATIONS_DTYPE"],
                 )
 
                 tt_bias = ttnn.prepare_conv_bias(
@@ -143,6 +143,7 @@ def ttnn_vgg16(
                     input_memory_config=ttnn.L1_MEMORY_CONFIG,
                     input_layout=tt_x.get_layout(),
                     **conv_kwargs,
+                    input_dtype=model_config["ACTIVATIONS_DTYPE"],
                 )
 
                 tt_weight = ttnn.to_device(tt_weight, device)
@@ -154,6 +155,8 @@ def ttnn_vgg16(
                 bias_tensor=tt_bias,
                 **conv_kwargs,
                 compute_config=compute_config,
+                dtype=model_config["ACTIVATIONS_DTYPE"],
+                slice_config=ttnn.Conv2dL1FullSliceConfig,
             )
             tt_x = ttnn.from_device(tt_output_tensor_on_device)
             ttnn.deallocate(tt_output_tensor_on_device)
@@ -238,9 +241,8 @@ def ttnn_vgg11(
             if conv_ttnn_params_2[iter_conv_id][0] > 128:
                 h_sharding = False
             conv_config = ttnn.Conv2dConfig(
-                dtype=model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=model_config["WEIGHTS_DTYPE"],
-                activation="relu",
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
                 deallocate_activation=False,
                 reallocate_halo_output=False,
                 shard_layout=(
@@ -285,6 +287,7 @@ def ttnn_vgg11(
                     input_layout=tt_x.get_layout(),
                     has_bias=True,
                     **conv_kwargs,
+                    input_dtype=model_config["ACTIVATIONS_DTYPE"],
                 )
 
                 tt_bias = ttnn.prepare_conv_bias(
@@ -292,6 +295,7 @@ def ttnn_vgg11(
                     input_memory_config=ttnn.L1_MEMORY_CONFIG,
                     input_layout=tt_x.get_layout(),
                     **conv_kwargs,
+                    input_dtype=model_config["ACTIVATIONS_DTYPE"],
                 )
 
                 tt_weight = ttnn.to_device(tt_weight, device)
@@ -303,7 +307,9 @@ def ttnn_vgg11(
                 weight_tensor=tt_weight,
                 bias_tensor=tt_bias,
                 **conv_kwargs,
+                slice_config=ttnn.Conv2dL1FullSliceConfig,
                 compute_config=compute_config,
+                dtype=model_config["ACTIVATIONS_DTYPE"],
             )
             tt_x = ttnn.from_device(tt_output_tensor_on_device)
             ttnn.deallocate(tt_output_tensor_on_device)

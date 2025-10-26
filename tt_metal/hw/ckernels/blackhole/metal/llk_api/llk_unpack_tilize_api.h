@@ -41,8 +41,6 @@ inline void llk_unpack_tilize_mop_config(const std::uint32_t operand) {
 }
 
 inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint32_t ct_dim) {
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
-
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
     const bool narrow_tile = get_operand_narrow_tile(operand_id);
@@ -90,9 +88,12 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, s
     WAYPOINT("UPTD");
 }
 
-inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c_tiles) {
+inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c_tiles, std::uint32_t input_tile_index = 0) {
+    // Not sure if input_tile_index can be arbitrary but it works for moving across rows of files,
+    // i.e. input_tile_index % block_c_tiles == 0
+    input_tile_index = input_tile_index % block_c_tiles + (input_tile_index / block_c_tiles) * block_c_tiles * TILE_R_DIM;
     for (std::uint32_t tile_index = 0; tile_index < block_c_tiles; tile_index++) {
-        llk_unpack_tilize(operand, tile_index, block_c_tiles);
+        llk_unpack_tilize(operand, input_tile_index + tile_index, block_c_tiles);
     }
 }
 

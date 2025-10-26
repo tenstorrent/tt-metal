@@ -17,12 +17,16 @@ struct ScaledDotProductAttentionDecode {
     const bool is_causal;
     std::vector<uint32_t> cur_pos;
     const std::optional<float> scale;
+    const std::optional<uint32_t> sliding_window_size;
     const tt::tt_metal::MemoryConfig output_mem_config;
     const std::optional<SDPAProgramConfig> program_config;
     const DeviceComputeKernelConfig compute_kernel_config;
     const uint32_t k_chunk_size;
     const bool paged_attention;
     const std::optional<bool> share_cache;
+
+    const std::optional<bool> use_mla;
+    const std::optional<uint32_t> head_dim_v;
 
     void validate(
         const std::vector<Tensor>& input_tensors,

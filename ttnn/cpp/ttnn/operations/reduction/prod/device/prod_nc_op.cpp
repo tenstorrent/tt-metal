@@ -22,10 +22,9 @@ void Prod::validate(const std::vector<Tensor>& inputs) const {
     const auto& output = inputs.at(1);
 
     auto input_shape = input.padded_shape();
-    TT_FATAL((input_shape.rank() == 4), "rank should be 4");
+    TT_FATAL((input_shape.rank() == 4), "rank should be 4, got rank: {}", input_shape.rank());
     const auto& output_shape = output.padded_shape();
     auto input_shape_wo_padding = input.logical_shape();
-    const auto& output_shape_wo_padding = output.logical_shape();
 
     if (dim == 0 || dim == 1) {
         input_shape[dim] = 1;
@@ -33,7 +32,12 @@ void Prod::validate(const std::vector<Tensor>& inputs) const {
     }
 
     for (int i = 0; i < input_shape.rank(); ++i) {
-        TT_FATAL(input_shape[i] == output_shape[i], "Error");
+        TT_FATAL(
+            input_shape[i] == output_shape[i],
+            "Input and output shapes must match at dimension {}, got input: {} vs output: {}",
+            i,
+            input_shape[i],
+            output_shape[i]);
         // TT_FATAL(input_shape_wo_padding[i] == output_shape_wo_padding[i], "Error");
     }
 }
@@ -61,6 +65,7 @@ ttnn::Shape compute_output_shape(const ttnn::Shape& input_shape, const int64_t& 
     switch (dim) {
         case 0:
         case 1: output_shape[dim] = 1; break;
+        default: TT_THROW("Unsupported dim {} for prod nc op", dim);
     }
 
     return output_shape;

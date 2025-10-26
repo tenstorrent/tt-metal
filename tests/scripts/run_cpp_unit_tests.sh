@@ -7,9 +7,9 @@ if [[ -z "$ARCH_NAME" ]]; then
   exit 1
 fi
 
-if [[ -z "$TT_METAL_HOME" ]]; then
-    echo "Must provide TT_METAL_HOME in environment" 1>&2
-    exit 1
+# Enable this on BH after #14613
+if [[ "$ARCH_NAME" == "wormhole_b0" ]]; then
+    export TT_METAL_ENABLE_ERISC_IRAM=1
 fi
 
 if [[ ! -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then

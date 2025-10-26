@@ -10,7 +10,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_downblock2d import TtDow
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
@@ -21,9 +21,13 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_downblock2d(device, temb_shape, input_shape, reset_seeds):
+def test_downblock2d(device, temb_shape, input_shape, debug_mode, is_ci_env, reset_seeds):
     unet = UNet2DConditionModel.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+        subfolder="unet",
+        local_files_only=is_ci_env,
     )
     unet.eval()
     state_dict = unet.state_dict()
@@ -31,7 +35,7 @@ def test_downblock2d(device, temb_shape, input_shape, reset_seeds):
     torch_downblock = unet.down_blocks[0]
 
     model_config = ModelOptimisations()
-    tt_downblock = TtDownBlock2D(device, state_dict, f"down_blocks.0", model_config=model_config)
+    tt_downblock = TtDownBlock2D(device, state_dict, f"down_blocks.0", model_config=model_config, debug_mode=debug_mode)
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_temb_tensor = torch_random(temb_shape, -0.1, 0.1, dtype=torch.float32)
@@ -51,7 +55,6 @@ def test_downblock2d(device, temb_shape, input_shape, reset_seeds):
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_output_tensor, output_shape, _ = tt_downblock.forward(ttnn_input_tensor, [B, C, H, W], ttnn_temb_tensor)
-    model_config.clear_weight_preprocess()
 
     output_tensor = ttnn.to_torch(ttnn_output_tensor)
 
@@ -61,5 +64,5 @@ def test_downblock2d(device, temb_shape, input_shape, reset_seeds):
     del unet, tt_downblock
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.998)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
     logger.info(f"PCC is {pcc_message}")

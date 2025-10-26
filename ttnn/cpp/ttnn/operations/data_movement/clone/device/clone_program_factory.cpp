@@ -6,6 +6,8 @@
 
 #include "clone_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/math.hpp"
 
 namespace ttnn::operations::data_movement::clone {
@@ -26,7 +28,7 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
     bool convert_dtype = input_data_format != output_data_format;
     bool tilized = output.layout() == Layout::TILE;
     auto compute_unit_size = [&](const auto& tensor, const auto& data_format) {
-        return tilized ? TileSize(data_format) : tensor.logical_shape()[-1] * tensor.element_size();
+        return tilized ? tt::tile_size(data_format) : tensor.logical_shape()[-1] * tensor.element_size();
     };
     uint32_t input_unit_size = compute_unit_size(input, input_data_format);
     uint32_t output_unit_size = compute_unit_size(output, output_data_format);
@@ -39,51 +41,37 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
     auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, num_units);
 
+    auto alignment = input.buffer()->alignment();
+
     uint32_t src_cb_id = CBIndex::c_4;
-    uint32_t aligned_input_unit_size = round_up_to_mul32(input_unit_size);
+    uint32_t aligned_input_unit_size = tt::align(input_unit_size, alignment);
     auto src_cb_config = CircularBufferConfig(2 * aligned_input_unit_size, {{src_cb_id, input_data_format}})
                              .set_page_size(src_cb_id, aligned_input_unit_size);
-    auto src_cb = CreateCircularBuffer(program, all_cores, src_cb_config);
+    CreateCircularBuffer(program, all_cores, src_cb_config);
 
     uint32_t dst_cb_id = src_cb_id;
     if (convert_dtype) {
         dst_cb_id = CBIndex::c_20;
-        uint32_t aligned_output_unit_size = round_up_to_mul32(output_unit_size);
+        uint32_t aligned_output_unit_size = tt::align(output_unit_size, alignment);
         auto dst_cb_config = CircularBufferConfig(2 * aligned_output_unit_size, {{dst_cb_id, output_data_format}})
                                  .set_page_size(dst_cb_id, aligned_output_unit_size);
-        auto dst_cb = CreateCircularBuffer(program, all_cores, dst_cb_config);
+        CreateCircularBuffer(program, all_cores, dst_cb_config);
     }
 
     auto input_buffer = input.buffer();
     auto output_buffer = output.buffer();
-    bool input_is_dram = input_buffer->buffer_type() == BufferType::DRAM;
-    bool output_is_dram = output_buffer->buffer_type() == BufferType::DRAM;
 
     std::vector<uint32_t> reader_compile_time_args, writer_compile_time_args;
     if (tilized) {
-        reader_compile_time_args = {
-            (uint32_t)src_cb_id,
-            (uint32_t)input_is_dram,
-        };
-        writer_compile_time_args = {
-            (uint32_t)dst_cb_id,
-            (uint32_t)output_is_dram,
-        };
+        reader_compile_time_args = {(uint32_t)src_cb_id};
+        TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
+        writer_compile_time_args = {(uint32_t)dst_cb_id};
+        TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
     } else {
-        bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(input_unit_size);
-        uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (uint32_t)log2(input_unit_size) : 0;
-        reader_compile_time_args = {
-            (uint32_t)src_cb_id,
-            (uint32_t)input_is_dram,
-            (uint32_t)src_stick_size_is_power_of_two,
-            (uint32_t)src_log2_stick_size};
-        bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_unit_size);
-        uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (uint32_t)log2(output_unit_size) : 0;
-        writer_compile_time_args = {
-            (uint32_t)dst_cb_id,
-            (uint32_t)output_is_dram,
-            (uint32_t)dst_stick_size_is_power_of_two,
-            (uint32_t)dst_log2_stick_size};
+        reader_compile_time_args = {(uint32_t)src_cb_id, (uint32_t)input_unit_size};
+        TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
+        writer_compile_time_args = {(uint32_t)dst_cb_id, (uint32_t)output_unit_size};
+        TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
     }
 
     auto read_kernel_id = CreateKernel(

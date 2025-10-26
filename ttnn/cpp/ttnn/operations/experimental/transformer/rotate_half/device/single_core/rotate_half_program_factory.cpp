@@ -6,7 +6,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 
@@ -21,16 +21,14 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor& input, Ten
     CoreRange core({0, 0}, {0, 0});
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t scalar_single_tile_size = tt_metal::detail::TileSize(scalar_cb_data_format);
+    uint32_t scalar_single_tile_size = tt::tile_size(scalar_cb_data_format);
 
     uint32_t num_tiles = input.physical_volume() / TILE_HW;
     uint32_t num_rows = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT;
     uint32_t half_row_size = input.padded_shape()[-1] / TILE_WIDTH / 2;
-
-    tt_metal::IDevice* device = input.device();
 
     // Used for half of tensor that is multiplied
     uint32_t src_mul_cb_index = 0;
@@ -38,7 +36,7 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor& input, Ten
     tt_metal::CircularBufferConfig cb_src_mul_config =
         tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src_mul_cb_index, cb_data_format}})
             .set_page_size(src_mul_cb_index, single_tile_size);
-    auto cb_src_mul = tt_metal::CreateCircularBuffer(program, core, cb_src_mul_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src_mul_config);
 
     // Used for bcast scalar
     uint32_t src_scalar_cb_index = 1;
@@ -47,38 +45,37 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor& input, Ten
         tt_metal::CircularBufferConfig(
             num_scalar_tiles * scalar_single_tile_size, {{src_scalar_cb_index, cb_data_format}})
             .set_page_size(src_scalar_cb_index, scalar_single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
     // Used for half of tensor that is not multiplied
     uint32_t src_no_mul_cb_index = 2;
     tt_metal::CircularBufferConfig cb_src_no_mul_config =
         tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src_no_mul_cb_index, cb_data_format}})
             .set_page_size(src_no_mul_cb_index, single_tile_size);
-    auto cb_src_no_mul = tt_metal::CreateCircularBuffer(program, core, cb_src_no_mul_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src_no_mul_config);
 
     uint32_t output_mul_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = 2;
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{output_mul_cb_index, cb_data_format}})
             .set_page_size(output_mul_cb_index, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_output_config);
     uint32_t output_no_mul_cb_index = src_no_mul_cb_index;
 
-    const uint16_t bfloat16_scalar = bfloat16(-1.0f).to_uint16();
+    const uint16_t bfloat16_scalar = std::bit_cast<uint16_t>(bfloat16(-1.0f));
 
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
 
-    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)src_no_mul_cb_index,
         (uint32_t)src_mul_cb_index,
         (uint32_t)src_scalar_cb_index,
-        (uint32_t)src_is_dram,
         (uint32_t)bfloat16_scalar};
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)output_no_mul_cb_index, (std::uint32_t)output_mul_cb_index, (std::uint32_t)dst_is_dram};
+        (std::uint32_t)output_no_mul_cb_index, (std::uint32_t)output_mul_cb_index};
+    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -94,7 +91,7 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor& input, Ten
         core,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::map<string, string> bcast_compute_defines = {
+    std::map<std::string, std::string> bcast_compute_defines = {
         {"BCAST_OP", "mul_tiles_bcast"},
         {"BCAST_LLKOP", "ELWMUL"},
         {"BCAST_DIM", "BroadcastType::SCALAR"},

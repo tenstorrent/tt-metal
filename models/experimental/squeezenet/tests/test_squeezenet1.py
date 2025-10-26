@@ -6,7 +6,7 @@ import torch
 from torchvision import models
 import pytest
 from loguru import logger
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
 )
 from models.experimental.squeezenet.reference.squeezenet import squeezenet1_0

@@ -1,0 +1,422 @@
+tests:
+  0:
+    name: "DRAM Packet Sizes"
+
+  1:
+    name: "DRAM Core Locations"
+    comment: |
+      This test appears to be broken. The graph is showing numbers that dont make sense.
+
+  2:
+    name: "DRAM Channels"
+
+  3:
+    name: "DRAM Directed Ideal"
+    comment: |
+      This test shows the ideal read and write bandwidth when transferring multiple 8KB packets.
+      The read bandwidth is what is expected, however write bandwidth is expected to be 64
+      B/cycle rather than 35 B/cycle. There may be some configuration problem with the dram
+      controller/phy or this may be the physical limit of the dram.
+
+  4:
+    name: "One to One Packet Sizes"
+
+  5:
+    name: "One from One Packet Sizes"
+
+  6:
+    name: "One to All Unicast 2x2 Packet Sizes"
+
+  7:
+    name: "One to All Unicast 5x5 Packet Sizes"
+
+  8:
+    name: "One to All Unicast Packet Sizes"
+
+  9:
+    name: "One to All Multicast 2x2 Packet Sizes"
+
+  10:
+    name: "One to All Multicast 5x5 Packet Sizes"
+
+  11:
+    name: "One to All Multicast Packet Sizes"
+
+  12:
+    name: "One to All Multicast Linked 2x2 Packet Sizes"
+
+  13:
+    name: "One to All Multicast Linked 5x5 Packet Sizes"
+
+  14:
+    name: "One to All Multicast Linked Packet Sizes"
+
+  15:
+    name: "One from All Packet Sizes"
+
+  16:
+    name: "Loopback Packet Sizes"
+
+  17:
+    name: "Reshard Hardcoded Small"
+    comment: |
+      This is a 2 reader reshard. It seems to be getting expected perf based on number of transactions
+      and transactions size. Reshard perf is dictated based on the number of transactions and the
+      transaction size. A small number of transactions will result in small perf due to large
+      round trip latency. It is suggested to use a large number of transactions, with large transaction
+      size to get the best performance.
+
+  18:
+    name: "Reshard Hardcoded Medium"
+    comment: |
+      This is a 2 reader reshard. It seems to be getting expected perf based on number of transactions
+      and transactions size. Reshard perf is dictated based on the number of transactions and the
+      transaction size. A small number of transactions will result in small perf due to large
+      round trip latency. It is suggested to use a large number of transactions, with large transaction
+      size to get the best performance.
+
+  19:
+    name: "Reshard Hardcoded Many Cores"
+    comment: |
+      This is a 8 reader reshard. It seems to be getting expected perf based on number of transactions
+      and transactions size. Reshard perf is dictated based on the number of transactions and the
+      transaction size. A small number of transactions will result in small perf due to large
+      round trip latency. It is suggested to use a large number of transactions, with large transaction
+      size to get the best performance.
+
+  20:
+    name: "Reshard Hardcoded 2 Cores to Many Cores"
+    comment: |
+      This is a 2 core to 8 reader reshard. It seems to be getting expected perf based on number of
+      transactions and transactions size. Reshard perf is dictated based on the number of transactions
+      and the transaction size. A small number of transactions will result in small perf due to large
+      round trip latency. It is suggested to use a large number of transactions, with large transaction
+      size to get the best performance.
+
+  21:
+    name: "Conv Act with halo 3x3"
+    comment: |
+      Convolution has a large number of transactions and a small transaction size. The performance is
+      similar to what it would be for a similarly configured one from one. Convolution may benefit from
+      having multiple cores doing different parts of the convolution at the same time. This would
+      result in a larger effective bandwidth.
+
+  22:
+    name: "Conv Act with halo 3x3 Small"
+    comment: |
+      Convolution has a large number of transactions and a small transaction size. The performance is
+      similar to what it would be for a similarly configured one from one. Convolution may benefit from
+      having multiple cores doing different parts of the convolution at the same time. This would
+      result in a larger effective bandwidth.
+
+  23:
+    name: "Conv Halo Gather"
+    comment: |
+      The performance of this test is similar to how other tests perform based on the number of
+      transactions and the transaction size, but with extra degradation due to needing to read
+      parameters from L1.
+
+  30:
+    name: "One from All Directed Ideal"
+
+  50:
+    name: "One to One Directed Ideal"
+
+  51:
+    name: "One from One Directed Ideal"
+
+  52:
+    name: "One to All Unicast Directed Ideal"
+
+  53:
+    name: "One to All Multicast Directed Ideal"
+
+  54:
+    name: "One to All Multicast Linked Directed Ideal"
+
+  55:
+    name: "Loopback Directed Ideal"
+
+  61:
+    name: "DRAM Interleaved Page Numbers"
+
+  62:
+    name: "DRAM Interleaved Page Core Locations"
+
+  63:
+    name: "DRAM Interleaved Page Read Numbers"
+
+  64:
+    name: "DRAM Interleaved Page Write Numbers"
+
+  65:
+    name: "DRAM Interleaved Page Directed Ideal"
+
+  66:
+    name: "L1 Interleaved Page Numbers"
+
+  67:
+    name: "L1 Interleaved Page Core Locations"
+
+  68:
+    name: "L1 Interleaved Page Read Numbers"
+
+  69:
+    name: "L1 Interleaved Page Write Numbers"
+
+  71:
+    name: "L1 Interleaved Page Directed Ideal"
+
+  72:
+    name: "DRAM Interleaved Page Read Noc Swap"
+
+  73:
+    name: "DRAM Interleaved Page Write Noc Swap"
+
+  74:
+    name: "L1 Interleaved Page Read Noc Swap"
+
+  75:
+    name: "L1 Interleaved Page Write Noc Swap"
+
+  80:
+    name: "One Packet Read Sizes"
+
+  81:
+    name: "One Packet Write Sizes"
+
+  82:
+    name: "One Packet Read Directed Ideal"
+
+  83:
+    name: "One Packet Write Directed Ideal"
+
+  100:
+    name: "Multicast Schemes (Loopback Enabled)"
+
+  101:
+    name: "Multicast Schemes (Loopback Disabled)"
+
+  102:
+    name: "Multicast Single Scheme"
+
+  110:
+    name: "Multi Interleaved Directed Ideal"
+
+  111:
+    name: "Multi Interleaved Sizes"
+
+  112:
+    name: "Multi Interleaved Read Directed Ideal"
+
+  113:
+    name: "Multi Interleaved Read Sizes"
+
+  114:
+    name: "Multi Interleaved Write Directed Ideal"
+
+  115:
+    name: "Multi Interleaved Write Sizes"
+
+  116:
+    name: "Multi Interleaved 2x2 Directed Ideal"
+
+  117:
+    name: "Multi Interleaved 2x2 Sizes"
+
+  118:
+    name: "Multi Interleaved 2x2 Read Directed Ideal"
+
+  119:
+    name: "Multi Interleaved 2x2 Read Sizes"
+
+  120:
+    name: "Multi Interleaved 2x2 Write Directed Ideal"
+
+  121:
+    name: "Multi Interleaved 2x2 Write Sizes"
+
+  122:
+    name: "Multi Interleaved 6x6 Directed Ideal"
+
+  123:
+    name: "Multi Interleaved 6x6 Sizes"
+
+  124:
+    name: "Multi Interleaved 6x6 Read Directed Ideal"
+
+  125:
+    name: "Multi Interleaved 6x6 Read Sizes"
+
+  126:
+    name: "Multi Interleaved 6x6 Write Directed Ideal"
+
+  127:
+    name: "Multi Interleaved 6x6 Write Sizes"
+
+  140:
+    name: "Core Bidirectional Directed Ideal Same Kernel"
+
+  141:
+    name: "Core Bidirectional Directed Ideal Different Kernels"
+
+  142:
+    name: "Core Bidirectional Same Virtual Channel Same Kernel"
+
+  143:
+    name: "Core Bidirectional Same Virtual Channel Different Kernels"
+
+  144:
+    name: "Core Bidirectional Write Virtual Channel Sweep Same Kernel"
+
+  145:
+    name: "Core Bidirectional Write Virtual Channel Sweep Different Kernels"
+
+  146:
+    name: "Core Bidirectional Packet Sizes Same Kernel"
+
+  147:
+    name: "Core Bidirectional Packet Sizes Different Kernels"
+
+  148:
+    name: "Core Bidirectional Custom"
+
+  150:
+    name: "One to One Virtual Channels"
+
+  151:
+    name: "One to One Custom"
+
+  152:
+    name: "One from One Virtual Channels"
+
+  153:
+    name: "One from One Custom"
+
+  154:
+    name: "One to All Unicast Virtual Channels"
+
+  155:
+    name: "One to All Unicast Custom"
+
+  156:
+    name: "One from All Virtual Channels"
+
+  157:
+    name: "One from All Custom"
+
+  200:
+    name: "Deinterleave Single Core"
+    comment: |
+      With a single core the graphs shows performance increases as the threshold increases.
+      This is because frequent flushes don't hide the round trip latency.
+
+  201:
+    name: "Deinterleave Multi Core"
+    comment: |
+      With multiple cores the graph shows that a small threshold always provides bad performance.
+      This is because frequent flushes don't hide the round trip latency. At larger thresholds,
+      the performance starts to fluctuate due to head-of-line blocking and unfairness in the NOC.
+      Performance fluctuates because the flush disturbs the steady state and will randomly create
+      traffic that sometimes has head of line blocking, and sometimes does not.
+
+  400:
+    name: "I2S - DRAM Sharded Row Major Writer"
+    comment: |
+      Here, we are getting ~4B/cycle. There are multiple reasons for such BW.
+      The first one is the large number of get_noc_addr(stick_id, s0) calls, without them the BW
+      would be ~6.7B/cycle.
+      The second reason is two additional operations inside the for loop.
+      The third and the main reason that also applies for other tests in the Interleaved to Sharded test suite is
+      that in our ideal tests we are mostly using compile time arguments. This significantly speeds up the runtime since the
+      compiler can introduce a lot of optimizations because of that. In this example we have 6 runtime arguments in the loop,
+      which slows things a lot. Because of this, this performance is expected.
+      Another note is that the more transactions we have, the more BW will be degraded, because of the additional operations inside the loop.
+
+  401:
+    name: "I2S - DRAM Sharded Tile Writer"
+    comment: |
+      Here, we are getting ~16.7B/cycle which is the expected BW, for the config: num of transactions = 8, transaction size = 4096B
+
+  402:
+    name: "I2S - DRAM Interleaved Tile Reader"
+    comment: |
+      Here, we are getting ~11.5B/cycle when reading from DRAM, with the num of transactions = 4, and
+      transaction size = 2048B. Compared to our DRAM Interleaved Page Read Numbers, we can see that
+      that is the expected performance.
+
+  403:
+    name: "I2S - L1 Interleaved Tile Reader"
+    comment: |
+      When reading from L1 we are getting ~14B/cycle, which is also expected
+      compared to our L1 Interleaved Page Read Numbers
+
+  404:
+    name: "I2S - DRAM Interleaved Row Major Reader"
+    comment: |
+      Here, we are getting ~11B/cycle when reading from DRAM, with the num of transactions = 128,
+      and transaction size = 512B. Compared to our DRAM Interleaved Page Read Numbers, we can see that
+      that is a bit below expected performance, but when we take into account the runtime arguments overhead,
+      this is expected.
+
+  405:
+    name: "I2S - L1 Interleaved Row Major Reader"
+    comment: |
+      When reading from L1 with the same config we are also getting ~11.5B/cycle, which is ~60%
+      of the performance when compared to our L1 Interleaved Page Read Numbers. The reason for this is the
+      large number of get_noc_addr(stick_id, s0) calls. Without them, we get ~14.3B/cycle, compared
+      to the expected ~18B/cycle. The same reasoning as in the previous test applies here.
+
+  300:
+    name: "All to All Directed Ideal"
+
+  301:
+    name: "All to All Packet Sizes"
+
+  302:
+    name: "All to All 2x2 To 1x1 Directed Ideal"
+
+  303:
+    name: "All to All 4x4 To 1x1 Directed Ideal"
+
+  304:
+    name: "All to All 1x1 To 2x2 Directed Ideal"
+
+  305:
+    name: "All to All 1x1 To 4x4 Directed Ideal"
+
+  306:
+    name: "All to All 2x2 To 2x2 Directed Ideal"
+
+  307:
+    name: "All to All Virtual Channels"
+
+  308:
+    name: "All to All Custom"
+
+  310:
+    name: "All from All Directed Ideal"
+
+  311:
+    name: "All from All Packet Sizes"
+
+  312:
+    name: "All from All 2x2 From 1x1 Directed Ideal"
+
+  313:
+    name: "All from All 4x4 From 1x1 Directed Ideal"
+
+  314:
+    name: "All from All 1x1 From 2x2 Directed Ideal"
+
+  315:
+    name: "All from All 1x1 From 4x4 Directed Ideal"
+
+  316:
+    name: "All from All 2x2 From 2x2 Directed Ideal"
+
+  317:
+    name: "All from All Virtual Channels"
+
+  318:
+    name: "All from All Custom"

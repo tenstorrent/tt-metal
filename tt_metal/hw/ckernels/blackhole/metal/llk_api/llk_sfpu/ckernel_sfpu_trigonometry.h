@@ -7,13 +7,12 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_exp.h"
 #include "sfpi.h"
 
 using namespace sfpi;
 
-namespace ckernel {
-
-namespace sfpu {
+namespace ckernel::sfpu {
 
 static const float PI = 3.1415927f;
 static const float PI_2 = 1.5707964f;
@@ -154,32 +153,26 @@ inline void calculate_sfpu_trig() {
 
 template <bool APPROXIMATION_MODE>
 sfpi_inline vFloat sfpu_atan_maclaurin_series(vFloat val) {
-    v_if(1 > sfpi::abs(val)) { dst_reg[0] = sfpi::abs(val); }
-    v_else { dst_reg[0] = sfpu_reciprocal(sfpi::abs(val)); }
+    vFloat t0 = sfpi::abs(val);
+    v_if(t0 > 1) { t0 = sfpu_reciprocal<false>(t0); }
     v_endif;
 
-    vFloat t1 = dst_reg[0] * dst_reg[0];
+    vFloat t1 = t0 * t0;
 
     t1 = POLYVAL6(-0.013480470f, 0.057477314f, -0.121239071f, 0.195635925f, -0.332994597f, 0.999995630f, t1);
 
-    t1 = t1 * dst_reg[0];
+    t1 = t1 * t0;
 
     v_if(sfpi::abs(val) > 1) { t1 = 1.570796327f - t1; }
     v_endif;
 
-    v_if(val < 0) { t1 = -t1; }
-    v_endif;
-
-    return t1;
+    return sfpi::setsgn(t1, val);
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_atan() {
-    // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat val = dst_reg[0];
-        val = sfpu_atan_maclaurin_series<APPROXIMATION_MODE>(val);
-        dst_reg[0] = val;
+        dst_reg[0] = sfpu_atan_maclaurin_series<APPROXIMATION_MODE>(dst_reg[0]);
         dst_reg++;
     }
 }
@@ -223,8 +216,9 @@ inline void calculate_asin() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
-        v = sfpu_asine_maclaurin_series<APPROXIMATION_MODE>(v);
-        dst_reg[0] = v;
+        v_if(v < vConstNeg1 || v > vConst1) { dst_reg[0] = std::numeric_limits<float>::quiet_NaN(); }
+        v_else { dst_reg[0] = sfpu_asine_maclaurin_series<APPROXIMATION_MODE>(v); }
+        v_endif;
         dst_reg++;
     }
 }
@@ -235,18 +229,46 @@ inline void calculate_acos() {
     // acos = (pi/2 - asin)
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
-        v = sfpu_asine_maclaurin_series<APPROXIMATION_MODE>(v);
-        v = PI_2 - v;
-        dst_reg[0] = v;
+        v_if(v < vConstNeg1 || v > vConst1) { dst_reg[0] = std::numeric_limits<float>::quiet_NaN(); }
+        v_else { dst_reg[0] = PI_2 - sfpu_asine_maclaurin_series<APPROXIMATION_MODE>(v); }
+        v_endif;
+        dst_reg++;
+    }
+}
+
+// cosh = (exp(x) + exp(-x)) / 2
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
+inline void calculate_cosh() {
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+        vFloat result = (_sfpu_exp_21f_<is_fp32_dest_acc_en>(v) + _sfpu_exp_21f_<is_fp32_dest_acc_en>(-v)) * 0.5f;
+        dst_reg[0] = result;
+        dst_reg++;
+    }
+}
+
+// sinh = (exp(x) - exp(-x)) / 2
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
+inline void calculate_sinh() {
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+        vFloat result = (_sfpu_exp_21f_<is_fp32_dest_acc_en>(v) - _sfpu_exp_21f_<is_fp32_dest_acc_en>(-v)) * 0.5f;
+        dst_reg[0] = result;
         dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE>
-void atan_init() {
-    vConstFloatPrgm0 = 1.442695f;  // ln2_recip
-    vConstFloatPrgm1 = 2.0f;
+void init_hyperbolic_trig() {
+    _init_exponential_<APPROXIMATION_MODE, false, p_sfpu::kCONST_1_FP16B>();
 }
 
-}  // namespace sfpu
-}  // namespace ckernel
+template <bool APPROXIMATION_MODE>
+void atan_init() {
+    // Initialisation for use of sfpu_reciprocal<false>.
+    recip_init<false>();
+}
+
+}  // namespace ckernel::sfpu

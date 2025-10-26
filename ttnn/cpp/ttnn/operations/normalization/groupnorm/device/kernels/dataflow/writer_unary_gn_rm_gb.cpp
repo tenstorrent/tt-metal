@@ -7,42 +7,43 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
-#include "debug/dprint.h"
 
 void kernel_main() {
-    constexpr bool is_mcast_sender = get_compile_time_arg_val(0) == 1;
-    constexpr bool fuse_gamma = get_compile_time_arg_val(1) == 1;
-    constexpr bool fuse_beta = get_compile_time_arg_val(2) == 1;
-    constexpr bool out_is_dram = get_compile_time_arg_val(3) == 1;
-    constexpr bool gamma_is_dram = get_compile_time_arg_val(4) == 1;
-    constexpr bool beta_is_dram = get_compile_time_arg_val(5) == 1;
-    constexpr bool input_mask_is_dram = get_compile_time_arg_val(6) == 1;
+    constexpr bool is_mcast_sender = get_named_compile_time_arg_val("is_mcast_sender") == 1;
+    constexpr bool fuse_gamma = get_named_compile_time_arg_val("fuse_gamma") == 1;
+    constexpr bool fuse_beta = get_named_compile_time_arg_val("fuse_beta") == 1;
 
-    constexpr uint32_t num_cols_tile_gamma_beta = get_compile_time_arg_val(7);
+    constexpr uint32_t num_cols_tile_gamma_beta = get_named_compile_time_arg_val("num_cols_tile_gamma_beta");
 
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(8);
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(9);
-    constexpr uint32_t per_core_N_bytes = get_compile_time_arg_val(10);
-    constexpr uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(11);
+    constexpr uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
+    constexpr uint32_t per_core_N = get_named_compile_time_arg_val("per_core_N");
+    constexpr uint32_t per_core_N_bytes = get_named_compile_time_arg_val("per_core_N_bytes");
+    constexpr uint32_t per_core_N_bytes_with_stride = get_named_compile_time_arg_val("per_core_N_bytes_with_stride");
 
-    constexpr uint32_t num_groups_per_core = get_compile_time_arg_val(12);
-    constexpr uint32_t num_batches_per_core = get_compile_time_arg_val(13);
+    constexpr uint32_t num_groups_per_core = get_named_compile_time_arg_val("num_groups_per_core");
+    constexpr uint32_t num_batches_per_core = get_named_compile_time_arg_val("num_batches_per_core");
 
-    constexpr uint32_t num_cols_per_group = get_compile_time_arg_val(14);
-    constexpr uint32_t num_tiles_per_batch = get_compile_time_arg_val(15);
+    constexpr uint32_t num_cols_per_group = get_named_compile_time_arg_val("num_cols_per_group");
+    constexpr uint32_t num_tiles_per_batch = get_named_compile_time_arg_val("num_tiles_per_batch");
 
-    constexpr uint32_t block_w_last = get_compile_time_arg_val(16);
-    constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_compile_time_arg_val(17);
-    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(18);
-    constexpr uint32_t group_row_offset = get_compile_time_arg_val(19);
-    constexpr uint32_t num_out_blocks = get_compile_time_arg_val(20);
+    constexpr uint32_t block_w_last = get_named_compile_time_arg_val("block_w_last");
+    constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_named_compile_time_arg_val("GROUP_SIZE_IS_POWER_OF_2");
+    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W =
+        get_named_compile_time_arg_val("GROUP_SIZE_SMALLER_THAN_TILE_W");
+    constexpr uint32_t group_row_offset = get_named_compile_time_arg_val("group_row_offset");
+    constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
 
-    constexpr uint32_t block_h = get_compile_time_arg_val(21);
-    constexpr uint32_t block_w = get_compile_time_arg_val(22);
-    constexpr uint32_t block_hw = get_compile_time_arg_val(23);
+    constexpr uint32_t block_h = get_named_compile_time_arg_val("block_h");
+    constexpr uint32_t block_w = get_named_compile_time_arg_val("block_w");
+    constexpr uint32_t block_hw = get_named_compile_time_arg_val("block_hw");
 
-    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(24) == 1;
-    constexpr uint32_t page_size = get_compile_time_arg_val(25);
+    constexpr uint32_t use_welford = get_named_compile_time_arg_val("groupnorm_mode") > 0;
+    constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
+
+    constexpr auto out_args = TensorAccessorArgs<0>();
+    constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+    constexpr auto input_mask_args = TensorAccessorArgs<beta_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
@@ -70,7 +71,6 @@ void kernel_main() {
     // constexpr uint32_t block_w = 4;
     const uint32_t single_tile_size_bytes = get_tile_size(cb_gamma);
     const uint32_t input_mask_single_tile_size_bytes = get_tile_size(cb_input_mask);
-    const DataFormat input_mask_data_format = get_dataformat(cb_input_mask);
 
     constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
 #ifdef UNTILIZE_OUT
@@ -81,13 +81,9 @@ void kernel_main() {
             ? (((fuse_gamma and not fuse_beta) or (not fuse_gamma and fuse_beta)) ? cb_in : cb_out0)
             : cb_out0;
 #endif
-    const DataFormat out_data_format = get_dataformat(cb_out);
 
     // input mask
-    const InterleavedAddrGenFast<input_mask_is_dram> mask = {
-        .bank_base_address = input_mask_addr,
-        .page_size = input_mask_single_tile_size_bytes,
-        .data_format = input_mask_data_format};
+    const auto mask = TensorAccessor(input_mask_args, input_mask_addr, input_mask_single_tile_size_bytes);
 
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
     uint32_t out_block_hw_normal = out_block_h_normal * block_w;
@@ -97,8 +93,9 @@ void kernel_main() {
     uint32_t out_block_hw_last = out_block_hw_normal;
     if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
-        num_out_blocks_padded++;
-        out_block_h_last = block_h % num_out_blocks;
+        uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
+        num_out_blocks_padded += (residual / out_block_h_normal + 1);
+        out_block_h_last = residual % out_block_h_normal;
         out_block_hw_last = out_block_h_last * block_w;
     }
 
@@ -122,11 +119,13 @@ void kernel_main() {
             cb_push_back(cb_input_mask, block_w);
 
             if (i == 0 and b == 0) {
-                constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
-                const uint32_t scalar_w = get_arg_val<uint32_t>(1);
-                generate_reduce_scaler(cb_in_2, scalar_w);
+                if constexpr (!use_welford) {
+                    constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
+                    const uint32_t scalar_w = get_arg_val<uint32_t>(1);
+                    generate_reduce_scaler(cb_in_2, scalar_w);
+                }
 
-                if constexpr (is_mcast_sender) {
+                if constexpr (!use_welford && is_mcast_sender) {
                     constexpr uint32_t cb_in_4 = tt::CBIndex::c_4;
                     const uint32_t scalar_c = get_arg_val<uint32_t>(0);
                     generate_reduce_scaler(cb_in_4, scalar_c);
@@ -138,7 +137,7 @@ void kernel_main() {
 
                 if constexpr (fuse_gamma) {
                     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
-                    auto gamma = get_interleaved_addr_gen<gamma_is_dram, page_size>(gamma_addr);
+                    const auto gamma = TensorAccessor(gamma_args, gamma_addr, page_size);
 
                     cb_reserve_back(cb_gamma, num_cols_tile_gamma_beta);
 
@@ -181,7 +180,7 @@ void kernel_main() {
                     // Then copy the second set of 32 bytes into the second face
 
                     const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
-                    auto beta = get_interleaved_addr_gen<beta_is_dram, page_size>(beta_addr);
+                    const auto beta = TensorAccessor(beta_args, beta_addr, page_size);
 
                     cb_reserve_back(cb_beta, num_cols_tile_gamma_beta);
 
@@ -214,8 +213,7 @@ void kernel_main() {
             // add or copy with previous output results
             uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
 
-            const InterleavedAddrGenFast<out_is_dram> dst_a = {
-                .bank_base_address = out_addr, .page_size = single_tile_size_bytes, .data_format = out_data_format};
+            const auto dst_a = TensorAccessor(out_args, out_addr, single_tile_size_bytes);
 
             uint32_t out_block_start_id_offset = 0;
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
@@ -232,7 +230,7 @@ void kernel_main() {
 
                 for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
                     for (uint32_t nt = 0; nt < block_w_curr; nt++) {
-                        // Checks, only relavent to the last group, that we are not indexing out of bounds
+                        // Checks, only relevant to the last group, that we are not indexing out of bounds
                         // for the cases where our last group does not span the length of our max tile span for a group
                         if ((index_g_offset + nt) < row_tile_max_index) {
                             noc_async_write_tile(

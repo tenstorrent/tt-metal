@@ -18,6 +18,7 @@
 
 #include "bcast_to_device_operation.hpp"
 #include "bcast_to_utils.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace ttnn::operations::experimental::broadcast_to;
 
@@ -139,15 +140,11 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto input = tensor_args.input;
-    uint32_t data_size = input.element_size();
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.dtype());
 
     auto output_shape = output.logical_shape();
-    auto output_data_format = datatype_to_dataformat_converter(output.dtype());
 
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_data_format);
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_data_format);
-    uint32_t num_output_tiles = output.physical_volume() / output.tensor_spec().tile().get_tile_hw();
+    uint32_t input_single_tile_size = tt::tile_size(input_data_format);
 
     // Device Setup
     auto* device = input.device();
@@ -161,30 +158,31 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
 
     // How many tiles to store per input CB (double buffer)
     constexpr uint32_t num_tiles_per_cb = 2;
-    auto [input_cb, input_cb_handle] = create_cb(
-        tt::CBIndex::c_0, program, all_device_cores, input_single_tile_size, num_tiles_per_cb, input_data_format);
+    create_cb(tt::CBIndex::c_0, program, all_device_cores, input_single_tile_size, num_tiles_per_cb, input_data_format);
 
-    auto [output_cb, output_cb_handle] = create_cb(
-        tt::CBIndex::c_1, program, all_device_cores, input_single_tile_size, num_tiles_per_cb, input_data_format);
-
-    const auto src_is_dram = static_cast<const uint32_t>(input.buffer()->is_dram());
-    const auto dst_is_dram = static_cast<const uint32_t>(output.buffer()->is_dram());
+    create_cb(tt::CBIndex::c_1, program, all_device_cores, input_single_tile_size, num_tiles_per_cb, input_data_format);
 
     auto kernel_config = BcastToKernelConfig(operation_attributes.subtile_broadcast_type);
 
     // READER KERNEL
+    std::vector<uint32_t> reader_compile_time_args{(uint32_t)tt::CBIndex::c_0};
+    tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
     auto reader_id = tt::tt_metal::CreateKernel(
         program,
         get_kernel_file_path(kernel_config.reader_kernel),
         all_device_cores,
-        tt::tt_metal::ReaderDataMovementConfig({src_is_dram, (uint32_t)tt::CBIndex::c_0}));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // WRITER KERNEL
+    uint32_t writer_cb_id = (kernel_config.writer_kernel == KernelName::WriterNoBcast) ? (uint32_t)tt::CBIndex::c_0
+                                                                                       : (uint32_t)tt::CBIndex::c_1;
+    std::vector<uint32_t> writer_compile_time_args{writer_cb_id};
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
     auto writer_id = tt::tt_metal::CreateKernel(
         program,
         get_kernel_file_path(kernel_config.writer_kernel),
         all_device_cores,
-        tt::tt_metal::WriterDataMovementConfig({dst_is_dram, (uint32_t)tt::CBIndex::c_1, (uint32_t)tt::CBIndex::c_0}));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // COMPUTE KERNEL
     auto compute_id = tt::tt_metal::CreateKernel(

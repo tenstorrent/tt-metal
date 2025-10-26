@@ -10,6 +10,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/distributed.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -17,20 +19,18 @@
 #include <random>
 #include <string_view>
 #include <vector>
-#include <algorithm>
 
 using namespace tt;
 using namespace tt::tt_metal;
 
 using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
 
-std::shared_ptr<Buffer> MakeBuffer(IDevice* device, uint32_t size, uint32_t page_size, bool sram) {
-    InterleavedBufferConfig config{
-        .device = device,
-        .size = size,
-        .page_size = page_size,
-        .buffer_type = (sram ? BufferType::L1 : BufferType::DRAM)};
-    return CreateBuffer(config);
+std::shared_ptr<distributed::MeshBuffer> MakeMeshBuffer(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t size, uint32_t page_size, bool sram) {
+    distributed::DeviceLocalBufferConfig local_config{
+        .page_size = page_size, .buffer_type = (sram ? BufferType::L1 : BufferType::DRAM)};
+    distributed::ReplicatedBufferConfig buffer_config{.size = size};
+    return distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
 }
 
 // Allocate a buffer on DRAM or SRAM. Assuming the buffer holds BFP16 data.
@@ -40,11 +40,12 @@ std::shared_ptr<Buffer> MakeBuffer(IDevice* device, uint32_t size, uint32_t page
 // @param n_tiles: The number of tiles to allocate.
 // @param sram: If true, allocate the buffer on SRAM, otherwise allocate it on
 // DRAM.
-std::shared_ptr<Buffer> MakeBufferBFP16(IDevice* device, uint32_t n_tiles, bool sram) {
+std::shared_ptr<distributed::MeshBuffer> MakeMeshBufferBFP16(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t n_tiles, bool sram) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
     // For simplicity, all DRAM buffers have page size = tile size.
     const uint32_t page_tiles = sram ? n_tiles : 1;
-    return MakeBuffer(device, tile_size * n_tiles, page_tiles * tile_size, sram);
+    return MakeMeshBuffer(mesh_device, tile_size * n_tiles, page_tiles * tile_size, sram);
 }
 
 CBHandle MakeCircularBuffer(
@@ -76,15 +77,11 @@ std::string next_arg(int& i, int argc, char** argv) {
 }
 
 void help(std::string_view program_name) {
-    std::cout << "Usage: " << program_name << " [options]\n";
-    std::cout << "This program demonstrates how to add two vectors using "
-                 "tt-Metalium.\n";
-    std::cout << "\n";
-    std::cout << "Options:\n";
-    std::cout << "  --device, -d <device_id>  Specify the device to run the "
-                 "program on. Default is 0.\n";
-    std::cout << "  --seed, -s <seed>         Specify the seed for the random "
-                 "number generator. Default is random.\n";
+    fmt::print("Usage: {} [options]\n", program_name);
+    fmt::print("This program demonstrates how to add two vectors using tt-Metalium.\n\n");
+    fmt::print("Options:\n");
+    fmt::print("  --device, -d <device_id>  Specify the device to run the program on. Default is 0.\n");
+    fmt::print("  --seed, -s <seed>         Specify the seed for the random number generator. Default is random.\n");
     exit(0);
 }
 
@@ -110,35 +107,59 @@ int main(int argc, char** argv) {
     // n_tiles is number of tiles of data for this programming example to add two vectors
     const uint32_t n_tiles = 640;
 
-    auto* device = CreateDevice(device_id);
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram();
 
-    CommandQueue& cq = device->command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 
     const uint32_t tile_size = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
-    std::vector<uint32_t> tiles_per_core;
-    const uint32_t core_to_print = 4;
+    std::map<CoreCoord, uint32_t> core_tile_idx;
 
     // Create 3 buffers on DRAM. These will hold the input and output data. A
     // and B are the input buffers, C is the output buffer.
-    auto a = MakeBufferBFP16(device, n_tiles, false);
-    auto b = MakeBufferBFP16(device, n_tiles, false);
-    auto c = MakeBufferBFP16(device, n_tiles, false);
+    auto a = MakeMeshBufferBFP16(mesh_device, n_tiles, false);
+    auto b = MakeMeshBufferBFP16(mesh_device, n_tiles, false);
+    auto c = MakeMeshBufferBFP16(mesh_device, n_tiles, false);
 
     std::mt19937 rng(seed);
-    std::vector<bfloat16> a_data = create_random_vector_of_bfloat16_native(tile_size * n_tiles * 2, 10, rng());
-    std::vector<bfloat16> b_data = create_random_vector_of_bfloat16_native(tile_size * n_tiles * 2, 10, rng());
+    std::uniform_real_distribution<float> dist(0, 10.0f);
+    std::vector<bfloat16> a_data(tile_size * n_tiles);
+    std::vector<bfloat16> b_data(tile_size * n_tiles);
+    for (uint32_t i = 0; i < tile_size * n_tiles; i++) {
+        a_data[i] = bfloat16(dist(rng));
+        b_data[i] = bfloat16(dist(rng));
+    }
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    uint32_t num_cores_total = num_cores_x * num_cores_y;
+    auto core_grid = mesh_device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = core_grid.x;
+    uint32_t num_cores_y = core_grid.y;
+    // CoreRnge uses inclusive start and exclusive end coordinates so range is [0, 0] to [num_cores_x - 1, num_cores_y -
+    // 1]. instead of the more intuitive [0, num_cores_x) and [0, num_cores_y).
     auto all_device_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
     const uint32_t cir_buf_num_title = 4;
-    CBHandle cb_a = MakeCircularBufferBFP16(program, all_device_cores, tt::CBIndex::c_0, cir_buf_num_title);
-    CBHandle cb_b = MakeCircularBufferBFP16(program, all_device_cores, tt::CBIndex::c_1, cir_buf_num_title);
-    CBHandle cb_c = MakeCircularBufferBFP16(program, all_device_cores, tt::CBIndex::c_2, cir_buf_num_title);
+    MakeCircularBufferBFP16(program, all_device_cores, tt::CBIndex::c_0, cir_buf_num_title);
+    MakeCircularBufferBFP16(program, all_device_cores, tt::CBIndex::c_1, cir_buf_num_title);
+    MakeCircularBufferBFP16(program, all_device_cores, tt::CBIndex::c_2, cir_buf_num_title);
+
+    // Calculate the work distribution across the cores. The work is split into 2 groups of cores. Primary and
+    // secondary. The primary group will process more tiles pre core than the secondary group, in case the number of
+    // work is not evenly divisible by the number of available cores. This function guarantees that the work is exactly
+    // split across the cores. No more, no less.
+    constexpr bool row_major =
+        true;  // Distribute the work in row-major order (across the grid of cores). For this application, it doesn't
+               // matter much But it may for kernels with more complex data access patterns.
+    auto
+        [num_cores,                   // number of cores utilized
+         all_cores,                   // set of all cores used
+         core_group_1,                // Primary core group
+         core_group_2,                // Secondary core group
+         num_tiles_per_core_group_1,  // Number of tiles each core in the primary group processes
+         num_tiles_per_core_group_2   // Number of tiles each core in the secondary group processes
+    ] = tt::tt_metal::split_work_to_cores(core_grid, n_tiles, row_major);
 
     // A Tensix core is made up with 5 processors. 2 data movement processors,
     // and 3 compute processors. The 2 data movement processors act independent
@@ -150,30 +171,42 @@ int main(int argc, char** argv) {
     // movement processors moves data from the NoC, or in our case, the DRAM,
     // into the SRAM.
     //
+    // Though the multi-Tensix parallelization strategy is SPMD for this example
+    //
     // The vector add example consists of 3 kernels. `interleaved_tile_read`
     // reads tiles from the input buffers A and B into 2 circular buffers. `add`
     // reads tiles from the circular buffers, adds them together, and dumps the
     // result into a third circular buffer. `tile_write` reads tiles from the
     // third circular buffer and writes them to the output buffer C.
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)tt::CBIndex::c_0, (std::uint32_t)tt::CBIndex::c_1};
+    std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
+        {"c_0", (std::uint32_t)tt::CBIndex::c_0}, {"c_1", (std::uint32_t)tt::CBIndex::c_1}};
+    TensorAccessorArgs(*a).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*b).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)tt::CBIndex::c_2};
+    TensorAccessorArgs(*c).append_to(writer_compile_time_args);
     std::vector<uint32_t> compute_compile_time_args = {
         (std::uint32_t)tt::CBIndex::c_0, (std::uint32_t)tt::CBIndex::c_1, (std::uint32_t)tt::CBIndex::c_2};
+    std::unordered_map<std::string, uint32_t> compute_named_compile_time_args = {
+        {"c_0", (std::uint32_t)tt::CBIndex::c_0},
+        {"c_1", (std::uint32_t)tt::CBIndex::c_1},
+        {"c_2", (std::uint32_t)tt::CBIndex::c_2}};
 
     auto reader = CreateKernel(
         program,
         "tt_metal/programming_examples/vecadd_multi_core/kernels/"
         "interleaved_tile_read_multi_core.cpp",
-        all_device_cores,
+        all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args = reader_compile_time_args});
+            .compile_args = reader_compile_time_args,
+            .named_compile_args = reader_named_compile_time_args});
     auto writer = CreateKernel(
         program,
         "tt_metal/programming_examples/vecadd_multi_core/kernels/"
         "tile_write_multi_core.cpp",
-        all_device_cores,
+        all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
@@ -182,67 +215,90 @@ int main(int argc, char** argv) {
         program,
         "tt_metal/programming_examples/vecadd_multi_core/"
         "kernels/add_multi_core.cpp",
-        all_device_cores,
-        ComputeConfig{.math_approx_mode = false, .compile_args = compute_compile_time_args, .defines = {}});
+        all_cores,
+        ComputeConfig{
+            .math_approx_mode = false,
+            .compile_args = compute_compile_time_args,
+            .defines = {},
+            .named_compile_args = compute_named_compile_time_args});
 
-    constexpr bool row_major = true;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, n_tiles, row_major);
+    auto work_groups = {
+        std::make_pair(core_group_1, num_tiles_per_core_group_1),
+        std::make_pair(core_group_2, num_tiles_per_core_group_2)};
+    // Set the runtime arguments for each core in the work groups. Give them a different starting and ending point to
+    // achieve SPMD
+    uint32_t start_tile_id = 0;
+    for (const auto& [group, work_per_core] : work_groups) {
+        for (const auto& range : group.ranges()) {
+            for (const auto& core : range) {
+                SetRuntimeArgs(program, reader, core, {a->address(), b->address(), work_per_core, start_tile_id});
+                SetRuntimeArgs(program, writer, core, {c->address(), work_per_core, start_tile_id});
+                SetRuntimeArgs(program, compute, core, {work_per_core, start_tile_id});
+                core_tile_idx[core] = start_tile_id;  // Save the mapping so we can print the results later.
 
-    auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
-    for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
-        const auto& core = cores[i];
-
-        uint32_t num_tiles_per_core;
-
-        if (core_group_1.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_2;
-        } else {
-            SetRuntimeArgs(program, reader, core, std::array<uint32_t, 10>{0});
-            SetRuntimeArgs(program, writer, core, std::array<uint32_t, 11>{0});
-            SetRuntimeArgs(program, compute, core, std::array<uint32_t, 3>{0});
-            continue;
+                start_tile_id += work_per_core;
+            }
         }
-        if (i < core_to_print) {
-            tiles_per_core.push_back(num_tiles_per_core);
-        }
-        SetRuntimeArgs(program, reader, core, {a->address(), b->address(), num_tiles_per_core, start_tile_id});
-        SetRuntimeArgs(program, writer, core, {c->address(), num_tiles_per_core, start_tile_id});
-        SetRuntimeArgs(program, compute, core, {num_tiles_per_core, start_tile_id});
-        start_tile_id += num_tiles_per_core;
     }
 
-    EnqueueWriteBuffer(cq, a, a_data, false);
-    EnqueueWriteBuffer(cq, b, b_data, false);
+    EnqueueWriteMeshBuffer(cq, a, a_data, false);
+    EnqueueWriteMeshBuffer(cq, b, b_data, false);
     // Enqueue the program
-    EnqueueProgram(cq, program, true);
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::cout << "Kernel execution finished" << std::endl;
 
     // Read the output buffer.
     std::vector<bfloat16> c_data;
-    EnqueueReadBuffer(cq, c, c_data, true);
+    distributed::EnqueueReadMeshBuffer(cq, c_data, c, true);
 
     // Print partial results so we can see the output is correct (plus or minus
     // some error due to BFP16 precision)
     std::cout << "Partial results: (note we are running under BFP16. It's going "
                  "to be less accurate)\n";
-    auto core_offset = 0;
-    for (int core_index = 0; core_index < std::min(core_to_print, num_cores_total); ++core_index) {
-        core_offset += core_index * tile_size * tiles_per_core[core_index];
-        std::cout << "Core (0, " << core_index << "):\n";
-        for (int index = 0; index < 10; index++) {
-            const auto i = core_offset + index;
-            std::cout << "index  " << i << "  " << a_data[i].to_float() << " + " << b_data[i].to_float() << " = "
-                      << c_data[i].to_float() << "\n";
+    // Print some results from some of the cores to illustrate the computation
+    for (uint32_t core_y = 0; core_y < num_cores_y; core_y++) {
+        CoreCoord core(0, core_y);
+        if (!core_tile_idx.contains(core)) {
+            continue;  // This core did not participate in the computation.
         }
-        std::cout << std::endl;
+        fmt::print("Core {}:\n", core);
+
+        auto start_idx = core_tile_idx.at(core) * tile_size;
+        for (uint32_t i = 0; i < 10; i++) {
+            fmt::print(
+                "Index {}: {} + {} = {}\n",
+                start_idx + i,
+                static_cast<float>(a_data[start_idx + i]),
+                static_cast<float>(b_data[start_idx + i]),
+                static_cast<float>(c_data[start_idx + i]));
+        }
+        fmt::print("\n");
     }
-    std::cout << std::flush;
+
+    // Check if the results match the expected values.
+    bool pass = true;
+    for (size_t i = 0; i < c_data.size(); i++) {
+        float expected = static_cast<float>(a_data[i]) + static_cast<float>(b_data[i]);
+        if (std::abs(static_cast<float>(c_data[i]) - expected) > 0.3f) {  // Allow some tolerance due to BFP16 precision
+            fmt::print(
+                "Mismatch at index {}: {} + {} = {}, expected {}\n",
+                i,
+                static_cast<float>(a_data[i]),
+                static_cast<float>(b_data[i]),
+                static_cast<float>(c_data[i]),
+                expected);
+            pass = false;
+        }
+    }
+    if (pass) {
+        fmt::print("All results match expected values within tolerance.\n");
+    } else {
+        fmt::print(stderr, "Some results did not match expected values.\n");
+    }
 
     // Finally, we close the device.
-    CloseDevice(device);
+    mesh_device->close();
     return 0;
 }

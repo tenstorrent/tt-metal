@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "llama.hpp"
 
 #include "autograd/tensor.hpp"
-#include "core/distributed_mapping.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/distributed/linear.hpp"
 #include "modules/distributed/llama_block.hpp"
@@ -27,10 +26,10 @@ void initialize_weights(DistributedLlama& model) {
             auto* device = &autograd::ctx().get_device();
             auto num_devices = static_cast<uint32_t>(device->num_devices());
             tensor_shape[0] *= num_devices;
-            core::XTensorToMeshVariant<float> shard_composer = core::ShardXTensorToMesh<float>(device->shape(), 0);
             auto weight_xtensor = init::normal_init(tensor_shape, {0.F, 0.02F});
-            tensor_ptr->set_value(
-                core::from_xtensor<float, ttnn::DataType::BFLOAT16>(weight_xtensor, device, shard_composer));
+            const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
+            tensor_ptr->set_value(ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+                weight_xtensor, device, ttnn::Layout::TILE, mapper.get()));
         } else if (name.find("bias") != std::string::npos) {
             init::constant_init(tensor_ptr, tensor.logical_shape(), 0.F);
         }

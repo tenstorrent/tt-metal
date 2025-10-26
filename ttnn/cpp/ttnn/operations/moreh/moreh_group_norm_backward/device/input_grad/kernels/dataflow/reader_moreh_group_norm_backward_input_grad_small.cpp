@@ -7,20 +7,10 @@
 void kernel_main() {
     int i{0};
     const auto output_grad_addr = get_arg_val<uint32_t>(i++);
-    const bool output_grad_is_dram = get_arg_val<uint32_t>(i++) == 1;
-
     const auto input_addr = get_arg_val<uint32_t>(i++);
-    const bool input_is_dram = get_arg_val<uint32_t>(i++) == 1;
-
     const auto mean_addr = get_arg_val<uint32_t>(i++);
-    const bool mean_is_dram = get_arg_val<uint32_t>(i++) == 1;
-
     const auto rstd_addr = get_arg_val<uint32_t>(i++);
-    const bool rstd_is_dram = get_arg_val<uint32_t>(i++) == 1;
-
     const auto gamma_addr = get_arg_val<uint32_t>(i++);
-    const bool gamma_is_dram = get_arg_val<uint32_t>(i++) == 1;
-    const bool gamma_has_value = get_arg_val<uint32_t>(i++) == 1;
 
     const auto tile_offset = get_arg_val<uint32_t>(i++);
     const auto num_rows_per_core = get_arg_val<uint32_t>(i++);
@@ -30,6 +20,13 @@ void kernel_main() {
 
     const auto origin_h = get_arg_val<uint32_t>(i++);
     const auto origin_w = get_arg_val<uint32_t>(i++);
+
+    constexpr bool gamma_has_value = get_compile_time_arg_val(0) == 1;
+    constexpr auto output_grad_args = TensorAccessorArgs<1>();
+    constexpr auto input_args = TensorAccessorArgs<output_grad_args.next_compile_time_args_offset()>();
+    constexpr auto mean_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    constexpr auto rstd_args = TensorAccessorArgs<mean_args.next_compile_time_args_offset()>();
+    constexpr auto gamma_args = TensorAccessorArgs<rstd_args.next_compile_time_args_offset()>();
 
     uint32_t cb_id{0};
     const auto cb_id_output_grad = cb_id++;
@@ -76,57 +73,23 @@ void kernel_main() {
 
     // output_grad
     const uint32_t output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
-    const auto output_grad_data_format = get_dataformat(cb_id_output_grad);
-
-    const InterleavedAddrGenFast<true> dram_output_grad_addrg = {
-        .bank_base_address = output_grad_addr,
-        .page_size = output_grad_tile_bytes,
-        .data_format = output_grad_data_format};
-
-    const InterleavedAddrGenFast<false> l1_output_grad_addrg = {
-        .bank_base_address = output_grad_addr,
-        .page_size = output_grad_tile_bytes,
-        .data_format = output_grad_data_format};
+    const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr, output_grad_tile_bytes);
 
     // input
     const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
-    const auto input_data_format = get_dataformat(cb_id_input);
-
-    const InterleavedAddrGenFast<true> dram_input_addrg = {
-        .bank_base_address = input_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
-
-    const InterleavedAddrGenFast<false> l1_input_addrg = {
-        .bank_base_address = input_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
+    const auto input_addrg = TensorAccessor(input_args, input_addr, input_tile_bytes);
 
     // mean
     const uint32_t mean_tile_bytes = get_tile_size(cb_id_mean);
-    const auto mean_data_format = get_dataformat(cb_id_mean);
-
-    const InterleavedAddrGenFast<true> dram_mean_addrg = {
-        .bank_base_address = mean_addr, .page_size = mean_tile_bytes, .data_format = mean_data_format};
-
-    const InterleavedAddrGenFast<false> l1_mean_addrg = {
-        .bank_base_address = mean_addr, .page_size = mean_tile_bytes, .data_format = mean_data_format};
+    const auto mean_addrg = TensorAccessor(mean_args, mean_addr, mean_tile_bytes);
 
     // rstd
     const uint32_t rstd_tile_bytes = get_tile_size(cb_id_rstd);
-    const auto rstd_data_format = get_dataformat(cb_id_rstd);
-
-    const InterleavedAddrGenFast<true> dram_rstd_addrg = {
-        .bank_base_address = rstd_addr, .page_size = rstd_tile_bytes, .data_format = rstd_data_format};
-
-    const InterleavedAddrGenFast<false> l1_rstd_addrg = {
-        .bank_base_address = rstd_addr, .page_size = rstd_tile_bytes, .data_format = rstd_data_format};
+    const auto rstd_addrg = TensorAccessor(rstd_args, rstd_addr, rstd_tile_bytes);
 
     // gamma
     const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
-    const auto gamma_data_format = get_dataformat(cb_id_gamma);
-
-    const InterleavedAddrGenFast<true> dram_gamma_addrg = {
-        .bank_base_address = gamma_addr, .page_size = gamma_tile_bytes, .data_format = gamma_data_format};
-
-    const InterleavedAddrGenFast<false> l1_gamma_addrg = {
-        .bank_base_address = gamma_addr, .page_size = gamma_tile_bytes, .data_format = gamma_data_format};
+    const auto gamma_addrg = TensorAccessor(gamma_args, gamma_addr, gamma_tile_bytes);
 
     const auto mean_dtype_bytes = mean_tile_bytes / (TILE_H * TILE_W);
     const auto rstd_dtype_bytes = mean_tile_bytes / (TILE_H * TILE_W);
@@ -167,11 +130,7 @@ void kernel_main() {
 
         // mean (1, 1, N, num_groups)
         cb_reserve_back(cb_id_mean, onetile);
-        if (mean_is_dram) {
-            noc_async_read_tile(mean_rstd_tile_idx, dram_mean_addrg, mean_l1_write_ptr);
-        } else {
-            noc_async_read_tile(mean_rstd_tile_idx, l1_mean_addrg, mean_l1_write_ptr);
-        }
+        noc_async_read_tile(mean_rstd_tile_idx, mean_addrg, mean_l1_write_ptr);
         noc_async_read_barrier();
         if (tilized_mean_rstd_idx_in_tile != 0) {
             auto mean_ptr = reinterpret_cast<uint16_t*>(mean_l1_write_ptr);
@@ -181,11 +140,7 @@ void kernel_main() {
 
         // rstd (1, 1, N, num_groups)
         cb_reserve_back(cb_id_rstd, onetile);
-        if (rstd_is_dram) {
-            noc_async_read_tile(mean_rstd_tile_idx, dram_rstd_addrg, rstd_l1_write_ptr);
-        } else {
-            noc_async_read_tile(mean_rstd_tile_idx, l1_rstd_addrg, rstd_l1_write_ptr);
-        }
+        noc_async_read_tile(mean_rstd_tile_idx, rstd_addrg, rstd_l1_write_ptr);
         noc_async_read_barrier();
         if (tilized_mean_rstd_idx_in_tile != 0) {
             auto rstd_ptr = reinterpret_cast<uint16_t*>(rstd_l1_write_ptr);
@@ -197,11 +152,7 @@ void kernel_main() {
             // input (N, C, H, W)
             input_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx;
             cb_reserve_back(cb_id_input, onetile);
-            if (input_is_dram) {
-                noc_async_read_tile(input_tile_idx, dram_input_addrg, input_l1_write_ptr);
-            } else {
-                noc_async_read_tile(input_tile_idx, l1_input_addrg, input_l1_write_ptr);
-            }
+            noc_async_read_tile(input_tile_idx, input_addrg, input_l1_write_ptr);
             noc_async_read_barrier();
             cb_push_back(cb_id_input, onetile);
         }  // inner_idx loop
@@ -210,11 +161,7 @@ void kernel_main() {
             // output_grad (N, C, H, W)
             output_grad_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx;
             cb_reserve_back(cb_id_output_grad, onetile);
-            if (output_grad_is_dram) {
-                noc_async_read_tile(output_grad_tile_idx, dram_output_grad_addrg, output_grad_l1_write_ptr);
-            } else {
-                noc_async_read_tile(output_grad_tile_idx, l1_output_grad_addrg, output_grad_l1_write_ptr);
-            }
+            noc_async_read_tile(output_grad_tile_idx, output_grad_addrg, output_grad_l1_write_ptr);
             noc_async_read_barrier();
             cb_push_back(cb_id_output_grad, onetile);
 
@@ -225,11 +172,7 @@ void kernel_main() {
                 const auto gamma_w_idx_in_tile = gamma_c_idx % TILE_W;
                 const auto tilized_gamma_idx_in_tile = get_tilized_idx(0, gamma_w_idx_in_tile, TILE_H, TILE_W);
                 cb_reserve_back(cb_id_gamma, onetile);
-                if (gamma_is_dram) {
-                    noc_async_read_tile(gamma_tile_idx, dram_gamma_addrg, gamma_l1_write_ptr);
-                } else {
-                    noc_async_read_tile(gamma_tile_idx, l1_gamma_addrg, gamma_l1_write_ptr);
-                }
+                noc_async_read_tile(gamma_tile_idx, gamma_addrg, gamma_l1_write_ptr);
                 noc_async_read_barrier();
                 if (tilized_gamma_idx_in_tile != 0) {
                     auto gamma_ptr = reinterpret_cast<uint16_t*>(gamma_l1_write_ptr);

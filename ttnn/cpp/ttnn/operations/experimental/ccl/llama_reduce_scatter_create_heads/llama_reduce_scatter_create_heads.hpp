@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,6 @@ namespace operations::experimental::ccl {
 
 struct ExecuteLlamaReduceScatterCreateHeads {
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         ttnn::Tensor& intermediate_packet_buffer,
         int32_t dim,
@@ -28,7 +27,8 @@ struct ExecuteLlamaReduceScatterCreateHeads {
         uint32_t num_kv_heads,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& qkv_memory_config = std::nullopt,
-        bool use_noc1_only = false);
+        bool use_noc1_only = false,
+        bool use_optimal_ccl_for_llama = false);
 };
 
 }  // namespace operations::experimental::ccl

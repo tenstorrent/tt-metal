@@ -25,6 +25,7 @@
  */
 
 #include <cstdint>
+#include <type_traits>
 #if defined(COMPILE_FOR_NCRISC) | defined(COMPILE_FOR_BRISC)
 // TODO(AP): this ifdef doesn't seem to make sense given we include risc_common.h
 // The issue is some files included inside risc_common.h only apply to NC/BRISCS
@@ -130,19 +131,6 @@ struct TYPED_U32_ARRAY : public U32_ARRAY {
     }
 } ATTR_PACK;
 
-// These primitives are intended for ordering debug prints
-// A possible use here is to synchronize debug print order between cores/harts
-// It could be implemented, for instance as code = linearize({x,y})*5 + hart_id
-// With another core/hart waiting on that index
-struct RAISE {
-    uint32_t code;
-    RAISE(uint32_t val) : code(val) {}
-} ATTR_PACK;  // raise a condition with specified code
-struct WAIT {
-    uint32_t code;
-    WAIT(uint32_t val) : code(val) {}
-} ATTR_PACK;  // wait for a condition with specified code
-
 // didn't want to include string.h
 inline uint32_t DebugPrintStrLen(const char* val) {
     const char* end = val;
@@ -240,14 +228,6 @@ uint8_t DebugPrintTypeToId<float>() {
 template <>
 uint8_t DebugPrintTypeToId<char>() {
     return DPrintCHAR;
-}
-template <>
-uint8_t DebugPrintTypeToId<RAISE>() {
-    return DPrintRAISE;
-}
-template <>
-uint8_t DebugPrintTypeToId<WAIT>() {
-    return DPrintWAIT;
 }
 template <>
 uint8_t DebugPrintTypeToId<BF16>() {
@@ -456,8 +436,6 @@ template DebugPrinter operator<< <int32_t>(DebugPrinter, int32_t val);
 template DebugPrinter operator<< <int64_t>(DebugPrinter, int64_t val);
 template DebugPrinter operator<< <float>(DebugPrinter, float val);
 template DebugPrinter operator<< <char>(DebugPrinter, char val);
-template DebugPrinter operator<< <RAISE>(DebugPrinter, RAISE val);
-template DebugPrinter operator<< <WAIT>(DebugPrinter, WAIT val);
 template DebugPrinter operator<< <FIXED>(DebugPrinter, FIXED val);
 template DebugPrinter operator<< <DEFAULTFLOAT>(DebugPrinter, DEFAULTFLOAT val);
 template DebugPrinter operator<< <HEX>(DebugPrinter, HEX val);
@@ -467,6 +445,15 @@ template DebugPrinter operator<< <SETPRECISION>(DebugPrinter, SETPRECISION val);
 template DebugPrinter operator<< <BF16>(DebugPrinter, BF16 val);
 template DebugPrinter operator<< <F32>(DebugPrinter, F32 val);
 template DebugPrinter operator<< <U32>(DebugPrinter, U32 val);
+
+// This allows printing of any (non char) pointer types as uint32_t
+template <typename T, typename = std::enable_if_t<!std::is_same_v<std::remove_cv_t<T>, char>>>
+DebugPrinter operator<<(DebugPrinter dp, T* val) {
+    using KernelPointerType = uint32_t;
+    static_assert(sizeof(KernelPointerType) == sizeof(T*));
+
+    return dp << reinterpret_cast<KernelPointerType>(val);
+}
 
 // Tile printing only supported in kernels
 #if defined(KERNEL_BUILD)

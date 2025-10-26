@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 #include "fill_pad_program_factory.hpp"
@@ -17,13 +18,6 @@ bool is_power_of_two_at_least_32(uint32_t value) { return value >= 32 && (value 
 using namespace tt;
 
 namespace ttnn::operations::data_movement::detail {
-
-// based off pack_two_bfloat16_into_uint32
-uint32_t pack_two_uint16_into_uint32(std::pair<uint16_t, uint16_t> two_uint16s) {
-    // first -> lower 16
-    // second -> upper 16
-    return (uint32_t)two_uint16s.first | ((uint32_t)two_uint16s.second << 16);
-}
 
 tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, float fill_value) {
     tt::tt_metal::IDevice* device = input_tensor.device();
@@ -35,7 +29,7 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
     TT_ASSERT(tens_buffer != nullptr, "Input buffer should be allocated on device!");
 
     uint32_t input_element_size_bytes = data_type_to_size.at(input_tensor.dtype());
-    uint32_t cb_page_size = input_element_size_bytes * tt::constants::FACE_HEIGHT + sizeof(uint16_t);
+    uint32_t cb_page_size = (input_element_size_bytes * tt::constants::FACE_HEIGHT) + sizeof(uint16_t);
     uint32_t height = input_tensor.logical_shape()[-2];
     uint32_t width = input_tensor.logical_shape()[-1];
 
@@ -48,13 +42,12 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, problem_size);
     uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
 
     constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_page_size * 2, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, cb_page_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     bool src_is_dram = tens_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
@@ -92,10 +85,12 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
         (std::uint32_t)tt::constants::TILE_HEIGHT,
         (std::uint32_t)tt::constants::FACE_HEIGHT};
 
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     if (sharded) {
         shard_builder::extend_sharding_compile_time_args(input_tensor, writer_compile_time_args);
         compute_defines["SHARDED"] = "1";
+    } else {
+        tt::tt_metal::TensorAccessorArgs(*tens_buffer).append_to(writer_compile_time_args);
     }
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(

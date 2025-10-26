@@ -7,7 +7,7 @@ import json
 import time
 
 from loguru import logger
-from models.utility_functions import comp_pcc, comp_allclose, comp_ulp, comp_equal, divup, roundup
+from models.common.utility_functions import comp_pcc, comp_allclose, comp_ulp, comp_equal, divup, roundup
 from typing import Tuple, Union
 
 import ttnn
@@ -122,7 +122,10 @@ def assert_allclose(
 
 
 def assert_with_ulp(
-    expected_result: Union[ttnn.Tensor, torch.Tensor], actual_result: Union[ttnn.Tensor, torch.Tensor], ulp_threshold=10
+    expected_result: Union[ttnn.Tensor, torch.Tensor],
+    actual_result: Union[ttnn.Tensor, torch.Tensor],
+    ulp_threshold=10,
+    allow_nonfinite=False,
 ):
     """
     Assert that two tensors are similar within a given distance expressed in Units of Least Precision (ULP)
@@ -139,9 +142,26 @@ def assert_with_ulp(
         expected_result (Union[ttnn.Tensor, torch.Tensor]): The expected reference tensor
         actual_result (Union[ttnn.Tensor, torch.Tensor]): The actual tensor to compare against the reference
         ulp_threshold (float, optional): Maximum tolerated ULP distance. Defaults to 10.
+        allow_nonfinite (bool, optional): If disabled, any non-finite value (NaN, +inf, -inf) will trigger an assertion. If enabled, differences between non-finite values at the same positions will trigger an assertion.
 
-    Note:
+    Notes:
         The length of a single ULP is measured using the difference between two consecutive floating point numbers.
+
+        ULP should be preferred when errors between `calculated` and `golden` outputs are known to be small (difference < 10s of ULPs).
+        This is typically the case for element-wise operations that approximate common numerical functions (e.g. exp, pow, log, ...).
+
+        For more significant differences, where `calculated` and `golden` differ by orders of magnitude, ULPs may be harder to compare
+        Indeed, with current definition, on bfloat16:
+        - ULP-Delta(4, 0) = 128
+        - ULP-Delta(0, 4) = 4.36e+40
+
+        Generally, if the ULP error exceeds the 2**(#mantissa bits) (128-ULP for bfloat16, 8388608 for float32), then it means that both outputs are different by more than an order of magnitude.
+        For these cases, functions such as `assert_allclose(golden, calculated, rtol, atol)` should be used instead.
+
+        To measure the accuracy in ULP of operations on bfloat8_b data type, the ttnn bfloat8_b tensor should be either passed directly to the
+        function, or converted to bfloat16 beforehand (bfloat16 has the 'same' resolution as bfloat8_b).
+        Indeed, ttnn.to_torch() converts bfloat8_b to float32 by default, which would lead to assert_with_ulp() measuring ULP error as if
+        data type was computed as float32.
 
     Returns:
         tuple: A tuple containing:
@@ -151,16 +171,45 @@ def assert_with_ulp(
     Raises:
         AssertionError: If the tensor shapes don't match or if tensor difference is greater than ulp_threshold.
     """
+
+    def tt_dtype_to_torch_dtype_for_ulp(tt_dtype):
+        # By default, ttnn converts ttnn.bfloat8_b to torch.float
+        # However, the resolution of a bfloat8_b value is the same as bfloat16
+        # (assuming all elements within the block share the same exponent)
+        # Thus, for ULP measurement, we convert bfloat8_b to bfloat16 instead of float32
+        if tt_dtype == ttnn.bfloat8_b:
+            return torch.bfloat16
+        if tt_dtype not in tt_dtype_to_torch_dtype:
+            raise ValueError(f"Trying to measure ULP on unknown dtype: {tt_dtype}")
+        return tt_dtype_to_torch_dtype[tt_dtype]
+
     if isinstance(expected_result, ttnn.Tensor):
-        expected_result = ttnn.to_torch(expected_result)
+        expected_result = ttnn.to_torch(expected_result, dtype=tt_dtype_to_torch_dtype_for_ulp(expected_result.dtype))
     if isinstance(actual_result, ttnn.Tensor):
-        actual_result = ttnn.to_torch(actual_result)
+        actual_result = ttnn.to_torch(actual_result, dtype=tt_dtype_to_torch_dtype_for_ulp(actual_result.dtype))
 
     assert list(expected_result.shape) == list(
         actual_result.shape
     ), f"list(expected_result.shape)={list(expected_result.shape)} vs list(actual_result.shape)={list(actual_result.shape)}"
 
-    ulp_passed, ulp_message = comp_ulp(expected_result, actual_result, ulp_threshold)
+    maximum_meaningful_ulp_thresholds = {
+        torch.float64: 2**52,
+        torch.float32: 2**23,
+        torch.float16: 2**10,
+        torch.bfloat16: 2**7,
+    }
+    maximum_meaningful_ulp_threshold = (
+        maximum_meaningful_ulp_thresholds[torch.float32]
+        if expected_result.dtype in maximum_meaningful_ulp_thresholds
+        else maximum_meaningful_ulp_thresholds[expected_result.dtype]
+    )
+
+    if ulp_threshold > maximum_meaningful_ulp_threshold:
+        logger.warning(
+            f"ULP threshold {ulp_threshold} is greater than the maximum meaningful ULP threshold of {maximum_meaningful_ulp_threshold} for dtype {expected_result.dtype}"
+        )
+
+    ulp_passed, ulp_message = comp_ulp(expected_result, actual_result, ulp_threshold, allow_nonfinite)
     assert ulp_passed, ulp_message
     return ulp_passed, ulp_message
 

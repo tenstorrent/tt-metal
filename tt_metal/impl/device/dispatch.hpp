@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <command_queue.hpp>
+#include "dispatch/command_queue.hpp"
 #include "device.hpp"
 #include "dispatch/topology.hpp"
 #include "hal_types.hpp"
@@ -19,7 +19,7 @@ struct ReadCoreDataDescriptor {
     uint32_t size_bytes = 0;
 };
 
-uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& dispatch_core_type);
+uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& dispatch_core_type, uint32_t num_subdevices);
 
 namespace device_dispatch {
 
@@ -29,7 +29,7 @@ struct CoreDispatchParams {
     uint32_t size_bytes = 0;
     IDevice* device = nullptr;
     uint32_t cq_id = 0;
-    CoreType dispatch_core_type;
+    CoreType dispatch_core_type{CoreType::COUNT};
     tt::stl::Span<const uint32_t> expected_num_workers_completed;
     tt::stl::Span<const SubDeviceId> sub_device_ids;
 };
@@ -55,7 +55,7 @@ void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_par
 
 void read_core_data_from_completion_queue(
     const ReadCoreDataDescriptor& read_descriptor,
-    chip_id_t mmio_device_id,
+    ChipId mmio_device_id,
     uint16_t channel,
     uint8_t cq_id,
     SystemMemoryManager& sysmem_manager,

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,21 +16,16 @@ void kernel_main() {
     const uint32_t start_output_page = get_arg_val<uint32_t>(1);
     const uint32_t end_output_page = get_arg_val<uint32_t>(2);
 
-    constexpr bool output_is_dram = get_compile_time_arg_val(0);
-    constexpr uint32_t Tile_size_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t Max_Map_Entries = get_compile_time_arg_val(2);
+    constexpr uint32_t Tile_size_bytes = get_compile_time_arg_val(0);
+    constexpr uint32_t Max_Map_Entries = get_compile_time_arg_val(1);
+    constexpr uint8_t element_sz_bytes = get_compile_time_arg_val(2);
 
-    constexpr uint8_t element_sz_bytes = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_id_mapping = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_id_input = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_id_working = get_compile_time_arg_val(5);  // scratch
+    constexpr auto output_args = TensorAccessorArgs<6>();
 
-    constexpr uint32_t cb_id_mapping = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_id_input = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_id_working = get_compile_time_arg_val(6);  // scratch
-
-    const DataFormat input_data_format = get_dataformat(cb_id_input);
-
-    //  TODO sharded
-    const InterleavedAddrGenFast<output_is_dram> output_addrgen = {
-        .bank_base_address = output_base_addr, .page_size = Tile_size_bytes, .data_format = input_data_format};
+    const auto output_addrgen = TensorAccessor(output_args, output_base_addr, Tile_size_bytes);
 
     // loop over output (reshaped) pages this core is responsible for
     bool first = true;

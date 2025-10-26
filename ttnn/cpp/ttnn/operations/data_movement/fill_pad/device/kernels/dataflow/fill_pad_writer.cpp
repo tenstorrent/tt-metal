@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -44,12 +44,8 @@ void kernel_main() {
         experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(rt_arg_ind));
     experimental::ShardedAddrGen<tensor_shard_info> s0 = {.bank_base_address = dst_addr, .shard_array = mapping_table};
 #else
-    const DataFormat data_format = get_dataformat(cb_id_0);
-    const InterleavedAddrGenFast<tensor_in_dram> s0 = {
-        .bank_base_address = dst_addr,
-        .page_size = tile_hw * element_size_bytes,
-        .data_format = data_format  // page_size needs to be tile_size_bytes
-    };
+    constexpr auto dst_args = TensorAccessorArgs<12>();
+    const auto s0 = TensorAccessor(dst_args, dst_addr, tile_hw * element_size_bytes);
 #endif
 
     // Reserve and push the fill value into the circular buffer

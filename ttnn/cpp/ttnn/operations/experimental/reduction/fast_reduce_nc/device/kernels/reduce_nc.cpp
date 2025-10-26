@@ -25,6 +25,10 @@ void MAIN {
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
     cb_wait_front(cb_in1, onetile);
 
+    // For each assigned output tile, process the input tiles in a doubly nested
+    // loop. The inner loop processes the number of tiles specified by
+    // input_granularity. The outer loop executes num_input_tiles / input_granularity
+    // times.
     for (uint32_t i = 0; i < num_output_tiles; i++) {
         add_tiles_init(cb_in0, cb_in1, true);
         reconfig_data_format(cb_in0, cb_in1);

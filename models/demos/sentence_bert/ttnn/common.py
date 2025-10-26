@@ -12,6 +12,8 @@ layernorm_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
     block_h=12,
     block_w=4,
     inplace=True,
+    legacy_reduction=True,
+    legacy_rsqrt=True,
 )
 
 ff1_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -108,22 +110,58 @@ def custom_preprocessor(torch_model, name):
 
 
 def preprocess_inputs(
-    input_ids,
-    token_type_ids,
-    position_ids,
-    attention_mask,
-    device,
+    input_ids=None,
+    token_type_ids=None,
+    position_ids=None,
+    extended_attention_mask=None,
+    attention_mask=None,
+    device=None,
 ):
-    input_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
-    token_type_ids = ttnn.from_torch(
-        token_type_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
-    position_ids = ttnn.from_torch(position_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
-    attention_mask = ttnn.from_torch(
-        attention_mask,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    return input_ids, token_type_ids, position_ids, attention_mask
+    if input_ids is not None:
+        input_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    if token_type_ids is not None:
+        token_type_ids = ttnn.from_torch(
+            token_type_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+    if position_ids is not None:
+        position_ids = ttnn.from_torch(
+            position_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+
+    if extended_attention_mask is not None:
+        extended_attention_mask = ttnn.from_torch(
+            extended_attention_mask,
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+    if attention_mask is not None:
+        attention_mask = ttnn.from_torch(
+            attention_mask,
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+    return input_ids, token_type_ids, position_ids, extended_attention_mask, attention_mask
+
+
+def ttnn_mean_pooling(ttnn_token_embeddings, ttnn_attention_mask, device=None):
+    ttnn_token_embeddings = ttnn.sharded_to_interleaved(ttnn_token_embeddings, ttnn.L1_MEMORY_CONFIG)
+    if ttnn_attention_mask.is_sharded():
+        ttnn_attention_mask_interleaved = ttnn.sharded_to_interleaved(ttnn_attention_mask, ttnn.L1_MEMORY_CONFIG)
+        ttnn_attention_mask_interleaved = ttnn.to_layout(ttnn_attention_mask_interleaved, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(ttnn_attention_mask)
+    else:
+        ttnn_attention_mask_interleaved = ttnn_attention_mask
+    ttnn_token_embeddings = ttnn.squeeze(ttnn_token_embeddings, dim=1)
+    tt_input_mask_expanded = ttnn.unsqueeze(ttnn_attention_mask_interleaved, dim=-1)
+    tt_input_mask_expanded = ttnn.repeat(tt_input_mask_expanded, [1, 1, ttnn_token_embeddings.shape[-1]])
+    sum1 = ttnn.multiply(ttnn_token_embeddings, tt_input_mask_expanded)
+    sum1 = ttnn.sum(sum1, 1)
+    sum2 = ttnn.sum(tt_input_mask_expanded, 1)
+    sum2 = ttnn.clamp(sum2, min=1e-9)
+    result = ttnn.div(sum1, sum2)
+    return result

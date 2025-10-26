@@ -1,8 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "conv3d_device_operation.hpp"
+#include <array>
+#include <cstdint>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
@@ -21,10 +23,11 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
     uint32_t H_in,
     uint32_t W_in,
     const std::array<uint32_t, 3>& padding,
+    const std::array<uint32_t, 3>& stride,
     const std::array<uint32_t, 3>& kernel_size) {
-    uint32_t T_out = T_in + 2 * padding[0] - (kernel_size[0] - 1);
-    uint32_t H_out = H_in + 2 * padding[1] - (kernel_size[1] - 1);
-    uint32_t W_out = W_in + 2 * padding[2] - (kernel_size[2] - 1);
+    uint32_t T_out = ((T_in + 2 * padding[0] - kernel_size[0]) / stride[0]) + 1;
+    uint32_t H_out = ((H_in + 2 * padding[1] - kernel_size[1]) / stride[1]) + 1;
+    uint32_t W_out = ((W_in + 2 * padding[2] - kernel_size[2]) / stride[2]) + 1;
     return {T_out, H_out, W_out};
 }
 }  // namespace detail
@@ -66,13 +69,6 @@ void Conv3dOp::validate(
             bias_tensor.logical_shape().size());
     }
 
-    // Add assertions for strides and groups
-    TT_FATAL(
-        config.stride[0] == 1 && config.stride[1] == 1 && config.stride[2] == 1,
-        "Strides must be (1,1,1). got ({}, {}, {})",
-        config.stride[0],
-        config.stride[1],
-        config.stride[2]);
     TT_FATAL(config.groups == 1, "Groups must be 1. got {}", config.groups);
     // assert padding on T is zero
     TT_FATAL(
@@ -167,10 +163,10 @@ std::vector<TensorSpec> Conv3dOp::compute_output_specs(const std::vector<Tensor>
     uint32_t T_in = input_tensor_a_shape[1];
     uint32_t H_in = input_tensor_a_shape[2];
     uint32_t W_in = input_tensor_a_shape[3];
-    uint32_t C_in = input_tensor_a_shape[4];
     uint32_t C_out = config.output_channels;
 
-    auto [T_out, H_out, W_out] = detail::compute_output_dims(T_in, H_in, W_in, config.padding, config.kernel_size);
+    auto [T_out, H_out, W_out] =
+        detail::compute_output_dims(T_in, H_in, W_in, config.padding, config.stride, config.kernel_size);
 
     ttnn::Shape output_shape({N, T_out, H_out, W_out, C_out});
 

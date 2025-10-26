@@ -1,12 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -49,24 +47,23 @@ void kernel_main() {
     size_t rt_arg_idx = 0;
 
     // Define all compile-time arguments at the beginning
-    constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t fabric_sender_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t fabric_receiver_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t accumulator_cb_id = get_compile_time_arg_val(4);
-    constexpr uint32_t output_tensor_cb_id = get_compile_time_arg_val(5);
-    constexpr uint32_t chip_id = get_compile_time_arg_val(6);
-    constexpr uint32_t tiles_per_core_width = get_compile_time_arg_val(7);
-    constexpr uint32_t tiles_per_core_width_output = get_compile_time_arg_val(8);
-    constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(9);
-    constexpr uint32_t input_shard_cores_per_device = get_compile_time_arg_val(10);
-    constexpr uint32_t num_devices = get_compile_time_arg_val(11);
-    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(12);
-    constexpr uint32_t output_cores_per_device = get_compile_time_arg_val(13);
-    constexpr uint32_t packet_receiver_core_x = get_compile_time_arg_val(14);
-    constexpr uint32_t packet_receiver_core_y = get_compile_time_arg_val(15);
-    constexpr uint32_t num_packet_worker_cores = get_compile_time_arg_val(16);
-    constexpr bool ring_topology = (bool)get_compile_time_arg_val(17);
+    constexpr uint32_t fabric_sender_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t fabric_receiver_cb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t accumulator_cb_id = get_compile_time_arg_val(3);
+    constexpr uint32_t output_tensor_cb_id = get_compile_time_arg_val(4);
+    constexpr uint32_t chip_id = get_compile_time_arg_val(5);
+    constexpr uint32_t tiles_per_core_width = get_compile_time_arg_val(6);
+    constexpr uint32_t tiles_per_core_width_output = get_compile_time_arg_val(7);
+    constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(8);
+    constexpr uint32_t input_shard_cores_per_device = get_compile_time_arg_val(9);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(10);
+    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(11);
+    constexpr uint32_t output_cores_per_device = get_compile_time_arg_val(12);
+    constexpr uint32_t packet_receiver_core_x = get_compile_time_arg_val(13);
+    constexpr uint32_t packet_receiver_core_y = get_compile_time_arg_val(14);
+    constexpr uint32_t num_packet_worker_cores = get_compile_time_arg_val(15);
+    constexpr bool ring_topology = (bool)get_compile_time_arg_val(16);
     // Derived compile-time constants
     constexpr uint32_t input_tensor_cores = input_shard_cores_per_device * num_devices;
     constexpr uint32_t num_packets_total_per_device =
@@ -105,10 +102,8 @@ void kernel_main() {
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr + packet_header_size);
         const uint64_t sem_noc_addr =
             safe_get_noc_addr(packet_receiver_core_x, packet_receiver_core_y, receiver_semaphore_address, 0);
-        sem_inc_packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            sem_noc_addr,
-            static_cast<uint16_t>(1),  // increment 1
-            32});
+        sem_inc_packet_header->to_noc_unicast_atomic_inc(
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sem_noc_addr, static_cast<uint32_t>(1)});  // increment 1
 
         const uint32_t base_receiver_l1_addr = get_read_ptr(fabric_receiver_cb_id);
 
@@ -121,7 +116,7 @@ void kernel_main() {
         for (uint32_t target_device_id : device_order) {
             // Calculate device-specific constants once per device
             const uint32_t num_hops = distance<ring_topology>(chip_id, target_device_id, num_devices);
-            unicast_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
+            fabric_set_unicast_route<false>(unicast_packet_header, num_hops);
             auto& fabric_conn =
                 get_fabric_connection<ring_topology>(fabric_connection, chip_id, target_device_id, num_devices);
 
@@ -144,8 +139,7 @@ void kernel_main() {
                 const uint64_t sem_noc_addr =
                     safe_get_noc_addr(receiver_core_x, receiver_core_y, receiver_semaphore_address, 0);
                 unicast_packet_header->to_noc_fused_unicast_write_atomic_inc(
-                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
-                        noc0_dest_noc_addr, sem_noc_addr, 1, 32, flush),
+                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(noc0_dest_noc_addr, sem_noc_addr, 1, flush),
                     curr_packet_size_bytes);
 
                 fabric_conn.wait_for_empty_write_slot();

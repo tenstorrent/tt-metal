@@ -4,7 +4,6 @@
 
 #include "view.hpp"
 
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include <tt-metalium/constants.hpp>
 #include <ttnn/operations/functions.hpp>
@@ -29,16 +28,8 @@ static MemoryConfig infer_output_memory_config(
 
 Tensor tensor_reshape(
     const Tensor& input_tensor, const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape) {
-    ZoneScoped;
     tt::tt_metal::GraphTracker::instance().track_function_start(
         "Tensor::reshape", input_tensor, new_logical_shape, new_padded_shape);
-
-    // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
-    if (is_multi_device_host_tensor(input_tensor)) {
-        return transform(input_tensor, [&](const Tensor& tensor_shard) {
-            return tensor_reshape(tensor_shard, new_logical_shape, new_padded_shape);
-        });
-    }
 
     const auto output_memory_config = infer_output_memory_config(input_tensor.memory_config(), new_padded_shape);
     auto new_spec = ttnn::TensorSpec(
@@ -50,6 +41,7 @@ Tensor tensor_reshape(
             new_logical_shape,
             new_padded_shape));
 
+    // TODO (#25340): Review tensor topology logic for reshape
     auto output = std::visit(
         [&input_tensor, &new_spec, &new_logical_shape, &new_padded_shape](auto&& storage) -> Tensor {
             using T = std::decay_t<decltype(storage)>;
@@ -63,7 +55,7 @@ Tensor tensor_reshape(
                         const auto& tensor_spec = tensor.tensor_spec();
                         auto page_size_bytes = tensor_spec.compute_page_size_bytes();
                         device_buffer->set_page_size(page_size_bytes);
-                        return Tensor(std::move(device_storage), new_spec, tensor.distributed_tensor_config());
+                        return Tensor(std::move(device_storage), new_spec, tensor.tensor_topology());
                     } else {
                         auto device_buffer = device_storage.get_buffer();
                         tt::tt_metal::ShardSpecBuffer shard_spec_buffer = device_buffer->shard_spec();
@@ -104,15 +96,15 @@ Tensor tensor_reshape(
                         auto page_size_bytes = upd_spec.compute_page_size_bytes();
                         device_buffer->set_page_size(page_size_bytes);
 
-                        return Tensor(std::move(device_storage), upd_spec, tensor.distributed_tensor_config());
+                        return Tensor(std::move(device_storage), upd_spec, tensor.tensor_topology());
                     }
                 } else {
-                    return Tensor(std::move(device_storage), new_spec, tensor.distributed_tensor_config());
+                    return Tensor(std::move(device_storage), new_spec, tensor.tensor_topology());
                 }
             } else if constexpr (std::is_same_v<T, tt::tt_metal::HostStorage>) {
-                return Tensor(tensor.storage(), new_spec, tensor.distributed_tensor_config());
+                return Tensor(tensor.storage(), new_spec, tensor.tensor_topology());
             } else {
-                TT_THROW("Unsupported storage type");
+                static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported storage type");
             }
         },
         input_tensor.storage());

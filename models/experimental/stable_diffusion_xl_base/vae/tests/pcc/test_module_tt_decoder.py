@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
@@ -10,23 +10,26 @@ from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelO
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 from loguru import logger
 
 
 @torch.no_grad()
 @pytest.mark.parametrize(
-    "input_shape, host_fallback, pcc",
+    "input_shape, pcc",
     [
-        ((1, 4, 128, 128), True, 0.92),
-        ((1, 4, 128, 128), False, 0.84),
+        ((1, 4, 128, 128), 0.94),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_vae_decoder(device, input_shape, host_fallback, pcc, reset_seeds):
+def test_vae_decoder(device, input_shape, pcc, debug_mode, is_ci_env, reset_seeds):
     vae = AutoencoderKL.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="vae"
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+        subfolder="vae",
+        local_files_only=is_ci_env,
     )
     vae.eval()
     state_dict = vae.state_dict()
@@ -35,7 +38,7 @@ def test_vae_decoder(device, input_shape, host_fallback, pcc, reset_seeds):
 
     logger.info("Loading weights to device")
     model_config = ModelOptimisations()
-    tt_vae = TtDecoder(device, state_dict, model_config=model_config, gn_fallback=host_fallback)
+    tt_vae = TtDecoder(device, state_dict, model_config=model_config, debug_mode=debug_mode)
     logger.info("Loaded weights")
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
 
@@ -56,10 +59,15 @@ def test_vae_decoder(device, input_shape, host_fallback, pcc, reset_seeds):
     ttnn_input_tensor = ttnn.reshape(ttnn_input_tensor, (B, 1, H * W, C))
 
     logger.info("Running TT model")
-    output_tensor = tt_vae.forward(ttnn_input_tensor, [B, C, H, W])
+    output_tensor, [C, H, W] = tt_vae.forward(ttnn_input_tensor, [B, C, H, W])
     logger.info("TT model done")
+
+    output_tensor = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0)).float()
+    output_tensor = output_tensor.reshape(B, H, W, C)
+    output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
 
     del vae
     gc.collect()
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    logger.info(f"PCC is: {pcc_message}")

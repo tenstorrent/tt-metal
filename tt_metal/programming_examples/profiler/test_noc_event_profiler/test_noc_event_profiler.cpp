@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
+#include <tt-metalium/distributed.hpp>
 
 using namespace tt::tt_metal;
 
@@ -25,8 +27,10 @@ int main() {
 
     try {
         constexpr int device_id = 0;
-        IDevice* device = CreateDevice(device_id);
-        CommandQueue& cq = device->command_queue();
+        std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+        distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+        distributed::MeshWorkload workload;
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
         Program program = CreateProgram();
 
         constexpr CoreCoord core = {0, 0};
@@ -43,24 +47,17 @@ int main() {
         constexpr uint32_t num_tiles = 5;
         constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
-        tt::tt_metal::InterleavedBufferConfig dram_config{
-            .device = device,
-            .size = dram_buffer_size,
-            .page_size = dram_buffer_size,
-            .buffer_type = tt::tt_metal::BufferType::DRAM};
-        tt::tt_metal::InterleavedBufferConfig l1_config{
-            .device = device,
-            .size = dram_buffer_size,
-            .page_size = dram_buffer_size,
-            .buffer_type = tt::tt_metal::BufferType::L1};
+        distributed::DeviceLocalBufferConfig dram_config{
+            .page_size = dram_buffer_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
+        distributed::DeviceLocalBufferConfig l1_config{
+            .page_size = dram_buffer_size, .buffer_type = tt::tt_metal::BufferType::L1};
+        distributed::ReplicatedBufferConfig buffer_config{.size = dram_buffer_size};
 
-        auto l1_buffer = CreateBuffer(l1_config);
+        auto l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
 
-        auto input_dram_buffer = CreateBuffer(dram_config);
-        const uint32_t input_dram_buffer_addr = input_dram_buffer->address();
+        auto input_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
 
-        auto output_dram_buffer = CreateBuffer(dram_config);
-        const uint32_t output_dram_buffer_addr = output_dram_buffer->address();
+        auto output_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
 
         // Since all interleaved buffers have size == page_size, they are entirely contained in the first DRAM bank
         const uint32_t input_bank_id = 0;
@@ -75,15 +72,16 @@ int main() {
             l1_buffer->size()};
         SetRuntimeArgs(program, dram_copy_kernel_id, core, runtime_args);
 
-        EnqueueProgram(cq, program, false);
-        Finish(cq);
+        workload.add_program(device_range, std::move(program));
+        distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
 
-        // It is necessary to explictly dump profile results at the end of the
+        // It is necessary to explictly read profile results at the end of the
         // program to get noc traces for standalone tt_metal programs.  For
         // ttnn, this is called _automatically_
-        detail::DumpDeviceProfileResults(device);
+        ReadMeshDeviceProfilerResults(*mesh_device);
 
-        pass &= CloseDevice(device);
+        pass &= mesh_device->close();
 
     } catch (const std::exception& e) {
         fmt::print(stderr, "Test failed with exception!\n");

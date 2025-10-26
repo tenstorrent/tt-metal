@@ -15,18 +15,16 @@ void kernel_main() {
     uint32_t num_shards = get_arg_val<uint32_t>(4);
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr bool src0_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr bool src_stick_size_is_pow2 = get_compile_time_arg_val(2) == 1;
-    constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(3);
+    constexpr uint32_t page_size = get_compile_time_arg_val(1);
 
     typedef ShardedInfo<
+        get_compile_time_arg_val(2),
+        get_compile_time_arg_val(3),
         get_compile_time_arg_val(4),
         get_compile_time_arg_val(5),
         get_compile_time_arg_val(6),
         get_compile_time_arg_val(7),
-        get_compile_time_arg_val(8),
-        get_compile_time_arg_val(9),
-        get_compile_time_arg_val(10)>
+        get_compile_time_arg_val(8)>
         tensor_shard_info;
 
     const auto [mapping_table, rt_increment] =

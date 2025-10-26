@@ -6,7 +6,6 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include "ttnn/operations/embedding/device/embedding_program_factory.hpp"
 
 using namespace tt::constants;
@@ -27,7 +26,7 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharded inputs");
     TT_FATAL(weights.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharded weights");
 
-    TT_FATAL(weights.padded_shape()[0] == 1 && weights.padded_shape()[1] == 1, "First two dimensions for the weights must be 1");
+    TT_FATAL(weights.padded_shape()[0] == 1 && weights.padded_shape()[1] == 1, "First two dimensions for the weights must be 1 but got {} and {}", weights.padded_shape()[0], weights.padded_shape()[1]);
     if (this->tilized) {
         TT_FATAL(a.padded_shape()[-1] % TILE_HEIGHT == 0, "Input tensor width {} must be a multiple of tile height {} to have the output tensor tilized", a.padded_shape()[-1], TILE_HEIGHT);
         TT_FATAL(weights.padded_shape()[-1] % TILE_WIDTH == 0, "Number of columns in table {} must be factor of tile width {}", weights.padded_shape()[-1], TILE_WIDTH);
@@ -43,7 +42,6 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
         if (is_sharded(this->output_mem_config.memory_layout())) {
             TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED, "Embedding only supports height sharded Row Major outputs");
         }
-        TT_FATAL(!is_block_float(this->output_dtype), "Output cannot be a block float dtype when not tilized");
     }
     if(a.layout() == Layout::ROW_MAJOR) {
         TT_FATAL(a.padded_shape()[1] == 1 && a.padded_shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
@@ -64,7 +62,7 @@ std::vector<TensorSpec> Embeddings::compute_output_specs(const std::vector<Tenso
 
     ttnn::Shape output_shape({batch_num, 1, num_output_embeddings, num_embedding_dims});
     auto output_layout = (tilized && input_tensors.at(0).layout() != Layout::TILE)? Layout::TILE : Layout::ROW_MAJOR;
-    return {TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(output_layout), output_mem_config))};
+    return {TensorSpec(output_shape, TensorLayout(weight_tensor.dtype(), PageConfig(output_layout), output_mem_config))};
 }
 
 operation::ProgramWithCallbacks Embeddings::create_program(

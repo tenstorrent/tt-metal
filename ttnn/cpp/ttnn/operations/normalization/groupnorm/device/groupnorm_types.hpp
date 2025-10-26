@@ -7,26 +7,24 @@
 #include <variant>
 
 #include <tt-metalium/core_coord.hpp>
+#include "ttnn/operations/functions.hpp"
 
-using namespace tt::tt_metal;
 namespace ttnn::operations::normalization {
 
 struct GroupNormMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;
-    MathFidelity math_fidelity;
-    DataType im_data_format;
-    DataType out_data_format;
-    bool inplace;
-    Layout output_layout;
-    int num_out_blocks;
+    DataType im_data_format{DataType::INVALID};
+    DataType out_data_format{DataType::INVALID};
+    bool inplace{};
+    Layout output_layout{Layout::INVALID};
+    int num_out_blocks{};
 };
 struct GroupNormShardedMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;
-    MathFidelity math_fidelity;
-    DataType im_data_format;
-    DataType out_data_format;
-    bool inplace;
-    Layout output_layout;
+    DataType im_data_format{DataType::INVALID};
+    DataType out_data_format{DataType::INVALID};
+    bool inplace{};
+    Layout output_layout{Layout::INVALID};
 };
 
 using GroupNormProgramConfig = std::variant<GroupNormMultiCoreProgramConfig, GroupNormShardedMultiCoreProgramConfig>;

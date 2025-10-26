@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,7 @@ class OpenPDNMnistConv2D:
         bn=None,
         device=None,
         cache={},
-        activation="relu",
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         activation_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
         use_1d_systolic_array=True,
@@ -41,8 +41,8 @@ class OpenPDNMnistConv2D:
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
         )
+        self.conf_output_dtype = activation_dtype
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=activation_dtype,
             weights_dtype=weights_dtype,
             activation=activation,
             shard_layout=shard_layout,
@@ -83,10 +83,12 @@ class OpenPDNMnistConv2D:
             stride=self.stride,
             padding=self.padding,
             conv_config=self.conv_config,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
             groups=self.groups,
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conf_output_dtype,
         )
         return tt_tensor
 
@@ -115,7 +117,7 @@ class TtOpenPDNMnist:
             batch_size=self.parameters.pool3.batch_size,
             input_h=self.parameters.pool3.input_height,
             input_w=self.parameters.pool3.input_width,
-            channels=self.parameters.conv2.out_channels,
+            channels=self.parameters.conv1.out_channels,
             kernel_size=[self.parameters.pool3.kernel_size, self.parameters.pool3.kernel_size],
             stride=[self.parameters.pool3.stride, self.parameters.pool3.stride],
             padding=[self.parameters.pool3.padding, self.parameters.pool3.padding],

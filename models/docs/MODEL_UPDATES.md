@@ -1,0 +1,225 @@
+# Model Updates
+
+> [!NOTE]
+>
+> Please refer to the front-page [README](../../README.md) for the latest verified release for each model.
+
+## October 15, 2025
+
+### [DeepSeek R1 Distill Qwen 14B](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Added support for DeepSeek R1 Distill Qwen 14B to [TT-Transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers).
+
+## September 29, 2025
+
+### [Gemma 3](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Added support for multi-image prompts.
+- Added support for sliding window attention in local attention layers.
+
+### [Llama 3.1-70B - Galaxy](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llama3_70b_galaxy)
+- Added support for batched prefill processing, significantly improving throughput when handling multiple user requests with similar sequence lengths.
+
+### [Mixtral8x7B](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Added support for Mixtral8x7B on Wormhole Quietbox to [TT-Transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers).
+
+### [Phi-4](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Added support for Phi-4 on Wormhole N300 to [TT-Transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers).
+
+### [Qwen 2.5-VL](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/qwen25_vl)
+- Added support for windowed SDPA in the vision attention module.
+
+### [Whisper](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/whisper)
+- Added support for batch data parallel on any number of devices.
+
+## September 8, 2025
+
+### [Gemma 3](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Added support for Gemma 3-4B on N150/N300 and Gemma 3-27B on Wormhole QuietBox to [TT-Transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers).
+
+### [Phi-3-Mini-128k](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Added support for Phi-3-Mini-128k-Instruct on N150/N300 to [TT-Transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers).
+
+## August 18, 2025
+
+### [Qwen 2.5-VL](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/qwen25_vl)
+- Integrated Qwen2.5-VL into the [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal).
+
+### [TT-Transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Ported all CCLs ops to use [TT-Fabric](https://github.com/tenstorrent/tt-metal/tree/main/tech_reports/TT-Fabric/TT-Fabric-Architecture.md).
+
+## August 6, 2025
+
+### [Qwen 2.5-VL](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/qwen25_vl)
+- Added support for the Qwen2.5-VL family of models on Wormhole devices.
+
+## July 21, 2025
+
+### [Llama 3.1-70B - Galaxy](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llama3_70b_galaxy)
+- Achieved 65 t/s/u (and still working on further improvements) on Wormhole Galaxy for decode mode with our [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal), with batch size 32 and 128 input sequence length.
+
+### [Qwen 2.5-32B](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Added Qwen 2.5-32B and Qwen 2.5-Coder-32B to the list of supported models in [models/tt_transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers).
+
+### [Llama 3.1-70B](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Added support for Llama 3.1 70B on Blackhole QuietBox.
+
+## June 9, 2025
+
+### [Qwen 3](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Added support for dense Qwen3 models (0.6B, 1.7B, 4B, 8B, 14B, 32B) on Wormhole devices.
+
+### [Llama 3.1-70B - Galaxy](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llama3_70b_galaxy)
+- Integrated Llama 3.1-70B on Galaxy into the [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal).
+- Added initial support for sampling tokens on device with batch size 32.
+
+## May 26, 2025
+
+### [Llama 3.1-8B](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Added support for Llama 3.1 8B on Blackhole P100, P150, 2xP150.
+
+### [Mistral 7B](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Added support for Mistral 7B in [models/tt_transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers).
+- Integrated Mistral 7B into the [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal).
+
+## May 5, 2025
+
+### [Llama 3.2-90B-Vision](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Added support for Llama 3.2 90B Vision on QuietBox in [models/tt_transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers).
+
+## April 22, 2025
+
+### [TT-Transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Added support for non-uniform data format configurations in different decoder layers via json files.
+
+## April 7, 2025
+
+### [Llama 3.1-70B - Galaxy](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llama3_70b_galaxy)
+- Achieved 45 t/s/u (and still working on further improvements) on Wormhole Galaxy for decode mode, with batch size 32 and 128 input sequence length. The included optimizations were: 1) using DRAM prefetching to remove memory bottlenecks for matmuls, 2) using [Sub-Devices](https://github.com/tenstorrent/tt-metal/tree/main/tech_reports/SubDevices/SubDevices.md) to run multiple ops in parallel, 3) using CCLs enabled by [TT-Fabric](https://github.com/tenstorrent/tt-metal/tree/main/tech_reports/TT-Fabric/TT-Fabric-Architecture.md).
+- Created a functional prefill + decode demo which can be run via [text_demo.py](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llama3_70b_galaxy/demo/text_demo.py).
+
+## March 24, 2025
+
+### [TT-Transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Moved and renamed `models/demos/llama3` to [models/tt_transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers) which is a commonized library for running LLMs similar to the Llama3 family.
+- Added support for hybrid data / tensor parallelism to the models that are part of [TT-Transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers).
+
+### [Whisper](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/whisper)
+- Added support for the Whisper (distil-large-v3) model on N150.
+
+## March 10, 2025
+
+### [QwQ-32B](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Added support for QwQ-32B on QuietBox.
+
+## February 24, 2025
+
+### [DeepSeek R1 Distill Llama 3.3 70B](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Added support for DeepSeek R1 Distill Llama 3.3 70B on QuietBox.
+
+### [Qwen 2.5](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Added support for Qwen2.5-7B on N300 and Qwen2.5-72B on QuietBox.
+
+### [Llama 3.1/3.2](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+> **Note:** This feature is available as of release [v0.56.0-rc37](https://github.com/tenstorrent/tt-metal/tree/v0.56.0-rc37)
+- Overhauled the demo script (now called [simple_text_demo.py](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers/demo/simple_text_demo.py)) to use a simplified causal generation interface.
+- Added support for custom input argument overrides to the demo.
+
+## February 10, 2025
+
+### [Llama 3.1/3.2](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+> **Note:** This feature is available as of release [v0.56.0-rc16](https://github.com/tenstorrent/tt-metal/tree/v0.56.0-rc16)
+- Added support for loading HuggingFace model formats (previously loaded Meta checkpoint formats), which will also enable easier adoption of future derivative models.
+
+### [Llama 3.2-11B-Vision](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Added support for processing text-only prompts to the model and the [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal).
+
+## January 13, 2025
+
+- Integrated Llama3 models (1B/3B/8B/11B/70B) into [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal) for all compatible Tenstorrent devices (N150/N300/QuietBox/Galaxy).
+- Enabled prefill with the maximum context length (131072) when running the Llama3 text models on smaller devices (N150/N300) via chunked prefill.
+
+## December 16, 2024
+
+### [Llama 3.1/3.2](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Added support for batch size 32 and the maximum context length (131072 tokens).
+- Added full hardware compatibilty for the 1B/3B/8B/11B/70B models (all models are now compatible with N150, N300, QuietBox, Galaxy except for 70B which is only supported on QuietBox and Galaxy due to its large size).
+
+## December 2, 2024
+
+### [Llama 3.1/3.2](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Improved the decode performance of the 1B/3B/8B/11B text models (for 8B, increased from ~23 t/s/u to ~28 t/s/u) by using BFP4 weights (instead of BFP8) for FF1 and FF3 in the MLP.
+- Added the option to specify custom model configurations, with two defaults for performance and accuracy already provided.
+
+## November 18, 2024
+
+### [Llama 3.2 - 1B/3B/11B](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Created a new shared codebase for the Llama3 family of models, with newly added support for Llama3.2-1B/3B/11B.
+
+### [Llama 3/3.1 - 70B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/llama3_70b)
+- Added support for the `ttnn.experimental.rotary_embedding_llama` op in decode mode, eliminating unnecessary device transfers of rotation matrices.
+
+## October 21, 2024
+
+### [Llama 3/3.1 - 70B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/llama3_70b)
+- Enabled prefill workloads to pad to multiples of 1024 instead of powers of 2, improving overall performance for longer sequences
+
+## October 7, 2024
+
+### [Llama 3.1 - 8B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/llama31_8b)
+- Added support for continuous batching
+- Added paged caching support for PagedAttention
+- Added a demo which runs with TT-NN tracing (23 t/s/u decode on main)
+
+## September 23, 2024
+
+### [Llama 3/3.1 - 70B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/llama3_70b)
+- Added support for 128K context length using PagedAttention
+- Added a continuous batching demo for running multiple batches of users consecutively
+- Added the option to enable TT-NN tracing
+
+## September 9, 2024
+
+### [Mixtral8x7B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/mixtral8x7b)
+> **Note:** This feature is available as of release [v0.52.0-rc1](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc1)
+- Added support for any user prompt size up to a maximum of 32k tokens
+
+## August 26, 2024
+
+### [Falcon7B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/falcon7b_common)
+- Added data parallel demo for a single Galaxy (32 chips)
+- Refactored all modules and tests to use ttnn multi-device tensors
+
+### [Llama 3.1 - 8B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/llama31_8b)
+> **Note:** This feature is available as of release [v0.51.0-rc33](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc33)
+- Added multi-batching support to the demo for running multiple batches of users consecutively
+
+### [Mixtral8x7B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/mixtral8x7b)
+- Improved end-to-end performance through optimizations to the attention mask in flash decoding
+
+## August 12, 2024
+
+### [Llama 3.1 - 8B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/llama31_8b)
+- Added support for flash decoding
+
+### [Mistral7B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/mistral7b)
+- Updated the demo to support multiple batches of users
+
+### [Mamba-2.8B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/mamba)
+- Updated the demo to use the full prefill graph instead of processing a single token of the prompt at a time using decode
+
+### [Mixtral8x7B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/mixtral8x7b)
+- Added support for decode with 32K context length using flash decoding
+- Fused mixture of experts into a single operation using `ttnn.moe`
+
+## July 29, 2024
+
+### [Llama 3.1 - 8B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/llama31_8b)
+- Added support for LLaMA 3.1 - 8B
+- Runs fast prefill for sequence lengths of up to 512 tokens
+- Supports a maximum context length of 8K tokens
+
+### [Llama 3/3.1 - 70B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/llama3_70b)
+- Added support for LLaMA 3.1 70B (new scaled rotary position embeddings)
+- Prefill and decode now support 8K context length with batch size 16
+
+### [Mistral7B](demos/wormhole/mistral7b)
+- Added prefill support for 4K context length, using scaled dot product attention

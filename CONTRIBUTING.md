@@ -89,6 +89,22 @@ For example,
 TT_LOGGER_LEVEL=Debug ./build/test/tt_metal/test_add_two_ints
 ```
 
+### Adding new TTNN examples
+
+TTNN tutorials in this documentation are written as Jupyter notebooks (`.ipynb`) and located in the `ttnn/tutorials/2025_dx_rework` directory. For each notebook, a corresponding Python script is automatically generated and maintained in the `ttnn/tutorials/basic_python` directory. To ensure consistency between notebooks and their exported Python versions, a Git pre-commit hook is provided.
+
+This hook performs the following actions:
+
+- Detects all staged Jupyter notebook files under the notebooks/ directory.
+- Converts each notebook to a Python script using jupyter nbconvert with a custom template.
+- Writes the output to the python/ directory only if there are changes.
+- Automatically stages new or updated Python scripts for commit.
+- Exits with a non-zero status code if any files were modified, alerting Git to re-check the commit.
+
+This process ensures that all TTNN examples remain synchronized and up-to-date in both formats. **Important:** Always make changes directly to the `.ipynb` notebook files—not the generated Python scripts. Any manual changes made to the Python files will be overwritten the next time the notebook is updated. Python files are considered read-only exports for users or CI pipelines that prefer `.py` formats.
+
+Both the Jupyter notebooks and the exported Python files are tested as part of the CI workflows to ensure correctness and stability.
+
 ### Building and viewing the documentation locally
 
 1. First, ensure that you have [built the project and activated the Python
@@ -126,6 +142,10 @@ is the IP address of the machine on which you launched the web server. For
 example: `http://10.250.37.37:4242`, for port ``4242``.
 
 If you forwarded your port, navigate to `http://localhost:8888`.
+
+`http://<ip address>:<port>` will redirect you to the tt-metalium docs at `http://<ip address>:<port>/tt-metalium/`.
+
+To view the ttnn docs, navigate to `http://<ip address>:<port>/ttnn`.
 
 4. If you make changes, you may need to check spelling errors.
 
@@ -233,7 +253,7 @@ structure our tests with this framework is to bundle it into a single
 executable.
 
 You can use `--gtest_filter` to filter out the specific test you'd like.
-For example, to build and run the `DispatchFixture.TensixDRAMLoopbackSingleCore` on
+For example, to build and run the `MeshDispatchFixture.TensixDRAMLoopbackSingleCore` on
 fast dispatch, you can
 
 1. Build the tests:
@@ -243,7 +263,7 @@ fast dispatch, you can
    ```
 2. Run the test:
    ```
-   ./build/test/tt_metal/unit_tests_api --gtest_filter="DispatchFixture.TensixDRAMLoopbackSingleCore"
+   ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDispatchFixture.TensixDRAMLoopbackSingleCore"
    ```
 
 On slow dispatch, to run another specific test, the equivalent would be:
@@ -252,7 +272,7 @@ On slow dispatch, to run another specific test, the equivalent would be:
 2. Run with the slow dispatch mode:
    ```
    export TT_METAL_SLOW_DISPATCH_MODE=1
-   ./build/test/tt_metal/unit_tests/unit_tests_api --gtest_filter="DeviceSingleCardBufferFixture.TestL1BuffersAllocatedTopDown"
+   ./build/test/tt_metal/unit_tests/unit_tests_api --gtest_filter="MeshDeviceSingleCardBufferFixture.TestL1BuffersAllocatedTopDown"
    ```
 
 We have split our tests into the two dispatch modes for less pollution of state
@@ -530,7 +550,7 @@ To set up pre-commit on your local machine, follow these steps:
   and without CI failure.
 
 ### Skipping CI/CD for documentation updates
-- CI/CD can be skipped for *documentation only* updates that incur no functional change.
+- CI/CD can be skipped for *documentation only* updates that incur no functional change. However, note that modifying `.rst` files in `docs/` is *not a documentation only* update, as the CI step for building documentation needs to run.
 - Upon submitting a PR and getting the necessary approvals:
   - Click Squash and Merge
   - Before confirming, edit the top level commit message by prepending the token `[skip ci]`
@@ -795,8 +815,8 @@ After that, the UI will usually delete your branch.
 
 ### A recommended development flow for model writers
 
-Please refer to documentation for [adding a model](./models/MODEL_ADD.md) and
-for [graduating](./models/MODEL_GRADUATION.md) it.
+Please refer to documentation for [adding a model](./models/docs/MODEL_ADD.md) and
+for [graduating](./models/docs/MODEL_GRADUATION.md) it.
 
 ### New feature and design specifications
 

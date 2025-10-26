@@ -7,10 +7,10 @@
 #include <limits>
 #include <numeric>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_assignment.hpp"
-#include <umd/device/types/arch.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -176,23 +176,24 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
             if (std::find(worker_phy_y.begin(), worker_phy_y.end(), y_coord) == worker_phy_y.end()) {
                 non_worker_rows.push_back(y_coord);
             }
-            if (y_coord > max_worker_y_physical) {
-                max_worker_y_physical = y_coord;
-            }
-            if (y_coord < min_worker_y_physical) {
-                min_worker_y_physical = y_coord;
-            }
+            max_worker_y_physical = std::max<uint32_t>(y_coord, max_worker_y_physical);
+            min_worker_y_physical = std::min<uint32_t>(y_coord, min_worker_y_physical);
         }
     }
     std::vector<CoreCoord> dram_interface_workers;
     uint32_t num_dram_banks = dram_phy_coords.size();
     // Get the optimal dram -> worker configuration here.
-    // For WH, worker cores are placed to the right of the DRAM Controller.
+    // For WH and BH, worker cores are placed to the right of the DRAM Controller.
+    // Need to shift down if the row is a non-tensix row (0 or 6 on WH and 0 or 1 on BH)
+    TT_ASSERT(
+        arch == ARCH::WORMHOLE_B0 or arch == ARCH::BLACKHOLE,
+        "Only Wormhole and Blackhole are supported to get optimal worker placement for interfacing with DRAM");
     for (int i = 0; i < num_dram_banks; ++i) {
         auto dram_core = dram_phy_coords[i];
-        if (arch == ARCH::WORMHOLE_B0 or arch == ARCH::BLACKHOLE) {
-            dram_interface_workers.push_back(CoreCoord(dram_core.x + 1, dram_core.y));
-        }
+        uint32_t dram_core_y = (arch == ARCH::BLACKHOLE)                ? std::max((uint32_t)dram_core.y, (uint32_t)2)
+                               : (dram_core.y == 0 || dram_core.y == 6) ? dram_core.y + 1
+                                                                        : dram_core.y;
+        dram_interface_workers.push_back(CoreCoord(dram_core.x + 1, dram_core_y));
     }
 
     if (arch == ARCH::WORMHOLE_B0) {

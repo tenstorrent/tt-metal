@@ -12,7 +12,7 @@ on:
       version:
         required: false
         type: string
-        default: "22.04"
+        default: "24.04"
       architecture:
         required: false
         type: string
@@ -26,7 +26,7 @@ on:
       version:
         required: false
         type: string
-        default: "22.04"
+        default: "24.04"
       architecture:
         required: false
         type: string
@@ -40,7 +40,7 @@ jobs:
       do-scan: ${{ steps.compute-outputs.outputs.do-scan }}
     steps:
       - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
 
       - id: compute-outputs
         shell: bash
@@ -54,20 +54,22 @@ jobs:
 
   build-docker-image:
     uses: ./.github/workflows/build-docker-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       distro: ${{ inputs.distro || 'ubuntu' }}
-      version: ${{ inputs.version || '22.04' }}
+      version: ${{ inputs.version || '24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
 
   clang-tidy:
     name: 🤖 Clang Tidy
     needs: [ build-docker-image, determine-scan-type ]
     if: ${{ needs.determine-scan-type.outputs.do-scan == 'true' }}
-    runs-on: tt-beta-ubuntu-2204-xlarge
+    runs-on: tt-ubuntu-2204-xlarge-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: ${{ needs.build-docker-image.outputs.dev-tag || 'docker-image-unresolved!'}}
+      image: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!'}}
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
@@ -76,7 +78,6 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
-        - /mnt/MLPerf/ccache:/mnt/MLPerf/ccache
       # Group 1457 is for the shared ccache drive
       # tmpfs is for efficiency
       options: >
@@ -152,7 +153,7 @@ jobs:
       - name: 🛠️ Baseline Build
         if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
         run: |
-          nice -n 19 cmake --build --preset clang-tidy
+          cmake --build --preset clang-tidy
 
       - name: Publish Ccache summary
         if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
@@ -175,7 +176,7 @@ jobs:
         run: |
           # Restore shim to legit clang-tidy
           # Symlink tomfoolery here so that Ninja believes the build command has not changed from the previous run
-          ln -sf $(which clang-tidy-17) ./clang-tidy-shim
+          ln -sf $(which clang-tidy-20) ./clang-tidy-shim
 
       - name: Prepare ccache summary
         run: |
@@ -185,7 +186,7 @@ jobs:
 
       - name: 🔍 Analyze code with clang-tidy
         run: |
-          nice -n 19 cmake --build --preset clang-tidy
+          cmake --build --preset clang-tidy
 
       - name: Publish Ccache summary
         run: |

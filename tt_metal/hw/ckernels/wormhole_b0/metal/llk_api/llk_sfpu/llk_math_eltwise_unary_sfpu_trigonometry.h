@@ -10,8 +10,6 @@
 
 namespace ckernel {
 
-// New LLK SFPU APIs
-
 // sine
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_sine_init() {
@@ -20,7 +18,7 @@ inline void llk_math_eltwise_unary_sfpu_sine_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_sine_op(uint dst_index) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_sfpu_trig<SfpuType::sine, APPROXIMATE>, dst_index, (int)VectorMode::RC);
 }
 
@@ -32,7 +30,7 @@ inline void llk_math_eltwise_unary_sfpu_cosine_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_cosine_op(uint dst_index) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_sfpu_trig<SfpuType::cosine, APPROXIMATE>, dst_index, (int)VectorMode::RC);
 }
 
@@ -44,7 +42,7 @@ inline void llk_math_eltwise_unary_sfpu_tan_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_tan_op(uint dst_index) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_sfpu_trig<SfpuType::tan, APPROXIMATE>, dst_index, (int)VectorMode::RC);
 }
 
@@ -56,7 +54,8 @@ inline void llk_math_eltwise_unary_sfpu_asin_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_asin(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(ckernel::sfpu::calculate_asin<APPROXIMATE>, dst_index, vector_mode);
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::calculate_asin<APPROXIMATE>, dst_index, vector_mode);
 }
 
 // acos
@@ -67,7 +66,8 @@ inline void llk_math_eltwise_unary_sfpu_acos_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_acos(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(ckernel::sfpu::calculate_acos<APPROXIMATE>, dst_index, vector_mode);
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::calculate_acos<APPROXIMATE>, dst_index, vector_mode);
 }
 
 // acosh
@@ -79,7 +79,7 @@ inline void llk_math_eltwise_unary_sfpu_acosh_init() {
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_acosh(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::_calculate_acosh_<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);
 }
 
@@ -91,7 +91,8 @@ inline void llk_math_eltwise_unary_sfpu_atan_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_atan(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(ckernel::sfpu::calculate_atan<APPROXIMATE>, dst_index, vector_mode);
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::calculate_atan<APPROXIMATE>, dst_index, vector_mode);
 }
 
 // asinh
@@ -103,8 +104,45 @@ inline void llk_math_eltwise_unary_sfpu_asinh_init() {
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_asinh(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::_calculate_asinh_<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);
+
+}
+
+// atanh
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_atanh_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::atanh, APPROXIMATE>(ckernel::sfpu::_init_atanh_<APPROXIMATE>);
+}
+
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+inline void llk_math_eltwise_unary_sfpu_atanh(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::_calculate_atanh_<APPROXIMATE, is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode);
+}
+
+// cosh
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_cosh_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::cosh, APPROXIMATE>(ckernel::sfpu::init_hyperbolic_trig<APPROXIMATE>);
+}
+
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+inline void llk_math_eltwise_unary_sfpu_cosh(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::calculate_cosh<APPROXIMATE, is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode);
+}
+
+// sinh
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_sinh_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::sinh, APPROXIMATE>(ckernel::sfpu::init_hyperbolic_trig<APPROXIMATE>);
+}
+
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+inline void llk_math_eltwise_unary_sfpu_sinh(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::calculate_sinh<APPROXIMATE, is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode);
 }
 
 }  // namespace ckernel

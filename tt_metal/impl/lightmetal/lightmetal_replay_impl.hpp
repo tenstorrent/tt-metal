@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,9 +12,12 @@
 
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/circular_buffer.hpp>
+
+#include "impl/kernels/kernel_impl.hpp"
 
 namespace tt::tt_metal {
-class TraceDescriptor;
+struct TraceDescriptor;
 }
 
 // Forward decl for command_generated.h / light_metal_binary_generated.h
@@ -60,6 +63,7 @@ public:
     bool run();
 
     // Executor functions for all traced host API calls (commands)
+    // Trace APIs are no longer supported due to trace API deprecation. See Issue #24955
     void execute(const tt::tt_metal::flatbuffer::Command* command);
     void execute(const tt::tt_metal::flatbuffer::EnqueueTraceCommand* command);
     void execute(const tt::tt_metal::flatbuffer::ReplayTraceCommand* command);
@@ -76,7 +80,6 @@ public:
     void execute(const tt::tt_metal::flatbuffer::CreateKernelCommand* command);
     void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32Command* command);
     void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32VecPerCoreCommand* cmd);
-    void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsCommand* command);
     void execute(const tt::tt_metal::flatbuffer::CreateCircularBufferCommand* command);
     void execute(const tt::tt_metal::flatbuffer::LightMetalCompareCommand* command);
 
@@ -102,6 +105,7 @@ public:
     void remove_cb_handle_from_map(uint32_t global_id);
 
     // Return the TraceDescriptor for a given trace_id from flatbuffer.
+    // No longer supported due to trace API deprecation. See Issue #24955
     std::optional<TraceDescriptor> get_trace_by_id(uint32_t target_trace_id);
 
     // fromFlatBuffer that need class state

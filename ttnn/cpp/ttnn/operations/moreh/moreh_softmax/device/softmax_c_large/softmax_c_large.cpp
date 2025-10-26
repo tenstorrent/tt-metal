@@ -2,7 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include "ttnn/operations/moreh/moreh_softmax/device/moreh_softmax_device_operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_softmax {
@@ -30,7 +33,6 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
 
     uint32_t num_tiles = input.physical_volume() / shape[dim] / H / W * Ht * Wt;
 
-    uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
@@ -39,6 +41,12 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
     auto arch = input.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
+
+    if (input.dtype() == DataType::FLOAT32 && !fp32_dest_acc_en) {
+        TT_THROW(
+            "FP32 destination accumulation must be enabled when input tensor has FLOAT32 data type. Please update the "
+            "compute kernel configuration.");
+    }
 
     Program program = Program();
 
@@ -61,23 +69,25 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
         });
 
     // create read/wrtie kernel
-    bool src_is_dram = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool dst_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
 
+    std::vector<uint32_t> reader_ct_args = {};
+    TensorAccessorArgs(*input.buffer()).append_to(reader_ct_args);
     auto reader_kernel_id = CreateReadKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/reader_moreh_softmax_c_large.cpp",
         all_cores,
-        {src_is_dram},
+        reader_ct_args,
         reader_defines);
+    std::vector<uint32_t> writer_ct_args = {};
+    TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
     auto writer_kernel_id = CreateWriteKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/writer_moreh_softmax_c_large.cpp",
         all_cores,
-        {dst_is_dram},
+        writer_ct_args,
         writer_defines);
 
     auto outer_stride = Ht * Wt;
@@ -87,7 +97,7 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
     auto dim_size = shape[dim];
     auto inner_size = outer_stride / dim_size;
 
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     if (op == MorehSoftmaxOp::SOFTMAX || op == MorehSoftmaxOp::LOGSOFTMAX) {
         compute_defines["SOFTMAX"] = "1";
     } else {
@@ -119,7 +129,7 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
     auto core_y_offset = core_range.start_coord.y;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
-        CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
+        CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};
         uint32_t num_tiles_per_core;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;

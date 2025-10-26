@@ -4,7 +4,7 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <stdint.h>
 #include <sys/types.h>
 #include <tt-metalium/host_api.hpp>
@@ -13,15 +13,12 @@
 #include <bit>
 #include <cctype>
 #include <functional>
-#include <initializer_list>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <type_traits>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -32,6 +29,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -42,8 +40,7 @@
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
-#include "umd/device/types/arch.h"
-#include <tt-metalium/utils.hpp>
+#include <umd/device/types/arch.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -76,13 +73,12 @@ using GoldenFunc = std::variant<
         const ::unit_tests::compute::GoldenConfig& config)>>;
 
 struct TestConfig {
-    // Whether or not to use *_init_short LLK API calls:
-    bool short_init = false;
     // Whether or not to sync full/half DST between MATH and PACK:
     bool dst_full_sync_en = false;
     // Whether or not we want the result to be stored in DST in FP32 is
     // controlled with this flag:
     bool fp32_dest_acc_en = false;
+    bool fast_tilize = false;
     uint32_t input_single_tile_size;
     uint32_t output_single_tile_size;
     // Block height in tiles:
@@ -97,8 +93,16 @@ struct TestConfig {
     GoldenFunc golden_function;
 };
 
-void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig& test_config) {
+void run_single_core_tilize_program(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = tt::tt_metal::CreateProgram();
+    workload.add_program(device_range, std::move(program));
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     CoreCoord core = {0, 0};
 
@@ -130,11 +134,10 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
         tt_metal::CircularBufferConfig(
             num_input_tiles * test_config.input_single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, test_config.input_single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
 
     std::shared_ptr<tt_metal::Buffer> src1_dram_buffer;
     uint32_t dram_buffer_src1_addr{};
-    CoreCoord dram_src1_noc_xy{};
 
     if (test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A_B) {
         src1_dram_buffer = CreateBuffer(input_dram_config);
@@ -146,7 +149,7 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
             tt_metal::CircularBufferConfig(
                 num_input_tiles * test_config.input_single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src1_cb_index, test_config.input_single_tile_size);
-        auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+        tt_metal::CreateCircularBuffer(program_, core, cb_src1_config);
     }
 
     uint32_t ouput_cb_index = tt::CBIndex::c_16;
@@ -156,9 +159,9 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
             num_output_tiles * test_config.output_single_tile_size,
             {{ouput_cb_index, test_config.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, test_config.output_single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
 
-    string reader_kernel_path;
+    std::string reader_kernel_path;
     if (test_config.untilize_type.has_value()) {
         reader_kernel_path = "tt_metal/kernels/dataflow/reader_unary.cpp";
     } else if (test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A_B) {
@@ -168,14 +171,14 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
     }
 
     auto reader_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         reader_kernel_path,
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto unary_writer_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tt_metal/kernels/dataflow/writer_unary.cpp",
         core,
         tt_metal::DataMovementConfig{
@@ -186,9 +189,10 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
         uint(test_config.num_tiles_c)   // per_core_block_tile_cnt
     };
 
-    string compute_kernel;
+    std::string compute_kernel;
     if (test_config.untilize_type.has_value()) {
-        string untilize_type = magic_enum::enum_name(test_config.untilize_type.value()).data();
+        // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
+        std::string untilize_type = enchantum::to_string(test_config.untilize_type.value()).data();
         std::transform(untilize_type.begin(), untilize_type.end(), untilize_type.begin(), [](unsigned char c) {
             return std::tolower(c);
         });
@@ -204,17 +208,17 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
         log_fatal(tt::LogTest, "Invalid untilize and tilize type value");
     }
 
-    std::map<string, string> defines = {};
+    std::map<std::string, std::string> defines = {};
 
-    if (test_config.short_init) {
-        defines["SHORT_INIT"] = "1";
-    }
     if (test_config.fp32_dest_acc_en) {
         defines["DST_ACCUM_MODE"] = "1";
     }
+    if (test_config.fast_tilize) {
+        defines["FAST_TILIZE"] = "1";
+    }
 
-    auto eltwise_unary_kernel = tt_metal::CreateKernel(
-        program,
+    tt_metal::CreateKernel(
+        program_,
         compute_kernel,
         core,
         tt_metal::ComputeConfig{
@@ -231,7 +235,7 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
     if(test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A_B) {
         // tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp
         tt_metal::SetRuntimeArgs(
-            program,
+            program_,
             reader_kernel,
             core,
             {
@@ -248,7 +252,7 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
     } else {
         // tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n.cpp
         tt_metal::SetRuntimeArgs(
-            program,
+            program_,
             reader_kernel,
             core,
             {dram_buffer_src0_addr,
@@ -259,9 +263,9 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
              false});
     }
 
-    tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, {dram_buffer_dst_addr, (uint32_t)0, num_tiles});
+    tt_metal::SetRuntimeArgs(program_, unary_writer_kernel, core, {dram_buffer_dst_addr, (uint32_t)0, num_tiles});
 
-    tt_metal::detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> result_vec;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
@@ -304,7 +308,7 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
         golden.resize(golden.size() * 2);
         for (auto i = 0; i < golden_unpacked.size(); i++) {
             // Cast float32 to "packed "uint32 golden vector if fp32_dest_acc_en:
-            golden[i] = std::bit_cast<uint32_t>(golden_unpacked[i].to_float());
+            golden[i] = std::bit_cast<uint32_t>(static_cast<float>(golden_unpacked[i]));
         }
     }
 
@@ -324,15 +328,17 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
         std::cout << "RESULTS " << std::endl;
         print_vector(unpack_vector<bfloat16, uint32_t>(result_vec));
     }
-    ASSERT_TRUE(pass);
     log_info(
         tt::LogTest,
-        "Done running test with: num_tiles_r = {}, num_tiles_c = {}, FP32_DestAcc = {}, DstSyncFull = {}, pass = {}",
+        "Done running test with: num_tiles_r = {}, num_tiles_c = {}, FP32_DestAcc = {}, DstSyncFull = {}, "
+        "FastTilize = {}, pass = {}",
         test_config.num_tiles_r,
         test_config.num_tiles_c,
         test_config.fp32_dest_acc_en,
         test_config.dst_full_sync_en,
+        test_config.fast_tilize,
         pass);
+    ASSERT_TRUE(pass);
 }
 
 }  // namespace unit_tests::compute::tilize
@@ -341,7 +347,7 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
 Following tests are for Unpack Tilize
 ***************************************/
 
-TEST_F(DeviceFixture, TensixComputeUnpackTilize) {
+TEST_F(MeshDeviceFixture, TensixComputeUnpackTilize) {
     vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
@@ -365,7 +371,32 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilize) {
     }
 }
 
-TEST_F(DeviceFixture, TensixComputeUnpackTilizeA_B) {
+TEST_F(MeshDeviceFixture, TensixComputeFastTilize) {
+    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
+    for (auto num_tile : num_tiles) {
+        for (bool fp32_dest_acc_en : {false}) {
+            // FP32 dest acc not possible for GS
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+                continue;
+            }
+            for (bool dst_full_sync_en : {false}) {
+                unit_tests::compute::tilize::TestConfig test_config = {
+                    .dst_full_sync_en = dst_full_sync_en,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .fast_tilize = true,
+                    .input_single_tile_size = 2 * 1024,
+                    .output_single_tile_size = 1024 * (fp32_dest_acc_en ? 4 : 2),
+                    .num_tiles_r = num_tile[0],
+                    .num_tiles_c = num_tile[1],
+                    .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+                    .golden_function = ::unit_tests::compute::gold_standard_tilize};
+                unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+            }
+        }
+    }
+}
+
+TEST_F(MeshDeviceFixture, TensixComputeUnpackTilizeA_B) {
     auto arch = this->arch_;
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
@@ -383,36 +414,11 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilizeA_B) {
     }
 }
 
-TEST_F(DeviceFixture, TensixComputeUnpackTilizeShortInit) {
-    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
-    for (auto num_tile : num_tiles) {
-        for (bool fp32_dest_acc_en : {true, false}) {
-            // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                continue;
-            }
-            for (bool dst_full_sync_en : {true, false}) {
-                unit_tests::compute::tilize::TestConfig test_config = {
-                    .short_init = true,
-                    .dst_full_sync_en = dst_full_sync_en,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .input_single_tile_size = 2 * 1024,
-                    .output_single_tile_size = 1024 * (fp32_dest_acc_en ? 4 : 2),
-                    .num_tiles_r = num_tile[0],
-                    .num_tiles_c = num_tile[1],
-                    .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
-                    .golden_function = ::unit_tests::compute::gold_standard_tilize};
-                unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
-            }
-        }
-    }
-}
-
 /**************************************
 Following tests are for Unpack Untilize
 ***************************************/
 
-TEST_F(DeviceFixture, TensixComputeUnpackUntilize) {
+TEST_F(MeshDeviceFixture, TensixComputeUnpackUntilize) {
     vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
@@ -422,31 +428,6 @@ TEST_F(DeviceFixture, TensixComputeUnpackUntilize) {
             }
             for (bool dst_full_sync_en : {true, false}) {
                 unit_tests::compute::tilize::TestConfig test_config = {
-                    .dst_full_sync_en = dst_full_sync_en,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .input_single_tile_size = 2 * 1024,
-                    .output_single_tile_size = 1024 * (fp32_dest_acc_en ? 4 : 2),
-                    .num_tiles_r = num_tile[0],
-                    .num_tiles_c = num_tile[1],
-                    .untilize_type = unit_tests::compute::tilize::UntilizeType::UNPACK,
-                    .golden_function = ::unit_tests::compute::gold_standard_untilize};
-                unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
-            }
-        }
-    }
-}
-
-TEST_F(DeviceFixture, TensixComputeUnpackUntilizeShortInit) {
-    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
-    for (auto num_tile : num_tiles) {
-        for (bool fp32_dest_acc_en : {true, false}) {
-            // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                continue;
-            }
-            for (bool dst_full_sync_en : {true, false}) {
-                unit_tests::compute::tilize::TestConfig test_config = {
-                    .short_init = true,
                     .dst_full_sync_en = dst_full_sync_en,
                     .fp32_dest_acc_en = fp32_dest_acc_en,
                     .input_single_tile_size = 2 * 1024,
@@ -464,8 +445,8 @@ TEST_F(DeviceFixture, TensixComputeUnpackUntilizeShortInit) {
 /**************************************
 Following tests are for pack untilize
 ***************************************/
-TEST_F(DeviceFixture, TensixComputePackUntilize) {
-    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
+TEST_F(MeshDeviceFixture, TensixComputePackUntilize) {
+    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}, {10, 10}, {2, 40}};
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
@@ -488,33 +469,8 @@ TEST_F(DeviceFixture, TensixComputePackUntilize) {
     }
 }
 
-TEST_F(DeviceFixture, TensixComputePackUntilizeShortInit) {
-    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
-    for (auto num_tile : num_tiles) {
-        for (bool fp32_dest_acc_en : {true, false}) {
-            // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                continue;
-            }
-            for (bool dst_full_sync_en : {true, false}) {
-                unit_tests::compute::tilize::TestConfig test_config = {
-                    .short_init = true,
-                    .dst_full_sync_en = dst_full_sync_en,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .input_single_tile_size = 2 * 1024,
-                    .output_single_tile_size = 1024 * (fp32_dest_acc_en ? 4 : 2),
-                    .num_tiles_r = num_tile[0],
-                    .num_tiles_c = num_tile[1],
-                    .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
-                    .golden_function = ::unit_tests::compute::gold_standard_untilize};
-                unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
-            }
-        }
-    }
-}
-
-TEST_F(DeviceFixture, TensixComputePackUntilizeDst) {
-    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
+TEST_F(MeshDeviceFixture, TensixComputePackUntilizeDst) {
+    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}, {10, 10}, {2, 40}};
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
             unit_tests::compute::tilize::TestConfig test_config = {
@@ -533,7 +489,7 @@ TEST_F(DeviceFixture, TensixComputePackUntilizeDst) {
 // Tests pack_untilize with tiny tile dims.
 // Row dim 1x32, which is faces = 2, rows = 1
 // Row dim 1x16, which is faces = 1, rows = 1
-TEST_F(DeviceFixture, TensixComputePackUntilizeDstTinyTile) {
+TEST_F(MeshDeviceFixture, TensixComputePackUntilizeDstTinyTile) {
     vector<vector<uint32_t>> test_config_values = {{1, 1, 1, 1}, {1, 1, 2, 1}, {1, 2, 2, 1}};
     uint32_t face_c_dim = 16;
     for (auto test_config_value : test_config_values) {
@@ -541,7 +497,6 @@ TEST_F(DeviceFixture, TensixComputePackUntilizeDstTinyTile) {
             uint32_t num_faces_per_tile = test_config_value[2];
             uint32_t face_r_dim = test_config_value[3];
             unit_tests::compute::tilize::TestConfig test_config = {
-                .short_init = true,
                 .dst_full_sync_en = dst_full_sync_en,
                 .input_single_tile_size = 2 * 1024,
                 .output_single_tile_size = 2 * num_faces_per_tile * face_r_dim * face_c_dim,

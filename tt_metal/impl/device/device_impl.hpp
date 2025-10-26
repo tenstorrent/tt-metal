@@ -5,33 +5,28 @@
 #pragma once
 
 #include <memory>
-#include <utility>
 
 #include <tt-metalium/device.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/command_queue_interface.hpp>
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include "trace/trace_buffer.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/program_cache.hpp>
 
-class go_msg_t;
-class launch_msg_t;
 namespace tt::tt_metal {
 class SubDeviceManagerTracker;
 
 // A physical PCIexpress Tenstorrent device
 class Device : public IDevice {
 public:
-    // friend void tt_gdb(IDevice* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
-    Device () = delete;
+    Device() = delete;
     Device(
-        chip_id_t device_id,
+        ChipId device_id,
         uint8_t num_hw_cqs,
         std::size_t l1_small_size,
         std::size_t trace_region_size,
@@ -44,17 +39,17 @@ public:
     ~Device() override;
 
     // TODO: Add copy/move semantics
-    Device(const Device &other) = delete;
-    Device& operator=(const Device &other) = delete;
+    Device(const Device& other) = delete;
+    Device& operator=(const Device& other) = delete;
 
-    Device(Device&& other);
-    Device& operator=(Device&& other);
+    Device(Device&& other) noexcept;
+    Device& operator=(Device&& other) noexcept;
 
     tt::ARCH arch() const override;
 
-    chip_id_t id() const override { return id_; }
+    ChipId id() const override { return id_; }
     // For a single device, build id is the same as device id
-    chip_id_t build_id() const override { return id_; }
+    ChipId build_id() const override { return id_; }
 
     uint8_t num_hw_cqs() const override { return num_hw_cqs_; }
 
@@ -70,25 +65,26 @@ public:
     // Given a coordinate in Virtual NOC0 Space, get the equivalent coordinate in Virtual noc_index space
     CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const override;
 
-    std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const override;
-    std::vector<CoreCoord> ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const override;
-    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment() override;
+    std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const override;
+    std::vector<CoreCoord> ethernet_cores_from_logical_cores(
+        const std::vector<CoreCoord>& logical_cores) const override;
+    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) override;
 
-    CoreCoord virtual_core_from_logical_core(const CoreCoord &logical_coord, const CoreType& core_type) const override;
-    CoreCoord worker_core_from_logical_core(const CoreCoord &logical_core) const override;
+    CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
+    CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
 
     // Ethernet API
-    CoreCoord ethernet_core_from_logical_core(const CoreCoord &logical_core) const override;
-    CoreCoord logical_core_from_ethernet_core(const CoreCoord &ethernet_core) const override;
+    CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const override;
+    CoreCoord logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const override;
     // `skip_reserved_tunnel_cores` is ignored on BH because there are no ethernet cores used for Fast Dispatch
     // tunneling
-    std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores=false) const override;
+    std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores = false) const override;
     std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const override;
     // `skip_reserved_tunnel_cores` is ignored on BH because there are no ethernet cores used for Fast Dispatch
     // tunneling
-    bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores=false) const override;
-    std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
-    std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const override;
+    bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores = false) const override;
+    std::tuple<ChipId, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
+    std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
     uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) override;
 
@@ -105,34 +101,25 @@ public:
     uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const override;
 
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const override;
-    std::optional<DeviceAddr> lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const override;
+    std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
+        tt::stl::Span<const SubDeviceId> sub_device_ids) const override;
 
     // Set of logical ethernet core coordinates
     // core.x represents connectivity to one other chip, i.e. cores with <x> all connect to same chip
     // core.y represents different channels along one <x>
-    const std::set<CoreCoord> &ethernet_cores() const override { return this->ethernet_cores_; }
+    const std::set<CoreCoord>& ethernet_cores() const override { return this->ethernet_cores_; }
 
-    const std::set<CoreCoord> &storage_only_cores() const override { return this->storage_only_cores_; }
+    const std::set<CoreCoord>& storage_only_cores() const override { return this->storage_only_cores_; }
 
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
 
     SystemMemoryManager& sysmem_manager() override { return *sysmem_manager_; }
-    CommandQueue& command_queue(size_t cq_id = 0) override;
+    CommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt) override;
 
     // Metal trace device capture mode
-    void begin_trace(uint8_t cq_id, uint32_t tid) override;
-    void end_trace(uint8_t cq_id, uint32_t tid) override;
-    void replay_trace(uint8_t cq_id, uint32_t tid, bool block_on_device, bool block_on_worker_thread) override;
-    void release_trace(uint32_t tid) override;
-    std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) override;
     uint32_t get_trace_buffers_size() const override { return trace_buffers_size_; }
     void set_trace_buffers_size(uint32_t size) override { trace_buffers_size_ = size; }
-    // Light Metal
-    void load_trace(uint8_t cq_id, uint32_t trace_id, const TraceDescriptor& trace_desc) override;
-
-    bool using_slow_dispatch() const override;
-    bool using_fast_dispatch() const override;
 
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
@@ -163,19 +150,22 @@ public:
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
     HalMemType get_mem_type_of_core(CoreCoord virtual_core) const override;
 
-    uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
+    bool has_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
-    uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const override;
+    uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data = true) const override;
 
     SubDeviceManagerId get_active_sub_device_manager_id() const override;
     SubDeviceManagerId get_default_sub_device_manager_id() const override;
-    SubDeviceManagerId create_sub_device_manager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+    SubDeviceManagerId create_sub_device_manager(
+        std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+    SubDeviceManagerId create_sub_device_manager(
+        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void clear_loaded_sub_device_manager() override;
     CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const override;
-    const std::vector<SubDeviceId> &get_sub_device_ids() const override;
-    const std::vector<SubDeviceId> &get_sub_device_stall_group() const override;
+    const std::vector<SubDeviceId>& get_sub_device_ids() const override;
+    const std::vector<SubDeviceId>& get_sub_device_stall_group() const override;
     void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
@@ -183,7 +173,9 @@ public:
     bool is_mmio_capable() const override;
     // TODO #20966: Remove these APIs
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
-    void set_mesh_device(std::shared_ptr<distributed::MeshDevice> mesh_device) { this->mesh_device = mesh_device; };
+    void set_mesh_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        this->mesh_device = mesh_device;
+    };
 
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
@@ -200,18 +192,17 @@ private:
         size_t worker_l1_unreserved_start,
         tt::stl::Span<const std::uint32_t> l1_bank_remap);
 
-    void compile_command_queue_programs();
     void configure_command_queue_programs();
 
     void mark_allocations_unsafe();
     void mark_allocations_safe();
 
-    CoreCoord physical_worker_core_from_logical_core(const CoreCoord &logical_core) const;
-    CoreCoord dram_core_from_dram_channel(uint32_t dram_channel) const;
+    CoreCoord physical_worker_core_from_logical_core(const CoreCoord& logical_core) const;
+    CoreCoord dram_core_from_dram_channel(uint32_t dram_channel, NOC noc = NOC::NOC_0) const;
     CoreCoord virtual_core_from_physical_core(const CoreCoord& physical_coord) const;
 
-    chip_id_t id_;
-    std::vector<std::vector<chip_id_t>> tunnels_from_mmio_;
+    ChipId id_;
+    std::vector<std::vector<ChipId>> tunnels_from_mmio_;
 
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
 
@@ -219,6 +210,7 @@ private:
 
     std::vector<std::unique_ptr<Program>> command_queue_programs_;
     bool using_fast_dispatch_ = false;
+
     // TODO #20966: Remove this member
     std::weak_ptr<distributed::MeshDevice> mesh_device;
 

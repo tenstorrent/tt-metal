@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2043 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,7 @@
 inline constexpr uint16_t NEG_INF_BFLOAT16 = 0xFF80;  // Representation of negative infinity in bfloat16
 inline constexpr uint16_t POS_INF_BFLOAT16 = 0x7F80;  // Representation of positive infinity in bfloat16
 inline constexpr uint16_t NAN_BFLOAT16 = 0x7FFF;      // Representation of NaN in bfloat16
+inline constexpr uint16_t BFLOAT16_SIGN_MASK = 0x8000;  // Sign bit mask for bfloat16
 
 // Optimized function to compare two bfloat16 values using integer arithmetic
 bool bfloat16_greater(uint16_t bf16_a, uint16_t bf16_b) {
@@ -27,13 +28,13 @@ bool bfloat16_greater(uint16_t bf16_a, uint16_t bf16_b) {
     */
 
     // Check if signs are different
-    if ((bf16_a ^ bf16_b) & 0x8000) {
+    if ((bf16_a ^ bf16_b) & BFLOAT16_SIGN_MASK) {
         // Signs differ: if bf16_a is positive, it's greater
-        return (bf16_a & 0x8000) == 0;
+        return (bf16_a & BFLOAT16_SIGN_MASK) == 0;
     }
 
     // Signs are the same
-    if (bf16_a & 0x8000) {
+    if (bf16_a & BFLOAT16_SIGN_MASK) {
         // Both negative: reverse comparison
         return bf16_a < bf16_b;
     } else {

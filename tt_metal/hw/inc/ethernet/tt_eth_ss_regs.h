@@ -36,6 +36,10 @@
 #define ETH_TXQ_REGS_SIZE 0x1000
 #define ETH_TXQ_REGS_SIZE_BIT 12
 
+//////////////////////////////
+// RX queue controllers
+#define ETH_RXQ_REGS_SIZE 0x1000
+
 // TXQ_CTRL[0]: set to enable packet resend mode (must be set on both sides)
 // TXQ_CTRL[1]: reserved, should be 0
 // TXQ_CTRL[2]: 0 = use Length field, 1 = use Type field (from ETH_TXQ_ETH_TYPE)

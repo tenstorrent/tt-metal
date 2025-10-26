@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,6 +21,7 @@ namespace {
 using ::testing::ElementsAre;
 using ::testing::Eq;
 using ::testing::IsEmpty;
+using ::testing::Optional;
 using ::testing::UnorderedElementsAre;
 
 TEST(MeshShapeTest, Construction) {
@@ -73,19 +74,19 @@ TEST(MeshShapeTest, Equality) {
 }
 
 TEST(MeshShapeTest, LinearTopology) {
-    EXPECT_TRUE(is_line_topology(MeshShape(1)));
-    EXPECT_TRUE(is_line_topology(MeshShape(3)));
-    EXPECT_TRUE(is_line_topology(MeshShape(1, 1)));
-    EXPECT_TRUE(is_line_topology(MeshShape(1, 3)));
-    EXPECT_TRUE(is_line_topology(MeshShape(3, 1)));
-    EXPECT_FALSE(is_line_topology(MeshShape(3, 3)));
-    EXPECT_TRUE(is_line_topology(MeshShape(1, 1, 1)));
-    EXPECT_TRUE(is_line_topology(MeshShape(1, 1, 3)));
-    EXPECT_TRUE(is_line_topology(MeshShape(1, 3, 1)));
-    EXPECT_TRUE(is_line_topology(MeshShape(3, 1, 1)));
-    EXPECT_FALSE(is_line_topology(MeshShape(1, 3, 3)));
-    EXPECT_FALSE(is_line_topology(MeshShape(3, 1, 3)));
-    EXPECT_FALSE(is_line_topology(MeshShape(3, 3, 3)));
+    EXPECT_TRUE(MeshShape(1).is_line_topology());
+    EXPECT_TRUE(MeshShape(3).is_line_topology());
+    EXPECT_TRUE(MeshShape(1, 1).is_line_topology());
+    EXPECT_TRUE(MeshShape(1, 3).is_line_topology());
+    EXPECT_TRUE(MeshShape(3, 1).is_line_topology());
+    EXPECT_FALSE(MeshShape(3, 3).is_line_topology());
+    EXPECT_TRUE(MeshShape(1, 1, 1).is_line_topology());
+    EXPECT_TRUE(MeshShape(1, 1, 3).is_line_topology());
+    EXPECT_TRUE(MeshShape(1, 3, 1).is_line_topology());
+    EXPECT_TRUE(MeshShape(3, 1, 1).is_line_topology());
+    EXPECT_FALSE(MeshShape(1, 3, 3).is_line_topology());
+    EXPECT_FALSE(MeshShape(3, 1, 3).is_line_topology());
+    EXPECT_FALSE(MeshShape(3, 3, 3).is_line_topology());
 }
 
 TEST(MeshCoordinateTest, Construction) {
@@ -162,6 +163,39 @@ TEST(MeshCoordinateTest, ZeroCoordinate) {
     EXPECT_EQ(MeshCoordinate::zero_coordinate(1), MeshCoordinate(0));
     EXPECT_EQ(MeshCoordinate::zero_coordinate(2), MeshCoordinate(0, 0));
     EXPECT_EQ(MeshCoordinate::zero_coordinate(3), MeshCoordinate(0, 0, 0));
+}
+
+TEST(MeshCoordinateTest, NegativeIndexing) {
+    MeshCoordinate coord(10, 20, 30);
+
+    // Positive indexing
+    EXPECT_EQ(coord[0], 10);
+    EXPECT_EQ(coord[1], 20);
+    EXPECT_EQ(coord[2], 30);
+
+    // Negative indexing
+    EXPECT_EQ(coord[-1], 30);  // Last element
+    EXPECT_EQ(coord[-2], 20);  // Second to last
+    EXPECT_EQ(coord[-3], 10);  // Third to last (first element)
+
+    // Out of bounds negative indexing
+    EXPECT_ANY_THROW(coord[-4]);
+}
+
+TEST(MeshCoordinateTest, MutableIndexAccess) {
+    MeshCoordinate coord(10, 20, 30);
+
+    // Modify through positive index
+    coord[0] = 15;
+    EXPECT_EQ(coord[0], 15);
+
+    // Modify through negative index
+    coord[-1] = 35;
+    EXPECT_EQ(coord[2], 35);
+    EXPECT_EQ(coord[-1], 35);
+
+    // Verify final state
+    EXPECT_THAT(coord.coords(), ElementsAre(15, 20, 35));
 }
 
 TEST(MeshCoordinateRangeTest, FromShape) {
@@ -583,27 +617,27 @@ TEST(MeshCoordinateRangeSetTest, Coords) {
 TEST(ToLinearIndexTest, Basic) {
     MeshShape shape(2, 2, 3);
 
-    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(0, 0, 0)), 0);
-    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(0, 0, 1)), 1);
-    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(0, 0, 2)), 2);
-    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(0, 1, 0)), 3);
-    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(0, 1, 1)), 4);
-    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(0, 1, 2)), 5);
-    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(1, 0, 0)), 6);
-    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(1, 0, 1)), 7);
-    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(1, 0, 2)), 8);
-    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(1, 1, 0)), 9);
-    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(1, 1, 1)), 10);
-    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(1, 1, 2)), 11);
+    EXPECT_EQ(MeshCoordinate(0, 0, 0).to_linear_index(shape), 0);
+    EXPECT_EQ(MeshCoordinate(0, 0, 1).to_linear_index(shape), 1);
+    EXPECT_EQ(MeshCoordinate(0, 0, 2).to_linear_index(shape), 2);
+    EXPECT_EQ(MeshCoordinate(0, 1, 0).to_linear_index(shape), 3);
+    EXPECT_EQ(MeshCoordinate(0, 1, 1).to_linear_index(shape), 4);
+    EXPECT_EQ(MeshCoordinate(0, 1, 2).to_linear_index(shape), 5);
+    EXPECT_EQ(MeshCoordinate(1, 0, 0).to_linear_index(shape), 6);
+    EXPECT_EQ(MeshCoordinate(1, 0, 1).to_linear_index(shape), 7);
+    EXPECT_EQ(MeshCoordinate(1, 0, 2).to_linear_index(shape), 8);
+    EXPECT_EQ(MeshCoordinate(1, 1, 0).to_linear_index(shape), 9);
+    EXPECT_EQ(MeshCoordinate(1, 1, 1).to_linear_index(shape), 10);
+    EXPECT_EQ(MeshCoordinate(1, 1, 2).to_linear_index(shape), 11);
 }
 
 TEST(ToLinearIndexTest, MismatchedDimensions) {
-    EXPECT_ANY_THROW(to_linear_index(MeshShape(1, 2, 3), MeshCoordinate(0, 0)));
+    EXPECT_ANY_THROW(MeshCoordinate(0, 0).to_linear_index(MeshShape(1, 2, 3)));
 }
 
 TEST(ToLinearIndexTest, OutOfBounds) {
-    EXPECT_ANY_THROW(to_linear_index(MeshShape(2, 3), MeshCoordinate(2, 0)));
-    EXPECT_ANY_THROW(to_linear_index(MeshShape(2, 3), MeshCoordinate(0, 3)));
+    EXPECT_ANY_THROW(MeshCoordinate(2, 0).to_linear_index(MeshShape(2, 3)));
+    EXPECT_ANY_THROW(MeshCoordinate(0, 3).to_linear_index(MeshShape(2, 3)));
 }
 
 TEST(MeshContainerTest, InitialValues) {
@@ -781,6 +815,339 @@ TEST(MeshContainerIteratorTraitsTest, STLAlgorithmsCompatibility) {
     });
     EXPECT_TRUE(none_greater_than_10);
 }
+
+TEST(MeshCoordinateRangeTest, Wraparound2D_BasicIterationAndShape) {
+    // 4x4 mesh; wraparound range from (3,3) to (0,0) should cover a 2x2 area with wrap.
+    MeshShape shape(4, 4);
+    MeshCoordinateRange range(MeshCoordinate(3, 3), MeshCoordinate(0, 0), shape);
+
+    // Iteration order is row-major starting from start coord, wrapping in each dimension.
+    std::vector<MeshCoordinate> coords;
+    for (const auto& c : range) {
+        coords.push_back(c);
+    }
+    EXPECT_THAT(
+        coords,
+        ElementsAre(
+            MeshCoordinate(3, 3),  // start
+            MeshCoordinate(3, 0),  // wrap column
+            MeshCoordinate(0, 3),  // wrap row
+            MeshCoordinate(0, 0)));
+
+    // Shape should reflect the minimal circular span per dimension.
+    EXPECT_EQ(range.shape(), MeshShape(2, 2));
+
+    // Contains the four points and excludes an outside point.
+    EXPECT_TRUE(range.contains(MeshCoordinate(3, 3)));
+    EXPECT_TRUE(range.contains(MeshCoordinate(3, 0)));
+    EXPECT_TRUE(range.contains(MeshCoordinate(0, 3)));
+    EXPECT_TRUE(range.contains(MeshCoordinate(0, 0)));
+    EXPECT_FALSE(range.contains(MeshCoordinate(2, 2)));
+}
+
+TEST(MeshCoordinateRangeTest, Wraparound2D_IntersectionWithNonWrapped) {
+    MeshShape shape(4, 4);
+    MeshCoordinateRange wrapped(MeshCoordinate(3, 3), MeshCoordinate(0, 0), shape);
+    MeshCoordinateRange single(MeshCoordinate(0, 0), MeshCoordinate(0, 0));
+
+    ASSERT_TRUE(wrapped.intersects(single));
+    auto inter = wrapped.intersection(single);
+    ASSERT_TRUE(inter.has_value());
+    EXPECT_TRUE(inter->contains(MeshCoordinate(0, 0)));
+    EXPECT_EQ(inter->shape().mesh_size(), 1u);
+}
+
+TEST(GetNeighborTest, Basic1D) {
+    MeshShape shape(5);
+    MeshCoordinate coord(2);
+
+    // Move forward
+    EXPECT_THAT(coord.get_neighbor(shape, 1, 0, MeshCoordinate::BoundaryMode::WRAP), Optional(MeshCoordinate(3)));
+
+    // Move backward
+    EXPECT_THAT(coord.get_neighbor(shape, -1, 0, MeshCoordinate::BoundaryMode::WRAP), Optional(MeshCoordinate(1)));
+
+    // Move multiple steps
+    EXPECT_THAT(coord.get_neighbor(shape, 2, 0, MeshCoordinate::BoundaryMode::WRAP), Optional(MeshCoordinate(4)));
+}
+
+TEST(GetNeighborTest, Basic2D) {
+    MeshShape shape(3, 4);
+    MeshCoordinate coord(1, 2);
+
+    // Move along dimension 0 (row)
+    EXPECT_THAT(coord.get_neighbor(shape, 1, 0, MeshCoordinate::BoundaryMode::WRAP), Optional(MeshCoordinate(2, 2)));
+    EXPECT_THAT(coord.get_neighbor(shape, -1, 0, MeshCoordinate::BoundaryMode::WRAP), Optional(MeshCoordinate(0, 2)));
+
+    // Move along dimension 1 (column)
+    EXPECT_THAT(coord.get_neighbor(shape, 1, 1, MeshCoordinate::BoundaryMode::WRAP), Optional(MeshCoordinate(1, 3)));
+    EXPECT_THAT(coord.get_neighbor(shape, -1, 1, MeshCoordinate::BoundaryMode::WRAP), Optional(MeshCoordinate(1, 1)));
+}
+
+TEST(GetNeighborTest, BoundaryModeWrap) {
+    MeshShape shape(3, 4);
+
+    // Wrap around at edges
+    EXPECT_THAT(
+        MeshCoordinate(0, 0).get_neighbor(shape, -1, 0, MeshCoordinate::BoundaryMode::WRAP),
+        Optional(MeshCoordinate(2, 0)));  // Wraps to last row
+
+    EXPECT_THAT(
+        MeshCoordinate(2, 3).get_neighbor(shape, 1, 1, MeshCoordinate::BoundaryMode::WRAP),
+        Optional(MeshCoordinate(2, 0)));  // Wraps to first column
+
+    // Wrap with larger offsets
+    EXPECT_THAT(
+        MeshCoordinate(1, 1).get_neighbor(shape, 5, 1, MeshCoordinate::BoundaryMode::WRAP),
+        Optional(MeshCoordinate(1, 2)));  // (1 + 5) % 4 = 2
+
+    // Negative wrap with larger offsets
+    EXPECT_THAT(
+        MeshCoordinate(1, 1).get_neighbor(shape, -6, 1, MeshCoordinate::BoundaryMode::WRAP),
+        Optional(MeshCoordinate(1, 3)));  // (1 - 6) wrapped = 3
+}
+
+TEST(GetNeighborTest, BoundaryModeClamp) {
+    MeshShape shape(3, 4);
+
+    // Clamp at boundaries
+    EXPECT_THAT(
+        MeshCoordinate(0, 0).get_neighbor(shape, -1, 0, MeshCoordinate::BoundaryMode::CLAMP),
+        Optional(MeshCoordinate(0, 0)));  // Clamped to boundary
+
+    EXPECT_THAT(
+        MeshCoordinate(2, 3).get_neighbor(shape, 1, 1, MeshCoordinate::BoundaryMode::CLAMP),
+        Optional(MeshCoordinate(2, 3)));  // Clamped to boundary
+
+    // Clamp with larger offsets
+    EXPECT_THAT(
+        MeshCoordinate(1, 1).get_neighbor(shape, 10, 0, MeshCoordinate::BoundaryMode::CLAMP),
+        Optional(MeshCoordinate(2, 1)));  // Clamped to max
+
+    EXPECT_THAT(
+        MeshCoordinate(1, 1).get_neighbor(shape, -10, 1, MeshCoordinate::BoundaryMode::CLAMP),
+        Optional(MeshCoordinate(1, 0)));  // Clamped to min
+}
+
+TEST(GetNeighborTest, BoundaryModeNone) {
+    MeshShape shape(3, 4);
+
+    // Valid neighbors
+    EXPECT_THAT(
+        MeshCoordinate(1, 1).get_neighbor(shape, 1, 0, MeshCoordinate::BoundaryMode::NONE),
+        Optional(MeshCoordinate(2, 1)));
+
+    // Out of bounds returns nullopt
+    EXPECT_THAT(MeshCoordinate(0, 0).get_neighbor(shape, -1, 0, MeshCoordinate::BoundaryMode::NONE), Eq(std::nullopt));
+    EXPECT_THAT(MeshCoordinate(2, 3).get_neighbor(shape, 1, 1, MeshCoordinate::BoundaryMode::NONE), Eq(std::nullopt));
+
+    // Larger offsets that go out of bounds
+    EXPECT_THAT(MeshCoordinate(1, 1).get_neighbor(shape, 2, 0, MeshCoordinate::BoundaryMode::NONE), Eq(std::nullopt));
+}
+
+TEST(GetNeighborTest, NegativeDimensionIndex) {
+    MeshShape shape(3, 4, 5);
+    MeshCoordinate coord(1, 2, 3);
+
+    // Negative dimension indexing (Python-style)
+    EXPECT_THAT(
+        coord.get_neighbor(shape, 1, -1, MeshCoordinate::BoundaryMode::WRAP),  // Last dimension
+        Optional(MeshCoordinate(1, 2, 4)));
+
+    EXPECT_THAT(
+        coord.get_neighbor(shape, 1, -2, MeshCoordinate::BoundaryMode::WRAP),  // Second to last dimension
+        Optional(MeshCoordinate(1, 3, 3)));
+
+    EXPECT_THAT(
+        coord.get_neighbor(shape, 1, -3, MeshCoordinate::BoundaryMode::WRAP),  // Third to last (first) dimension
+        Optional(MeshCoordinate(2, 2, 3)));
+}
+
+TEST(GetNeighborTest, DirectionalMovement2D) {
+    // Test N/E/S/W movement as in the user's example
+    MeshShape shape(3, 4);
+    MeshCoordinate src(1, 2);
+
+    // North (negative along dimension 0)
+    EXPECT_THAT(src.get_neighbor(shape, -1, 0, MeshCoordinate::BoundaryMode::WRAP), Optional(MeshCoordinate(0, 2)));
+
+    // East (positive along dimension 1)
+    EXPECT_THAT(src.get_neighbor(shape, 1, 1, MeshCoordinate::BoundaryMode::WRAP), Optional(MeshCoordinate(1, 3)));
+
+    // South (positive along dimension 0)
+    EXPECT_THAT(src.get_neighbor(shape, 1, 0, MeshCoordinate::BoundaryMode::WRAP), Optional(MeshCoordinate(2, 2)));
+
+    // West (negative along dimension 1)
+    EXPECT_THAT(src.get_neighbor(shape, -1, 1, MeshCoordinate::BoundaryMode::WRAP), Optional(MeshCoordinate(1, 1)));
+}
+
+TEST(GetNeighborTest, TorusTopology) {
+    // Test torus wrapping behavior
+    MeshShape shape(3, 3);
+
+    // Corner wrapping
+    MeshCoordinate corner(0, 0);
+
+    EXPECT_THAT(
+        corner.get_neighbor(shape, -1, 0, MeshCoordinate::BoundaryMode::WRAP),
+        Optional(MeshCoordinate(2, 0)));  // Wraps to bottom
+
+    EXPECT_THAT(
+        corner.get_neighbor(shape, -1, 1, MeshCoordinate::BoundaryMode::WRAP),
+        Optional(MeshCoordinate(0, 2)));  // Wraps to right
+
+    // Opposite corner
+    corner = MeshCoordinate(2, 2);
+
+    EXPECT_THAT(
+        corner.get_neighbor(shape, 1, 0, MeshCoordinate::BoundaryMode::WRAP),
+        Optional(MeshCoordinate(0, 2)));  // Wraps to top
+
+    EXPECT_THAT(
+        corner.get_neighbor(shape, 1, 1, MeshCoordinate::BoundaryMode::WRAP),
+        Optional(MeshCoordinate(2, 0)));  // Wraps to left
+}
+
+TEST(GetNeighborTest, DimensionMismatch) {
+    MeshShape shape(3, 4);
+    MeshCoordinate coord(1, 2, 3);  // 3D coordinate
+
+    // Should throw due to dimension mismatch
+    EXPECT_ANY_THROW(coord.get_neighbor(shape, 1, 0, MeshCoordinate::BoundaryMode::WRAP));
+}
+
+TEST(GetNeighborTest, InvalidDimension) {
+    MeshShape shape(3, 4);
+    MeshCoordinate coord(1, 2);
+
+    // Out of range dimension
+    EXPECT_ANY_THROW(coord.get_neighbor(shape, 1, 2, MeshCoordinate::BoundaryMode::WRAP));
+    EXPECT_ANY_THROW(coord.get_neighbor(shape, 1, -3, MeshCoordinate::BoundaryMode::WRAP));
+}
+
+TEST(GetNeighborTest, OutOfBoundsInputCoordinate) {
+    MeshShape shape(3, 4);
+
+    // Coordinate with first dimension out of bounds
+    MeshCoordinate out_of_bounds1(3, 2);  // First dim is 3, but shape is only 3 (valid: 0-2)
+    EXPECT_ANY_THROW(out_of_bounds1.get_neighbor(shape, 1, 0, MeshCoordinate::BoundaryMode::WRAP));
+    EXPECT_ANY_THROW(out_of_bounds1.get_neighbor(shape, 1, 0, MeshCoordinate::BoundaryMode::CLAMP));
+    EXPECT_ANY_THROW(out_of_bounds1.get_neighbor(shape, 1, 0, MeshCoordinate::BoundaryMode::NONE));
+
+    // Coordinate with second dimension out of bounds
+    MeshCoordinate out_of_bounds2(1, 4);  // Second dim is 4, but shape is only 4 (valid: 0-3)
+    EXPECT_ANY_THROW(out_of_bounds2.get_neighbor(shape, 1, 1, MeshCoordinate::BoundaryMode::WRAP));
+    EXPECT_ANY_THROW(out_of_bounds2.get_neighbor(shape, 1, 1, MeshCoordinate::BoundaryMode::CLAMP));
+    EXPECT_ANY_THROW(out_of_bounds2.get_neighbor(shape, 1, 1, MeshCoordinate::BoundaryMode::NONE));
+
+    // Coordinate with both dimensions out of bounds
+    MeshCoordinate out_of_bounds3(5, 10);
+    EXPECT_ANY_THROW(out_of_bounds3.get_neighbor(shape, 0, 0, MeshCoordinate::BoundaryMode::WRAP));
+}
+
+TEST(MeshCoordinateRangeTest, Wraparound1D_BasicIterationAndShape) {
+    MeshShape shape(5);
+    MeshCoordinateRange range(MeshCoordinate(4), MeshCoordinate(1), shape);
+    std::vector<MeshCoordinate> coords;
+    for (const auto& c : range) {
+        coords.push_back(c);
+    }
+    EXPECT_THAT(coords, ElementsAre(MeshCoordinate(4), MeshCoordinate(0), MeshCoordinate(1)));
+    EXPECT_EQ(range.shape(), MeshShape(3));
+    EXPECT_TRUE(range.contains(MeshCoordinate(4)));
+    EXPECT_TRUE(range.contains(MeshCoordinate(0)));
+    EXPECT_TRUE(range.contains(MeshCoordinate(1)));
+    EXPECT_FALSE(range.contains(MeshCoordinate(2)));
+    EXPECT_FALSE(range.contains(MeshCoordinate(3)));
+}
+
+TEST(MeshCoordinateRangeTest, Wraparound1D_FullWrap) {
+    MeshShape shape(5);
+    MeshCoordinateRange range(MeshCoordinate(1), MeshCoordinate(0), shape);
+    std::vector<MeshCoordinate> coords;
+    for (const auto& c : range) {
+        coords.push_back(c);
+    }
+    EXPECT_THAT(
+        coords,
+        ElementsAre(MeshCoordinate(1), MeshCoordinate(2), MeshCoordinate(3), MeshCoordinate(4), MeshCoordinate(0)));
+    EXPECT_EQ(range.shape(), MeshShape(5));
+    // Since full wrap, contains all
+    for (uint32_t i = 0; i < 5; ++i) {
+        EXPECT_TRUE(range.contains(MeshCoordinate(i)));
+    }
+}
+
+TEST(MeshCoordinateRangeTest, Wraparound2D_PartialWrap) {
+    MeshShape shape(4, 4);
+    MeshCoordinateRange range(MeshCoordinate(1, 3), MeshCoordinate(2, 1), shape);
+    std::vector<MeshCoordinate> coords;
+    for (const auto& c : range) {
+        coords.push_back(c);
+    }
+    EXPECT_THAT(
+        coords,
+        ElementsAre(
+            MeshCoordinate(1, 3),
+            MeshCoordinate(1, 0),
+            MeshCoordinate(1, 1),
+            MeshCoordinate(2, 3),
+            MeshCoordinate(2, 0),
+            MeshCoordinate(2, 1)));
+    EXPECT_EQ(range.shape(), MeshShape(2, 3));
+    EXPECT_TRUE(range.contains(MeshCoordinate(1, 3)));
+    EXPECT_TRUE(range.contains(MeshCoordinate(2, 1)));
+    EXPECT_FALSE(range.contains(MeshCoordinate(1, 2)));
+    EXPECT_FALSE(range.contains(MeshCoordinate(0, 0)));
+    EXPECT_FALSE(range.contains(MeshCoordinate(3, 3)));
+}
+
+TEST(MeshCoordinateRangeTest, Wraparound3D_BasicIterationAndShape) {
+    MeshShape shape(3, 4, 5);
+    MeshCoordinateRange range(MeshCoordinate(2, 3, 4), MeshCoordinate(0, 1, 2), shape);
+    std::vector<MeshCoordinate> coords;
+    for (const auto& c : range) {
+        coords.push_back(c);
+    }
+    EXPECT_EQ(coords.size(), 2 * 3 * 4);  // lengths 2,3,4
+    EXPECT_EQ(range.shape(), MeshShape(2, 3, 4));
+    EXPECT_TRUE(range.contains(MeshCoordinate(2, 3, 4)));
+    EXPECT_TRUE(range.contains(MeshCoordinate(0, 1, 2)));
+    EXPECT_FALSE(range.contains(MeshCoordinate(1, 2, 3)));  // Assuming not in range
+}
+
+TEST(MeshCoordinateRangeTest, Wraparound3D_Intersection) {
+    MeshShape shape(5, 5, 5);
+    MeshCoordinateRange a(MeshCoordinate(4, 4, 4), MeshCoordinate(1, 1, 1), shape);
+    MeshCoordinateRange b(MeshCoordinate(0, 0, 0), MeshCoordinate(3, 3, 3), shape);
+    auto inter_opt = a.intersection(b);
+    ASSERT_TRUE(inter_opt.has_value());
+    auto& inter = inter_opt.value();
+    // Check bounding range contains intersecting points (overapprox ok)
+    EXPECT_TRUE(inter.contains(MeshCoordinate(0, 0, 0)));
+    EXPECT_TRUE(inter.contains(MeshCoordinate(1, 1, 1)));
+    // May contain extra, but verify shape or something
+    EXPECT_GE(inter.shape().mesh_size(), 8);  // At least 2^3 for corners
+}
+
+TEST(MeshCoordinateRangeTest, Wraparound4D_BasicIterationAndShape) {
+    MeshShape shape({2, 3, 4, 5});
+    MeshCoordinateRange range(
+        MeshCoordinate(std::vector<uint32_t>{1, 2, 3, 4}), MeshCoordinate(std::vector<uint32_t>{0, 1, 0, 1}), shape);
+    std::vector<MeshCoordinate> coords;
+    for (const auto& c : range) {
+        coords.push_back(c);
+    }
+    EXPECT_EQ(
+        coords.size(), 2 * 3 * 2 * 3);  // lengths: dim0: (1 to 0) -> (2-1)+(0+1)=2, dim1: (2 to 1) -> (3-2)+(1+1)=3,
+                                        // dim2: (3 to 0) -> (4-3)+(0+1)=2, dim3: (4 to 1) -> (5-4)+(1+1)=3
+    EXPECT_EQ(range.shape(), MeshShape({2, 3, 2, 3}));
+    EXPECT_TRUE(range.contains(MeshCoordinate(std::vector<uint32_t>{1, 2, 3, 4})));
+    EXPECT_TRUE(range.contains(MeshCoordinate(std::vector<uint32_t>{0, 1, 0, 1})));
+    EXPECT_FALSE(range.contains(MeshCoordinate(std::vector<uint32_t>{0, 0, 2, 2})));
+}
+
+// Add more detailed assertions as needed
 
 }  // namespace
 }  // namespace tt::tt_metal::distributed

@@ -33,10 +33,8 @@ void kernel_main() {
     bool do_third_multicast = get_arg_val<uint32_t>(24) == 1;
 
     constexpr uint32_t cb_id = get_compile_time_arg_val(0);
-    constexpr bool src_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr bool dst_is_dram = get_compile_time_arg_val(2) == 1;
-
-    const DataFormat data_format = get_dataformat(cb_id);
+    constexpr auto src_args = TensorAccessorArgs<1>();
+    constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
     // if controller core then this local address will be incremented by remote cores,
     // otherwise controller core will set this to signal that write to dst can be done once controller core sees
@@ -47,11 +45,8 @@ void kernel_main() {
     constexpr uint32_t ublock_size_tiles = 1;
     uint32_t tile_bytes = get_tile_size(cb_id);
 
-    const InterleavedAddrGenFast<src_is_dram> src_addrgen = {
-        .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
-
-    const InterleavedAddrGenFast<dst_is_dram> dst_addrgen = {
-        .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto src_addrgen = TensorAccessor(src_args, src_addr, tile_bytes);
+    const auto dst_addrgen = TensorAccessor(dst_args, dst_addr, tile_bytes);
 
     // read a ublock of tiles from src to CB
     cb_reserve_back(cb_id, num_tiles);

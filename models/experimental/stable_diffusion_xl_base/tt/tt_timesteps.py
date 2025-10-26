@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,8 +6,10 @@ from math import log
 import torch
 import ttnn
 
+from models.common.lightweightmodule import LightweightModule
 
-class TtTimesteps:
+
+class TtTimesteps(LightweightModule):
     def __init__(self, device, num_channels, flip_sin_to_cos, downscale_freq_shift, scale):
         super().__init__()
 
@@ -32,8 +34,8 @@ class TtTimesteps:
         )
 
     def forward(self, timesteps):
-        emb = ttnn.multiply(ttnn.unsqueeze(timesteps, -1), ttnn.unsqueeze(self.emb, 0))
-        emb = ttnn.multiply(emb, self.scale)
+        emb = ttnn.multiply(ttnn.unsqueeze(timesteps, -1), ttnn.unsqueeze(self.emb, 0), use_legacy=False)
+        emb = ttnn.multiply(emb, self.scale, use_legacy=False)
 
         emb = ttnn.concat([ttnn.sin(emb), ttnn.cos(emb)], dim=-1)
 

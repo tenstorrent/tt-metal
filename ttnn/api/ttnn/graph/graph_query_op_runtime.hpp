@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,8 @@ struct RuntimeQueryResponse {
     std::optional<std::string> error_message;
 };
 
-static constexpr int NUM_TRACE_EXECUTIONS = 10;
+static constexpr size_t NUM_TRACE_EXECUTIONS = 20;
+static constexpr size_t WARMUP_TRACE_EXECUTIONS = 5;
 
 /**
  * @brief Extracts a trace of the operation(s) and returns the trace ID.
@@ -43,6 +44,8 @@ auto capture_op_trace(Op op, MeshDevice* device, Args&&... args) {
     auto transform_arg = [device](auto&& arg) {
         if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, TensorSpec>) {
             return create_device_tensor(arg, device);
+        } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::optional<TensorSpec>>) {
+            return arg ? std::optional<Tensor>(create_device_tensor(*arg, device)) : std::nullopt;
         } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::vector<TensorSpec>>) {
             std::vector<Tensor> result(arg.size());
             std::transform(arg.begin(), arg.end(), result.begin(), [device](auto&& arg) {
@@ -60,16 +63,16 @@ auto capture_op_trace(Op op, MeshDevice* device, Args&&... args) {
         std::apply(op, transformed_args);
     }
 
-    auto trace_id = ttnn::operations::trace::begin_trace_capture(device, ttnn::DefaultQueueId);
+    auto trace_id = ttnn::operations::trace::begin_trace_capture(device, ttnn::QueueId(0));
     try {
         std::apply(op, transformed_args);
     } catch (const std::exception& e) {
         // Ensure trace capture is stopped and released before returning to avoid a memory leak
-        ttnn::operations::trace::end_trace_capture(device, trace_id, ttnn::DefaultQueueId);
+        ttnn::operations::trace::end_trace_capture(device, trace_id, ttnn::QueueId(0));
         ttnn::operations::trace::release_trace(device, trace_id);
         throw e;
     }
-    ttnn::operations::trace::end_trace_capture(device, trace_id, ttnn::DefaultQueueId);
+    ttnn::operations::trace::end_trace_capture(device, trace_id, ttnn::QueueId(0));
 
     return trace_id;
 }
@@ -85,17 +88,22 @@ auto capture_op_trace(Op op, MeshDevice* device, Args&&... args) {
  * @return Trace runtime in nanoseconds.
  */
 template <typename TraceID>
-uint64_t execute_time_and_release_trace(TraceID trace_id, MeshDevice* device) {
+uint64_t execute_time_and_release_trace(TraceID trace_id, MeshDevice* device, QueueId cq_id = QueueId(0)) {
     try {
+        for (size_t i = 0; i < WARMUP_TRACE_EXECUTIONS; ++i) {
+            ttnn::operations::trace::execute_trace(device, trace_id, cq_id, /* blocking = */ true);
+        }
+
         uint64_t duration = 0;
-        for (int i = 0; i < NUM_TRACE_EXECUTIONS; ++i) {
+        for (size_t i = 0; i < NUM_TRACE_EXECUTIONS; ++i) {
             auto start = std::chrono::high_resolution_clock::now();
-            ttnn::operations::trace::execute_trace(device, trace_id, ttnn::DefaultQueueId, /* blocking = */ true);
+            ttnn::operations::trace::execute_trace(device, trace_id, cq_id, /* blocking = */ true);
             auto end = std::chrono::high_resolution_clock::now();
             duration += std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
         }
 
         ttnn::operations::trace::release_trace(device, trace_id);
+
         return duration / NUM_TRACE_EXECUTIONS;
 
     } catch (const std::exception& e) {

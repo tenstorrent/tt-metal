@@ -18,7 +18,7 @@ namespace operations {
 using namespace tt::tt_metal;
 
 inline bool is_dram(const Tensor& tensor) { return tensor.memory_config().buffer_type() == BufferType::DRAM; }
-inline bool is_dram(const std::optional<const Tensor> tensor) {
+inline bool is_dram(const std::optional<const Tensor>& tensor) {
     return tensor.has_value() ? is_dram(tensor.value()) : true;
 }
 inline bool is_dram(const std::optional<std::reference_wrapper<const Tensor>> tensor) {
@@ -71,18 +71,18 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::vector<uint32_t>& compile_args = {},
-    std::map<string, string> defines = {});
+    std::map<std::string, std::string> defines = {});
 
 [[maybe_unused]] KernelHandle CreateWriteKernel(
     Program& program,
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::vector<uint32_t>& compile_args = {},
-    std::map<string, string> defines = {});
+    std::map<std::string, std::string> defines = {});
 
 struct ComputeKernelArg {
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec;
-    uint32_t num_tile_per_core_group;
+    uint32_t num_tile_per_core_group{};
     const std::vector<uint32_t>& compile_args = {};
 };
 
@@ -129,9 +129,8 @@ struct CircularBufferArg {
     tt::DataFormat data_format;
     std::optional<std::variant<CoreCoord, CoreRange, CoreRangeSet>> core_range = std::nullopt;
 
-    CircularBufferArg(uint32_t buffer_index, uint32_t num_tiles) : buffer_index(buffer_index), num_tiles(num_tiles) {
-        data_format = tt::DataFormat::Invalid;
-    }
+    CircularBufferArg(uint32_t buffer_index, uint32_t num_tiles) :
+        buffer_index(buffer_index), num_tiles(num_tiles), data_format(tt::DataFormat::Invalid) {}
     CircularBufferArg(uint32_t buffer_index, uint32_t num_tiles, tt::DataFormat data_format) :
         buffer_index(buffer_index), num_tiles(num_tiles), data_format(data_format) {}
 };
@@ -197,7 +196,7 @@ auto create_override_runtime_arguments_callback(
                     runtime_args[rt_idx++] = input_tensors.at(idx).buffer()->address();
                 }
                 for (uint32_t idx = 0; idx < optional_input_tensors.size(); idx++) {
-                    auto optional_input_tensor = optional_input_tensors.at(idx);
+                    const auto& optional_input_tensor = optional_input_tensors.at(idx);
                     runtime_args[rt_idx++] =
                         optional_input_tensor.has_value() ? optional_input_tensor.value().buffer()->address() : 0;
                 }
@@ -222,7 +221,7 @@ auto create_override_runtime_arguments_callback(
     KernelHandle writer_kernel_id,
     uint32_t num_cores,
     uint32_t core_h,
-    CallbackArgMap arg_map) {
+    const CallbackArgMap& arg_map) {
     return [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, arg_map, num_cores, core_h](
                const void* operation,
                Program& program,
@@ -239,7 +238,7 @@ auto create_override_runtime_arguments_callback(
                     runtime_args[pair.first] = input_tensors.at(pair.second).buffer()->address();
                 }
                 for (const auto& pair : arg_map.optional_input) {
-                    auto optional_input_tensor = optional_input_tensors.at(pair.second);
+                    const auto& optional_input_tensor = optional_input_tensors.at(pair.second);
                     runtime_args[pair.first] =
                         optional_input_tensor.has_value() ? optional_input_tensor.value().buffer()->address() : 0;
                 }

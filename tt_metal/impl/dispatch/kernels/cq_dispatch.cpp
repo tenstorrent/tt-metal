@@ -17,84 +17,87 @@
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
-#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 
 // The command queue write interface controls writes to the completion region, host owns the completion region read
 // interface Data requests from device and event states are written to the completion region
 
 CQWriteInterface cq_write_interface;
 
-constexpr uint32_t dispatch_cb_base = get_compile_time_arg_val(0);
-constexpr uint32_t dispatch_cb_log_page_size = get_compile_time_arg_val(1);
-constexpr uint32_t dispatch_cb_pages = get_compile_time_arg_val(2);
-constexpr uint32_t my_dispatch_cb_sem_id = get_compile_time_arg_val(3);
-constexpr uint32_t upstream_dispatch_cb_sem_id = get_compile_time_arg_val(4);
-constexpr uint32_t dispatch_cb_blocks = get_compile_time_arg_val(5);
-constexpr uint32_t upstream_sync_sem = get_compile_time_arg_val(6);
-constexpr uint32_t command_queue_base_addr = get_compile_time_arg_val(7);
-constexpr uint32_t completion_queue_base_addr = get_compile_time_arg_val(8);
-constexpr uint32_t completion_queue_size = get_compile_time_arg_val(9);
-constexpr uint32_t downstream_cb_base = get_compile_time_arg_val(10);
-constexpr uint32_t downstream_cb_size = get_compile_time_arg_val(11);
-constexpr uint32_t my_downstream_cb_sem_id = get_compile_time_arg_val(12);
-constexpr uint32_t downstream_cb_sem_id = get_compile_time_arg_val(13);
-constexpr uint32_t split_dispatch_page_preamble_size = get_compile_time_arg_val(14);
-constexpr uint32_t split_prefetch = get_compile_time_arg_val(15);
-constexpr uint32_t prefetch_h_noc_xy = get_compile_time_arg_val(16);
-constexpr uint32_t prefetch_h_local_downstream_sem_addr = get_compile_time_arg_val(17);
-constexpr uint32_t prefetch_h_max_credits = get_compile_time_arg_val(18);
-constexpr uint32_t packed_write_max_unicast_sub_cmds = get_compile_time_arg_val(19);  // Number of cores in compute grid
-constexpr uint32_t dispatch_s_sync_sem_base_addr = get_compile_time_arg_val(20);
-constexpr uint32_t max_num_worker_sems = get_compile_time_arg_val(21);  // maximum number of worker semaphores
+constexpr uint32_t dispatch_cb_base = DISPATCH_CB_BASE;
+constexpr uint32_t dispatch_cb_log_page_size = DISPATCH_CB_LOG_PAGE_SIZE;
+constexpr uint32_t dispatch_cb_pages = DISPATCH_CB_PAGES;
+constexpr uint32_t my_dispatch_cb_sem_id = MY_DISPATCH_CB_SEM_ID;
+constexpr uint32_t upstream_dispatch_cb_sem_id = UPSTREAM_DISPATCH_CB_SEM_ID;
+constexpr uint32_t dispatch_cb_blocks = DISPATCH_CB_BLOCKS;
+constexpr uint32_t upstream_sync_sem = UPSTREAM_SYNC_SEM;
+constexpr uint32_t command_queue_base_addr = COMMAND_QUEUE_BASE_ADDR;
+constexpr uint32_t completion_queue_base_addr = COMPLETION_QUEUE_BASE_ADDR;
+constexpr uint32_t completion_queue_size = COMPLETION_QUEUE_SIZE;
+constexpr uint32_t downstream_cb_base = DOWNSTREAM_CB_BASE;
+constexpr uint32_t downstream_cb_size = DOWNSTREAM_CB_SIZE;
+constexpr uint32_t my_downstream_cb_sem_id = MY_DOWNSTREAM_CB_SEM_ID;
+constexpr uint32_t downstream_cb_sem_id = DOWNSTREAM_CB_SEM_ID;
+constexpr uint32_t split_dispatch_page_preamble_size = SPLIT_DISPATCH_PAGE_PREAMBLE_SIZE;
+constexpr uint32_t split_prefetch = SPLIT_PREFETCH;
+constexpr uint32_t prefetch_h_noc_xy = PREFETCH_H_NOC_XY;
+constexpr uint32_t prefetch_h_local_downstream_sem_addr = PREFETCH_H_LOCAL_DOWNSTREAM_SEM_ADDR;
+constexpr uint32_t prefetch_h_max_credits = PREFETCH_H_MAX_CREDITS;
+constexpr uint32_t packed_write_max_unicast_sub_cmds =
+    PACKED_WRITE_MAX_UNICAST_SUB_CMDS;  // Number of cores in compute grid
+constexpr uint32_t dispatch_s_sync_sem_base_addr = DISPATCH_S_SYNC_SEM_BASE_ADDR;
+constexpr uint32_t max_num_worker_sems = MAX_NUM_WORKER_SEMS;  // maximum number of worker semaphores
 constexpr uint32_t max_num_go_signal_noc_data_entries =
-    get_compile_time_arg_val(22);  // maximum number of go signal data words
-constexpr uint32_t mcast_go_signal_addr = get_compile_time_arg_val(23);
-constexpr uint32_t unicast_go_signal_addr = get_compile_time_arg_val(24);
-constexpr uint32_t distributed_dispatcher = get_compile_time_arg_val(25);
-constexpr uint32_t host_completion_q_wr_ptr = get_compile_time_arg_val(26);
-constexpr uint32_t dev_completion_q_wr_ptr = get_compile_time_arg_val(27);
-constexpr uint32_t dev_completion_q_rd_ptr = get_compile_time_arg_val(28);
+    MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES;  // maximum number of go signal data words
+constexpr uint32_t mcast_go_signal_addr = MCAST_GO_SIGNAL_ADDR;
+constexpr uint32_t unicast_go_signal_addr = UNICAST_GO_SIGNAL_ADDR;
+constexpr uint32_t distributed_dispatcher = DISTRIBUTED_DISPATCHER;
+constexpr uint32_t host_completion_q_wr_ptr = HOST_COMPLETION_Q_WR_PTR;
+constexpr uint32_t dev_completion_q_wr_ptr = DEV_COMPLETION_Q_WR_PTR;
+constexpr uint32_t dev_completion_q_rd_ptr = DEV_COMPLETION_Q_RD_PTR;
 
-constexpr uint32_t first_stream_used = get_compile_time_arg_val(29);
+constexpr uint32_t first_stream_used = FIRST_STREAM_USED;
 
-constexpr uint32_t virtualize_unicast_cores = get_compile_time_arg_val(30);
-constexpr uint32_t num_virtual_unicast_cores = get_compile_time_arg_val(31);
-constexpr uint32_t num_physical_unicast_cores = get_compile_time_arg_val(32);
+constexpr uint32_t virtualize_unicast_cores = VIRTUALIZE_UNICAST_CORES;
+constexpr uint32_t num_virtual_unicast_cores = NUM_VIRTUAL_UNICAST_CORES;
+constexpr uint32_t num_physical_unicast_cores = NUM_PHYSICAL_UNICAST_CORES;
 
 // fabric mux connection
-constexpr uint32_t fabric_header_rb_base = get_compile_time_arg_val(33);
-constexpr uint32_t fabric_header_rb_entries = get_compile_time_arg_val(34);
-constexpr uint32_t my_fabric_sync_status_addr = get_compile_time_arg_val(35);
+constexpr uint32_t fabric_header_rb_base = FABRIC_HEADER_RB_BASE;
+constexpr uint32_t fabric_header_rb_entries = FABRIC_HEADER_RB_ENTRIES;
+constexpr uint32_t my_fabric_sync_status_addr = MY_FABRIC_SYNC_STATUS_ADDR;
 
-constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(36);
-constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(37);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(38);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(39);
-constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(40);
-constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(41);
-constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(42);
-constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(43);
-constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(44);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(45);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(46);
-constexpr size_t worker_credits_stream_id = get_compile_time_arg_val(47);
+constexpr uint8_t fabric_mux_x = FABRIC_MUX_X;
+constexpr uint8_t fabric_mux_y = FABRIC_MUX_Y;
+constexpr uint8_t fabric_mux_num_buffers_per_channel = FABRIC_MUX_NUM_BUFFERS_PER_CHANNEL;
+constexpr size_t fabric_mux_channel_buffer_size_bytes = FABRIC_MUX_CHANNEL_BUFFER_SIZE_BYTES;
+constexpr size_t fabric_mux_channel_base_address = FABRIC_MUX_CHANNEL_BASE_ADDRESS;
+constexpr size_t fabric_mux_connection_info_address = FABRIC_MUX_CONNECTION_INFO_ADDRESS;
+constexpr size_t fabric_mux_connection_handshake_address = FABRIC_MUX_CONNECTION_HANDSHAKE_ADDRESS;
+constexpr size_t fabric_mux_flow_control_address = FABRIC_MUX_FLOW_CONTROL_ADDRESS;
+constexpr size_t fabric_mux_buffer_index_address = FABRIC_MUX_BUFFER_INDEX_ADDRESS;
+constexpr size_t fabric_mux_status_address = FABRIC_MUX_STATUS_ADDRESS;
+constexpr size_t fabric_mux_termination_signal_address = FABRIC_MUX_TERMINATION_SIGNAL_ADDRESS;
+constexpr size_t worker_credits_stream_id = WORKER_CREDITS_STREAM_ID;
 
-constexpr size_t fabric_worker_flow_control_sem = get_compile_time_arg_val(48);
-constexpr size_t fabric_worker_teardown_sem = get_compile_time_arg_val(49);
-constexpr size_t fabric_worker_buffer_index_sem = get_compile_time_arg_val(50);
+constexpr size_t fabric_worker_flow_control_sem = FABRIC_WORKER_FLOW_CONTROL_SEM;
+constexpr size_t fabric_worker_teardown_sem = FABRIC_WORKER_TEARDOWN_SEM;
+constexpr size_t fabric_worker_buffer_index_sem = FABRIC_WORKER_BUFFER_INDEX_SEM;
 
-constexpr uint8_t num_hops = static_cast<uint8_t>(get_compile_time_arg_val(51));
+constexpr uint8_t num_hops = static_cast<uint8_t>(NUM_HOPS);
 
-constexpr uint32_t my_dev_id = get_compile_time_arg_val(52);
-constexpr uint32_t ew_dim = get_compile_time_arg_val(53);
-constexpr uint32_t to_mesh_id = get_compile_time_arg_val(54);
-constexpr uint32_t to_dev_id = get_compile_time_arg_val(55);
-constexpr uint32_t router_direction = get_compile_time_arg_val(56);
+constexpr uint32_t my_dev_id = MY_DEV_ID;
+constexpr uint32_t ew_dim = EW_DIM;
+constexpr uint32_t to_mesh_id = TO_MESH_ID;
+constexpr uint32_t to_dev_id = TO_DEV_ID;
+constexpr uint32_t router_direction = ROUTER_DIRECTION;
 
 constexpr bool is_2d_fabric = static_cast<bool>(FABRIC_2D);
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(57);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(58);
+constexpr uint32_t worker_mcast_grid = WORKER_MCAST_GRID;
+constexpr uint32_t num_worker_cores_to_mcast = NUM_WORKER_CORES_TO_MCAST;
+
+constexpr uint32_t is_d_variant = IS_D_VARIANT;
+constexpr uint32_t is_h_variant = IS_H_VARIANT;
 
 constexpr uint8_t upstream_noc_index = UPSTREAM_NOC_INDEX;
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
@@ -153,6 +156,17 @@ struct GoSignalState {
     uint32_t go_signal;
     uint32_t wait_count;
 };
+
+extern "C" {
+// These variables are used by triage to help report dispatcher state.
+volatile uint32_t last_wait_count = 0;
+volatile uint32_t last_wait_stream = 0;
+constexpr uint32_t stream_addr0 = STREAM_REG_ADDR(0, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+constexpr uint32_t stream_addr1 = STREAM_REG_ADDR(1, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+constexpr uint32_t stream_width = MEM_WORD_ADDR_WIDTH;
+volatile uint32_t last_event;
+}
+
 
 static GoSignalState go_signal_state_ring_buf[4];
 static uint8_t go_signal_state_wr_ptr = 0;
@@ -234,84 +248,94 @@ void process_write_host_h(uint32_t& block_noc_writes_to_clear, uint32_t block_ne
     uint32_t completion_write_ptr;
     // We will send the cmd back in the first X bytes, this makes the logic of reserving/pushing completion queue
     // pages much simpler since we are always sending writing full pages (except for last page)
-    uint32_t length = cmd->write_linear_host.length;
+    uint64_t wlength = cmd->write_linear_host.length;
+    bool is_event = cmd->write_linear_host.is_event;
     // DPRINT << "process_write_host_h: " << length << ENDL();
     uint32_t data_ptr = cmd_ptr;
 #if !defined(FABRIC_RELAY)
     cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, pcie_noc_xy, 0);
 #endif
-    while (length != 0) {
-        // Get a page if needed
-        if (cb_fence == data_ptr) {
-            // Check for block completion
-            if (cb_fence == block_next_start_addr[rd_block_idx]) {
-                // Check for dispatch_cb wrap
-                if (rd_block_idx == dispatch_cb_blocks - 1) {
-                    cb_fence = dispatch_cb_base;
-                    data_ptr = dispatch_cb_base;
+    constexpr uint32_t max_batch_size = ~(dispatch_cb_page_size - 1);
+    if (is_event) {
+        last_event = ((uint32_t*)(data_ptr + sizeof(CQDispatchCmd)))[0];
+    }
+    while (wlength != 0) {
+        uint32_t length = (wlength > max_batch_size) ? max_batch_size : static_cast<uint32_t>(wlength);
+        wlength -= length;
+        while (length != 0) {
+            // Get a page if needed
+            if (cb_fence == data_ptr) {
+                // Check for block completion
+                if (cb_fence == block_next_start_addr[rd_block_idx]) {
+                    // Check for dispatch_cb wrap
+                    if (rd_block_idx == dispatch_cb_blocks - 1) {
+                        cb_fence = dispatch_cb_base;
+                        data_ptr = dispatch_cb_base;
+                    }
+                    if constexpr (is_h_variant && is_d_variant) {
+                        move_rd_to_next_block_and_release_pages<
+                            upstream_noc_index,
+                            upstream_noc_xy,
+                            upstream_dispatch_cb_sem_id,
+                            dispatch_cb_pages_per_block,
+                            dispatch_cb_blocks>(block_noc_writes_to_clear, rd_block_idx);
+                    } else {
+                        move_rd_to_next_block_and_release_pages_remote<
+                            upstream_noc_index,
+                            upstream_noc_xy,
+                            upstream_dispatch_cb_sem_id,
+                            dispatch_cb_pages_per_block,
+                            dispatch_cb_blocks>(relay_client, block_noc_writes_to_clear, rd_block_idx);
+                    }
                 }
-                if constexpr (is_h_variant && is_d_variant) {
-                    move_rd_to_next_block_and_release_pages<
-                        upstream_noc_index,
-                        upstream_noc_xy,
-                        upstream_dispatch_cb_sem_id,
-                        dispatch_cb_pages_per_block,
-                        dispatch_cb_blocks>(block_noc_writes_to_clear, rd_block_idx);
-                } else {
-                    move_rd_to_next_block_and_release_pages_remote<
-                        upstream_noc_index,
-                        upstream_noc_xy,
-                        upstream_dispatch_cb_sem_id,
-                        dispatch_cb_pages_per_block,
-                        dispatch_cb_blocks>(relay_client, block_noc_writes_to_clear, rd_block_idx);
-                }
-            }
-            // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
-            uint32_t n_pages = cb_acquire_pages<my_dispatch_cb_sem_id, dispatch_cb_log_page_size>(
-                cb_fence, block_next_start_addr, rd_block_idx, upstream_total_acquired_page_count);
+                // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
+                uint32_t n_pages = cb_acquire_pages<my_dispatch_cb_sem_id, dispatch_cb_log_page_size>(
+                    cb_fence, block_next_start_addr, rd_block_idx, upstream_total_acquired_page_count);
 
-            cb_fence += n_pages * dispatch_cb_page_size;
-        }
-        uint32_t available_data = cb_fence - data_ptr;
-        uint32_t xfer_size = (length > available_data) ? available_data : length;
-        uint32_t npages = (xfer_size + completion_queue_page_size - 1) / completion_queue_page_size;
-        completion_queue_reserve_back(npages);
-        uint32_t completion_queue_write_addr = cq_write_interface.completion_fifo_wr_ptr << 4;
-        // completion_queue_write_addr will never be equal to completion_queue_end_addr due to
-        // completion_queue_push_back wrap logic so we don't need to handle this case explicitly to avoid 0 sized
-        // transactions
-        if (completion_queue_write_addr + xfer_size > completion_queue_end_addr) {
-            uint32_t last_chunk_size = completion_queue_end_addr - completion_queue_write_addr;
+                cb_fence += n_pages * dispatch_cb_page_size;
+            }
+            uint32_t available_data = cb_fence - data_ptr;
+            uint32_t xfer_size = (length > available_data) ? available_data : length;
+            uint32_t npages = (xfer_size + completion_queue_page_size - 1) / completion_queue_page_size;
+            completion_queue_reserve_back(npages);
+            uint32_t completion_queue_write_addr = cq_write_interface.completion_fifo_wr_ptr << 4;
+            // completion_queue_write_addr will never be equal to completion_queue_end_addr due to
+            // completion_queue_push_back wrap logic so we don't need to handle this case explicitly to avoid 0 sized
+            // transactions
+            if (completion_queue_write_addr + xfer_size > completion_queue_end_addr) {
+                uint32_t last_chunk_size = completion_queue_end_addr - completion_queue_write_addr;
 #if defined(FABRIC_RELAY)
-            noc_async_write(data_ptr, pcie_noc_xy | completion_queue_write_addr, last_chunk_size);
+                noc_async_write(data_ptr, pcie_noc_xy | completion_queue_write_addr, last_chunk_size);
 #else
-            cq_noc_async_write_with_state_any_len(data_ptr, completion_queue_write_addr, last_chunk_size);
-            uint32_t num_noc_packets_written = div_up(last_chunk_size, NOC_MAX_BURST_SIZE);
+                cq_noc_async_write_with_state_any_len(data_ptr, completion_queue_write_addr, last_chunk_size);
+                uint32_t num_noc_packets_written = div_up(last_chunk_size, NOC_MAX_BURST_SIZE);
+                noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;
+                noc_nonposted_writes_acked[noc_index] += num_noc_packets_written;
+#endif
+                completion_queue_write_addr = completion_queue_base_addr;
+                data_ptr += last_chunk_size;
+                length -= last_chunk_size;
+                xfer_size -= last_chunk_size;
+            }
+#if defined(FABRIC_RELAY)
+            noc_async_write(data_ptr, pcie_noc_xy | completion_queue_write_addr, xfer_size);
+#else
+            cq_noc_async_write_with_state_any_len(data_ptr, completion_queue_write_addr, xfer_size);
+            // completion_queue_push_back below will do a write to host, so we add 1 to the number of data packets
+            // written
+            uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE) + 1;
             noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;
             noc_nonposted_writes_acked[noc_index] += num_noc_packets_written;
 #endif
-            completion_queue_write_addr = completion_queue_base_addr;
-            data_ptr += last_chunk_size;
-            length -= last_chunk_size;
-            xfer_size -= last_chunk_size;
+
+            // This will update the write ptr on device and host
+            // We flush to ensure the ptr has been read out of l1 before we update it again
+            completion_queue_push_back(npages);
+
+            length -= xfer_size;
+            data_ptr += xfer_size;
+            noc_async_writes_flushed();
         }
-#if defined(FABRIC_RELAY)
-        noc_async_write(data_ptr, pcie_noc_xy | completion_queue_write_addr, xfer_size);
-#else
-        cq_noc_async_write_with_state_any_len(data_ptr, completion_queue_write_addr, xfer_size);
-        // completion_queue_push_back below will do a write to host, so we add 1 to the number of data packets written
-        uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE) + 1;
-        noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;
-        noc_nonposted_writes_acked[noc_index] += num_noc_packets_written;
-#endif
-
-        // This will update the write ptr on device and host
-        // We flush to ensure the ptr has been read out of l1 before we update it again
-        completion_queue_push_back(npages);
-
-        length -= xfer_size;
-        data_ptr += xfer_size;
-        noc_async_writes_flushed();
     }
     cmd_ptr = data_ptr;
 }
@@ -334,13 +358,10 @@ void process_exec_buf_end_h() {
 // This means the downstream buffers are always page aligned, simplifies wrap handling
 template <uint32_t preamble_size>
 void relay_to_next_cb(
-    uint32_t data_ptr, uint32_t length, uint32_t& block_noc_writes_to_clear, uint32_t block_next_start_addr[]) {
-    // TODO: Size for fabric
-    static_assert(
-        preamble_size == 0 || preamble_size == sizeof(tt::packet_queue::dispatch_packet_header_t),
-        "Dispatcher preamble size must be 0 or sizeof(dispatch_packet_header_t)");
+    uint32_t data_ptr, uint64_t wlength, uint32_t& block_noc_writes_to_clear, uint32_t block_next_start_addr[]) {
+    static_assert(preamble_size == 0, "Dispatcher preamble size must be 0. This is not supported anymore with Fabric");
 
-    // DPRINT << "relay_to_next_cb: " << data_ptr << " " << cb_fence << " " << length << ENDL();
+    // DPRINT << "relay_to_next_cb: " << data_ptr << " " << cb_fence << " " << wlength << ENDL();
 
     // First page should be valid since it has the command
     ASSERT(data_ptr <= dispatch_cb_end - dispatch_cb_page_size);
@@ -352,78 +373,87 @@ void relay_to_next_cb(
     relay_client.init_write_state_only<my_noc_index, NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0));
     relay_client.init_inline_write_state_only<my_noc_index>(get_noc_addr_helper(downstream_noc_xy, 0));
 
-    while (length > 0) {
-        ASSERT(downstream_cb_end > downstream_cb_data_ptr);
+    constexpr uint32_t max_batch_size = ~(dispatch_cb_page_size - 1);
+    while (wlength != 0) {
+        uint32_t length = (wlength > max_batch_size) ? max_batch_size : static_cast<uint32_t>(wlength);
+        wlength -= length;
+        while (length > 0) {
+            ASSERT(downstream_cb_end > downstream_cb_data_ptr);
 
-        cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(1);
+            cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(1);
 
-        uint32_t xfer_size;
-        bool not_end_of_cmd;
-        if (length > dispatch_cb_page_size - preamble_size) {
-            xfer_size = dispatch_cb_page_size - preamble_size;
-            not_end_of_cmd = true;
-        } else {
-            xfer_size = length;
-            not_end_of_cmd = false;
-        }
-
-        if constexpr (preamble_size > 0) {
-            uint32_t flag;
-            relay_client.write_inline<my_noc_index>(
-                get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr),
-                xfer_size + preamble_size + not_end_of_cmd);
-            downstream_cb_data_ptr += preamble_size;
-            ASSERT(downstream_cb_data_ptr < downstream_cb_end);
-        }
-        // Get a page if needed
-        if (data_ptr + xfer_size > cb_fence) {
-            // Check for block completion
-            if (cb_fence == block_next_start_addr[rd_block_idx]) {
-                uint32_t orphan_size = cb_fence - data_ptr;
-                // No more writes from this block. Decrement the number of writes
-                // since they were all accounted for.
-                // Check for dispatch_cb wrap
-                if (rd_block_idx == dispatch_cb_blocks - 1) {
-                    ASSERT(cb_fence == dispatch_cb_end);
-                    if (orphan_size != 0) {
-                        relay_client.write<my_noc_index, true, NCRISC_WR_CMD_BUF>(
-                            data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr), orphan_size);
-                        length -= orphan_size;
-                        xfer_size -= orphan_size;
-                        downstream_cb_data_ptr += orphan_size;
-                        if (downstream_cb_data_ptr == downstream_cb_end) {
-                            downstream_cb_data_ptr = downstream_cb_base;
-                        }
-                        // All writes from this block have completed.
-                        orphan_size = 0;
-                    }
-                    cb_fence = dispatch_cb_base;
-                    data_ptr = dispatch_cb_base;
-                }
-
-                move_rd_to_next_block_and_release_pages<
-                    upstream_noc_index,
-                    upstream_noc_xy,
-                    upstream_dispatch_cb_sem_id,
-                    dispatch_cb_pages_per_block,
-                    dispatch_cb_blocks>(block_noc_writes_to_clear, rd_block_idx);
+            uint32_t xfer_size;
+            bool not_end_of_cmd;
+            if (length > dispatch_cb_page_size - preamble_size) {
+                xfer_size = dispatch_cb_page_size - preamble_size;
+                not_end_of_cmd = true;
+            } else {
+                xfer_size = length;
+                not_end_of_cmd = false;
             }
 
-            // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
-            uint32_t n_pages = cb_acquire_pages<my_dispatch_cb_sem_id, dispatch_cb_log_page_size>(
-                cb_fence, block_next_start_addr, rd_block_idx, upstream_total_acquired_page_count);
-            cb_fence += n_pages * dispatch_cb_page_size;
-        }
+            if constexpr (preamble_size > 0) {
+                uint32_t flag;
+                relay_client.write_inline<my_noc_index>(
+                    get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr),
+                    xfer_size + preamble_size + not_end_of_cmd);
+                downstream_cb_data_ptr += preamble_size;
+                ASSERT(downstream_cb_data_ptr < downstream_cb_end);
+            }
+            // Get a page if needed
+            if (data_ptr + xfer_size > cb_fence) {
+                // Check for block completion
+                if (cb_fence == block_next_start_addr[rd_block_idx]) {
+                    uint32_t orphan_size = cb_fence - data_ptr;
+                    // No more writes from this block. Decrement the number of writes
+                    // since they were all accounted for.
+                    // Check for dispatch_cb wrap
+                    if (rd_block_idx == dispatch_cb_blocks - 1) {
+                        ASSERT(cb_fence == dispatch_cb_end);
+                        if (orphan_size != 0) {
+                            relay_client.write<my_noc_index, true, NCRISC_WR_CMD_BUF>(
+                                data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr), orphan_size);
+                            length -= orphan_size;
+                            xfer_size -= orphan_size;
+                            downstream_cb_data_ptr += orphan_size;
+                            if (downstream_cb_data_ptr == downstream_cb_end) {
+                                downstream_cb_data_ptr = downstream_cb_base;
+                            }
+                            // All writes from this block have completed.
+                            orphan_size = 0;
+                        }
+                        cb_fence = dispatch_cb_base;
+                        data_ptr = dispatch_cb_base;
+                    }
 
-        relay_client
-            .write_atomic_inc_any_len<my_noc_index, downstream_noc_xy, downstream_cb_sem_id, true, NCRISC_WR_CMD_BUF>(
+                    move_rd_to_next_block_and_release_pages<
+                        upstream_noc_index,
+                        upstream_noc_xy,
+                        upstream_dispatch_cb_sem_id,
+                        dispatch_cb_pages_per_block,
+                        dispatch_cb_blocks>(block_noc_writes_to_clear, rd_block_idx);
+                }
+
+                // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
+                uint32_t n_pages = cb_acquire_pages<my_dispatch_cb_sem_id, dispatch_cb_log_page_size>(
+                    cb_fence, block_next_start_addr, rd_block_idx, upstream_total_acquired_page_count);
+                cb_fence += n_pages * dispatch_cb_page_size;
+            }
+
+            relay_client.write_atomic_inc_any_len<
+                my_noc_index,
+                downstream_noc_xy,
+                downstream_cb_sem_id,
+                true,
+                NCRISC_WR_CMD_BUF>(
                 data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr), xfer_size, 1);
 
-        length -= xfer_size;
-        data_ptr += xfer_size;
-        downstream_cb_data_ptr += xfer_size;
-        if (downstream_cb_data_ptr == downstream_cb_end) {
-            downstream_cb_data_ptr = downstream_cb_base;
+            length -= xfer_size;
+            data_ptr += xfer_size;
+            downstream_cb_data_ptr += xfer_size;
+            if (downstream_cb_data_ptr == downstream_cb_end) {
+                downstream_cb_data_ptr = downstream_cb_base;
+            }
         }
     }
 
@@ -439,7 +469,7 @@ void relay_to_next_cb(
 void process_write_host_d(uint32_t& block_noc_writes_to_clear, uint32_t block_next_start_addr[]) {
     volatile tt_l1_ptr CQDispatchCmd* cmd = (volatile tt_l1_ptr CQDispatchCmd*)cmd_ptr;
     // Remember: host transfer command includes the command in the payload, don't add it here
-    uint32_t length = cmd->write_linear_host.length;
+    uint64_t length = cmd->write_linear_host.length;
     uint32_t data_ptr = cmd_ptr;
 
     relay_to_next_cb<split_dispatch_page_preamble_size>(
@@ -447,8 +477,8 @@ void process_write_host_d(uint32_t& block_noc_writes_to_clear, uint32_t block_ne
 }
 
 void relay_write_h(uint32_t& block_noc_writes_to_clear, uint32_t block_next_start_addr[]) {
-    volatile tt_l1_ptr CQDispatchCmd* cmd = (volatile tt_l1_ptr CQDispatchCmd*)cmd_ptr;
-    uint32_t length = sizeof(CQDispatchCmd) + cmd->write_linear.length;
+    volatile tt_l1_ptr CQDispatchCmdLarge* cmd = (volatile tt_l1_ptr CQDispatchCmdLarge*)cmd_ptr;
+    uint64_t length = sizeof(CQDispatchCmdLarge) + cmd->write_linear.length;
     uint32_t data_ptr = cmd_ptr;
 
     relay_to_next_cb<split_dispatch_page_preamble_size>(
@@ -464,7 +494,7 @@ void process_exec_buf_end_d(uint32_t& block_noc_writes_to_clear, uint32_t block_
 // This means each noc_write frees up a page
 void process_write_linear(
     uint32_t num_mcast_dests, uint32_t& block_noc_writes_to_clear, uint32_t block_next_start_addr[]) {
-    volatile tt_l1_ptr CQDispatchCmd* cmd = (volatile tt_l1_ptr CQDispatchCmd*)cmd_ptr;
+    volatile tt_l1_ptr CQDispatchCmdLarge* cmd = (volatile tt_l1_ptr CQDispatchCmdLarge*)cmd_ptr;
     bool multicast = num_mcast_dests > 0;
     if (not multicast) {
         num_mcast_dests = 1;
@@ -472,13 +502,15 @@ void process_write_linear(
 
     uint32_t dst_noc = cmd->write_linear.noc_xy_addr;
     uint32_t write_offset_index = cmd->write_linear.write_offset_index;
-    uint32_t dst_addr = cmd->write_linear.addr + write_offset[write_offset_index];
-    uint32_t length = cmd->write_linear.length;
-    uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);
+    uint64_t dst_addr = cmd->write_linear.addr + write_offset[write_offset_index];
+    uint64_t length = cmd->write_linear.length;
+    uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmdLarge);
+    // DPRINT << "process_write_linear noc_xy:0x" << HEX() << dst_noc << ", write_offset:" << write_offset_index << ",
+    // dst_addr:0x" << dst_addr << ", length:0x" << length << ", data_ptr:0x" << data_ptr << DEC() << ENDL();
     if (multicast) {
-        cq_noc_async_write_init_state<CQ_NOC_sNdl, true>(0, get_noc_addr_helper(dst_noc, dst_addr));
+        cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, true>(0, dst_noc, dst_addr);
     } else {
-        cq_noc_async_write_init_state<CQ_NOC_sNdl, false>(0, get_noc_addr_helper(dst_noc, dst_addr));
+        cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, false>(0, dst_noc, dst_addr);
     }
 
     while (length != 0) {
@@ -533,7 +565,7 @@ void process_write_linear(
 }
 
 void process_write(uint32_t& block_noc_writes_to_clear, uint32_t block_next_start_addr[]) {
-    volatile tt_l1_ptr CQDispatchCmd* cmd = (volatile tt_l1_ptr CQDispatchCmd*)cmd_ptr;
+    volatile tt_l1_ptr CQDispatchCmdLarge* cmd = (volatile tt_l1_ptr CQDispatchCmdLarge*)cmd_ptr;
     uint32_t num_mcast_dests = cmd->write_linear.num_mcast_dests;
     process_write_linear(num_mcast_dests, block_noc_writes_to_clear, block_next_start_addr);
 }
@@ -548,8 +580,8 @@ void process_write_paged(uint32_t& block_noc_writes_to_clear, uint32_t block_nex
     uint32_t pages = cmd->write_paged.pages;
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);
     uint32_t write_length = pages * page_size;
-    InterleavedAddrGen<is_dram> addr_gen{.bank_base_address = base_addr, .page_size = page_size};
-    uint64_t dst_addr_offset = 0;  // Offset into page.
+    auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec<is_dram>(), base_addr, page_size);
+    uint32_t dst_addr_offset = 0;  // Offset into page.
 
     // DPRINT << "process_write_paged - pages: " << pages << " page_size: " << page_size
     //        << " dispatch_cb_page_size: " << dispatch_cb_page_size << ENDL();
@@ -958,6 +990,8 @@ static void process_wait() {
         } while (!wrap_ge(*sem_addr, count));
     }
     if (wait_stream) {
+        last_wait_count = count;
+        last_wait_stream = stream;
         volatile uint32_t* sem_addr = reinterpret_cast<volatile uint32_t*>(
             STREAM_REG_ADDR(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
         // DPRINT << " DISPATCH WAIT STREAM " << HEX() << stream << DEC() << " count " << count << ENDL();
@@ -1003,36 +1037,40 @@ void process_go_signal_mcast_cmd() {
     // can guarantee that copying the go signal does not corrupt any other command fields, which is true (see
     // CQDispatchGoSignalMcastCmd).
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage = (volatile uint32_t tt_l1_ptr*)cmd_ptr;
-    *aligned_go_signal_storage = cmd->mcast.go_signal;
+    uint32_t go_signal_value = cmd->mcast.go_signal;
     uint8_t go_signal_noc_data_idx = cmd->mcast.noc_data_start_index;
-    if (cmd->mcast.num_mcast_txns > 0) {
+    uint32_t multicast_go_offset = cmd->mcast.multicast_go_offset;
+    uint32_t num_unicasts = cmd->mcast.num_unicast_txns;
+    uint32_t wait_count = cmd->mcast.wait_count;
+    if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
         // Setup registers before waiting for workers so only the NOC_CMD_CTRL register needs to be touched after.
         uint64_t dst_noc_addr_multicast =
-            get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], mcast_go_signal_addr);
-        uint32_t num_dests = go_signal_noc_data[go_signal_noc_data_idx++];
+            get_noc_addr_helper(worker_mcast_grid, mcast_go_signal_addr + sizeof(uint32_t) * multicast_go_offset);
+        uint32_t num_dests = num_worker_cores_to_mcast;
+        // Ensure the offset with respect to L1_ALIGNMENT is the same for the source and destination.
+        uint32_t storage_offset = multicast_go_offset % (L1_ALIGNMENT / sizeof(uint32_t));
+        aligned_go_signal_storage[storage_offset] = go_signal_value;
+
         cq_noc_async_write_init_state<CQ_NOC_SNDL, true>(
-            (uint32_t)aligned_go_signal_storage, dst_noc_addr_multicast, sizeof(uint32_t));
+            (uint32_t)&aligned_go_signal_storage[storage_offset], dst_noc_addr_multicast, sizeof(uint32_t));
         noc_nonposted_writes_acked[noc_index] += num_dests;
 
+        WAYPOINT("WCW");
         while (!stream_wrap_ge(
-            NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), cmd->mcast.wait_count)) {
+            NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), wait_count)) {
         }
+        WAYPOINT("WCD");
         cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0);
-        // Send GO signal to remaining destinations. Only the destination NOC needs to be modified.
-        for (uint32_t i = 1, num_mcasts = cmd->mcast.num_mcast_txns; i < num_mcasts; ++i) {
-            uint64_t dst = get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], mcast_go_signal_addr);
-            uint32_t num_dests = go_signal_noc_data[go_signal_noc_data_idx++];
-            cq_noc_async_write_with_state<CQ_NOC_sNdl>(0, dst, 0);
-            noc_nonposted_writes_acked[noc_index] += num_dests;
-        }
-        noc_nonposted_writes_num_issued[noc_index] += cmd->mcast.num_mcast_txns;
+        noc_nonposted_writes_num_issued[noc_index] += 1;
     } else {
+        WAYPOINT("WCW");
         while (!stream_wrap_ge(
-            NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), cmd->mcast.wait_count)) {
+            NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), wait_count)) {
         }
+        WAYPOINT("WCD");
     }
 
-    uint32_t num_unicasts = cmd->mcast.num_unicast_txns;
+    *aligned_go_signal_storage = go_signal_value;
     if constexpr (virtualize_unicast_cores) {
         // Issue #19729: Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
         // This chip is virtualizing cores the go signal is unicasted to
@@ -1304,6 +1342,7 @@ static inline bool process_cmd_h(
 }
 
 void kernel_main() {
+    set_l1_data_cache<true>();
 #if defined(FABRIC_RELAY)
     DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start (fabric relay. 2d = " << (uint32_t)is_2d_fabric
            << ")" << ENDL();
@@ -1362,7 +1401,6 @@ void kernel_main() {
             fabric_mux_y,
             worker_credits_stream_id,
             fabric_mux_channel_base_address,
-            fabric_mux_flow_control_address,
             fabric_mux_connection_handshake_address,
             fabric_mux_connection_info_address,
             fabric_mux_buffer_index_address,
@@ -1466,4 +1504,5 @@ void kernel_main() {
         relay_client.template teardown<upstream_noc_index, upstream_noc_xy, upstream_dispatch_cb_sem_id>();
     }
     // DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": out" << ENDL();
+    set_l1_data_cache<false>();
 }

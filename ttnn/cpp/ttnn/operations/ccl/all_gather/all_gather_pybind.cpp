@@ -1,125 +1,92 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_gather_pybind.hpp"
 
+#include <cstdint>
+#include <optional>
+
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
 
 #include "ttnn-pybind/decorators.hpp"
-#include "ttnn/operations/ccl/all_gather/all_gather.hpp"
-#include "ttnn/distributed/types.hpp"
+#include "all_gather.hpp"
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/fabric_edm_types.hpp>
 
 namespace ttnn::operations::ccl {
 
-namespace detail {
+void py_bind_all_gather(py::module& module) {
+    auto doc =
+        R"doc(all_gather(input_tensor: ttnn.Tensor, dim: int, cluster_axis: Optional[int] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None, memory_config: Optional[ttnn.MemoryConfig] = None, output_tensor: Optional[ttnn.Tensor] = None, num_links: Optional[int] = None, topology: Optional[ttnn.Topology] = None) -> ttnn.Tensor
 
-template <typename ccl_operation_t>
-void bind_all_gather(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
-    bind_registered_operation(
+            All-gather operation across devices along a selected dimension and optional cluster axis. If cluster axis is specified then we gather across the cluster axis. All-gather is a collective operation that gathers data from all devices into a new output tensor, concatenated along the specified `dim`. When cluster_axis is specified, each of the non-cluster_axis dimensions are performing independent all-gathers along the devices on the cluster axis. When the layout is row-major or we have tile padding on the gather dim, we use the composite all-gather implementation that falls back to all-broadcast.
+
+            Args:
+                input_tensor (ttnn.Tensor): Input tensor to be gathered.
+                dim (int): Dimension along which to gather.
+
+            Keyword Args:
+                cluster_axis (int, optional): The axis on the mesh device to gather across. Defaults to `None`.
+                subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores.
+                memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
+                output_tensor (ttnn.Tensor, optional): Preallocated output tensor.
+                num_links (int, optional): The number of links to use for the all-gather operation. Defaults to `None`, for which the number of links is determined automatically.
+                topology (ttnn.Topology, optional): Fabric topology. Defaults to `None`.
+
+           Returns:
+               ttnn.Tensor: The gathered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] * num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices along the mesh.
+
+            Example:
+                >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
+                >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
+                >>> ttnn_tensor = ttnn.from_torch(
+                                full_tensor,
+                                dtype=input_dtype,
+                                device=mesh_device,
+                                layout=layout,
+                                memory_config=mem_config,
+                                mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
+                >>> output = ttnn.all_gather(ttnn_tensor, dim=0)
+                >>> print(output.shape)
+                [8, 1, 32, 256]
+                )doc";
+
+    using OperationType = decltype(ttnn::all_gather);
+    ttnn::bind_registered_operation(
         module,
-        operation,
+        ttnn::all_gather,
         doc,
         ttnn::pybind_overload_t{
-            [](const ccl_operation_t& self,
+            [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               const int32_t dim,
-               const uint32_t num_links,
+               int32_t dim,
+               const std::optional<uint32_t> cluster_axis,
+               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<size_t> num_workers,
-               const std::optional<size_t> num_buffers_per_channel,
-               const ttnn::ccl::Topology topology) -> ttnn::Tensor {
-                return self(
-                    input_tensor, dim, num_links, memory_config, num_workers, num_buffers_per_channel, topology);
-            },
-            py::arg("input_tensor"),
-            py::arg("dim"),
-            py::kw_only(),
-            py::arg("num_links") = 1,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("num_workers") = std::nullopt,
-            py::arg("num_buffers_per_channel") = std::nullopt,
-            py::arg("topology") = ttnn::ccl::Topology::Ring},
-
-        ttnn::pybind_overload_t{
-            [](const ccl_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const int32_t dim,
-               const uint32_t cluster_axis,
-               const MeshDevice& mesh_device,
-               const uint32_t num_links,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<size_t> num_workers,
-               const std::optional<size_t> num_buffers_per_channel,
-               const ttnn::ccl::Topology topology) -> ttnn::Tensor {
+               std::optional<ttnn::Tensor>& optional_output_tensor,
+               const std::optional<uint32_t> num_links,
+               const std::optional<tt::tt_fabric::Topology> topology) {
                 return self(
                     input_tensor,
                     dim,
                     cluster_axis,
-                    mesh_device,
-                    num_links,
+                    subdevice_id,
                     memory_config,
-                    num_workers,
-                    num_buffers_per_channel,
+                    optional_output_tensor,
+                    num_links,
                     topology);
             },
-            py::arg("input_tensor"),
+            py::arg("input_tensor").noconvert(),
             py::arg("dim"),
-            py::arg("cluster_axis"),
-            py::arg("mesh_device"),
             py::kw_only(),
-            py::arg("num_links") = 1,
+            py::arg("cluster_axis") = std::nullopt,
+            py::arg("subdevice_id") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("num_workers") = std::nullopt,
-            py::arg("num_buffers_per_channel") = std::nullopt,
-            py::arg("topology") = ttnn::ccl::Topology::Ring});
-}
-
-}  // namespace detail
-
-void py_bind_all_gather(pybind11::module& module) {
-    detail::bind_all_gather(
-        module,
-        ttnn::all_gather,
-        R"doc(
-
-        Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
-
-        Args:
-            input_tensor (ttnn.Tensor): multi-device tensor.
-            dim (int): Dimension to perform operation.
-            cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-all-gather operation on.
-            mesh_device (MeshDevice): Device mesh to perform the line-all-gather operation on.
-        * cluster_axis and mesh_device parameters are applicable only for Linear Topology.
-
-        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md
-
-        Keyword Args:
-            num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
-            num_workers (int, optional): Number of workers to use for the operation. Defaults to `None`.
-            num_buffers_per_channel (int, optional): Number of buffers per channel to use for the operation. Defaults to `None`.
-            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        Example:
-            >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
-            >>> physical_device_ids = ttnn.get_t3k_physical_device_ids_ring()
-            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), physical_device_ids=physical_device_ids[:8])
-            >>> ttnn_tensor = ttnn.from_torch(
-                            full_tensor,
-                            dtype=input_dtype,
-                            device=mesh_device,
-                            layout=layout,
-                            memory_config=mem_config,
-                            mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
-            >>> ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-            >>> output = ttnn.all_gather(ttnn_tensor, dim=0, topology=ttnn.Topology.Ring)
-
-        )doc");
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("num_links") = std::nullopt,
+            py::arg("topology").noconvert() = std::nullopt,
+        });
 }
 
 }  // namespace ttnn::operations::ccl

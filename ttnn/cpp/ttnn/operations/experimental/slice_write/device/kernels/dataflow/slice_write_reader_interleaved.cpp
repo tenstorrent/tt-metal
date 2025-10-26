@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -15,9 +16,10 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr bool dst0_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr uint32_t page_offset = get_compile_time_arg_val(1);
+    constexpr auto src_args = TensorAccessorArgs<2>();
 
-    const InterleavedAddrGen<dst0_is_dram> s0 = {.bank_base_address = src_addr, .page_size = stick_size};
+    const auto s0 = TensorAccessor(src_args, src_addr, stick_size);
 
     uint32_t i_stick = start_id;
     uint32_t sticks_read = 0;
@@ -29,6 +31,15 @@ void kernel_main() {
             sticks_read++;
             uint64_t src_noc_addr = get_noc_addr(i_stick, s0);
             noc_async_read(src_noc_addr, l1_write_addr, stick_size);
+#ifdef LAST_DIM
+            // align data if slicing on last dim
+            noc_async_read_barrier();
+            tt::data_movement::common::tt_memmove<false, false, false, 0>(
+                l1_write_addr + page_offset,  // destination (shifted right)
+                l1_write_addr,                // source (original location)
+                stick_size                    // total bytes to move
+            );
+#endif
             l1_write_addr += stick_size_offset;
             i_stick += 1;
         }

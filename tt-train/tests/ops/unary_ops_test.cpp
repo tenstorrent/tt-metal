@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/losses.hpp"
 
@@ -29,7 +30,7 @@ protected:
 TEST_F(UnaryOpsTest, GlobalMean) {
     std::vector<float> test_data = {1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F};
 
-    auto shape = core::create_shape({2, 1, 1, 4});
+    auto shape = ttnn::Shape({2, 1, 1, 4});
     auto tensor = core::from_vector(test_data, shape, &autograd::ctx().get_device());
 
     auto tensor_ptr = autograd::create_tensor(tensor);
@@ -51,7 +52,7 @@ TEST_F(UnaryOpsTest, GlobalMean) {
 TEST_F(UnaryOpsTest, LogSoftmax) {
     auto* device = &autograd::ctx().get_device();
     std::vector<float> test_data = {-0.1F, -0.2F, -0.3F, -0.4F, 0.F, -0.2F, -0.3F, -0.4F};
-    auto tensor = core::from_vector(test_data, core::create_shape({2, 1, 1, 4}), device);
+    auto tensor = core::from_vector(test_data, ttnn::Shape({2, 1, 1, 4}), device);
     auto tensor_ptr = autograd::create_tensor(tensor);
     auto result = log_softmax_moreh(tensor_ptr, 3);
     auto result_data = core::to_vector(result->get_value());
@@ -76,9 +77,9 @@ TEST_F(UnaryOpsTest, Silu) {
     auto C = 1;
     auto H = 20;
     auto W = 5;
-    auto len = static_cast<float>(N * C * H * W);
-    xt::random::seed(42);
-    xt::xarray<float> a = xt::random::rand<float>({N, C, H, W}, -1.0F, 1.0F);
+    xt::xarray<float> a = xt::empty<float>({N, C, H, W});
+    ttml::core::parallel_generate(
+        std::span{a.data(), a.size()}, []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); }, 42);
     xt::xarray<float> expected_silu = {
         {{{-0.10980F, 0.38199F, 0.64114F, -0.21957F, 0.28487F},
           {0.35594F, 0.10836F, 0.10620F, -0.23011F, -0.05124F},

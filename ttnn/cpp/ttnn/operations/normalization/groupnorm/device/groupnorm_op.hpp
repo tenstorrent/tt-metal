@@ -6,12 +6,11 @@
 
 #include <optional>
 
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "groupnorm_types.hpp"
-
-using namespace tt::constants;
-using namespace tt::tt_metal;
 
 namespace ttnn::operations::normalization {
 
@@ -28,38 +27,63 @@ Ref: https://pytorch.org/docs/stable/generated/torch.nn.GroupNorm.html
 >>> output = m(input)
 */
 
-operation::ProgramWithCallbacks groupnorm_multi_core(
+tt::tt_metal::operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
     const Tensor& a,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
     const std::optional<const Tensor>& input_mask,
+    const std::optional<const Tensor>& reciprocals,
     Tensor& output,
     float eps,
     uint32_t num_groups,
     uint32_t num_batches,
-    MathFidelity fidelity,
     DataType im_data_format,
     CoreCoord grid_size,
     bool inplace,
-    uint32_t num_out_blocks);
-operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
+    uint32_t num_out_blocks,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool use_welford);
+
+tt::tt_metal::operation::ProgramWithCallbacks groupnorm_multi_core_mcast(
     const Tensor& a,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
     const std::optional<const Tensor>& input_mask,
+    const std::optional<const Tensor>& reciprocals,
     Tensor& output,
     float eps,
     uint32_t num_groups,
     uint32_t num_batches,
-    MathFidelity fidelity,
-    tt::tt_metal::DataType im_data_format,
+    DataType im_data_format,
     CoreCoord grid_size,
-    bool inplace);
+    bool inplace,
+    uint32_t num_out_blocks,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool use_welford);
+
+tt::tt_metal::operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
+    const Tensor& a,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& beta,
+    const std::optional<const Tensor>& input_mask,
+    const std::optional<const Tensor>& negative_mask,
+    Tensor& output,
+    float eps,
+    uint32_t num_groups,
+    uint32_t num_batches,
+    DataType im_data_format,
+    CoreCoord grid_size,
+    bool inplace,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool use_welford);
+
 struct GroupNorm {
     float eps;
     uint32_t num_groups;
     MemoryConfig output_mem_config;
     GroupNormProgramConfig program_config;
+    const DeviceComputeKernelConfig compute_kernel_config;
+    bool use_welford;
 
     void validate(
         const std::vector<Tensor>& input_tensors,

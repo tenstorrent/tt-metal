@@ -6,21 +6,24 @@
 
 #include "fabric_types.hpp"
 #include "gtest/gtest.h"
-#include "dispatch_fixture.hpp"
+#include "mesh_dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/device.hpp>
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <tt-metalium/fabric.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 
-class MultiCommandQueueSingleDeviceFixture : public DispatchFixture {
+class UnitMeshMultiCQSingleDeviceFixture : public MeshDispatchFixture {
 protected:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
@@ -33,17 +36,17 @@ protected:
         }
 
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
 
-        const chip_id_t device_id = 0;
-        const DispatchCoreType dispatch_core_type = this->get_dispatch_core_type();
-        this->create_device(device_id, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+        // Check to deal with TG systems
+        const ChipId device_id =
+            (enable_remote_chip or tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster())
+                ? *tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids().begin()
+                : *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
+        this->create_device(device_id, DEFAULT_TRACE_REGION_SIZE);
     }
 
-    void TearDown() override {
-        if (this->device_ != nullptr) {
-            tt::tt_metal::CloseDevice(this->device_);
-        }
-    }
+    void TearDown() override { device_.reset(); }
 
     bool validate_dispatch_mode() {
         this->slow_dispatch_ = false;
@@ -68,26 +71,30 @@ protected:
         return dispatch_core_type;
     }
 
-    void create_device(
-        const chip_id_t device_id,
-        const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
-        const DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER) {
-        this->device_ = tt::tt_metal::CreateDevice(
-            device_id, this->num_cqs_, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_type);
+    void create_device(const ChipId device_id, const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
+        const auto& dispatch_core_config =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        std::vector<ChipId> chip_id = {device_id};
+
+        auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
+            chip_id, DEFAULT_L1_SMALL_SIZE, trace_region_size, 2, dispatch_core_config);
+        this->device_ = reserved_devices[device_id];
     }
 
-    tt::tt_metal::IDevice* device_ = nullptr;
-    tt::ARCH arch_;
-    uint8_t num_cqs_;
+    std::shared_ptr<distributed::MeshDevice> device_;
+    tt::ARCH arch_{tt::ARCH::Invalid};
+    uint8_t num_cqs_{};
+    distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
+    distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
 };
 
-class MultiCommandQueueSingleDeviceEventFixture : public MultiCommandQueueSingleDeviceFixture {};
+class UnitMeshMultiCQSingleDeviceProgramFixture : public UnitMeshMultiCQSingleDeviceFixture {};
 
-class MultiCommandQueueSingleDeviceBufferFixture : public MultiCommandQueueSingleDeviceFixture {};
+class UnitMeshMultiCQSingleDeviceBufferFixture : public UnitMeshMultiCQSingleDeviceFixture {};
 
-class MultiCommandQueueSingleDeviceProgramFixture : public MultiCommandQueueSingleDeviceFixture {};
+class UnitMeshMultiCQSingleDeviceEventFixture : public UnitMeshMultiCQSingleDeviceFixture {};
 
-class MultiCommandQueueSingleDeviceTraceFixture : public MultiCommandQueueSingleDeviceFixture {
+class UnitMeshMultiCQSingleDeviceTraceFixture : public UnitMeshMultiCQSingleDeviceFixture {
 protected:
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
@@ -95,24 +102,15 @@ protected:
         }
 
         this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
-        if (this->num_cqs_ != 2) {
-            log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
-            GTEST_SKIP();
-        }
 
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     }
 
-    void CreateDevice(const size_t trace_region_size) {
-        const chip_id_t device_id = 0;
-        const DispatchCoreType dispatch_core_type = this->get_dispatch_core_type();
-        this->create_device(device_id, trace_region_size, dispatch_core_type);
+    void CreateDevice(const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
+        this->create_device(0 /* device_id */, trace_region_size);
     }
-
-    DispatchCoreType dispatch_core_type_;
 };
-
-class MultiCommandQueueMultiDeviceFixture : public DispatchFixture {
+class UnitMeshMultiCQMultiDeviceFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {
         this->slow_dispatch_ = false;
@@ -129,66 +127,42 @@ protected:
             GTEST_SKIP();
         }
 
-        const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        const auto& dispatch_core_config =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
+        std::vector<ChipId> chip_ids;
+        auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
 
-        DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
-        if (arch == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() != 1) {
-            if (!tt::tt_metal::IsGalaxyCluster()) {
-                log_warning(
-                    tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
-                dispatch_core_type = DispatchCoreType::ETH;
+        // Check to deal with TG systems
+        if (enable_remote_chip or
+            tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB or
+            tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+            for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
+                chip_ids.push_back(id);
             }
+        } else {
+            chip_ids.push_back(mmio_device_id);
         }
-
-        std::vector<int> devices_to_open;
-        devices_to_open.reserve(tt::tt_metal::GetNumAvailableDevices());
-        for (int i = 0; i < tt::tt_metal::GetNumAvailableDevices(); ++i) {
-            devices_to_open.push_back(i);
-        }
-        reserved_devices_ = tt::tt_metal::detail::CreateDevices(
-            devices_to_open, num_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
-        for (const auto& [id, device] : reserved_devices_) {
-            devices_.push_back(device);
+        auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
+            chip_ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 2, dispatch_core_config);
+        for (const auto& [id, device] : reserved_devices) {
+            this->devices_.push_back(device);
         }
     }
 
     void TearDown() override {
-        if (!reserved_devices_.empty()) {
-            tt::tt_metal::detail::CloseDevices(reserved_devices_);
+        for (auto& device : devices_) {
+            device.reset();
         }
     }
 
-    std::vector<tt::tt_metal::IDevice*> devices_;
-    std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
+    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
+    distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
+    distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
 };
 
-class MultiCommandQueueMultiDeviceBufferFixture : public MultiCommandQueueMultiDeviceFixture {};
+class UnitMeshMultiCQMultiDeviceBufferFixture : public UnitMeshMultiCQMultiDeviceFixture {};
 
-class MultiCommandQueueMultiDeviceEventFixture : public MultiCommandQueueMultiDeviceFixture {};
-
-class MultiCommandQueueOnFabricMultiDeviceFixture : public MultiCommandQueueMultiDeviceFixture,
-                                                    public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
-protected:
-    void SetUp() override {
-        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
-            GTEST_SKIP() << "Dispatch on Fabric tests only applicable on Wormhole B0";
-        }
-        tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(true);
-        // This will force dispatch init to inherit the FabricConfig param
-        tt::tt_metal::detail::SetFabricConfig(GetParam(), FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
-        MultiCommandQueueMultiDeviceFixture::SetUp();
-
-        if (::testing::Test::IsSkipped()) {
-            tt::tt_metal::detail::SetFabricConfig(
-                FabricConfig::DISABLED, FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
-        }
-    }
-
-    void TearDown() override {
-        MultiCommandQueueMultiDeviceFixture::TearDown();
-        tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(false);
-    }
-};
+class UnitMeshMultiCQMultiDeviceEventFixture : public UnitMeshMultiCQMultiDeviceFixture {};
 
 }  // namespace tt::tt_metal

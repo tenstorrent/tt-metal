@@ -12,7 +12,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
-#include <algorithm>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <cstdint>
 #include <exception>
 #include <iomanip>
@@ -24,8 +24,9 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include <tt-metalium/distributed.hpp>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -39,10 +40,8 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/command_queue_common.hpp"
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/tt_xy_pair.h"
-#include "umd/device/types/xy_pair.h"
-#include <tt-metalium/utils.hpp>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -81,7 +80,7 @@ bool hammer_pcie_g = false;
 bool hammer_pcie_type_g = false;
 bool test_write = false;
 bool linked = false;
-bool dump_profiler_results = false;
+bool read_profiler_results = false;
 uint32_t nop_count_g = 0;
 
 void init(int argc, char** argv) {
@@ -123,7 +122,7 @@ void init(int argc, char** argv) {
         log_info(LogTest, " -hpt:hammer hugepage PCIe hammer type: 0:32bit writes 1:128bit non-temporal writes");
         log_info(LogTest, "  -psrta: pass page size as a runtime argument (default compile time define)");
         log_info(LogTest, " -nop: time loop of <n> nops");
-        log_info(LogTest, "-profdump: dump profiler results before closing device");
+        log_info(LogTest, "-profread: read profiler results before closing device");
         exit(0);
     }
 
@@ -162,7 +161,7 @@ void init(int argc, char** argv) {
 
     linked = test_args::has_command_option(input_args, "-link");
 
-    dump_profiler_results = test_args::has_command_option(input_args, "-profdump");
+    read_profiler_results = test_args::has_command_option(input_args, "-profread");
 
     worker_g = CoreRange({core_x, core_y}, {core_x, core_y});
     src_worker_g = {src_core_x, src_core_y};
@@ -214,14 +213,14 @@ int main(int argc, char** argv) {
 
     bool pass = true;
     try {
-        int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        auto mesh_device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(0 /*device_id*/);
+        auto& cq = mesh_device->mesh_command_queue();
+        auto device_id = mesh_device->get_devices()[0]->id();
 
-        CommandQueue& cq = device->command_queue();
-
+        auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
         tt_metal::Program program = tt_metal::CreateProgram();
 
-        string src_mem;
+        std::string src_mem;
         uint32_t noc_addr_x, noc_addr_y;
         uint64_t noc_mem_addr = 0;
         uint32_t dram_banked = 0;
@@ -230,38 +229,37 @@ int main(int argc, char** argv) {
         uint32_t mcast_noc_addr_end_x = 0;
         uint32_t mcast_noc_addr_end_y = 0;
 
-        chip_id_t mmio_device_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
+        ChipId mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
         uint16_t channel =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
         void* host_pcie_base =
             (void*)tt::tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_device_id, channel);
         uint64_t dev_pcie_base =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_pcie_base_addr_from_device(device->id());
+            tt::tt_metal::MetalContext::instance().get_cluster().get_pcie_base_addr_from_device(device_id);
         uint64_t pcie_offset = 1024 * 1024 * 50;  // beyond where FD will write...maybe
 
-        const metal_SocDescriptor& soc_d =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+        const metal_SocDescriptor& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
         switch (source_mem_g) {
             case 0:
             default: {
                 src_mem = "FROM_PCIE";
-                vector<tt::umd::CoreCoord> pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
-                TT_ASSERT(pcie_cores.size() > 0);
+                vector<tt::umd::CoreCoord> pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
+                TT_ASSERT(!pcie_cores.empty());
                 noc_addr_x = pcie_cores[0].x;
                 noc_addr_y = pcie_cores[0].y;
                 noc_mem_addr = dev_pcie_base + pcie_offset;
             } break;
             case 1: {
                 src_mem = "FROM_DRAM";
-                vector<tt::umd::CoreCoord> dram_cores = soc_d.get_cores(CoreType::DRAM, soc_d.get_umd_coord_system());
+                vector<tt::umd::CoreCoord> dram_cores = soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED);
                 TT_ASSERT(dram_cores.size() > dram_channel_g);
                 noc_addr_x = dram_cores[dram_channel_g].x;
                 noc_addr_y = dram_cores[dram_channel_g].y;
             } break;
             case 2: {
                 src_mem = test_write ? "TO_L1" : "FROM_L1";
-                CoreCoord w = device->worker_core_from_logical_core(src_worker_g);
+                CoreCoord w = mesh_device->worker_core_from_logical_core(src_worker_g);
                 noc_addr_x = w.x;
                 noc_addr_y = w.y;
             } break;
@@ -275,7 +273,7 @@ int main(int argc, char** argv) {
             case 4: {
                 src_mem = "FROM_L1_TO_HOST";
                 log_info(LogTest, "Host bw test overriding page_count to 1");
-                CoreCoord w = device->worker_core_from_logical_core(src_worker_g);
+                CoreCoord w = mesh_device->worker_core_from_logical_core(src_worker_g);
                 page_count_g = 1;
                 noc_addr_x = w.x;
                 noc_addr_y = w.y;
@@ -283,7 +281,7 @@ int main(int argc, char** argv) {
             case 5: {
                 src_mem = "FROM_HOST_TO_L1";
                 log_info(LogTest, "Host bw test overriding page_count to 1");
-                CoreCoord w = device->worker_core_from_logical_core(src_worker_g);
+                CoreCoord w = mesh_device->worker_core_from_logical_core(src_worker_g);
                 page_count_g = 1;
                 noc_addr_x = w.x;
                 noc_addr_y = w.y;
@@ -291,8 +289,8 @@ int main(int argc, char** argv) {
             case 6: {
                 src_mem = "FROM_L1_TO_MCAST";
                 issue_mcast = 1;
-                CoreCoord start = device->worker_core_from_logical_core(mcast_src_workers_g.start_coord);
-                CoreCoord end = device->worker_core_from_logical_core(mcast_src_workers_g.end_coord);
+                CoreCoord start = mesh_device->worker_core_from_logical_core(mcast_src_workers_g.start_coord);
+                CoreCoord end = mesh_device->worker_core_from_logical_core(mcast_src_workers_g.end_coord);
                 noc_addr_x = start.x;
                 noc_addr_y = start.y;
                 mcast_noc_addr_end_x = end.x;
@@ -301,7 +299,7 @@ int main(int argc, char** argv) {
             } break;
         }
 
-        std::map<string, string> defines = {
+        std::map<std::string, std::string> defines = {
             {"ITERATIONS", std::to_string(iterations_g)},
             {"PAGE_COUNT", std::to_string(page_count_g)},
             {"LATENCY", std::to_string(latency_g)},
@@ -319,13 +317,13 @@ int main(int argc, char** argv) {
             {"NOP_COUNT", std::to_string(nop_count_g)},
         };
         if (!page_size_as_runtime_arg_g) {
-            defines.insert(std::pair<string, string>("PAGE_SIZE", std::to_string(page_size_g)));
+            defines.insert(std::pair<std::string, std::string>("PAGE_SIZE", std::to_string(page_size_g)));
         }
 
         tt_metal::CircularBufferConfig cb_config =
             tt_metal::CircularBufferConfig(page_size_g * page_count_g, {{0, tt::DataFormat::Float32}})
                 .set_page_size(0, page_size_g);
-        auto cb = tt_metal::CreateCircularBuffer(program, worker_g, cb_config);
+        tt_metal::CreateCircularBuffer(program, worker_g, cb_config);
 
         auto dm0 = tt_metal::CreateKernel(
             program,
@@ -338,12 +336,12 @@ int main(int argc, char** argv) {
         if (page_size_as_runtime_arg_g) {
             tt_metal::SetRuntimeArgs(program, dm0, worker_g.start_coord, {page_size_g});
         }
+        mesh_workload.add_program(
+            tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
 
-        std::shared_ptr<Event> sync_event = std::make_shared<Event>();
-
-        CoreCoord w = device->worker_core_from_logical_core(worker_g.start_coord);
+        CoreCoord w = mesh_device->worker_core_from_logical_core(worker_g.start_coord);
         log_info(LogTest, "Master core: {}", w.str());
-        string direction = test_write ? "Writing" : "Reading";
+        std::string direction = test_write ? "Writing" : "Reading";
         if (source_mem_g == 3) {
             log_info(LogTest, "{}: {}", direction, src_mem);
         } else if (source_mem_g == 4) {
@@ -365,7 +363,7 @@ int main(int argc, char** argv) {
         }
         if (source_mem_g < 4 || source_mem_g == 6) {
             std::string api;
-            string read_write = test_write ? "write" : "read";
+            std::string read_write = test_write ? "write" : "read";
             if (issue_mcast) {
                 api = "noc_async_" + read_write + "_multicast";
             } else if (read_one_packet_g) {
@@ -387,32 +385,32 @@ int main(int argc, char** argv) {
         }
 
         vector<uint32_t> blank(page_size_g / sizeof(uint32_t));
-        std::chrono::duration<double> elapsed_seconds;
+        std::chrono::duration<double> elapsed_seconds{};
         if (source_mem_g < 4 || source_mem_g == 6) {
             // Cache stuff
             for (int i = 0; i < warmup_iterations_g; i++) {
-                EnqueueProgram(cq, program, false);
+                tt::tt_metal::distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
             }
-            Finish(cq);
+            tt::tt_metal::distributed::Finish(cq);
 
             auto start = std::chrono::system_clock::now();
-            EnqueueProgram(cq, program, false);
+            tt::tt_metal::distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
             if (time_just_finish_g) {
                 start = std::chrono::system_clock::now();
             }
             if (hammer_write_reg_g || hammer_pcie_g) {
-                EnqueueRecordEvent(cq, sync_event);
+                auto sync_event = cq.enqueue_record_event();
 
                 bool done = false;
                 uint32_t addr = 0xfafafafa;
                 uint32_t offset = 0;
                 uint32_t page = 0;
-                uint32_t* pcie_base = (uint32_t*)host_pcie_base + pcie_offset / sizeof(uint32_t);
-                uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+                uint32_t* pcie_base = (uint32_t*)host_pcie_base + (pcie_offset / sizeof(uint32_t));
+                uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
                 while (!done) {
                     if (hammer_write_reg_g) {
                         tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
-                            &addr, tt_cxy_pair(device->id(), w), l1_unreserved_base);
+                            &addr, tt_cxy_pair(device_id, w), l1_unreserved_base);
                     }
                     if (hammer_pcie_g) {
                         if (page == page_count_g) {
@@ -430,13 +428,13 @@ int main(int argc, char** argv) {
                         }
                         page++;
                     }
-                    if (EventQuery(sync_event)) {
+                    if (tt::tt_metal::distributed::EventQuery(sync_event)) {
                         done = true;
                     }
                 }
             }
 
-            Finish(cq);
+            tt::tt_metal::distributed::Finish(cq);
             auto end = std::chrono::system_clock::now();
             elapsed_seconds = (end - start);
         } else if (source_mem_g == 4 || source_mem_g == 5) {
@@ -449,12 +447,12 @@ int main(int argc, char** argv) {
             for (int i = 0; i < warmup_iterations_g; i++) {
                 if (source_mem_g == 4) {
                     tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                        vec, sizeof(uint32_t), tt_cxy_pair(device->id(), w), dispatch_l1_unreserved_base);
+                        vec, sizeof(uint32_t), tt_cxy_pair(device_id, w), dispatch_l1_unreserved_base);
                 } else {
                     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                         vec.data(),
                         vec.size() * sizeof(uint32_t),
-                        tt_cxy_pair(device->id(), w),
+                        tt_cxy_pair(device_id, w),
                         dispatch_l1_unreserved_base);
                 }
             }
@@ -463,12 +461,12 @@ int main(int argc, char** argv) {
             for (int i = 0; i < iterations_g; i++) {
                 if (source_mem_g == 4) {
                     tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                        vec, page_size_g, tt_cxy_pair(device->id(), w), dispatch_l1_unreserved_base);
+                        vec, page_size_g, tt_cxy_pair(device_id, w), dispatch_l1_unreserved_base);
                 } else {
                     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                         vec.data(),
                         vec.size() * sizeof(uint32_t),
-                        tt_cxy_pair(device->id(), w),
+                        tt_cxy_pair(device_id, w),
                         dispatch_l1_unreserved_base);
                 }
             }
@@ -492,11 +490,11 @@ int main(int argc, char** argv) {
             log_info(LogTest, "BW: {} GB/s", ss.str());
         }
 
-        if (dump_profiler_results) {
-            tt_metal::detail::DumpDeviceProfileResults(device);
+        if (read_profiler_results) {
+            tt_metal::ReadMeshDeviceProfilerResults(*mesh_device);
         }
 
-        pass &= tt_metal::CloseDevice(device);
+        pass &= mesh_device->close();
     } catch (const std::exception& e) {
         pass = false;
         log_fatal(tt::LogTest, "{}", e.what());

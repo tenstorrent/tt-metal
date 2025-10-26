@@ -7,6 +7,8 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "reshape_program_factory.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -36,9 +38,6 @@ void ReshapeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) 
         TT_FATAL(
             input_tensor_a.padded_shape()[3] % ROW_MAJOR_WIDTH == 0 && padded_output_shape[3] % ROW_MAJOR_WIDTH == 0,
             "Operand/target width must be a multiple of 8");
-        uint32_t num_old_sticks =
-            input_tensor_a.padded_shape()[0] * input_tensor_a.padded_shape()[1] * input_tensor_a.padded_shape()[2];
-        uint32_t num_new_sticks = padded_output_shape[0] * padded_output_shape[1] * padded_output_shape[2];
     } else {
         TT_THROW("Unsupported layout for reshape");
     }
@@ -55,6 +54,19 @@ std::vector<ttnn::TensorSpec> ReshapeDeviceOperation::compute_output_specs(
             output_mem_config,
             logical_output_shape,
             padded_output_shape))};
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
+ReshapeDeviceOperation::create_op_performance_model(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& output_tensor = output_tensors.at(0);
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
+        input_tensors, output_tensors, ideal_dev_clock_cycles);
+    return result;
 }
 
 operation::ProgramWithCallbacks ReshapeDeviceOperation::create_program(

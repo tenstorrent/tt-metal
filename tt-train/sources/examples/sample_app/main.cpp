@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,10 +28,9 @@ void print_tensor(const tt::tt_metal::Tensor& tensor) {
         for (size_t dim1 = 0; dim1 < shape[1]; dim1++) {
             for (size_t dim2 = 0; dim2 < shape[2]; dim2++) {
                 for (size_t dim3 = 0; dim3 < shape[3]; dim3++) {
-                    std::cout << data
-                                     [dim0 * shape[1] * shape[2] * shape[3] + dim1 * shape[2] * shape[3] +
-                                      dim2 * shape[3] + dim3]
-                                         .to_float()
+                    std::cout << static_cast<float>(data
+                                                        [dim0 * shape[1] * shape[2] * shape[3] +
+                                                         dim1 * shape[2] * shape[3] + dim2 * shape[3] + dim3])
                               << " ";
                 }
                 std::cout << std::endl;
@@ -47,7 +46,6 @@ int main() {
     const size_t tensor_height = 32;
 
     // tell TTNN that we want to use the first device available
-    tt::ARCH arch_ = {};
     size_t num_devices_ = 0;
 
     std::srand(0);

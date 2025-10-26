@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -54,18 +54,17 @@ bool compare_tensors_for_broken(const ttnn::Tensor& t1, const ttnn::Tensor& t2, 
 }
 
 TEST_F(LinearOpTest, TTNNBackwardGoodShape) {
-    auto* device = &ttml::autograd::ctx().get_device();
     auto tensor = ttml::autograd::create_tensor();
-    ttml::init::uniform_init(tensor, ttml::core::create_shape({64, 1, 256, 64}), ttml::init::UniformRange{-0.1F, 0.1F});
+    ttml::init::uniform_init(tensor, ttnn::Shape({64, 1, 256, 64}), ttml::init::UniformRange{-0.1F, 0.1F});
 
     auto weight = ttml::autograd::create_tensor();
-    ttml::init::uniform_init(weight, ttml::core::create_shape({1, 1, 64, 64}), ttml::init::UniformRange{-0.1F, 0.1F});
+    ttml::init::uniform_init(weight, ttnn::Shape({1, 1, 64, 64}), ttml::init::UniformRange{-0.1F, 0.1F});
 
     auto bias = ttml::autograd::create_tensor();
-    ttml::init::uniform_init(bias, ttml::core::create_shape({1, 1, 1, 64}), ttml::init::UniformRange{-0.1F, 0.1F});
+    ttml::init::uniform_init(bias, ttnn::Shape({1, 1, 1, 64}), ttml::init::UniformRange{-0.1F, 0.1F});
 
     auto out = ttml::autograd::create_tensor();
-    ttml::init::uniform_init(out, ttml::core::create_shape({64, 1, 256, 64}), ttml::init::UniformRange{-0.1F, 0.1F});
+    ttml::init::uniform_init(out, ttnn::Shape({64, 1, 256, 64}), ttml::init::UniformRange{-0.1F, 0.1F});
     out->set_grad(out->get_value());
 
     ttml::ops::ttnn_linear_backward(tensor, weight, bias, out);
@@ -88,17 +87,14 @@ TEST_F(LinearOpTest, TTNNBackwardGoodShape) {
 }
 void test_linear(uint32_t batch, uint32_t emb_dim) {
     std::cout << "dim: " << emb_dim << std::endl;
-    auto* device = &ttml::autograd::ctx().get_device();
     auto tensor = ttml::autograd::create_tensor();
-    ttml::init::uniform_init(
-        tensor, ttml::core::create_shape({batch, 1, 1024, 768}), ttml::init::UniformRange{-0.1F, 0.1F});
+    ttml::init::uniform_init(tensor, ttnn::Shape({batch, 1, 1024, 768}), ttml::init::UniformRange{-0.1F, 0.1F});
 
     auto weight = ttml::autograd::create_tensor();
-    ttml::init::uniform_init(
-        weight, ttml::core::create_shape({1, 1, emb_dim, 768}), ttml::init::UniformRange{-0.1F, 0.1F});
+    ttml::init::uniform_init(weight, ttnn::Shape({1, 1, emb_dim, 768}), ttml::init::UniformRange{-0.1F, 0.1F});
 
     auto bias = ttml::autograd::create_tensor();
-    ttml::init::uniform_init(bias, ttml::core::create_shape({1, 1, 1, emb_dim}), ttml::init::UniformRange{-0.1F, 0.1F});
+    ttml::init::uniform_init(bias, ttnn::Shape({1, 1, 1, emb_dim}), ttml::init::UniformRange{-0.1F, 0.1F});
 
     ttml::ops::linear_op(tensor, weight, bias);
 }
@@ -113,19 +109,19 @@ TEST_F(LinearOpTest, TTNNLargeLinearOpWithBias) {
 // TEST_F(LinearOpTest, TTNNBackwardBadShape_BROKEN) {
 //     auto* device = &ttml::autograd::ctx().get_device();
 //     auto tensor = ttml::autograd::create_tensor();
-//     ttml::init::uniform_init(tensor, ttml::core::create_shape({128, 1, 1,
+//     ttml::init::uniform_init(tensor, ttnn::Shape({128, 1, 1,
 //     128}), ttml::init::UniformRange{-0.1F, 0.1F});
 
 //     auto weight = ttml::autograd::create_tensor();
-//     ttml::init::uniform_init(weight, ttml::core::create_shape({1, 1, 256,
+//     ttml::init::uniform_init(weight, ttnn::Shape({1, 1, 256,
 //     128}), ttml::init::UniformRange{-0.1F, 0.1F});
 
 //     auto bias = ttml::autograd::create_tensor();
-//     ttml::init::uniform_init(bias, ttml::core::create_shape({1, 1, 1, 256}),
+//     ttml::init::uniform_init(bias, ttnn::Shape({1, 1, 1, 256}),
 //     ttml::init::UniformRange{-0.1F, 0.1F});
 
 //     auto out = ttml::autograd::create_tensor();
-//     ttml::init::uniform_init(out, ttml::core::create_shape({128, 1, 1, 256}),
+//     ttml::init::uniform_init(out, ttnn::Shape({128, 1, 1, 256}),
 //     ttml::init::UniformRange{-0.1F, 0.1F}); out->set_grad(out->get_value());
 
 //     ttml::ops::ttnn_linear_backward(tensor, weight, bias, out);

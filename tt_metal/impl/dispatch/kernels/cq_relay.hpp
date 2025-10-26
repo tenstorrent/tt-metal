@@ -7,7 +7,6 @@
 #include <cstdint>
 #include "dataflow_api.h"
 #include "cq_common.hpp"
-#include "fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -43,7 +42,6 @@ public:
         uint32_t mux_y,
         uint32_t mux_worker_credits_stream_id,
         uint32_t mux_channel_base_address,
-        uint32_t mux_flow_control_address,
         uint32_t mux_connection_handshake_address,
         uint32_t mux_connection_info_address,
         uint32_t mux_buffer_index_address,
@@ -65,12 +63,10 @@ public:
 #if defined(FABRIC_RELAY)
         edm.template init<fd_core_type>(
             true /*connected_to_persistent_fabric*/,
-            router_direction,
             mux_x,
             mux_y,
             mux_channel_base_address,
             mux_num_buffers_per_channel,
-            mux_flow_control_address,
             mux_connection_handshake_address,
             mux_connection_info_address,
             mux_channel_buffer_size_bytes,
@@ -88,24 +84,24 @@ public:
         if constexpr (FABRIC_2D) {
 #if (FABRIC_2D_DYNAMIC == 1)
             tt::tt_fabric::fabric_set_unicast_route(
-                (tt::tt_fabric::MeshPacketHeader*)packet_header_addr,
-                (eth_chan_directions)edm.direction,
-                my_dev_id,
-                to_dev_id,
-                to_mesh_id,
-                ew_dim);
+                (tt::tt_fabric::MeshPacketHeader*)packet_header_addr, my_dev_id, to_dev_id, to_mesh_id, ew_dim);
+#else
+#if defined(GALAXY_CLUSTER)
+            tt::tt_fabric::fabric_set_route(
+                (tt::tt_fabric::HybridMeshPacketHeader*)packet_header_addr,
+                (eth_chan_directions)router_direction,
+                0,  // branch forward
+                0,  // start hop
+                num_hops,
+                true);
 #else
             tt::tt_fabric::fabric_set_unicast_route(
-                (tt::tt_fabric::LowLatencyMeshPacketHeader*)packet_header_addr,
-                (eth_chan_directions)edm.direction,
-                my_dev_id,
-                to_dev_id,
-                to_mesh_id,
-                ew_dim);
+                (tt::tt_fabric::HybridMeshPacketHeader*)packet_header_addr, to_dev_id, to_mesh_id);
+#endif
 #endif
         } else {
-            auto header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_addr);
-            header->to_chip_unicast(num_hops);
+            auto header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_addr);
+            fabric_set_unicast_route<false>((LowLatencyPacketHeader*)header, num_hops);
         }
 #else
         init_write_state_only<noc_index, downstream_cmd_buf>(downstream_noc_addr);
@@ -142,7 +138,7 @@ public:
     template <uint8_t noc_idx, bool count = true>
     FORCE_INLINE void write_inline(uint64_t dst, uint32_t val) {
 #if defined(FABRIC_RELAY)
-        auto packet_header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
+        auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
         packet_header->to_noc_unicast_inline_write(
             tt::tt_fabric::NocUnicastInlineWriteCommandHeader{.noc_address = dst, .value = val});
         // Use the fabric_atomic_inc helper to send the header
@@ -163,7 +159,7 @@ public:
         ASSERT(mux_channel_buffer_size_bytes > sizeof(PACKET_HEADER_TYPE));
         constexpr uint32_t k_FabricMaxBurstSize = mux_channel_buffer_size_bytes - sizeof(PACKET_HEADER_TYPE);
 
-        auto packet_header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
+        auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
         while (length > k_FabricMaxBurstSize) {
             packet_header->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_ptr}, k_FabricMaxBurstSize);
 
@@ -215,17 +211,13 @@ public:
     }
 
     template <uint8_t noc_idx, uint32_t dest_noc_xy, uint32_t dest_sem_id>
-    FORCE_INLINE void release_pages(uint16_t n) {
+    FORCE_INLINE void release_pages(uint32_t n) {
 #if defined(FABRIC_RELAY)
         auto sem_addr = get_semaphore<fd_core_type>(dest_sem_id);
         uint64_t noc_dest_addr = get_noc_addr_helper(dest_noc_xy, sem_addr);
 
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
-        packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            noc_dest_addr,
-            n,
-            std::numeric_limits<uint16_t>::max(),
-        });
+        packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_dest_addr, n});
         tt::tt_fabric::fabric_atomic_inc<mux_num_buffers_per_channel>(edm, packet_header);
 #else
         noc_semaphore_inc(get_noc_addr_helper(dest_noc_xy, get_semaphore<fd_core_type>(dest_sem_id)), n, noc_idx);
@@ -238,13 +230,13 @@ public:
         uint32_t downstream_sem_id,
         bool wait,
         uint8_t downstream_cmd_buf>
-    FORCE_INLINE void write_atomic_inc_any_len(uint32_t data_ptr, uint64_t dst_ptr, uint32_t length, uint16_t n) {
+    FORCE_INLINE void write_atomic_inc_any_len(uint32_t data_ptr, uint64_t dst_ptr, uint32_t length, uint32_t n) {
 #if defined(FABRIC_RELAY)
         // Writing to a HEADER only buffer is wrong. This function requires a FULL SIZE buffer
         ASSERT(mux_channel_buffer_size_bytes > sizeof(PACKET_HEADER_TYPE));
         constexpr uint32_t k_FabricMaxBurstSize = mux_channel_buffer_size_bytes - sizeof(PACKET_HEADER_TYPE);
 
-        auto packet_header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
+        auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
         while (length > k_FabricMaxBurstSize) {
             packet_header->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_ptr}, k_FabricMaxBurstSize);
 
@@ -258,10 +250,7 @@ public:
 
         packet_header->to_noc_fused_unicast_write_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                dst_ptr,
-                get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)),
-                n,
-                std::numeric_limits<uint16_t>::max()},
+                dst_ptr, get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)), n},
             length);
 
         tt::tt_fabric::fabric_async_write<mux_num_buffers_per_channel>(edm, packet_header, data_ptr, length);

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,11 +13,8 @@ void kernel_main() {
     const uint32_t tile_size_bytes = get_tile_size(cb_out0);
 
     // Address of the output buffer
-    const InterleavedAddrGenFast<true> out0 = {
-        .bank_base_address = c_addr,
-        .page_size = tile_size_bytes,
-        .data_format = DataFormat::Float16_b,
-    };
+    constexpr auto out0_args = TensorAccessorArgs<0>();
+    const auto out0 = TensorAccessor(out0_args, c_addr, tile_size_bytes);
 
     // Loop over all the tiles and write them to the output buffer
     for (uint32_t i = 0; i < n_tiles; i++) {

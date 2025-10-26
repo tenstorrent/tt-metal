@@ -7,7 +7,6 @@
 #include <string>
 
 #include "build.hpp"
-#include "utils.hpp"
 
 enum class MathFidelity : uint8_t;
 namespace tt {
@@ -19,7 +18,7 @@ namespace tt::tt_metal {
 JitBuildOptions::JitBuildOptions(const JitBuildEnv& env) :
     build_env(env), fp32_dest_acc_en(false), bfp8_pack_precise(false) {}
 
-void JitBuildOptions::set_name(const string& n) {
+void JitBuildOptions::set_name(const std::string& n) {
     name = n;
     path = build_env.get_out_kernel_root_path() + n;
 }

@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
 #include <vector>
 
 #include "moreh_sum_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::moreh::moreh_sum {
@@ -32,7 +34,7 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
     const auto [W, H, other_dims_product] = extract_spatial_dims(shape);
     uint32_t Wt{W / tt::constants::TILE_WIDTH};
     uint32_t Ht{H / tt::constants::TILE_HEIGHT};
-    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
+    [[maybe_unused]] uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
     auto num_rows{other_dims_product * Ht};
 
     // check mask for w-dim
@@ -95,12 +97,15 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(is_dram(input))};
-    std::map<string, string> reader_defines{};
+    std::vector<uint32_t> reader_compile_time_args = {};
+    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
+
+    std::map<std::string, std::string> reader_defines{};
     if (do_mask_w) {
         reader_defines["DO_MASK_W"] = "1";
     }
-    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(is_dram(output))};
+    std::vector<uint32_t> writer_compile_time_args = {};
+    TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
     const auto reader_kernel_file{
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_w_impl_kernels/reader_moreh_int_sum_w.cpp"};
     const auto writer_kernel_file{
@@ -117,13 +122,13 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
         Wt,                         // Wt
         origin_W};
 
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
     const auto compute_kernel_file{
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_w_impl_kernels/moreh_int_sum_w.cpp"};
-    const auto compute_kernel_1_id = CreateComputeKernel(
+    CreateComputeKernel(
         program,
         compute_kernel_file,
         {core_group_1, num_rows_per_core_group_1, compute_args_group_1},
@@ -205,7 +210,7 @@ void MorehSumOperation::MorehSumWIntFactory::override_runtime_arguments(
     auto src_dram_buffer{tensor_args.input.buffer()};
     auto dst_dram_buffer{tensor_return_value.buffer()};
 
-    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
+    for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         {

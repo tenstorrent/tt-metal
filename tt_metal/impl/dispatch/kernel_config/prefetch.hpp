@@ -11,8 +11,8 @@
 #include "fd_kernel.hpp"
 #include "mesh_graph.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
 
 namespace tt {
@@ -89,8 +89,8 @@ class PrefetchKernel : public FDKernel {
 public:
     PrefetchKernel(
         int node_id,
-        chip_id_t device_id,
-        chip_id_t servicing_device_id,
+        ChipId device_id,
+        ChipId servicing_device_id,
         uint8_t cq_id,
         noc_selection_t noc_selection,
         bool h_variant,

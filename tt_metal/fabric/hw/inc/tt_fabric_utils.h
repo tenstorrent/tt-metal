@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,15 +8,20 @@
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
 #include "tt_metal/hw/inc/dataflow_api.h"
 #include "tt_metal/hw/inc/dataflow_api_addrgen.h"
-#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 
 namespace tt::tt_fabric {
 
 /* Termination signal handling*/
+FORCE_INLINE bool got_graceful_termination_signal(volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
+    return *termination_signal_ptr == tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE;
+}
+
 FORCE_INLINE bool got_immediate_termination_signal(volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     // mailboxes defined in tt_metal/hw/inc/ethernet/tunneling.h
+    invalidate_l1_cache();
     uint32_t launch_msg_rd_ptr = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
     tt_l1_ptr launch_msg_t* const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_msg_rd_ptr]);
     return (*termination_signal_ptr == tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE) ||
@@ -24,20 +29,22 @@ FORCE_INLINE bool got_immediate_termination_signal(volatile tt::tt_fabric::Termi
 }
 
 FORCE_INLINE bool connect_is_requested(uint32_t cached) {
-    return cached == tt::tt_fabric::EdmToEdmSender<0>::open_connection_value ||
-           cached == tt::tt_fabric::EdmToEdmSender<0>::close_connection_request_value;
+    return cached == tt::tt_fabric::connection_interface::open_connection_value ||
+           cached == tt::tt_fabric::connection_interface::close_connection_request_value;
 }
 
-template <uint8_t SENDER_NUM_BUFFERS>
+template <uint8_t MY_ETH_CHANNEL, uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE void establish_worker_connection(
-    tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface) {
-    local_sender_channel_worker_interface.cache_producer_noc_addr();
+    tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS>&
+        local_sender_channel_worker_interface) {
+    local_sender_channel_worker_interface.template cache_producer_noc_addr<MY_ETH_CHANNEL>();
     local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
 }
 
-template <uint8_t SENDER_NUM_BUFFERS>
+template <uint8_t MY_ETH_CHANNEL, uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE void check_worker_connections(
-    tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface,
+    tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS>&
+        local_sender_channel_worker_interface,
     bool& channel_connection_established,
     uint32_t stream_id) {
     if (!channel_connection_established) {
@@ -54,7 +61,7 @@ FORCE_INLINE void check_worker_connections(
             channel_connection_established = true;
 
             ASSERT(get_ptr_val(stream_id) <= static_cast<int32_t>(SENDER_NUM_BUFFERS));
-            establish_worker_connection(local_sender_channel_worker_interface);
+            establish_worker_connection<MY_ETH_CHANNEL>(local_sender_channel_worker_interface);
         }
     } else if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
         channel_connection_established = false;

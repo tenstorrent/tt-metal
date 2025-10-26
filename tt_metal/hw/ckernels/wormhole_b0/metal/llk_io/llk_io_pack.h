@@ -30,12 +30,13 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
     // updated by packer here we don't synchronize with packer, so if we use tiles_received_ptr could case a data race
     // alternatively we could sync with packer, but that's slower and more complex code
     // that is, don't do this: uint32_t tiles_received = tiles_received_ptr[0];
-    uint32_t tiles_received = get_local_cb_interface(output).tiles_received;
+    uint16_t tiles_received = get_local_cb_interface(output).tiles_received;
 
     std::int32_t free_tiles;
     do {
         std::uint16_t tiles_acked = (std::uint16_t)reg_read((std::uint32_t)tiles_acked_ptr);
-        std::uint32_t free_tiles_wrap = get_local_cb_interface(output).fifo_num_pages - (tiles_received - tiles_acked);
+        // Perform 16-bit subtractions because inputs are 16 bits and may wrap due to overflow.
+        std::uint16_t free_tiles_wrap = get_local_cb_interface(output).fifo_num_pages - (tiles_received - tiles_acked);
         free_tiles = (std::int32_t)free_tiles_wrap;
     } while (free_tiles < num_tiles);
 }

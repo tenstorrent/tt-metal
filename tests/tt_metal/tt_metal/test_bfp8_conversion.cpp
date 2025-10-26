@@ -15,7 +15,7 @@
 #include <type_traits>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -26,9 +26,7 @@ int main(int argc, char** argv) {
     bool pass = true;
 
     try {
-        uint32_t single_bfp8_tile_size = tile_size(tt::DataFormat::Bfp8_b);
         uint32_t num_tiles = 1;
-        uint32_t size_in_bytes = num_tiles * single_bfp8_tile_size;
 
         int num_float_in_tile = 1024;
         int float_data_size = num_tiles * num_float_in_tile;
@@ -46,12 +44,12 @@ int main(int argc, char** argv) {
             TensorLayoutType::TILED_NFACES);
 
         std::vector<uint32_t> packed_bfp8b_tile_vec_rm_in =
-            pack_fp32_vec_as_bfp8_tiles(fp32_vec, /*row_major_input=*/true, /*is_exp_a=*/false);
+            pack_as_bfp8_tiles(tt::stl::make_const_span(fp32_vec), /*row_major_input=*/true, /*is_exp_a=*/false);
         std::vector<float> unpacked_bfp8b_tile_vec_rm_out = unpack_bfp8_tiles_into_float_vec(
             packed_bfp8b_tile_vec_rm_in, /*row_major_output*/ true, /*is_exp_a=*/false);
 
         std::vector<uint32_t> packed_bfp8b_tile_vec_tile_in =
-            pack_fp32_vec_as_bfp8_tiles(tiled_fp32_vec, /*row_major_input=*/false, /*is_exp_a=*/false);
+            pack_as_bfp8_tiles(tt::stl::make_const_span(tiled_fp32_vec), /*row_major_input=*/false, /*is_exp_a=*/false);
         std::vector<float> unpacked_bfp8b_tile_vec_tile_out = unpack_bfp8_tiles_into_float_vec(
             packed_bfp8b_tile_vec_tile_in, /*row_major_output=*/false, /*is_exp_a=*/false);
 

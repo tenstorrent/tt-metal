@@ -14,15 +14,6 @@ namespace operations::reduction {
 
 struct MoeOperation {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
-        const Tensor& input_tensor,
-        const Tensor& expert_mask_tensor,
-        const Tensor& topk_mask_tensor,
-        uint16_t k,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-
-    static auto invoke(
         const Tensor& input_tensor,
         const Tensor& expert_mask_tensor,
         const Tensor& topk_mask_tensor,

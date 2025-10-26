@@ -1,0 +1,250 @@
+arch:
+  0: wormhole_b0
+  1: wormhole_b0
+  2: wormhole_b0
+  3: wormhole_b0
+  4: wormhole_b0
+  5: wormhole_b0
+  6: wormhole_b0
+  7: wormhole_b0
+chips:
+  0:
+    - 1
+    - 0
+    - 0
+    - 0
+  1:
+    - 1
+    - 1
+    - 0
+    - 0
+  2:
+    - 2
+    - 0
+    - 0
+    - 0
+  3:
+    - 2
+    - 1
+    - 0
+    - 0
+  4:
+    - 0
+    - 0
+    - 0
+    - 0
+  5:
+    - 0
+    - 1
+    - 0
+    - 0
+  6:
+    - 3
+    - 0
+    - 0
+    - 0
+  7:
+    - 3
+    - 1
+    - 0
+    - 0
+chip_unique_ids:
+  7: 14521741482
+  6: 14521741479
+  5: 14521741465
+  4: 14521741355
+  3: 10226774186
+  2: 10226774183
+  1: 10226774169
+  0: 10226774059
+ethernet_connections:
+  -
+    - chip: 0
+      chan: 6
+    - chip: 2
+      chan: 6
+  -
+    - chip: 0
+      chan: 7
+    - chip: 2
+      chan: 7
+  -
+    - chip: 0
+      chan: 8
+    - chip: 4
+      chan: 0
+  -
+    - chip: 0
+      chan: 9
+    - chip: 4
+      chan: 1
+  -
+    - chip: 0
+      chan: 14
+    - chip: 1
+      chan: 14
+  -
+    - chip: 0
+      chan: 15
+    - chip: 1
+      chan: 15
+  -
+    - chip: 1
+      chan: 0
+    - chip: 3
+      chan: 0
+  -
+    - chip: 1
+      chan: 1
+    - chip: 3
+      chan: 1
+  -
+    - chip: 1
+      chan: 8
+    - chip: 5
+      chan: 0
+  -
+    - chip: 1
+      chan: 9
+    - chip: 5
+      chan: 1
+  -
+    - chip: 2
+      chan: 8
+    - chip: 6
+      chan: 0
+  -
+    - chip: 2
+      chan: 9
+    - chip: 6
+      chan: 1
+  -
+    - chip: 2
+      chan: 14
+    - chip: 3
+      chan: 14
+  -
+    - chip: 2
+      chan: 15
+    - chip: 3
+      chan: 15
+  -
+    - chip: 3
+      chan: 8
+    - chip: 7
+      chan: 0
+  -
+    - chip: 3
+      chan: 9
+    - chip: 7
+      chan: 1
+  -
+    - chip: 4
+      chan: 6
+    - chip: 5
+      chan: 6
+  -
+    - chip: 4
+      chan: 7
+    - chip: 5
+      chan: 7
+  -
+    - chip: 6
+      chan: 6
+    - chip: 7
+      chan: 6
+  -
+    - chip: 6
+      chan: 7
+    - chip: 7
+      chan: 7
+ethernet_connections_to_remote_devices:
+  []
+chips_with_mmio:
+  - 0: 0
+  - 1: 1
+  - 2: 3
+  - 3: 2
+harvesting:
+  0:
+    noc_translation: true
+    harvest_mask: 544
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 0
+    pcie_harvesting_mask: 0
+  1:
+    noc_translation: true
+    harvest_mask: 513
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 0
+    pcie_harvesting_mask: 0
+  2:
+    noc_translation: true
+    harvest_mask: 640
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 0
+    pcie_harvesting_mask: 0
+  3:
+    noc_translation: true
+    harvest_mask: 513
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 0
+    pcie_harvesting_mask: 0
+  4:
+    noc_translation: true
+    harvest_mask: 576
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 0
+    pcie_harvesting_mask: 0
+  5:
+    noc_translation: true
+    harvest_mask: 513
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 0
+    pcie_harvesting_mask: 0
+  6:
+    noc_translation: true
+    harvest_mask: 513
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 0
+    pcie_harvesting_mask: 0
+  7:
+    noc_translation: true
+    harvest_mask: 528
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 0
+    pcie_harvesting_mask: 0
+chip_to_boardtype:
+  0: n300
+  1: n300
+  2: n300
+  3: n300
+  4: n300
+  5: n300
+  6: n300
+  7: n300
+boards:
+  -
+    - board_id: 72058994491928619
+    - board_type: n300
+    - chips:
+        - 4
+        - 0
+  -
+    - board_id: 72058994491928729
+    - board_type: n300
+    - chips:
+        - 5
+        - 1
+  -
+    - board_id: 72058994491928743
+    - board_type: n300
+    - chips:
+        - 6
+        - 2
+  -
+    - board_id: 72058994491928746
+    - board_type: n300
+    - chips:
+        - 7
+        - 3

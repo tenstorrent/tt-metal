@@ -141,11 +141,11 @@ static std::pair<std::vector<uint32_t>, std::vector<uint32_t>> shard_noc_cores_f
     std::vector<uint32_t> logical_to_noc_row_map;
     std::vector<uint32_t> logical_to_noc_col_map;
     for (uint32_t y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-        CoreCoord noc_core = d->virtual_core_from_logical_core(CoreCoord(0, y), CoreType::WORKER);
+        CoreCoord noc_core = d->virtual_core_from_logical_core(CoreCoord(0, y), tt::CoreType::WORKER);
         logical_to_noc_row_map.push_back(noc_core.y);
     }
     for (uint32_t x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-        CoreCoord noc_core = d->virtual_core_from_logical_core(CoreCoord(x, 0), CoreType::WORKER);
+        CoreCoord noc_core = d->virtual_core_from_logical_core(CoreCoord(x, 0), tt::CoreType::WORKER);
         logical_to_noc_col_map.push_back(noc_core.x);
     }
 
@@ -221,8 +221,9 @@ bool ShardedAddrGenArgBuilder::shard_grid_is_transposed(Tensor const& t) {
 
 void ShardedAddrGenArgBuilder::log_sharded_tensor_kernel_args(Tensor const& t, std::string const& prefix) {
     auto const& [pages_per_shard_y, pages_per_shard_x] = t.buffer()->shard_spec().shape_in_pages();
-    auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(t.shard_spec().value());
-    bool shard_grid_transposed = shard_grid_is_transposed(t);
+    [[maybe_unused]] const auto& [shard_grid_start, shard_grid_end] =
+        shard_grid_from_shard_spec(t.shard_spec().value());
+    [[maybe_unused]] bool shard_grid_transposed = shard_grid_is_transposed(t);
 
     TT_ASSERT(pages_per_shard_y > 0);
     TT_ASSERT(pages_per_shard_x > 0);

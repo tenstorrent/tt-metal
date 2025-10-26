@@ -5,6 +5,7 @@
 #include "reports.hpp"
 
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 
 #include "ttnn/reports.hpp"
 #include <tt-metalium/allocator.hpp>
@@ -27,8 +28,9 @@ void py_module(py::module& module) {
         .def_property_readonly("address", [](const ttnn::reports::BufferInfo& self) { return self.address; })
         .def_property_readonly(
             "max_size_per_bank", [](const ttnn::reports::BufferInfo& self) { return self.max_size_per_bank; })
-        .def_property_readonly("buffer_type", [](const ttnn::reports::BufferInfo& self) { return self.buffer_type; });
-
+        .def_property_readonly("buffer_type", [](const ttnn::reports::BufferInfo& self) { return self.buffer_type; })
+        .def_property_readonly(
+            "buffer_layout", [](const ttnn::reports::BufferInfo& self) { return self.buffer_layout; });
     module.def("get_buffers", &get_buffers, py::arg("devices"));
     module.def("get_buffers", [](MeshDevice* device) { return get_buffers({device}); }, py::arg("device"));
 

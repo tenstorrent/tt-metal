@@ -28,15 +28,15 @@ void kernel_main() {
     //   receiver: This the cores that receive the aggregated results from sender, they only do
     //   local computations that they send to the sender for final aggregation
     //
-    // GROUPNORM RECIEVER DESCIPTION
-    // This is a high level desciption of the stages of this kernel, tags will be added to show where in the code each
+    // GROUPNORM RECEIVER DESCRIPTION
+    // This is a high level description of the stages of this kernel, tags will be added to show where in the code each
     // stage starts and ends
     //
     // Batch Loop:
     //   Group Loop:
     //     This is the process which repeats for every group
     //     First Read of data:
-    //       If Reciever:
+    //       If Receiver:
     //           Send partial reduction of Average to Sender Core
     //       If Sender:
     //           Pack Partials:
@@ -45,7 +45,7 @@ void kernel_main() {
     //           Send Global:
     //               Send Global Average to all Receiver cores
     //     Second Read of data:
-    //       If Reciever:
+    //       If Receiver:
     //           Send partial reduction of Varience to Sender Core
     //       If Sender:
     //           Pack Partials:
@@ -56,35 +56,36 @@ void kernel_main() {
     //          Third Read of data:
     //
     //      // clang-format on
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool out_is_dram = get_compile_time_arg_val(1) == 1;
+    uint32_t reduce_receiver_semaphore_addr = get_semaphore(get_named_compile_time_arg_val("reduce_receiver_semaphore_id"));
+    uint32_t reduce_sender_semaphore_addr = get_semaphore(get_named_compile_time_arg_val("reduce_sender_semaphore_id"));
 
-    uint32_t reduce_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(2));
-    uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(3));
-
-    constexpr uint32_t num_batch_group = get_compile_time_arg_val(4);
-    constexpr uint32_t num_batches = get_compile_time_arg_val(5);
+    constexpr uint32_t num_batch_group = get_named_compile_time_arg_val("num_batch_group");
+    constexpr uint32_t num_batches = get_named_compile_time_arg_val("num_batches");
 
     constexpr uint32_t num_groups = num_batch_group / num_batches;
 
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(6);
-    const uint32_t per_core_N_bytes = get_compile_time_arg_val(7);
-    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(8);
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(9);
-    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(10);
+    constexpr uint32_t per_core_N = get_named_compile_time_arg_val("per_core_N");
+    const uint32_t per_core_N_bytes = get_named_compile_time_arg_val("per_core_N_bytes");
+    const uint32_t per_core_N_bytes_with_stride = get_named_compile_time_arg_val("per_core_N_bytes_with_stride");
+    constexpr uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
+    constexpr uint32_t TILE_HEIGHT = get_named_compile_time_arg_val("TILE_HEIGHT");
 
-    constexpr uint32_t block_h = get_compile_time_arg_val(11);
-    constexpr uint32_t block_w = get_compile_time_arg_val(12);
-    constexpr uint32_t block_hw = get_compile_time_arg_val(13);
+    constexpr uint32_t block_h = get_named_compile_time_arg_val("block_h");
+    constexpr uint32_t block_w = get_named_compile_time_arg_val("block_w");
+    constexpr uint32_t block_hw = get_named_compile_time_arg_val("block_hw");
 
-    constexpr uint32_t num_cols_per_group = get_compile_time_arg_val(14);
-    constexpr uint32_t num_tiles_per_batch = get_compile_time_arg_val(15);
+    constexpr uint32_t num_cols_per_group = get_named_compile_time_arg_val("num_cols_per_group");
+    constexpr uint32_t num_tiles_per_batch = get_named_compile_time_arg_val("num_tiles_per_batch");
 
-    constexpr uint32_t block_w_last = get_compile_time_arg_val(16);
-    constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_compile_time_arg_val(17);
-    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(18);
-    constexpr uint32_t group_row_offset = get_compile_time_arg_val(19);
-    constexpr uint32_t num_out_blocks = get_compile_time_arg_val(20);
+    constexpr uint32_t block_w_last = get_named_compile_time_arg_val("block_w_last");
+    constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_named_compile_time_arg_val("GROUP_SIZE_IS_POWER_OF_2");
+    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_named_compile_time_arg_val("GROUP_SIZE_SMALLER_THAN_TILE_W");
+    constexpr uint32_t group_row_offset = get_named_compile_time_arg_val("group_row_offset");
+    constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
+
+    // 19 and 20 are used in welford version but unused in this version
+    constexpr auto src0_args = TensorAccessorArgs<0>();
+    constexpr auto out_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
@@ -116,7 +117,6 @@ void kernel_main() {
     constexpr uint32_t cb_reread_out = tt::CBIndex::c_23;
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial);  // tile size
-    const DataFormat data_format = get_dataformat(cb_ex_partial);          // data format
     const DataFormat out_data_format = get_dataformat(cb_out0);
 
     volatile tt_l1_ptr uint32_t* reduce_receiver_semaphore_addr_ptr =
@@ -150,10 +150,11 @@ void kernel_main() {
     uint32_t out_block_h_last = out_block_h_normal;
     uint32_t out_block_hw_last = out_block_hw_normal;
     const uint32_t num_reads_of_input = 3;
-    if constexpr(block_h % num_out_blocks != 0) {
+    if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
-        num_out_blocks_padded++;
-        out_block_h_last = block_h % num_out_blocks;
+	uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
+        num_out_blocks_padded += (residual / out_block_h_normal + 1);
+        out_block_h_last = residual % out_block_h_normal;
         out_block_hw_last = out_block_h_last * block_w;
     }
 
@@ -184,9 +185,7 @@ void kernel_main() {
                     }
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
                     const uint32_t src0_tile_bytes = get_tile_size(cb_in0);
-                    const DataFormat src0_data_format = get_dataformat(cb_in0);
-                    const InterleavedAddrGenFast<src0_is_dram> src_a = {
-                        .bank_base_address = src_addr, .page_size = src0_tile_bytes, .data_format = src0_data_format};
+                    const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
                     uint32_t l1_write_addr;
                     l1_write_addr = get_write_ptr(cb_in0);
                     cb_reserve_back(cb_in0, out_block_hw_normal);
@@ -223,10 +222,7 @@ void kernel_main() {
                             cb_pop_front(cb_ex2_partial, 1);
                         }
                     } else if (cur_read_iteration == 2) {
-                        const InterleavedAddrGenFast<out_is_dram> dst_a = {
-                            .bank_base_address = out_addr,
-                            .page_size = single_tile_size_bytes,
-                            .data_format = out_data_format};
+                        const auto dst_a = TensorAccessor(out_args, out_addr, single_tile_size_bytes);
 
                         // add or copy with previous output results
                         uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;

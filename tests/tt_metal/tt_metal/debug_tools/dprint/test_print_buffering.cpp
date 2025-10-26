@@ -4,13 +4,12 @@
 
 #include <fmt/base.h>
 #include <tt-metalium/host_api.hpp>
-#include <algorithm>
 #include <functional>
-#include <map>
 #include <string>
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
@@ -21,8 +20,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
-#include "umd/device/types/xy_pair.h"
-#include <tt-metalium/utils.hpp>
 
 ////////////////////////////////////////////////////////////////////////////////
 // A test for checking that prints are properly buffered before being displayed to the user.
@@ -32,7 +29,7 @@ using namespace tt::tt_metal;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-const std::vector<string>& golden_output = {
+const std::vector<std::string> golden_output = {
     "(0,0): This is a large DPRINT message that should not be interleaved with other DPRINT messages. (0,0): Adding \
 the alphabet to extend the size of this message: ABCDEFGHIJKLMNOPQRSTUVWXYZ. (0,0): Now, in reverse, to make it \
 even longer: ZYXWVUTSRQPONMLKJIHGFEDCBA.",
@@ -70,37 +67,45 @@ little mouse learned that bravery and kindness can change the world.",
     "contains several newline characters",
     "and should be displayed over multiple lines."};
 
-void RunTest(DPrintFixture* fixture, IDevice* device) {
+void RunTest(DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     std::vector<CoreCoord> cores;
     cores.emplace_back(0, 0);
     cores.emplace_back(0, 1);
     cores.emplace_back(0, 2);
 
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
+    workload.add_program(device_range, std::move(program));
+    auto& program_ = workload.get_programs().at(device_range);
 
     for (const CoreCoord& core : cores) {
         KernelHandle kernel_id = CreateKernel(
-            program,
+            program_,
             "tests/tt_metal/tt_metal/test_kernels/misc/print_buffering.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-        SetRuntimeArgs(program, kernel_id, core, {core.x, core.y});
+        SetRuntimeArgs(program_, kernel_id, core, {core.x, core.y});
 
-        log_info(tt::LogTest, "Running test on core {}:({},{})", device->id(), core.x, core.y);
+        log_info(tt::LogTest, "Running test on core {}:({},{})", mesh_device->get_devices()[0]->id(), core.x, core.y);
     }
 
-    fixture->RunProgram(device, program);
+    fixture->RunProgram(mesh_device, workload);
 
     // Check the print log against golden output.
-    EXPECT_TRUE(FileContainsAllStrings(DPrintFixture::dprint_file_name, golden_output));
+    EXPECT_TRUE(FileContainsAllStrings(DPrintMeshFixture::dprint_file_name, golden_output));
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-TEST_F(DPrintFixture, TensixTestPrintBuffering) {
-    for (IDevice* device : this->devices_) {
+TEST_F(DPrintMeshFixture, TensixTestPrintBuffering) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](DPrintFixture* fixture, IDevice* device) { CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device); }, device);
+            [](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, mesh_device);
+            },
+            mesh_device);
     }
 }

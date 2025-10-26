@@ -52,7 +52,7 @@ Replace all usages of `CreateDevice` as follows:
 // Old
 tt::tt_metal::IDevice* device = tt::tt_metal::CreateDevice(device_id);
 // New
-#include <tt-metallium/distributed.hpp>
+#include <tt-metalium/distributed.hpp>
 
 std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 ```
@@ -98,11 +98,11 @@ Ideally, TTNN users should use Tensors and TT-NN OPs instead of direct access to
 auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device,  tensor_spec);
 auto  storage = tt::tt_metal::DeviceStorage{input_buffer};
 
-// New allocate_tensor_on_mesh (preferred replacement)
-auto  input_tensor = allocate_tensor_on_mesh(tensor_spec, device.get());
+// New allocate_tensor_on_device (preferred replacement)
+auto  input_tensor = allocate_tensor_on_device(tensor_spec, device.get());
 
-// New tensor_impl::allocate_mesh_buffer_on_device
-auto input_buffer = tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(device, tensor_spec);
+// New tensor_impl::allocate_device_buffer
+auto input_buffer = tt::tt_metal::tensor_impl::allocate_device_buffer(device, tensor_spec);
 auto storage = tt::tt_metal::DeviceStorage{input_buffer,  DistributedTensorConfig{},  {{tt::tt_metal::distributed::MeshCoordinate{0,  0},  tensor_spec}}};
 
 // Old EnqueueProgram

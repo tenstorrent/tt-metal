@@ -11,7 +11,7 @@ import traceback
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_topk_simmilarity
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_topk_similarity
 
 
 def run_topk_tests(
@@ -44,8 +44,8 @@ def run_topk_tests(
         print(traceback.format_exc())
         raise e
 
-    success, simmilarity_value = comp_topk_simmilarity([ref_values, ref_indices], [tt_values, tt_gather_values])
-    logger.debug(simmilarity_value)
+    success, similarity_value = comp_topk_similarity([ref_values, ref_indices], [tt_values, tt_gather_values])
+    logger.debug(similarity_value)
     logger.debug(success)
 
     assert success

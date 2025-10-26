@@ -4,13 +4,9 @@
 
 #include "typecast_sharded_program_factory.hpp"
 
-#include <algorithm>
-
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 namespace ttnn::operations::copy::program {
 
@@ -27,7 +23,6 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
     const auto& output_dtype = args.output_dtype;
 
     tt::tt_metal::Program program = CreateProgram();
-    tt::tt_metal::IDevice* device = input.device();
 
     auto shard_spec = input.shard_spec().value();
     auto all_cores = shard_spec.grid;
@@ -43,8 +38,8 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
     tt::DataFormat act_df = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
-    uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
+    uint32_t input_tile_size = tt::tile_size(act_df);
+    uint32_t output_tile_size = tt::tile_size(out_df);
 
     TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
 
@@ -107,7 +102,7 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(dst_is_dram == 0, "Output buffer should be in L1");
 
-    std::map<string, string> kernel_defines;
+    std::map<std::string, std::string> kernel_defines;
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
@@ -127,13 +122,13 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
 
     bool math_approx_mode = false;
 
-    std::map<string, string> unary_defines;
+    std::map<std::string, std::string> unary_defines;
     unary_defines["TYPECAST_LLK"] = fmt::format(
         "typecast_tile<{0}u, {1}u>",
         (uint32_t)datatype_to_dataformat_converter(input_dtype),
         (uint32_t)datatype_to_dataformat_converter(output_dtype));
 
-    auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp",
         all_cores,

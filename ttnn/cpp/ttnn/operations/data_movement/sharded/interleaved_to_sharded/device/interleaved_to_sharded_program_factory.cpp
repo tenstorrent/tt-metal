@@ -15,6 +15,7 @@
 #include "ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -29,7 +30,6 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         num_units_per_shard_height, num_units_offset, num_units_per_row, num_units_per_shard_height_last,
         num_units_per_shard_width_last, padded_offset_bytes;
 
-    tt::tt_metal::IDevice* device = input.device();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -49,8 +49,8 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
 
     if (input.layout() == Layout::TILE) {
-        input_unit_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-        output_unit_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+        input_unit_size = tt::tile_size(input_cb_data_format);
+        output_unit_size = tt::tile_size(output_cb_data_format);
         TT_FATAL(
             shard_spec.shape[0] % TILE_HEIGHT == 0 && shard_spec.shape[1] % TILE_WIDTH == 0,
             "Shard shape {} must be tile {}x{} sized!",
@@ -103,7 +103,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         tt::tt_metal::CircularBufferConfig input_cb_out_config =
             tt::tt_metal::CircularBufferConfig(num_input_units * input_page_size, {{input_cb_index, input_cb_data_format}})
                 .set_page_size(input_cb_index, input_page_size);
-        auto cb_input = tt::tt_metal::CreateCircularBuffer(program, all_cores, input_cb_out_config);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, input_cb_out_config);
     }
     tt::tt_metal::CircularBufferConfig output_cb_out_config =
         tt::tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, output_cb_data_format}})
@@ -125,13 +125,13 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         tt::tt_metal::CircularBufferConfig scratch_cb_out_config =
             tt::tt_metal::CircularBufferConfig(4 * scratch_cb_page_size, {{scratch_cb_index, input_cb_data_format}})
                 .set_page_size(scratch_cb_index, scratch_cb_page_size);
-        auto cb_scratch = tt::tt_metal::CreateCircularBuffer(program, all_cores, scratch_cb_out_config);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, scratch_cb_out_config);
     }
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id;
     if (input.layout() == Layout::TILE) {
-        std::vector<uint32_t> reader_compile_time_args = {
-            (std::uint32_t)input_cb_index, (std::uint32_t)src_is_dram, all_cores.num_cores()};
+        std::vector<uint32_t> reader_compile_time_args = {input_cb_index, all_cores.num_cores()};
+        tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
         unary_reader_kernel_id = tt::tt_metal::CreateKernel(
             program,
@@ -139,14 +139,8 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             all_cores,
             tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     } else {
-        bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(num_units_per_row);
-        uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)log2(num_units_per_row) : 0;
-        std::vector<uint32_t> reader_compile_time_args = {
-            (std::uint32_t)input_cb_index,
-            (std::uint32_t)scratch_cb_index,
-            (std::uint32_t)src_is_dram,
-            (std::uint32_t)src_stick_size_is_power_of_two,
-            (std::uint32_t)src_log2_stick_size};
+        std::vector<uint32_t> reader_compile_time_args = {input_cb_index, scratch_cb_index, num_units_per_row};
+        tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
         unary_reader_kernel_id = tt::tt_metal::CreateKernel(
             program,
@@ -159,7 +153,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     std::string writer_kernel;
     std::vector<uint32_t> writer_compile_time_args = {out_cb_index};
     if (dst_is_dram) {
-        if (input.get_layout() == Layout::TILE) {
+        if (input.layout() == Layout::TILE) {
             writer_kernel = std::string("ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded_blocks_start_id.cpp");
         } else {
             writer_kernel = std::string("ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded_stick_layout_start_id.cpp");
@@ -339,7 +333,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             if (dst_is_dram) {
                 uint32_t page_id_within_row = curr_idx_w / input_unit_size;
                 uint32_t output_width_in_pages = tt::div_up(num_units_per_row, input_unit_size);
-                uint32_t start_id = curr_idx_h * output_width_in_pages + page_id_within_row;
+                uint32_t start_id = (curr_idx_h * output_width_in_pages) + page_id_within_row;
                 writer_run_time_args = {
                     dst_buffer->address(),
                     shard_height,

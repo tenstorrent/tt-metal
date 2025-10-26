@@ -6,11 +6,11 @@
 
 #include <stdint.h>
 #include <optional>
-#include "fabric_edm_packet_header.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "fd_kernel.hpp"
 #include "tt_metal/impl/dispatch/system_memory_manager.hpp"
-#include "tt_metal/fabric/fabric_mux_config.hpp"
 #include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/fabric.hpp>
 
 namespace tt::tt_metal {
 
@@ -66,13 +66,14 @@ private:
 public:
     RelayMux(
         int node_id,
-        chip_id_t device_id,
-        chip_id_t servicing_device_id,
+        ChipId device_id,
+        ChipId servicing_device_id,
         uint8_t cq_id,
         noc_selection_t noc_selection,
         bool d2h,
         int tunnel_index) :
         FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection), d2h_{d2h}, tunnel_id_{tunnel_index} {
+        TT_FATAL(tunnel_id_ >= 0, "Relay Mux Tunnel Index must be >= 0");
         kernel_type_ = FDKernelType::ROUTING;
     }
 
@@ -99,6 +100,12 @@ public:
     // and workers that only need the header only channel are specified in the downstream kernels.
     // Throws if not found
     int GetWorkerChannelIndex(int worker_id, tt::tt_fabric::FabricMuxChannelType channel_type) const;
+
+    // Get the link index used by dispatch for coordination with fabric tensix
+    static uint32_t get_dispatch_link_index(
+        tt::tt_fabric::FabricNodeId src_fabric_node_id,
+        tt::tt_fabric::FabricNodeId dst_fabric_node_id,
+        IDevice* device);
 };
 
 // Helper function to assemble the dispatch_fabric_mux_client_config args
@@ -110,7 +117,7 @@ void assemble_fabric_mux_client_config_args(
 
 // Helper function to calculate number of hops from a mmio device to downstream device
 // The two devices must be along the same tunnel.
-int get_num_hops(chip_id_t mmio_dev_id, chip_id_t downstream_dev_id);
+int get_num_hops(ChipId mmio_dev_id, ChipId downstream_dev_id);
 
 // Helper function to assemble args specific to the 2D fabric header
 template <typename Configuration>

@@ -88,15 +88,21 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
     const Tensor& weight_tensor,
     Tensor& matmul_output_tensor,
     IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& target_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     uint32_t dim,
     uint32_t num_links,
     uint32_t ring_size,
     uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset,
 
     /* Matmul Params */
@@ -113,7 +119,7 @@ namespace ccl {
 std::vector<Tensor> all_gather_matmul_async(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
-    Tensor& persistent_output_buffer,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
     uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     CoreCoord all_gather_core_grid_offset,
@@ -121,6 +127,7 @@ std::vector<Tensor> all_gather_matmul_async(
     uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config_ag = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+    const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
     const std::optional<MemoryConfig>& memory_config_mm = std::nullopt,
     bool transpose_a = false,
@@ -129,7 +136,10 @@ std::vector<Tensor> all_gather_matmul_async(
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
     const std::optional<const std::string>& activation = std::nullopt,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
+    std::optional<const ttnn::CoreGrid> core_grid = std::nullopt,
+    std::optional<uint32_t> chunks_per_sync = std::nullopt,
+    std::optional<uint32_t> num_workers_per_link = std::nullopt,
+    std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
 
 }  // namespace ccl
 }  // namespace experimental

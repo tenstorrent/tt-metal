@@ -10,19 +10,19 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
 
 #include "ttnn/operations/ccl/common/kernels/command_processor.hpp"
-
-#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
+#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/io_descriptors.hpp"
-#include "api/ttnn/tensor/enum_types.hpp"
 #include <cstdint>
 #include <utility>
+
+using namespace tt::tt_metal;
 
 using arg_idx_t = uint16_t;
 
@@ -442,7 +442,7 @@ void try_advance_inline_write_or_atomic_inc(command_context_t<Addrgen>& cmd_ctx)
         uint64_t dest_noc_addr_for_pkt = safe_get_noc_addr(dest_noc0_x, dest_noc0_y, dest_bank_addr, 0);
         if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC) {
             pkt_hdr->to_noc_unicast_atomic_inc(
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{dest_noc_addr_for_pkt, static_cast<uint16_t>(value), 32});
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{dest_noc_addr_for_pkt, static_cast<uint32_t>(value)});
         } else {
             pkt_hdr->to_noc_unicast_inline_write(
                 tt::tt_fabric::NocUnicastInlineWriteCommandHeader{dest_noc_addr_for_pkt, static_cast<uint16_t>(value)});
@@ -450,7 +450,7 @@ void try_advance_inline_write_or_atomic_inc(command_context_t<Addrgen>& cmd_ctx)
 
         switch (cmd_ctx.current_cmd_header.dest_type) {
             case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: {
-                pkt_hdr->to_chip_unicast(cmd_ctx.current_cmd_header.get_unicast_dest_args().distance_in_hops);
+                fabric_set_unicast_route<false>(pkt_hdr, cmd_ctx.current_cmd_header.get_unicast_dest_args().distance_in_hops);
 
                 auto& fabric_connection = cmd_ctx.current_cmd_header.get_unicast_dest_args().is_forward_direction
                                               ? cmd_ctx.fabric_connection.get_forward_connection()
@@ -495,6 +495,34 @@ void try_advance_inline_write_or_atomic_inc(command_context_t<Addrgen>& cmd_ctx)
             noc_inline_dw_write(dest_noc_addr, value);
         }
     }
+}
+
+template <tt::tt_metal::TensorMemoryLayout TENSOR_LAYOUT, tt::tt_metal::Layout MEM_LAYOUT, typename AddrGen>
+FORCE_INLINE std::pair<uint64_t, size_t> get_noc_addr_and_contiguous_pages(
+    uint32_t curr_page_idx,
+    const uint32_t offset_into_worker_slice,
+    const ttnn::ccl::Shape4D<uint32_t>& offset_worker_slice,
+    const AddrGen& address_generator,
+    const ttnn::ccl::Shape4D<uint32_t>& tensor_slice_shape,
+    uint8_t noc_id = noc_index) {
+        constexpr uint32_t offset = 0;
+        std::pair<uint64_t, size_t> ret_val =
+            get_contiguous_noc_addr(curr_page_idx,address_generator,offset,noc_id);
+        uint32_t flattened_offset_worker_slice = ttnn::ccl::v2::flattened_index(tensor_slice_shape, offset_worker_slice);
+        uint32_t contig_until_edge_of_tensor_slice = tensor_slice_shape.x - ((flattened_offset_worker_slice + offset_into_worker_slice) % tensor_slice_shape.x);
+        size_t contig_pages = std::min<int32_t>(ret_val.second, contig_until_edge_of_tensor_slice);
+        return {ret_val.first, contig_pages};
+}
+
+template <tt::tt_metal::TensorMemoryLayout TENSOR_LAYOUT, tt::tt_metal::Layout MEM_LAYOUT, typename AddrGen>
+FORCE_INLINE std::pair<uint64_t, uint16_t> get_noc_addr_and_contiguous_pages_for_fabric_write(
+    uint32_t curr_page_idx,
+    const uint32_t offset_into_worker_slice,
+    const ttnn::ccl::Shape4D<uint32_t>& offset_worker_slice,
+    const AddrGen& address_generator,
+    const ttnn::ccl::Shape4D<uint32_t>& tensor_slice_shape) {
+    return get_noc_addr_and_contiguous_pages<TENSOR_LAYOUT, MEM_LAYOUT, AddrGen>(
+        curr_page_idx, offset_into_worker_slice, offset_worker_slice, address_generator, tensor_slice_shape, 0);
 }
 
 #ifndef NO_TENSOR_MODE
@@ -549,7 +577,7 @@ void try_advance_read_tensor_to_cb(command_context_t<Addrgen>& cmd_ctx) {
     cb_push_back(cmd_ctx.cb_id, cmd_ctx.packet_size_in_pages);
 }
 #endif
-
+namespace command_processor {
 void write_and_advance_local_read_address_for_fabric_write(
     uint64_t noc0_dest_noc_addr,
     size_t packet_header_buffer_addr,
@@ -569,7 +597,7 @@ void write_and_advance_local_read_address_for_fabric_write(
             auto& fabric_conn = unicast_args.is_forward_direction ? fabric_connection.get_forward_connection()
                                                                   : fabric_connection.get_backward_connection();
 
-            pkt_hdr->to_chip_unicast(unicast_args.distance_in_hops);
+            fabric_set_unicast_route<false>(pkt_hdr, unicast_args.distance_in_hops);
 
             fabric_conn.wait_for_empty_write_slot();
             fabric_conn.send_payload_without_header_non_blocking_from_address(l1_read_addr, payload_size_bytes);
@@ -609,6 +637,7 @@ void write_and_advance_local_read_address_for_fabric_write(
 
     l1_read_addr += payload_size_bytes;
 }
+}
 
 FORCE_INLINE void write_payload_then_advance_read_address(
     uint64_t noc0_dest_noc_addr,
@@ -624,7 +653,7 @@ FORCE_INLINE void write_payload_then_advance_read_address(
     switch (current_cmd_header.dest_type) {
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: [[fallthrough]];
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_MULTICAST:
-            write_and_advance_local_read_address_for_fabric_write(
+            command_processor::write_and_advance_local_read_address_for_fabric_write(
                 noc0_dest_noc_addr,
                 packet_header_buffer_addr,
                 current_cmd_header,
@@ -850,6 +879,7 @@ void try_advance(command_context_t<Addrgen>& cmd_ctx) {
                 cmd_ctx.cmd_specific_ctx.inline_value_ctx.value) {
                 DPRINT << "Completing waitval command\n";
                 cmd_ctx.complete_current_command();
+                invalidate_l1_cache();
             }
             break;
 
@@ -971,7 +1001,7 @@ void kernel_main() {
 #endif
 
     if (fabric_connection.is_logically_connected()) {
-        fabric_connection.open();
+        fabric_connection.open<true>();
     }
     while (stream_done_mask != finish_value) {
         if ((stream_done_mask & 0x1) == 0) {

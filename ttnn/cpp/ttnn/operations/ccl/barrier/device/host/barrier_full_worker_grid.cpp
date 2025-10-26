@@ -50,8 +50,8 @@ static std::tuple<std::array<uint32_t, 7>, std::array<uint32_t, 10>, std::array<
     CoreCoord const& eth_sender_core,
     CoreCoord const& eth_receiver_core,
     CoreCoord const& sem_init_core) {
-    const uint32_t worker_sem0 = CreateSemaphore(program, sem_init_core, 0, CoreType::WORKER);
-    const uint32_t worker_sem1 = CreateSemaphore(program, sem_init_core, 0, CoreType::WORKER);
+    const uint32_t worker_sem0 = CreateSemaphore(program, sem_init_core, 0, tt::CoreType::WORKER);
+    const uint32_t worker_sem1 = CreateSemaphore(program, sem_init_core, 0, tt::CoreType::WORKER);
     uint32_t start_semaphore_address = hal::get_erisc_l1_unreserved_base() + EriscDatamoverConfig::eth_word_size_bytes;
     uint32_t erisc_semaphore_address =
         hal::get_erisc_l1_unreserved_base() + (EriscDatamoverConfig::eth_word_size_bytes * 2);
@@ -66,16 +66,16 @@ static std::tuple<std::array<uint32_t, 7>, std::array<uint32_t, 10>, std::array<
         erisc_semaphore_address,
         start_semaphore_address,
         erisc_buffer_address,
-        static_cast<uint32_t>(device->virtual_core_from_logical_core(sem_init_core, CoreType::WORKER).x),
-        static_cast<uint32_t>(device->virtual_core_from_logical_core(sem_init_core, CoreType::WORKER).y),
+        static_cast<uint32_t>(device->virtual_core_from_logical_core(sem_init_core, tt::CoreType::WORKER).x),
+        static_cast<uint32_t>(device->virtual_core_from_logical_core(sem_init_core, tt::CoreType::WORKER).y),
         worker_sem0};
     const std::array<uint32_t, 7> sender_rt_args = {
         static_cast<uint32_t>(is_starting_core ? 1 : 0),  // is_ring_start
         hal::get_erisc_l1_unreserved_base(),              // handshake_addr
         erisc_buffer_address,
         erisc_semaphore_address,
-        static_cast<uint32_t>(device->virtual_core_from_logical_core(sem_init_core, CoreType::WORKER).x),
-        static_cast<uint32_t>(device->virtual_core_from_logical_core(sem_init_core, CoreType::WORKER).y),
+        static_cast<uint32_t>(device->virtual_core_from_logical_core(sem_init_core, tt::CoreType::WORKER).x),
+        static_cast<uint32_t>(device->virtual_core_from_logical_core(sem_init_core, tt::CoreType::WORKER).y),
         worker_sem1};  // sample size
     const std::array<uint32_t, 5> sem_id_args = {
         worker_sem0,
@@ -92,9 +92,9 @@ operation::ProgramWithCallbacks barrier_with_workers(
     const bool is_starting_core,
     const uint32_t ring_size,
     const uint32_t ring_index,
-    chip_id_t target_device_id,
-    const std::optional<chip_id_t> receiver_device_id,
-    const std::optional<chip_id_t> sender_device_id,
+    tt::ChipId target_device_id,
+    const std::optional<tt::ChipId> receiver_device_id,
+    const std::optional<tt::ChipId> sender_device_id,
     ttnn::ccl::Topology topology) {
     // Configurable params
     const uint32_t num_links = 1;
@@ -103,11 +103,11 @@ operation::ProgramWithCallbacks barrier_with_workers(
     std::vector<Tensor> input_tensors = {input_tensor};
     std::vector<Tensor> output_tensors = {output_tensor};
     // Configure operational parameters
-    auto const& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
+    [[maybe_unused]] const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
 
     // Get the device from the tensor
     const auto& device =
-        input_tensor.mesh_device() ? input_tensor.mesh_device()->get_device(target_device_id) : input_tensor.device();
+        input_tensor.device() ? input_tensor.device()->get_device(target_device_id) : input_tensor.device();
     // Get a representation of the topology
 
     // Create the program

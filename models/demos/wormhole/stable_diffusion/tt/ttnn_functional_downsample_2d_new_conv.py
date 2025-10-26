@@ -8,6 +8,7 @@ from typing import Optional
 import torch
 
 import ttnn
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import reshard_for_output_channels_divisibility
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import get_default_compute_config
 
 
@@ -87,6 +88,7 @@ class downsample_2d:
                 output_height=self.output_height,
                 output_width=self.output_width,
                 output_channels=self.out_channels,
+                input_channels_alignment=32,
                 compute_grid_size=self.device.compute_with_storage_grid_size(),
                 block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 enable_channels_padding=False,
@@ -116,11 +118,11 @@ class downsample_2d:
         #     hidden_states = ttnn.to_memory_config(hidden_states, self.conv.conv.input_sharded_memory_config)
         # hidden_states = self.conv(hidden_states)
         conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat8_b,
             weights_dtype=ttnn.bfloat8_b,
-            activation="",
             shard_layout=self.shard_layout,
             reshard_if_not_optimal=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
 
         if hidden_states.memory_config() != self.input_memory_config:
@@ -143,32 +145,18 @@ class downsample_2d:
             "groups": 1,
             "device": self.device,
             "conv_config": conv_config,
+            "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }
 
-        if not ttnn.is_tensor_storage_on_device(self.conv_weights):
-            self.conv_weights = ttnn.prepare_conv_weights(
-                weight_tensor=self.conv_weights,
-                weights_format="OIHW",
-                input_memory_config=hidden_states.memory_config(),
-                input_layout=hidden_states.get_layout(),
-                has_bias=True,
-                **conv_kwargs,
-            )
-            self.conv_bias = ttnn.prepare_conv_bias(
-                bias_tensor=self.conv_bias,
-                input_memory_config=hidden_states.memory_config(),
-                input_layout=hidden_states.get_layout(),
-                **conv_kwargs,
-            )
-            self.conv_weights = ttnn.to_device(self.conv_weights, self.device)
-            self.conv_bias = ttnn.to_device(self.conv_bias, self.device)
-
-        hidden_states = ttnn.conv2d(
+        hidden_states, [self.conv_weights, self.conv_bias] = ttnn.conv2d(
             input_tensor=hidden_states,
             **conv_kwargs,
             weight_tensor=self.conv_weights,
             bias_tensor=self.conv_bias,
             compute_config=compute_config,
+            dtype=ttnn.bfloat8_b,
+            return_weights_and_bias=True,
         )
+        hidden_states = reshard_for_output_channels_divisibility(hidden_states, self.out_channels)
 
         return hidden_states

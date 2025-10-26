@@ -4,18 +4,14 @@
 
 #pragma once
 
+#include "ttnn/decorators.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/memory_config/memory_config.hpp"
 
 namespace ttnn {
 namespace operations::experimental::transformer {
 
 struct NLPConcatHeadsOperation {
-    static ttnn::Tensor invoke(
-        QueueId queue_id,
-        const Tensor& input_tensor,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-
     static ttnn::Tensor invoke(
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,

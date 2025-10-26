@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,5 +26,13 @@ const ContextPtr& DistributedContext::get_current_world() { return ContextImpl::
 void DistributedContext::set_current_world(const ContextPtr& ctx) { ContextImpl::set_current_world(ctx); }
 
 bool DistributedContext::is_initialized() { return ContextImpl::is_initialized(); }
+
+DistributedContextId DistributedContext::id() const { return id_; }
+
+/* -------------------- DistributedContext ID generation --------------------- */
+DistributedContextId DistributedContext::generate_unique_id() {
+    static std::size_t next_id = 0;
+    return DistributedContextId(next_id++);
+}
 
 }  // namespace tt::tt_metal::distributed::multihost

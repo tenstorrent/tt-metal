@@ -14,7 +14,15 @@ namespace ttnn::operations::transformer {
 void ScaledDotProductAttentionDecode::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    TT_FATAL(input_tensors.size() == 3, "Must have 3 input tensors and mask");
+    bool use_mla = this->use_mla.value_or(false);
+
+    if (use_mla) {
+        TT_FATAL(input_tensors.size() == 2, "Must have 2 input tensors and mask");
+        TT_FATAL(this->head_dim_v.has_value(), "Must provide head_dim_v for multi-latent attention decode");
+        TT_FATAL(this->is_causal, "Multi-latent attention decode only tested for causal!");
+    } else {
+        TT_FATAL(input_tensors.size() == 3, "Must have 3 input tensors and mask");
+    }
 
     for (auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device!");
@@ -33,7 +41,24 @@ void ScaledDotProductAttentionDecode::validate(
     const auto q_shape = input_tensors.at(0).padded_shape();
     const auto q_shape_unpadded = input_tensors.at(0).logical_shape();
     const auto k_shape = input_tensors.at(1).padded_shape();
-    const auto v_shape = input_tensors.at(2).padded_shape();
+
+    // When using multi-latent attention, the V tensor is the same as K tensor, but of smaller head dimension.
+    // For the sake validation, we will use the K tensor shape for V tensor, and validate head_dim_v separately.
+    const auto v_shape = use_mla ? input_tensors.at(1).padded_shape() : input_tensors.at(2).padded_shape();
+
+    if (use_mla) {
+        // Head dim v validation
+        TT_FATAL(
+            q_shape[3] == k_shape[3],
+            "Head dimension of Q must be equal to head dim of K, got {} and {}",
+            q_shape[3],
+            k_shape[3]);
+        TT_FATAL(
+            this->head_dim_v.value() <= q_shape[3],
+            "Head dimension of V must be less than or equal to head dim of Q, got {} and {}",
+            head_dim_v,
+            q_shape[3]);
+    }
 
     // Input 0 must be sharded by height or DRAM interleaved. All other inputs must be in DRAM.
     const auto Q_memcfg = input_tensors.at(0).memory_config();
@@ -115,19 +140,42 @@ void ScaledDotProductAttentionDecode::validate(
                 "Expect cur_pos to be ROW_MAJOR, got {}",
                 cur_pos_tensor.layout());
             const auto cur_pos_shape = cur_pos_tensor.padded_shape();
-            TT_FATAL(
-                cur_pos_shape[0] == B, "cur_pos must have batch size equal to Q, got {} and {}", cur_pos_shape[0], B);
+
+            if (!cur_pos_tensor.is_sharded()) {
+                TT_FATAL(
+                    cur_pos_shape[-1] == B,
+                    "cur_pos must have batch size equal to Q, got {} and {}",
+                    cur_pos_shape[0],
+                    B);
+            }
         }
 
         TT_FATAL(optional_input_tensors.at(1).has_value(), "Must have page_table tensor for paged attention");
         const auto& page_table_tensor = optional_input_tensors.at(1).value();
 
-        TT_FATAL(page_table_tensor.dtype() == DataType::INT32, "Error");
+        if (page_table_tensor.is_sharded()) {
+            TT_FATAL(
+                page_table_tensor.dtype() == DataType::UINT16,
+                "Error: SDPA currently only supports UINT16 datatype for sharded configurations");
+        } else {
+            TT_FATAL(
+                page_table_tensor.dtype() == DataType::INT32, "Error: SDPA currently only supports INT32 datatype");
+        }
+
         TT_FATAL(page_table_tensor.layout() == Layout::ROW_MAJOR, "Error");
 
         const auto page_table_shape = page_table_tensor.padded_shape();
 
-        TT_FATAL(page_table_shape[0] == B, "page_table must have hidden size equal to Q");
+        if (page_table_tensor.is_sharded()) {
+            uint32_t num_cores = page_table_tensor.memory_config().shard_spec()->grid.num_cores();
+            TT_FATAL(
+                page_table_shape[0] / num_cores == B,
+                "Page_table must have shard height batch_size {} equal to Q on {} cores",
+                B,
+                num_cores);
+        } else {
+            TT_FATAL(page_table_shape[0] == B, "Page_table must have batch size equal to Q");
+        }
 
         TT_FATAL(k_shape[2] == v_shape[2], "K and V must have same block size");
         TT_FATAL(k_shape[3] == v_shape[3] && k_shape[3] == q_shape[3], "Q, K, V must have same hidden size");
@@ -201,12 +249,39 @@ void ScaledDotProductAttentionDecode::validate(
             input_tensors.at(0).dtype() == DataType::BFLOAT16,
             "GQA expects BFLOAT16 input tensor, but got {}",
             input_tensors.at(0).dtype());
-        uint32_t num_heads_per_kv = q_shape_unpadded[2] / k_shape[1];
         TT_FATAL(
             q_shape_unpadded[2] % k_shape[1] == 0,
             "GQA expects Q to have a multiple of K heads, but got {} and {}",
             q_shape_unpadded[2],
             k_shape[1]);
+    }
+
+    // Check attention sink
+    if (optional_input_tensors.at(3).has_value()) {
+        const auto& attention_sink = optional_input_tensors.at(3).value();
+
+        const auto& sink_shape = attention_sink.padded_shape();
+        TT_FATAL(sink_shape.size() == 2, "Attention sink must have 2 dimensions");
+        TT_FATAL(
+            sink_shape[0] == q_shape[2],
+            "Attention sink must have the same padded num heads as Q but got {}",
+            sink_shape[0]);
+        TT_FATAL(
+            sink_shape[1] == tt::constants::TILE_WIDTH,
+            "Attention sink must be a single tile wide, but got {}",
+            sink_shape[1]);
+        TT_FATAL(
+            attention_sink.dtype() == DataType::BFLOAT16,
+            "Attention sink must by a BF16 tensor, but got {}",
+            attention_sink.dtype());
+        TT_FATAL(
+            attention_sink.layout() == Layout::TILE,
+            "Attention sink must be in TILE layout, but got {}",
+            attention_sink.layout());
+        TT_FATAL(
+            attention_sink.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "Attention sink must be in DRAM memory, but got {}",
+            attention_sink.memory_config().buffer_type());
     }
 }
 
@@ -219,6 +294,10 @@ std::vector<TensorSpec> ScaledDotProductAttentionDecode::compute_output_specs(
         output_shape[2] = round_up_to_tile(output_shape[2], tt::constants::TILE_HEIGHT);
         output_layout = Layout::ROW_MAJOR;
     }
+    if (this->use_mla.value_or(false)) {
+        // Multi Latent Attention
+        output_shape[3] = this->head_dim_v.value();
+    }
     return {TensorSpec(output_shape, TensorLayout(input.dtype(), PageConfig(output_layout), output_mem_config))};
 }
 
@@ -228,17 +307,22 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
     std::vector<Tensor>& output_tensors) const {
     auto& input_tensor_q = input_tensors.at(0);
     auto& input_tensor_k = input_tensors.at(1);
-    auto& input_tensor_v = input_tensors.at(2);
+    auto& input_tensor_v = this->use_mla.value_or(false) ? input_tensors.at(1) : input_tensors.at(2);
 
     auto& cur_pos_tensor = optional_input_tensors.at(0);
     auto& page_table_tensor = optional_input_tensors.at(1);
     auto& attn_mask = optional_input_tensors.at(2);
+    auto& attention_sink = optional_input_tensors.at(3);
 
     auto& output_tensor = output_tensors.at(0);
 
     auto scale = this->scale;
     if (not scale.has_value()) {
         scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1]));
+    }
+    auto sliding_window_size = this->sliding_window_size;
+    if (not sliding_window_size.has_value()) {
+        sliding_window_size = 0;
     }
 
     return detail::sdpa_decode_multi_core(
@@ -248,6 +332,7 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
         cur_pos_tensor,
         page_table_tensor,
         attn_mask,
+        attention_sink,
         output_tensor,
         this->is_causal,
         this->cur_pos,
@@ -255,7 +340,10 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
         this->compute_kernel_config,
         this->program_config,
         this->k_chunk_size,
-        this->share_cache);
+        this->share_cache,
+        this->use_mla.value_or(false),
+        this->head_dim_v.value_or(0),
+        sliding_window_size);
 }
 
 operation::Hash ScaledDotProductAttentionDecode::compute_program_hash(
@@ -271,11 +359,15 @@ operation::Hash ScaledDotProductAttentionDecode::compute_program_hash(
         this->k_chunk_size,
         this->paged_attention,
         this->is_causal,
+        this->use_mla,
+        this->head_dim_v,
+        this->sliding_window_size,
         has_attn_mask,
         has_cur_pos,
         input_tensors,
         // Hash on page_table_tensor to properly size page table CB
-        optional_input_tensors.at(1));
+        optional_input_tensors.at(1),
+        optional_input_tensors.at(3));
 }
 
 }  // namespace ttnn::operations::transformer

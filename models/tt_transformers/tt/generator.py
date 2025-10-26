@@ -5,16 +5,18 @@
 from dataclasses import dataclass
 
 import torch
-from llama_models.llama3.api.datatypes import InterleavedTextMedia, StopReason
-from llama_models.llama3.reference_impl.generation import (
-    ChatPrediction,
-    CompletionPrediction,
-    TokenResult,
-    sample_top_p,
-)
 from loguru import logger
 
 import ttnn
+from models.common.llama_models import (
+    CompletionMessage,
+    StopReason,
+    TokenResult,
+    create_vision_mask,
+    encode_content,
+    extract_images_from_messages,
+    sample_top_p,
+)
 from models.tt_transformers.tt.common import (
     copy_host_to_device,
     get_block_size,
@@ -22,6 +24,7 @@ from models.tt_transformers.tt.common import (
     get_padded_prefill_len,
     num_blocks_in_seq,
 )
+from models.tt_transformers.tt.model_config import CheckpointType
 
 
 @dataclass(frozen=True)
@@ -31,13 +34,13 @@ class SamplingParams:
     The same data class exists in vLLM at vllm/worker/tt_model_runner.py.
     """
 
-    temperature: float
-    top_k: int
-    top_p: float
+    temperature: float | list[float]
+    top_k: int | list[int]
+    top_p: float | list[float]
 
 
 class Generator:
-    def __init__(self, model, model_args, mesh_device, tokenizer=None, formatter=None):
+    def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.
         With model_args you have the checkpoint location, can specify max batch size
@@ -51,76 +54,101 @@ class Generator:
         self.model = model
         self.model_args = model_args
         self.mesh_device = mesh_device
+        self.processor = processor
         self.tokenizer = tokenizer
-        self.formatter = formatter
         self.data_parallel = len(self.model)
+        self.prev_page_table = None
 
     # Note: This function is called by vLLM
-    def prefill_forward_text(self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None):
+    def prefill_forward_text(
+        self,
+        tokens: torch.Tensor,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
+        empty_slots=None,
+        **kwargs,
+    ):
+        if page_table is not None:
+            assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
+
         batch_size, batch_seq_len = tokens.shape
-        max_batch_size_per_model, batch_size_per_model = self._get_batch_size_per_model(batch_size)
+        max_batch_size_per_model = self.model_args[0].max_batch_size
 
         # Each model expected to run the same model, safe to use 1st vocab size
         output_logits = torch.zeros(batch_size, 1, self.model_args[0].vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch_size)
 
-        if page_table is not None:
-            assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
-            page_table = torch.split(page_table, batch_size_per_model)
+        if empty_slots is None:
+            empty_slots = list(range(batch_size))
 
         out_list = []
-        for group_user_id in range(max_batch_size_per_model):
-            for model_id in range(self.data_parallel):
-                if group_user_id >= batch_size_per_model[model_id]:
-                    # Skip users that are not in this model's batch size
-                    continue
+        for idx, user_id in enumerate(empty_slots):
+            model_id = user_id // max_batch_size_per_model
+            group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
+            seq_len = int(prompt_lens[idx])
+            last_token_idx = seq_len - 1
+            prefill_seq_len = get_padded_prefill_len(seq_len)
+            local_kwargs = kwargs.copy()  # Avoid modifying original kwargs
 
-                user_id = group_user_id + model_id * max_batch_size_per_model
-                logger.info(f"Prefilling User {user_id + 1}")
-                seq_len = int(prompt_lens[user_id])
-                last_token_idx = seq_len - 1
+            logger.info(f"Prefilling User {user_id + 1} up to {seq_len} tokens")
 
-                prefill_seq_len = get_padded_prefill_len(seq_len)
-                prefill_ids = torch.cat(
-                    [tokens[user_id : user_id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
-                )
-                if page_table is not None:
-                    page_table_user = self._get_prefill_user_page_table(
-                        page_table[model_id], kv_cache[model_id], seq_len
-                    )
+            # Extracting data for the current user
+            # If page_table is not provided, we keep track of the relative/model user_id through group_user_id
+            prefill_ids = torch.cat(
+                [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
+            )
+            page_table_user = (
+                self._get_prefill_user_page_table(page_table[idx : idx + 1], kv_cache[model_id], seq_len)
+                if page_table is not None
+                else None
+            )
+            model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
 
-                logits = self.prefill_forward_single_user_text(
-                    prefill_ids,
-                    page_table=page_table_user if page_table is not None else None,
-                    user_id=group_user_id,
-                    last_token_idx=last_token_idx,
-                    kv_cache=kv_cache[model_id] if kv_cache is not None else None,
-                    model_id=model_id,
-                )
+            # Check if 'pixel_values' exists and index it safely
+            if local_kwargs.get("pixel_values", None) is not None:
+                local_kwargs["pixel_values"] = local_kwargs["pixel_values"][idx]
+                if "image_grid_thw" in local_kwargs:
+                    local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
+
+            logits = self.prefill_forward_single_user_text(
+                prefill_ids,
+                page_table=page_table_user,
+                user_id=group_user_id,
+                last_token_idx=last_token_idx,
+                kv_cache=model_kv_cache,
+                model_id=model_id,
+                **local_kwargs,
+            )
+            # if data parallel is greater than 1, we need to add logits to out_list and do the processing after all the prefill are done
+            # otherwise, we can process the logits after prefill immediately
+            if self.data_parallel > 1:
                 out_list.append(logits)
+            else:
+                output_logits[idx] = self.model[model_id].process_output_prefill(
+                    logits, last_token_idx=(last_token_idx % 32)
+                )
+                del logits
 
-        # We gather data back to how at the end of prefill
-        for group_user_id in range(max_batch_size_per_model):
-            for model_id in range(self.data_parallel):
-                if group_user_id >= batch_size_per_model[model_id]:
-                    # Skip users that are not in this model's batch size
-                    continue
-
-                user_id = group_user_id + model_id * max_batch_size_per_model
-                out = out_list[group_user_id]
-
-                seq_len = int(prompt_lens[user_id])
+        # Process the logits after all the prefill are done in data parallel mode
+        if self.data_parallel > 1:
+            for idx, out in enumerate(out_list):
+                seq_len = int(prompt_lens[idx])
                 last_token_idx = seq_len - 1
+                user_id = empty_slots[idx]
+                model_id = user_id // max_batch_size_per_model
 
                 # Since we give unpadded_seq_len, only the tile containing the last token is returned
-                output_logits[user_id] = self.model[model_id].process_output_prefill(
+                output_logits[idx] = self.model[model_id].process_output_prefill(
                     out, last_token_idx=(last_token_idx % 32)
                 )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_logits
 
-    def prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, kv_cache=None, model_id=-1):
+    def prefill_forward_single_user_text(
+        self, tokens, page_table, user_id, last_token_idx, kv_cache=None, model_id=-1, **kwargs
+    ):
         seq_len = tokens.shape[-1]
         use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
         if use_chunked_prefill:
@@ -161,7 +189,8 @@ class Generator:
 
                 (
                     chunk_prefill_input,
-                    chunk_rot_mats_prefill,
+                    chunk_rot_mats_global_prefill,
+                    chunk_rot_mats_local_prefill,
                     page_table_tt,
                     chunk_page_table_tt,
                 ) = self.model[model_id].prepare_inputs_prefill(
@@ -169,16 +198,19 @@ class Generator:
                     start_pos=chunk_start,
                     page_table=page_table_user_padded,
                     chunk_page_table=chunk_page_table,
+                    **kwargs,
                 )
                 tt_logits = self.model[model_id].ttnn_prefill_forward(
                     chunk_prefill_input,
-                    rot_mats=chunk_rot_mats_prefill,
+                    rot_mats_global=chunk_rot_mats_global_prefill,
+                    rot_mats_local=chunk_rot_mats_local_prefill,
                     user_id=CHUNK_USER_ID,
                     page_table=page_table_tt,
                     chunk_page_table=chunk_page_table_tt,
                     chunk_start_idx=chunk_start,
                     get_last_token=(last_token_idx_in_chunk // 32) * 32,
                     kv_cache=kv_cache,
+                    **kwargs,
                 )
 
                 if chunk_start == last_chunk_start:
@@ -186,14 +218,22 @@ class Generator:
                 else:
                     del tt_logits
         else:
-            prefill_input, rot_mats_prefill, page_table_tt, _ = self.model[model_id].prepare_inputs_prefill(
+            (
+                prefill_input,
+                rot_mats_global_prefill,
+                rot_mats_local_prefill,
+                page_table_tt,
+                _,
+            ) = self.model[model_id].prepare_inputs_prefill(
                 tokens,
                 page_table=page_table,
+                **kwargs,
             )
 
             tt_logits = self.model[model_id].ttnn_prefill_forward(
                 prefill_input,
-                rot_mats=rot_mats_prefill,
+                rot_mats_global=rot_mats_global_prefill,
+                rot_mats_local=rot_mats_local_prefill,
                 user_id=user_id,
                 page_table=page_table_tt,
                 get_last_token=(last_token_idx // 32) * 32,
@@ -230,15 +270,15 @@ class Generator:
             "argmax_on_device": argmax_on_device,
         }
         if enable_trace:
-            tt_logits = self._easy_trace_text(**decode_kwargs)
+            tt_decode_output = self._easy_trace_text(**decode_kwargs)
         else:
-            tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
+            tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
 
         if read_from_device:
-            to_host = self.read_decode_output(tt_logits, B, is_tokens=(sampling_params is not None))
-            return to_host
-        else:
-            return tt_logits
+            to_host = self.read_decode_output(tt_decode_output)
+            return self.process_decode_output_host(to_host, is_tokens=(sampling_params is not None))
+
+        return tt_decode_output
 
     def _decode_forward_no_trace_text(
         self,
@@ -256,17 +296,20 @@ class Generator:
 
         tt_tokens = []
         tt_current_pos = []
-        tt_rot_mats = []
+        tt_rot_mat_idxs = []
         tt_page_table = []
-
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
-            tt_tokens_i, tt_current_pos_i, tt_rot_mats_i, tt_page_table_i = self.model[i].prepare_inputs_decode(
-                tokens[i], current_pos[i], user_page_table
-            )
+            model_i = self.model[i]
+            (
+                tt_tokens_i,
+                tt_current_pos_i,
+                tt_rot_mat_idxs_i,
+                tt_page_table_i,
+            ) = model_i.prepare_inputs_decode(tokens[i], current_pos[i], user_page_table)
             tt_tokens.append(tt_tokens_i)
             tt_current_pos.append(tt_current_pos_i)
-            tt_rot_mats.append(tt_rot_mats_i)
+            tt_rot_mat_idxs.append(tt_rot_mat_idxs_i)
             tt_page_table.append(tt_page_table_i)
 
         for i in range(self.data_parallel):
@@ -274,7 +317,7 @@ class Generator:
             tt_logits_i = self.model[i].ttnn_decode_forward(
                 tt_tokens[i],
                 tt_current_pos[i],
-                rot_mats=tt_rot_mats[i],
+                rot_mat_idxs=tt_rot_mat_idxs[i],
                 page_table=tt_page_table[i],
                 kv_cache=user_kv_cache,
                 argmax_on_device=argmax_on_device,
@@ -307,6 +350,7 @@ class Generator:
         trace_ids = {}
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
+
             host_inputs = self.model[i].prepare_decode_inputs_host(
                 tokens[i], current_pos[i], page_table=user_page_table
             )
@@ -318,47 +362,14 @@ class Generator:
             trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
             trace_ids[i] = trace_id
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
-            transformed_inputs = self.model[i].transform_decode_inputs_device(*(device_inputs[i]))
             tt_out_trace.append(
                 self.model[i].ttnn_decode_forward(
-                    *transformed_inputs, kv_cache=user_kv_cache, argmax_on_device=argmax_on_device
+                    *device_inputs[i], kv_cache=user_kv_cache, argmax_on_device=argmax_on_device
                 )
             )
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
         return trace_ids, tt_out_trace, *device_inputs
-
-    def _decode_forward_trace_text(
-        self,
-        trace_ids,
-        device_inputs,
-        tt_out_trace,
-        tokens,
-        current_pos,
-        page_table=None,
-    ):
-        """
-        Executes the trace for the decode_forward method but does not read back outputs.
-        """
-        host_inputs = []
-        for i in range(self.data_parallel):
-            user_page_table = page_table[i] if page_table is not None else None
-            host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
-            host_inputs.append(host_inputs_i)
-
-        to_device = []
-        for i in range(self.data_parallel):
-            to_device.append(
-                copy_host_to_device(
-                    host_tensors=host_inputs[i],
-                    device_tensors=device_inputs[i],
-                )
-            )
-        device_inputs = to_device
-        for i, trace_id in trace_ids.items():
-            ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
-
-        return tt_out_trace
 
     def _easy_trace_text(
         self,
@@ -379,16 +390,27 @@ class Generator:
             self.trace_inputs_text = device_inputs
             self.trace_output_text = tt_out_trace
 
-        trace_logits_rm = self._decode_forward_trace_text(
-            self.trace_ids_text,
-            self.trace_inputs_text,
-            self.trace_output_text,
-            tokens,
-            current_pos,
-            page_table=page_table,
-        )
+        reset_inputs = not argmax_on_device
+        if self.prev_page_table is None or any(
+            not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table)
+        ):
+            reset_inputs = True
+            self.prev_page_table = page_table
 
-        return trace_logits_rm
+        if reset_inputs:
+            for i in range(self.data_parallel):
+                user_page_table = page_table[i] if page_table is not None else None
+                host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
+
+                copy_host_to_device(
+                    host_tensors=host_inputs_i,
+                    device_tensors=self.trace_inputs_text[i],
+                )
+
+        for i, trace_id in self.trace_ids_text.items():
+            ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
+
+        return self.trace_output_text
 
     def _prefill_forward_single_user(
         self,
@@ -492,6 +514,63 @@ class Generator:
         self,
         vision_images,
         vision_masks,
+        tokens,
+        xattn_caches,
+        total_lens,
+        prompt_lens,
+        page_table=None,
+        kv_cache=None,
+        cross_page_table=None,
+        empty_slots=None,
+        **kwargs,
+    ):
+        if (self.model_args[0].checkpoint_type == CheckpointType.HuggingFace) and (
+            not self.model_args[0].is_llama_vision()
+        ):
+            logits = self.prefill_forward_text(
+                tokens,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                prompt_lens=prompt_lens,
+                pixel_values=vision_images,
+                **kwargs,
+            )
+
+            return logits, None, None, None, None
+
+        else:
+            (
+                output_logits,
+                prefill_output_xattn_masks,
+                prefill_output_full_text_row_masked_out_masks,
+                decode_output_xattn_masks,
+                decode_output_full_text_row_masked_out_masks,
+            ) = self.prefill_forward_llama_vision(
+                vision_images,
+                vision_masks,
+                tokens,
+                xattn_caches,
+                total_lens,
+                prompt_lens,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                cross_page_table=cross_page_table,
+                empty_slots=empty_slots,
+            )
+
+            return (
+                output_logits,
+                prefill_output_xattn_masks,
+                prefill_output_full_text_row_masked_out_masks,
+                decode_output_xattn_masks,
+                decode_output_full_text_row_masked_out_masks,
+            )
+
+    # Note: This function is called by vLLM
+    def prefill_forward_llama_vision(
+        self,
+        vision_images,
+        vision_masks,
         tokens: torch.Tensor,
         xattn_caches,
         total_lens,
@@ -499,82 +578,80 @@ class Generator:
         page_table=None,
         kv_cache=None,
         cross_page_table=None,
+        empty_slots=None,
     ):
         """
         Batched version of _prefill_forward_single_user for vision model.
         """
+        if page_table is not None:
+            assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
+        if cross_page_table is not None:
+            assert isinstance(cross_page_table, torch.Tensor), "cross_page_table mush be torch.Tensor"
+
         batch_size, batch_seq_len = tokens.shape
-        max_batch_size_per_model, batch_size_per_model = self._get_batch_size_per_model(batch_size)
+        max_batch_size_per_model = self.model_args[0].max_batch_size
 
         output_logits = torch.zeros(batch_size, 1, self.model_args[0].vocab_size)
 
-        out_list = [[] for _ in range(self.data_parallel)]
-        prefill_output_xattn_masks = [None for _ in range(batch_size)]
-        prefill_output_full_text_row_masked_out_masks = [None for _ in range(batch_size)]
-        decode_output_xattn_masks = [None for _ in range(batch_size)]
-        decode_output_full_text_row_masked_out_masks = [None for _ in range(batch_size)]
+        out_list = []
+        prefill_output_xattn_masks = []
+        prefill_output_full_text_row_masked_out_masks = []
+        decode_output_xattn_masks = []
+        decode_output_full_text_row_masked_out_masks = []
 
-        if page_table is not None:
-            assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
-            page_table = torch.split(page_table, batch_size_per_model)
+        if empty_slots is None:
+            empty_slots = list(range(batch_size))
 
-        if cross_page_table is not None:
-            assert isinstance(cross_page_table, torch.Tensor), "cross_page_table mush be torch.Tensor"
-            cross_page_table = torch.split(cross_page_table, batch_size_per_model)
+        for idx, user_id in enumerate(empty_slots):
+            model_id = user_id // max_batch_size_per_model
+            group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
+            seq_len = int(prompt_lens[idx])
 
-        for group_user_id in range(max_batch_size_per_model):
-            for model_id in range(self.data_parallel):
-                if group_user_id >= batch_size_per_model[model_id]:
-                    # Skip users that are not in this model's batch size
-                    continue
+            logger.info(f"Prefilling User {user_id + 1} up to {seq_len} tokens")
 
-                user_id = group_user_id + model_id * max_batch_size_per_model
-                logger.info(f"Prefilling User {user_id + 1}")
-                seq_len = int(prompt_lens[user_id])
-                user_page_table = page_table[model_id] if page_table is not None else None
-                user_kv_cache = kv_cache[model_id] if kv_cache is not None else None
-                user_cross_page_table = cross_page_table[model_id] if kv_cache is not None else None
-                xattn_cache = xattn_caches[model_id] if xattn_caches is not None else None
-                (
-                    xattn_cache,
-                    prefill_cross_attention_masks,
-                    prefill_full_text_row_masked_out_mask,
-                    decode_cross_attention_masks,
-                    decode_full_text_row_masked_out_mask,
-                    logits,
-                ) = self._prefill_forward_single_user(
-                    vision_images=vision_images[user_id],
-                    vision_mask=vision_masks[user_id],
-                    tokens=tokens[user_id : user_id + 1, :seq_len],  # Keep batch dimension
-                    xattn_caches=xattn_cache,
-                    user_id=group_user_id,
-                    total_len=total_lens[user_id],
-                    prefill_len=seq_len,
-                    page_table=user_page_table,
-                    kv_cache=user_kv_cache,
-                    cross_page_table=user_cross_page_table,
-                    model_id=model_id,
-                )
-                if xattn_caches is not None:
-                    xattn_caches[model_id] = xattn_cache
-                out_list[model_id].append(logits)
-                prefill_output_xattn_masks[user_id] = prefill_cross_attention_masks
-                prefill_output_full_text_row_masked_out_masks[user_id] = prefill_full_text_row_masked_out_mask
-                decode_output_xattn_masks[user_id] = decode_cross_attention_masks
-                decode_output_full_text_row_masked_out_masks[user_id] = decode_full_text_row_masked_out_mask
+            user_page_table = page_table[idx : idx + 1] if page_table is not None else None
+            user_cross_page_table = cross_page_table[idx : idx + 1] if kv_cache is not None else None
+            model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
+            model_xattn_cache = xattn_caches[model_id] if xattn_caches is not None else None
+
+            (
+                model_xattn_cache,
+                prefill_cross_attention_masks,
+                prefill_full_text_row_masked_out_mask,
+                decode_cross_attention_masks,
+                decode_full_text_row_masked_out_mask,
+                logits,
+            ) = self._prefill_forward_single_user(
+                vision_images=vision_images[idx],
+                vision_mask=vision_masks[idx],
+                tokens=tokens[idx : idx + 1, :seq_len],  # Keep batch dimension
+                xattn_caches=model_xattn_cache,
+                user_id=group_user_id,
+                total_len=total_lens[idx],
+                prefill_len=seq_len,
+                page_table=user_page_table,
+                kv_cache=model_kv_cache,
+                cross_page_table=user_cross_page_table,
+                model_id=model_id,
+            )
+
+            if xattn_caches is not None:
+                xattn_caches[model_id] = model_xattn_cache
+
+            out_list.append(logits)
+            prefill_output_xattn_masks.append(prefill_cross_attention_masks)
+            prefill_output_full_text_row_masked_out_masks.append(prefill_full_text_row_masked_out_mask)
+            decode_output_xattn_masks.append(decode_cross_attention_masks)
+            decode_output_full_text_row_masked_out_masks.append(decode_full_text_row_masked_out_mask)
 
         # We gather prefill output at the end of prefill to reduce unnecessary device sync
-        for group_user_id in range(max_batch_size_per_model):
-            for model_id in range(self.data_parallel):
-                if group_user_id >= batch_size_per_model[model_id]:
-                    # Skip users that are not in this model's batch size
-                    continue
+        for idx, user_id in enumerate(empty_slots):
+            model_id = user_id // max_batch_size_per_model
 
-                user_id = group_user_id + model_id * max_batch_size_per_model
-                last_token_idx = prompt_lens[user_id] - 1
-                output_logits[user_id] = self.model[model_id].process_output_prefill(
-                    out_list[model_id][group_user_id], 1, last_token_idx=(last_token_idx % 32)
-                )
+            last_token_idx = prompt_lens[idx] - 1
+            output_logits[idx] = self.model[model_id].process_output_prefill(
+                out_list[idx], 1, last_token_idx=(last_token_idx % 32)
+            )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
 
@@ -587,7 +664,7 @@ class Generator:
         )
 
     # Note: This function is called by vLLM
-    def decode_forward(
+    def decode_forward_llama_vision(
         self,
         start_pos,
         tokens,
@@ -646,31 +723,84 @@ class Generator:
             tt_logits = self._decode_forward_no_trace(**decode_kwargs)
 
         if read_from_device:
-            to_host = self.read_decode_output(tt_logits, B)
-            return to_host
+            to_host = self.read_decode_output(tt_logits)
+            return self.process_decode_output_host(to_host)
         else:
             return tt_logits
 
+    def decode_forward(
+        self,
+        start_pos,
+        tokens,
+        prefill_cross_attention_masks,
+        prefill_full_text_row_masked_out_mask,
+        decode_cross_attention_masks,
+        decode_full_text_row_masked_out_mask,
+        xattn_caches=None,
+        page_table=None,
+        kv_cache=None,
+        cross_page_table=None,
+        enable_trace=True,
+        read_from_device=True,
+    ):
+        if (self.model_args[0].checkpoint_type == CheckpointType.HuggingFace) and (
+            not self.model_args[0].is_llama_vision()
+        ):
+            return self.decode_forward_text(
+                tokens,
+                start_pos,
+                enable_trace=enable_trace,
+                page_table=page_table,
+                kv_cache=kv_cache,
+            )
+        else:
+            return self.decode_forward_llama_vision(
+                start_pos,
+                tokens,
+                prefill_cross_attention_masks,
+                prefill_full_text_row_masked_out_mask,
+                decode_cross_attention_masks,
+                decode_full_text_row_masked_out_mask,
+                xattn_caches,
+                page_table,
+                kv_cache,
+                cross_page_table,
+                enable_trace,
+                read_from_device,
+            )
+
     # Note: This function is called by vLLM
-    def read_decode_output(self, tt_out, unpadded_batch, is_tokens=False):
+    def read_decode_output(self, tt_out, async_read=False):
         """
-        Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
+        Input tt_out is a list of ttnn device tensors
         """
-        _, batch_size_per_model = self._get_batch_size_per_model(unpadded_batch)
+        if not async_read:
+            return [out.cpu() for out in tt_out]
+
+        host_outputs = []
+        read_events = []
+        for i in range(self.data_parallel):
+            host_outputs.append(tt_out[i].cpu(blocking=False))
+            read_events.append(ttnn.record_event(self.model[i].mesh_device, 0))
+
+        return host_outputs, read_events
+
+    # Note: This function is called by vLLM
+    def process_decode_output_host(self, tt_out, is_tokens=False):
+        """
+        Converts the input ttnn host tensors to a torch tensor.
+        The input can be logits (if is_tokens=False) or tokens (if is_tokens=True).
+        """
+        max_batch_size_per_model = self.model_args[0].max_batch_size
 
         logits = []
         for i in range(self.data_parallel):
-            if batch_size_per_model[i] == 0:
-                continue
             logits_i = self.model[i].process_output_decode(
-                tt_out[i], B=batch_size_per_model[i], S=1, is_tokens=is_tokens
+                tt_out[i], max_batch_size_per_model, S=1, is_tokens=is_tokens
             )
             logits.append(logits_i)
 
-        logits = torch.cat(logits, 0)
-        assert logits.shape[0] == unpadded_batch
-
-        return logits
+        return torch.cat(logits, 0)
 
     def _decode_forward_no_trace(
         self,
@@ -1104,15 +1234,14 @@ class Generator:
 
     def generate(
         self,
-        model_input,
+        vision_images,
+        vision_mask,
+        prompt_tokens,
         max_gen_len: int,
         temperature: float = 0.6,
         top_p: float = 0.9,
     ):
         # Do initial prefill
-        vision_images = model_input.vision.images
-        vision_mask = model_input.vision.mask
-        prompt_tokens = model_input.tokens
         prefill_len = len(prompt_tokens)
         total_len = prefill_len + max_gen_len  # Prepares mask for full length of output
 
@@ -1159,7 +1288,8 @@ class Generator:
             else:
                 next_token = torch.argmax(logits[:, -1], dim=-1)
             next_token = next_token.reshape(-1)
-            return next_token, self.tokenizer.decode(next_token.tolist())
+            decoder = self.tokenizer or self.processor
+            return next_token, decoder.decode(next_token.tolist())
 
         next_token, text = sample(logits)
 
@@ -1199,11 +1329,20 @@ class Generator:
         if max_gen_len is None or max_gen_len == 0 or max_gen_len >= self.model[model_id].configuration.max_seq_len:
             max_gen_len = self.model[model_id].configuration.max_seq_len - 1
 
+        encoder = self.processor or self.tokenizer
+        model_input = encoder.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True)
+        vision_images = extract_images_from_messages(messages) or None
+        vision_mask = None
+        if vision_images is not None:
+            vision_mask = create_vision_mask(model_input["input_ids"][0], encoder.image_token_id) or None
+
         tokens = []
 
         stop_reason = None
         for result in self.generate(
-            model_input=self.formatter.encode_dialog_prompt(messages, tool_prompt_format=False),
+            vision_images=vision_images,
+            vision_mask=vision_mask,
+            prompt_tokens=model_input["input_ids"][0],
             max_gen_len=max_gen_len,
             temperature=temperature,
             top_p=top_p,
@@ -1217,55 +1356,54 @@ class Generator:
         if stop_reason is None:
             stop_reason = StopReason.out_of_tokens
 
-        message = self.formatter.decode_assistant_message(tokens, stop_reason)
+        decoder = self.tokenizer or self.processor
+        message = decoder.decode(tokens, skip_special_tokens=True)
 
-        return ChatPrediction(generation=message)
+        return CompletionMessage(message)
 
     def text_completion(
         self,
-        content: InterleavedTextMedia,
+        content,
         temperature: float = 0.6,
         top_p: float = 0.9,
         max_gen_len=None,
     ):
+        """Supports only vision models at the moment"""
         model_id = 0
         if max_gen_len is None or max_gen_len == 0 or max_gen_len >= self.model[model_id].configuration.max_seq_len:
             max_gen_len = self.model[model_id].configuration.max_seq_len - 1
 
-        model_input = self.formatter.encode_content(content)
+        vision_images = []
+        image_token = getattr(self.processor, "image_token", None) or getattr(self.tokenizer, "image_token", None)
+        text = encode_content(content, vision_images, image_token)
+        vision_images = vision_images or None
+        model_input = self.processor(text=text, images=vision_images, add_special_tokens=False)
+        vision_mask = None
+        if vision_images is not None:
+            vision_mask = create_vision_mask(model_input["input_ids"][0], self.processor.image_token_id) or None
 
         tokens = []
 
         for result in self.generate(
-            model_input=model_input,
+            vision_images=vision_images,
+            vision_mask=vision_mask,
+            prompt_tokens=model_input["input_ids"],
             max_gen_len=max_gen_len,
             temperature=temperature,
             top_p=top_p,
         ):
             tokens.append(result.token)
 
-        generation = self.tokenizer.decode(tokens)
+        decoder = self.tokenizer or self.processor
+        generation = decoder.decode(tokens, skip_special_tokens=True)
 
-        return CompletionPrediction(generation=generation)
+        return generation
 
     def _get_prefill_user_page_table(self, page_table, kv_cache, prefill_len):
         # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
         block_size = get_block_size(kv_cache)
         num_blocks = num_blocks_in_seq(prefill_len, block_size)
         return page_table[:, :num_blocks]
-
-    def _get_batch_size_per_model(self, batch_size):
-        """
-        Returns the maximum batch size per model and a list of batch sizes for each model.
-        """
-        max_batch_size_per_model = (batch_size + self.data_parallel - 1) // self.data_parallel
-
-        # The logic ensures that the total batch size is divided as evenly as possible
-        # among the models, with any remainder distributed to the earlier models in the list.
-        return max_batch_size_per_model, [
-            max(min(max_batch_size_per_model, batch_size - i * max_batch_size_per_model), 0)
-            for i in range(self.data_parallel)
-        ]
 
     ## Destructor
 
@@ -1287,10 +1425,8 @@ def create_submeshes(mesh_device, data_parallel):
     num_devices = num_rows * num_cols
     assert num_devices % data_parallel == 0, f"Unsupported device split: {num_devices} devices, {data_parallel} groups"
 
-    # Check if the mesh is 8x4 (expected shape for TG) and perfer row split
-    # Submeshes with 8 devices are expected to be in ring topology hence the row split
-    if num_rows == 8 and num_cols == 4 and num_rows % data_parallel == 0:
-        submeshes = mesh_device.create_submeshes(ttnn.MeshShape(num_rows // data_parallel, num_cols))
+    if num_rows == 8 and num_cols == 4 and num_cols % data_parallel == 0:
+        submeshes = mesh_device.create_submeshes(ttnn.MeshShape(num_rows, num_cols // data_parallel))
         for submesh in submeshes:
             submesh.reshape(ttnn.MeshShape(1, num_devices // data_parallel))
         return submeshes

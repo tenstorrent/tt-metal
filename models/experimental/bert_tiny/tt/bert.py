@@ -7,7 +7,7 @@ import torch
 import ttnn
 from typing import Optional
 from models.experimental.bert_tiny.tt.bert_encoder import TtBertencoder
-from models.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_rm
+from models.common.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_rm
 
 
 class TtBert(nn.Module):

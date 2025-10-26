@@ -7,8 +7,8 @@
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 // #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 // #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::binary {
@@ -46,21 +46,13 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
     uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
     uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
     uint32_t H = ashape[-2];
-    uint32_t W = ashape[-1];
     uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
-    uint32_t bC = bshape.rank() >= 3 ? bshape[-3] : 1;
-    uint32_t bH = bshape[-2];
-    uint32_t bW = bshape[-1];
     uint32_t NC = N * C;
-    uint32_t HW = H * W;
 
     // uint32_t Wt = W / TILE_WIDTH;
     // uint32_t Ht = H / TILE_HEIGHT;
 
     // uint32_t num_tensor_tiles = NC * Ht * Wt;
-    uint32_t num_btensor_tiles = NC * bH * bW / TILE_HW;
-
-    uint32_t bnc1 = (bN * bC == 1) ? 1 : 0;
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -84,9 +76,9 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
     tt::DataFormat b_df = tt_metal::datatype_to_dataformat_converter(b->dtype());
     tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
-    uint32_t input1_tile_size = tt::tt_metal::detail::TileSize(b_df);
-    uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
+    uint32_t input_tile_size = tt::tile_size(act_df);
+    uint32_t input1_tile_size = tt::tile_size(b_df);
+    uint32_t output_tile_size = tt::tile_size(out_df);
 
     TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
     uint32_t shard_size_in_bytes = shard_spec.numel() * a.element_size();
@@ -142,13 +134,12 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(num_input_tiles * input1_tile_size, {{src1_cb_index, b_df}})
             .set_page_size(src1_cb_index, input1_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
 
-    auto src0_buffer = a.buffer();
     auto src1_buffer = b->buffer();
     auto dst_buffer = output.buffer();
-    bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index, (uint32_t)src1_is_dram};
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
+    TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
@@ -175,7 +166,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
     log_debug(
         tt::LogOp,
         "ncores {}, ncores_x {}, Wt {}, Ht {}, h_blk {}, w_blk {}, src0_cb_index {}, src1_cb_index {}, output_cb_index "
-        "{}, src1_is_dram {}, dst_is_dram {}, Ht_per_batch_b {}, batch_b {}",
+        "{}, dst_is_dram {}, Ht_per_batch_b {}, batch_b {}",
         ncores,
         ncores_x,
         Wt,
@@ -185,7 +176,6 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
         src0_cb_index,
         src1_cb_index,
         output_cb_index,
-        src1_is_dram,
         dst_is_dram,
         Ht_per_batch_b,
         batch_b);
@@ -270,7 +260,7 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreShardedOptimized::override_
     uint32_t ncores = shard_spec.num_cores();
     uint32_t Wt = 0, Ht = 0;
     const auto ashape = input_tensor_a.padded_shape();
-    uint32_t N = ashape[0], C = ashape[1], H = ashape[2], W = ashape[3];
+    uint32_t N = ashape[0], C = ashape[1];
     uint32_t bN = input_tensor_b->padded_shape()[0];
     uint32_t NC = N * C;
     if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {

@@ -27,8 +27,6 @@ from models.experimental.functional_unet.tests.common import (
     UNetPerformanceStatistics,
 )
 
-from models.utility_functions import skip_for_grayskull
-
 
 def determine_num_cores_for_even_sharding(shard_dim: int, max_cores: int):
     number_of_cores = max_cores
@@ -55,7 +53,6 @@ def get_dram_sharded_memory_config_for_tensor(output_tensor, dram_grid_size):
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, output_dram_shard_spec)
 
 
-@skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -122,12 +119,22 @@ def test_unet_trace_2cq(
     dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config, dram_output_tensor)
     ttnn.synchronize_device(device)
 
-    outputs = []
+    outputs = [
+        ttnn.allocate_tensor_on_host(
+            dram_output_tensor.shape,
+            dram_output_tensor.dtype,
+            dram_output_tensor.layout,
+            device,
+            output_dram_memory_config,
+        )
+        for _ in range(iterations)
+    ]
+
     start = time.time()
     ttnn.wait_for_event(1, op_event)
     ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=1)
     write_event = ttnn.record_event(device, 1)
-    for _ in range(iterations - 1):
+    for i in range(iterations - 1):
         ttnn.wait_for_event(0, write_event)
         op_event = ttnn.record_event(device, 0)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
@@ -138,7 +145,7 @@ def test_unet_trace_2cq(
         ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=1)
         write_event = ttnn.record_event(device, 1)
         ttnn.wait_for_event(1, model_event)
-        outputs.append(dram_output_tensor.cpu(blocking=False, cq_id=1))
+        ttnn.copy_device_to_host_tensor(dram_output_tensor, outputs[i], blocking=False, cq_id=1)
         read_event = ttnn.record_event(device, 1)
     ttnn.wait_for_event(0, write_event)
     op_event = ttnn.record_event(device, 0)
@@ -147,7 +154,7 @@ def test_unet_trace_2cq(
     dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config, dram_output_tensor)
     model_event = ttnn.record_event(device, 0)
     ttnn.wait_for_event(1, model_event)
-    outputs.append(dram_output_tensor.cpu(blocking=False, cq_id=1))
+    ttnn.copy_device_to_host_tensor(dram_output_tensor, outputs[-1], blocking=False, cq_id=1)
     ttnn.synchronize_device(device)
     end = time.time()
     inference_time = (end - start) / iterations
@@ -166,7 +173,6 @@ def test_unet_trace_2cq(
     return UNetPerformanceStatistics(groups, batch, 1, inference_and_compile_time, inference_time)
 
 
-@skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -255,12 +261,22 @@ def test_unet_trace_2cq_multi_device(
     dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config, dram_output_tensor)
     ttnn.synchronize_device(mesh_device)
 
-    outputs = []
+    outputs = [
+        ttnn.allocate_tensor_on_host(
+            dram_output_tensor.shape,
+            dram_output_tensor.dtype,
+            dram_output_tensor.layout,
+            mesh_device,
+            output_dram_memory_config,
+        )
+        for _ in range(iterations)
+    ]
+
     start = time.time()
     ttnn.wait_for_event(1, op_event)
     ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=1)
     write_event = ttnn.record_event(mesh_device, 1)
-    for _ in range(iterations - 1):
+    for i in range(iterations - 1):
         ttnn.wait_for_event(0, write_event)
         op_event = ttnn.record_event(mesh_device, 0)
         ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
@@ -271,7 +287,7 @@ def test_unet_trace_2cq_multi_device(
         ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=1)
         write_event = ttnn.record_event(mesh_device, 1)
         ttnn.wait_for_event(1, model_event)
-        outputs.append(dram_output_tensor.cpu(blocking=False, cq_id=1))
+        ttnn.copy_device_to_host_tensor(dram_output_tensor, outputs[i], blocking=False, cq_id=1)
         read_event = ttnn.record_event(mesh_device, 1)
     ttnn.wait_for_event(0, write_event)
     op_event = ttnn.record_event(mesh_device, 0)
@@ -280,7 +296,7 @@ def test_unet_trace_2cq_multi_device(
     dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config, dram_output_tensor)
     model_event = ttnn.record_event(mesh_device, 0)
     ttnn.wait_for_event(1, model_event)
-    outputs.append(dram_output_tensor.cpu(blocking=False, cq_id=1))
+    ttnn.copy_device_to_host_tensor(dram_output_tensor, outputs[-1], blocking=False, cq_id=1)
     ttnn.synchronize_device(mesh_device)
     end = time.time()
 

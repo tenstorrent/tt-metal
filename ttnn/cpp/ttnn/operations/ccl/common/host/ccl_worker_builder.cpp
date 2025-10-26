@@ -11,7 +11,6 @@
 #include <tt-metalium/fabric.hpp>
 #include "tt-metalium/kernel_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include <tt-metalium/erisc_datamover_builder.hpp>
 
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/host_api.hpp>
@@ -262,21 +261,17 @@ size_t generate_ccl_tensor_slice_command_args(
     std::vector<uint32_t>& args_out) {
     // Copy the header
     std::size_t num_command_args_added = 0;
-    auto const args_index_old = args_out.size();
+    [[maybe_unused]] auto const args_index_old = args_out.size();
     if (!last_tensor_slice.has_value()) {
-        const std::size_t args_index_old = args_out.size();
         // push back Command Header
         // push back arg 0 header
         log_trace(tt::LogOp, "Generating full tensor spec command args");
         add_ccl_command_arg_to_runtime_args<ttnn::ccl::cmd::CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>(
             current_tensor_slice, args_out);
-        const size_t args_index_new = args_out.size();
         // We can reused cached values for the first slice
         num_command_args_added++;
     } else {
         auto const& last_slice = last_tensor_slice.value();
-        const std::size_t args_index_old = args_out.size();
-        auto header_index = args_out.size();
 
         // tensor shape
         if (last_slice.tensor_shape != current_tensor_slice.tensor_shape) {
@@ -796,7 +791,7 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
     CoreRangeSet const& worker_core_range,
     tt::tt_metal::DataMovementConfig datamovement_kernel_config,
     const size_t num_command_streams,
-    std::optional<chip_id_t> my_chip_id) {
+    std::optional<tt::ChipId> my_chip_id) {
     TT_FATAL(
         num_command_streams > 0 && num_command_streams <= 2,
         "Invalid number of command streams: {}. Must be 1 or 2",
@@ -807,7 +802,7 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
     std::ranges::for_each(tensors, [](auto const& t) {
         TT_FATAL(t != nullptr, "Null tensor passed to generate_multi_command_stream_kernel_ct_args");
     });
-    if (tensors.size() > 0 && tensors[0]->is_sharded()) {
+    if (!tensors.empty() && tensors[0]->is_sharded()) {
         datamovement_kernel_config.defines["TENSOR0_SHARDED_MEM_LAYOUT"] = "1";
     }
     if (tensors.size() > 1 && tensors[1]->is_sharded()) {
@@ -824,19 +819,18 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
     } else {
         datamovement_kernel_config.defines["NO_TENSOR_MODE"] = "1";
     }
-    if (datamovement_kernel_config.defines.size() > 0) {
+    if (!datamovement_kernel_config.defines.empty()) {
         log_trace(tt::LogOp, "Command Kernel Defines:");
-        for (auto const& [k, v] : datamovement_kernel_config.defines) {
+        for ([[maybe_unused]] auto const& [k, v] : datamovement_kernel_config.defines) {
             log_trace(tt::LogOp, "\t{}: {}", k, v);
         }
     }
-
 
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index =
         datamovement_kernel_config.processor == tt::tt_metal::DataMovementProcessor::RISCV_0 ? tt::CB::c_in6 : tt::CB::c_in7;
     static constexpr auto num_packet_headers_storable = 8;
-    static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
+    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * 2,
@@ -851,7 +845,7 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
         num_packet_headers_storable * packet_header_size_bytes,
         packet_header_size_bytes,
         worker_core_range);
-    auto reserved_packet_header_CB_handle = CreateCircularBuffer(program, worker_core_range, cb_config);
+    CreateCircularBuffer(program, worker_core_range, cb_config);
 
     {  // CT ARGS
         std::vector<uint32_t> ct_args = {my_chip_id.value_or(0xFFFF), reserved_packet_header_CB_index};
@@ -872,12 +866,12 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
 
         datamovement_kernel_config.compile_args = ct_args;
         log_trace(tt::LogOp, "\tSenderReader Kernel Defines");
-        for (auto const& [k, v] : datamovement_kernel_config.defines) {
+        for ([[maybe_unused]] auto const& [k, v] : datamovement_kernel_config.defines) {
             log_trace(tt::LogOp, "\t\t{}: {}", k, v);
         }
         log_trace(tt::LogOp, "\tSenderReader CT Args");
         for (size_t i = 0; i < ct_args.size(); i++) {
-            auto const& arg = ct_args[i];
+            [[maybe_unused]] auto const& arg = ct_args[i];
             log_trace(tt::LogOp, "\t\t{}: {}", i, arg);
         }
     }
@@ -951,7 +945,7 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
                             a.worker_slice_offset.x);
                     },
                     [&ss](CclCommandAtomicInc const& a) {
-                        ss << fmt::format("(val:{}, wrap: {})", a.value, a.wrap_value);
+                        ss << fmt::format("(val:{})", a.value);
                     },
                     [&ss](CclCommandWaitValue const& a) { ss << fmt::format("(wait_value: {})", a.target_value); },
                     [&ss](CclCommandInlineReadWrite const& a) { ss << fmt::format("(value: {})", a.value); },
@@ -1031,159 +1025,6 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
     }
 }
 
-std::vector<uint32_t> generate_edm_connection_rt_args(
-    tt::tt_fabric::SenderWorkerAdapterSpec const& connection_info,
-    Program &program,
-    CoreRangeSet worker_cores) {
-    std::vector<uint32_t> new_rt_args;
-    auto worker_flow_control_semaphore_id = CreateSemaphore(program, worker_cores, 0);
-    auto worker_teardown_semaphore_id = CreateSemaphore(program, worker_cores, 0);
-    auto worker_buffer_index_semaphore_id = CreateSemaphore(program, worker_cores, 0);
-    append_worker_to_fabric_edm_sender_rt_args(
-        connection_info,
-        worker_flow_control_semaphore_id,
-        worker_teardown_semaphore_id,
-        worker_buffer_index_semaphore_id,
-        new_rt_args);
-
-    return new_rt_args;
-}
-
-void generate_multi_input_command_stream_kernel_rt_args(
-    Program& program,
-    tt::tt_metal::KernelHandle kernel_id,
-    std::vector<Tensor const*> const& tensors,
-    std::vector<size_t> const& page_sizes,
-    IDevice* device,
-    uint32_t num_pages_per_edm_buffer,  // TODO: get from fabric
-    CoreRangeSet const& worker_core_range,
-    ttnn::ccl::cmd::CclHostLowLevelCommandSequence const& ccl_command_stream0,
-    std::optional<ttnn::ccl::cmd::CclHostLowLevelCommandSequence> const& ccl_command_stream1,
-    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& forward_fabric_connections,
-    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& backward_fabric_connections,
-    std::optional<std::unordered_map<const Tensor*, IDevice*>> const& tensor_device_override,
-    std::optional<std::vector<size_t>> const& tensor_indices,
-    ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider) {
-
-    bool fill_args_overrider = rt_args_overrider != nullptr;
-
-    if (fill_args_overrider) {
-        TT_FATAL(tensor_indices.has_value(), "Internal Error. Tensor indices must be provided when using rt_args_overrider");
-        const size_t tensor_count = std::count_if(tensors.begin(), tensors.end(), [](Tensor const* t) { return t != nullptr; });
-        TT_FATAL(tensor_indices.value().size() == tensor_count, "Internal Error. Tensor indices must match the number of tensors");
-        for (auto tensor_index : tensor_indices.value()) {
-            while (rt_args_overrider->size() <= tensor_index) {
-                rt_args_overrider->add_tensor();
-            }
-        }
-    }
-
-    // TODO: see if we can pull the kernel defines to understand if we built the kernel in single command stream mode
-    log_trace(
-        tt::LogOp,
-        "Generating multi command stream kernel RT args for kernel {} on core(s): {}",
-        kernel_id,
-        worker_core_range);
-    log_trace(tt::LogOp, "Command stream 0:");
-    log_command_stream(ccl_command_stream0, 1);
-    if (ccl_command_stream1) {
-        log_trace(tt::LogOp, "Command stream 1:");
-        log_command_stream(ccl_command_stream1.value(), 1);
-    }
-
-    std::vector<const std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand>*> command_streams = {
-        &ccl_command_stream0};
-    if (ccl_command_stream1.has_value()) {
-        command_streams.push_back(&ccl_command_stream1.value());
-    }
-
-    // RT ARGS
-    const size_t num_command_streams = command_streams.size();
-    TT_FATAL(
-        tensors.size() <= num_command_streams,
-        "Current CCL Command Processor kernel only supports a 1-to-1 mapping between command streams and tensors. "
-        "Switching between tensors within a command stream is future work");
-    TT_FATAL(page_sizes.size() == tensors.size(), "Number of page sizes must match with the number of tensors");
-    auto command_stream_start_arg_indices = std::vector<size_t>(num_command_streams, 0);
-    std::vector<uint32_t> rt_args;
-    rt_args.reserve(200);
-    for (size_t i = 0; i < tensors.size(); i++) {
-        if (tensors[i]) {
-            if (fill_args_overrider) {
-                rt_args_overrider->add_runtime_arg_index(tensor_indices.value()[i], rt_args.size());
-            }
-            rt_args.push_back(tensors[i]->buffer()->address());
-        } else {
-            // take up the rt arg with filler value  in case user built a kernel across a core range
-            // set with multiple command streams/tensors, but this particular core doesn't actualy need/use
-            // both tensors/command streams
-            rt_args.push_back(0xdeaddead);
-        }
-    }
-    for (size_t i = 0; i < num_command_streams; i++) {
-        rt_args.push_back(command_streams[i]->size());  // in0_read_command_slices
-        command_stream_start_arg_indices[i] = rt_args.size();
-        rt_args.push_back(0);  // in0_command_start_offset
-    }
-    rt_args.push_back(num_pages_per_edm_buffer);
-    TT_FATAL(tensors.size() == page_sizes.size(), "Number of pages must match with the number of tensors");
-    for (size_t i = 0; i < tensors.size(); i++) {
-        if (tensors[i]) {
-            rt_args.push_back(page_sizes[i]);  // in0
-        } else {
-            rt_args.push_back(0xdeaddead);
-        }
-    }
-
-    for (Tensor const* t : tensors) {
-        if (t) {
-            bool rt_args_enabled = true;
-            rt_args.push_back(rt_args_enabled);
-            if (tensor_device_override.has_value() and
-                tensor_device_override.value().find(t) != tensor_device_override.value().end()) {
-                std::ranges::copy(
-                    ttnn::ccl::emit_address_generator_runtime_args(tensor_device_override->at(t), *t),
-                    std::back_inserter(rt_args));
-            } else {
-                std::ranges::copy(
-                    ttnn::ccl::emit_address_generator_runtime_args(t->buffer()->device(), *t),
-                    std::back_inserter(rt_args));
-            }
-        } else {
-            bool rt_args_enabled = false;
-            rt_args.push_back(rt_args_enabled);
-        }
-        // else: Interleaved addrgen passes no additional args - we specify interleaved addrgen as the default
-    }
-
-    rt_args.push_back(forward_fabric_connections.has_value());
-    if (forward_fabric_connections.has_value()) {
-        const auto new_rt_args =
-            generate_edm_connection_rt_args(*forward_fabric_connections, program, worker_core_range);
-        std::copy(new_rt_args.begin(), new_rt_args.end(), std::back_inserter(rt_args));
-    }
-    rt_args.push_back(backward_fabric_connections.has_value());
-    if (backward_fabric_connections.has_value()) {
-        const auto new_rt_args =
-            generate_edm_connection_rt_args(*backward_fabric_connections, program, worker_core_range);
-        std::copy(new_rt_args.begin(), new_rt_args.end(), std::back_inserter(rt_args));
-    }
-
-    for (size_t i = 0; i < num_command_streams; i++) {
-        // Update the command stream start arg index argument to point to here (i.e. where
-        // this command stream's commands will start)
-        rt_args[command_stream_start_arg_indices[i]] = rt_args.size();
-        generate_ccl_command_stream_to_kernel_args((*command_streams[i]), i, tensor_indices, rt_args_overrider, rt_args);
-    }
-
-    log_trace(tt::LogOp, "\tMulti-input command processor RT Args");
-    for (size_t i = 0; i < rt_args.size(); i++) {
-        auto const& arg = rt_args[i];
-        log_trace(tt::LogOp, "\t\t{}: {}", i, arg);
-    }
-    tt::tt_metal::SetRuntimeArgs(program, kernel_id, worker_core_range, rt_args);
-
-}
 
 void generate_multi_input_command_stream_kernel_rt_args(
     Program& program,
@@ -1316,222 +1157,13 @@ void generate_multi_input_command_stream_kernel_rt_args(
 
     log_trace(tt::LogOp, "\tMulti-input command processor RT Args");
     for (size_t i = 0; i < rt_args.size(); i++) {
-        auto const& arg = rt_args[i];
+        [[maybe_unused]] auto const& arg = rt_args[i];
         log_trace(tt::LogOp, "\t\t{}: {}", i, arg);
     }
     tt::tt_metal::SetRuntimeArgs(program, kernel_id, worker_core_range, rt_args);
 
 }
 
-void generate_multi_command_stream_kernel_rt_args(
-    Program& program,
-    tt::tt_metal::KernelHandle kernel_id,
-    std::vector<uint32_t> const& cb_ids,
-    std::vector<const Tensor*> const& tensors,
-    IDevice* device,
-    uint32_t page_size,  // TODO: get from tensors
-    CoreRangeSet const& worker_core_range,
-    uint32_t num_pages_per_edm_buffer,  // TODO: get from fabric
-    std::vector<std::vector<ttnn::ccl::v2::TensorSlice>> const& command_tensor_slices,
-    ttnn::ccl::cmd::CclCommandCode command_type,  // TODAY REQURED TO BE SAME - FUTURE - wrapped with above
-    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& forward_fabric_connections,
-    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& backward_fabric_connections,
-    std::optional<std::vector<tt::tt_fabric::edm_termination_info_t>> const& edm_termination_infos,
-    std::vector<ttnn::ccl::cmd::CclCommandDestArgs> const& dest_args) {
-    for (size_t i = 0; i < tensors.size(); i++) {
-        TT_FATAL(tensors[i] != nullptr, "Tensor at index {} is nullptr", i);
-    }
-
-    TT_FATAL(tensors.size() > 0 && tensors.size() <= 2, "Size mismatch between tensors and cb_ids");
-    TT_FATAL(cb_ids.size() == tensors.size(), "Size mismatch between cb_ids and tensors");
-    TT_FATAL(command_tensor_slices.size() == tensors.size(), "Size mismatch between command_tensor_slices and tensors");
-    TT_FATAL(dest_args.size() == tensors.size(), "Size mismatch between dest_args and tensors");
-    // RT ARGS
-    const size_t num_command_streams = tensors.size();
-    auto command_stream_start_arg_indices = std::vector<size_t>(num_command_streams, 0);
-    std::vector<uint32_t> rt_args;
-    rt_args.reserve(100);
-    for (size_t i = 0; i < num_command_streams; i++) {
-        rt_args.push_back(tensors[i]->buffer()->address());
-    }
-    for (size_t i = 0; i < num_command_streams; i++) {
-        rt_args.push_back(command_tensor_slices[i].size());  // input_tensor_0_read_command_slices
-        command_stream_start_arg_indices[i] = rt_args.size();
-        rt_args.push_back(0);  // in0_command_start_offset
-    }
-    rt_args.push_back(num_pages_per_edm_buffer);
-    for (size_t i = 0; i < num_command_streams; i++) {
-        rt_args.push_back(page_size);  // in0
-    }
-
-    for (size_t i = 0; i < num_command_streams; i++) {
-        std::ranges::copy(
-            ttnn::ccl::legacy_emit_address_generator_runtime_args(device, *tensors[i]), std::back_inserter(rt_args));
-    }
-
-    // TODO: Handle teardown signalling
-    rt_args.push_back(forward_fabric_connections.has_value());
-    if (forward_fabric_connections.has_value()) {
-        auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
-        auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
-        auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
-        append_worker_to_fabric_edm_sender_rt_args(
-            forward_fabric_connections.value(),
-            sender_worker_flow_control_semaphore_id,
-            sender_worker_teardown_semaphore_id,
-            sender_worker_buffer_index_semaphore_id,
-            rt_args);
-    }
-    rt_args.push_back(backward_fabric_connections.has_value());
-    if (backward_fabric_connections.has_value()) {
-        auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
-        auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
-        auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
-        append_worker_to_fabric_edm_sender_rt_args(
-            backward_fabric_connections.value(),
-            sender_worker_flow_control_semaphore_id,
-            sender_worker_teardown_semaphore_id,
-            sender_worker_buffer_index_semaphore_id,
-            rt_args);
-    }
-    size_t fabric_teardown_arg_idx = 0;
-    if (edm_termination_infos.has_value()) {
-        fabric_teardown_arg_idx = rt_args.size();
-        rt_args.push_back(0);
-    }
-
-    switch (command_type) {
-        case ttnn::ccl::cmd::CclCommandCode::STREAM_TENSOR_TO_CB:
-            for (size_t i = 0; i < num_command_streams; i++) {
-                rt_args[command_stream_start_arg_indices[i]] = rt_args.size();
-                ttnn::ccl::worker_detail::generate_ccl_read_to_cb_slice_sequence_commands(
-                    command_tensor_slices[i], rt_args, dest_args[i]);
-            }
-            break;
-        case ttnn::ccl::cmd::CclCommandCode::STREAM_CB_TO_TENSOR:
-            for (size_t i = 0; i < num_command_streams; i++) {
-                rt_args[command_stream_start_arg_indices[i]] = rt_args.size();
-                ttnn::ccl::worker_detail::generate_ccl_cb_to_tensor_slice_sequence_commands(
-                    command_tensor_slices[i], rt_args, dest_args[i]);
-            }
-            break;
-
-        case ttnn::ccl::cmd::CclCommandCode::STREAM_EDM_TO_TENSOR:
-        case ttnn::ccl::cmd::CclCommandCode::INVALID:
-        default: TT_ASSERT(false);
-    };
-
-    if (edm_termination_infos.has_value()) {
-        rt_args[fabric_teardown_arg_idx] = rt_args.size();
-        get_runtime_args_for_edm_termination_infos(edm_termination_infos.value(), rt_args);
-    }
-
-    log_trace(tt::LogOp, "\tMulti-input command processor RT Args");
-    for (size_t i = 0; i < rt_args.size(); i++) {
-        auto const& arg = rt_args[i];
-        log_trace(tt::LogOp, "\t\t{}: {}", i, arg);
-    }
-    tt::tt_metal::SetRuntimeArgs(program, kernel_id, worker_core_range, rt_args);
-}
-
-ttnn::ccl::cmd::CclHostLowLevelCommandSequence build_ccl_cmd_proc_teardown_commands(
-    Program& program,
-    IDevice* device,
-    IDevice* forward_device,
-    size_t line_size,
-    size_t line_index,
-    std::vector<tt::tt_fabric::edm_termination_info_t> const& edm_termination_infos,
-    ccl::SyncModeSpec const& sync_details,
-    ccl::EdmLineFabricOpInterface& fabric_interface) {
-    TT_FATAL(sync_details.num_signals == 1, "Only one signal is supported for CCL command processor teardown");
-    TT_FATAL(sync_details.sem_ids.size() == 1, "Only one signal is supported for CCL command processor teardown");
-    TT_FATAL(sync_details.wait_counts.size() == 1, "Only one signal is supported for CCL command processor teardown");
-
-    auto local_wait_sem_id = sync_details.sem_ids.at(0);
-    auto remote_sem_id = sync_details.sem_ids.at(0);
-
-    ttnn::ccl::cmd::CclHostLowLevelCommandSequence teardown_cmd_stream = {
-        // + 1 because we need to wait for our left/backward neighbour to tell us it's safe to teardown (because they
-        // are
-        // done tearing down - we teardown from first to last)
-        cmd::uops::local_semaphore_wait(local_wait_sem_id, sync_details.wait_counts.at(0) + (line_index != 0)),
-    };
-
-    // If there is a forward connection, notify that neighbour that they can teardown
-    if (forward_device != nullptr) {
-        auto remote_worker_noc0_core = forward_device->worker_core_from_logical_core(sync_details.core);
-        teardown_cmd_stream.push_back(cmd::uops::fabric_unicast_semaphore_inc(
-            remote_sem_id,
-            ttnn::ccl::cmd::CclCommandAtomicInc{1},
-            remote_worker_noc0_core.x,
-            remote_worker_noc0_core.y,
-            ttnn::ccl::cmd::UnicastCommandDestArgs{1, true}));
-    }
-
-    // Finally teardown our local chip's fabric endpoint(s)
-    if (edm_termination_infos.size() > 0) {
-        log_trace(tt::LogOp, "{} termination infos", edm_termination_infos.size());
-    }
-    for (auto& info : edm_termination_infos) {
-        if (info.distance == 0) {
-            log_trace(
-                tt::LogOp,
-                "Adding local chip fabric teardown command for termination address {},",
-                info.termination_addr);
-            teardown_cmd_stream.push_back(cmd::uops::local_chip_noc_absolute_address_semaphore_inc(
-                info.edm_noc_x, info.edm_noc_y, info.termination_addr, 1));
-        } else {
-            log_trace(
-                tt::LogOp,
-                "Adding remote chip fabric teardown command for termination address {} of distance {}",
-                info.termination_addr,
-                info.distance);
-            teardown_cmd_stream.push_back(ttnn::ccl::cmd::uops::fabric_unicast_absolute_address_semaphore_inc(
-                ttnn::ccl::cmd::CclCommandAddrAbsoluteAddress{info.termination_addr},
-                ttnn::ccl::cmd::CclCommandAtomicInc{1},
-                info.edm_noc_x,
-                info.edm_noc_y,
-                ttnn::ccl::cmd::UnicastCommandDestArgs{info.distance, true}));
-        }
-    }
-
-    return teardown_cmd_stream;
-}
-
-void build_sync_kernels(
-    IDevice* device,
-    Program& program,
-    ccl::SyncModeSpec const& sync_details,
-    bool terminate_fabric,
-    ccl::EdmLineFabricOpInterface& fabric_interface) {
-    auto const sync_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_wait_completion.cpp",
-        sync_details.core,
-        tt::tt_metal::ReaderDataMovementConfig({sync_details.num_signals, terminate_fabric}));
-
-    std::vector<uint32_t> rt_args;
-    rt_args.reserve(sync_details.num_signals * 2);
-    for (size_t i = 0; i < sync_details.num_signals; ++i) {
-        rt_args.push_back(sync_details.sem_ids[i]);
-        rt_args.push_back(sync_details.wait_counts[i]);
-    }
-
-    if (terminate_fabric) {
-        auto termination_infos = fabric_interface.generate_local_chip_fabric_termination_infos(device);
-        rt_args.push_back(termination_infos.size());
-        for (auto& info : termination_infos) {
-            if (info.distance != 0) {
-                continue;
-            }
-            rt_args.push_back(info.termination_addr);
-            rt_args.push_back(info.edm_noc_x);
-            rt_args.push_back(info.edm_noc_y);
-        }
-    }
-
-    tt::tt_metal::SetRuntimeArgs(program, sync_kernel_id, sync_details.core, rt_args);
-}
 
 std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args(
     ttnn::ccl::InterleavedTensorWorkerSlice worker_slice,
@@ -1541,7 +1173,6 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
     const std::size_t num_commands_expected = this->input_tensor_partition.partition_size;
 
     auto const& tensor_shape = worker_slice.tensor_shape;
-    auto const& tensor_slice_shape = worker_slice.tensor_slice_shape;
 
     auto num_slices = input_tensor_partition.partition_size;
     auto start_slice_index = input_tensor_partition.partition_index;
@@ -1588,7 +1219,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
 
     auto const& addr_gen_rt_args = ttnn::ccl::legacy_emit_address_generator_runtime_args(this->device, input_tensor);
     std::ranges::copy(addr_gen_rt_args, std::back_inserter(args));
-    for (auto const& arg : addr_gen_rt_args) {
+    for ([[maybe_unused]] auto const& arg : addr_gen_rt_args) {
         log_trace(tt::LogOp, "ccl_send_reader arg[{}]: addr_gen_rt_args[] {}", logged_arg_idx, args[logged_arg_idx]);
         logged_arg_idx++;
     }
@@ -1597,167 +1228,6 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
     emit_ccl_send_slice_sequence_commands(slices, args);
 
     log_trace(tt::LogOp, "ccl_send_reader Sender Worker has {} RT Args: {}", args.size(), args);
-
-    return args;
-}
-
-std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args(
-    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& forward_fabric_connection,
-    const size_t sender_worker_forward_flow_control_semaphore_id,
-    const size_t sender_worker_forward_teardown_semaphore_id,
-    const size_t sender_worker_forward_buffer_index_semaphore_id,
-    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& backward_fabric_connection,
-    const size_t sender_worker_backward_flow_control_semaphore_id,
-    const size_t sender_worker_backward_teardown_semaphore_id,
-    const size_t sender_worker_backward_buffer_index_semaphore_id,
-    const size_t forward_direction_distance_to_end_of_line,
-    const size_t backward_direction_distance_to_end_of_line,
-    ttnn::ccl::InterleavedTensorWorkerSlice worker_slice,
-    std::size_t operating_dim,
-    uint32_t num_pages_per_packet,
-    uint32_t worker_slice_index,
-    std::optional<ttnn::ccl::SyncModeSpec> sync_details) const {
-    const std::size_t num_commands_expected = this->output_tensor_partition.partition_size - 1;
-
-    auto const& tensor_shape = worker_slice.tensor_shape;
-    auto const& tensor_slice_shape = worker_slice.tensor_slice_shape;
-
-    auto num_slices = output_tensor_partition.partition_size;
-    auto start_slice_index = output_tensor_partition.partition_index;
-    std::int64_t end_slice_index_exclusive = output_tensor_partition.partition_index + 1;
-
-    log_trace(tt::LogOp, "ccl_send_writer start_slice_index = {}", start_slice_index);
-    log_trace(tt::LogOp, "ccl_send_writer end_slice_index_exclusive = {}", end_slice_index_exclusive);
-
-    // Add the command args
-    auto const& slices = generate_slice_sequence_on_dim_v2(
-        tensor_shape,
-        worker_slice.worker_slice_shape,
-        worker_slice.worker_slice_offset,
-        operating_dim,
-        num_slices,
-        start_slice_index,
-        end_slice_index_exclusive,
-        worker_slice_index);
-    TT_ASSERT(num_commands_expected == slices.size());
-
-    // If we are on device zero, we send n-1 chunks in ascending order
-    auto& output_tensor = this->op_config.get_output_tensor(0);
-    TT_ASSERT(output_tensor.padded_shape().size() == 4, "Only 4D tensors are supported for ccl");
-    ttnn::ccl::Shape4D<uint32_t> output_tensor_shape = {
-        output_tensor.padded_shape()[0],
-        output_tensor.padded_shape()[1],
-        output_tensor.padded_shape()[2],
-        output_tensor.padded_shape()[3]};
-
-    std::vector<uint32_t> args = {
-        static_cast<uint32_t>(output_tensor.buffer()->address()),
-        static_cast<uint32_t>(slices.size()),
-        num_pages_per_packet,
-        this->op_config.get_page_size(),
-        forward_direction_distance_to_end_of_line,
-        backward_direction_distance_to_end_of_line};
-    std::size_t logged_arg_idx = 0;
-    log_trace(tt::LogOp, "ccl_send_writer arg[{}]: buffer_address = {}", logged_arg_idx, args[logged_arg_idx]);
-    logged_arg_idx++;
-    log_trace(tt::LogOp, "ccl_send_writer arg[{}]: num_commands = {}", logged_arg_idx, args[logged_arg_idx]);
-    logged_arg_idx++;
-    log_trace(tt::LogOp, "ccl_send_writer arg[{}]: pages_per_packet {}", logged_arg_idx, args[logged_arg_idx]);
-    logged_arg_idx++;
-    log_trace(tt::LogOp, "ccl_send_writer arg[{}]: page_size {}", logged_arg_idx, args[logged_arg_idx]);
-    logged_arg_idx++;
-    args.push_back(forward_fabric_connection.has_value() ? 1 : 0);
-    if (forward_fabric_connection.has_value()) {
-        TT_FATAL(
-            forward_direction_distance_to_end_of_line > 0,
-            "Forward direction distance to end of line must be greater than 0");
-        log_trace(tt::LogOp, "ccl_send_writer has forward fabric connection");
-        log_trace(tt::LogOp, "\tedm_noc_x: {}", forward_fabric_connection.value().edm_noc_x);
-        log_trace(tt::LogOp, "\tedm_noc_y: {}", forward_fabric_connection.value().edm_noc_y);
-        log_trace(tt::LogOp, "\tedm_buffer_base_addr: {}", forward_fabric_connection.value().edm_buffer_base_addr);
-        log_trace(tt::LogOp, "\tnum_buffers_per_channel: {}", forward_fabric_connection.value().num_buffers_per_channel);
-        log_trace(tt::LogOp, "\tedm_l1_sem_addr: {}", forward_fabric_connection.value().edm_l1_sem_addr);
-        log_trace(
-            tt::LogOp,
-            "\tedm_connection_handshake_addr: {}",
-            forward_fabric_connection.value().edm_connection_handshake_addr);
-        log_trace(
-            tt::LogOp,
-            "\tedm_worker_location_info_addr: {}",
-            forward_fabric_connection.value().edm_worker_location_info_addr);
-        log_trace(tt::LogOp, "\tbuffer_size_bytes: {}", forward_fabric_connection.value().buffer_size_bytes);
-        log_trace(
-            tt::LogOp, "\tbuffer_index_semaphore_id: {}", forward_fabric_connection.value().buffer_index_semaphore_id);
-        tt::tt_fabric::append_worker_to_fabric_edm_sender_rt_args(
-            forward_fabric_connection.value(),
-            sender_worker_forward_flow_control_semaphore_id,
-            sender_worker_forward_teardown_semaphore_id,
-            sender_worker_forward_buffer_index_semaphore_id,
-            args);
-        logged_arg_idx = tt::tt_fabric::log_worker_to_fabric_edm_sender_rt_args(args, logged_arg_idx);
-    }
-    args.push_back(backward_fabric_connection.has_value() ? 1 : 0);
-    if (backward_fabric_connection.has_value()) {
-        TT_FATAL(
-            backward_direction_distance_to_end_of_line > 0,
-            "Backward direction distance to end of line must be greater than 0");
-        log_trace(tt::LogOp, "ccl_send_writer has backward fabric connection");
-        log_trace(tt::LogOp, "\tedm_noc_x: {}", backward_fabric_connection.value().edm_noc_x);
-        log_trace(tt::LogOp, "\tedm_noc_y: {}", backward_fabric_connection.value().edm_noc_y);
-        log_trace(tt::LogOp, "\tedm_buffer_base_addr: {}", backward_fabric_connection.value().edm_buffer_base_addr);
-        log_trace(
-            tt::LogOp, "\tnum_buffers_per_channel: {}", backward_fabric_connection.value().num_buffers_per_channel);
-        log_trace(tt::LogOp, "\tedm_l1_sem_addr: {}", backward_fabric_connection.value().edm_l1_sem_addr);
-        log_trace(
-            tt::LogOp,
-            "\tedm_connection_handshake_addr: {}",
-            backward_fabric_connection.value().edm_connection_handshake_addr);
-        log_trace(
-            tt::LogOp,
-            "\tedm_worker_location_info_addr: {}",
-            backward_fabric_connection.value().edm_worker_location_info_addr);
-        log_trace(tt::LogOp, "\tbuffer_size_bytes: {}", backward_fabric_connection.value().buffer_size_bytes);
-        log_trace(
-            tt::LogOp, "\tbuffer_index_semaphore_id: {}", backward_fabric_connection.value().buffer_index_semaphore_id);
-        tt::tt_fabric::append_worker_to_fabric_edm_sender_rt_args(
-            backward_fabric_connection.value(),
-            sender_worker_backward_flow_control_semaphore_id,
-            sender_worker_backward_teardown_semaphore_id,
-            sender_worker_backward_buffer_index_semaphore_id,
-            args);
-        logged_arg_idx = tt::tt_fabric::log_worker_to_fabric_edm_sender_rt_args(args, logged_arg_idx);
-    }
-
-    args.push_back(sync_details.has_value() ? 1 : 0);
-    if (sync_details.has_value()) {
-        args.push_back(sync_details.value().num_signals);
-        for (size_t i = 0; i < sync_details.value().num_signals; ++i) {
-            auto const noc_coord =
-                this->device->virtual_core_from_logical_core(sync_details.value().core, CoreType::WORKER);
-            log_trace(
-                tt::LogOp,
-                "ccl_send_writer on device {} adding sync signal dest to (y={},x={},id={})",
-                this->device->id(),
-                noc_coord.y,
-                noc_coord.x,
-                sync_details.value().sem_ids[i]);
-            args.push_back(sync_details.value().sem_ids[i]);
-            args.push_back(noc_coord.x);
-            args.push_back(noc_coord.y);
-        }
-    }
-
-    auto const& addr_gen_rt_args = ttnn::ccl::legacy_emit_address_generator_runtime_args(this->device, output_tensor);
-    std::ranges::copy(addr_gen_rt_args, std::back_inserter(args));
-    for (auto const& arg : addr_gen_rt_args) {
-        log_trace(tt::LogOp, "ccl_send_writer arg[{}]: addr_gen_rt_args[] {}", logged_arg_idx, args[logged_arg_idx]);
-        logged_arg_idx++;
-    }
-
-    log_trace(tt::LogOp, "ccl_send_writer Generating {} ccl send commands", slices.size());
-    emit_ccl_send_slice_sequence_commands(slices, args);
-
-    log_trace(tt::LogOp, "ccl_send_writer Sender Worker has {} RT Args: {}", args.size(), args);
 
     return args;
 }

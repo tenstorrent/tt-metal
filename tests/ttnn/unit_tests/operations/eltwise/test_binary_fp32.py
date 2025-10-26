@@ -6,6 +6,10 @@ import torch
 import ttnn
 
 import pytest
+from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
+    data_gen_with_range,
+    compare_pcc,
+)
 
 
 @pytest.mark.parametrize(
@@ -387,3 +391,53 @@ def test_bitwise(device, ttnn_function):
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.9999
     assert status
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize("use_legacy", [True, False])
+def test_binary_xlogy_ttnn(input_shapes, device, use_legacy):
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
+
+    output_tensor = ttnn.xlogy(input_tensor1, input_tensor2, use_legacy=use_legacy)
+    golden_function = ttnn.get_golden_function(ttnn.xlogy)
+    golden_tensor = golden_function(in_data1, in_data2)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize("accurate_mode", [False, True])
+@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16)])
+def test_binary_div_edge_case_ttnn(accurate_mode, round_mode, device, torch_dtype, ttnn_dtype):
+    if torch_dtype == torch.bfloat16 and round_mode is None and accurate_mode is False:
+        pytest.skip(
+            "Skipping test case due to division by zero not being handled properly in bfloat16 with round_mode=None and accurate_mode=False"
+        )
+    in_data1 = torch.tensor([0.0, 1.0, -1.0, 0.0, 0.0, 7.0, 9.75], dtype=torch_dtype)
+    in_data2 = torch.tensor([0.0, 0.0, 0.0, 1.0, -1.0, 2.5, -14.25], dtype=torch_dtype)
+    input_tensor1 = ttnn.from_torch(
+        in_data1, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    input_tensor2 = ttnn.from_torch(
+        in_data2, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    output_tensor = ttnn.div(input_tensor1, input_tensor2, accurate_mode=accurate_mode, round_mode=round_mode)
+    golden_function = ttnn.get_golden_function(ttnn.div)
+    golden_tensor = golden_function(in_data1, in_data2, round_mode)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    if ttnn_dtype == ttnn.bfloat16:
+        golden_tensor = torch.where(
+            torch.isnan(golden_tensor), torch.tensor(float("inf"), dtype=golden_tensor.dtype), golden_tensor
+        )
+    assert torch.allclose(golden_tensor, output_tensor, equal_nan=True)

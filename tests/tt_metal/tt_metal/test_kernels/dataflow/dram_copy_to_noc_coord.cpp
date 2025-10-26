@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,6 +24,7 @@ void kernel_main() {
     std::uint32_t buffer_size = get_arg_val<uint32_t>(7);
 
     bool use_inline_dw_write = static_cast<bool>(get_arg_val<uint32_t>(8));
+    bool bad_linked_transaction = static_cast<bool>(get_arg_val<uint32_t>(9));
 
 #if defined(SIGNAL_COMPLETION_TO_DISPATCHER)
     // We will assert later. This kernel will hang.
@@ -36,9 +37,10 @@ void kernel_main() {
     tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
 #endif
     uint64_t dispatch_addr = NOC_XY_ADDR(
-        NOC_X(mailboxes->go_message.master_x),
-        NOC_Y(mailboxes->go_message.master_y),
-        DISPATCH_MESSAGE_ADDR + NOC_STREAM_REG_SPACE_SIZE * mailboxes->go_message.dispatch_message_offset);
+        NOC_X(mailboxes->go_messages[mailboxes->go_message_index].master_x),
+        NOC_Y(mailboxes->go_messages[mailboxes->go_message_index].master_y),
+        DISPATCH_MESSAGE_ADDR +
+            NOC_STREAM_REG_SPACE_SIZE * mailboxes->go_messages[mailboxes->go_message_index].dispatch_message_offset);
     noc_fast_write_dw_inline<DM_DEDICATED_NOC>(
         noc_index,
         NCRISC_AT_CMD_BUF,
@@ -57,6 +59,12 @@ void kernel_main() {
     noc_async_read_barrier();
 
     // NOC dst address
+    if (bad_linked_transaction) {
+        uint64_t dst_noc_multicast_addr =
+            get_noc_multicast_addr(dst_noc_x, dst_noc_y, dst_noc_x, dst_noc_y, buffer_dst_addr);
+        noc_async_write_multicast(local_buffer_addr, dst_noc_multicast_addr, buffer_size, 1, true);
+        // linked transaction not closed, the next unicast will hang.
+    }
     std::uint64_t buffer_dst_noc_addr = get_noc_addr(dst_noc_x, dst_noc_y, buffer_dst_addr);
     if (use_inline_dw_write) {
         auto src_data = reinterpret_cast<volatile uint32_t*>(local_buffer_addr);

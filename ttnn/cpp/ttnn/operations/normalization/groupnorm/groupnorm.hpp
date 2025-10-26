@@ -7,6 +7,8 @@
 #include "ttnn/decorators.hpp"
 #include "device/groupnorm_types.hpp"
 
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+
 namespace ttnn {
 namespace operations {
 namespace normalization {
@@ -19,12 +21,16 @@ struct ExecuteGroupNorm {
         const std::optional<ttnn::Tensor>& input_mask = std::nullopt,
         const std::optional<ttnn::Tensor>& weight = std::nullopt,
         const std::optional<ttnn::Tensor>& bias = std::nullopt,
+        const std::optional<ttnn::Tensor>& reciprocals = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<ttnn::DataType> dtype = std::nullopt,
         std::optional<CoreGrid> core_grid = std::nullopt,
         std::optional<bool> inplace = std::nullopt,
         std::optional<ttnn::Layout> output_layout = std::nullopt,
-        std::optional<int> num_out_blocks = std::nullopt);
+        std::optional<int> num_out_blocks = std::nullopt,
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        const std::optional<ttnn::Tensor>& negative_mask = std::nullopt,
+        bool use_welford = false);
 };
 
 }  // namespace normalization

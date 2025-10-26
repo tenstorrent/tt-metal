@@ -14,10 +14,8 @@ namespace operations::experimental::ccl {
 
 struct ExecuteLlamaReduceScatterMatmul {
     static std::vector<ttnn::Tensor> invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,               // mm0 used
         const ttnn::Tensor& weight_tensor,              // mm1 used
-        const ttnn::Tensor& rs_tensor,                  // rs1
         ttnn::Tensor& intermediate_packet_buffer,       // rs2
         int32_t dim,                                    // rs3
         const GlobalSemaphore& cross_device_semaphore,  // rs4
@@ -25,6 +23,8 @@ struct ExecuteLlamaReduceScatterMatmul {
         const MeshDevice& mesh_device,                  // rs 6
         uint32_t num_links,                             // rs 7 default 1
         const tt::tt_metal::SubDeviceId& subdevice_id,
+        const std::optional<const ttnn::Tensor>& second_weight_tensor = std::nullopt,
+        const std::optional<const ttnn::Tensor>& rs_tensor = std::nullopt,
         tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear,
         const std::optional<ttnn::MemoryConfig>& memory_config_rs = std::nullopt,  // rs 8 default std::nullopt
         const std::optional<ttnn::MemoryConfig>& memory_config_mm = std::nullopt,  // mm4 used but default std::nullopt

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
+#include "tools/profiler/fabric_event_profiler.hpp"
 
 namespace tt::tt_fabric {
 
@@ -36,13 +37,11 @@ WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS> build_connection_to_fabr
 
     auto mux_channel_credits_stream_id = get_mux_channel_stream_id_from_channel_id(fabric_mux_channel_id);
     return WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>(
-        true,      /* ignored, connected_to_persistent_fabric */
-        direction, /* ignored, direction */
+        true, /* ignored, connected_to_persistent_fabric */
         fabric_mux_x,
         fabric_mux_y,
         fabric_mux_channel_base_address,
         fabric_mux_num_buffers_per_channel,
-        fabric_mux_flow_control_address,
         fabric_mux_connection_handshake_address,
         fabric_mux_connection_info_address,
         fabric_mux_channel_buffer_size_bytes,
@@ -65,20 +64,46 @@ FORCE_INLINE void wait_for_fabric_endpoint_ready(
     auto local_fabric_ep_status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_fabric_ep_status_address);
 
     local_fabric_ep_status_ptr[0] = tt::tt_fabric::FabricEndpointStatus::TERMINATED;
-    while (local_fabric_ep_status_ptr[0] != tt::tt_fabric::FabricEndpointStatus::READY_FOR_TRAFFIC) {
+    do {
         noc_async_read_one_packet(noc_addr, local_fabric_ep_status_address, 4);
         noc_async_read_barrier();
-    }
+        invalidate_l1_cache();
+    } while (local_fabric_ep_status_ptr[0] != tt::tt_fabric::FabricEndpointStatus::READY_FOR_TRAFFIC);
 }
 
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
 FORCE_INLINE void fabric_client_connect(WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& connection_handle) {
-    connection_handle.open();
+    connection_handle.template open<true>();
+}
+
+template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
+FORCE_INLINE void fabric_client_connect_start(
+    WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& connection_handle) {
+    connection_handle.open_start();
+}
+
+template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
+FORCE_INLINE void fabric_client_connect_finish(
+    WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& connection_handle) {
+    connection_handle.open_finish();
 }
 
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
 FORCE_INLINE void fabric_client_disconnect(WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& connection_handle) {
     connection_handle.close();
+}
+
+FORCE_INLINE void fabric_endpoint_terminate(
+    uint8_t fabric_ep_x,
+    uint8_t fabric_ep_y,
+    size_t fabric_ep_termination_signal_address,
+    bool graceful_termination = true) {
+    uint64_t noc_addr = get_noc_addr(fabric_ep_x, fabric_ep_y, fabric_ep_termination_signal_address);
+    noc_inline_dw_write(
+        noc_addr,
+        graceful_termination ? tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE
+                             : tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+    noc_async_write_barrier();
 }
 
 // assumes packet header is correctly populated
@@ -89,6 +114,7 @@ FORCE_INLINE void fabric_async_write(
     uint32_t source_payload_address,
     uint32_t packet_payload_size_bytes) {
     connection_handle.wait_for_empty_write_slot();
+    RECORD_FABRIC_HEADER(packet_header);
     connection_handle.send_payload_without_header_non_blocking_from_address(
         source_payload_address, packet_payload_size_bytes);
     connection_handle.send_payload_flush_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -100,6 +126,7 @@ FORCE_INLINE void fabric_atomic_inc(
     WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& connection_handle,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
     connection_handle.wait_for_empty_write_slot();
+    RECORD_FABRIC_HEADER(packet_header);
     connection_handle.send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 

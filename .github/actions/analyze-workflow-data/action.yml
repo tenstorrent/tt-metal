@@ -5,6 +5,9 @@ inputs:
   cache-path:
     description: 'Path to the cached workflow data file'
     required: true
+  previous-cache-path:
+    description: "Path to the previous run's workflow data file (optional)"
+    required: false
   GITHUB_TOKEN:
     description: 'GitHub token for API access. Used to fetch PR information and workflow details.'
     required: true
@@ -25,12 +28,32 @@ inputs:
     description: 'Number of days to look back for workflow data'
     required: false
     default: '15'
+  alert-all:
+    description: 'If true, generate a Slack-ready alert message listing all currently failing workflows with owner mentions.'
+    required: false
+    default: 'false'
+  annotations-index-path:
+    description: 'Path to JSON mapping run_id -> annotations directory (optional)'
+    required: false
+  commits-path:
+    description: 'Path to JSON array of commits on main (optional)'
+    required: false
+  gtest-logs-index-path:
+    description: 'Path to JSON mapping run_id -> extracted gtest logs dir (optional)'
+    required: false
+  other-logs-index-path:
+    description: 'Path to JSON mapping run_id -> extracted other logs dir (optional)'
+    required: false
 
 outputs:
   failed_workflows:
     description: 'JSON array of workflow names that have failed their latest run on the main branch'
   report:
     description: 'The generated workflow report in markdown format, containing workflow statistics and failure details'
+  regressed_workflows:
+    description: 'JSON array of objects {name, run_id, run_url, created_at} for workflows that regressed (success -> fail)'
+  alert_all_message:
+    description: 'Slack-ready alert message listing all currently failing workflows with owner mentions (set when alert-all=true)'
 
 runs:
   using: 'node20'

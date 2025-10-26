@@ -13,14 +13,16 @@ from PIL import Image as PIL_Image
 from torch import Tensor
 
 import ttnn
-from models.tt_transformers.tt.common import copy_host_to_device, get_padded_prefill_len, get_prefill_rot_mat
+from models.common.utility_functions import nearest_32
+from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.common import copy_host_to_device, get_padded_prefill_len
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text import (
     TtLlamaCrossAttentionTransformerText,
 )
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_vision import (
     TtLlamaCrossAttentionTransformerVision,
 )
-from models.utility_functions import nearest_32
+from models.tt_transformers.tt.rope import get_rot_mats
 
 logger = logging.getLogger(__name__)
 MP_SCALE = 8
@@ -120,7 +122,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         self.model_dim = configuration.dim
 
         self.mesh_device = mesh_device
-        self.state_dict = state_dict
+        self.tt_ccl = TT_CCL(self.mesh_device)
         self.weight_cache_path = weight_cache_path
         self.dtype = dtype
         self.configuration = configuration
@@ -130,6 +132,7 @@ class CrossAttentionTransformer(torch.nn.Module):
 
         self.vision_model = TtLlamaCrossAttentionTransformerVision(
             mesh_device,
+            self.tt_ccl,
             state_dict,
             "vision_model.",
             weight_cache_path=configuration.weight_cache_path(dtype),
@@ -140,6 +143,7 @@ class CrossAttentionTransformer(torch.nn.Module):
 
         self.text_model = TtLlamaCrossAttentionTransformerText(
             mesh_device,
+            self.tt_ccl,
             state_dict,
             state_dict_prefix="text_model.",
             weight_cache_path=configuration.weight_cache_path(ttnn.bfloat8_b),
@@ -191,6 +195,9 @@ class CrossAttentionTransformer(torch.nn.Module):
                 max_num_images=max_num_images,
             )
 
+            max_actual_num_chunks = max([i for chunk in num_chunks for i in chunk])
+            max_actual_num_chunks = max_actual_num_chunks if max_actual_num_chunks <= 2 else self.max_num_chunks
+
         if skip_vision_encoder:
             vision_tokens = torch.zeros(
                 (
@@ -203,11 +210,11 @@ class CrossAttentionTransformer(torch.nn.Module):
             )
         else:
             # TT vision_model
-            vision_tokens = self.vision_model(stacked_images, aspect_ratios)
+            vision_tokens = self.vision_model(stacked_images, aspect_ratios, max_actual_num_chunks)
             chunk_seq_len = self.configuration.vision_chunk_ntok
             # NOTE: slicing up to chunk_seq_len is necessary because padding information is lost by this point
             vision_tokens = ttnn.reshape(
-                vision_tokens[0, :, :chunk_seq_len], (bsz, max_num_images, self.max_num_chunks, -1, self.model_dim)
+                vision_tokens[0, :, :chunk_seq_len], (bsz, max_num_images, max_actual_num_chunks, -1, self.model_dim)
             )
 
         bsz, nimg, nchunk, ntok, image_token_dim = tuple(vision_tokens.shape)
@@ -223,7 +230,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             batch_masks,
             num_chunks,
             total_len,
-            self.max_num_chunks,
+            max_actual_num_chunks,
             prefill_len,
         )
 
@@ -347,13 +354,12 @@ class CrossAttentionTransformer(torch.nn.Module):
         tt_h = self.configuration.prepare_residual_tensor_prefill(
             h,
         )
-        rot_mats = get_prefill_rot_mat(
-            self.configuration.head_dim,
-            self.mesh_device,
+        rot_mats = get_rot_mats(
+            head_dim=self.configuration.head_dim,
+            device=self.mesh_device,
             seq_len=S,
             theta=self.configuration.rope_theta,
-            scale_factor=self.configuration.rope_scaling_factor,
-            orig_context_len=self.configuration.orig_context_len,
+            rope_scaling=self.configuration.rope_scaling,
         )
 
         if isinstance(page_table, torch.Tensor):
@@ -683,7 +689,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             full_text_row_masked_out_mask_11SD=full_text_mask_expand_11SD,
             xattn_caches=xattn_caches,
             current_pos=None,
-            rot_mats=rot_mats,
+            rot_mats_global=rot_mats,
             user_id=user_id,
             mode="prefill",
             page_table=page_table,
@@ -726,7 +732,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             full_text_row_masked_out_mask_11SD=full_text_mask_expand_11SD,
             xattn_caches=xattn_caches,
             current_pos=position_id,
-            rot_mats=rot_mats,
+            rot_mats_global=rot_mats,
             mode="decode",
             page_table=page_table,
             kv_cache=kv_cache,

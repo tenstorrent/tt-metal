@@ -7,7 +7,6 @@
 #include <tt-metalium/work_split.hpp>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 
 namespace tt {
@@ -27,25 +26,24 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
     Program program{};
 
     const tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(q_input.dtype());
-    const uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
+    const uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
     const tt::DataFormat cos_cb_data_format = tt_metal::datatype_to_dataformat_converter(cos.dtype());
-    const uint32_t cos_single_tile_size = tt_metal::detail::TileSize(cos_cb_data_format);
+    const uint32_t cos_single_tile_size = tt::tile_size(cos_cb_data_format);
 
     const tt::DataFormat sin_cb_data_format = tt_metal::datatype_to_dataformat_converter(sin.dtype());
-    const uint32_t sin_single_tile_size = tt_metal::detail::TileSize(sin_cb_data_format);
+    const uint32_t sin_single_tile_size = tt::tile_size(sin_cb_data_format);
 
     const tt::DataFormat trans_mat_cb_data_format = tt_metal::datatype_to_dataformat_converter(trans_mat.dtype());
-    const uint32_t trans_mat_single_tile_size = tt_metal::detail::TileSize(trans_mat_cb_data_format);
+    const uint32_t trans_mat_single_tile_size = tt::tile_size(trans_mat_cb_data_format);
 
     const tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(q_output.dtype());
-    const uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
+    const uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
-    std::optional<ShardSpec> q_shard_spec = q_input.shard_spec();
-    std::optional<ShardSpec> k_shard_spec = k_input.shard_spec();
-    std::optional<ShardSpec> cos_sin_shard_spec = cos.shard_spec();
+    const std::optional<ShardSpec>& q_shard_spec = q_input.shard_spec();
+    const std::optional<ShardSpec>& k_shard_spec = k_input.shard_spec();
+    const std::optional<ShardSpec>& cos_sin_shard_spec = cos.shard_spec();
 
-    const uint32_t batch = q_input.padded_shape()[1];
     const uint32_t q_n_heads_t = row_major_QK ? 1 : q_shard_spec->shape[0] / constants::TILE_HEIGHT;
     const uint32_t k_n_heads_t = row_major_QK ? 1 : k_shard_spec->shape[0] / constants::TILE_HEIGHT;
 
@@ -132,22 +130,21 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
         tt_metal::CircularBufferConfig(
             num_interm_tiles * input_single_tile_size, {{rotated_input_interm_cb_index, input_cb_data_format}})
             .set_page_size(rotated_input_interm_cb_index, input_single_tile_size);
-    auto cb_rotated_input_interm =
-        tt_metal::CreateCircularBuffer(program, all_cores_bb, cb_rotated_input_interm_config);
+    tt_metal::CreateCircularBuffer(program, all_cores_bb, cb_rotated_input_interm_config);
 
     uint32_t cos_interm_cb_index = CBIndex::c_25;
     tt_metal::CircularBufferConfig cb_cos_interm_config =
         tt_metal::CircularBufferConfig(
             num_interm_tiles * input_single_tile_size, {{cos_interm_cb_index, cos_cb_data_format}})
             .set_page_size(cos_interm_cb_index, cos_single_tile_size);
-    auto cb_cos_interm = tt_metal::CreateCircularBuffer(program, all_cores_bb, cb_cos_interm_config);
+    tt_metal::CreateCircularBuffer(program, all_cores_bb, cb_cos_interm_config);
 
     uint32_t sin_interm_cb_index = CBIndex::c_26;
     tt_metal::CircularBufferConfig cb_sin_interm_config =
         tt_metal::CircularBufferConfig(
             num_interm_tiles * input_single_tile_size, {{sin_interm_cb_index, sin_cb_data_format}})
             .set_page_size(sin_interm_cb_index, sin_single_tile_size);
-    auto cb_sin_interm = tt_metal::CreateCircularBuffer(program, all_cores_bb, cb_sin_interm_config);
+    tt_metal::CreateCircularBuffer(program, all_cores_bb, cb_sin_interm_config);
 
     uint32_t q_output_cb_index = CBIndex::c_16;  // output operands start at index 16
     tt_metal::CircularBufferConfig cb_q_output_config =

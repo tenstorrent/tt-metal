@@ -38,10 +38,8 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
                const bool use_noc1_only,
                const std::optional<uint32_t> num_links,
                const ttnn::ccl::Topology topology,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               QueueId queue_id) -> ttnn::Tensor {
+               std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> ttnn::Tensor {
                 return self(
-                    queue_id,
                     input_tensor,
                     buffer_tensor,
                     dim,
@@ -67,8 +65,7 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
             py::arg("use_noc1_only") = false,
             py::arg("num_links") = 1,
             py::arg("topology") = ttnn::ccl::Topology::Linear,
-            py::arg("subdevice_id") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("subdevice_id") = std::nullopt});
 }
 
 }  // namespace
@@ -85,12 +82,12 @@ void py_bind_all_gather_concat(pybind11::module& module) {
             cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-all-gather operation on.
             mesh_device (MeshDevice): Device mesh to perform the line-all-gather operation on.
         * cluster_axis and mesh_device parameters are applicable only for Linear Topology.
-        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md
+        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
         Keyword Args:
             num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
             num_heads (int): Number of heads for NLP concat heads
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
-            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
+            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Linear`.
         Returns:
             ttnn.Tensor: the output tensor.
         )doc");
