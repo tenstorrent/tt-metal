@@ -587,7 +587,7 @@ void py_module(nb::module_& mod) {
                const bool transpose_b,
                const std::optional<const ttnn::MemoryConfig>& memory_config,
                const std::optional<const DataType> dtype,
-               nb::object program_config_obj,
+               const std::optional<MatmulProgramConfig>& program_config,
                const std::optional<const std::string>& activation,
                const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<ttnn::CoreGrid> core_grid,
@@ -595,23 +595,6 @@ void py_module(nb::module_& mod) {
                std::optional<Tensor>& optional_output_tensor,
                const std::optional<const GlobalCircularBuffer>& global_cb,
                const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) -> ttnn::Tensor {
-                std::optional<MatmulProgramConfig> program_config = std::nullopt;
-                if (!program_config_obj.is_none()) {
-                    if (nb::isinstance(program_config_obj, nb::type<MatmulMultiCoreReuseProgramConfig>())) {
-                        program_config = nb::cast<MatmulMultiCoreReuseProgramConfig>(program_config_obj);
-                    } else if (nb::isinstance(
-                                   program_config_obj, nb::type<MatmulMultiCoreReuseMultiCastProgramConfig>())) {
-                        program_config = nb::cast<MatmulMultiCoreReuseMultiCastProgramConfig>(program_config_obj);
-                    } else if (nb::isinstance(
-                                   program_config_obj, nb::type<MatmulMultiCoreReuseMultiCast1DProgramConfig>())) {
-                        program_config = nb::cast<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config_obj);
-                    } else if (nb::isinstance(
-                                   program_config_obj,
-                                   nb::type<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>())) {
-                        program_config =
-                            nb::cast<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(program_config_obj);
-                    }
-                }
                 return self(
                     input_tensor_a,
                     input_tensor_b,
@@ -691,7 +674,7 @@ void py_module(nb::module_& mod) {
                const bool transpose_b,
                const std::optional<const ttnn::MemoryConfig>& memory_config,
                const std::optional<const DataType> dtype,
-               nb::object program_config_obj,
+               const std::optional<MatmulProgramConfig>& program_config,
                const std::optional<const std::string>& activation,
                const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<ttnn::CoreGrid> core_grid,
@@ -699,23 +682,6 @@ void py_module(nb::module_& mod) {
                std::optional<Tensor>& optional_output_tensor,
                const std::optional<const GlobalCircularBuffer>& global_cb,
                const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) -> ttnn::Tensor {
-                std::optional<MatmulProgramConfig> program_config = std::nullopt;
-                if (!program_config_obj.is_none()) {
-                    if (nb::isinstance(program_config_obj, nb::type<MatmulMultiCoreReuseProgramConfig>())) {
-                        program_config = nb::cast<MatmulMultiCoreReuseProgramConfig>(program_config_obj);
-                    } else if (nb::isinstance(
-                                   program_config_obj, nb::type<MatmulMultiCoreReuseMultiCastProgramConfig>())) {
-                        program_config = nb::cast<MatmulMultiCoreReuseMultiCastProgramConfig>(program_config_obj);
-                    } else if (nb::isinstance(
-                                   program_config_obj, nb::type<MatmulMultiCoreReuseMultiCast1DProgramConfig>())) {
-                        program_config = nb::cast<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config_obj);
-                    } else if (nb::isinstance(
-                                   program_config_obj,
-                                   nb::type<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>())) {
-                        program_config =
-                            nb::cast<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(program_config_obj);
-                    }
-                }
                 return self(
                     input_tensor_a,
                     input_tensor_b,
@@ -785,7 +751,7 @@ void py_module(nb::module_& mod) {
                const bool transpose_b,
                const std::optional<const ttnn::MemoryConfig>& memory_config,
                const std::optional<const DataType> dtype,
-               nb::object program_config_obj,
+               const std::optional<MatmulProgramConfig>& program_config,
                const std::optional<const std::string>& activation,
                const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<ttnn::CoreGrid> core_grid,
@@ -793,23 +759,6 @@ void py_module(nb::module_& mod) {
                std::optional<Tensor>& optional_output_tensor,
                const std::optional<const GlobalCircularBuffer>& global_cb,
                const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) -> std::vector<ttnn::Tensor> {
-                std::optional<MatmulProgramConfig> program_config = std::nullopt;
-                if (!program_config_obj.is_none()) {
-                    if (nb::isinstance(program_config_obj, nb::type<MatmulMultiCoreReuseProgramConfig>())) {
-                        program_config = nb::cast<MatmulMultiCoreReuseProgramConfig>(program_config_obj);
-                    } else if (nb::isinstance(
-                                   program_config_obj, nb::type<MatmulMultiCoreReuseMultiCastProgramConfig>())) {
-                        program_config = nb::cast<MatmulMultiCoreReuseMultiCastProgramConfig>(program_config_obj);
-                    } else if (nb::isinstance(
-                                   program_config_obj, nb::type<MatmulMultiCoreReuseMultiCast1DProgramConfig>())) {
-                        program_config = nb::cast<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config_obj);
-                    } else if (nb::isinstance(
-                                   program_config_obj,
-                                   nb::type<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>())) {
-                        program_config =
-                            nb::cast<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(program_config_obj);
-                    }
-                }
                 return self(
                     input_tensor_a,
                     input_tensors_b,
@@ -894,28 +843,11 @@ void py_module(nb::module_& mod) {
                const float beta,
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<const DataType> dtype,
-               nb::object program_config_obj,
+               const std::optional<MatmulProgramConfig>& program_config,
                const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<CoreGrid> core_grid,
                const std::optional<tt::tt_metal::Tile> output_tile,
                const std::optional<Tensor>& optional_output_tensor) -> ttnn::Tensor {
-                std::optional<MatmulProgramConfig> program_config = std::nullopt;
-                if (!program_config_obj.is_none()) {
-                    if (nb::isinstance(program_config_obj, nb::type<MatmulMultiCoreReuseProgramConfig>())) {
-                        program_config = nb::cast<MatmulMultiCoreReuseProgramConfig>(program_config_obj);
-                    } else if (nb::isinstance(
-                                   program_config_obj, nb::type<MatmulMultiCoreReuseMultiCastProgramConfig>())) {
-                        program_config = nb::cast<MatmulMultiCoreReuseMultiCastProgramConfig>(program_config_obj);
-                    } else if (nb::isinstance(
-                                   program_config_obj, nb::type<MatmulMultiCoreReuseMultiCast1DProgramConfig>())) {
-                        program_config = nb::cast<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config_obj);
-                    } else if (nb::isinstance(
-                                   program_config_obj,
-                                   nb::type<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>())) {
-                        program_config =
-                            nb::cast<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(program_config_obj);
-                    }
-                }
                 return self(
                     input_tensor,
                     mat1_tensor,
@@ -995,27 +927,13 @@ void py_module(nb::module_& mod) {
                const bool is_input_a_sparse,
                const std::optional<const ttnn::MemoryConfig>& memory_config,
                const std::optional<const DataType> dtype,
-               nb::object program_config_obj,
+               const std::optional<MatmulProgramConfig>& program_config,
                const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<ttnn::CoreGrid> core_grid,
                const std::optional<tt::tt_metal::Tile> output_tile,
                std::optional<Tensor>& optional_output_tensor,
                const std::optional<const GlobalCircularBuffer>& global_cb,
                const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) -> ttnn::Tensor {
-                std::optional<MatmulProgramConfig> program_config = std::nullopt;
-                if (!program_config_obj.is_none()) {
-                    if (nb::isinstance<MatmulMultiCoreReuseProgramConfig>(program_config_obj)) {
-                        program_config = nb::cast<MatmulMultiCoreReuseProgramConfig>(program_config_obj);
-                    } else if (nb::isinstance<MatmulMultiCoreReuseMultiCastProgramConfig>(program_config_obj)) {
-                        program_config = nb::cast<MatmulMultiCoreReuseMultiCastProgramConfig>(program_config_obj);
-                    } else if (nb::isinstance<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config_obj)) {
-                        program_config = nb::cast<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config_obj);
-                    } else if (nb::isinstance<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(
-                                   program_config_obj)) {
-                        program_config =
-                            nb::cast<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(program_config_obj);
-                    }
-                }
                 return self(
                     input_tensor_a,
                     input_tensor_b,
