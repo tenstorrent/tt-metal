@@ -15,10 +15,31 @@ ALWI void fill_four_val(uint32_t begin_addr, uint16_t val, uint16_t val1, uint16
     ptr[1] = (val2 | (val3 << 16));
 }
 
-ALWI float uint32_to_float(uint32_t f) {
-    float ret;
-    std::memcpy(&ret, &f, sizeof(float));
-    return ret;
+// Fixed-point math constants and helpers for Q16.16 format
+constexpr int32_t FIXED_POINT_SHIFT = 16;
+constexpr int32_t FIXED_ONE = 1 << FIXED_POINT_SHIFT;         // 1.0 in Q16.16
+constexpr int32_t FIXED_HALF = 1 << (FIXED_POINT_SHIFT - 1);  // 0.5 in Q16.16
+
+// Convert float represented as uint32_t to fixed-point Q16.16
+ALWI int32_t float_as_u32_to_fixed(uint32_t f) {
+    float fval;
+    std::memcpy(&fval, &f, sizeof(float));
+    return (int32_t)(fval * FIXED_ONE);
+}
+
+// Extract integer part from fixed-point
+ALWI int32_t fixed_to_int(int32_t fixed) { return fixed >> FIXED_POINT_SHIFT; }
+
+// Extract fractional part from fixed-point (0 to FIXED_ONE)
+ALWI int32_t fixed_frac(int32_t fixed) { return fixed & ((1 << FIXED_POINT_SHIFT) - 1); }
+
+// Multiply two fixed-point numbers
+ALWI int32_t fixed_mul(int32_t a, int32_t b) { return ((int64_t)a * b) >> FIXED_POINT_SHIFT; }
+
+// Convert fixed-point to bfloat16 for weight values
+ALWI uint16_t fixed_to_bfloat16(int32_t fixed) {
+    float fval = (float)fixed / FIXED_ONE;
+    return float_to_bfloat16(fval);
 }
 
 void kernel_main() {
@@ -50,15 +71,15 @@ void kernel_main() {
     uint32_t nsticks_to_process_on_core =
         (total_nsticks_to_process % 2) ? total_nsticks_to_process / 2 + 1 : total_nsticks_to_process / 2;
     // assuming shard begins with a new row. TODO: generalize?
-    float scale_h_inv = uint32_to_float(scale_h_inv_comp);
-    float scale_w_inv = uint32_to_float(scale_w_inv_comp);
-    float y_coordinate,
+    int32_t scale_h_inv = float_as_u32_to_fixed(scale_h_inv_comp);
+    int32_t scale_w_inv = float_as_u32_to_fixed(scale_w_inv_comp);
+    int32_t y_coordinate,
         x_coordinate;  // x and y coordinate of the output pixel, as if it had existed in the input image
-    float x;           // helper variable to avoid out of bound reads in the x direction
-    float dx,
+    int32_t x;         // helper variable to avoid out of bound reads in the x direction
+    int32_t dx,
         dy;  // distance between the output pixel and its closest pixel with lower coordinates (up and to the left)
-    y_coordinate = uint32_to_float(y_starting_coordinate_u32);
-    float x_starting_coordinate = uint32_to_float(x_starting_coordinate_u32);
+    y_coordinate = float_as_u32_to_fixed(y_starting_coordinate_u32);
+    int32_t x_starting_coordinate = float_as_u32_to_fixed(x_starting_coordinate_u32);
 
     // If the current core is a writer core, adjust the x_starting_coordinate to start from the correct position.
 
@@ -81,7 +102,7 @@ void kernel_main() {
         // These variables are for referencing the appropriate input rows, specifically
         // Their coordinates in the halo shard
 
-        uint32_t y1 = int(y_coordinate);
+        uint32_t y1 = fixed_to_int(y_coordinate);
         uint32_t y2 = y1 + 1;
 
         // These two variables represent the indices of the rows referenced by y1 and y2
@@ -92,7 +113,7 @@ void kernel_main() {
         int32_t in_batch_index_y1 = int32_t(y1) - 1 + start_input_row_in_image_id - accumulated_offset;
         int32_t in_batch_index_y2 = int32_t(y2) - 1 + start_input_row_in_image_id - accumulated_offset;
 
-        dy = y_coordinate - y1;
+        dy = fixed_frac(y_coordinate);
 
         // In no circumstance should the padding rows have weights greater than 0.5
 
@@ -103,7 +124,7 @@ void kernel_main() {
             // Entering this case means that in_batch_index_y1 (the "upper" row) corresponds to a padding row
             // (specifically the top padding row) Reduce the padding row's weight to 0 and put full weight on the row
             // below it
-            dy = 1;
+            dy = FIXED_ONE;
         }
 
         if (in_batch_index_y2 == int(in_h)) {
@@ -113,8 +134,8 @@ void kernel_main() {
             // Entering this case means that in_batch_index_y2 (the "lower row") corresponds to a padding
             // row(specifically the bottom padding row)
 
-            if (dy > 0.5) {  // Due to math behind bilinear upsampling, dy could never be exactly 0.5, so this check
-                             // should be numerically safe
+            if (dy > FIXED_HALF) {  // Due to math behind bilinear upsampling, dy could never be exactly 0.5, so this
+                                    // check should be numerically safe
 
                 // In this case, a padding row has weight higher than 0.5.
                 // This means we  are actually done with the current batch,
@@ -122,8 +143,8 @@ void kernel_main() {
                 // previous image) The iteration that enters this case outputs the first row of the next batch
                 y1 += 2;
                 y2 += 2;
-                y_coordinate += 2;
-                dy = 1;
+                y_coordinate += (2 << FIXED_POINT_SHIFT);  // Add 2.0 in fixed-point
+                dy = FIXED_ONE;
                 accumulated_offset += 2 + in_h;
             } else {
                 // In this case, we handle the rows on the bottom border of the image
@@ -140,10 +161,10 @@ void kernel_main() {
         // This happens when scale_w is 1, 2, or 4
         bool use_precomputed_weights = (scale_w == 1 || scale_w == 2 || scale_w == 4);
 
-        float one_minus_dy = 1 - dy;
+        int32_t one_minus_dy = FIXED_ONE - dy;
 
         // Variables for pre-computed weights (only used when optimization is enabled)
-        float dx_a = 0, dx_b = 0;
+        int32_t dx_a = 0, dx_b = 0;
         bool has_special_first = false;
         uint16_t p1_bf16_set_a = 0, p2_bf16_set_a = 0, p3_bf16_set_a = 0, p4_bf16_set_a = 0;
         uint16_t p1_bf16_set_b = 0, p2_bf16_set_b = 0, p3_bf16_set_b = 0, p4_bf16_set_b = 0;
@@ -157,58 +178,57 @@ void kernel_main() {
             // Pre-compute dx values for the alternating pattern
             // When x increments by scale_w_inv*2, we get a repeating pattern
             // Handle special case when starting x is negative (gets clamped to 0)
-            float x_temp = x_coordinate;
-            has_special_first = (x_temp < 0);
+            has_special_first = (x_coordinate < 0);
 
             // Calculate the two alternating dx values based on the actual increment
             // For reader core, after any special first value, dx alternates between two values
             if (has_special_first) {
                 // First position is special (dx=0), calculate next two
-                float x1 = x_coordinate + scale_w_inv * 2;
-                dx_a = x1 - int(x1);  // This will be the first regular dx
-                float x2 = x1 + scale_w_inv * 2;
-                dx_b = x2 - int(x2);  // This will be the second regular dx
+                int32_t x1 = x_coordinate + (scale_w_inv << 1);  // scale_w_inv * 2
+                dx_a = fixed_frac(x1);                           // This will be the first regular dx
+                int32_t x2 = x1 + (scale_w_inv << 1);            // x1 + scale_w_inv * 2
+                dx_b = fixed_frac(x2);                           // This will be the second regular dx
             } else {
                 // No special first, calculate the two alternating values
-                float x1 = x_coordinate;
-                dx_a = x1 - int(x1);
-                float x2 = x1 + scale_w_inv * 2;
-                dx_b = x2 - int(x2);
+                int32_t x1 = x_coordinate;
+                dx_a = fixed_frac(x1);
+                int32_t x2 = x1 + (scale_w_inv << 1);  // x1 + scale_w_inv * 2
+                dx_b = fixed_frac(x2);
             }
 
             // Pre-compute weights for the two alternating dx values
-            float one_minus_dx_a = 1 - dx_a;
-            float one_minus_dx_b = 1 - dx_b;
+            int32_t one_minus_dx_a = FIXED_ONE - dx_a;
+            int32_t one_minus_dx_b = FIXED_ONE - dx_b;
 
             // Weight set A
-            float p1_set_a = one_minus_dx_a * one_minus_dy;
-            float p2_set_a = dx_a * one_minus_dy;
-            float p3_set_a = one_minus_dx_a * dy;
-            float p4_set_a = dx_a * dy;
+            int32_t p1_set_a = fixed_mul(one_minus_dx_a, one_minus_dy);
+            int32_t p2_set_a = fixed_mul(dx_a, one_minus_dy);
+            int32_t p3_set_a = fixed_mul(one_minus_dx_a, dy);
+            int32_t p4_set_a = fixed_mul(dx_a, dy);
 
             // Weight set B
-            float p1_set_b = one_minus_dx_b * one_minus_dy;
-            float p2_set_b = dx_b * one_minus_dy;
-            float p3_set_b = one_minus_dx_b * dy;
-            float p4_set_b = dx_b * dy;
+            int32_t p1_set_b = fixed_mul(one_minus_dx_b, one_minus_dy);
+            int32_t p2_set_b = fixed_mul(dx_b, one_minus_dy);
+            int32_t p3_set_b = fixed_mul(one_minus_dx_b, dy);
+            int32_t p4_set_b = fixed_mul(dx_b, dy);
 
             // Convert weights to bfloat16 once
-            p1_bf16_set_a = float_to_bfloat16(p1_set_a);
-            p2_bf16_set_a = float_to_bfloat16(p2_set_a);
-            p3_bf16_set_a = float_to_bfloat16(p3_set_a);
-            p4_bf16_set_a = float_to_bfloat16(p4_set_a);
+            p1_bf16_set_a = fixed_to_bfloat16(p1_set_a);
+            p2_bf16_set_a = fixed_to_bfloat16(p2_set_a);
+            p3_bf16_set_a = fixed_to_bfloat16(p3_set_a);
+            p4_bf16_set_a = fixed_to_bfloat16(p4_set_a);
 
-            p1_bf16_set_b = float_to_bfloat16(p1_set_b);
-            p2_bf16_set_b = float_to_bfloat16(p2_set_b);
-            p3_bf16_set_b = float_to_bfloat16(p3_set_b);
-            p4_bf16_set_b = float_to_bfloat16(p4_set_b);
+            p1_bf16_set_b = fixed_to_bfloat16(p1_set_b);
+            p2_bf16_set_b = fixed_to_bfloat16(p2_set_b);
+            p3_bf16_set_b = fixed_to_bfloat16(p3_set_b);
+            p4_bf16_set_b = fixed_to_bfloat16(p4_set_b);
 
             // Special case weights for dx=0 (only used when x starts negative)
             // Formula: p1=(1-dx)*(1-dy), p2=dx*(1-dy), p3=(1-dx)*dy, p4=dx*dy
             // When dx=0: p1=(1-dy), p2=0, p3=dy, p4=0
-            p1_bf16_zero = float_to_bfloat16(one_minus_dy);
+            p1_bf16_zero = fixed_to_bfloat16(one_minus_dy);
             p2_bf16_zero = 0;
-            p3_bf16_zero = float_to_bfloat16(dy);
+            p3_bf16_zero = fixed_to_bfloat16(dy);
             p4_bf16_zero = 0;
         }
 
@@ -253,13 +273,14 @@ void kernel_main() {
                 }
             } else {
                 // Calculate weights dynamically for other scale factors
-                dx = x - int(x);
-                p1_bf16 = float_to_bfloat16((1 - dx) * (1 - dy));
-                p2_bf16 = float_to_bfloat16(dx * (1 - dy));
-                p3_bf16 = float_to_bfloat16((1 - dx) * dy);
-                p4_bf16 = float_to_bfloat16(dx * dy);
+                dx = fixed_frac(x);
+                int32_t one_minus_dx = FIXED_ONE - dx;
+                p1_bf16 = fixed_to_bfloat16(fixed_mul(one_minus_dx, one_minus_dy));
+                p2_bf16 = fixed_to_bfloat16(fixed_mul(dx, one_minus_dy));
+                p3_bf16 = fixed_to_bfloat16(fixed_mul(one_minus_dx, dy));
+                p4_bf16 = fixed_to_bfloat16(fixed_mul(dx, dy));
             }
-            uint32_t x1 = int(x);
+            uint32_t x1 = fixed_to_int(x);
             uint32_t x2 = (x1 + 1) < (in_w - 1) ? (x1 + 1) : (in_w - 1);
 
             // Debug output - showing which weights are being used
@@ -317,7 +338,7 @@ void kernel_main() {
                 cb_push_back(out_cb_id, 4);
                 cb_push_back(in_scalar_cb_id, 1);
             }
-            x_coordinate += scale_w_inv * 2;
+            x_coordinate += (scale_w_inv << 1);  // scale_w_inv * 2 in fixed-point
         }
         y_coordinate += scale_h_inv;
     }
