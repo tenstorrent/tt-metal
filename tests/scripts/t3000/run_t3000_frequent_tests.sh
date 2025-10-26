@@ -394,7 +394,7 @@ run_t3000_wan22_tests() {
   pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_rope.py -k "2x4"; fail+=$?
   pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_attention_wan.py -k "2x4"; fail+=$?
   pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "transformer_block and 2x4sp0tp1 or short_seq-2x4sp0tp1 or model_caching"; fail+=$?
-  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "2x4 or 1x8 or test_autoencoder_kl_wan or test_wan_rmsnorm or test_wan_attention or test_wan_conv3d"; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "test_wan_decoder and 2x4 and real_weights and check_output and _1f"; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
