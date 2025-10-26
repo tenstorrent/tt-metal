@@ -73,6 +73,8 @@ void kernel_main() {
                                      // in_h (corresponding to height of a single batch) +
                                      // 2 (corresponding to the 2 skipped padding rows)
 
+    // DPRINT << "num outer loops: " << in_image_rows_per_core * scale_h << ENDL();
+    // DPRINT << "scale_h: " << scale_h << ENDL();
     for (uint32_t image_row = 0; image_row < in_image_rows_per_core * scale_h; ++image_row) {
         x_coordinate = x_starting_coordinate;
 
@@ -130,22 +132,134 @@ void kernel_main() {
                 dy = 0;
             }
         }
+        // DPRINT << "x increment: " << scale_w_inv * 2 << ENDL();
+        // DPRINT << "nsticks_to_process_on_core: " << nsticks_to_process_on_core << ENDL();
+
+        // Pre-calculate bilinear interpolation weights for the two alternating dx values
+        // Since dy is constant for this row and dx alternates between two values,
+        // we can pre-compute the weights and avoid expensive floating-point operations
+        float one_minus_dy = 1 - dy;
+
+        // Pre-compute dx values for the alternating pattern
+        // When x increments by scale_w_inv*2, we get a repeating pattern
+        // Handle special case when starting x is negative (gets clamped to 0)
+        float x_temp = x_coordinate;
+        bool has_special_first = (x_temp < 0);
+
+        // Calculate the two alternating dx values based on the actual increment
+        // For reader core, after any special first value, dx alternates between two values
+        float dx_a, dx_b;
+        if (has_special_first) {
+            // First position is special (dx=0), calculate next two
+            float x1 = x_coordinate + scale_w_inv * 2;
+            dx_a = x1 - int(x1);  // This will be the first regular dx
+            float x2 = x1 + scale_w_inv * 2;
+            dx_b = x2 - int(x2);  // This will be the second regular dx
+        } else {
+            // No special first, calculate the two alternating values
+            float x1 = x_coordinate;
+            dx_a = x1 - int(x1);
+            float x2 = x1 + scale_w_inv * 2;
+            dx_b = x2 - int(x2);
+        }
+
+        // Pre-compute weights for the two alternating dx values
+        float one_minus_dx_a = 1 - dx_a;
+        float one_minus_dx_b = 1 - dx_b;
+
+        // Weight set A (dx = 0.375)
+        float p1_set_a = one_minus_dx_a * one_minus_dy;
+        float p2_set_a = dx_a * one_minus_dy;
+        float p3_set_a = one_minus_dx_a * dy;
+        float p4_set_a = dx_a * dy;
+
+        // Weight set B (dx = 0.875)
+        float p1_set_b = one_minus_dx_b * one_minus_dy;
+        float p2_set_b = dx_b * one_minus_dy;
+        float p3_set_b = one_minus_dx_b * dy;
+        float p4_set_b = dx_b * dy;
+
+        // Convert weights to bfloat16 once
+        uint16_t p1_bf16_set_a = float_to_bfloat16(p1_set_a);
+        uint16_t p2_bf16_set_a = float_to_bfloat16(p2_set_a);
+        uint16_t p3_bf16_set_a = float_to_bfloat16(p3_set_a);
+        uint16_t p4_bf16_set_a = float_to_bfloat16(p4_set_a);
+
+        uint16_t p1_bf16_set_b = float_to_bfloat16(p1_set_b);
+        uint16_t p2_bf16_set_b = float_to_bfloat16(p2_set_b);
+        uint16_t p3_bf16_set_b = float_to_bfloat16(p3_set_b);
+        uint16_t p4_bf16_set_b = float_to_bfloat16(p4_set_b);
+
+        // Special case weights for dx=0 (only used when x starts negative)
+        // Formula: p1=(1-dx)*(1-dy), p2=dx*(1-dy), p3=(1-dx)*dy, p4=dx*dy
+        // When dx=0: p1=(1-dy), p2=0, p3=dy, p4=0
+        uint16_t p1_bf16_zero = float_to_bfloat16(one_minus_dy);
+        uint16_t p2_bf16_zero = 0;
+        uint16_t p3_bf16_zero = float_to_bfloat16(dy);
+        uint16_t p4_bf16_zero = 0;
+
         for (uint32_t j = 0; j < nsticks_to_process_on_core; j++) {
+            DeviceZoneScopedN("XLoop");
+
+            // Select pre-computed weights based on position
+            uint16_t p1_bf16, p2_bf16, p3_bf16, p4_bf16;
+
+            if (has_special_first && j == 0) {
+                // Special first case where x was negative and clamped to 0
+                p1_bf16 = p1_bf16_zero;
+                p2_bf16 = p2_bf16_zero;
+                p3_bf16 = p3_bf16_zero;
+                p4_bf16 = p4_bf16_zero;
+            } else {
+                // Regular alternating pattern
+                // After any special first, pattern is: 0.375, 0.875, 0.375, 0.875...
+                bool use_set_a;
+                if (has_special_first) {
+                    // j=1 → 0.375 (set_a), j=2 → 0.875 (set_b), j=3 → 0.375 (set_a)...
+                    use_set_a = ((j - 1) % 2) == 0;
+                } else {
+                    // No special first, simple alternation
+                    use_set_a = (j % 2) == 0;
+                }
+
+                if (use_set_a) {
+                    p1_bf16 = p1_bf16_set_a;
+                    p2_bf16 = p2_bf16_set_a;
+                    p3_bf16 = p3_bf16_set_a;
+                    p4_bf16 = p4_bf16_set_a;
+                } else {
+                    p1_bf16 = p1_bf16_set_b;
+                    p2_bf16 = p2_bf16_set_b;
+                    p3_bf16 = p3_bf16_set_b;
+                    p4_bf16 = p4_bf16_set_b;
+                }
+            }
+
+            // Calculate x position and indices (still needed for memory addressing)
+            x = x_coordinate < 0 ? 0 : x_coordinate;
+            uint32_t x1 = int(x);
+            uint32_t x2 = (x1 + 1) < (in_w - 1) ? (x1 + 1) : (in_w - 1);
+
+            // Debug output - showing which weights are being used
+            // DPRINT << "x_coordinate: " << x_coordinate << ", y_coordinate: " << y_coordinate << ENDL();
+            // if (has_special_first && j == 0) {
+            //     DPRINT << "dx: 0, dy: " << dy << ENDL();
+            //     DPRINT << "p1: " << one_minus_dy << ", p2: 0, p3: " << dy << ", p4: 0" << ENDL();
+            // } else {
+            //     bool is_set_a = (has_special_first ? ((j - 1) % 2) == 0 : (j % 2) == 0);
+            //     float dx_debug = is_set_a ? dx_a : dx_b;
+            //     DPRINT << "dx: " << dx_debug << ", dy: " << dy << ENDL();
+            //     DPRINT << "p1: " << (is_set_a ? p1_set_a : p1_set_b)
+            //            << ", p2: " << (is_set_a ? p2_set_a : p2_set_b)
+            //            << ", p3: " << (is_set_a ? p3_set_a : p3_set_b)
+            //            << ", p4: " << (is_set_a ? p4_set_a : p4_set_b) << ENDL();
+            // }
+
             for (uint32_t i = 0; i < blocks; i++) {
                 cb_reserve_back(out_cb_id, 4);
                 cb_reserve_back(in_scalar_cb_id, 1);
 
-                x = x_coordinate < 0 ? 0 : x_coordinate;
-                dx = x - int(x);
-                uint32_t x1 = int(x);
-                uint32_t x2 = (x1 + 1) < (in_w - 1) ? (x1 + 1) : (in_w - 1);
-
-                fill_four_val(
-                    get_write_ptr(in_scalar_cb_id),
-                    float_to_bfloat16((1 - dx) * (1 - dy)),
-                    float_to_bfloat16(dx * (1 - dy)),
-                    float_to_bfloat16((1 - dx) * dy),
-                    float_to_bfloat16(dx * dy));
+                fill_four_val(get_write_ptr(in_scalar_cb_id), p1_bf16, p2_bf16, p3_bf16, p4_bf16);
 
                 uint32_t l1_write_addr = get_write_ptr(out_cb_id);
                 uint32_t l1_read_addr_temp =
