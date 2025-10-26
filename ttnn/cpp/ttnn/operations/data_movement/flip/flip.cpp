@@ -23,7 +23,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 
 // toggle this to enable debug prints
-constexpr bool debug_flip = true;
+constexpr bool debug_flip = false;
 inline void flip_db_print(bool condition, const std::string& msg) {
     if constexpr (debug_flip) {
         if (condition) {
@@ -50,19 +50,13 @@ ttnn::Tensor flip_impl(
     const ttnn::Tensor& input_tensor, const ttnn::SmallVector<uint32_t>& dims, const MemoryConfig& memory_config) {
     // For tensors with rank < 4, pad to 4D for device operation compatibility
     // const auto rank = input_tensor.get_logical_shape().rank();
-    log_debug(tt::LogOp, "flip_impl");
     auto output = ttnn::prim::flip(input_tensor, dims, memory_config, std::nullopt);
     return output;
 }
 
 } // namespace detail
 
-// --- Fix: define OwnedFlipArgs and MassagedFlip types for unary flip ---
-// OwnedFlipArgs: tuple of (tensor after pre_transform, dims)
 using OwnedFlipArgs = std::tuple<ttnn::Tensor, ttnn::SmallVector<uint32_t>>;
-
-// MassagedFlip: MassagedOperation that produces a ttnn::Tensor, taking
-// (const ttnn::Tensor&, const ttnn::SmallVector<uint32_t>&) as inputs
 using MassagedFlip = MassagedOperation<ttnn::Tensor, const ttnn::Tensor&, const ttnn::SmallVector<uint32_t>&>;
 using MassagedFlipParams =
     MassagedOperationParams<ttnn::Tensor, const ttnn::Tensor&, const ttnn::SmallVector<uint32_t>&>;
@@ -135,8 +129,6 @@ ttnn::Tensor ExecuteFlip::invoke(
     const std::optional<MemoryConfig>& memory_config) {
     const auto input_rank = input_tensor.logical_shape().rank();
 
-    log_debug(tt::LogOp, "ExecuteFlip::invoke");
-
     TT_FATAL(input_rank <= 5, "Flip operation supports tensors with rank up to 5, got rank {}", input_rank);
     TT_FATAL(!dims.empty(), "Flip dimensions cannot be empty");
     TT_FATAL(is_device_tensor(input_tensor), "Input tensor must be on device");
@@ -153,11 +145,7 @@ ttnn::Tensor ExecuteFlip::invoke(
     auto mem_conf = memory_config.value_or(input_tensor.memory_config());
 
     // Check for no-op case
-    log_debug(tt::LogOp, "dims: {}", dims);
-    log_debug(tt::LogOp, "normalized_dims: {}", normalized_dims);
-
     bool is_flip_nop = detail::is_flip_nop(input_tensor, normalized_dims);
-    log_debug(tt::LogOp, "is_flip_nop: {}", is_flip_nop);
 
     if (is_flip_nop) {
         return ttnn::to_memory_config(input_tensor, memory_config.value_or(input_tensor.memory_config()));

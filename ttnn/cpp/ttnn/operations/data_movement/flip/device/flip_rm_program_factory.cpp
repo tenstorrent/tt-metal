@@ -71,14 +71,14 @@ FlipDeviceOperation::MultiCoreRowMajor::cached_program_t FlipDeviceOperation::Mu
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         split_work_to_cores(core_grid, num_rows);
 
-    log_debug(tt::LogOp, "num_rows: {}\n", num_rows);
-    log_debug(tt::LogOp, "core_grid: {}\n", core_grid);
-    log_debug(tt::LogOp, "num_cores: {}\n", num_cores);
-    log_debug(tt::LogOp, "all_cores: {}\n", all_cores);
-    log_debug(tt::LogOp, "core_group_1: {}\n", core_group_1);
-    log_debug(tt::LogOp, "core_group_2: {}\n", core_group_2);
-    log_debug(tt::LogOp, "num_rows_per_core_group_1: {}\n", num_rows_per_core_group_1);
-    log_debug(tt::LogOp, "num_rows_per_core_group_2: {}\n", num_rows_per_core_group_2);
+    // log_debug(tt::LogOp, "num_rows: {}\n", num_rows);
+    // log_debug(tt::LogOp, "core_grid: {}\n", core_grid);
+    // log_debug(tt::LogOp, "num_cores: {}\n", num_cores);
+    // log_debug(tt::LogOp, "all_cores: {}\n", all_cores);
+    // log_debug(tt::LogOp, "core_group_1: {}\n", core_group_1);
+    // log_debug(tt::LogOp, "core_group_2: {}\n", core_group_2);
+    // log_debug(tt::LogOp, "num_rows_per_core_group_1: {}\n", num_rows_per_core_group_1);
+    // log_debug(tt::LogOp, "num_rows_per_core_group_2: {}\n", num_rows_per_core_group_2);
 
     // ------------------------------------------------------------------------
     // 2) Create circular buffer
