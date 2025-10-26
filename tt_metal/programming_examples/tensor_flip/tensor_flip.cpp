@@ -413,8 +413,8 @@ int main(int argc, char** argv) {
     // constexpr uint32_t W = 224;
 
     constexpr uint32_t C = 1;
-    constexpr uint32_t H = 64;
-    constexpr uint32_t W = 64;
+    constexpr uint32_t H = 65;
+    constexpr uint32_t W = 65;
 
     constexpr uint32_t NUMEL = N * C * H * W;
 

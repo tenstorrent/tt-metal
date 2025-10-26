@@ -78,13 +78,6 @@ void kernel_main() {
 
         if (is_horizontal_flip) {
             // flip elements within the row
-            // uint32_t* row_data = reinterpret_cast<uint32_t*>(l1_buffer_addr);
-            // for (uint32_t col_id = 0; col_id < row_width / 2; ++col_id) {
-            //     uint32_t temp = row_data[col_id];
-            //     row_data[col_id] = row_data[row_width - 1 - col_id];
-            //     row_data[row_width - 1 - col_id] = temp;
-            // }
-
             uint8_t* row_bytes = reinterpret_cast<uint8_t*>(l1_buffer_addr);
             for (uint32_t col_id = 0; col_id < row_width / 2; ++col_id) {
                 uint32_t left = col_id * element_size;

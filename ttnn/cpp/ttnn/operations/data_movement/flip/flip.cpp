@@ -24,7 +24,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 
 // toggle this to enable debug prints
-constexpr bool debug_flip = false;
+constexpr bool debug_flip = true;
 inline void flip_db_print(bool condition, const std::string& msg) {
     if constexpr (debug_flip) {
         if (condition) {
@@ -53,31 +53,6 @@ ttnn::Tensor flip_impl(
     // const auto rank = input_tensor.get_logical_shape().rank();
     log_debug(tt::LogOp, "flip_impl");
     auto output = ttnn::prim::flip(input_tensor, dims, memory_config, std::nullopt);
-
-    // is_padded is TRUE when input tensor layout is tiled
-    // and one or more tensor dims are not divisible by 32
-    auto input_shape = input_tensor.logical_shape();
-    uint32_t pad_y = (32 - input_shape[2] % 32);
-    uint32_t pad_x = (32 - input_shape[3] % 32);
-    bool is_padded = (pad_y != 32) || (pad_x != 32);
-    is_padded = false;
-
-    log_debug(tt::LogOp, "pad_y: {}", pad_y);
-    log_debug(tt::LogOp, "pad_x: {}", pad_x);
-
-    // TODO unpad supports only host tensors TT
-    // TODO we should not change the layout
-    if (is_padded) {
-        output = ttnn::operations::core::from_device(output);
-        output = ttnn::to_layout(output, ttnn::Layout::ROW_MAJOR);
-        output = output.unpad(
-            ttnn::Shape({0, 0, pad_y, pad_x}),
-            ttnn::Shape({input_shape[0], input_shape[1], input_shape[2], input_shape[3]}));
-        // output = output.pad(
-        //     ttnn::Shape({input_shape[0], input_shape[1], input_shape[2], input_shape[3]}),
-        //     ttnn::Shape({0, 0, 0, 0}), 0);
-        // output = ttnn::to_layout(output, ttnn::Layout::TILE);
-    }
     return output;
 }
 
@@ -99,7 +74,9 @@ MassagedFlip build_untilize_rm_retilize_flip(
         // predicate: decide whether we need untilize->rm-slice->retilize
         .predicate = [](const ttnn::Tensor& tensor, const ttnn::SmallVector<uint32_t>& /*dims*/) -> bool {
             // If padded_shape != logical_shape then input is tiled/padded and needs handling
-            return tensor.padded_shape() != tensor.logical_shape();
+            bool res = tensor.layout() == ttnn::TILE_LAYOUT && tensor.logical_shape() != tensor.padded_shape();
+            flip_db_print(res, "untilize_rm_retilize required");
+            return res;
         },
         // pre_transform: untilize -> padding-oblivious slice -> reshape to logical shape
         .pre_transform = [queue_id, output_memory_config](
@@ -140,8 +117,7 @@ MassagedFlip build_untilize_rm_retilize_flip(
                     ttnn::tilize_with_val_padding(padded, padded.padded_shape(), 0.0f, output.memory_config());
                 flip_db_print(true, "[DEBUG] tilized");
                 // need to reshape tilized result to logical flip output shape
-                auto reshaped = ttnn::reshape(tilized, logical_output_shape, tilized.padded_shape());
-                return reshaped;
+                return ttnn::reshape(tilized, logical_output_shape, tilized.padded_shape());
             }
             flip_db_print(true, "[DEBUG] already tilized");
             return output;
@@ -167,6 +143,9 @@ ttnn::Tensor ExecuteFlip::invoke(
     TT_FATAL(input_rank <= 5, "Flip operation supports tensors with rank up to 5, got rank {}", input_rank);
     TT_FATAL(!dims.empty(), "Flip dimensions cannot be empty");
     TT_FATAL(is_device_tensor(input_tensor), "Input tensor must be on device");
+    TT_FATAL(
+        !(input_tensor.layout() == ttnn::Layout::TILE && input_tensor.dtype() == ttnn::DataType::INT32),
+        "Flip does not support INT32 tensors with tiled layout");
 
     // Normalize dimensions to positive indices
     SmallVector<uint32_t> normalized_dims(dims.size());
