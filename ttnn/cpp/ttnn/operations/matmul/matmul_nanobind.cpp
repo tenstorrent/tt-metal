@@ -20,11 +20,15 @@
 
 namespace ttnn::operations::matmul {
 
+// Placeholder to satisfy Python import of ttnn._ttnn.operations.matmul.MatmulProgramConfig
+struct MatmulProgramConfigPlaceholder {};
+
 namespace nb = nanobind;
 using ttnn::operations::unary::UnaryWithParam;
 
 void py_module(nb::module_& mod) {
-    // MatmulProgramConfig is a std::variant of concrete configs; do not bind it as a class.
+    // Provide a placeholder class so Python can import MatmulProgramConfig symbol for annotations.
+    nb::class_<MatmulProgramConfigPlaceholder>(mod, "MatmulProgramConfig");
 
     auto matmul_multi_core_reuse_program_config =
         tt_serializable_class<MatmulMultiCoreReuseProgramConfig>(mod, "MatmulMultiCoreReuseProgramConfig", R"doc(
