@@ -580,7 +580,6 @@ void py_module(py::module& module) {
         "get_device_tensors",
         &get_device_tensors,
         py::arg("tensor"),
-        py::kw_only(),
         R"doc(
        Get a list of tensor shards from a multidevice tensor.
 
