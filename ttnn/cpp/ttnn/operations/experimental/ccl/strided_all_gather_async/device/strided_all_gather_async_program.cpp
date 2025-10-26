@@ -306,19 +306,8 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
             .set_page_size(sender_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, sender_worker_core_range_set, cb_sender_config);
 
-    bool input_is_sharded = input_tensor.is_sharded();
-    bool output_is_sharded = output_tensor.is_sharded();
-
     std::map<std::string, std::string> reader_compute_defines;
     std::map<std::string, std::string> writer_compute_defines;
-
-    if (input_is_sharded) {
-        reader_compute_defines["INPUT_IS_SHARDED"] = "1";
-    }
-    if (output_is_sharded) {
-        reader_compute_defines["OUTPUT_IS_SHARDED"] = "1";
-        writer_compute_defines["OUTPUT_IS_SHARDED"] = "1";
-    }
 
     // KERNEL CREATION
     /* All gather fusion */
@@ -348,11 +337,9 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
 
         uint32_t input_tensor_Wt = input_tensor_shape[3] / TILE_WIDTH;
         uint32_t input_tensor_Ht = input_tensor_shape[2] / TILE_WIDTH;
-        uint32_t input_tensor_C = input_tensor_shape[1];
 
         uint32_t output_tensor_Wt = output_tensor_shape[3] / TILE_WIDTH;
         uint32_t output_tensor_Ht = output_tensor_shape[2] / TILE_WIDTH;
-        uint32_t output_tensor_C = output_tensor_shape[1];
 
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
             // Fabrix mux kernel
@@ -451,11 +438,7 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                     output_tensor.buffer()->address(),  // output_tensor_address
                     input_tensor_Wt,                    // width in tiles of the output shard
                     input_tensor_Ht,                    // height in tiles of the output shard
-                    input_tensor_C,                     // num input channels
                     output_tensor_Wt,                   // width in tiles of entire output
-                    output_tensor_Ht,                   // height in tiles of entire output
-                    output_tensor_C,                    // num output channels
-                    dim,                                // dim to gather on
                     batch_head_size,                    // product of the first two dims
                     global_worker_id,                   //
                     tiles_per_core,                     //
@@ -534,12 +517,8 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                 std::vector<uint32_t> writer_rt_args = {
                     output_tensor.buffer()->address(),                           // output_tensor_address
                     input_tensor_Wt,                                             // width in tiles of the output shard
-                    input_tensor_Ht,                                             // height in tiles of the output shard
-                    input_tensor_C,                                              // num input channels
                     output_tensor_Wt,                                            // width in tiles of entire output
                     output_tensor_Ht,                                            // height in tiles of entire output
-                    output_tensor_C,                                             // num output channels
-                    dim,                                                         // dim to gather on
                     batch_head_size,                                             // product of the first two dims
                     global_worker_id,                                            //
                     tiles_per_core,                                              //
@@ -609,14 +588,14 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                         auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
                         worker_reader_sender_runtime_args[0] = input.buffer()->address();
                         worker_reader_sender_runtime_args[1] = output.buffer()->address();
-                        worker_reader_sender_runtime_args[13] = out_ready_semaphore.address();
+                        worker_reader_sender_runtime_args[9] = out_ready_semaphore.address();
                         // sender writer
                         auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
                         worker_writer_sender_runtime_args[0] = output.buffer()->address();
-                        worker_writer_sender_runtime_args[14] = out_ready_semaphore.address();
+                        worker_writer_sender_runtime_args[10] = out_ready_semaphore.address();
 
                         if (barrier_semaphore.has_value()) {
-                            worker_writer_sender_runtime_args[18] = barrier_semaphore.value().address();
+                            worker_writer_sender_runtime_args[12] = barrier_semaphore.value().address();
                         }
 
                         core_idx++;
