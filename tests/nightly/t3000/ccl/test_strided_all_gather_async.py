@@ -35,7 +35,7 @@ def run_strided_all_gather_impl(
     num_iters=1,
     enable_trace=True,
     cluster_axis=None,
-    chunks_per_sync=None,
+    tiles_per_chunk=None,
     num_workers_per_link=None,
     num_buffers_per_channel=None,
     allowed_pcc=1,
@@ -145,7 +145,7 @@ def run_strided_all_gather_impl(
             subdevice_id=worker_sub_device_id,
             barrier_semaphore=barrier_semaphore_handles[i],
             cluster_axis=cluster_axis,
-            chunks_per_sync=chunks_per_sync,
+            tiles_per_chunk=tiles_per_chunk,
             num_workers_per_link=num_workers_per_link,
             num_buffers_per_channel=num_buffers_per_channel,
         )
@@ -282,5 +282,5 @@ def test_strided_all_gather_async(
         enable_trace=enable_trace,
         num_iters=num_iters,
         num_workers_per_link=num_workers_per_link,
-        chunks_per_sync=tiles_per_chunk,
+        tiles_per_chunk=tiles_per_chunk,
     )
