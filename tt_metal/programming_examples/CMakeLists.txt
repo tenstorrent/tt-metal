@@ -22,7 +22,6 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/pad_multi_core)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/shard_data_rm)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/vecadd_sharding)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/vecadd_multi_core)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tensor_flip)
 
 add_custom_target(
     programming_examples
