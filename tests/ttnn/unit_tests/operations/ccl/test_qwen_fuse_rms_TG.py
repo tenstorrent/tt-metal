@@ -1,27 +1,15 @@
+import pytest
 import ttnn
-import os
-from tracy import signpost
 
 from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
-
-
 from conftest import is_6u
 from models.demos.llama3_70b_galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 
 from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.rms_test import (
-    run_rms_trace,
     run_rms_fuse_impl,
 )
-
-from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.concat_fuse_test import (
-    run_concat_fuse_impl,
-)
-
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-from conftest import is_6u
 
 
 # Enumerate the post-commit cases explicitly
