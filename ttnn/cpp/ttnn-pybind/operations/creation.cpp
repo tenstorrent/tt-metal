@@ -350,10 +350,11 @@ void bind_arange_operation(py::module& module, const creation_operation_t& opera
                const int64_t end,
                const int64_t step,
                const DataType dtype,
-               const std::optional<std::reference_wrapper<MeshDevice>> device,
+               const std::optional<MeshDevice*> device,
                const MemoryConfig& memory_config,
                const Layout layout) -> ttnn::Tensor {
-                return self(start, end, step, dtype, device, memory_config, layout);
+                auto dev_ref = device.has_value() ? std::make_optional(std::ref(*device.value())) : std::nullopt;
+                return self(start, end, step, dtype, dev_ref, memory_config, layout);
             },
             py::arg("start"),
             py::arg("end"),
@@ -367,9 +368,12 @@ void bind_arange_operation(py::module& module, const creation_operation_t& opera
             [](const creation_operation_t& self,
                const int64_t end,
                const DataType dtype,
-               const std::optional<std::reference_wrapper<MeshDevice>> device,
+               const std::optional<MeshDevice*> device,
                const MemoryConfig& memory_config,
-               const Layout layout) -> ttnn::Tensor { return self(end, dtype, device, memory_config, layout); },
+               const Layout layout) -> ttnn::Tensor {
+                auto dev_ref = device.has_value() ? std::make_optional(std::ref(*device.value())) : std::nullopt;
+                return self(end, dtype, dev_ref, memory_config, layout);
+            },
             py::arg("end"),
             py::kw_only(),
             py::arg("dtype") = DataType::BFLOAT16,
