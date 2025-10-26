@@ -21,9 +21,8 @@ on:
           - N300
           - P150
           - config-t3000
-          - config-BH-LoudBox
+          - BH-LoudBox
           - topology-6u-wormhole_b0
-          - topology-6u-blackhole
         description: "Runner Type Label"
       commit-range:
         required: true
@@ -42,13 +41,17 @@ on:
         required: true
         type: string
         default: "3"
-        description: "Number of retry attempts for each test run"
+        description: "Number of retry attempts for each test run (default: 3)"
       download-artifacts:
         required: false
         type: boolean
         default: true
         description: "Download artifacts from GitHub for each commit (requires gh cli to be authenticated)"
-
+      skip-commits:
+        required: false
+        type: string
+        default: ""
+        description: "Comma-separated list of commits to automatically skip (e.g., abc123,def456)"
 
 permissions:
   actions: write
@@ -360,6 +363,10 @@ jobs:
           fi
           if [[ "${{ inputs.download-artifacts }}" == 'true' ]]; then
             bisect_args+=(-a)
+          fi
+
+          if [[ "${{ inputs.skip-commits }}" != '' ]]; then
+            bisect_args+=(-c "${{ inputs.skip-commits }}")
           fi
 
           bisect_args+=(-s "$SCRIPT_PATH")
