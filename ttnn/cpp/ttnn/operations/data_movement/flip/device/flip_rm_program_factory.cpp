@@ -100,7 +100,7 @@ FlipDeviceOperation::MultiCoreRowMajor::cached_program_t FlipDeviceOperation::Mu
     // ------------------------------------------------------------------------
     // 3) Set compile time arguments for kernels
     // ------------------------------------------------------------------------
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, input_page_size, rank};
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, input_page_size, rank, element_size};
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram, input_page_size};
 
     // ------------------------------------------------------------------------

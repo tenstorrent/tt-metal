@@ -12,14 +12,17 @@ namespace ttnn::operations::data_movement {
 FlipDeviceOperation::program_factory_t FlipDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    bool is_padded = input_tensor.padded_shape() != input_tensor.logical_shape();
+    // bool is_padded = input_tensor.padded_shape() != input_tensor.logical_shape();
     const auto layout = input_tensor.get_layout();
     if (layout == Layout::TILE) {
-        if (is_padded) {
-            return MultiCoreTiledPadAware{};
-        }
+        // if (is_padded) {
+        //     return MultiCoreTiledPadAware{};
+        // }
         return MultiCoreTiled{};
     }
+    // if (is_padded) {
+    //     return MultiCoreTiledPadAware{};
+    // }
     return MultiCoreRowMajor{};
 }
 

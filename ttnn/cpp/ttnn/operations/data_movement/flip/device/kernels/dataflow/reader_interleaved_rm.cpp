@@ -38,6 +38,7 @@ void kernel_main() {
     constexpr bool src_is_dram = static_cast<bool>(get_compile_time_arg_val(0));
     constexpr uint32_t page_size = get_compile_time_arg_val(1);
     constexpr uint32_t rank = get_compile_time_arg_val(2);
+    constexpr uint32_t element_size = get_compile_time_arg_val(3);
 
     // Runtime arguments
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -77,11 +78,22 @@ void kernel_main() {
 
         if (is_horizontal_flip) {
             // flip elements within the row
-            uint32_t* row_data = reinterpret_cast<uint32_t*>(l1_buffer_addr);
+            // uint32_t* row_data = reinterpret_cast<uint32_t*>(l1_buffer_addr);
+            // for (uint32_t col_id = 0; col_id < row_width / 2; ++col_id) {
+            //     uint32_t temp = row_data[col_id];
+            //     row_data[col_id] = row_data[row_width - 1 - col_id];
+            //     row_data[row_width - 1 - col_id] = temp;
+            // }
+
+            uint8_t* row_bytes = reinterpret_cast<uint8_t*>(l1_buffer_addr);
             for (uint32_t col_id = 0; col_id < row_width / 2; ++col_id) {
-                uint32_t temp = row_data[col_id];
-                row_data[col_id] = row_data[row_width - 1 - col_id];
-                row_data[row_width - 1 - col_id] = temp;
+                uint32_t left = col_id * element_size;
+                uint32_t right = (row_width - 1 - col_id) * element_size;
+                for (uint32_t b = 0; b < element_size; ++b) {
+                    uint8_t tmp = row_bytes[left + b];
+                    row_bytes[left + b] = row_bytes[right + b];
+                    row_bytes[right + b] = tmp;
+                }
             }
         }
         cb_push_back(cb_id, 1);
