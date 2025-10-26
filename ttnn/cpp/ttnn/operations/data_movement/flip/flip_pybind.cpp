@@ -16,7 +16,7 @@ namespace py = pybind11;
 
 void bind_flip(py::module& module) {
     auto doc =
-        R"doc(flip(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt, queue_id: int = 0) -> ttnn.Tensor
+        R"doc(flip(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt) -> ttnn.Tensor
 
             Reverse the order of an n-D tensor along given axis in dims.
 
@@ -26,7 +26,6 @@ void bind_flip(py::module& module) {
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-                queue_id (int, optional): command queue id. Defaults to `0`.
 
            Returns:
                List of ttnn.Tensor: the output tensor.
@@ -69,15 +68,13 @@ void bind_flip(py::module& module) {
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::SmallVector<int64_t>& dims,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               QueueId queue_id) {
-                return self(queue_id, input_tensor, dims, memory_config);
+               const std::optional<ttnn::MemoryConfig>& memory_config) {
+                return self(input_tensor, dims, memory_config);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("dims"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
         });
 }
 

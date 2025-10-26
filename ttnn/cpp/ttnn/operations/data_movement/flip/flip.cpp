@@ -6,7 +6,6 @@
 
 #include <tt-metalium/constants.hpp>
 
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/flip/device/flip_device_operation.hpp"
@@ -38,7 +37,7 @@ namespace ttnn::operations::data_movement {
 namespace detail {
 
 bool is_flip_nop(const ttnn::Tensor& input_tensor, const ttnn::SmallVector<uint32_t>& dims) {
-    const auto& shape = input_tensor.get_logical_shape();
+    const auto& shape = input_tensor.logical_shape();
     for (auto dim : dims) {
         if (shape[dim] > 1) {
             return false;
@@ -69,7 +68,7 @@ using MassagedFlipParams =
     MassagedOperationParams<ttnn::Tensor, const ttnn::Tensor&, const ttnn::SmallVector<uint32_t>&>;
 
 MassagedFlip build_untilize_rm_retilize_flip(
-    QueueId queue_id, const MemoryConfig& output_memory_config, ttnn::Shape& logical_output_shape) {
+    const MemoryConfig& output_memory_config, ttnn::Shape& logical_output_shape) {
     return MassagedFlip(MassagedFlipParams{
         // predicate: decide whether we need untilize->rm-slice->retilize
         .predicate = [](const ttnn::Tensor& tensor, const ttnn::SmallVector<uint32_t>& /*dims*/) -> bool {
@@ -79,7 +78,7 @@ MassagedFlip build_untilize_rm_retilize_flip(
             return res;
         },
         // pre_transform: untilize -> padding-oblivious slice -> reshape to logical shape
-        .pre_transform = [queue_id, output_memory_config](
+        .pre_transform = [output_memory_config](
                              const ttnn::Tensor& input_tensor,
                              const ttnn::SmallVector<uint32_t>& dims) -> OwnedFlipArgs {
             TT_FATAL(
@@ -100,18 +99,17 @@ MassagedFlip build_untilize_rm_retilize_flip(
                 SliceDeviceOperation{ttnn::Shape(begins), ttnn::Shape(ends), ttnn::Shape(steps), output_memory_config},
                 {untilized_tensor},
                 {},
-                {std::nullopt},
-                queue_id)[0];
+                {std::nullopt})[0];
 
             untilized_tensor = ttnn::reshape(untilized_tensor, input_tensor.logical_shape());
             return std::make_tuple(untilized_tensor, dims);
         },
 
         // post_transform: pad back to tile-size & re-tilize, then reshape to logical output
-        .post_transform = [&logical_output_shape, queue_id](const ttnn::Tensor& output) -> ttnn::Tensor {
+        .post_transform = [&logical_output_shape](const ttnn::Tensor& output) -> ttnn::Tensor {
             // now we have a rm tensor, so we need ensure it's padded to tile size and re-tilize it
             if (output.layout() != ttnn::TILE_LAYOUT) {
-                auto padded = pad_to_tile_vol(queue_id, output, 0.0f, true, output.memory_config());
+                auto padded = pad_to_tile_vol(output, 0.0f, true, output.memory_config());
                 flip_db_print(true, "[DEBUG] padded to tile layout, now tilizing.");
                 auto tilized =
                     ttnn::tilize_with_val_padding(padded, padded.padded_shape(), 0.0f, output.memory_config());
@@ -132,7 +130,6 @@ MassagedFlip build_untilize_rm_retilize_flip(
 }
 
 ttnn::Tensor ExecuteFlip::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config) {
@@ -168,16 +165,9 @@ ttnn::Tensor ExecuteFlip::invoke(
 
     ttnn::Shape logical_output_shape = input_tensor.logical_shape();
 
-    auto untilize_rm_retilize_flip = build_untilize_rm_retilize_flip(queue_id, mem_conf, logical_output_shape);
+    auto untilize_rm_retilize_flip = build_untilize_rm_retilize_flip(mem_conf, logical_output_shape);
     auto res = untilize_rm_retilize_flip(input_tensor, normalized_dims);
     return res;
-}
-
-ttnn::Tensor ExecuteFlip::invoke(
-    const ttnn::Tensor& input_tensor,
-    const SmallVector<int64_t>& dims,
-    const std::optional<MemoryConfig>& memory_config) {
-    return invoke(DefaultQueueId, input_tensor, dims, memory_config);
 }
 
 ttnn::Tensor ExecuteFlip::invoke(const ttnn::Tensor& input_tensor, const SmallVector<int64_t>& dims) {

@@ -11,12 +11,6 @@ namespace operations::data_movement {
 
 struct ExecuteFlip {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
-        const ttnn::Tensor& input_tensor,
-        const SmallVector<int64_t>& dims,
-        const std::optional<MemoryConfig>& memory_config);
-
-    static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const SmallVector<int64_t>& dims,
         const std::optional<MemoryConfig>& memory_config);

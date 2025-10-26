@@ -94,15 +94,14 @@ FlipDeviceOperation::MultiCoreTiled::cached_program_t FlipDeviceOperation::Multi
     // 2) Create circular buffer
     // ------------------------------------------------------------------------
     DataFormat input_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t tile_size = tt::tt_metal::detail::TileSize(input_data_format);
-    uint32_t input_page_size = tile_size;
+    uint32_t input_page_size = detail::get_page_size(input_tensor);
     uint32_t num_input_pages_to_read = 2;  // double buffering
     uint32_t cb_size = num_input_pages_to_read * input_page_size;
 
-    auto cb_inp = CreateCircularBuffer(
+    tt::tt_metal::CreateCircularBuffer(
         program,
         all_cores,
-        CircularBufferConfig(cb_size, {{CBIndex::c_0, input_data_format}})
+        tt::tt_metal::CircularBufferConfig(cb_size, {{CBIndex::c_0, input_data_format}})
             .set_page_size(CBIndex::c_0, input_page_size));
 
     // ------------------------------------------------------------------------

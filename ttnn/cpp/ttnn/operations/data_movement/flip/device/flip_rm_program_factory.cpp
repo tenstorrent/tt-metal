@@ -11,10 +11,10 @@ namespace ttnn::operations::data_movement {
 
 namespace detail {
 
-static uint32_t num_pages(const ttnn::Tensor& input_tensor) {
-    const auto& shape = input_tensor.logical_shape();
-    return shape.volume() / shape[-1];
-}
+// static uint32_t num_pages(const ttnn::Tensor& input_tensor) {
+//     const auto& shape = input_tensor.logical_shape();
+//     return shape.volume() / shape[-1];
+// }
 
 static uint32_t get_page_size(const ttnn::Tensor& input_tensor) {
     auto BUFFER_ALIGNMENT = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
@@ -85,16 +85,16 @@ FlipDeviceOperation::MultiCoreRowMajor::cached_program_t FlipDeviceOperation::Mu
     // ------------------------------------------------------------------------
     DataFormat input_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_page_size = detail::get_page_size(input_tensor);
-    uint32_t input_row_width = input_page_size / input_tensor.element_size();
+    // uint32_t input_row_width = input_page_size / input_tensor.element_size();
     uint32_t num_input_pages_to_read = 2;  // double buffering
     uint32_t cb_size = num_input_pages_to_read * input_page_size;
 
-    log_debug(tt::LogOp, "input_row_width: {}\n", input_row_width);
+    // log_debug(tt::LogOp, "input_row_width: {}\n", input_row_width);
 
-    auto cb_inp = CreateCircularBuffer(
+    tt::tt_metal::CreateCircularBuffer(
         program,
         all_cores,
-        CircularBufferConfig(cb_size, {{CBIndex::c_0, input_data_format}})
+        tt::tt_metal::CircularBufferConfig(cb_size, {{CBIndex::c_0, input_data_format}})
             .set_page_size(CBIndex::c_0, input_page_size));
 
     // ------------------------------------------------------------------------
