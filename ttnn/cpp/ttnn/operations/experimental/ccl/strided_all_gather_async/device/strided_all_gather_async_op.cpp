@@ -91,7 +91,7 @@ tt::tt_metal::operation::ProgramWithCallbacks StridedAllGatherAsync::create_prog
         this->barrier_semaphore,
         this->using_persistent_buffers,
         this->sub_device_id,
-        this->chunks_per_sync,
+        this->tiles_per_chunk,
         this->num_workers_per_link,
         this->num_buffers_per_channel);
 }
@@ -117,7 +117,7 @@ tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
             : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         this->barrier_semaphore.has_value(),
         this->using_persistent_buffers,
-        this->chunks_per_sync,
+        this->tiles_per_chunk,
         this->num_workers_per_link,
         this->num_buffers_per_channel,
         input_shape,
@@ -143,7 +143,7 @@ Tensor strided_all_gather_async_impl(
     const std::vector<IDevice*>& devices,
     const std::optional<uint32_t>& cluster_axis,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    const std::optional<uint32_t>& chunks_per_sync,
+    const std::optional<uint32_t>& tiles_per_chunk,
     const std::optional<uint32_t>& num_workers_per_link,
     const std::optional<uint32_t>& num_buffers_per_channel) {
     TT_FATAL(
@@ -188,7 +188,7 @@ Tensor strided_all_gather_async_impl(
                    cluster_axis,
                    barrier_semaphore,
                    using_persistent_buffers,
-                   chunks_per_sync,
+                   tiles_per_chunk,
                    num_workers_per_link,
                    num_buffers_per_channel),
                {input_tensor},
@@ -209,7 +209,7 @@ Tensor strided_all_gather_async(
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     std::optional<uint32_t> cluster_axis,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
     return strided_all_gather_async_impl(
@@ -224,7 +224,7 @@ Tensor strided_all_gather_async(
         ttnn::ccl::get_active_physical_devices(input_tensor),
         cluster_axis,
         barrier_semaphore,
-        chunks_per_sync,
+        tiles_per_chunk,
         num_workers_per_link,
         num_buffers_per_channel);
 }

@@ -25,7 +25,7 @@ ttnn::Tensor ExecuteStridedAllGatherAsync::invoke(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
     return ttnn::operations::experimental::ccl::strided_all_gather_async(
@@ -39,7 +39,7 @@ ttnn::Tensor ExecuteStridedAllGatherAsync::invoke(
         subdevice_id,
         cluster_axis,
         barrier_semaphore,
-        chunks_per_sync,
+        tiles_per_chunk,
         num_workers_per_link,
         num_buffers_per_channel);
 }
