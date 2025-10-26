@@ -261,12 +261,18 @@ void device_module(py::module& m_device) {
 
     m_device.def(
         "SetDefaultDevice",
-        [](MeshDevice* device) { ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(device); },
+        [](std::optional<MeshDevice*> device) {
+            if (device.has_value()) {
+                ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(device.value());
+            } else {
+                ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(nullptr);
+            }
+        },
         R"doc(
             Sets the default device to use for operations when inputs are not on the device.
 
             Args:
-                device (ttnn.Device): The TT device to use.
+                device (ttnn.Device | None): The TT device to use, or None to clear the default device.
 
             Note:
                 This functionality is planned for deprecation in the future.
@@ -275,6 +281,8 @@ void device_module(py::module& m_device) {
                 >>> device_id = 0
                 >>> device = ttnn.open_device(device_id = device_id)
                 >>> ttnn.SetDefaultDevice(device)
+                >>> # Clear the default device
+                >>> ttnn.SetDefaultDevice(None)
         )doc");
 
     m_device.def(
