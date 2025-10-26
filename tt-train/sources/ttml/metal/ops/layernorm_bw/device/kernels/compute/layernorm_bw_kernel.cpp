@@ -32,20 +32,20 @@ constexpr uint32_t cb_dL_out_idx = tt::CBIndex::c_5;      // upstream gradient
 constexpr uint32_t cb_mat_mul_reduce = tt::CBIndex::c_6;  // reduction vector
 constexpr uint32_t cb_input_idx = tt::CBIndex::c_7;       // input tensor
 constexpr uint32_t cb_mean_idx = tt::CBIndex::c_8;        // mean from forward pass
+constexpr uint32_t cb_mean_bcast_idx = tt::CBIndex::c_9;  // broadcasted mean (to avoid conflict with reader)
 
 // CBs with output data
 constexpr uint32_t cb_dx_idx = tt::CBIndex::c_10;                // dx (input gradient)
 constexpr uint32_t cb_dgamma_components = tt::CBIndex::c_11;     // dgamma components
 constexpr uint32_t cb_dbeta_components = tt::CBIndex::c_12;      // dbeta components
+constexpr uint32_t cb_rstd_bcast_idx = tt::CBIndex::c_13;        // broadcasted rstd (to avoid conflict with reader)
 
 // CBs with intermediate computations
-constexpr uint32_t cb_dy_gamma_idx = tt::CBIndex::c_14;             // dy * gamma
 constexpr uint32_t cb_dy_gamma_sum_idx = tt::CBIndex::c_15;         // sum(dy * gamma)
 constexpr uint32_t cb_dy_gamma_xnorm_sum_idx = tt::CBIndex::c_16;   // sum(dy * gamma * x_normalized)
 constexpr uint32_t cb_scaled_dy_gamma_sum_idx = tt::CBIndex::c_17;  // (1/N) * sum(dy * gamma) - pre-scaled
 constexpr uint32_t cb_scaled_dy_gamma_xnorm_sum_idx =
     tt::CBIndex::c_18;  // (1/N) * sum(dy * gamma * x_normalized) - pre-scaled
-constexpr uint32_t cb_zero = tt::CBIndex::c_19;  // (1/N) * sum(dy * gamma * x_normalized) - pre-scaled
 
 constexpr uint32_t onetile = 1;
 
@@ -55,16 +55,10 @@ constexpr bool do_mask_w = true;
 constexpr bool do_mask_w = false;
 #endif
 
-inline void zero_dst() {
-    copy_tile_init(cb_zero);
-    for (int i = 0; i < 4; i++) {
-        copy_tile(cb_zero, 0, i);
-    }
-}
-
 inline void zero_dst_reg(uint32_t i) {
-    copy_tile_init(cb_zero);
-    copy_tile(cb_zero, 0, i);
+    float zero = 0.0f;
+    fill_tile_int(i, zero);
+    fill_tile(i, zero);
 }
 
 // Compute x_hat = (input - mean) * rstd
@@ -83,16 +77,16 @@ inline void compute_x_hat_preprocessing(uint32_t num_tiles) {
         copy_tile(cb_input_idx, tile_idx, x_hat_reg);
 
         // Load broadcasted mean
-        copy_tile_init(cb_mean_idx);
-        copy_tile(cb_mean_idx, 0, mean_reg);
+        copy_tile_init(cb_mean_bcast_idx);
+        copy_tile(cb_mean_bcast_idx, 0, mean_reg);
 
         // Subtract mean: (input - mean)
         sub_binary_tile_init();
         sub_binary_tile(x_hat_reg, mean_reg, x_hat_reg);
 
         // Load broadcasted rstd
-        copy_tile_init(cb_rstd_idx);
-        copy_tile(cb_rstd_idx, 0, rstd_reg);
+        copy_tile_init(cb_rstd_bcast_idx);
+        copy_tile(cb_rstd_bcast_idx, 0, rstd_reg);
 
         // Multiply by rstd: (input - mean) * rstd
         mul_binary_tile_init();
@@ -120,28 +114,38 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
 
     tile_regs_acquire();
 
-    for (uint32_t col = 0; col < Wt; ++col) {
-        mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
-        mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, col, col, sum_register);
+    zero_dst_reg(sum_register);
 
+    for (uint32_t col = 0; col < Wt; ++col) {
         // Mask the tile if needed
         if constexpr (do_mask_w) {
             if (col + 1 == Wt) {
+                mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+                mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, col, col, working_register);
+
                 // Limitation: mask_tile only works when the mask register is immediately next to the data register.
-                const uint32_t mask_register = sum_register + 1U;
+                const uint32_t mask_register = working_register + 1U;
 
                 copy_tile_init(cb_mask_w_idx);
                 copy_tile(cb_mask_w_idx, /* tile_idx */ 0, /* register idx */ mask_register);
 
                 mask_tile_init();
-                mask_tile(sum_register, mask_register);
+                mask_tile(working_register, mask_register);
+
+                add_binary_tile_init();
+                add_binary_tile(sum_register, working_register, sum_register);
             }
+        } else {
+            mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+            mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, col, col, sum_register);
         }
     }
 
     tile_regs_commit();
     pack_and_push(sum_register, cb_dy_gamma_sum_idx);
     tile_regs_acquire();
+
+    // tile_regs_acquire();
 
     // Reduce sum across inner dimension using matmul
     cb_wait_front(cb_dy_gamma_sum_idx, onetile);
@@ -180,18 +184,15 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
     mul_binary_tile(scaled_sum_register, scaler_register, scaled_sum_register);
 
     tile_regs_commit();
+    cb_pop_front(cb_dy_gamma_sum_idx, onetile);
     pack_and_push(scaled_sum_register, cb_scaled_dy_gamma_sum_idx);
     tile_regs_acquire();
-
-    // Broadcast the result across rows
     cb_wait_front(cb_scaled_dy_gamma_sum_idx, onetile);
     unary_bcast_init<BroadcastType::COL>(cb_scaled_dy_gamma_sum_idx, cb_scaled_dy_gamma_sum_idx);
     unary_bcast<BroadcastType::COL>(cb_scaled_dy_gamma_sum_idx, /* tile idx */ 0, /* reg tile idx */ 0);
     tile_regs_commit();
-    pack_and_push(0, cb_scaled_dy_gamma_sum_idx);
     cb_pop_front(cb_scaled_dy_gamma_sum_idx, onetile);
-
-    cb_pop_front(cb_dy_gamma_sum_idx, onetile);
+    pack_and_push(0, cb_scaled_dy_gamma_sum_idx);
 }
 
 // cb_scaled_dy_gamma_xnorm_sum_idx (the result is broadcasted across rows)
@@ -286,16 +287,15 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
     mul_binary_tile(scaled_sum_register, scaler_register, scaled_sum_register);
 
     tile_regs_commit();
+    cb_pop_front(cb_dy_gamma_xnorm_sum_idx, onetile);
     pack_and_push(scaled_sum_register, cb_scaled_dy_gamma_xnorm_sum_idx);
     tile_regs_acquire();
     cb_wait_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
     unary_bcast_init<BroadcastType::COL>(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaled_dy_gamma_xnorm_sum_idx);
     unary_bcast<BroadcastType::COL>(cb_scaled_dy_gamma_xnorm_sum_idx, /* tile idx */ 0, /* reg tile idx */ 0);
     tile_regs_commit();
-    pack_and_push(0, cb_scaled_dy_gamma_xnorm_sum_idx);
     cb_pop_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
-
-    cb_pop_front(cb_dy_gamma_xnorm_sum_idx, onetile);
+    pack_and_push(0, cb_scaled_dy_gamma_xnorm_sum_idx);
 }
 #else
 // cb_scaled_dy_gamma_sum_idx (the result is broadcasted across rows)
@@ -313,26 +313,38 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
 
     tile_regs_acquire();
 
+    zero_dst_reg(sum_register);
+
     for (uint32_t col = 0; col < Wt; col += block_size) {
         cb_wait_front(cb_dL_out_idx, block_size);
         cb_wait_front(cb_gamma_idx, block_size);
 
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
-            mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, block_idx, block_idx, sum_register);
-
+            uint32_t global_col = col + block_idx;
+            if (global_col + 1 > Wt) {
+                break;
+            }
             // Mask the tile if needed
             if constexpr (do_mask_w) {
-                if (col + block_idx + 1 == Wt) {
+                if (global_col + 1 == Wt) {
+                    mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+                    mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, block_idx, block_idx, working_register);
+
                     // Limitation: mask_tile only works when the mask register is immediately next to the data register.
-                    const uint32_t mask_register = sum_register + 1U;
+                    const uint32_t mask_register = working_register + 1U;
 
                     copy_tile_init(cb_mask_w_idx);
                     copy_tile(cb_mask_w_idx, /* tile_idx */ 0, /* register idx */ mask_register);
 
                     mask_tile_init();
-                    mask_tile(sum_register, mask_register);
+                    mask_tile(working_register, mask_register);
+
+                    add_binary_tile_init();
+                    add_binary_tile(sum_register, working_register, sum_register);
                 }
+            } else {
+                mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+                mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, block_idx, block_idx, sum_register);
             }
         }
 
@@ -377,16 +389,15 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
     mul_binary_tile(scaled_sum_register, scaler_register, scaled_sum_register);
 
     tile_regs_commit();
+    cb_pop_front(cb_dy_gamma_sum_idx, onetile);
     pack_and_push(scaled_sum_register, cb_scaled_dy_gamma_sum_idx);
     tile_regs_acquire();
     cb_wait_front(cb_scaled_dy_gamma_sum_idx, onetile);
     unary_bcast_init<BroadcastType::COL>(cb_scaled_dy_gamma_sum_idx, cb_scaled_dy_gamma_sum_idx);
     unary_bcast<BroadcastType::COL>(cb_scaled_dy_gamma_sum_idx, /* tile idx */ 0, /* reg tile idx */ 0);
     tile_regs_commit();
-    pack_and_push(0, cb_scaled_dy_gamma_sum_idx);
     cb_pop_front(cb_scaled_dy_gamma_sum_idx, onetile);
-
-    cb_pop_front(cb_dy_gamma_sum_idx, onetile);
+    pack_and_push(0, cb_scaled_dy_gamma_sum_idx);
 }
 
 // cb_scaled_dy_gamma_xnorm_sum_idx (the result is broadcasted across rows)
@@ -418,6 +429,9 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
 
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             uint32_t global_col = col + block_idx;
+            if (global_col + 1 > Wt) {
+                break;
+            }
             auto target_register = (global_col == 0) ? sum_register : working_register;
 
             // Load x_normalized (x_hat)
@@ -496,17 +510,15 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
     mul_binary_tile(scaled_sum_register, scaler_register, scaled_sum_register);
 
     tile_regs_commit();
+    cb_pop_front(cb_dy_gamma_xnorm_sum_idx, onetile);
     pack_and_push(scaled_sum_register, cb_scaled_dy_gamma_xnorm_sum_idx);
     tile_regs_acquire();
     cb_wait_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
     unary_bcast_init<BroadcastType::COL>(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaled_dy_gamma_xnorm_sum_idx);
     unary_bcast<BroadcastType::COL>(cb_scaled_dy_gamma_xnorm_sum_idx, /* tile idx */ 0, /* reg tile idx */ 0);
-    cb_pop_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
     tile_regs_commit();
-    pack_and_push(0, cb_scaled_dy_gamma_xnorm_sum_idx);
     cb_pop_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
-
-    cb_pop_front(cb_dy_gamma_xnorm_sum_idx, onetile);
+    pack_and_push(0, cb_scaled_dy_gamma_xnorm_sum_idx);
 }
 #endif  // EVERYTHING_FITS_IN_L1
 
@@ -514,7 +526,11 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
 // Computes dx = (1/rstd) * (dy*gamma - (1/N) * sum(dy*gamma) - x_normalized * (1/N) * sum(dy*gamma * x_normalized))
 // result is in dx_register
 // acquire in the inner loop, push after block is processed
-inline void compute_dx(const uint32_t input_tile_idx, const uint32_t dx_register) {
+inline void compute_dx(const uint32_t input_tile_idx, const uint32_t dx_register, const uint32_t global_col) {
+    if (global_col + 1 > Wt) {
+        zero_dst_reg(dx_register);
+        return;
+    }
     const uint32_t x_norm_register = dx_register + 1;
     const uint32_t temp_register = dx_register + 2;
 
@@ -548,18 +564,33 @@ inline void compute_dx(const uint32_t input_tile_idx, const uint32_t dx_register
     sub_binary_tile(dx_register, temp_register, dx_register);
 
     // Multiply by rstd: dx = rstd * (...)
-    copy_tile_init(cb_rstd_idx);
-    copy_tile(cb_rstd_idx, 0, temp_register);
+    copy_tile_init(cb_rstd_bcast_idx);
+    copy_tile(cb_rstd_bcast_idx, 0, temp_register);
     mul_binary_tile_init();
     mul_binary_tile(dx_register, temp_register, dx_register);
+
+    if constexpr (do_mask_w) {
+        if (global_col + 1 == Wt) {
+            const uint32_t mask_register = dx_register + 1U;
+            copy_tile_init(cb_mask_w_idx);
+            copy_tile(cb_mask_w_idx, /* tile_idx */ 0, /* register idx */ mask_register);
+            mask_tile_init();
+            mask_tile(dx_register, mask_register);
+        }
+    }
 }
 
 // uses 3 registers starting from dgamma_register
 // result is in dgamma_register
 // acquire in the inner loop, push after block is processed
 inline void compute_dgamma_components(
-    const uint32_t input_tile_idx, const uint32_t dgamma_register, bool is_last_tile = false) {
+    const uint32_t input_tile_idx, const uint32_t dgamma_register, const uint32_t global_col) {
     // Computes dgamma_components = dy * x_normalized
+
+    if (global_col + 1 > Wt) {
+        zero_dst_reg(dgamma_register);
+        return;
+    }
 
     const uint32_t x_norm_register = dgamma_register + 1;
 
@@ -577,7 +608,7 @@ inline void compute_dgamma_components(
 
     // Mask dgamma_register if needed
     if constexpr (do_mask_w) {
-        if (is_last_tile) {
+        if (global_col + 1 == Wt) {
             // Limitation: mask_tile only works when the mask register is immediately next to the data register.
             const uint32_t mask_register = dgamma_register + 1U;
 
@@ -594,13 +625,18 @@ inline void compute_dgamma_components(
 // result is in dbeta_register
 // acquire in the inner loop, push after block is processed
 inline void compute_dbeta_components(
-    const uint32_t dy_tile_idx, const uint32_t dbeta_register, bool is_last_tile = false) {
+    const uint32_t dy_tile_idx, const uint32_t dbeta_register, const uint32_t global_col) {
+    if (global_col + 1 > Wt) {
+        zero_dst_reg(dbeta_register);
+        return;
+    }
+
     copy_tile_init(cb_dL_out_idx);
     copy_tile(cb_dL_out_idx, dy_tile_idx, dbeta_register);
 
     // Mask dbeta_register if needed
     if constexpr (do_mask_w) {
-        if (is_last_tile) {
+        if (global_col + 1 == Wt) {
             // Limitation: mask_tile only works when the mask register is immediately next to the data register.
             const uint32_t mask_register = dbeta_register + 1U;
             copy_tile_init(cb_mask_w_idx);
@@ -618,7 +654,6 @@ inline void MAIN {
     }
     cb_wait_front(cb_scaler_idx, onetile);
     cb_wait_front(cb_mat_mul_reduce, onetile);
-    cb_wait_front(cb_zero, onetile);
 
     init_sfpu(cb_x_hat_idx, cb_dx_idx);
     binary_op_init_common(cb_x_hat_idx, cb_gamma_idx, cb_dx_idx);
@@ -631,16 +666,18 @@ inline void MAIN {
         unary_bcast_init<BroadcastType::COL>(cb_rstd_idx, cb_rstd_idx);
         unary_bcast<BroadcastType::COL>(cb_rstd_idx, /* tile idx */ 0, /* reg tile idx */ 0);
         tile_regs_commit();
-        pack_and_push(0, cb_rstd_idx);
-        cb_wait_front(cb_rstd_idx, onetile);
+        cb_pop_front(cb_rstd_idx, onetile);
+        pack_and_push(0, cb_rstd_bcast_idx);
+        cb_wait_front(cb_rstd_bcast_idx, onetile);
 
         tile_regs_acquire();
         cb_wait_front(cb_mean_idx, onetile);
         unary_bcast_init<BroadcastType::COL>(cb_mean_idx, cb_mean_idx);
         unary_bcast<BroadcastType::COL>(cb_mean_idx, /* tile idx */ 0, /* reg tile idx */ 0);
         tile_regs_commit();
-        pack_and_push(0, cb_mean_idx);
-        cb_wait_front(cb_mean_idx, onetile);
+        cb_pop_front(cb_mean_idx, onetile);
+        pack_and_push(0, cb_mean_bcast_idx);
+        cb_wait_front(cb_mean_bcast_idx, onetile);
 
 #ifdef EVERYTHING_FITS_IN_L1
         // Wait for input for entire row when everything fits in L1
@@ -663,40 +700,39 @@ inline void MAIN {
 
         // Process each block of tiles in the row
         for (uint32_t col = 0; col < Wt; col += block_size) {
-            cb_reserve_back(cb_dx_idx, block_size);
-            cb_reserve_back(cb_dgamma_components, block_size);
-            cb_reserve_back(cb_dbeta_components, block_size);
+            // Calculate actual number of tiles in this block (handles last block when Wt % block_size != 0)
+            const uint32_t current_block_size = (col + block_size > Wt) ? (Wt - col) : block_size;
 
             // Compute dx
             {
 #ifndef EVERYTHING_FITS_IN_L1
                 // Compute x_hat for this block
-                cb_wait_front(cb_input_idx, block_size);
-                compute_x_hat_preprocessing(block_size);
-                cb_wait_front(cb_x_hat_idx, block_size);
+                cb_wait_front(cb_input_idx, current_block_size);
+                compute_x_hat_preprocessing(current_block_size);
+                cb_wait_front(cb_x_hat_idx, current_block_size);
 
-                cb_wait_front(cb_dL_out_idx, block_size);
-                cb_wait_front(cb_gamma_idx, block_size);
+                cb_wait_front(cb_dL_out_idx, current_block_size);
+                cb_wait_front(cb_gamma_idx, current_block_size);
 #endif
                 uint32_t dx_register;
                 tile_regs_acquire();
 
-                for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
 #ifdef EVERYTHING_FITS_IN_L1
                     const uint32_t input_tile_idx = col + block_idx;
 #else
                     const uint32_t input_tile_idx = block_idx;
 #endif
                     dx_register = block_idx;
-                    compute_dx(input_tile_idx, dx_register);
+                    compute_dx(input_tile_idx, dx_register, col + block_idx);
                 }
                 tile_regs_commit();
-                pack_and_push_block(cb_dx_idx, block_size);
+                pack_and_push_block(cb_dx_idx, current_block_size);
 #ifndef EVERYTHING_FITS_IN_L1
-                cb_pop_front(cb_x_hat_idx, block_size);
-                cb_pop_front(cb_dL_out_idx, block_size);
-                cb_pop_front(cb_gamma_idx, block_size);
-                cb_pop_front(cb_input_idx, block_size);
+                cb_pop_front(cb_gamma_idx, current_block_size);
+                cb_pop_front(cb_dL_out_idx, current_block_size);
+                cb_pop_front(cb_x_hat_idx, current_block_size);
+                cb_pop_front(cb_input_idx, current_block_size);
 #endif
             }
 
@@ -704,58 +740,63 @@ inline void MAIN {
             {
 #ifndef EVERYTHING_FITS_IN_L1
                 // Compute x_hat for this block
-                cb_wait_front(cb_input_idx, block_size);
-                compute_x_hat_preprocessing(block_size);
-                cb_wait_front(cb_x_hat_idx, block_size);
+                cb_wait_front(cb_input_idx, current_block_size);
+                compute_x_hat_preprocessing(current_block_size);
+                cb_wait_front(cb_x_hat_idx, current_block_size);
 
-                cb_wait_front(cb_dL_out_idx, block_size);
+                cb_wait_front(cb_dL_out_idx, current_block_size);
 #endif
                 uint32_t dgamma_register;
                 tile_regs_acquire();
 
-                for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
 #ifdef EVERYTHING_FITS_IN_L1
                     const uint32_t input_tile_idx = col + block_idx;
 #else
                     const uint32_t input_tile_idx = block_idx;
 #endif
                     dgamma_register = block_idx;
-                    compute_dgamma_components(input_tile_idx, dgamma_register, (col + block_idx + 1 == Wt));
+                    compute_dgamma_components(input_tile_idx, dgamma_register, col + block_idx);
                 }
                 tile_regs_commit();
-                pack_and_push_block(cb_dgamma_components, block_size);
+                pack_and_push_block(cb_dgamma_components, current_block_size);
 #ifndef EVERYTHING_FITS_IN_L1
-                cb_pop_front(cb_x_hat_idx, block_size);
-                cb_pop_front(cb_dL_out_idx, block_size);
-                cb_pop_front(cb_input_idx, block_size);
+                cb_pop_front(cb_x_hat_idx, current_block_size);
+                cb_pop_front(cb_dL_out_idx, current_block_size);
+                cb_pop_front(cb_input_idx, current_block_size);
 #endif
             }
 
             // Compute dbeta_components
             {
 #ifndef EVERYTHING_FITS_IN_L1
-                cb_wait_front(cb_dL_out_idx, block_size);
+                cb_wait_front(cb_dL_out_idx, current_block_size);
 #endif
                 uint32_t dbeta_register;
                 tile_regs_acquire();
 
-                for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
 #ifdef EVERYTHING_FITS_IN_L1
                     const uint32_t dy_tile_idx = col + block_idx;
 #else
                     const uint32_t dy_tile_idx = block_idx;
 #endif
                     dbeta_register = block_idx;
-                    compute_dbeta_components(dy_tile_idx, dbeta_register, (col + block_idx + 1 == Wt));
+                    compute_dbeta_components(dy_tile_idx, dbeta_register, col + block_idx);
                 }
                 tile_regs_commit();
-                pack_and_push_block(cb_dbeta_components, block_size);
+                pack_and_push_block(cb_dbeta_components, current_block_size);
 #ifndef EVERYTHING_FITS_IN_L1
-                cb_pop_front(cb_dL_out_idx, block_size);
+                cb_pop_front(cb_dL_out_idx, current_block_size);
 #endif
             }
         }
 
+        // Pop the row-level tensors
+        cb_pop_front(cb_rstd_bcast_idx, onetile);
+        cb_pop_front(cb_mean_bcast_idx, onetile);
+        cb_pop_front(cb_scaled_dy_gamma_sum_idx, onetile);
+        cb_pop_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
 #ifdef EVERYTHING_FITS_IN_L1
         // Pop per-row data
         cb_pop_front(cb_dL_out_idx, Wt);
@@ -767,12 +808,6 @@ inline void MAIN {
             cb_pop_front(cb_gamma_idx, Wt);
         }
 #endif
-
-        // Pop the row-level tensors
-        cb_pop_front(cb_rstd_idx, 2 * onetile);
-        cb_pop_front(cb_mean_idx, 2 * onetile);
-        cb_pop_front(cb_scaled_dy_gamma_sum_idx, onetile);
-        cb_pop_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
     }
     if constexpr (do_mask_w) {
         cb_pop_front(cb_mask_w_idx, onetile);

@@ -46,32 +46,30 @@ constexpr auto kDLoutCbIndex = tt::CBIndex::c_5;         // upstream gradient
 constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_6;  // reduction vector
 constexpr auto kInputCbIndex = tt::CBIndex::c_7;         // input tensor
 constexpr auto kMeanCbIndex = tt::CBIndex::c_8;          // mean from forward pass
+constexpr auto kMeanBcastCbIndex = tt::CBIndex::c_9;     // broadcasted mean (to avoid conflict with reader)
 
 // CBs with output data
 constexpr auto kDxCbIndex = tt::CBIndex::c_10;                // dx (input gradient)
 constexpr auto kDgammaComponentsCbIndex = tt::CBIndex::c_11;  // dgamma components
 constexpr auto kDbetaComponentsCbIndex = tt::CBIndex::c_12;   // dbeta components
+constexpr auto kRstdBcastCbIndex = tt::CBIndex::c_13;         // broadcasted rstd (to avoid conflict with reader)
 
 // CBs with intermediate computations
-constexpr auto kXNormalizedCbIndex = tt::CBIndex::c_13;       // x_normalized = (x - mean) * rstd
-constexpr auto kDyGammaCbIndex = tt::CBIndex::c_14;           // dy * gamma
 constexpr auto kDyGammaSumCbIndex = tt::CBIndex::c_15;        // sum(dy * gamma)
 constexpr auto kDyGammaXnormSumCbIndex = tt::CBIndex::c_16;   // sum(dy * gamma * x_normalized)
 constexpr auto kScaledDyGammaSumCbIndex = tt::CBIndex::c_17;  // (1/N) * sum(dy * gamma) - pre-scaled
 constexpr auto kScaledDyGammaXnormSumCbIndex =
     tt::CBIndex::c_18;  // (1/N) * sum(dy * gamma * x_normalized) - pre-scaled
-constexpr auto kCbZeroIndex = tt::CBIndex::c_19;  // (1/N) * sum(dy * gamma * x_normalized) - pre-scaled
 
 // CB sizes (some set to 2U for ping-pong)
 constexpr uint32_t kNumScalerTiles = 1U;
 constexpr uint32_t kNumMaskTiles = 1U;
-constexpr uint32_t kNumRstdTiles = 2U;
+constexpr uint32_t kNumRstdTiles = 1U;
+constexpr uint32_t kNumRstdBcastTiles = 1U;
+constexpr uint32_t kNumMeanBcastTiles = 1U;
 constexpr uint32_t kNumMatMulReduceTiles = 1U;
-constexpr uint32_t kNumXNormalizedTiles = 2U;
-constexpr uint32_t kNumDyGammaTiles = 2U;
 constexpr uint32_t kNumDyGammaSumTiles = 1U;
 constexpr uint32_t kNumDyGammaXnormSumTiles = 1U;
-constexpr uint32_t kNumZeroTiles = 1U;
 
 const std::string kMaskWDefineKey = "DO_MASK_W";
 const std::string kEverythingFitsInL1DefineKey = "EVERYTHING_FITS_IN_L1";
@@ -103,16 +101,16 @@ bool fits_in_l1_check(
     const uint64_t dbeta_components_memory = Wt * bfloat16_single_tile_size_bytes;
 
     // Memory for intermediate computation CBs
-    const uint64_t x_normalized_memory = kNumXNormalizedTiles * bfloat16_single_tile_size_bytes;
-    const uint64_t dy_gamma_memory = kNumDyGammaTiles * bfloat16_single_tile_size_bytes;
     const uint64_t dy_gamma_sum_memory = kNumDyGammaSumTiles * float32_single_tile_size_bytes;
     const uint64_t dy_gamma_xnorm_sum_memory = kNumDyGammaXnormSumTiles * float32_single_tile_size_bytes;
+    const uint64_t rstd_bcast_memory = kNumRstdBcastTiles * bfloat16_single_tile_size_bytes;
+    const uint64_t mean_bcast_memory = kNumMeanBcastTiles * bfloat16_single_tile_size_bytes;
 
     // Total L1 memory required
     const uint64_t required_L1_in_bytes =
         scaler_memory + mask_memory + gamma_memory + x_hat_memory + input_memory + mean_memory + rstd_memory +
         dL_dout_memory + matmul_reduce_memory + dx_memory + dgamma_components_memory + dbeta_components_memory +
-        x_normalized_memory + dy_gamma_memory + dy_gamma_sum_memory + dy_gamma_xnorm_sum_memory;
+        dy_gamma_sum_memory + dy_gamma_xnorm_sum_memory + rstd_bcast_memory + mean_bcast_memory;
 
     return required_L1_in_bytes <= available_L1_in_bytes;
 }
@@ -196,23 +194,26 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     const auto& rstd = tensor_args.rstd;
     const auto& dLdout = tensor_args.dL_dout;
 
-    // Check input shape is [B, 1, S, C]
+    // Check input shape is [B*N*S, C]
     const auto& input_shape = input.logical_shape();
-    TT_FATAL(input_shape.rank() == 4, "Input tensor must be 4D [B, N, 1, C], got shape {}", input_shape);
+    TT_FATAL(input_shape.rank() == 2, "Input tensor must be 2D [B*N*S, C], got shape {}", input_shape);
 
     // Check gamma shape is [1, 1, 1, C]
     const auto& gamma_shape = gamma.logical_shape();
     std::cout << "Gamma shape: " << gamma_shape << std::endl;
     TT_FATAL(gamma_shape.rank() == 4, "Gamma tensor must be 4D [1, 1, 1, C], got shape {}", gamma_shape);
 
-    // Check mean shape is [B, 1, S, 1]
+    // Check mean shape is [B*N*S, 1]
     const auto& mean_shape = mean.logical_shape();
-    TT_FATAL(mean_shape.rank() == 4, "Mean tensor must be 4D [B, 1, S, 1], got shape {}", mean_shape);
+    TT_FATAL(mean_shape.rank() == 2, "Mean tensor must be 4D [B, 1, S, 1], got shape {}", mean_shape);
 
-    // Check rstd shape is [B, 1, S, 1]
-    // Note: LayerNorm computes statistics across N and C dimensions, so dimension 1 is 1
+    // Check rstd shape is [B*N*S, 1]
     const auto& rstd_shape = rstd.logical_shape();
-    TT_FATAL(rstd_shape.rank() == 4, "Rstd tensor must be 4D [B, 1, S, 1], got shape {}", rstd_shape);
+    TT_FATAL(rstd_shape.rank() == 2, "Rstd tensor must be 2D [B*N*S, 1], got shape {}", rstd_shape);
+
+    // Check dL_dout shape is [B*N*S, C]
+    const auto& dL_dout_shape = dLdout.logical_shape();
+    TT_FATAL(dL_dout_shape.rank() == 2, "dL_dout tensor must be 2D [B*N*S, C], got shape {}", dL_dout_shape);
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     tt::tt_metal::IDevice* device = input.device();
@@ -229,11 +230,9 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
 
     TT_FATAL(
         padded_tensor_volume % tt::constants::TILE_HW == 0, "Padded input tensor volume must be divisible by TILE_HW");
-    TT_FATAL(padded_tensor_shape.rank() == 4U, "Input tensor must be 4D");
+    TT_FATAL(padded_tensor_shape.rank() == 2U, "Input tensor must be 4D");
     uint32_t Wt = padded_tensor_shape[-1] / tt::constants::TILE_WIDTH;
-    uint32_t Ht = padded_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
-    uint32_t NC = padded_tensor_shape[0] * padded_tensor_shape[1];
-    uint32_t total_rows_to_process = NC * Ht;
+    uint32_t total_rows_to_process = padded_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
 
     // Get the number of inner dimension (assumes divisible by TILE_WIDTH)
     uint32_t num_inner = input.logical_shape()[-1];
@@ -248,6 +247,8 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
 
     // Compile arguments
     uint32_t block_size = get_block_size(Wt, 2U);  // Need 2 extra registers for layernorm backward
+
+    std::cout << "Block total_rows_to_process: " << total_rows_to_process << std::endl;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
@@ -290,8 +291,12 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
         program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
     [[maybe_unused]] auto cb_mean = create_circular_buffer(
         program, all_cores, kMeanCbIndex, data_format, bfloat16_single_tile_size_bytes, num_mean_tiles);
+    [[maybe_unused]] auto cb_mean_bcast = create_circular_buffer(
+        program, all_cores, kMeanBcastCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMeanBcastTiles);
 
     // Output CBs
+    [[maybe_unused]] auto cb_rstd_bcast = create_circular_buffer(
+        program, all_cores, kRstdBcastCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRstdBcastTiles);
     [[maybe_unused]] auto cb_dx = create_circular_buffer(
         program, all_cores, kDxCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
     [[maybe_unused]] auto cb_dgamma_components = create_circular_buffer(
@@ -300,10 +305,6 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
         program, all_cores, kDbetaComponentsCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
     // Intermediate computation CBs
-    [[maybe_unused]] auto cb_x_normalized = create_circular_buffer(
-        program, all_cores, kXNormalizedCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumXNormalizedTiles);
-    [[maybe_unused]] auto cb_dy_gamma = create_circular_buffer(
-        program, all_cores, kDyGammaCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumDyGammaTiles);
     [[maybe_unused]] auto cb_dy_gamma_sum = create_circular_buffer(
         program, all_cores, kDyGammaSumCbIndex, data_format, float32_single_tile_size_bytes, kNumDyGammaSumTiles);
     [[maybe_unused]] auto cb_dy_gamma_xnorm_sum = create_circular_buffer(
@@ -322,8 +323,6 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
         data_format,
         float32_single_tile_size_bytes,
         kNumDyGammaXnormSumTiles);
-    [[maybe_unused]] auto cb_zero = create_circular_buffer(
-        program, all_cores, kCbZeroIndex, data_format, bfloat16_single_tile_size_bytes, kNumZeroTiles);
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------

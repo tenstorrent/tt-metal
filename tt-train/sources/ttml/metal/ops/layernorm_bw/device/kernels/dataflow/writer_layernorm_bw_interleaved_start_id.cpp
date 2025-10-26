@@ -51,23 +51,26 @@ void kernel_main() {
         // reduction across batches, which is performed on the host. Here, we output the
         // per-tile components for host-side reduction.
         for (uint32_t c = 0; c < Wt; c += block_size) {
+            // Calculate actual number of tiles in this block (handles last block when Wt % block_size != 0)
+            const uint32_t current_block_size = (c + block_size > Wt) ? (Wt - c) : block_size;
             uint32_t start_idx = (r * Wt) + c;
 
             // Write dx block
-            write_cb_block_to_dram(cb_dx_idx, dx_output_addr_generator, start_idx, block_size, tile_bytes);
+            write_cb_block_to_dram(cb_dx_idx, dx_output_addr_generator, start_idx, current_block_size, tile_bytes);
 
             // Write dgamma_components block
             write_cb_block_to_dram(
-                cb_dgamma_components, dgamma_output_addr_generator, start_idx, block_size, tile_bytes);
+                cb_dgamma_components, dgamma_output_addr_generator, start_idx, current_block_size, tile_bytes);
 
             // Write dbeta_components block
-            write_cb_block_to_dram(cb_dbeta_components, dbeta_output_addr_generator, start_idx, block_size, tile_bytes);
+            write_cb_block_to_dram(
+                cb_dbeta_components, dbeta_output_addr_generator, start_idx, current_block_size, tile_bytes);
 
             noc_async_write_barrier();
 
-            cb_pop_front(cb_dx_idx, block_size);
-            cb_pop_front(cb_dgamma_components, block_size);
-            cb_pop_front(cb_dbeta_components, block_size);
+            cb_pop_front(cb_dx_idx, current_block_size);
+            cb_pop_front(cb_dgamma_components, current_block_size);
+            cb_pop_front(cb_dbeta_components, current_block_size);
         }
     }
 }

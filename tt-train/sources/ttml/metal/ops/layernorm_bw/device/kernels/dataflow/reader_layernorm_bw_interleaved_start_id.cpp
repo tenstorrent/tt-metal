@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 #include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
 
 // CBs with input data
@@ -15,7 +14,6 @@ constexpr uint32_t cb_dL_out_idx = tt::CBIndex::c_5;      // upstream gradient
 constexpr uint32_t cb_mat_mul_reduce = tt::CBIndex::c_6;  // reduction vector
 constexpr uint32_t cb_input_idx = tt::CBIndex::c_7;       // input tensor
 constexpr uint32_t cb_mean_idx = tt::CBIndex::c_8;        // mean from forward pass
-constexpr uint32_t cb_zero = tt::CBIndex::c_19;           // reduction vector
 
 constexpr uint32_t packed_scaler = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
@@ -62,8 +60,6 @@ void kernel_main() {
     }
     // Generate tile with scalar (1/N).
     generate_tile_with_packed_bfloat16_value(cb_scaler_idx, packed_scaler);
-    // Generate tile with zeros.
-    generate_tile_with_packed_bfloat16_value(cb_zero, 0);
     // Generate tile for matmul row reduce.
     generate_matmul_row_reduce_tile(cb_mat_mul_reduce);
 
@@ -111,58 +107,61 @@ void kernel_main() {
 
         // First pass: for computing sum(dy * gamma)
         for (uint32_t c = 0; c < Wt; c += block_size) {
+            const uint32_t current_block_size = (c + block_size > Wt) ? (Wt - c) : block_size;
             uint32_t row_tile_idx = (r * Wt) + c;
 
-            read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes);
-            read_tiles(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes);
+            read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, current_block_size, tile_bytes);
+            read_tiles(cb_gamma_idx, gamma_address_generator, c, current_block_size, tile_bytes);
 
             noc_async_read_barrier();
-            cb_push_back(cb_dL_out_idx, block_size);
-            cb_push_back(cb_gamma_idx, block_size);
+            cb_push_back(cb_dL_out_idx, current_block_size);
+            cb_push_back(cb_gamma_idx, current_block_size);
         }
 
         // Second pass: for computing sum(dy * gamma * x_normalized)
         for (uint32_t c = 0; c < Wt; c += block_size) {
+            const uint32_t current_block_size = (c + block_size > Wt) ? (Wt - c) : block_size;
             uint32_t row_tile_idx = (r * Wt) + c;
 
-            read_tiles(cb_input_idx, input_address_generator, row_tile_idx, block_size, tile_bytes);
-            read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes);
-            read_tiles(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes);
+            read_tiles(cb_input_idx, input_address_generator, row_tile_idx, current_block_size, tile_bytes);
+            read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, current_block_size, tile_bytes);
+            read_tiles(cb_gamma_idx, gamma_address_generator, c, current_block_size, tile_bytes);
 
             noc_async_read_barrier();
-            cb_push_back(cb_input_idx, block_size);
-            cb_push_back(cb_dL_out_idx, block_size);
-            cb_push_back(cb_gamma_idx, block_size);
+            cb_push_back(cb_input_idx, current_block_size);
+            cb_push_back(cb_dL_out_idx, current_block_size);
+            cb_push_back(cb_gamma_idx, current_block_size);
         }
 
         // Three passes: for computing dx, dgamma_components, and dbeta_components
         for (uint32_t c = 0; c < Wt; c += block_size) {
+            const uint32_t current_block_size = (c + block_size > Wt) ? (Wt - c) : block_size;
             uint32_t row_tile_idx = (r * Wt) + c;
             {
-                read_tiles(cb_input_idx, input_address_generator, row_tile_idx, block_size, tile_bytes);
-                read_tiles(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes);
-                read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes);
+                read_tiles(cb_input_idx, input_address_generator, row_tile_idx, current_block_size, tile_bytes);
+                read_tiles(cb_gamma_idx, gamma_address_generator, c, current_block_size, tile_bytes);
+                read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, current_block_size, tile_bytes);
 
                 noc_async_read_barrier();
-                cb_push_back(cb_input_idx, block_size);
-                cb_push_back(cb_gamma_idx, block_size);
-                cb_push_back(cb_dL_out_idx, block_size);
+                cb_push_back(cb_input_idx, current_block_size);
+                cb_push_back(cb_gamma_idx, current_block_size);
+                cb_push_back(cb_dL_out_idx, current_block_size);
             }
 
             {
-                read_tiles(cb_input_idx, input_address_generator, row_tile_idx, block_size, tile_bytes);
-                read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes);
+                read_tiles(cb_input_idx, input_address_generator, row_tile_idx, current_block_size, tile_bytes);
+                read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, current_block_size, tile_bytes);
 
                 noc_async_read_barrier();
-                cb_push_back(cb_input_idx, block_size);
-                cb_push_back(cb_dL_out_idx, block_size);
+                cb_push_back(cb_input_idx, current_block_size);
+                cb_push_back(cb_dL_out_idx, current_block_size);
             }
 
             {
-                read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes);
+                read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, current_block_size, tile_bytes);
 
                 noc_async_read_barrier();
-                cb_push_back(cb_dL_out_idx, block_size);
+                cb_push_back(cb_dL_out_idx, current_block_size);
             }
         }
 #endif

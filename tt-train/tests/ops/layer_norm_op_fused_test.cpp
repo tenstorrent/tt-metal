@@ -105,6 +105,154 @@ protected:
     }
 };
 
+TEST_F(LayerNormFusedOpTest, MetalLayerNormBw_One_Tile) {
+    using namespace ttml;
+
+    uint32_t batch_size = 1;
+    uint32_t seq_len = 13;
+    uint32_t heads = 1;
+    uint32_t features = 20;
+
+    std::cout << "\n=== Test: MetalLayerNormBw_LargeFeatures_NoL1Fit ===" << std::endl;
+    std::cout << "Hyperparameters:" << std::endl;
+    std::cout << "  batch_size: " << batch_size << std::endl;
+    std::cout << "  seq_len: " << seq_len << std::endl;
+    std::cout << "  heads: " << heads << std::endl;
+    std::cout << "  features: " << features << std::endl;
+    std::cout << "  eps: 1e-5" << std::endl;
+    std::cout << "  tolerance: 1e-1" << std::endl;
+    std::cout << "  total_elements: " << (batch_size * seq_len * heads * features) << std::endl;
+    std::cout << "  iterations: 3" << std::endl;
+
+    std::mt19937 gen(1213);
+    std::normal_distribution<float> dist(0.0f, 2.0f);  // Larger variance
+
+    uint32_t total_elements = batch_size * seq_len * heads * features;
+    for (int i = 0; i < 3; i++) {
+        std::vector<float> test_data;
+        for (uint32_t i = 0; i < total_elements; ++i) {
+            test_data.push_back(dist(gen));
+        }
+
+        std::vector<float> gamma_data;
+        std::vector<float> beta_data;
+        std::normal_distribution<float> param_dist(1.0f, 0.2f);
+        for (uint32_t i = 0; i < features; ++i) {
+            gamma_data.push_back(param_dist(gen));
+            beta_data.push_back(dist(gen) * 0.1f);
+        }
+
+        std::vector<float> dy_data;
+        std::normal_distribution<float> grad_dist(0.0f, 0.2f);
+        for (uint32_t i = 0; i < total_elements; ++i) {
+            dy_data.push_back(grad_dist(gen));
+        }
+
+        uint32_t combined_batch = batch_size * seq_len * heads;
+        auto x_xtensor = xt::adapt(test_data, {combined_batch * features});
+        auto gamma_xtensor = xt::adapt(gamma_data, {features});
+        auto beta_xtensor = xt::adapt(beta_data, {features});
+        auto dy_xtensor = xt::adapt(dy_data, {combined_batch * features});
+
+        auto [y_ref, cache] =
+            layernorm_forward_reference(x_xtensor, gamma_xtensor, beta_xtensor, combined_batch, features, 1e-5f);
+        auto [dx_ref, dgamma_ref, dbeta_ref] = layernorm_backward_reference(dy_xtensor, cache);
+
+        auto input_tensor = core::from_vector(
+            test_data, ttnn::Shape({batch_size, heads, seq_len, features}), &autograd::ctx().get_device());
+        auto gamma_tensor =
+            core::from_vector(gamma_data, ttnn::Shape({1, 1, 1, features}), &autograd::ctx().get_device());
+
+        std::vector<float> mu_data(cache.mu.data(), cache.mu.data() + cache.mu.size());
+        auto mean_tensor =
+            core::from_vector(mu_data, ttnn::Shape({batch_size, heads, seq_len, 1}), &autograd::ctx().get_device());
+
+        std::vector<float> rstd_data;
+        for (uint32_t b = 0; b < combined_batch; ++b) {
+            rstd_data.push_back(1.0f / cache.s.data()[b]);
+        }
+        auto rstd_tensor =
+            core::from_vector(rstd_data, ttnn::Shape({batch_size, heads, seq_len, 1}), &autograd::ctx().get_device());
+        auto dy_tensor = core::from_vector(
+            dy_data, ttnn::Shape({batch_size, heads, seq_len, features}), &autograd::ctx().get_device());
+
+        auto output_tensors = metal::ops::layernorm_bw::LayerNormBackwardOperation::invoke(
+            input_tensor, gamma_tensor, mean_tensor, rstd_tensor, dy_tensor);
+
+        auto metal_dx = core::to_vector(output_tensors[0].value());
+        auto metal_dgamma = core::to_vector(output_tensors[1].value());
+        auto metal_dbeta = core::to_vector(output_tensors[2].value());
+
+        float tolerance = 1e-1f;
+
+        float max_dx_error = 0.0f;
+        float dx_sum_error = 0.0f;
+        for (uint32_t i = 0; i < total_elements; ++i) {
+            float error = std::abs(metal_dx[i] - dx_ref.data()[i]);
+            max_dx_error = std::max(max_dx_error, error);
+            dx_sum_error += error;
+            if (error > tolerance) {
+                std::cout << "dx gradient mismatch at index " << i << ": metal=" << metal_dx[i]
+                          << ", reference=" << dx_ref.data()[i] << ", error=" << error << std::endl;
+            }
+        }
+        float dx_mean_error = dx_sum_error / total_elements;
+        float dx_variance = 0.0f;
+        for (uint32_t i = 0; i < total_elements; ++i) {
+            float error = std::abs(metal_dx[i] - dx_ref.data()[i]);
+            float diff = error - dx_mean_error;
+            dx_variance += diff * diff;
+        }
+        dx_variance /= total_elements;
+        std::cout << "Test completed. dx: Max error: " << max_dx_error << ", Mean error: " << dx_mean_error
+                  << ", Variance: " << dx_variance << std::endl;
+
+        float max_dgamma_error = 0.0f;
+        float dgamma_sum_error = 0.0f;
+        for (uint32_t i = 0; i < features; ++i) {
+            float error = std::abs(metal_dgamma[i] - dgamma_ref.data()[i]);
+            max_dgamma_error = std::max(max_dgamma_error, error);
+            dgamma_sum_error += error;
+            if (error > tolerance) {
+                std::cout << "Gamma gradient mismatch at index " << i << ": metal=" << metal_dgamma[i]
+                          << ", reference=" << dgamma_ref.data()[i] << ", error=" << error << std::endl;
+            }
+        }
+        float dgamma_mean_error = dgamma_sum_error / features;
+        float dgamma_variance = 0.0f;
+        for (uint32_t i = 0; i < features; ++i) {
+            float error = std::abs(metal_dgamma[i] - dgamma_ref.data()[i]);
+            float diff = error - dgamma_mean_error;
+            dgamma_variance += diff * diff;
+        }
+        dgamma_variance /= features;
+        std::cout << "Test completed. dgamma: Max error: " << max_dgamma_error << ", Mean error: " << dgamma_mean_error
+                  << ", Variance: " << dgamma_variance << std::endl;
+
+        float max_dbeta_error = 0.0f;
+        float dbeta_sum_error = 0.0f;
+        for (uint32_t i = 0; i < features; ++i) {
+            float error = std::abs(metal_dbeta[i] - dbeta_ref.data()[i]);
+            max_dbeta_error = std::max(max_dbeta_error, error);
+            dbeta_sum_error += error;
+            if (error > tolerance) {
+                std::cout << "Beta gradient mismatch at index " << i << ": metal=" << metal_dbeta[i]
+                          << ", reference=" << dbeta_ref.data()[i] << ", error=" << error << std::endl;
+            }
+        }
+        float dbeta_mean_error = dbeta_sum_error / features;
+        float dbeta_variance = 0.0f;
+        for (uint32_t i = 0; i < features; ++i) {
+            float error = std::abs(metal_dbeta[i] - dbeta_ref.data()[i]);
+            float diff = error - dbeta_mean_error;
+            dbeta_variance += diff * diff;
+        }
+        dbeta_variance /= features;
+        std::cout << "Test completed. dbeta: Max error: " << max_dbeta_error << ", Mean error: " << dbeta_mean_error
+                  << ", Variance: " << dbeta_variance << std::endl;
+    }
+}
+
 TEST_F(LayerNormFusedOpTest, MetalLayerNormBw_LargeFeatures_NoL1Fit) {
     using namespace ttml;
 
