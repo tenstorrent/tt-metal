@@ -60,7 +60,6 @@ void kernel_main() {
     const auto output_tensor_addrgen =
         TensorAccessor(output_tensor_args, output_tensor_address, input_tensor_page_size);
 
-    uint32_t slices_received = 0;
     uint32_t slices_expected = 0;
     uint32_t writes_expected = 0;
     if (topology == Topology::Linear) {
@@ -118,14 +117,14 @@ void kernel_main() {
                 false);
 
             // Receive this chunk from all other devices
-            uint32_t sem_target = 0;
+            uint32_t slices_received = 0;
             uint32_t next_tile_to_read = 0;
             while (slices_received < slices_expected) {
                 uint32_t actual_sender_chip_id = get_sender_id(direction, my_chip_id, slices_received, ring_size);
 
                 // Receive the next chunk
-                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
-                sem_target++;
+                noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), slices_received + 1);
 
                 if ((topology == Topology::Linear && writes_expected > 0) ||
                     (topology == Topology::Ring && ((slices_received + 1) < (writes_expected + 1)))) {
