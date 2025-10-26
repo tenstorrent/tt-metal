@@ -19,7 +19,7 @@ using ttnn::ccl::Topology;
 
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr uint32_t cb_output_id = get_compile_time_arg_val(1);
-constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(2);
+constexpr uint32_t max_tiles_per_packet = get_compile_time_arg_val(2);
 constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(3);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(4);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(5);
@@ -39,11 +39,7 @@ void kernel_main() {
     address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
     uint32_t input_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
     uint32_t input_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_tensor_C = get_arg_val<uint32_t>(arg_idx++);
     uint32_t output_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t output_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t output_tensor_C = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t gather_dim = get_arg_val<uint32_t>(arg_idx++);
     uint32_t input_batch_head_count = get_arg_val<uint32_t>(arg_idx++);
     uint32_t input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
     uint32_t input_tiles_per_core = get_arg_val<uint32_t>(arg_idx++);
@@ -106,7 +102,7 @@ void kernel_main() {
                 cb_output_id,
                 input_tiles_per_core,
                 tiles_per_chunk,
-                num_tiles_to_write_per_packet,
+                max_tiles_per_packet,
                 ag_worker_cores,
                 input_tensor_addrgen,
                 input_tensor_page_size,
@@ -135,7 +131,7 @@ void kernel_main() {
                         cb_output_id,
                         input_tiles_per_core,
                         tiles_per_chunk,
-                        num_tiles_to_write_per_packet,
+                        max_tiles_per_packet,
                         ag_worker_cores,
                         input_tensor_addrgen,
                         input_tensor_page_size,
