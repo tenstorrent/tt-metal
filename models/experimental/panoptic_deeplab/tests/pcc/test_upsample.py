@@ -64,27 +64,30 @@ def test_bilinear_upsample_matmul_vs_torch(b, h, w, c, scale, input_channels_fir
 
 
 @pytest.mark.parametrize(
-    "b, h, w, c, scale, input_channels_first, output_channels_first",
+    "b, h, w, c, scale, input_channels_first, output_channels_first, memory_config",
+    # fmt: off
     [
-        (1, 128, 64, 32, 2, False, False),  # single batch, NHWC -> NHWC, scale 2
-        (1, 128, 64, 32, 2, True, True),  # single batch, NCHW -> NCHW, scale 2
-        (1, 128, 64, 32, 2, False, True),  # single batch, NHWC -> NCHW, scale 2
-        (1, 128, 64, 32, 2, True, False),  # single batch, NCHW -> NHWC, scale 2
-        (1, 128, 64, 32, 4, False, False),  # single batch, NHWC -> NHWC, scale 4
-        (1, 128, 64, 32, 4, False, True),  # single batch, NHWC -> NHWC, scale 4
-        (1, 128, 64, 32, 4, True, False),  # single batch, NHWC -> NHWC, scale 4
-        (1, 128, 64, 32, 4, True, True),  # single batch, NCHW -> NCHW, scale 4
-        (3, 64, 32, 16, 2, False, False),  # multi-batch, NHWC -> NHWC, scale 2
-        (3, 64, 32, 16, 4, True, True),  # multi-batch, NCHW -> NCHW, scale 4
-        (8, 32, 32, 8, 3, False, False),  # larger batch, NHWC -> NHWC, scale 3
-        (1, 128, 256, 32, 4, False, False),
-        (1, 128, 256, 32, 4, True, True),
-        (1, 128, 256, 19, 4, False, False),
-        (1, 128, 256, 19, 4, False, True),
+        (1, 128, 64, 32, 2, False, False, ttnn.DRAM_MEMORY_CONFIG),  # single batch, NHWC -> NHWC, scale 2
+        (1, 128, 64, 32, 2, True, True, ttnn.DRAM_MEMORY_CONFIG),  # single batch, NCHW -> NCHW, scale 2
+        (1, 128, 64, 32, 2, False, True, ttnn.DRAM_MEMORY_CONFIG),  # single batch, NHWC -> NCHW, scale 2
+        (1, 128, 64, 32, 2, True, False, ttnn.DRAM_MEMORY_CONFIG),  # single batch, NCHW -> NHWC, scale 2
+        (1, 128, 64, 32, 4, False, False, ttnn.DRAM_MEMORY_CONFIG),  # single batch, NHWC -> NHWC, scale 4
+        (1, 128, 64, 32, 4, False, True, ttnn.DRAM_MEMORY_CONFIG),  # single batch, NHWC -> NHWC, scale 4
+        (1, 128, 64, 32, 4, True, False, ttnn.DRAM_MEMORY_CONFIG),  # single batch, NHWC -> NHWC, scale 4
+        (1, 128, 64, 32, 4, True, True, ttnn.DRAM_MEMORY_CONFIG),  # single batch, NCHW -> NCHW, scale 4
+        (3, 64, 32, 16, 2, False, False, ttnn.DRAM_MEMORY_CONFIG),  # multi-batch, NHWC -> NHWC, scale 2
+        (3, 64, 32, 16, 4, True, True, ttnn.DRAM_MEMORY_CONFIG),  # multi-batch, NCHW -> NCHW, scale 4
+        (8, 32, 32, 8, 3, False, False, ttnn.DRAM_MEMORY_CONFIG),  # larger batch, NHWC -> NHWC, scale 3
+        (1, 128, 256, 32, 4, False, False, ttnn.DRAM_MEMORY_CONFIG),
+        (1, 128, 256, 32, 4, True, True, ttnn.DRAM_MEMORY_CONFIG),
+        (1, 128, 256, 19, 4, False, False, ttnn.DRAM_MEMORY_CONFIG),
+        (1, 128, 256, 19, 4, False, True, ttnn.DRAM_MEMORY_CONFIG),
+        (1, 128, 256, 19, 4, False, True, ttnn.L1_MEMORY_CONFIG), # Matmul 512 x 128 x 1024 forced to HiFi4 and perf breaks
     ],
+    # fmt: on
 )
 def test_bilinear_upsample_ttnn_matmul_vs_ttnn_upsample(
-    device, b, h, w, c, scale, input_channels_first, output_channels_first
+    device, b, h, w, c, scale, input_channels_first, output_channels_first, memory_config
 ):
     torch.manual_seed(0)
 
@@ -96,7 +99,7 @@ def test_bilinear_upsample_ttnn_matmul_vs_ttnn_upsample(
         img_torch_nchw if input_channels_first else img_torch_nhwc,
         device=device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=memory_config,
     )
 
     # Method 1: Custom matrix multiplication implementation

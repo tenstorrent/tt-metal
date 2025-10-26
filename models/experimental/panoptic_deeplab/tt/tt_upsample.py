@@ -98,6 +98,7 @@ class BilinearUpsampleMatmulTTNN(LightweightModule):
         scale=4,
         input_channels_first=False,
         output_channels_first=None,
+        compute_kernel_config=None,
     ):
         self.device = device
         self.N = input_batch
@@ -132,6 +133,17 @@ class BilinearUpsampleMatmulTTNN(LightweightModule):
         )
         self.Mw = ttnn.unsqueeze_to_4D(ttnn.from_torch(Mw, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16))
 
+        if compute_kernel_config is not None:
+            self.compute_kernel_config = compute_kernel_config
+        else:
+            self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
+            logger.info(f"Compute kernel config not provided, using default. {self.compute_kernel_config=}.")
+
     def _interp_matrix(self, coords, size):
         floor = torch.floor(coords).long()
         ceil = torch.clamp(floor + 1, 0, size - 1)
@@ -160,22 +172,23 @@ class BilinearUpsampleMatmulTTNN(LightweightModule):
             img_ttnn = ttnn.to_layout(img_ttnn, ttnn.TILE_LAYOUT)
 
         # Step 1: Width interpolation
-        Y_width = ttnn.matmul(img_ttnn, self.Mw)
+        Y_width = ttnn.matmul(
+            img_ttnn, self.Mw, memory_config=img_ttnn.memory_config(), compute_kernel_config=self.compute_kernel_config
+        )  # batch broadcast works only with input A
         logger.warning(f"{Y_width.shape=} = {img_ttnn.shape=} @ {self.Mw.shape=}")
 
         # Step 2: Height interpolation
         Y_final = ttnn.matmul(
-            self.MhT, Y_width
+            self.MhT, Y_width, memory_config=img_ttnn.memory_config(), compute_kernel_config=self.compute_kernel_config
         )  # batch broadcast works only with input A; broadcasted manually at init
         # Y_final = ttnn.matmul(Y_width,self.Mh, transpose_a=True)
         logger.warning(f"{Y_final.shape=} = {Y_width.shape=}.T @ {self.Mh.shape=}")
 
         if self.output_channels_first:
-            # Y_final = ttnn.permute(Y_final, (0, 1, 3, 2))
             logger.warning(f"{Y_final.shape=}")
             return Y_final  # (B, C, H_out, W_out)
         else:
-            # Note Permute is 10x faster on row major layout
+            # Note Permute is 10x faster on row major layout; todo set last matmul to untilize on this codepath
             Y_final = ttnn.to_layout(Y_final, ttnn.ROW_MAJOR_LAYOUT)
             Y_final = ttnn.permute(Y_final, (0, 2, 3, 1))  # (B, H_out, W_out, C)
             Y_final = ttnn.to_layout(Y_final, ttnn.TILE_LAYOUT)
