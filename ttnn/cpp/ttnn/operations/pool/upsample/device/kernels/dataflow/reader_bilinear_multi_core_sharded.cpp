@@ -135,108 +135,130 @@ void kernel_main() {
         // DPRINT << "x increment: " << scale_w_inv * 2 << ENDL();
         // DPRINT << "nsticks_to_process_on_core: " << nsticks_to_process_on_core << ENDL();
 
-        // Pre-calculate bilinear interpolation weights for the two alternating dx values
-        // Since dy is constant for this row and dx alternates between two values,
-        // we can pre-compute the weights and avoid expensive floating-point operations
+        // Check if we can use the optimization for pre-computed weights
+        // The optimization only works when dx alternates between at most 2 values
+        // This happens when scale_w is 1, 2, or 4
+        bool use_precomputed_weights = (scale_w == 1 || scale_w == 2 || scale_w == 4);
+
         float one_minus_dy = 1 - dy;
 
-        // Pre-compute dx values for the alternating pattern
-        // When x increments by scale_w_inv*2, we get a repeating pattern
-        // Handle special case when starting x is negative (gets clamped to 0)
-        float x_temp = x_coordinate;
-        bool has_special_first = (x_temp < 0);
+        // Variables for pre-computed weights (only used when optimization is enabled)
+        float dx_a = 0, dx_b = 0;
+        bool has_special_first = false;
+        uint16_t p1_bf16_set_a = 0, p2_bf16_set_a = 0, p3_bf16_set_a = 0, p4_bf16_set_a = 0;
+        uint16_t p1_bf16_set_b = 0, p2_bf16_set_b = 0, p3_bf16_set_b = 0, p4_bf16_set_b = 0;
+        uint16_t p1_bf16_zero = 0, p2_bf16_zero = 0, p3_bf16_zero = 0, p4_bf16_zero = 0;
 
-        // Calculate the two alternating dx values based on the actual increment
-        // For reader core, after any special first value, dx alternates between two values
-        float dx_a, dx_b;
-        if (has_special_first) {
-            // First position is special (dx=0), calculate next two
-            float x1 = x_coordinate + scale_w_inv * 2;
-            dx_a = x1 - int(x1);  // This will be the first regular dx
-            float x2 = x1 + scale_w_inv * 2;
-            dx_b = x2 - int(x2);  // This will be the second regular dx
-        } else {
-            // No special first, calculate the two alternating values
-            float x1 = x_coordinate;
-            dx_a = x1 - int(x1);
-            float x2 = x1 + scale_w_inv * 2;
-            dx_b = x2 - int(x2);
+        if (use_precomputed_weights) {
+            // Pre-calculate bilinear interpolation weights for the two alternating dx values
+            // Since dy is constant for this row and dx alternates between two values,
+            // we can pre-compute the weights and avoid expensive floating-point operations
+
+            // Pre-compute dx values for the alternating pattern
+            // When x increments by scale_w_inv*2, we get a repeating pattern
+            // Handle special case when starting x is negative (gets clamped to 0)
+            float x_temp = x_coordinate;
+            has_special_first = (x_temp < 0);
+
+            // Calculate the two alternating dx values based on the actual increment
+            // For reader core, after any special first value, dx alternates between two values
+            if (has_special_first) {
+                // First position is special (dx=0), calculate next two
+                float x1 = x_coordinate + scale_w_inv * 2;
+                dx_a = x1 - int(x1);  // This will be the first regular dx
+                float x2 = x1 + scale_w_inv * 2;
+                dx_b = x2 - int(x2);  // This will be the second regular dx
+            } else {
+                // No special first, calculate the two alternating values
+                float x1 = x_coordinate;
+                dx_a = x1 - int(x1);
+                float x2 = x1 + scale_w_inv * 2;
+                dx_b = x2 - int(x2);
+            }
+
+            // Pre-compute weights for the two alternating dx values
+            float one_minus_dx_a = 1 - dx_a;
+            float one_minus_dx_b = 1 - dx_b;
+
+            // Weight set A
+            float p1_set_a = one_minus_dx_a * one_minus_dy;
+            float p2_set_a = dx_a * one_minus_dy;
+            float p3_set_a = one_minus_dx_a * dy;
+            float p4_set_a = dx_a * dy;
+
+            // Weight set B
+            float p1_set_b = one_minus_dx_b * one_minus_dy;
+            float p2_set_b = dx_b * one_minus_dy;
+            float p3_set_b = one_minus_dx_b * dy;
+            float p4_set_b = dx_b * dy;
+
+            // Convert weights to bfloat16 once
+            p1_bf16_set_a = float_to_bfloat16(p1_set_a);
+            p2_bf16_set_a = float_to_bfloat16(p2_set_a);
+            p3_bf16_set_a = float_to_bfloat16(p3_set_a);
+            p4_bf16_set_a = float_to_bfloat16(p4_set_a);
+
+            p1_bf16_set_b = float_to_bfloat16(p1_set_b);
+            p2_bf16_set_b = float_to_bfloat16(p2_set_b);
+            p3_bf16_set_b = float_to_bfloat16(p3_set_b);
+            p4_bf16_set_b = float_to_bfloat16(p4_set_b);
+
+            // Special case weights for dx=0 (only used when x starts negative)
+            // Formula: p1=(1-dx)*(1-dy), p2=dx*(1-dy), p3=(1-dx)*dy, p4=dx*dy
+            // When dx=0: p1=(1-dy), p2=0, p3=dy, p4=0
+            p1_bf16_zero = float_to_bfloat16(one_minus_dy);
+            p2_bf16_zero = 0;
+            p3_bf16_zero = float_to_bfloat16(dy);
+            p4_bf16_zero = 0;
         }
-
-        // Pre-compute weights for the two alternating dx values
-        float one_minus_dx_a = 1 - dx_a;
-        float one_minus_dx_b = 1 - dx_b;
-
-        // Weight set A (dx = 0.375)
-        float p1_set_a = one_minus_dx_a * one_minus_dy;
-        float p2_set_a = dx_a * one_minus_dy;
-        float p3_set_a = one_minus_dx_a * dy;
-        float p4_set_a = dx_a * dy;
-
-        // Weight set B (dx = 0.875)
-        float p1_set_b = one_minus_dx_b * one_minus_dy;
-        float p2_set_b = dx_b * one_minus_dy;
-        float p3_set_b = one_minus_dx_b * dy;
-        float p4_set_b = dx_b * dy;
-
-        // Convert weights to bfloat16 once
-        uint16_t p1_bf16_set_a = float_to_bfloat16(p1_set_a);
-        uint16_t p2_bf16_set_a = float_to_bfloat16(p2_set_a);
-        uint16_t p3_bf16_set_a = float_to_bfloat16(p3_set_a);
-        uint16_t p4_bf16_set_a = float_to_bfloat16(p4_set_a);
-
-        uint16_t p1_bf16_set_b = float_to_bfloat16(p1_set_b);
-        uint16_t p2_bf16_set_b = float_to_bfloat16(p2_set_b);
-        uint16_t p3_bf16_set_b = float_to_bfloat16(p3_set_b);
-        uint16_t p4_bf16_set_b = float_to_bfloat16(p4_set_b);
-
-        // Special case weights for dx=0 (only used when x starts negative)
-        // Formula: p1=(1-dx)*(1-dy), p2=dx*(1-dy), p3=(1-dx)*dy, p4=dx*dy
-        // When dx=0: p1=(1-dy), p2=0, p3=dy, p4=0
-        uint16_t p1_bf16_zero = float_to_bfloat16(one_minus_dy);
-        uint16_t p2_bf16_zero = 0;
-        uint16_t p3_bf16_zero = float_to_bfloat16(dy);
-        uint16_t p4_bf16_zero = 0;
 
         for (uint32_t j = 0; j < nsticks_to_process_on_core; j++) {
             DeviceZoneScopedN("XLoop");
 
-            // Select pre-computed weights based on position
+            // Calculate x position and indices (needed for memory addressing)
+            x = x_coordinate < 0 ? 0 : x_coordinate;
+
+            // Select or compute weights based on optimization mode
             uint16_t p1_bf16, p2_bf16, p3_bf16, p4_bf16;
 
-            if (has_special_first && j == 0) {
-                // Special first case where x was negative and clamped to 0
-                p1_bf16 = p1_bf16_zero;
-                p2_bf16 = p2_bf16_zero;
-                p3_bf16 = p3_bf16_zero;
-                p4_bf16 = p4_bf16_zero;
+            if (use_precomputed_weights) {
+                // Use pre-computed weights for optimized scale factors
+                if (has_special_first && j == 0) {
+                    // Special first case where x was negative and clamped to 0
+                    p1_bf16 = p1_bf16_zero;
+                    p2_bf16 = p2_bf16_zero;
+                    p3_bf16 = p3_bf16_zero;
+                    p4_bf16 = p4_bf16_zero;
+                } else {
+                    // Regular alternating pattern
+                    bool use_set_a;
+                    if (has_special_first) {
+                        use_set_a = ((j - 1) % 2) == 0;
+                    } else {
+                        // No special first, simple alternation
+                        use_set_a = (j % 2) == 0;
+                    }
+
+                    if (use_set_a) {
+                        p1_bf16 = p1_bf16_set_a;
+                        p2_bf16 = p2_bf16_set_a;
+                        p3_bf16 = p3_bf16_set_a;
+                        p4_bf16 = p4_bf16_set_a;
+                    } else {
+                        p1_bf16 = p1_bf16_set_b;
+                        p2_bf16 = p2_bf16_set_b;
+                        p3_bf16 = p3_bf16_set_b;
+                        p4_bf16 = p4_bf16_set_b;
+                    }
+                }
             } else {
-                // Regular alternating pattern
-                // After any special first, pattern is: 0.375, 0.875, 0.375, 0.875...
-                bool use_set_a;
-                if (has_special_first) {
-                    // j=1 → 0.375 (set_a), j=2 → 0.875 (set_b), j=3 → 0.375 (set_a)...
-                    use_set_a = ((j - 1) % 2) == 0;
-                } else {
-                    // No special first, simple alternation
-                    use_set_a = (j % 2) == 0;
-                }
-
-                if (use_set_a) {
-                    p1_bf16 = p1_bf16_set_a;
-                    p2_bf16 = p2_bf16_set_a;
-                    p3_bf16 = p3_bf16_set_a;
-                    p4_bf16 = p4_bf16_set_a;
-                } else {
-                    p1_bf16 = p1_bf16_set_b;
-                    p2_bf16 = p2_bf16_set_b;
-                    p3_bf16 = p3_bf16_set_b;
-                    p4_bf16 = p4_bf16_set_b;
-                }
+                // Calculate weights dynamically for other scale factors
+                dx = x - int(x);
+                p1_bf16 = float_to_bfloat16((1 - dx) * (1 - dy));
+                p2_bf16 = float_to_bfloat16(dx * (1 - dy));
+                p3_bf16 = float_to_bfloat16((1 - dx) * dy);
+                p4_bf16 = float_to_bfloat16(dx * dy);
             }
-
-            // Calculate x position and indices (still needed for memory addressing)
-            x = x_coordinate < 0 ? 0 : x_coordinate;
             uint32_t x1 = int(x);
             uint32_t x2 = (x1 + 1) < (in_w - 1) ? (x1 + 1) : (in_w - 1);
 
