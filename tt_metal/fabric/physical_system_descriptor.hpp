@@ -200,6 +200,7 @@ public:
     const ExitNodeConnectionTable& get_exit_node_connection_table() const { return exit_node_connection_table_; }
     bool is_using_mock_cluster() const;
     LocalEthernetMetrics query_local_ethernet_metrics() const;
+    tt::ARCH get_arch() const;
 
     PhysicalConnectivityGraph& get_system_graph() { return system_graph_; }
     std::unordered_map<AsicID, ASICDescriptor>& get_asic_descriptors() { return asic_descriptors_; }

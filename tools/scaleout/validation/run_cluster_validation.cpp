@@ -16,6 +16,7 @@
 #include <cabling_generator/cabling_generator.hpp>
 #include <tt-metalium/hal.hpp>
 #include "tools/scaleout/validation/utils/cluster_validation_utils.hpp"
+#include <tt-metalium/distributed_context.hpp>
 
 namespace tt::scaleout_tools {
 
@@ -33,7 +34,7 @@ struct InputArgs {
     bool print_connectivity = false;
     bool help = false;
     bool send_traffic = false;
-    uint32_t data_size = align_down(tt::tt_metal::hal::get_erisc_l1_unreserved_size(), 64);
+    uint32_t data_size = 0;
     uint32_t packet_size_bytes = 64;
     uint32_t num_iterations = 50;
     bool sweep_traffic_configs = false;
@@ -55,6 +56,11 @@ std::filesystem::path generate_output_dir() {
 
 InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
     InputArgs input_args;
+
+    if (test_args::has_command_option(args_vec, "--help")) {
+        input_args.help = true;
+        return input_args;
+    }
 
     if (test_args::has_command_option(args_vec, "--cabling-descriptor-path")) {
         TT_FATAL(
@@ -91,6 +97,8 @@ InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
             input_args.data_size <= tt::tt_metal::hal::get_erisc_l1_unreserved_size(),
             "Data size must be less than or equal to the L1 unreserved size: {} bytes",
             tt::tt_metal::hal::get_erisc_l1_unreserved_size());
+    } else {
+        input_args.data_size = align_down(tt::tt_metal::hal::get_erisc_l1_unreserved_size(), 64);
     }
     if (test_args::has_command_option(args_vec, "--packet-size-bytes")) {
         input_args.packet_size_bytes = std::stoi(test_args::get_command_option(args_vec, "--packet-size-bytes"));
@@ -105,7 +113,6 @@ InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
     input_args.print_connectivity = test_args::has_command_option(args_vec, "--print-connectivity");
     input_args.send_traffic = test_args::has_command_option(args_vec, "--send-traffic");
     input_args.sweep_traffic_configs = test_args::has_command_option(args_vec, "--sweep-traffic-configs");
-    input_args.help = test_args::has_command_option(args_vec, "--help");
     input_args.validate_connectivity =
         input_args.cabling_descriptor_path.has_value() || input_args.fsd_path.has_value();
 
@@ -129,7 +136,10 @@ std::string get_factory_system_descriptor_path(const InputArgs& input_args) {
     return fsd_path;
 }
 
-PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& input_args) {
+PhysicalSystemDescriptor generate_physical_system_descriptor(
+    const InputArgs& input_args,
+    const std::unique_ptr<umd::Cluster>& driver,
+    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context) {
     auto log_hostnames = [&](const std::vector<std::string>& hostnames) {
         std::stringstream ss;
         for (const auto& hostname : hostnames) {
@@ -146,14 +156,9 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
         log_output_rank0("Running Physical Discovery");
         constexpr bool run_discovery = true;
         auto& context = tt::tt_metal::MetalContext::instance();
-        const auto& driver = context.get_cluster().get_driver();
+        // const auto& driver = context.get_cluster().get_driver();
         auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
-            driver,
-            context.get_distributed_context_ptr(),
-            &context.hal(),
-            context.rtoptions(),
-            run_discovery
-        );
+            driver, distributed_context, &context.hal(), context.rtoptions(), run_discovery);
         log_output_rank0("Physical Discovery Complete");
         log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
         return physical_system_descriptor;
@@ -248,15 +253,16 @@ int main(int argc, char* argv[]) {
     }
 
     bool eth_connections_healthy = true;
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    auto distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
     // Create physical system descriptor and discover the system
-    auto physical_system_descriptor = generate_physical_system_descriptor(input_args);
+    auto driver = std::make_unique<tt::umd::Cluster>();
+    auto physical_system_descriptor = generate_physical_system_descriptor(input_args, driver, distributed_context);
 
     AsicTopology missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
     bool links_reset = false;
     // Ethernet Link Retraining through SW is currently only supported for Wormhole
-    bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
+    bool link_retrain_supported = physical_system_descriptor.get_arch() == tt::ARCH::WORMHOLE_B0;
     constexpr uint32_t MAX_RETRAINS_BEFORE_FAILURE =
         5;  // If links don't come up after 5 retrains, the system is in an unrecoverable state.
     uint32_t num_retrains = 0;
@@ -287,10 +293,10 @@ int main(int argc, char* argv[]) {
         input_args.data_size,
         input_args.output_path);
 
-    if (*distributed_context.rank() == 0 && input_args.print_connectivity) {
+    if (*distributed_context->rank() == 0 && input_args.print_connectivity) {
         print_ethernet_connectivity(input_args.print_connectivity, physical_system_descriptor);
     }
-    distributed_context.barrier();
+    distributed_context->barrier();
     if (input_args.fail_on_warning && !eth_connections_healthy) {
         TT_THROW("Encountered unhealthy ethernet connections, listed above");
         return -1;

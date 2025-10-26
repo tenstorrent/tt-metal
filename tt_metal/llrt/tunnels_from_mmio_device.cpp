@@ -11,31 +11,30 @@ namespace tt::llrt {
 // TODO: Stop using these functions here and in PhysicalSystemDescriptor once UMD provides support for ASIC index/offset
 // in WH systems
 const std::unordered_set<ChipId>& get_devices_controlled_by_mmio_device(
-    const std::unique_ptr<tt::umd::Cluster>& cluster, ChipId mmio_device_id) {
-    const auto& cluster_descriptor = cluster->get_cluster_description();
+    umd::ClusterDescriptor* cluster_desc, ChipId mmio_device_id) {
     TT_ASSERT(
-        cluster_descriptor->get_chips_grouped_by_closest_mmio().count(mmio_device_id),
+        cluster_desc->get_chips_grouped_by_closest_mmio().count(mmio_device_id),
         "Expected device {} to be an MMIO device!",
         mmio_device_id);
-    return cluster_descriptor->get_chips_grouped_by_closest_mmio().at(mmio_device_id);
+    return cluster_desc->get_chips_grouped_by_closest_mmio().at(mmio_device_id);
 }
 
 #define MAX_TUNNEL_DEPTH 4
 std::map<ChipId, std::vector<std::vector<ChipId>>> discover_tunnels_from_mmio_device(
-    const std::unique_ptr<tt::umd::Cluster>& cluster) {
+    umd::ClusterDescriptor* cluster_desc) {
     std::map<ChipId, std::vector<std::vector<tt::ChipId>>> tunnels_from_mmio_device = {};
 
-    for (const auto& mmio_chip_id : cluster->get_target_mmio_device_ids()) {
+    for (const auto& [mmio_chip_id, _] : cluster_desc->get_chips_with_mmio()) {
         std::vector<std::vector<ChipId>> tunnels_from_mmio = {};
-        const auto& all_eth_connections = cluster->get_cluster_description()->get_ethernet_connections();
-        TT_ASSERT(cluster->get_cluster_description()->is_chip_mmio_capable(mmio_chip_id));
+        const auto& all_eth_connections = cluster_desc->get_ethernet_connections();
+        TT_ASSERT(cluster_desc->is_chip_mmio_capable(mmio_chip_id));
 
         if (all_eth_connections.find(mmio_chip_id) == all_eth_connections.end()) {
             tunnels_from_mmio_device.insert({mmio_chip_id, {}});
             continue;
         }
 
-        auto device_ids = get_devices_controlled_by_mmio_device(cluster, mmio_chip_id);
+        auto device_ids = get_devices_controlled_by_mmio_device(cluster_desc, mmio_chip_id);
         device_ids.erase(mmio_chip_id);
 
         if (device_ids.empty()) {
@@ -65,7 +64,7 @@ std::map<ChipId, std::vector<std::vector<ChipId>>> discover_tunnels_from_mmio_de
             tunnels_from_mmio.size(),
             mmio_chip_id);
 
-        device_ids = get_devices_controlled_by_mmio_device(cluster, mmio_chip_id);
+        device_ids = get_devices_controlled_by_mmio_device(cluster_desc, mmio_chip_id);
         device_ids.erase(mmio_chip_id);
 
         for (auto& tunnel : tunnels_from_mmio) {

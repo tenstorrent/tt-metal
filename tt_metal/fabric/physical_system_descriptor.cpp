@@ -28,29 +28,9 @@ const std::unique_ptr<tt::umd::Cluster> PhysicalSystemDescriptor::null_cluster =
 namespace {
 
 // This reimplements tt::Cluster::get_bus_id() and should be moved to tt::umd::Cluster
-inline uint16_t get_bus_id(const std::unique_ptr<tt::umd::Cluster>& cluster, ChipId chip) {
-    // Prefer cached value from cluster descriptor (available for silicon and our simulator/mock descriptors)
-    auto cluster_desc = cluster->get_cluster_description();
+inline uint16_t get_bus_id(const std::unique_ptr<umd::ClusterDescriptor>& cluster_desc, ChipId chip) {
     uint16_t bus_id = cluster_desc->get_bus_id(chip);
-
     return bus_id;
-}
-
-// This reimplements tt::Cluster::get_arch() and should be moved to tt::umd::Cluster
-tt::ARCH get_arch(const std::unique_ptr<tt::umd::ClusterDescriptor>& cluster_descriptor) {
-    // Pick a chip and query its architecture
-    const std::unordered_set<ChipId>& chips = cluster_descriptor->get_all_chips();
-    TT_FATAL(!chips.empty(), "Unable to determine architecture because UMD driver detected no chips.");
-    tt::ARCH arch = cluster_descriptor->get_arch(*chips.begin());
-    TT_FATAL(arch != tt::ARCH::Invalid, "Chip {} has invalid architecture.", *chips.begin());
-
-    // We don't yet support mixed architecture clusters. Check that all chips are the same architecture.
-    bool all_same_arch = std::all_of(
-        chips.begin(), chips.end(), [&](ChipId chip_id) { return cluster_descriptor->get_arch(chip_id) == arch; });
-
-    TT_FATAL(all_same_arch, "Chips with differing architectures detected. This is unsupported.");
-
-    return arch;
 }
 
 std::string get_host_name() {
@@ -72,7 +52,7 @@ std::string get_mobo_name() {
 }
 
 TrayID get_tray_id_for_chip(
-    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::unique_ptr<umd::ClusterDescriptor>& cluster_desc,
     ChipId chip_id,
     const std::string& mobo_name,
     bool using_mock_cluster_desc) {
@@ -85,7 +65,7 @@ TrayID get_tray_id_for_chip(
         return TrayID{0};
     }
     const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
-    auto bus_id = get_bus_id(cluster, chip_id);
+    auto bus_id = get_bus_id(cluster_desc, chip_id);
     auto bus_id_it = std::find(ordered_bus_ids.begin(), ordered_bus_ids.end(), bus_id);
     TT_FATAL(bus_id_it != ordered_bus_ids.end(), "Bus ID {} not found.", bus_id);
     auto tray_id = std::distance(ordered_bus_ids.begin(), bus_id_it) + 1;
@@ -93,8 +73,10 @@ TrayID get_tray_id_for_chip(
 }
 
 std::pair<TrayID, ASICLocation> get_asic_position(
-    const std::unique_ptr<tt::umd::Cluster>& cluster, tt::ARCH arch, ChipId chip_id, bool using_mock_cluster_desc) {
-    auto cluster_desc = cluster->get_cluster_description();
+    const std::unique_ptr<umd::ClusterDescriptor>& cluster_desc,
+    tt::ARCH arch,
+    ChipId chip_id,
+    bool using_mock_cluster_desc) {
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB_WORMHOLE ||
         cluster_desc->get_board_type(chip_id) == BoardType::UBB_BLACKHOLE) {
         constexpr std::string_view ubb_mobo_name = "S7T-MB";
@@ -104,13 +86,13 @@ std::pair<TrayID, ASICLocation> get_asic_position(
         auto ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
         return {TrayID{ubb_id.tray_id}, ASICLocation{ubb_id.asic_id}};
     } else {
-        auto tray_id = get_tray_id_for_chip(cluster, chip_id, get_mobo_name(), using_mock_cluster_desc);
+        auto tray_id = get_tray_id_for_chip(cluster_desc, chip_id, get_mobo_name(), using_mock_cluster_desc);
         ASICLocation asic_location;
         if (arch == tt::ARCH::WORMHOLE_B0) {
             // Derive ASIC Location based on the tunnel depth for Wormhole systems
             // TODO: Remove this once UMD populates the ASIC Location for WH systems.
             auto mmio_device = cluster_desc->get_closest_mmio_capable_chip(chip_id);
-            auto tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(cluster);
+            auto tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(cluster_desc.get());
             const auto& tunnels = tunnels_from_mmio_device.at(mmio_device);
             for (auto tunnel = 0; tunnel < tunnels.size(); tunnel++) {
                 const auto& devices_on_tunnel = tunnels[tunnel];
@@ -254,6 +236,23 @@ void PhysicalSystemDescriptor::clear() {
     exit_node_connection_table_.clear();
 }
 
+// This reimplements tt::Cluster::get_arch() and should be moved to tt::umd::Cluster
+tt::ARCH PhysicalSystemDescriptor::get_arch() const {
+    // Pick a chip and query its architecture
+    const std::unordered_set<ChipId>& chips = cluster_desc_->get_all_chips();
+    TT_FATAL(!chips.empty(), "Unable to determine architecture because UMD driver detected no chips.");
+    tt::ARCH arch = cluster_desc_->get_arch(*chips.begin());
+    TT_FATAL(arch != tt::ARCH::Invalid, "Chip {} has invalid architecture.", *chips.begin());
+
+    // We don't yet support mixed architecture clusters. Check that all chips are the same architecture.
+    bool all_same_arch = std::all_of(
+        chips.begin(), chips.end(), [&](ChipId chip_id) { return cluster_desc_->get_arch(chip_id) == arch; });
+
+    TT_FATAL(all_same_arch, "Chips with differing architectures detected. This is unsupported.");
+
+    return arch;
+}
+
 void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
     this->clear();
 
@@ -278,8 +277,8 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
     auto& exit_nodes = exit_node_connection_table_[hostname];
 
     auto add_local_asic_descriptor = [&](AsicID src_unique_id, ChipId src_chip_id) {
-        auto [tray_id, asic_location] =
-            get_asic_position(cluster_, get_arch(cluster_desc_), src_chip_id, target_device_type_ != TargetDevice::Silicon);
+        auto [tray_id, asic_location] = get_asic_position(
+            cluster_desc_, this->get_arch(), src_chip_id, target_device_type_ != TargetDevice::Silicon);
         asic_descriptors_[src_unique_id] = ASICDescriptor{
             TrayID{tray_id}, asic_location, cluster_desc_->get_board_type(src_chip_id), src_unique_id, hostname};
     };
