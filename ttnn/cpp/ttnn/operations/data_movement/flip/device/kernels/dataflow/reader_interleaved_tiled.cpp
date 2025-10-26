@@ -8,8 +8,8 @@
 inline uint32_t calc_src_tile_index(
     uint32_t dst_tile_id, uint32_t rank, uint32_t* dims_to_flip, uint32_t* tiled_shape, uint32_t* tile_strides) {
     size_t remaining = dst_tile_id;
-    uint32_t src_multi_dim[rank];
-    uint32_t dst_multi_dim[rank];
+    uint32_t src_multi_dim[rank];  // TODO: do not use VLAs
+    uint32_t dst_multi_dim[rank];  // TODO: do not use VLAs
 
     // 1. Convert output tile linear index to multi-dimensional index
     for (uint32_t i = 0; i < rank; ++i) {
@@ -120,11 +120,15 @@ void kernel_main() {
 
                 if (is_horizontal_flip) {
                     // flip elements within the row
-                    uint32_t* row_data = reinterpret_cast<uint32_t*>(l1_buf_addr);
+                    uint8_t* row_bytes = reinterpret_cast<uint8_t*>(l1_buf_addr);
                     for (uint32_t i = 0; i < FACE_WIDTH / 2; ++i) {
-                        uint32_t temp = row_data[i];
-                        row_data[i] = row_data[FACE_WIDTH - 1 - i];
-                        row_data[FACE_WIDTH - 1 - i] = temp;
+                        uint32_t left = i * element_size;
+                        uint32_t right = (FACE_WIDTH - 1 - i) * element_size;
+                        for (uint32_t b = 0; b < element_size; ++b) {
+                            uint8_t tmp = row_bytes[left + b];
+                            row_bytes[left + b] = row_bytes[right + b];
+                            row_bytes[right + b] = tmp;
+                        }
                     }
                 }
                 l1_buf_addr += SUBTILE_LINE_BYTES;

@@ -8,7 +8,7 @@
 uint32_t compute_src_row_id(
     uint32_t dst_row_id, uint32_t rank, const uint32_t* shape, const uint32_t* dims_to_flip, const uint32_t* strides) {
     // Step 1: dst_linear_id -> multi-dimensional index
-    uint32_t dst_multi_dim[rank - 1];
+    uint32_t dst_multi_dim[rank - 1];  // TODO: do not use VLAs
     uint32_t remainder = dst_row_id;
     for (uint32_t i = 0; i < rank - 1; i++) {
         dst_multi_dim[i] = remainder / strides[i];
@@ -16,7 +16,7 @@ uint32_t compute_src_row_id(
     }
 
     // Step 2: Flip dst multi dim to find src multi dim
-    uint32_t src_multi_dim[rank - 1];
+    uint32_t src_multi_dim[rank - 1];  // TODO: do not use VLAs
     for (uint32_t i = 0; i < rank - 1; ++i) {
         if (dims_to_flip[i]) {
             src_multi_dim[i] = shape[i] - dst_multi_dim[i] - 1;

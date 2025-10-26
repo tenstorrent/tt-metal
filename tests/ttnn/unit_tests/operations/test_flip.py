@@ -24,40 +24,25 @@ def random_torch_tensor(dtype, shape):
 @pytest.mark.parametrize("c", [1, 2])
 @pytest.mark.parametrize("h", [32, 33])
 @pytest.mark.parametrize("w", [64, 65])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
-def test_flip_rm(device, n, c, h, w, dtype):
-    torch.manual_seed(2005)
-    shape = (n, c, h, w)
-    torch_tensor = random_torch_tensor(dtype, shape)
-    torch_output = torch.flip(torch_tensor, (2, 3))
-    tt_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    tt_output = ttnn.flip(tt_tensor, (2, 3))
-    assert_allclose(torch_output, ttnn.to_torch(tt_output))
-
-
-@pytest.mark.parametrize("n", [1, 2])
-@pytest.mark.parametrize("c", [1, 2])
-@pytest.mark.parametrize("h", [32, 128])
-@pytest.mark.parametrize("w", [64, 224])
 @pytest.mark.parametrize("dims", [[2], [3], [2, 3], [1, 2, 3]])
-@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.int32])
-def test_flip_tiled(device, n, c, h, w, dims, dtype):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
+def test_flip_rm(device, n, c, h, w, dims, dtype):
     torch.manual_seed(2005)
     shape = (n, c, h, w)
     torch_tensor = random_torch_tensor(dtype, shape)
     torch_output = torch.flip(torch_tensor, dims)
-    tt_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     tt_output = ttnn.flip(tt_tensor, dims)
     assert_allclose(torch_output, ttnn.to_torch(tt_output))
 
 
 @pytest.mark.parametrize("n", [1, 2])
 @pytest.mark.parametrize("c", [1, 2])
-@pytest.mark.parametrize("h", [33])
-@pytest.mark.parametrize("w", [65])
+@pytest.mark.parametrize("h", [32, 33])
+@pytest.mark.parametrize("w", [64, 65])
 @pytest.mark.parametrize("dims", [[2], [3], [2, 3], [1, 2, 3]])
-@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.int32])
-def test_flip_tiled_pad(device, n, c, h, w, dims, dtype):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
+def test_flip_tiled(device, n, c, h, w, dims, dtype):
     torch.manual_seed(2005)
     shape = (n, c, h, w)
     torch_tensor = random_torch_tensor(dtype, shape)
