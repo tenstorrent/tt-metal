@@ -292,6 +292,16 @@ void device_module(nb::module_& m_device) {
             )doc");
 
     m_device.def(
+        "ClearDefaultDevice",
+        []() { ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(nullptr); },
+        R"doc(
+            Clears the default device (sets it to None).
+
+            Example:
+                >>> ttnn.ClearDefaultDevice()
+        )doc");
+
+    m_device.def(
         "GetDefaultDevice",
         []() {
             return dynamic_cast<MeshDevice*>(
