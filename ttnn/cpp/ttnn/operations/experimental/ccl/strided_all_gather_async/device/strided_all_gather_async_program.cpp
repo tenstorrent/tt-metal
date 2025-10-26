@@ -146,7 +146,7 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
     tt::tt_metal::Program program{};
@@ -168,7 +168,7 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
         using_persistent_buffers,
         sub_device_id,
         empty_fused_op_signaler,
-        chunks_per_sync,
+        tiles_per_chunk,
         num_workers_per_link,
         num_buffers_per_channel,
         CoreCoord(0, 0));
@@ -191,7 +191,7 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
-    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset) {
@@ -401,7 +401,7 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                 uint32_t remainder = single_batch_head_num_pages % global_worker_count;
                 uint32_t tiles_per_core = base_pages_per_worker + ((global_worker_id < remainder) ? 1 : 0);
 
-                uint32_t tiles_per_chunk_val = chunks_per_sync.value_or(0);
+                uint32_t tiles_per_chunk_val = tiles_per_chunk.value_or(0);
                 log_trace(tt::LogOp, "DEBUG: tiles_per_chunk__val: {}", tiles_per_chunk_val);
 
                 uint32_t self_write_done_semaphore;
