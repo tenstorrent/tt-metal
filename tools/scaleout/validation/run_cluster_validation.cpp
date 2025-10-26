@@ -264,7 +264,7 @@ int main(int argc, char* argv[]) {
         reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
         links_reset = true;
         num_retrains++;
-        physical_system_descriptor.run_discovery(true);
+        physical_system_descriptor.run_discovery(true, true);
         missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
     }
 
