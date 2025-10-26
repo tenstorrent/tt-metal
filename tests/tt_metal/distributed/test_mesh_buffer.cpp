@@ -9,6 +9,8 @@
 #include <array>
 #include <cstddef>
 #include <initializer_list>
+#include <iomanip>
+#include <iostream>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -80,6 +82,83 @@ struct DeviceLocalShardedBufferTestConfig {
             this->tensor2d_shape_in_pages());
     }
 };
+
+// Helper function to print detailed mismatch information between two uint32_t vectors
+template <typename T>
+void print_vector_mismatch_details(const std::vector<T>& dst_aligned, const std::vector<T>& src) {
+    if (dst_aligned == src) {
+        return;  // No mismatch, nothing to print
+    }
+
+    size_t size = std::min(dst_aligned.size(), src.size());
+    std::vector<std::pair<size_t, size_t>> mismatch_ranges;  // pairs of (start_offset, count)
+
+    // Find all ranges of mismatches
+    size_t i = 0;
+    while (i < size) {
+        if (dst_aligned[i] != src[i]) {
+            size_t start = i;
+            size_t count = 0;
+            while (i < size && dst_aligned[i] != src[i]) {
+                count++;
+                i++;
+            }
+            mismatch_ranges.emplace_back(start, count);
+        } else {
+            i++;
+        }
+    }
+
+    // Print information for each mismatch range
+    std::cout << "\n=== DATA MISMATCH DETECTED ===\n";
+    std::cout << "Total elements: " << size << "\n";
+    std::cout << "Number of mismatch ranges: " << mismatch_ranges.size() << "\n\n";
+
+    for (const auto& [start_offset, mismatch_count] : mismatch_ranges) {
+        std::cout << "Mismatch Range: offset=" << start_offset << ", count=" << mismatch_count << "\n";
+
+        // Print header
+        std::cout << "Offset   ";
+        for (int j = 0; j < 8; j++) {
+            std::cout << " | Dst:" << j << "    Src:" << j << "   ";
+        }
+        std::cout << "|\n";
+        std::cout << std::string(190, '-') << "\n";
+
+        // Print up to 128 pairs (or the actual count if less)
+        size_t pairs_to_print = std::min(mismatch_count, size_t(128));
+
+        for (size_t offset = 0; offset < pairs_to_print; offset += 8) {
+            size_t pairs_in_line = std::min(size_t(8), pairs_to_print - offset);
+
+            // Print offset for this line
+            std::cout << std::setw(8) << std::left << (start_offset + offset) << " ";
+
+            // Print 8 pairs (or fewer if at the end)
+            for (size_t j = 0; j < pairs_in_line; j++) {
+                size_t idx = start_offset + offset + j;
+                std::cout << " | 0x" << std::hex << std::setfill('0') << std::setw(8) << dst_aligned[idx] << " 0x"
+                          << std::hex << std::setfill('0') << std::setw(8) << src[idx];
+                std::cout << std::dec << std::setfill(' ');
+            }
+            // Fill remaining columns if less than 8 pairs in this line
+            for (size_t j = pairs_in_line; j < 8; j++) {
+                std::cout << " |                      ";
+            }
+            std::cout << " |\n";
+        }
+
+        if (mismatch_count > 128) {
+            std::cout << "... (" << (mismatch_count - 128) << " more mismatched values not shown)\n";
+        }
+        std::cout << "\n";
+    }
+
+    if (dst_aligned.size() != src.size()) {
+        std::cout << "WARNING: Size mismatch - dst_aligned.size()=" << dst_aligned.size()
+                  << ", src.size()=" << src.size() << "\n";
+    }
+}
 
 TEST_F(MeshBufferTest2x4, ShardedBufferInitialization) {
     const DeviceLocalBufferConfig device_local_config{
@@ -652,6 +731,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
 
     std::vector<uint32_t> dst_aligned(dst_ptr_aligned, dst_ptr_aligned + (bytes_per_device / sizeof(uint32_t)));
 
+    print_vector_mismatch_details(dst_aligned, src);
     EXPECT_EQ(dst_aligned, src);
 }
 
