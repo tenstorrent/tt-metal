@@ -13,11 +13,15 @@ class BilinearUpsampleTorch(LightweightModule):
     Pre-computes interpolation matrices for efficiency.
     """
 
-    def __init__(self, input_height, input_width, scale=4, channels_first=False):
+    def __init__(self, input_height, input_width, scale=4, input_channels_first=False, output_channels_first=None):
         self.H = input_height
         self.W = input_width
         self.scale = scale
-        self.channels_first = channels_first
+        self.input_channels_first = input_channels_first
+        # Default output format matches input format if not specified
+        self.output_channels_first = (
+            output_channels_first if output_channels_first is not None else input_channels_first
+        )
         self.H_out = self.H * self.scale
         self.W_out = self.W * self.scale
 
@@ -39,7 +43,7 @@ class BilinearUpsampleTorch(LightweightModule):
         return M
 
     def _check_input_shape(self, img):
-        if self.channels_first:
+        if self.input_channels_first:
             # Input format: (B, C, H, W)
             B, C, H, W = img.shape
             assert H == self.H and W == self.W, f"Input shape mismatch: expected ({self.H}, {self.W}), got ({H}, {W})"
@@ -53,7 +57,7 @@ class BilinearUpsampleTorch(LightweightModule):
 
         # 4D tensor matrix multiplication constraint: all operations must use 4D tensors
         # Convert input to 4D: (B, C, H, W) format for all operations
-        if self.channels_first:
+        if self.input_channels_first:
             X_4d = img  # Already (B, C, H, W)
         else:
             X_4d = img.permute(0, 3, 1, 2)  # (B, H, W, C) -> (B, C, H, W)
@@ -69,7 +73,7 @@ class BilinearUpsampleTorch(LightweightModule):
         Y_final_4d = torch.matmul(self.Mh.T, Y_width)
         logger.warning(f"{Y_final_4d.shape=} = {self.Mh.T.shape=} @ {Y_width.shape=}")
 
-        if self.channels_first:
+        if self.output_channels_first:
             # Return in channels-first format: (B, C, H_out, W_out)
             return Y_final_4d
         else:
@@ -84,14 +88,28 @@ class BilinearUpsampleMatmulTTNN(LightweightModule):
     Pre-computes interpolation matrices for efficiency.
     """
 
-    def __init__(self, device, input_batch, input_channels, input_height, input_width, scale=4, channels_first=False):
+    def __init__(
+        self,
+        device,
+        input_batch,
+        input_channels,
+        input_height,
+        input_width,
+        scale=4,
+        input_channels_first=False,
+        output_channels_first=None,
+    ):
         self.device = device
         self.N = input_batch
         self.C = input_channels
         self.H = input_height
         self.W = input_width
         self.scale = scale
-        self.channels_first = channels_first
+        self.input_channels_first = input_channels_first
+        # Default output format matches input format if not specified
+        self.output_channels_first = (
+            output_channels_first if output_channels_first is not None else input_channels_first
+        )
         self.H_out = self.H * self.scale
         self.W_out = self.W * self.scale
 
@@ -124,7 +142,7 @@ class BilinearUpsampleMatmulTTNN(LightweightModule):
         return M
 
     def _check_input_shape(self, img):
-        if self.channels_first:
+        if self.input_channels_first:
             # Input format: (B, C, H, W)
             B, C, H, W = img.shape
             assert H == self.H and W == self.W, f"Input shape mismatch: expected ({self.H}, {self.W}), got ({H}, {W})"
@@ -135,7 +153,7 @@ class BilinearUpsampleMatmulTTNN(LightweightModule):
 
     def forward(self, img_ttnn):
         # Note: Permute is faster on row major layout
-        if self.channels_first == False:
+        if self.input_channels_first == False:
             img_ttnn = ttnn.permute(img_ttnn, (0, 3, 1, 2))  # (B, H, W, C) -> (B, C, H, W)
 
         if img_ttnn.layout != ttnn.TILE_LAYOUT:
@@ -152,7 +170,7 @@ class BilinearUpsampleMatmulTTNN(LightweightModule):
         # Y_final = ttnn.matmul(Y_width,self.Mh, transpose_a=True)
         logger.warning(f"{Y_final.shape=} = {Y_width.shape=}.T @ {self.Mh.shape=}")
 
-        if self.channels_first:
+        if self.output_channels_first:
             # Y_final = ttnn.permute(Y_final, (0, 1, 3, 2))
             logger.warning(f"{Y_final.shape=}")
             return Y_final  # (B, C, H_out, W_out)
