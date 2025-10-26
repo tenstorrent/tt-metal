@@ -1498,7 +1498,6 @@ class TtQwenModelArgs(TtModelArgs):
         self.full_model_n_layers = self.n_layers
         self.norm_eps = params.get("norm_eps", params.get("rms_norm_eps"))
         self.vocab_size = params["vocab_size"]
-        # self.padded_vocab_size = 128 * 1024
         self.padded_vocab_size = 155648
         self.head_dim = params.get("head_dim", self.dim // self.n_heads)
         if is_hf:

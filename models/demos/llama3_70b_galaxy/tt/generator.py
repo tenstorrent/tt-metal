@@ -184,7 +184,7 @@ class Generator:
             use_batched_prefill = True
 
         if return_logits:
-            tt_out_logits_all_users = torch.zeros(batch, 1, 155648 if self.model.args.is_qwen else 131072)
+            tt_out_logits_all_users = torch.zeros(batch, 1, self.model.args.padded_vocab_size)
 
         all_users = [0] if use_batched_prefill else empty_slots
 
@@ -239,7 +239,7 @@ class Generator:
 
             # If PCC check enabled or return_logits is True (we save output logits)
             if tt_out_logits_all_users is not None or return_logits:
-                tt_out_logits_saved = torch.zeros(1, 155648 if self.model.args.is_qwen else 131072)
+                tt_out_logits_saved = torch.zeros(1, self.model.args.padded_vocab_size)
                 prefill_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
 
             if enable_trace:

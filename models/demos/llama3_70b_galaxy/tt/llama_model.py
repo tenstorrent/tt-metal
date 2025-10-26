@@ -580,10 +580,7 @@ class TtTransformer(LightweightModule):
                     self.mesh_device, dims=(3, 1), mesh_shape=self.args.cluster_shape
                 ),
             )
-            if not self.args.is_qwen:
-                tt_out_logits = tt_out_logits[0, 0, 0, :128256]
-            else:
-                tt_out_logits = tt_out_logits[0, 0, 0, :155648]
+            tt_out_logits = tt_out_logits[0, 0, 0, : self.args.vocab_size]
 
             tt_out_logits_saved.copy_(tt_out_logits)
 
