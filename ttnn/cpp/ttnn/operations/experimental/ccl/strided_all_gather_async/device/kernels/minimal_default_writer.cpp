@@ -162,7 +162,6 @@ void kernel_main() {
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
 
-    uint32_t slice_writes = 0;
     uint32_t writes_expected = 0;
     if (topology == Topology::Linear) {
         if (direction == 1 && num_targets_backward_direction) {
@@ -210,6 +209,7 @@ void kernel_main() {
                 true);
 
             // Forward chunks
+            uint32_t slice_writes = 0;
             uint32_t next_tile_to_write = 0;
             while (slice_writes < writes_expected) {
                 uint32_t actual_sender_chip_id = get_sender_id(direction, my_chip_id, slice_writes, ring_size);
