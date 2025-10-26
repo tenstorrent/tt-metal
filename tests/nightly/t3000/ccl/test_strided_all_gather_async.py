@@ -214,6 +214,8 @@ def run_strided_all_gather_impl(
         ([1, 1, 32, 512], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([1, 1, 32, 512], 3, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([1, 1, 32, 768], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 32, 768], 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 4096, 4096], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
         "1tile1chunk1worker",
@@ -221,6 +223,8 @@ def run_strided_all_gather_impl(
         "1tile2chunk1worker",
         "2tile1chunk1worker",
         "1tile3chunk1worker",
+        "1tile3chunk2worker",
+        "4k4k",
     ],
 )
 @pytest.mark.parametrize(
