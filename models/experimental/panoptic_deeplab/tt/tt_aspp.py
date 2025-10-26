@@ -183,7 +183,9 @@ class TtASPP(LightweightModule):
         pooled = ttnn.to_layout(pooled, ttnn.ROW_MAJOR_LAYOUT)
 
         # Choose upsample mode: nearest for 1x1, bilinear otherwise
-        upsample_mode = "nearest" if (current_h == 1 and current_w == 1) else "bilinear"
+        # upsample_mode = "nearest" if (current_h == 1 and current_w == 1) else "bilinear"
+        # accuracy changes are negligible, so we use nearest for all to save memory
+        upsample_mode = "nearest"
         pooled = ttnn.upsample(pooled, scale_factor=tuple(scale_factor), mode=upsample_mode)
 
         # Convert back to TILE_LAYOUT

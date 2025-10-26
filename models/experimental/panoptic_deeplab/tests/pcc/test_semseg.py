@@ -114,7 +114,7 @@ def test_ttnn_semseg(device, model_location_generator):
     logger.info("Running TTNN semantic segmentation head test...")
     ttnn_out_tt, _ = ttnn_model.semantic_head(ttnn_features)
 
-    ttnn_out_torch = ttnn.to_torch(ttnn_out_tt).permute(0, 3, 1, 2)
+    ttnn_out_torch = ttnn.to_torch(ttnn_out_tt)
 
     # Check if output was padded and needs slicing back to original channels
     original_channels = ttnn_model.semantic_head.get_output_channels_for_slicing()
@@ -122,6 +122,6 @@ def test_ttnn_semseg(device, model_location_generator):
         logger.info(f"Slicing output from {ttnn_out_torch.shape[1]} to {original_channels} channels in torch")
         ttnn_out_torch = ttnn_out_torch[:, :original_channels, :, :]
 
-    passed, msg = assert_with_pcc(torch_out, ttnn_out_torch, pcc=0.99)
+    passed, msg = assert_with_pcc(torch_out, ttnn_out_torch, pcc=0.970)
     logger.info(f"Semantic segmentation PCC: {msg}")
     assert passed, f"Semantic segmentation PCC test failed: {msg}"

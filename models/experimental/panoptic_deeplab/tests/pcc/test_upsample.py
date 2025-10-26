@@ -113,7 +113,7 @@ def test_bilinear_upsample_ttnn_matmul_vs_ttnn_upsample(
         input_channels_first=input_channels_first,
         output_channels_first=output_channels_first,
     )
-    output_matmul = upsampler.forward(ttnn_input_tensor)
+    output_matmul = upsampler(ttnn_input_tensor)
     output_matmul_torch = ttnn.to_torch(output_matmul)
 
     # Method 2: PyTorch reference with align_corners=True
