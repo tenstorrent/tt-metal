@@ -116,7 +116,6 @@ def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_batches, tile_h, t
 @pytest.mark.parametrize("tile_h", [16])
 @pytest.mark.parametrize("tile_w", [32])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat8_b])
-@skip_for_blackhole("Semaphores used to broadcast sparsity is not propagating on BH, Issue #27979")
 def test_sparse_matmul_without_nnz(device, mkn, num_experts, num_batches, tile_h, tile_w, in1_dtype):
     torch.manual_seed(0)
     m, k, n = mkn
