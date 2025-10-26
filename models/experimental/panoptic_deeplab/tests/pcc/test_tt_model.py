@@ -132,14 +132,14 @@ def test_panoptic_deeplab(device, model_location_generator):
         ttnn_semantic_torch = ttnn_semantic_torch[:, :semantic_original_channels, :, :]
 
     # Handle center output - slice back to original channels if padding was applied
-    ttnn_center_torch = ttnn.to_torch(ttnn_center).permute(0, 3, 1, 2)
+    ttnn_center_torch = ttnn.to_torch(ttnn_center)
     center_original_channels = ttnn_model.instance_head.get_center_output_channels_for_slicing()
     if center_original_channels is not None:
         logger.info(f"Slicing center output from {ttnn_center_torch.shape[1]} to {center_original_channels} channels")
         ttnn_center_torch = ttnn_center_torch[:, :center_original_channels, :, :]
 
     # Handle offset output - slice back to original channels if padding was applied
-    ttnn_offset_torch = ttnn.to_torch(ttnn_offset).permute(0, 3, 1, 2)
+    ttnn_offset_torch = ttnn.to_torch(ttnn_offset)
     offset_original_channels = ttnn_model.instance_head.get_offset_output_channels_for_slicing()
     if offset_original_channels is not None:
         logger.info(f"Slicing offset output from {ttnn_offset_torch.shape[1]} to {offset_original_channels} channels")
@@ -147,10 +147,10 @@ def test_panoptic_deeplab(device, model_location_generator):
 
     from tests.ttnn.utils_for_testing import check_with_pcc
 
-    sem_passed, sem_msg = check_with_pcc(pytorch_semantic, ttnn_semantic_torch, pcc=0.993)
+    sem_passed, sem_msg = check_with_pcc(pytorch_semantic, ttnn_semantic_torch, pcc=0.994)
     logger.info(f"Semantic PCC: {sem_msg}")
 
-    center_passed, center_msg = check_with_pcc(pytorch_center, ttnn_center_torch, pcc=0.938)
+    center_passed, center_msg = check_with_pcc(pytorch_center, ttnn_center_torch, pcc=0.959)
     logger.info(f"Center PCC: {center_msg}")
 
     offset_passed, offset_msg = check_with_pcc(pytorch_offset, ttnn_offset_torch, pcc=0.999)

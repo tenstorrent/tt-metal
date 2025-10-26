@@ -216,7 +216,7 @@ class TtDeepLabV3PlusHead(LightweightModule):
                 )
 
             # Use TtUpsample wrapper with channel slicing
-            from models.tt_cnn.tt.builder import TtUpsample, UpsampleConfiguration, ChannelSliceStrategyConfiguration
+            from models.tt_cnn.tt.builder import TtUpsample, UpsampleConfiguration
 
             # Convert to interleaved DRAM if sharded
             if y.is_sharded():
@@ -244,7 +244,7 @@ class TtDeepLabV3PlusHead(LightweightModule):
                 scale_factor=(scale_h, scale_w),
                 # mode="bilinear",
                 mode="nearest",  # accuracy changes are negligible, so we use nearest for all to save memory
-                slice_strategy=ChannelSliceStrategyConfiguration(num_slices=4),
+                slice_strategy=None,
             )
             upsample_layer = TtUpsample(upsample_config, self.device)
             y_upsampled = upsample_layer(y)
