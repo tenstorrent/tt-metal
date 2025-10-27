@@ -222,7 +222,7 @@ test_suite_bh_glx_metal_unit_tests() {
     RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2D*.*"
     RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric1D*.*"
     RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
-    RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_6U_blackhole.yaml
+    RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_6U_galaxy.yaml
 
     # Dispatch
     ./build/test/tt_metal/unit_tests_eth
@@ -242,6 +242,15 @@ test_suite_bh_glx_python_unit_tests() {
     echo "[upstream-tests] running BH GLX upstream python unit tests"
     # CCL / Ops
     pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_galaxy_mesh.py
+}
+
+test_suite_bh_glx_llama_demo_tests() {
+    echo "[upstream-tests] running BH GLX upstream Llama demo tests with weights"
+
+    verify_llama_dir_
+
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 32
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel 32 --max_generated_tokens 220
 }
 
 # Define test suite mappings for different hardware topologies
@@ -300,7 +309,8 @@ test_suite_bh_ttnn_stress_tests"
 
 hw_topology_test_suites["blackhole_glx"]="
 test_suite_bh_glx_metal_unit_tests
-test_suite_bh_glx_python_unit_tests"
+test_suite_bh_glx_python_unit_tests
+test_suite_bh_glx_llama_demo_tests"
 
 # Function to display help
 show_help() {
