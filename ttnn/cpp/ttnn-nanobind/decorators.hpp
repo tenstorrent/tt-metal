@@ -56,6 +56,16 @@ constexpr auto resolve_primitive_operation_call_method(F) {
     }(typename traits::arg_tuple{});
 }
 
+template <typename F>
+constexpr auto resolve_composite_operation_call_method(F func) {
+    using traits = function_traits<F>;
+
+    return []<typename TSelf, typename... TArgs>(F func, arg_traits<TSelf, TArgs...>) {
+        return [func](TSelf self, TArgs... args) ->
+               typename traits::return_t { return func(self, static_cast<decltype(args)&&>(args)...); };
+    }(func, typename traits::arg_tuple{});
+}
+
 template <typename... py_args_t>
 struct nanobind_arguments_t {
     std::tuple<py_args_t...> value;
@@ -105,7 +115,7 @@ template <
 void def_call_operator(py_operation_t& py_operation, const nanobind_overload_t<function_t, py_args_t...>& overload) {
     std::apply(
         [&py_operation, &overload](auto... args) {
-            py_operation.def("__call__", overload.function, nb::is_method(), args...);
+            py_operation.def("__call__", resolve_composite_operation_call_method(overload.function), args...);
         },
         overload.args.value);
 }
