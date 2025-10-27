@@ -183,6 +183,7 @@ tt::tt_metal::operation::ProgramWithCallbacks LayerNormPostAllGather::create_pro
         this->norm_type,
         this->eps,
         this->compute_kernel_config,
-        this->use_2d_core_grid);
+        this->use_2d_core_grid,
+        this->program_config);
 }
 }  // namespace ttnn::operations::normalization
