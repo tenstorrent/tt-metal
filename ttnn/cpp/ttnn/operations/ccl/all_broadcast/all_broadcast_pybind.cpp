@@ -18,7 +18,7 @@ namespace ttnn::operations::ccl {
 
 void py_bind_all_broadcast(py::module& module) {
     auto doc =
-        R"doc(all_broadcast(input_tensor: ttnn.Tensor, cluster_axis: Optional[int] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None, memory_config: Optional[ttnn.MemoryConfig] = None, num_links: Optional[int] = None, topology: Optional[ttnn.Topology] = None) -> List[ttnn.Tensor]
+        R"doc(all_broadcast(input_tensor: ttnn.Tensor, *, cluster_axis: Optional[int] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None, memory_config: Optional[ttnn.MemoryConfig] = None, num_links: Optional[int] = 1, topology: Optional[ttnn.Topology] = ttnn.Topology.Linear) -> List[ttnn.Tensor]
 
             All-broadcast operation across devices. This operation broadcasts data from all devices to all other devices in the mesh, returning a vector of tensors where each tensor contains the data from a corresponding device in the mesh.
 
@@ -30,7 +30,7 @@ void py_bind_all_broadcast(py::module& module) {
                 subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores.
                 memory_config (ttnn.MemoryConfig, optional): Output memory configuration. Defaults to input tensor memory config.
                 num_links (int, optional): The number of links to use for the all-broadcast operation. Defaults to `1`.
-                topology (ttnn.Topology, optional): Fabric topology. Defaults to `Linear`.
+                topology (ttnn.Topology, optional): Fabric topology. Defaults to `ttnn.Topology.Linear`.
 
            Returns:
                List[ttnn.Tensor]: A list of tensors, one from each device, where each tensor has the same shape as the input.
@@ -67,8 +67,8 @@ void py_bind_all_broadcast(py::module& module) {
             py::arg("cluster_axis") = std::nullopt,
             py::arg("subdevice_id") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("num_links") = std::nullopt,
-            py::arg("topology") = std::nullopt,
+            py::arg("num_links") = 1,
+            py::arg("topology") = ttnn::ccl::Topology::Linear,
         });
 }
 
