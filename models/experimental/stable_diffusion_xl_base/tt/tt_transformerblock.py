@@ -88,7 +88,7 @@ class TtBasicTransformerBlock(LightweightModule):
             epsilon=self.ln_eps,
             compute_kernel_config=self.ln_compute_kernel_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            program_config=legacy_config,
+            # program_config=legacy_config,
         )
         attn_hidden_states = self.attn1(attn_hidden_states, attention_mask, None)
         hidden_states = ttnn.add(input_tensor, attn_hidden_states, use_legacy=False)
@@ -101,7 +101,7 @@ class TtBasicTransformerBlock(LightweightModule):
             epsilon=self.ln_eps,
             compute_kernel_config=self.ln_compute_kernel_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            program_config=legacy_config,
+            # program_config=legacy_config,
         )
         attn_hidden_states = self.attn2(attn_hidden_states, attention_mask, encoder_hidden_states)
         hidden_states = ttnn.add(hidden_states, attn_hidden_states, use_legacy=False)
@@ -112,7 +112,7 @@ class TtBasicTransformerBlock(LightweightModule):
             bias=self.tt_norm3_bias,
             epsilon=self.ln_eps,
             compute_kernel_config=self.ln_compute_kernel_config,
-            program_config=legacy_config,
+            # program_config=legacy_config,
         )
         attn_hidden_states = self.ff(attn_hidden_states)
         hidden_states = ttnn.add(hidden_states, attn_hidden_states, use_legacy=False)
