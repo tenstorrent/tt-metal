@@ -80,16 +80,6 @@ class TtGemma3MultiModalProjector(LightweightModule):
         )
 
     def forward(self, vision_outputs: ttnn.Tensor) -> ttnn.Tensor:
-        # Debug print at the start of multi-modal projector forward
-        try:
-            from ttexalens.tt_exalens_lib import read_words_from_device
-
-            read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-            read_data = list(read_data)
-            print("read data at start of TtGemma3MultiModalProjector forward: ", read_data)
-        except Exception as e:
-            print(f"Debug print failed in multi-modal projector: {e}")
-
         batch_size, _, seq_length = vision_outputs.shape
         mode = "decode" if seq_length <= 32 else "prefill"
 

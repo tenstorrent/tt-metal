@@ -8,7 +8,6 @@ We have reused the TtLlamaImageFeedForward with few changes in CoreGrid and prog
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from ttexalens.tt_exalens_lib import read_words_from_device
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -74,9 +73,6 @@ class TtGemmaImageFeedForward(LightweightModule):
         """
         seq_len = x.shape[-2]
         batch_size = x.shape[0]
-        read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-        read_data = list(read_data)
-        print("read data start of MLP forward: ", read_data)
 
         # Depends on whether we are padding or not
         MAX_MM_SEQ_LEN = seq_len if self.args.is_gemma else self.args.VISION_MAX_MM_SEQ
@@ -136,7 +132,4 @@ class TtGemmaImageFeedForward(LightweightModule):
             pre_bias_output = c_proj_out
 
         output = ttnn.add(pre_bias_output, self.c_proj_bias)
-        read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-        read_data = list(read_data)
-        print("read data end of MLP forward: ", read_data)
         return output

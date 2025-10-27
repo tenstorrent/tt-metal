@@ -78,13 +78,6 @@ class TtGemmaModel(Transformer):
         tokens_embd = ttnn.to_torch(tokens_embd, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
 
         if "pixel_values" in kwargs and kwargs.get("pixel_values", None) is not None:
-            # Debug print before vision computation starts
-            from ttexalens.tt_exalens_lib import read_words_from_device
-
-            read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-            read_data = list(read_data)
-            print("read data before compute_vision_token in TtGemmaModel.prepare_inputs_prefill: ", read_data)
-
             vision_output = self.compute_vision_token(kwargs.get("pixel_values", None))
             comp_vision_output = ttnn.to_torch(
                 vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
@@ -151,12 +144,6 @@ class TtGemmaModel(Transformer):
         Returns:
             Combined vision output tensor
         """
-        # Debug print at the very start of compute_vision_token
-        from ttexalens.tt_exalens_lib import read_words_from_device
-
-        read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-        read_data = list(read_data)
-        print("read data start of compute_vision_token: ", read_data)
 
         assert 0 < batch_size <= 3, "Device runs OOM with batch size > 3"
 

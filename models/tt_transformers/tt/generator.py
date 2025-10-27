@@ -70,17 +70,6 @@ class Generator:
         empty_slots=None,
         **kwargs,
     ):
-        # Debug print at the very start of prefill_forward_text
-        if "pixel_values" in kwargs:
-            try:
-                from ttexalens.tt_exalens_lib import read_words_from_device
-
-                read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-                read_data = list(read_data)
-                print("read data at start of prefill_forward_text (with pixel_values): ", read_data)
-            except Exception as e:
-                print(f"Debug print failed: {e}")
-
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
 
@@ -230,17 +219,6 @@ class Generator:
                 else:
                     del tt_logits
         else:
-            # Debug print before prepare_inputs_prefill in Generator
-            if "pixel_values" in kwargs:
-                try:
-                    from ttexalens.tt_exalens_lib import read_words_from_device
-
-                    read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-                    read_data = list(read_data)
-                    print("read data before prepare_inputs_prefill in Generator (with pixel_values): ", read_data)
-                except Exception as e:
-                    print(f"Debug print failed: {e}")
-
             (
                 prefill_input,
                 rot_mats_global_prefill,
@@ -275,11 +253,6 @@ class Generator:
         read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
     ):
-        from ttexalens.tt_exalens_lib import read_words_from_device
-
-        read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-        read_data = list(read_data)
-        print("read data at start of decode forward text: ", read_data)
         assert (
             sampling_params is None or sampling_params.temperature == 0
         ), "Currently only supporting greedy decoding (temperature=0) on device"
@@ -302,24 +275,10 @@ class Generator:
         else:
             tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
 
-        read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-        read_data = list(read_data)
-        print("read data after tt_decode_output: ", read_data)
         if read_from_device:
-            print("Reading decode output to host...")
             to_host = self.read_decode_output(tt_decode_output)
-            read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-            read_data = list(read_data)
-            print("read data after read_decode_output here0: ", read_data)
             return_val = self.process_decode_output_host(to_host, is_tokens=(sampling_params is not None))
-            read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-            read_data = list(read_data)
-            print("read data after process_decode_output_host: ", read_data)
             return return_val
-
-        read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-        read_data = list(read_data)
-        print("read data at end of decode forward text: ", read_data)
         return tt_decode_output
 
     def _decode_forward_no_trace_text(
@@ -361,6 +320,7 @@ class Generator:
 
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
+            print("Running ttnn_decode_forward for model ", i)
             tt_logits_i = self.model[i].ttnn_decode_forward(
                 tt_tokens[i],
                 tt_current_pos[i],
@@ -370,6 +330,7 @@ class Generator:
                 argmax_on_device=argmax_on_device,
             )
             tt_logits.append(tt_logits_i)
+            print("Completed ttnn_decode_forward for model ", i)
 
         return tt_logits
 
@@ -420,6 +381,11 @@ class Generator:
                 )
             )
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
+            print("after running ttnn_decode_forward for model ", i)
+            print("tt_out_trace size: ", len(tt_out_trace))
+            print("tt_out_trace dtype: ", tt_out_trace[-1].dtype)
+            print("tt_out_trace memory config: ", tt_out_trace[-1].memory_config())
+            print("tt_out shape: ", tt_out_trace[-1].shape)
         logger.info("Done Capturing Decode Trace")
         return trace_ids, tt_out_trace, *device_inputs
 
@@ -434,14 +400,18 @@ class Generator:
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
         """
+        print("Starting easy trace...")
         if not hasattr(self, "trace_ids_text"):
+            print("we are executing _capture_trace_text")
             trace_ids, tt_out_trace, *device_inputs = self._capture_trace_text(
                 tokens, current_pos, page_table=page_table, kv_cache=kv_cache, argmax_on_device=argmax_on_device
             )
             self.trace_ids_text = trace_ids
             self.trace_inputs_text = device_inputs
             self.trace_output_text = tt_out_trace
+            print("size of return from _capture_trace_text: ", len(tt_out_trace))
 
+        print("after _capture_trace_text")
         reset_inputs = not argmax_on_device
         if self.prev_page_table is None or any(
             not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table)
@@ -458,17 +428,21 @@ class Generator:
                     host_tensors=host_inputs_i,
                     device_tensors=self.trace_inputs_text[i],
                 )
-
+        print("after resetting inputs if needed")
         for i in range(self.data_parallel):
             if (
                 hasattr(self.model[i], "device_decode_sliding_mask")
                 and self.model[i].device_decode_sliding_mask is not None
             ):
                 self.model[i].update_attention_masks(current_pos[i])
-
+        print("after updating attention masks if needed")
         for i, trace_id in self.trace_ids_text.items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
-
+        print("end of easy trace")
+        print("returning trace output text of size: ", len(self.trace_output_text))
+        print("trace output text dtype: ", self.trace_output_text[0].dtype)
+        print("trace output text shape: ", self.trace_output_text[0].shape)
+        print("trace output text memory config: ", self.trace_output_text[0].memory_config())
         return self.trace_output_text
 
     def _prefill_forward_single_user(
@@ -583,17 +557,6 @@ class Generator:
         empty_slots=None,
         **kwargs,
     ):
-        # Debug print at the start of prefill_forward
-        if vision_images is not None:
-            try:
-                from ttexalens.tt_exalens_lib import read_words_from_device
-
-                read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-                read_data = list(read_data)
-                print("read data at start of Generator.prefill_forward (with vision_images): ", read_data)
-            except Exception as e:
-                print(f"Debug print failed in prefill_forward: {e}")
-
         if (self.model_args[0].checkpoint_type == CheckpointType.HuggingFace) and (
             not self.model_args[0].is_llama_vision()
         ):
@@ -749,29 +712,11 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
     ):
-        # Debug: Check buffer at start of decode_forward_llama_vision
-        try:
-            from ttexalens.tt_exalens_lib import read_words_from_device
-
-            debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-            print(f"[DEBUG] Buffer at start of decode_forward_llama_vision: {debug_data[:16]}")
-        except Exception as e:
-            print(f"[DEBUG] Could not read buffer at start of decode_forward_llama_vision: {e}")
-
         B = tokens.shape[0]
         data_parallel = min(B, self.data_parallel)
         batch_per_device = B // data_parallel
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
-
-        # Debug: Check buffer after data chunking
-        try:
-            from ttexalens.tt_exalens_lib import read_words_from_device
-
-            debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-            print(f"[DEBUG] Buffer after data chunking: {debug_data[:16]}")
-        except Exception as e:
-            print(f"[DEBUG] Could not read buffer after data chunking: {e}")
 
         prefill_cross_attention_masks = [
             prefill_cross_attention_masks[i * batch_per_device : (i + 1) * batch_per_device]
@@ -794,24 +739,6 @@ class Generator:
             torch.chunk(cross_page_table, self.data_parallel, 0) if cross_page_table is not None else None
         )
 
-        # Debug: Check buffer after mask preparation
-        try:
-            from ttexalens.tt_exalens_lib import read_words_from_device
-
-            debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-            print(f"[DEBUG] Buffer after mask preparation: {debug_data[:16]}")
-        except Exception as e:
-            print(f"[DEBUG] Could not read buffer after mask preparation: {e}")
-
-        # Debug: Check buffer before decode_kwargs preparation
-        try:
-            from ttexalens.tt_exalens_lib import read_words_from_device
-
-            debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-            print(f"[DEBUG] Buffer before decode_kwargs preparation: {debug_data[:16]}")
-        except Exception as e:
-            print(f"[DEBUG] Could not read buffer before decode_kwargs preparation: {e}")
-
         decode_kwargs = {
             "position_id": start_pos,
             "tokens": tokens,
@@ -825,69 +752,14 @@ class Generator:
             "cross_page_table": cross_page_table,
         }
 
-        # Debug: Check buffer after decode_kwargs preparation
-        try:
-            from ttexalens.tt_exalens_lib import read_words_from_device
-
-            debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-            print(f"[DEBUG] Buffer after decode_kwargs preparation: {debug_data[:16]}")
-        except Exception as e:
-            print(f"[DEBUG] Could not read buffer after decode_kwargs preparation: {e}")
-
-        # Debug: Check buffer just before trace/no_trace execution
-        try:
-            from ttexalens.tt_exalens_lib import read_words_from_device
-
-            debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-            print(f"[DEBUG] Buffer just before trace/no_trace execution: {debug_data[:16]}")
-        except Exception as e:
-            print(f"[DEBUG] Could not read buffer just before trace/no_trace execution: {e}")
         if enable_trace:
             tt_logits = self._easy_trace(**decode_kwargs)
         else:
             tt_logits = self._decode_forward_no_trace(**decode_kwargs)
 
-        # Debug: Check buffer after trace/no_trace execution
-        try:
-            from ttexalens.tt_exalens_lib import read_words_from_device
-
-            debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-            print(f"[DEBUG] Buffer after trace/no_trace execution: {debug_data[:16]}")
-        except Exception as e:
-            print(f"[DEBUG] Could not read buffer after trace/no_trace execution: {e}")
-
         if read_from_device:
-            # Debug: Check buffer before read_decode_output
-            try:
-                from ttexalens.tt_exalens_lib import read_words_from_device
-
-                debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-                print(f"[DEBUG] Buffer before read_decode_output: {debug_data[:16]}")
-            except Exception as e:
-                print(f"[DEBUG] Could not read buffer before read_decode_output: {e}")
-
             to_host = self.read_decode_output(tt_logits)
-
-            # Debug: Check buffer after read_decode_output
-            try:
-                from ttexalens.tt_exalens_lib import read_words_from_device
-
-                debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-                print(f"[DEBUG] Buffer after read_decode_output here 1: {debug_data[:16]}")
-            except Exception as e:
-                print(f"[DEBUG] Could not read buffer after read_decode_output: {e}")
-
             result = self.process_decode_output_host(to_host)
-
-            # Debug: Check buffer after process_decode_output_host
-            try:
-                from ttexalens.tt_exalens_lib import read_words_from_device
-
-                debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-                print(f"[DEBUG] Buffer after process_decode_output_host: {debug_data[:16]}")
-            except Exception as e:
-                print(f"[DEBUG] Could not read buffer after process_decode_output_host: {e}")
-
             return result
         else:
             return tt_logits
@@ -907,14 +779,7 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
     ):
-        # Debug: Check buffer at start of decode_forward
-        try:
-            from ttexalens.tt_exalens_lib import read_words_from_device
-
-            debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-            print(f"[DEBUG] Buffer at start of decode_forward: {debug_data[:16]}")
-        except Exception as e:
-            print(f"[DEBUG] Could not read buffer at start of decode_forward: {e}")
+        print("start of decode forward...")
 
         if (self.model_args[0].checkpoint_type == CheckpointType.HuggingFace) and (
             not self.model_args[0].is_llama_vision()
@@ -942,15 +807,6 @@ class Generator:
                 read_from_device,
             )
 
-            # Debug: Check buffer at end of decode_forward
-            try:
-                from ttexalens.tt_exalens_lib import read_words_from_device
-
-                debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-                print(f"[DEBUG] Buffer at end of decode_forward: {debug_data[:16]}")
-            except Exception as e:
-                print(f"[DEBUG] Could not read buffer at end of decode_forward: {e}")
-
             return result
 
     # Note: This function is called by vLLM
@@ -961,11 +817,24 @@ class Generator:
         debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
         print(f"[DEBUG] data start of read decode output: {debug_data[:16]}")
 
+        return_val = []
         if not async_read:
             print("returning decode output to host synchronously...")
-            return_val = [out.cpu(blocking=False) for out in tt_out]
-            debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-            print(f"[DEBUG] data before return val: {debug_data[:16]}")
+            print("len tt_out:  ", len(tt_out))
+            for out_idx in range(len(tt_out)):
+                print(f"[DEBUG] Reading output from device tensor {out_idx}...")
+                debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
+                print(f"[DEBUG] before return val for idx : {out_idx} : {debug_data[:16]}")
+                print(
+                    "address of tt_out buffer: ",
+                    (tt_out[out_idx].buffer_address(), hex(tt_out[out_idx].buffer_address())),
+                )
+                print("dtype of tt_out buffer: ", tt_out[out_idx].dtype)
+                print("size of tt_out buffer: ", tt_out[out_idx].volume() * 2)
+                return_val_idx = tt_out[out_idx].cpu()
+                debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
+                print(f"[DEBUG] after return val for idx : {out_idx} : {debug_data[:16]}")
+                return_val.append(return_val_idx)
             return return_val
 
         host_outputs = []
@@ -1012,15 +881,6 @@ class Generator:
         Performs text decode step.
         Returns tt_logits on device
         """
-
-        # Debug: Check buffer at start of _decode_forward_no_trace
-        try:
-            from ttexalens.tt_exalens_lib import read_words_from_device
-
-            debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-            print(f"[DEBUG] Buffer at start of _decode_forward_no_trace: {debug_data[:16]}")
-        except Exception as e:
-            print(f"[DEBUG] Could not read buffer at start of _decode_forward_no_trace: {e}")
 
         # forward_decode should be traced callable
         # decorator does compilation, capture, execute
@@ -1070,15 +930,6 @@ class Generator:
 
         tt_logits = []
         for i in range(self.data_parallel):
-            # Debug: Check buffer before ttnn_decode_forward for device i
-            try:
-                from ttexalens.tt_exalens_lib import read_words_from_device
-
-                debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-                print(f"[DEBUG] Buffer before ttnn_decode_forward device {i}: {debug_data[:16]}")
-            except Exception as e:
-                print(f"[DEBUG] Could not read buffer before ttnn_decode_forward device {i}: {e}")
-
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             xattn_cache = xattn_caches[i] if xattn_caches is not None else None
             tt_logits_i = self.model[i].ttnn_decode_forward(
@@ -1093,27 +944,7 @@ class Generator:
                 kv_cache=user_kv_cache,
                 cross_page_table=tt_cross_page_table[i],
             )
-
-            # Debug: Check buffer after ttnn_decode_forward for device i
-            try:
-                from ttnn.ttexalens.tt_exalens_lib import read_words_from_device
-
-                debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-                print(f"[DEBUG] Buffer after ttnn_decode_forward device {i}: {debug_data[:16]}")
-            except Exception as e:
-                print(f"[DEBUG] Could not read buffer after ttnn_decode_forward device {i}: {e}")
-
             tt_logits.append(tt_logits_i)
-
-        # Debug: Check buffer before returning from _decode_forward_no_trace
-        try:
-            from ttexalens.tt_exalens_lib import read_words_from_device
-
-            debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-            print(f"[DEBUG] Buffer before returning from _decode_forward_no_trace: {debug_data[:16]}")
-        except Exception as e:
-            print(f"[DEBUG] Could not read buffer before returning from _decode_forward_no_trace: {e}")
-
         return tt_logits
 
     def _capture_trace(
@@ -1297,15 +1128,6 @@ class Generator:
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
 
-        # Debug: Check buffer at end of _decode_forward_no_trace
-        try:
-            from ttexalens.tt_exalens_lib import read_words_from_device
-
-            debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-            print(f"[DEBUG] Buffer at end of _decode_forward_no_trace: {debug_data[:16]}")
-        except Exception as e:
-            print(f"[DEBUG] Could not read buffer at end of _decode_forward_no_trace: {e}")
-
         return (
             trace_ids,
             tt_logits_rm,
@@ -1388,44 +1210,9 @@ class Generator:
                     trace_cross_page_table[i],
                 ),
             )
-        # Debug: Check buffer before executing traces
-        try:
-            from ttexalens.tt_exalens_lib import read_words_from_device
-
-            debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-            print(f"[DEBUG] Buffer before executing traces: {debug_data[:16]}")
-        except Exception as e:
-            print(f"[DEBUG] Could not read buffer before executing traces: {e}")
 
         for i, trace_id in trace_ids.items():
-            # Debug: Check buffer before executing trace for device i
-            try:
-                from ttexalens.tt_exalens_lib import read_words_from_device
-
-                debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-                print(f"[DEBUG] Buffer before executing trace device {i}: {debug_data[:16]}")
-            except Exception as e:
-                print(f"[DEBUG] Could not read buffer before executing trace device {i}: {e}")
-
             ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
-
-            # Debug: Check buffer after executing trace for device i
-            try:
-                from ttexalens.tt_exalens_lib import read_words_from_device
-
-                debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-                print(f"[DEBUG] Buffer after executing trace device {i}: {debug_data[:16]}")
-            except Exception as e:
-                print(f"[DEBUG] Could not read buffer after executing trace device {i}: {e}")
-
-        # Debug: Check buffer after all traces executed
-        try:
-            from ttexalens.tt_exalens_lib import read_words_from_device
-
-            debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-            print(f"[DEBUG] Buffer after all traces executed: {debug_data[:16]}")
-        except Exception as e:
-            print(f"[DEBUG] Could not read buffer after all traces executed: {e}")
 
         return trace_logits_rm
 
@@ -1445,14 +1232,6 @@ class Generator:
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
         """
-        # Debug: Check buffer at start of _easy_trace
-        try:
-            from ttexalens.tt_exalens_lib import read_words_from_device
-
-            debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-            print(f"[DEBUG] Buffer at start of _easy_trace: {debug_data[:16]}")
-        except Exception as e:
-            print(f"[DEBUG] Could not read buffer at start of _easy_trace: {e}")
 
         if not hasattr(self, "trace_ids"):
             (
@@ -1493,15 +1272,6 @@ class Generator:
                 "tt_logits_rm": tt_logits_rm,
             }
 
-        # Debug: Check buffer before _decode_forward_trace
-        try:
-            from ttexalens.tt_exalens_lib import read_words_from_device
-
-            debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-            print(f"[DEBUG] Buffer before _decode_forward_trace: {debug_data[:16]}")
-        except Exception as e:
-            print(f"[DEBUG] Could not read buffer before _decode_forward_trace: {e}")
-
         trace_logits_rm = self._decode_forward_trace(
             position_id,
             tokens,
@@ -1522,15 +1292,6 @@ class Generator:
             self.trace_inputs["tt_page_table"],
             self.trace_inputs["tt_cross_page_table"],
         )
-
-        # Debug: Check buffer after _decode_forward_trace
-        try:
-            from ttexalens.tt_exalens_lib import read_words_from_device
-
-            debug_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-            print(f"[DEBUG] Buffer after _decode_forward_trace: {debug_data[:16]}")
-        except Exception as e:
-            print(f"[DEBUG] Could not read buffer after _decode_forward_trace: {e}")
 
         return trace_logits_rm
 

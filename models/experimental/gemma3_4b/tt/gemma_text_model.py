@@ -363,6 +363,7 @@ class Gemma3Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        print("start of ttnn_decode_forward")
         rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs_global)
         if self.rope_setup_local is not None:
             rot_mats_local = self.rope_setup_local.get_rot_mats(rot_mat_idxs_local)
@@ -415,7 +416,9 @@ class Gemma3Transformer(LightweightModule):
             # TODO Investigate why moving to DRAM fails, it never should!
             # tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
             pass
-
+        print("end of ttnn_decode_forward with tt_logits shape: ", tt_logits.shape)
+        print("tt_logits dtype: ", tt_logits.dtype)
+        print("tt_logits memory config: ", tt_logits.memory_config())
         return tt_logits
 
     def forward(

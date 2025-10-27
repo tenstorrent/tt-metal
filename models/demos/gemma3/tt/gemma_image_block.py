@@ -8,7 +8,6 @@ TtGemmaImageAttention and TtGemmaImageFeedForward
 
 # SPDX-License-Identifier: Apache-2.0
 
-from ttexalens.tt_exalens_lib import read_words_from_device
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -40,9 +39,6 @@ class TtGemmaImageTransformerBlock(LightweightModule):
         self.hidden_size = configuration.vision_dim
         self.gated = gated
 
-        read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-        read_data = list(read_data)
-        print("read data before TtLayerNorm: ", read_data)
         self.ln_1 = TtLayerNorm(
             device=mesh_device,
             dim=configuration.vision_dim,
@@ -53,9 +49,6 @@ class TtGemmaImageTransformerBlock(LightweightModule):
             eps=configuration.norm_eps,
         )
 
-        read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-        read_data = list(read_data)
-        print("read data after TtLayerNorm: ", read_data)
         self.attn = TtGemmaImageAttention(
             mesh_device=mesh_device,
             tt_ccl=tt_ccl,
@@ -65,9 +58,6 @@ class TtGemmaImageTransformerBlock(LightweightModule):
             dtype=dtype,
             configuration=configuration,
         )
-        read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-        read_data = list(read_data)
-        print("read data after TtGemmaImageAttention: ", read_data)
 
         self.ln_2 = TtLayerNorm(
             device=mesh_device,
@@ -78,9 +68,6 @@ class TtGemmaImageTransformerBlock(LightweightModule):
             weight_dtype=dtype,
             eps=configuration.norm_eps,
         )
-        read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-        read_data = list(read_data)
-        print("read data after TtLayerNorm: ", read_data)
 
         self.mlp = TtGemmaImageFeedForward(
             mesh_device=mesh_device,
@@ -91,9 +78,6 @@ class TtGemmaImageTransformerBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             dtype=dtype,
         )
-        read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-        read_data = list(read_data)
-        print("read data after TtGemmaImageFeedForward: ", read_data)
 
         if gated:
             # Gate tensors must be expanded to hidden dim or we get a PCC error
@@ -118,10 +102,6 @@ class TtGemmaImageTransformerBlock(LightweightModule):
         seq_len = x_11SH.shape[-2]
         assert seq_len % 32 == 0 and seq_len > 0, "Seqlen must be divisible by 32"
         batch_size = x_11SH.shape[0]
-
-        read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-        read_data = list(read_data)
-        print("read data start of image block forward: ", read_data)
 
         attn_out = self.attn(self.ln_1(x_11SH), mask=mask)
         if self.gated:
@@ -154,7 +134,4 @@ class TtGemmaImageTransformerBlock(LightweightModule):
         ttnn.deallocate(mlp_out)
         ttnn.deallocate(attn_out)
         ttnn.deallocate(res)
-        read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-        read_data = list(read_data)
-        print("read data end of image block forward: ", read_data)
         return out

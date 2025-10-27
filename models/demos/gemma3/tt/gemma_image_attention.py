@@ -10,7 +10,6 @@ configuration changes.
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from ttexalens.tt_exalens_lib import read_words_from_device
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -295,9 +294,6 @@ class TtGemmaImageAttention(LightweightModule):
 
         MAX_MM_SEQ_LEN = seq_len if self.configuration.is_gemma else self.configuration.VISION_MAX_MM_SEQ
 
-        read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-        read_data = list(read_data)
-        print("read data start of forward: ", read_data)
         if seq_len > MAX_MM_SEQ_LEN:
             x_11SH = ttnn.reshape(x_11SH, [batch_size, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
 
@@ -310,12 +306,8 @@ class TtGemmaImageAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi4,
             program_config=self.qkv_program_config(seq_len, MAX_MM_SEQ_LEN),
         )
-        print("before gemma image attention reshape\n")
-        read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-        read_data = list(read_data)
-        print("read data before reshape: ", read_data)
+
         q_heads_1QSD = ttnn.transpose(ttnn.reshape(q_heads_1QSD, (batch_size, seq_len, self.n_local_heads, -1)), 1, 2)
-        print("after gemma image attention reshape\n")
 
         k_heads_1KSD = ttnn.linear(
             x_11SH,
@@ -401,7 +393,4 @@ class TtGemmaImageAttention(LightweightModule):
             output_11SH = ttnn.reshape(output_11SH, [batch_size, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
-        read_data = read_words_from_device("0-0", 0x1197DB60, word_count=32)
-        read_data = list(read_data)
-        print("read data before return: ", read_data)
         return output_11SH
