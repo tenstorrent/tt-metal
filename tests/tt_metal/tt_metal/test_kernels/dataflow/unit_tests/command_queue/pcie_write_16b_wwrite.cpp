@@ -33,12 +33,7 @@ void kernel_main() {
             CQ_NOC_WAIT,
             true /* update_counter */,
             false /* posted */>(
-            NOC_0,
-            l1_src_address,
-            pcie_xy_enc,
-            pcie_dst_address,
-            16 /* bytes per write */,
-            1 /* ndests */);
+            NOC_0, l1_src_address, pcie_xy_enc, pcie_dst_address, 16 /* bytes per write */, 1 /* ndests */);
 
         l1_src_address += 16;
         pcie_dst_address += 16;
@@ -47,5 +42,3 @@ void kernel_main() {
     // Ensure all outstanding transactions are flushed
     noc_async_write_barrier();
 }
-
-
