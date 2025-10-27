@@ -105,11 +105,11 @@ EOF
       - source_labels: [__address__]
         regex: '([^:]+):(\d+)'
         target_label: host
-        replacement: '\${1}'
+        replacement: '$${1}'
       - source_labels: [__address__]
         regex: '([^:]+):(\d+)'
         target_label: port
-        replacement: '\${2}'
+        replacement: '$${2}'
 EOF
 }
 
