@@ -217,7 +217,6 @@ private:
     // Fabric program includes ethernet router kernel
     std::unique_ptr<Program> fabric_program_;
 
-    uint32_t worker_thread_core_ = 0;
     uint32_t completion_queue_reader_core_ = 0;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     uint8_t num_hw_cqs_ = 1;
@@ -239,8 +238,6 @@ private:
     program_cache::detail::ProgramCache program_cache_;
 
     uint32_t trace_buffers_size_ = 0;
-    bool uninitialized_error_fired_ =
-        false;  // To avoid spam with warnings about calling Device methods when it's not initialized.
     uint32_t ethernet_core_count_on_dispatcher_ = 0;
 };
 
