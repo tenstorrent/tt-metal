@@ -705,6 +705,7 @@ class MLA1D(AbstractModule):
             batch_per_shard = even_int_div(batch_size, dp_factor)
 
             page_table = torch.randperm(max_num_blocks, dtype=torch.int32)  # Randperm not necessary, but more rigorous
+            # page_table = page_table.reshape(even_int_div(max_num_blocks, batch_per_shard), batch_per_shard)
             page_table = page_table.reshape(batch_per_shard, even_int_div(max_num_blocks, batch_per_shard))
         assert page_table.numel() == paged_config.max_num_blocks
 

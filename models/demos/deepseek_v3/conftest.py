@@ -92,7 +92,7 @@ def hf_config(model_path):
 def hf_config_short(request, hf_config):
     hf_config_out = deepcopy(hf_config)
     hf_config_out.num_hidden_layers = getattr(request, "param", 1)
-    hf_config_out.max_seq_len = 3 * 1024
+    hf_config_out.max_seq_len = 1024
     return hf_config_out
 
 

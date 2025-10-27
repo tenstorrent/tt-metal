@@ -14,13 +14,14 @@ from transformers import AutoConfig
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
 from models.demos.deepseek_v3.tt.ccl import CCL
-from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
-from models.demos.deepseek_v3.tt.model.row_pipelined_model import RowPipelinedModel
+from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
+from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_weight_config
 from models.demos.deepseek_v3.utils.hf_model_utils import load_model_weights
 from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.test_utils import add_inv_scale_to_state_dict
+from models.demos.deepseek_v3.utils.test_utils import add_inv_scale_to_state_dict, get_rope_tensors
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
 @dataclass(frozen=True)
@@ -71,7 +72,6 @@ class DeepseekGenerator:
     ) -> None:
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
-        self.batch_size = min(USERS_PER_ROW, batch_size)
         self.cache_dir = cache_dir
 
         # Load HF config + tokenizer
@@ -79,7 +79,7 @@ class DeepseekGenerator:
             hf_config if hf_config is not None else AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
         )
         # self._ensure_max_seq_len(self.hf_config)
-        self.hf_config.max_seq_len = 4096  # TODO: Change this when needed?
+        self.hf_config.max_seq_len = 1024  # TODO: Change this when needed?
         # Optional overrides for layer counts before building states
         if override_num_layers is not None:
             try:
@@ -98,19 +98,22 @@ class DeepseekGenerator:
         self.ccl = CCL(mesh_device)
         mesh_shape = list(mesh_device.shape)
         self.dp_factor = mesh_shape[1]
-
+        # Weight cache to avoid loading weights multiple times
+        self._weight_ttnn_cache: dict[str, ttnn.Tensor] = {}
         # Paged attention setup
-        self.paged_config = MLA1D.get_valid_paged_config(self.hf_config.max_seq_len, USERS_PER_ROW, self.dp_factor)
-        self.page_tables_tt = [
-            MLA1D.create_page_table(
+        self.batch_size_per_row = USERS_PER_ROW
+        self.batch_size = self.batch_size_per_row * self.mesh_device.shape[0]
+        self.paged_config = MLA2D.get_valid_paged_config(self.hf_config.max_seq_len, self.batch_size, self.dp_factor)
+        self.page_tables_tt = tuple(
+            MLA2D.create_page_table(
                 paged_config=self.paged_config,
-                mesh_device=mesh_device,
+                mesh_device=self.mesh_device,
+                batch_size_per_row=int(self.batch_size_per_row / self.mesh_device.shape[0]),
             )
             for _ in range(self.hf_config.num_hidden_layers)
-        ]
-        self.rope = RotarySetup(device=mesh_device, batch_size_per_row=USERS_PER_ROW, hf_config=self.hf_config)
-
-        # Prepare weights/configs
+        )
+        for page_table in self.page_tables_tt:
+            logger.info(f"page_table shape: {page_table.shape}")
         self.random_weights = random_weights
         self.single_layer = single_layer
         self._prepare_weight_configs(cache_dir)
@@ -181,7 +184,7 @@ class DeepseekGenerator:
         # Convert weights to TT tensors-on-disk and build weight_config
         logger.info("Converting weights to TTNN SavedWeight format (RowPipelinedModel)...")
         self.model_weight_config = get_weight_config(
-            ModuleClass=RowPipelinedModel,
+            ModuleClass=RowBatchedModel,
             hf_config=self.hf_config,
             state_dicts=(model_state,),
             weight_cache_path=weight_cache_path,
@@ -191,18 +194,18 @@ class DeepseekGenerator:
 
     def _prepare_model_states(self) -> None:
         logger.info("Creating model states...")
-        self.model_state = RowPipelinedModel.create_state(
+        self.model_state = RowBatchedModel.create_state(
             hf_config=self.hf_config, mesh_device=self.mesh_device, paged_config=self.paged_config, ccl=self.ccl
         )
         logger.info("Creating model shared states...")
-        self.model_shared_state = RowPipelinedModel.create_shared_state(
+        self.model_shared_state = RowBatchedModel.create_shared_state(
             hf_config=self.hf_config, mesh_device=self.mesh_device
         )
 
     def _prepare_run_configs(self, mode: str) -> None:
         if mode == "prefill":
             logger.info("Creating model prefill config...")
-            self.model_prefill_cfg = RowPipelinedModel.prefill_model_config(
+            self.model_prefill_cfg = RowBatchedModel.prefill_model_config(
                 hf_config=self.hf_config, mesh_device=self.mesh_device
             )
             self._prepare_model_states()
@@ -211,6 +214,7 @@ class DeepseekGenerator:
                 self.model_weight_config,
                 self.model_state,
                 self.model_shared_state,
+                cached_ttnn_weights=self._weight_ttnn_cache,
             )
         elif mode == "decode":
             logger.info("Creating model decode config...")
@@ -220,7 +224,7 @@ class DeepseekGenerator:
             assert (
                 hasattr(self, "model_shared_state") and self.model_shared_state is not None
             ), "Model shared state must be prepared before creating decode run config. Run _prepare_run_configs('prefill') first."
-            self.model_decode_cfg = RowPipelinedModel.decode_model_config(
+            self.model_decode_cfg = RowBatchedModel.decode_model_config(
                 hf_config=self.hf_config, mesh_device=self.mesh_device
             )
             self.model_run_config_decode = create_run_config(
@@ -228,6 +232,7 @@ class DeepseekGenerator:
                 self.model_weight_config,
                 self.model_state,
                 self.model_shared_state,
+                cached_ttnn_weights=self._weight_ttnn_cache,
             )
         else:
             raise ValueError(f"Unknown run config mode: {mode}")
@@ -247,6 +252,105 @@ class DeepseekGenerator:
                 logger.info("No decode run config to cleanup")
         else:
             raise ValueError(f"Unknown run config mode: {mode}")
+
+    def clear_ttnn_weight_cache(self) -> None:
+        """Clear the TTNN weight cache to free up memory."""
+        # Deallocate all TTNN tensors before clearing the cache
+        for tensor_path, tensor in self._weight_ttnn_cache.items():
+            try:
+                ttnn.deallocate(tensor)
+            except Exception as e:
+                logger.warning(f"Failed to deallocate tensor {tensor_path}: {e}")
+        self._weight_ttnn_cache.clear()
+
+    def cleanup_all(self) -> None:
+        """Comprehensive cleanup of all resources managed by the generator."""
+        # Clear TTNN weight cache
+        try:
+            self.clear_ttnn_weight_cache()
+        except Exception as e:
+            logger.warning(f"Failed to clear weight cache: {e}")
+
+        # Clean up run configs
+        try:
+            self._cleanup_run_configs("prefill")
+        except Exception as e:
+            logger.warning(f"Failed to cleanup prefill run config: {e}")
+
+        try:
+            self._cleanup_run_configs("decode")
+        except Exception as e:
+            logger.warning(f"Failed to cleanup decode run config: {e}")
+
+        # Clean up model states
+        try:
+            if hasattr(self, "model_state") and self.model_state is not None:
+                del self.model_state
+        except Exception as e:
+            logger.warning(f"Failed to cleanup model state: {e}")
+
+        try:
+            if hasattr(self, "model_shared_state") and self.model_shared_state is not None:
+                del self.model_shared_state
+        except Exception as e:
+            logger.warning(f"Failed to cleanup model shared state: {e}")
+
+        # Clean up page tables (TTNN tensors)
+        try:
+            if hasattr(self, "page_tables_tt") and self.page_tables_tt is not None:
+                for i, page_table in enumerate(self.page_tables_tt):
+                    try:
+                        ttnn.deallocate(page_table)
+                    except Exception as e:
+                        logger.warning(f"Failed to deallocate page table {i}: {e}")
+                del self.page_tables_tt
+        except Exception as e:
+            logger.warning(f"Failed to cleanup page tables: {e}")
+
+        # Clean up RoPE setup
+        try:
+            if hasattr(self, "rope") and self.rope is not None:
+                del self.rope
+        except Exception as e:
+            logger.warning(f"Failed to cleanup RoPE setup: {e}")
+
+        # Clean up CCL
+        try:
+            if hasattr(self, "ccl") and self.ccl is not None:
+                del self.ccl
+        except Exception as e:
+            logger.warning(f"Failed to cleanup CCL: {e}")
+
+        # Clean up configs
+        try:
+            if hasattr(self, "model_prefill_cfg") and self.model_prefill_cfg is not None:
+                del self.model_prefill_cfg
+            if hasattr(self, "model_decode_cfg") and self.model_decode_cfg is not None:
+                del self.model_decode_cfg
+            if hasattr(self, "model_weight_config") and self.model_weight_config is not None:
+                del self.model_weight_config
+
+        except Exception as e:
+            logger.warning(f"Failed to cleanup model configs: {e}")
+
+        # Clean up paged config
+        try:
+            if hasattr(self, "paged_config") and self.paged_config is not None:
+                del self.paged_config
+        except Exception as e:
+            logger.warning(f"Failed to cleanup paged config: {e}")
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit with automatic cleanup."""
+        self.cleanup_all()
+
+    def __del__(self):
+        """Destructor to ensure cleanup when object is garbage collected."""
+        self.cleanup_all()
 
     def _tt_from_tokens_step(self, tokens_step: torch.Tensor) -> ttnn.Tensor:
         """Tokens step: [B] -> TTNN tensor [1, 1, B] uint32, replicated to mesh."""
@@ -268,7 +372,8 @@ class DeepseekGenerator:
         returns: (rope_tensors, tt_positions)
         """
         # Build RoPE tensors for current positions
-        rope_mats = self.rope.get_rot_mats(positions.to(torch.int32))
+        rope_setup = RotarySetup(device=self.mesh_device, batch_size_per_row=USERS_PER_ROW, hf_config=self.hf_config)
+        rope_mats = rope_setup.get_rot_mats_table(seq_len=1)
         rope_tensors = {
             "cos_matrix": rope_mats["cos_matrix"],
             "sin_matrix": rope_mats["sin_matrix"],
@@ -280,19 +385,26 @@ class DeepseekGenerator:
         tt_positions = ttnn.from_torch(
             positions.to(torch.int32),
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, 0), mesh_shape=mesh_shape),
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
             dtype=ttnn.int32,
         )
         return rope_tensors, tt_positions
 
-    def _decode_step(self, tokens_step: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+    def _decode_step(self, tokens_step: torch.Tensor, positions: torch.Tensor, batch_size_per_row: int) -> torch.Tensor:
         """Run a single decode step and return logits on host as torch tensor [1, 1, B, V]."""
         # Prepare TT inputs
         tt_tokens = self._tt_from_tokens_step(tokens_step)
-        rope_tensors, tt_positions = self._tt_from_positions(positions)
+        rope_tensors = get_rope_tensors(self.hf_config, batch_size_per_row, 1, positions, self.mesh_device)
+        tt_positions = ttnn.from_torch(
+            positions,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+            dtype=ttnn.int32,
+        )
 
         # RowPipelinedModel forward
-        logits_tt = RowPipelinedModel.forward_decode(
+
+        logits_tt = RowBatchedModel.forward_decode(
             tt_tokens,
             tt_positions,
             self.model_run_config_decode,
@@ -300,8 +412,10 @@ class DeepseekGenerator:
             self.page_tables_tt,
         )
         # Gather to host
-        logits = ttnn.to_torch(logits_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=3))
-
+        logits = ttnn.to_torch(
+            logits_tt,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape),
+        )
         # Free device tensors for this step
         ttnn.deallocate(tt_tokens)
         ttnn.deallocate(logits_tt)
@@ -347,7 +461,7 @@ class DeepseekGenerator:
         }
 
         # RowPipelinedModel forward prefill
-        logits_tt = RowPipelinedModel.forward_prefill(
+        logits_tt = RowBatchedModel.forward_prefill(
             tt_tokens, user_id, self.model_run_config_prefill, rope_tensors, self.page_tables_tt
         )
 
@@ -362,7 +476,7 @@ class DeepseekGenerator:
     def _sample_greedy(self, logits: torch.Tensor) -> torch.Tensor:
         return torch.argmax(logits, dim=-1)  # [B]
 
-    def _pad_batch(self, tokens_list: List[List[int]]) -> Tuple[torch.Tensor, List[int]]:
+    def _pad_batch(self, tokens_list: List[List[int]], batch_size: int) -> Tuple[torch.Tensor, List[int]]:
         """Pad/pack a list of token id sequences to batch of size USERS_PER_ROW.
 
         Returns
@@ -371,14 +485,14 @@ class DeepseekGenerator:
         """
         assert len(tokens_list) > 0 and len(tokens_list) <= USERS_PER_ROW
         max_len = max(len(t) for t in tokens_list)
-        # Round up to nearest multiple of TILE_SIZE
-        max_len = ((max_len + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-        out = torch.full((USERS_PER_ROW, max_len), self.tokenizer.pad_token_id, dtype=torch.long)
-        lengths = torch.zeros((USERS_PER_ROW,), dtype=torch.int32)
+        B = batch_size
+        out = torch.full((B, max_len), 0, dtype=torch.long)
+        valid = []
         for i, seq in enumerate(tokens_list):
+            # logger.info(f"seq {i} = {seq}")
             out[i, : len(seq)] = torch.tensor(seq, dtype=torch.long)
-            lengths[i] = len(seq)
-        return out, lengths
+            valid.append(len(seq))
+        return out, valid
 
     def generate(
         self,
@@ -387,51 +501,64 @@ class DeepseekGenerator:
         sampling: SamplingParams | None = None,
         teacher_forcing=None,
         early_print_first_user: bool = True,
-    ) -> List[List[int]]:
+    ) -> Tuple[List[List[int]], dict]:
         """Generate tokens for the given prompts using greedy decode by default.
 
         early_print_first_user: If True, prints generated tokens for the first user
                                 at each step. Better for demo visibility.
 
-        Returns: list of generated token id lists for the provided prompts (order preserved).
+        Returns: (list of generated token id lists for the provided prompts (order preserved), statistics dictionary)
         """
+        # Initialize profiler
+        profiler = BenchmarkProfiler()
+        profiler.start("run")
+
         prompts = list(prompts)
-        assert 1 <= len(prompts) <= USERS_PER_ROW, f"Supports 1..{USERS_PER_ROW} prompts"
+        num_of_prompts = len(prompts)
+        assert 1 <= num_of_prompts <= USERS_PER_ROW, f"Supports 1..{USERS_PER_ROW} prompts"
+
+        logger.info("Creating model run configs...")
+        profiler.start("preparing_prefill_config")
+        self._prepare_run_configs("prefill")
+        profiler.end("preparing_prefill_config")
+
+        profiler.start("preparing_decode_config")
+        self._prepare_run_configs("decode")
+        profiler.end("preparing_decode_config")
 
         # Tokenize using HF chat template
+        profiler.start("tokenizing")
         encoded: List[List[int]] = [self._encode_prompt(p) for p in prompts]
-        tokens_batched, lengths = self._pad_batch(encoded)  # [USERS_PER_ROW, seq_len]
+        tokens_batched, lengths = self._pad_batch(encoded, self.batch_size)
+        logger.info(f"tokens_batched shape: {tokens_batched.shape}")
+        profiler.end("tokenizing")
 
         logger.info(f"Lengths of (encoded) prompts: {lengths}")
-        # Prefill
-        self._prepare_run_configs("prefill")
-        num_of_users = tokens_batched.shape[0]
-        last_logits = []
-        for user_id in range(num_of_users):
-            if lengths[user_id] == 0:
-                logger.info(f"Skipping prefill for user {user_id} as prompt length is 0")
-                last_logits.append(torch.zeros(self.hf_config.vocab_size))
-                continue
-            logger.info(f"Running prefill for {user_id}")
-            logger.info(
-                f"Input to the prefill: {self.tokenizer.decode(tokens_batched[user_id].tolist(), skip_special_tokens=True)}"
+
+        # Prefill via repeated decode steps over prompt tokens
+        profiler.start("inference_prefill")
+        positions = torch.zeros(self.batch_size, dtype=torch.int32)
+        last_logits = None
+
+        for step in range(tokens_batched.shape[1]):
+            step_tokens = tokens_batched[:, step]  # [B]
+            last_logits = (
+                self._decode_step(step_tokens, positions, batch_size_per_row=self.batch_size_per_row)
+                .squeeze(0)
+                .squeeze(0)
             )
-            user_out = self._prefill(tokens_batched[user_id], user_id)
-            user_out = user_out[0, 0, -1:, :].squeeze(0)  # [ 1, 1, seq_len, V] -> [V]
-            last_logits.append(user_out)
-        last_logits = torch.stack(last_logits)
+            positions += 1
 
-        self._cleanup_run_configs("prefill")
-        assert len(last_logits) == num_of_users
+        assert last_logits is not None
+        profiler.end("inference_prefill")
 
-        logger.info(f"Finished prefill for all users...")
+        logger.info(f"Finished prefill-via-decode for all users...")
 
         # First sampled token after prompt
+        last_logits = last_logits.squeeze(0).squeeze(0)
         next_tokens = self._sample_greedy(last_logits)
-
-        # Decode
-        self._prepare_run_configs("decode")
-        positions = torch.zeros(USERS_PER_ROW, dtype=torch.int32) + lengths
+        token_value = int(next_tokens[0].item())
+        logger.info(f"First sampled token: {self.tokenizer.decode(token_value, skip_special_tokens=True)}")
 
         # If teacher forcing is enabled, collect the model's predicted token and force GT for next step (single prompt)
         if teacher_forcing is not None:
@@ -439,12 +566,19 @@ class DeepseekGenerator:
             forced = teacher_forcing.collect_predicted_tokens(int(next_tokens[0].item()))
             next_tokens[0] = int(forced)
 
-        generations: List[List[int]] = [[] for _ in range(len(prompts))]
+        generations: List[List[int]] = [[] for _ in range(num_of_prompts)]
+        logger.info(f"Generating {max_new_tokens} tokens for {num_of_prompts} user(s)...")
         if early_print_first_user:
             logger.info("===== Generation for first user =====")
+
+        profiler.start("inference_decode")
         for gen_idx in range(max_new_tokens):
             # Decode one step with previous next_tokens
-            logits = self._decode_step(next_tokens, positions).squeeze(0).squeeze(0)
+            logger.info(f"Decoding step {gen_idx} for {num_of_prompts} user(s)...")
+            profiler.start(f"decode_time_{gen_idx}")
+            logits = self._decode_step(next_tokens, positions, self.batch_size_per_row).squeeze(0).squeeze(0)
+            profiler.end(f"decode_time_{gen_idx}")
+
             pred_tokens = self._sample_greedy(logits)
             if teacher_forcing is not None:
                 forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
@@ -453,17 +587,56 @@ class DeepseekGenerator:
             positions += 1
 
             # Collect only for the original batch size
-            for i in range(len(prompts)):
+            for i in range(num_of_prompts):
                 token_value = int(next_tokens[i].item())
                 generations[i].append(token_value)
                 if early_print_first_user and i == 0:
                     print(self.tokenizer.decode(token_value, skip_special_tokens=True), end="", flush=True)
 
+        profiler.end("inference_decode")
+        profiler.end("run")
+
         if early_print_first_user:
             logger.info("\n===== Done =====")
 
-        self._cleanup_run_configs("decode")
-        return generations
+        # Calculate statistics
+        prefill_time = profiler.get_duration("inference_prefill")
+        decode_times = [profiler.get_duration(f"decode_time_{i}") for i in range(max_new_tokens)]
+
+        # Get config preparation times
+        prefill_config_time = profiler.get_duration("preparing_prefill_config")
+        decode_config_time = profiler.get_duration("preparing_decode_config")
+
+        # Average prompt length for prefill calculation
+        avg_prompt_len = float(lengths[0] if len(lengths) > 0 else 0)
+
+        # Calculate statistics
+        prefill_tokens_per_sec = (avg_prompt_len / prefill_time) * num_of_prompts if prefill_time > 0 else 0
+
+        # Calculate decode throughput excluding the first iteration (compile time)
+        # This matches simple_text_demo.py: line 1071-1072 excludes iteration 0 when summing times
+        if len(decode_times) > 1:
+            total_decode_time = sum(decode_times[1:])  # Exclude iteration 0 (compile time)
+            decode_tokens_per_sec_per_user = (max_new_tokens - 1) / total_decode_time if total_decode_time > 0 else 0
+        else:
+            total_decode_time = sum(decode_times)
+            decode_tokens_per_sec_per_user = 0
+        decode_tokens_per_sec = decode_tokens_per_sec_per_user * num_of_prompts
+        avg_time_to_first_token = prefill_time / num_of_prompts if num_of_prompts > 0 else 0
+
+        statistics = {
+            "preparing_prefill_config": prefill_config_time,
+            "preparing_decode_config": decode_config_time,
+            "inference_prefill": prefill_time,
+            "inference_decode": total_decode_time,
+            "prefill_time_to_token": avg_time_to_first_token,
+            "prefill_t/s": prefill_tokens_per_sec,
+            "decode_t/s/u": decode_tokens_per_sec_per_user,
+            "decode_t/s": decode_tokens_per_sec,
+            "Full demo runtime": profiler.get_duration("run"),
+        }
+
+        return generations, statistics
 
     def _encode_prompt(self, prompt: str) -> List[int]:
         # Use HF chat template if a tokenizer is provided; otherwise synthesize simple token ids
