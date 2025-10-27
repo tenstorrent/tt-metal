@@ -6,10 +6,10 @@
 
 #include <cstdint>
 #include "hw/inc/host_interface.hpp"
-#include "tt_cluster.hpp"
 #include "core_coord.hpp"
 #include <memory>
 #include <umd/device/types/arch.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/cluster_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
@@ -38,27 +38,27 @@ struct SystemDescriptor {
 
 // Abstract interface for the Lite Fabric cluster
 class LiteFabricHal {
-private:
+protected:
     SystemDescriptor system_descriptor_;
 
 public:
-    LiteFabricHal(tt::Cluster& cluster);
+    LiteFabricHal();
 
     static std::shared_ptr<LiteFabricHal> create();
 
     virtual ~LiteFabricHal() = default;
 
-    virtual void set_reset_state(tt::Cluster& cluster, tt_cxy_pair virtual_core, bool assert_reset) = 0;
+    virtual void set_reset_state(tt_cxy_pair virtual_core, bool assert_reset) = 0;
 
-    virtual void set_pc(tt::Cluster& cluster, tt_cxy_pair virtual_core, uint32_t pc_addr, uint32_t pc_val) = 0;
+    virtual void set_pc(tt_cxy_pair virtual_core, uint32_t pc_val) = 0;
 
-    virtual void launch(tt::Cluster& cluster, const SystemDescriptor& desc, const std::filesystem::path& bin_path) = 0;
+    virtual void launch(const std::filesystem::path& bin_path) = 0;
 
-    virtual void terminate(tt::Cluster& cluster, const SystemDescriptor& desc) = 0;
+    virtual void terminate() = 0;
 
     virtual tt::umd::tt_version get_binary_version() = 0;
 
-    virtual void wait_for_state(tt::Cluster& cluster, tt_cxy_pair virtual_core, lite_fabric::InitState state) = 0;
+    virtual void wait_for_state(tt_cxy_pair virtual_core, lite_fabric::InitState state) = 0;
 
     virtual std::vector<std::filesystem::path> build_includes(const std::filesystem::path& root_dir) = 0;
 
@@ -66,12 +66,15 @@ public:
 
     virtual std::vector<std::filesystem::path> build_linker(const std::filesystem::path& root_dir) = 0;
 
-    void wait_for_state(tt::Cluster& cluster, const SystemDescriptor& desc, lite_fabric::InitState state);
+    virtual std::string build_target_name() = 0;
 
-    void set_pc(tt::Cluster& cluster, const SystemDescriptor& desc, uint32_t pc_addr, uint32_t pc_val);
+    void wait_for_state(lite_fabric::InitState state);
 
-    void set_reset_state(tt::Cluster& cluster, const SystemDescriptor& desc, bool assert_reset);
+    void set_pc(uint32_t pc_val);
 
+    void set_reset_state(bool assert_reset);
+
+    const SystemDescriptor& get_system_descriptor() { return system_descriptor_; }
 };
 
 }  // namespace lite_fabric

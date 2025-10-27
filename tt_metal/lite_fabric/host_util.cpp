@@ -18,12 +18,12 @@ void InitializeLiteFabric(std::shared_ptr<lite_fabric::LiteFabricHal>& lite_fabr
     if (lite_fabric::CompileFabricLite(lite_fabric_hal, home_directory, output_directory)) {
         throw std::runtime_error("Failed to compile lite fabric");
     }
-    if (lite_fabric::LinkFabricLite(
-            lite_fabric_hal, home_directory, output_directory, output_directory / "lite_fabric.elf")) {
+    auto bin_path = lite_fabric::LinkFabricLite(lite_fabric_hal, home_directory, output_directory);
+    if (!bin_path) {
         throw std::runtime_error("Failed to link lite fabric");
     }
 
-    std::filesystem::path bin_path{output_directory / "lite_fabric.bin"};
+    lite_fabric_hal->launch(*bin_path);
 }
 
 }  // namespace lite_fabric

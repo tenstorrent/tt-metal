@@ -5,10 +5,16 @@
 #include "blackhole_impl.hpp"
 #include "hw/inc/host_interface.hpp"
 #include "tt_metal/lite_fabric/hw/inc/lf_dev_mem_map.hpp"
+#include "tt_metal/impl/context/metal_context.hpp"
 
 namespace {
 
-uint32_t GetStateAddress() { return LITE_FABRIC_CONFIG_START + offsetof(lite_fabric::FabricLiteConfig, current_state); }
+uint32_t GetStateAddress() {
+    return LITE_FABRIC_CONFIG_START + offsetof(lite_fabric::FabricLiteMemoryMap, config) +
+           offsetof(lite_fabric::FabricLiteConfig, current_state);
+}
+
+uint32_t GetConfigAddress() { return LITE_FABRIC_CONFIG_START + offsetof(lite_fabric::FabricLiteMemoryMap, config); }
 
 lite_fabric::FabricLiteConfig GetInitFabricLiteConfig(const lite_fabric::SystemDescriptor& desc) {
     lite_fabric::FabricLiteConfig config{};
@@ -19,7 +25,7 @@ lite_fabric::FabricLiteConfig GetInitFabricLiteConfig(const lite_fabric::SystemD
     config.binary_addr = LITE_FABRIC_TEXT_START;
     config.binary_size = (LITE_FABRIC_TEXT_SIZE + 15) & ~0xF;  // Align to 16 bytes;
     config.eth_chans_mask = desc.enabled_eth_channels.at(0);
-    config.routing_enabled = true;
+    config.routing_enabled = lite_fabric::RoutingEnabledState::ENABLED;
     return config;
 }
 
@@ -27,8 +33,9 @@ lite_fabric::FabricLiteConfig GetInitFabricLiteConfig(const lite_fabric::SystemD
 
 namespace lite_fabric {
 
-void BlackholeLiteFabricHal::set_reset_state(tt::Cluster& cluster, tt_cxy_pair virtual_core, bool assert_reset) {
+void BlackholeLiteFabricHal::set_reset_state(tt_cxy_pair virtual_core, bool assert_reset) {
     // We run on ERISC1. Don't touch ERISC0. It is running base firmware
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     if (assert_reset) {
         // Assert all cores except ERISC0.
         tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
@@ -40,25 +47,26 @@ void BlackholeLiteFabricHal::set_reset_state(tt::Cluster& cluster, tt_cxy_pair v
     }
 }
 
-void BlackholeLiteFabricHal::set_pc(tt::Cluster& cluster, tt_cxy_pair virtual_core, uint32_t pc_addr, uint32_t pc_val) {
-    cluster.write_core(reinterpret_cast<void*>(&pc_val), sizeof(uint32_t), virtual_core, pc_addr);
+void BlackholeLiteFabricHal::set_pc(tt_cxy_pair virtual_core, uint32_t pc_val) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    cluster.write_core(reinterpret_cast<void*>(&pc_val), sizeof(uint32_t), virtual_core, LITE_FABRIC_RESET_PC);
 }
 
 tt::umd::tt_version BlackholeLiteFabricHal::get_binary_version() {
     return tt::umd::tt_version{0, 0, 0};
 }
 
-void BlackholeLiteFabricHal::launch(tt::Cluster& cluster, const SystemDescriptor& desc, const std::filesystem::path& bin_path) {
-    // Might want to consolidate this the Wormhole Impl
+void BlackholeLiteFabricHal::launch(const std::filesystem::path& bin_path) {
     constexpr uint32_t k_FirmwareStart = LITE_FABRIC_TEXT_START;
-    constexpr uint32_t k_PcResetAddress = LITE_FABRIC_RESET_PC;
 
-    lite_fabric::FabricLiteConfig config = GetInitFabricLiteConfig(desc);
-    auto config_addr = lite_fabric::FabricLiteMemoryMap::get_address();
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
-    for (const auto& tunnel_1x : desc.tunnels_from_mmio) {
-        set_reset_state(cluster, tunnel_1x.mmio_cxy_virtual(), true);
-        set_pc(cluster, tunnel_1x.mmio_cxy_virtual(), k_PcResetAddress, k_FirmwareStart);
+    lite_fabric::FabricLiteConfig config = GetInitFabricLiteConfig(system_descriptor_);
+    auto config_addr = GetConfigAddress();
+
+    for (const auto& tunnel_1x : system_descriptor_.tunnels_from_mmio) {
+        set_reset_state(tunnel_1x.mmio_cxy_virtual(), true);
+        set_pc(tunnel_1x.mmio_cxy_virtual(), k_FirmwareStart);
 
         std::ifstream bin_file(bin_path, std::ios::binary);
         if (!bin_file) {
@@ -85,25 +93,25 @@ void BlackholeLiteFabricHal::launch(tt::Cluster& cluster, const SystemDescriptor
         log_debug(tt::LogMetal, "Writing flat binary to {:#x} size {} B", LITE_FABRIC_TEXT_START, bin_size);
         cluster.write_core(binary_data.data(), bin_size, tunnel_1x.mmio_cxy_virtual(), LITE_FABRIC_TEXT_START);
 
-        log_debug(
+        log_info(
             tt::LogMetal,
-            "Wrote lite fabric. Core: {}, Config: {:#x}, Binary: {:#x}, Size: {} B",
+            "Wrote lite fabric. Core: {}, Config: {:#x}, Binary: {:#x}, Size: {} B. Initial config state {}",
             tunnel_1x.mmio_core_logical,
             config_addr,
             static_cast<uint32_t>(config.binary_addr),
-            static_cast<uint32_t>(config.binary_size));
+            static_cast<uint32_t>(config.binary_size),
+            static_cast<uint32_t>(config.initial_state));
     }
 
     cluster.l1_barrier(0);
 
-    for (auto tunnel_1x : desc.tunnels_from_mmio) {
-        set_reset_state(cluster, tunnel_1x.mmio_cxy_virtual(), false);
+    for (auto tunnel_1x : system_descriptor_.tunnels_from_mmio) {
+        set_reset_state(tunnel_1x.mmio_cxy_virtual(), false);
     }
 
-    cluster.l1_barrier(0);
     // Wait for ready
-    for (auto tunnel_1x : desc.tunnels_from_mmio) {
-        wait_for_state(cluster, tunnel_1x.mmio_cxy_virtual(), lite_fabric::InitState::READY);
+    for (auto tunnel_1x : system_descriptor_.tunnels_from_mmio) {
+        wait_for_state(tunnel_1x.mmio_cxy_virtual(), lite_fabric::InitState::READY);
         log_info(
             tt::LogMetal,
             "Lite Fabric {} (virtual={}) is ready",
@@ -112,25 +120,29 @@ void BlackholeLiteFabricHal::launch(tt::Cluster& cluster, const SystemDescriptor
     }
 }
 
-void BlackholeLiteFabricHal::terminate(tt::Cluster& cluster, const SystemDescriptor& desc) {
+void BlackholeLiteFabricHal::terminate() {
     uint32_t routing_enabled_address = LITE_FABRIC_CONFIG_START + offsetof(lite_fabric::FabricLiteMemoryMap, config) +
                                        offsetof(lite_fabric::FabricLiteConfig, routing_enabled);
     uint32_t enabled = 0;
-    for (const auto& tunnel_1x : desc.tunnels_from_mmio) {
-        log_debug(
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+    // On blackhole we run on a second erisc which can be put into reset
+    for (const auto& tunnel_1x : system_descriptor_.tunnels_from_mmio) {
+        log_info(
             tt::LogMetal,
-            "Host to terminate Device {} {} (virtual={})",
+            "Host to terminate lite fabric on device {} {} (virtual={})",
             0,
             tunnel_1x.mmio_core_logical,
             tunnel_1x.mmio_core_virtual);
         cluster.write_core((void*)&enabled, sizeof(uint32_t), tunnel_1x.mmio_cxy_virtual(), routing_enabled_address);
     }
     cluster.l1_barrier(0);
-    LiteFabricHal::set_reset_state(cluster, desc, true);
+
+    LiteFabricHal::set_reset_state(true);
 }
 
-void BlackholeLiteFabricHal::wait_for_state(
-    tt::Cluster& cluster, tt_cxy_pair virtual_core, lite_fabric::InitState state) {
+void BlackholeLiteFabricHal::wait_for_state(tt_cxy_pair virtual_core, lite_fabric::InitState state) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     std::vector<uint32_t> readback{static_cast<uint32_t>(lite_fabric::InitState::UNKNOWN)};
     while (static_cast<lite_fabric::InitState>(readback[0]) != state) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -142,8 +154,6 @@ std::vector<std::filesystem::path> BlackholeLiteFabricHal::build_includes(const 
     return {
         root_dir,
         root_dir.parent_path(),
-        root_dir / "ttnn",
-        root_dir / "ttnn/cpp",
         root_dir / "tt_metal",
         root_dir / "tt_metal/include",
         root_dir / "tt_metal/hw/inc",

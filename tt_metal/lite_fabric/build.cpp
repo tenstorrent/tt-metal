@@ -6,12 +6,14 @@
 #include "tt_metal/lite_fabric/build.hpp"
 
 #include <filesystem>
+#include <optional>
 #include <sstream>
 #include <tt-logger/tt-logger.hpp>
 #include <vector>
 #include <string>
 #include <fmt/format.h>
 #include "tt_metal/lite_fabric/hal/lite_fabric_hal.hpp"
+#include "tt_stl/assert.hpp"
 
 namespace {
 std::string GetToolchainPath(const std::string& root_dir) {
@@ -43,7 +45,6 @@ std::string GetCommonOptions() {
         "Wno-unknown-pragmas",
         "Wno-deprecated-declarations",
         "Wno-error=multistatement-macros",
-        "Wno-error=parentheses",
         "Wno-error=unused-but-set-variable",
         "Wno-unused-variable",
         "Wno-unused-function",
@@ -67,6 +68,15 @@ int CompileFabricLite(
     const std::filesystem::path& root_dir,
     const std::filesystem::path& out_dir,
     const std::vector<std::string>& extra_defines) {
+    // Delete the output directory if it exists && contains the lite fabric elf
+    if (std::filesystem::exists(out_dir)) {
+        auto elf_path = out_dir / fmt::format("lite_fabric.{}.elf", lite_fabric_hal->build_target_name());
+        if (std::filesystem::exists(elf_path)) {
+            log_info(tt::LogMetal, "Removing existing output directory: {}", out_dir);
+            std::filesystem::remove_all(out_dir);
+        }
+    }
+
     const std::filesystem::path lite_fabric_src = root_dir / "tt_metal/lite_fabric/hw/src/lite_fabric.cpp";
 
     auto includes = lite_fabric_hal->build_includes(root_dir);
@@ -90,7 +100,7 @@ int CompileFabricLite(
     // Disable gp relaxations. We store various data in L1. We need functions to work when called directly from
     // the L1 address. The caller may have already setup their own gp, thus the gp relative instructions we have
     // are invalid
-    oss << "-mno-relax -c -o " << out_dir / "lite_fabric.o";
+    oss << "-mno-relax -c -o " << out_dir / fmt::format("lite_fabric.{}.o", lite_fabric_hal->build_target_name());
 
     std::string compile_cmd = oss.str();
     log_info(tt::LogMetal, "compile:\n{}", compile_cmd);
@@ -102,14 +112,16 @@ int CompileFabricLite(
     return system(compile_cmd.c_str());
 }
 
-int LinkFabricLite(
+std::optional<std::filesystem::path> LinkFabricLite(
     const std::shared_ptr<LiteFabricHal>& lite_fabric_hal,
     const std::filesystem::path& root_dir,
-    const std::filesystem::path& out_dir,
-    const std::filesystem::path& elf_out) {
+    const std::filesystem::path& out_dir) {
     const std::filesystem::path tunneling_dir = root_dir / "tt_metal/lite_fabric/hw/inc";
     const std::filesystem::path input_ld = root_dir / "tt_metal/lite_fabric/toolchain/lite_fabric.ld";
-    const std::filesystem::path output_ld = out_dir / "lite_fabric_preprocessed.ld";
+    const std::filesystem::path output_ld =
+        out_dir / fmt::format("lite_fabric_preprocessed.{}.ld", lite_fabric_hal->build_target_name());
+    const std::filesystem::path elf_out =
+        out_dir / fmt::format("lite_fabric.{}.elf", lite_fabric_hal->build_target_name());
 
     std::ostringstream preprocess_oss;
     preprocess_oss << GetToolchainPath(root_dir.string()) << "riscv-tt-elf-g++ ";
@@ -124,7 +136,7 @@ int LinkFabricLite(
     int preprocess_result = system(preprocess_cmd.c_str());
     if (preprocess_result != 0) {
         log_error(tt::LogMetal, "Failed to preprocess linker script");
-        return preprocess_result;
+        return std::nullopt;
     }
 
     // Now link using the preprocessed linker script
@@ -133,8 +145,8 @@ int LinkFabricLite(
     link_oss << GetCommonOptions() << " ";
     link_oss << "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
     link_oss << fmt::format("-T{} ", output_ld.string());  // Use preprocessed linker script
-    link_oss << fmt::format("-Wl,-Map={}/lite_fabric.map ", out_dir.string());
-    link_oss << fmt::format("-save-temps {}/lite_fabric.o ", out_dir.string());
+    link_oss << fmt::format("-Wl,-Map={}/lite_fabric.{}.map ", out_dir.string(), lite_fabric_hal->build_target_name());
+    link_oss << fmt::format("-save-temps {}/lite_fabric.{}.o ", out_dir.string(), lite_fabric_hal->build_target_name());
     link_oss << fmt::format("-o {} ", elf_out.string());
 
     auto linker_flags = lite_fabric_hal->build_linker(root_dir);
@@ -147,7 +159,8 @@ int LinkFabricLite(
 
     int link_result = system(link_cmd.c_str());
     if (link_result != 0) {
-        return link_result;
+        log_error(tt::LogMetal, "Failed to link lite fabric");
+        return std::nullopt;
     }
 
     // Create flat binary from ELF for direct device loading
@@ -164,11 +177,11 @@ int LinkFabricLite(
     int objcopy_result = system(objcopy_cmd.c_str());
     if (objcopy_result != 0) {
         log_error(tt::LogMetal, "Failed to create flat binary from ELF");
-        return objcopy_result;
+        return std::nullopt;
     }
 
     log_info(tt::LogMetal, "binary: {}", bin_path);
-    return 0;
+    return bin_path;
 }
 
 }  // namespace lite_fabric

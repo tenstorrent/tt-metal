@@ -4,6 +4,8 @@
 
 #include <fmt/ranges.h>
 #include <gtest/gtest.h>
+#include <memory>
+#include <optional>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
@@ -16,23 +18,24 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/fabric.hpp>
 
-#include "context/metal_context.hpp"
 #include "distributed.hpp"
 #include "fabric_types.hpp"
-#include "llrt/hal.hpp"
-#include "tt_cluster.hpp"
+#include "hal/lite_fabric_hal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 
 #include "tt_metal/lite_fabric/host_util.hpp"
 #include "tt_metal/lite_fabric/build.hpp"
 
-#define CHECK_TEST_REQS()                                                                       \
-    if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) { \
-        GTEST_SKIP() << "Blackhole only";                                                       \
-    }                                                                                           \
-    if (tt::tt_metal::GetNumAvailableDevices() < 2) {                                           \
-        GTEST_SKIP() << "At least 2 Devices are required";                                      \
-    }                                                                                           \
+// UMD opens lite fabric on P300. Only run this test on P150 so we don't overwrite binaries
+#define CHECK_TEST_REQS()                                                                            \
+    {                                                                                                \
+        auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type(); \
+        if (cluster_type != tt::tt_metal::ClusterType::P150_X2 &&                                    \
+            cluster_type != tt::tt_metal::ClusterType::P150_X4 &&                                    \
+            cluster_type != tt::tt_metal::ClusterType::P150_X8) {                                    \
+            GTEST_SKIP() << "Lite Fabric tests only supported on multi chip P150";                   \
+        }                                                                                            \
+    }
 
 struct FabricLiteTestConfig {
     bool standalone{false};
@@ -42,32 +45,27 @@ struct FabricLiteTestConfig {
 // Lite Fabric Test Fixture
 class FabricLite : public testing::TestWithParam<FabricLiteTestConfig> {
 protected:
-    inline static lite_fabric::SystemDescriptor desc;
+    inline static std::shared_ptr<lite_fabric::LiteFabricHal> lite_fabric_hal_;
 
     // Instance variables instead of static ones for parameter-dependent resources
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
     bool fabric_configured_{false};
 
     static void SetUpTestSuite() {
-        // auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        // auto& hal = tt::tt_metal::MetalContext::instance().hal();
         CHECK_TEST_REQS();
-
-        // desc = lite_fabric::GetSystemDescriptorFromMmio(cluster, 0);
-
-        // lite_fabric::LaunchLiteFabric(cluster, hal, desc);
+        lite_fabric_hal_ = lite_fabric::LiteFabricHal::create();
+        lite_fabric::InitializeLiteFabric(lite_fabric_hal_);
     }
 
     static void TearDownTestSuite() {
-        // auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-
-        // lite_fabric::TerminateLiteFabric(cluster, desc);
+        CHECK_TEST_REQS();
+        lite_fabric_hal_->terminate();
     }
 
     void SetUp() override {
         CHECK_TEST_REQS();
 
-        if (desc.tunnels_from_mmio.empty()) {
+        if (lite_fabric_hal_->get_system_descriptor().tunnels_from_mmio.empty()) {
             GTEST_SKIP() << "No tunnels found";
         }
 
@@ -138,15 +136,10 @@ TEST(FabricLiteBuild, BuildOnly) {
 
     auto lite_fabric_hal = lite_fabric::LiteFabricHal::create();
 
-    if (lite_fabric::CompileFabricLite(lite_fabric_hal, home_directory, output_directory)) {
-        throw std::runtime_error("Failed to compile lite fabric");
-    }
-    if (lite_fabric::LinkFabricLite(
-            lite_fabric_hal, home_directory, output_directory, output_directory / "lite_fabric.elf")) {
-        throw std::runtime_error("Failed to link lite fabric");
-    }
-
-    std::filesystem::path bin_path{output_directory / "lite_fabric.bin"};
+    EXPECT_EQ(0, lite_fabric::CompileFabricLite(lite_fabric_hal, home_directory, output_directory));
+    EXPECT_NE(std::nullopt, lite_fabric::LinkFabricLite(lite_fabric_hal, home_directory, output_directory));
 }
 
-TEST_P(FabricLite, Init) { EXPECT_GT(desc.tunnels_from_mmio.size(), 0) << "No tunnels found"; }
+TEST_P(FabricLite, Init) {
+    EXPECT_GT(lite_fabric_hal_->get_system_descriptor().tunnels_from_mmio.size(), 0) << "No tunnels found";
+}
