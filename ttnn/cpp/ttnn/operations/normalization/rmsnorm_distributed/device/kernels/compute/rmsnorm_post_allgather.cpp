@@ -1,12 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * This kernel computes layernorm or rmsnorm, dependent on the RMSNORM define.
- * For layernorm it receives E(x**2) and E(x) and computes the remaining normalization based on gamma, beta and epsilon.
- *   E(x**2) and E(x) are contained in a two tile wide tensor containing E(x**2) and E(x) in the left most columns per
- * tile. For rmsnorm it receives E(x**2) and computes the remaining normalization based on gamma, beta and epsilon.
+ * This kernel computes rmsnorm, dependent on the RMSNORM define.
+ * For rmsnorm we receive E(x**2) and compute the remaining normalization based on gamma, beta and epsilon.
  *   E(x**2) is contained in a one tile wide tensor containing E(x**2) in the left most column.
  */
 
@@ -23,8 +21,14 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
+ALWI void ACQ() {
+    tile_regs_acquire();
+    tile_regs_wait();
+}
+ALWI void REL() {
+    tile_regs_commit();
+    tile_regs_release();
+}
 
 namespace NAMESPACE {
 void MAIN {
@@ -54,13 +58,8 @@ void MAIN {
     constexpr uint32_t cb_x_normed = tt::CBIndex::c_12;  // (x - E(x)) * 1/sqrt(var+eps) or x * 1/sqrt(E(x**2) + eps)
 
     constexpr uint32_t cb_var = tt::CBIndex::c_8;  // E(x**2) - E(x)**2 or E(x**2)
-
-    // Layernorm-specific CBs
-    constexpr uint32_t cb_mean_squared = tt::CBIndex::c_7;   // E(x)**2
-    constexpr uint32_t cb_x_minus_mean = tt::CBIndex::c_11;  // x - E(x)
-
-    constexpr uint32_t cb_norm_x_input = cb_x_minus_mean;
-    constexpr uint32_t stats_tile_stride = 2;
+    constexpr uint32_t cb_norm_x_input = cb_inp;
+    constexpr uint32_t stats_tile_stride = 1;
 
     constexpr uint32_t cb_gamma = tt::CBIndex::c_2;
     constexpr uint32_t cb_beta = tt::CBIndex::c_3;
@@ -89,7 +88,7 @@ void MAIN {
         reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_stats, cb_reduce, cb_stats_reduced);
         cb_wait_front(cb_stats, stats_tiles_cols);
         cb_reserve_back(cb_stats_reduced, stats_tile_stride);
-
+        cb_reserve_back(cb_var, 1);
         ACQ();
         // Reduce sum(x**2) first
         for (uint32_t i = 0; i < stats_tiles_cols; i += stats_tile_stride) {
@@ -97,67 +96,14 @@ void MAIN {
         }
         pack_tile(0, cb_stats_reduced);
 
-        // Reduce sum(x) next
-        for (uint32_t i = 1; i < stats_tiles_cols; i += stats_tile_stride) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_stats, cb_reduce, i, 0, 1);
-        }
-        pack_tile(1, cb_stats_reduced);
+        pack_tile(0, cb_var);
 
         REL();
         cb_push_back(cb_stats_reduced, stats_tile_stride);
         cb_pop_front(cb_stats, stats_tiles_cols);
+        cb_push_back(cb_var, 1);
 
         reduce_uninit();
-
-        /*
-         * E[x]**2
-         */
-        reconfig_data_format(cb_stats_reduced, cb_stats_reduced);
-        pack_reconfig_data_format(cb_mean_squared);
-        mul_tiles_init(cb_stats_reduced, cb_stats_reduced);
-        cb_reserve_back(cb_mean_squared, onetile);
-        cb_wait_front(cb_stats_reduced, stats_tile_stride);
-        ACQ();
-        mul_tiles(cb_stats_reduced, cb_stats_reduced, 1, 1, 0);
-        pack_tile(0, cb_mean_squared);
-        REL();
-
-        cb_push_back(cb_mean_squared, 1);
-
-        /*
-         * E[x**2] - E[x]**2
-         */
-        reconfig_data_format(cb_stats_reduced, cb_mean_squared);
-        pack_reconfig_data_format(cb_var);
-        sub_tiles_init(cb_stats_reduced, cb_mean_squared);
-
-        cb_reserve_back(cb_var, onetile);
-        cb_wait_front(cb_mean_squared, 1);
-        ACQ();
-        sub_tiles(cb_stats_reduced, cb_mean_squared, 0, 0, 0);
-        pack_tile(0, cb_var);
-        REL();
-        cb_push_back(cb_var, 1);
-        cb_pop_front(cb_mean_squared, 1);
-
-        /*
-         * x - E[x]
-         */
-        reconfig_data_format(cb_inp, cb_stats_reduced);
-        pack_reconfig_data_format(cb_x_minus_mean);
-        sub_bcast_cols_init_short(cb_inp, cb_stats_reduced);
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_wait_front(cb_inp, blk);
-            cb_reserve_back(cb_x_minus_mean, blk);
-            ACQ();
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                sub_tiles_bcast_cols(cb_inp, cb_stats_reduced, wtr, 1, wtr);
-                pack_tile(wtr, cb_x_minus_mean);
-            }
-            REL();
-            cb_push_back(cb_x_minus_mean, blk);
-            cb_pop_front(cb_inp, blk);
-        }
 
         // free up CBs
         cb_pop_front(cb_stats_reduced, stats_tile_stride);
@@ -182,7 +128,6 @@ void MAIN {
 
         /*
          * norm x
-         * Layernorm: (X - E[X]) * 1/sqrt(Var(X) + eps)
          * RMSNorm: X * 1/sqrt(E[X**2] + eps)
          */
 
@@ -255,7 +200,9 @@ void MAIN {
     }
     cb_pop_front(cb_eps, 1);
     cb_pop_front(cb_reduce, 1);
-    cb_pop_front(cb_gamma, Wt);
+    if constexpr (do_gamma) {
+        cb_pop_front(cb_gamma, Wt);
+    }
     if constexpr (do_beta) {
         cb_pop_front(cb_beta, Wt);
     }
