@@ -198,7 +198,7 @@ static void RunTest(
             kernel);
     }
 
-    std::string exception = "";
+    std::string exception;
     do {
         exception = MetalContext::instance().watcher_server()->exception_message();
     } while (exception.empty());
