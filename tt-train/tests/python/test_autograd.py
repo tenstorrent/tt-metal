@@ -47,18 +47,14 @@ def do_test_numpy_autograd_conversion(
     if autograd_type:
         if layout:
             try:
-                autograd_tensor = ttml.autograd.Tensor.from_numpy(
-                    numpy_tensor, layout=layout, new_type=autograd_type
-                )
+                autograd_tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, layout=layout, new_type=autograd_type)
             except TypeError as e:
                 type_error = handle_error(e, expect_type_exception, type_error)
             except RuntimeError as e:
                 runtime_error = handle_error(e, expect_runtime_exception, runtime_error)
         else:
             try:
-                autograd_tensor = ttml.autograd.Tensor.from_numpy(
-                    numpy_tensor, new_type=autograd_type
-                )
+                autograd_tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, new_type=autograd_type)
             except TypeError as e:
                 type_error = handle_error(e, expect_type_exception, type_error)
             except RuntimeError as e:
@@ -66,9 +62,7 @@ def do_test_numpy_autograd_conversion(
     else:
         if layout:
             try:
-                autograd_tensor = ttml.autograd.Tensor.from_numpy(
-                    numpy_tensor, layout=layout
-                )
+                autograd_tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, layout=layout)
             except TypeError as e:
                 type_error = handle_error(e, expect_type_exception, type_error)
             except RuntimeError as e:
@@ -86,9 +80,7 @@ def do_test_numpy_autograd_conversion(
         assert (autograd_tensor.to_numpy(new_type=autograd_type) == numpy_tensor).all()
         for new_type in supported_autograd_types_except(autograd_type):
             try:
-                assert (
-                    autograd_tensor.to_numpy(new_type=new_type) == numpy_tensor
-                ).all()
+                assert (autograd_tensor.to_numpy(new_type=new_type) == numpy_tensor).all()
             except TypeError as e:
                 type_error = handle_error(e, expect_type_exception, type_error)
             except RuntimeError as e:
@@ -112,18 +104,57 @@ metal_data_types = [
 layouts = [None, ttml.Layout.ROW_MAJOR, ttml.Layout.TILE]
 
 
-def generate_all_test_cases():
+def generate_all_test_cases(
+    tensor_data=None,
+    numpy_types=None,
+    metal_types=None,
+    layout_types=None,
+):
+    """
+    Generate test cases with optional filtering.
+
+    Args:
+        tensor_data: Tensor data to use (default: default_tensor_data)
+        numpy_types: List of numpy types to test (default: all numpy_data_types)
+        metal_types: List of metal types to test (default: all metal_data_types)
+        layout_types: List of layouts to test (default: all layouts)
+
+    Examples:
+        # Generate all cases (default)
+        all_test_cases = generate_all_test_cases()
+
+        # Only test float32 with all metal types and layouts
+        float32_cases = generate_all_test_cases(numpy_types=[np.float32])
+
+        # Only test with TILE layout
+        tile_cases = generate_all_test_cases(layout_types=[ttml.Layout.TILE])
+
+        # Combine filters: only float32 + bfloat16 with TILE layout
+        custom_cases = generate_all_test_cases(
+            numpy_types=[np.float32],
+            metal_types=[ttml.autograd.DataType.BFLOAT16],
+            layout_types=[ttml.Layout.TILE]
+        )
+    """
+    tensor_data = tensor_data if tensor_data is not None else default_tensor_data
+    numpy_types = numpy_types if numpy_types is not None else numpy_data_types
+    metal_types = metal_types if metal_types is not None else metal_data_types
+    layout_types = layout_types if layout_types is not None else layouts
+
     ret = []
-    for numpy_data_type in numpy_data_types:
-        for metal_data_type in metal_data_types:
-            for layout in layouts:
-                ret.append(
-                    (default_tensor_data, numpy_data_type, metal_data_type, layout)
-                )
+    for numpy_data_type in numpy_types:
+        for metal_data_type in metal_types:
+            for layout in layout_types:
+                ret.append((tensor_data, numpy_data_type, metal_data_type, layout))
     return ret
 
 
+# Generate all test cases (you can customize this by passing parameters)
 all_test_cases = generate_all_test_cases()
+
+# Example: If you want to test only specific combinations, you can create additional test case sets:
+# float32_only_cases = generate_all_test_cases(numpy_types=[np.float32])
+# tile_layout_cases = generate_all_test_cases(layout_types=[ttml.Layout.TILE])
 
 
 def join_lists(*lists):
@@ -468,15 +499,18 @@ division_issue_cases = [
 ]
 
 
-@pytest.mark.parametrize(
-    "tensor_data, numpy_type, autograd_type, layout",
-    cases_except(
-        all_test_cases,
-        unsupported_format_cases,
-        typecast_issue_cases,
-    ),
-)
+@pytest.mark.parametrize("tensor_data", [default_tensor_data])
+@pytest.mark.parametrize("numpy_type", numpy_data_types)
+@pytest.mark.parametrize("autograd_type", metal_data_types)
+@pytest.mark.parametrize("layout", layouts)
 def test_numpy_autograd_conversion(tensor_data, numpy_type, autograd_type, layout):
+    # Skip unsupported format cases
+    if (tensor_data, numpy_type, autograd_type, layout) in unsupported_format_cases:
+        pytest.skip("Unsupported format combination")
+    # Skip typecast issue cases
+    if (tensor_data, numpy_type, autograd_type, layout) in typecast_issue_cases:
+        pytest.skip("Known typecast issue")
+
     return do_test_numpy_autograd_conversion(
         tensor_data=tensor_data,
         numpy_type=numpy_type,
@@ -491,9 +525,7 @@ def test_numpy_autograd_conversion(tensor_data, numpy_type, autograd_type, layou
     "tensor_data, numpy_type, autograd_type, layout",
     unsupported_format_cases,
 )
-def test_numpy_autograd_conversion_expecting_type_error(
-    tensor_data, numpy_type, autograd_type, layout
-):
+def test_numpy_autograd_conversion_expecting_type_error(tensor_data, numpy_type, autograd_type, layout):
     return do_test_numpy_autograd_conversion(
         tensor_data=tensor_data,
         numpy_type=numpy_type,
@@ -508,9 +540,7 @@ def test_numpy_autograd_conversion_expecting_type_error(
     "tensor_data, numpy_type, autograd_type, layout",
     typecast_issue_cases,
 )
-def test_numpy_autograd_conversion_expecting_runtime_error(
-    tensor_data, numpy_type, autograd_type, layout
-):
+def test_numpy_autograd_conversion_expecting_runtime_error(tensor_data, numpy_type, autograd_type, layout):
     return do_test_numpy_autograd_conversion(
         tensor_data=tensor_data,
         numpy_type=numpy_type,
@@ -526,71 +556,70 @@ def make_tensors(tensor_data, numpy_type, autograd_type, layout):
 
     if autograd_type:
         if layout:
-            autograd_tensor = ttml.autograd.Tensor.from_numpy(
-                numpy_tensor, layout=layout, new_type=autograd_type
-            )
+            autograd_tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, layout=layout, new_type=autograd_type)
         else:
-            autograd_tensor = ttml.autograd.Tensor.from_numpy(
-                numpy_tensor, new_type=autograd_type
-            )
+            autograd_tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, new_type=autograd_type)
     else:
         if layout:
-            autograd_tensor = ttml.autograd.Tensor.from_numpy(
-                numpy_tensor, layout=layout
-            )
+            autograd_tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor, layout=layout)
         else:
             autograd_tensor = ttml.autograd.Tensor.from_numpy(numpy_tensor)
     return (numpy_tensor, autograd_tensor)
 
 
-@pytest.mark.parametrize(
-    "tensor_data, numpy_type, autograd_type, layout",
-    cases_except(
-        all_test_cases,
-        unsupported_format_cases,
-        typecast_issue_cases,
-    ),
-)
+@pytest.mark.parametrize("tensor_data", [default_tensor_data])
+@pytest.mark.parametrize("numpy_type", numpy_data_types)
+@pytest.mark.parametrize("autograd_type", metal_data_types)
+@pytest.mark.parametrize("layout", layouts)
 def test_binary_operators_add(tensor_data, numpy_type, autograd_type, layout):
-    numpy_tensor, autograd_tensor = make_tensors(
-        tensor_data, numpy_type, autograd_type, layout
-    )
+    # Skip unsupported format cases
+    if (tensor_data, numpy_type, autograd_type, layout) in unsupported_format_cases:
+        pytest.skip("Unsupported format combination")
+    # Skip typecast issue cases
+    if (tensor_data, numpy_type, autograd_type, layout) in typecast_issue_cases:
+        pytest.skip("Known typecast issue")
+
+    numpy_tensor, autograd_tensor = make_tensors(tensor_data, numpy_type, autograd_type, layout)
 
     sum = autograd_tensor + autograd_tensor
     assert (sum.to_numpy() == (numpy_tensor + numpy_tensor)).all()
 
 
-@pytest.mark.parametrize(
-    "tensor_data, numpy_type, autograd_type, layout",
-    cases_except(
-        all_test_cases,
-        unsupported_format_cases,
-        typecast_issue_cases,
-    ),
-)
+@pytest.mark.parametrize("tensor_data", [default_tensor_data])
+@pytest.mark.parametrize("numpy_type", numpy_data_types)
+@pytest.mark.parametrize("autograd_type", metal_data_types)
+@pytest.mark.parametrize("layout", layouts)
 def test_binary_operators_diff(tensor_data, numpy_type, autograd_type, layout):
-    numpy_tensor, autograd_tensor = make_tensors(
-        tensor_data, numpy_type, autograd_type, layout
-    )
+    # Skip unsupported format cases
+    if (tensor_data, numpy_type, autograd_type, layout) in unsupported_format_cases:
+        pytest.skip("Unsupported format combination")
+    # Skip typecast issue cases
+    if (tensor_data, numpy_type, autograd_type, layout) in typecast_issue_cases:
+        pytest.skip("Known typecast issue")
+
+    numpy_tensor, autograd_tensor = make_tensors(tensor_data, numpy_type, autograd_type, layout)
 
     diff = autograd_tensor - autograd_tensor
 
     assert (diff.to_numpy() == (numpy_tensor - numpy_tensor)).all()
 
 
-@pytest.mark.parametrize(
-    "tensor_data, numpy_type, autograd_type, layout",
-    cases_except(
-        all_test_cases,
-        unsupported_format_cases,
-        typecast_issue_cases,
-        multiplication_issue_cases,
-    ),
-)
+@pytest.mark.parametrize("tensor_data", [default_tensor_data])
+@pytest.mark.parametrize("numpy_type", numpy_data_types)
+@pytest.mark.parametrize("autograd_type", metal_data_types)
+@pytest.mark.parametrize("layout", layouts)
 def test_binary_operators_mul(tensor_data, numpy_type, autograd_type, layout):
-    numpy_tensor, autograd_tensor = make_tensors(
-        tensor_data, numpy_type, autograd_type, layout
-    )
+    # Skip unsupported format cases
+    if (tensor_data, numpy_type, autograd_type, layout) in unsupported_format_cases:
+        pytest.skip("Unsupported format combination")
+    # Skip typecast issue cases
+    if (tensor_data, numpy_type, autograd_type, layout) in typecast_issue_cases:
+        pytest.skip("Known typecast issue")
+    # Skip multiplication issue cases
+    if (tensor_data, numpy_type, autograd_type, layout) in multiplication_issue_cases:
+        pytest.skip("Known multiplication issue")
+
+    numpy_tensor, autograd_tensor = make_tensors(tensor_data, numpy_type, autograd_type, layout)
 
     mul = autograd_tensor * autograd_tensor
     mul_float = autograd_tensor * 10.0
@@ -599,19 +628,22 @@ def test_binary_operators_mul(tensor_data, numpy_type, autograd_type, layout):
     assert (mul_float.to_numpy() == (numpy_tensor * 10.0)).all()
 
 
-@pytest.mark.parametrize(
-    "tensor_data, numpy_type, autograd_type, layout",
-    cases_except(
-        all_test_cases,
-        unsupported_format_cases,
-        typecast_issue_cases,
-        division_issue_cases,
-    ),
-)
+@pytest.mark.parametrize("tensor_data", [default_tensor_data])
+@pytest.mark.parametrize("numpy_type", numpy_data_types)
+@pytest.mark.parametrize("autograd_type", metal_data_types)
+@pytest.mark.parametrize("layout", layouts)
 def test_binary_operators_div(tensor_data, numpy_type, autograd_type, layout):
-    numpy_tensor, autograd_tensor = make_tensors(
-        tensor_data, numpy_type, autograd_type, layout
-    )
+    # Skip unsupported format cases
+    if (tensor_data, numpy_type, autograd_type, layout) in unsupported_format_cases:
+        pytest.skip("Unsupported format combination")
+    # Skip typecast issue cases
+    if (tensor_data, numpy_type, autograd_type, layout) in typecast_issue_cases:
+        pytest.skip("Known typecast issue")
+    # Skip division issue cases
+    if (tensor_data, numpy_type, autograd_type, layout) in division_issue_cases:
+        pytest.skip("Known division issue")
+
+    numpy_tensor, autograd_tensor = make_tensors(tensor_data, numpy_type, autograd_type, layout)
 
     div = autograd_tensor.__div__(autograd_tensor)
 
