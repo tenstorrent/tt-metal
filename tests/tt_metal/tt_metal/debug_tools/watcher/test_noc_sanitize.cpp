@@ -385,7 +385,7 @@ void RunTestOnCore(
     }
 
     log_info(LogTest, "Expected error: {}", expected);
-    std::string exception = "";
+    std::string exception;
     do {
         exception = MetalContext::instance().watcher_server()->exception_message();
     } while (exception.empty());
