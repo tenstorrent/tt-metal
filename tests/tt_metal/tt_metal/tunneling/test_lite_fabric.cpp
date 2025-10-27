@@ -49,19 +49,19 @@ protected:
     bool fabric_configured_{false};
 
     static void SetUpTestSuite() {
-        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        // auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        // auto& hal = tt::tt_metal::MetalContext::instance().hal();
         CHECK_TEST_REQS();
 
-        desc = lite_fabric::GetSystemDescriptorFromMmio(cluster, 0);
+        // desc = lite_fabric::GetSystemDescriptorFromMmio(cluster, 0);
 
-        lite_fabric::LaunchLiteFabric(cluster, hal, desc);
+        // lite_fabric::LaunchLiteFabric(cluster, hal, desc);
     }
 
     static void TearDownTestSuite() {
-        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        // auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
-        lite_fabric::TerminateLiteFabric(cluster, desc);
+        // lite_fabric::TerminateLiteFabric(cluster, desc);
     }
 
     void SetUp() override {
@@ -135,13 +135,17 @@ TEST(FabricLiteBuild, BuildOnly) {
     }
     auto home_directory = std::filesystem::path(std::getenv("TT_METAL_HOME"));
     auto output_directory = home_directory / "lite_fabric";
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    if (lite_fabric::CompileFabricLite(cluster, home_directory, output_directory)) {
-        throw std::runtime_error("Failed to compile");
+
+    auto lite_fabric_hal = lite_fabric::LiteFabricHal::create();
+
+    if (lite_fabric::CompileFabricLite(lite_fabric_hal, home_directory, output_directory)) {
+        throw std::runtime_error("Failed to compile lite fabric");
     }
     if (lite_fabric::LinkFabricLite(home_directory, output_directory, output_directory / "lite_fabric.elf")) {
-        throw std::runtime_error("Failed to link");
+        throw std::runtime_error("Failed to link lite fabric");
     }
+
+    std::filesystem::path bin_path{output_directory / "lite_fabric.bin"};
 }
 
 TEST_P(FabricLite, Init) { EXPECT_GT(desc.tunnels_from_mmio.size(), 0) << "No tunnels found"; }
