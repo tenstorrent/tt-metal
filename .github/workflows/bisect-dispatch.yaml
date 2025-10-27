@@ -214,7 +214,7 @@ jobs:
 
           # Parse commit range from combined input
           COMMIT_RANGE='${{ inputs.commit-range }}'
-          IFS=',' read -r GOOD_COMMIT BAD_COMMIT <<< "$COMMIT_RANGE"
+          IFS=', ' read -r GOOD_COMMIT BAD_COMMIT <<< "$COMMIT_RANGE"
 
           # Validate parsed values
           if [ -z "$GOOD_COMMIT" ] || [ -z "$BAD_COMMIT" ]; then
