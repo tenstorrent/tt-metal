@@ -83,6 +83,9 @@ target_sources(
         barrier/device/host/barrier_full_worker_grid.cpp
         barrier/device/barrier_op.cpp
         barrier/barrier.cpp
+        broadcast/broadcast.cpp
+        broadcast/device/broadcast_op.cpp
+        broadcast/device/broadcast_program.cpp
 )
 
 target_include_directories(ttnn_op_ccl PRIVATE ${FixmeOpIncDirs})

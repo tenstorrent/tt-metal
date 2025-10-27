@@ -19,6 +19,7 @@ Welcome to TT-Metalium documentation!
    tt_metal/examples/index
    tt_metal/advanced_topics/index
    tt_metal/apis/index
+   tt_metal/environment_variables/index.rst
    tools/index
 
 .. toctree::

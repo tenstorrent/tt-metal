@@ -34,10 +34,10 @@ private:
     std::mutex programs_mutex;
     std::mutex mesh_devices_mutex;
     std::mutex mesh_workloads_mutex;
-    std::unordered_map<uint64_t, inspector::ProgramData> programs_data{};
-    std::unordered_map<int, uint64_t> kernel_id_to_program_id{};
-    std::unordered_map<int, inspector::MeshDeviceData> mesh_devices_data{};
-    std::unordered_map<uint64_t, inspector::MeshWorkloadData> mesh_workloads_data{};
+    std::unordered_map<uint64_t, inspector::ProgramData> programs_data;
+    std::unordered_map<int, uint64_t> kernel_id_to_program_id;
+    std::unordered_map<int, inspector::MeshDeviceData> mesh_devices_data;
+    std::unordered_map<uint64_t, inspector::MeshWorkloadData> mesh_workloads_data;
 
     // Operation tracking
     struct OperationInfo {
@@ -53,7 +53,7 @@ private:
     void dbg_serialize_operations();
 
     // fw_compile_hash needs to be atomic because it is set in MetalContext::initialize()
-    std::atomic<uint64_t> fw_compile_hash{};
+    std::atomic<uint64_t> fw_compile_hash;
     friend class tt::tt_metal::Inspector;
 };
 
