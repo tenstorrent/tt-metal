@@ -639,9 +639,9 @@ def main():
     # Convert logits (similarity scores) to probabilities using softmax
     # Softmax normalizes scores so they sum to 1.0, representing a probability distribution
     probs = ttnn.softmax(logits_per_image, dim=-1)
-    logger.info(f"\n==== Zero-shot Classification Results ====")
+    logger.info(f"==== Zero-shot Classification Results ====")
     logger.info(f"Image: {image_url.split('/')[-1]}")
-    logger.info(f"\nClassification probabilities:")
+    logger.info(f"Classification probabilities:")
 
     # Display results sorted by probability (highest first)
     probs_torch = ttnn.to_torch(probs)
