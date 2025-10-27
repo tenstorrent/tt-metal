@@ -157,7 +157,41 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
 
 // clang-format off
 /**
- * Pushes a given number of tiles in the back of the specified CB’s queue.
+ * Returns a reference to unique runtime arguments as a POD struct. The runtime arguments are reinterpreted
+ * as the given struct type.
+ *
+ * Return value: Reference to the runtime arguments as type T
+ *
+ * | Argument              | Description                                    | Type                  | Valid Range | Required |
+ * |-----------------------|------------------------------------------------|-----------------------|-------------|----------|
+ * | T (template argument) | POD struct type to interpret the arguments as  | Any POD struct        | N/A         | True     |
+ */
+// clang-format on
+template <typename T>
+FORCE_INLINE T& get_runtime_arguments() {
+    return *((tt_l1_ptr T*)(rta_l1_base));
+}
+
+// clang-format off
+/**
+ * Returns a reference to common runtime arguments as a POD struct. The runtime arguments are reinterpreted
+ * as the given struct type.
+ *
+ * Return value: Reference to the common runtime arguments as type T
+ *
+ * | Argument              | Description                                    | Type                  | Valid Range | Required |
+ * |-----------------------|------------------------------------------------|-----------------------|-------------|----------|
+ * | T (template argument) | POD struct type to interpret the arguments as  | Any POD struct        | N/A         | True     |
+ */
+// clang-format on
+template <typename T>
+FORCE_INLINE T& get_common_runtime_arguments() {
+    return *((tt_l1_ptr T*)(crta_l1_base));
+}
+
+// clang-format off
+/**
+ * Pushes a given number of tiles in the back of the specified CB's queue.
  * Decreases the available space in the circular buffer by this number of
  * tiles. This call is used by the producer to make the tiles visible to the
  * consumer of the CB.
