@@ -125,6 +125,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         boundary_ratio: Optional[float] = None,
         expand_timesteps: bool = False,  # Wan2.2 ti2v
         dynamic_load=False,
+        topology: ttnn.Topology = ttnn.Topology.Linear,
     ):
         super().__init__()
 
@@ -147,10 +148,15 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="transformer_2", trust_remote_code=True
         )
 
-        self.ccl_manager = CCLManager(
+        self.dit_ccl_manager = CCLManager(
             mesh_device=mesh_device,
             num_links=num_links,
-            topology=ttnn.Topology.Linear,
+            topology=topology,
+        )
+        self.vae_ccl_manager = CCLManager(
+            mesh_device=mesh_device,
+            num_links=num_links,
+            topology=ttnn.Topology.Linear,  # NOTE: VAE always uses Linear topology. TODO: enable ring if given.
         )
         self.parallel_config = parallel_config
         self.vae_parallel_config = vae_parallel_config
@@ -171,7 +177,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             out_channels=self.vae.config.out_channels,
             is_residual=self.vae.config.is_residual,
             mesh_device=self.mesh_device,
-            ccl_manager=self.ccl_manager,
+            ccl_manager=self.vae_ccl_manager,
             parallel_config=self.vae_parallel_config,
         )
 
@@ -197,7 +203,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             eps=self.torch_transformer.config.eps,
             rope_max_seq_len=self.torch_transformer.config.rope_max_seq_len,
             mesh_device=self.mesh_device,
-            ccl_manager=self.ccl_manager,
+            ccl_manager=self.dit_ccl_manager,
             parallel_config=self.parallel_config,
             is_fsdp=True,
         )
@@ -239,7 +245,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             eps=self.torch_transformer_2.config.eps,
             rope_max_seq_len=self.torch_transformer_2.config.rope_max_seq_len,
             mesh_device=self.mesh_device,
-            ccl_manager=self.ccl_manager,
+            ccl_manager=self.dit_ccl_manager,
             parallel_config=self.parallel_config,
             is_fsdp=True,
         )

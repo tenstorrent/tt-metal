@@ -2,17 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
+#include <tt-metalium/fabric.hpp>
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/ccl/mesh_partition/mesh_partition.hpp"
 
 namespace composite_common {
 
+bool is_fabric_2d() {
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+
+    return (
+        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D ||
+        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+}
+
+// Map a dimension of an ND tensor to 4D. If dim > than rank difference, subtract rank difference.
+std::tuple<uint32_t, int32_t> normalize_dim_4d(const uint32_t dim, const uint32_t rank) {
+    constexpr int32_t RANK_4D = 4, RANK_2D = 2;
+
+    // special case for rank 2
+    if (rank == RANK_2D) {
+        return std::make_tuple(RANK_2D + dim, RANK_2D);
+    }
+
+    const auto rank_diff = static_cast<int32_t>(rank) - RANK_4D;
+    const auto normalized_dim = (dim < std::abs(rank_diff)) ? dim : dim - rank_diff;
+
+    return std::make_tuple(normalized_dim, rank_diff);
+}
+
 bool use_composite_reduce_scatter(
-    const ttnn::Tensor& input_tensor,
-    ttnn::ccl::Topology topology,
-    const int32_t dim,
-    std::optional<uint32_t> cluster_axis) {
+    const ttnn::Tensor& input_tensor, const int32_t dim, std::optional<uint32_t> cluster_axis) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -20,12 +41,9 @@ bool use_composite_reduce_scatter(
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
-    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
+    const auto normalized_scatter_dim = std::get<0>(normalize_dim_4d(scatter_dim, rank));
 
-    // This is the same conditional topology update done inside the native op
-    if (num_devices == 2) {
-        topology = ttnn::ccl::Topology::Linear;
-    }
+    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
 
     // Must scatter evenly
     auto input_shape = input_tensor.logical_shape();
@@ -39,24 +57,15 @@ bool use_composite_reduce_scatter(
     }
 
     // Use composite if we don't support scattering on the provided dim
-    // with the provided topology
-    if (topology == ttnn::ccl::Topology::Linear) {
-        if (scatter_dim != 3) {
-            return true;
-        }
-    } else if (topology == ttnn::ccl::Topology::Ring) {
-        if (scatter_dim != 1 && scatter_dim != 2 && scatter_dim != 3) {
-            return true;
-        }
-    } else {
-        TT_FATAL(false, "reduce_scatter_minimal_async only supports linear or ring topology");
+    if (normalized_scatter_dim != 1 && normalized_scatter_dim != 2 && normalized_scatter_dim != 3) {
+        return true;
     }
 
     // Use composite if tiled and scattering on padded dim 2 or 3
     auto output_shape = input_shape;
     output_shape[scatter_dim] /= num_devices;
-    return (scatter_dim == 3 && output_shape[scatter_dim] % tile_width != 0) ||
-           (scatter_dim == 2 && output_shape[scatter_dim] % tile_height != 0);
+    return (normalized_scatter_dim == 3 && output_shape[scatter_dim] % tile_width != 0) ||
+           (normalized_scatter_dim == 2 && output_shape[scatter_dim] % tile_height != 0);
 }
 
 ttnn::Tensor composite_reduce_scatter(
@@ -78,7 +87,7 @@ ttnn::Tensor composite_reduce_scatter(
     auto output_shape = input_tensor.logical_shape();
     output_shape[scatter_dim] /= num_devices;
     bool is_tiled_and_not_tile_aligned = input_tensor.layout() == ttnn::Layout::TILE &&
-                                         (output_shape[2] % tile_height != 0 || output_shape[3] % tile_width != 0);
+                                         (output_shape[-2] % tile_height != 0 || output_shape[-1] % tile_width != 0);
 
     auto input_memory_config = input_tensor.memory_config();
     TT_FATAL(
@@ -230,6 +239,10 @@ bool use_composite_all_gather(
 
     auto input_memory_config = input_tensor.memory_config();
     auto output_memory_config = memory_config.value_or(input_memory_config);
+
+    if (is_fabric_2d()) {
+        return true;
+    }
 
     // Use composite for row-major tensors
     if (input_tensor.layout() == ttnn::Layout::ROW_MAJOR) {

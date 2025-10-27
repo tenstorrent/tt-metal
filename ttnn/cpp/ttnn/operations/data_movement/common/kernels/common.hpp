@@ -207,4 +207,19 @@ inline void spin(uint32_t cycles) {
     } while (wall_clock < (wall_clock_timestamp + cycles));
 }
 
+template <uint32_t Size, class Enable = void>
+struct ByteSizeAddressType {
+    typedef uint8_t type;
+};
+
+template <uint32_t Size>
+struct ByteSizeAddressType<Size, typename std::enable_if<Size == 2>::type> {
+    typedef uint16_t type;
+};
+
+template <uint32_t Size>
+struct ByteSizeAddressType<Size, typename std::enable_if<Size == 4>::type> {
+    typedef uint32_t type;
+};
+
 }  // namespace tt::data_movement::common

@@ -4,7 +4,7 @@
 
 #include <tt_stl/overloaded.hpp>
 #include <circular_buffer_config.hpp>
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
 #include "dispatch/system_memory_manager.hpp"

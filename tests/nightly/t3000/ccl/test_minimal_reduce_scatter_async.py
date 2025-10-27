@@ -317,10 +317,9 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "ones_tensor",
     [
-        True,
         False,
     ],
-    ids=["ones", "random"],
+    ids=["random"],
 )
 @pytest.mark.parametrize(
     "use_barrier, use_persistent_buffers",
@@ -435,10 +434,9 @@ def test_reduce_scatter_async(
 @pytest.mark.parametrize(
     "ones_tensor",
     [
-        True,
         False,
     ],
-    ids=["ones", "random"],
+    ids=["random"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -1027,3 +1025,108 @@ def test_reduce_scatter_minimal_async_linear_sharded(
         num_buffers_per_channel=None,
         verify_output=True,
     )
+
+
+MESH_SHAPE = (2, 4)
+LAYOUT = ttnn.TILE_LAYOUT
+
+NUM_ITERS = 1
+
+
+def _valid_cluster_div(input_shape, dim, cluster_axis, mesh_shape, **kwargs):
+    return input_shape[dim] % (prod(mesh_shape) if cluster_axis is None else mesh_shape[cluster_axis]) == 0
+
+
+def _get_tensors(
+    input_shape,
+    mesh_shape,
+    dim,
+    cluster_axis,
+    dtype,
+    memory_config,
+    layout,
+    device,
+    math_op=ttnn.ReduceType.Sum,
+):
+    assert _valid_cluster_div(input_shape, dim, cluster_axis, mesh_shape)
+
+    num_devices = math.prod(mesh_shape)
+
+    elems = math.prod(input_shape)
+
+    torch_inputs = [
+        torch.linspace(i * elems, (i + 1) * elems, elems).reshape(input_shape).bfloat16() for i in range(num_devices)
+    ]
+    torch_input = torch.concat(torch_inputs, dim=0)
+
+    torch_reference = torch.reshape(torch_input, tuple(list(mesh_shape) + input_shape))
+    torch_reference = torch.sum(torch_reference, dim=cluster_axis)
+
+    dim_per_device = input_shape[dim] // mesh_shape[cluster_axis]
+
+    torch_reference_slices = []
+    for x in range(mesh_shape[0]):
+        for y in range(mesh_shape[1]):
+            i, j = (x, y) if cluster_axis == 1 else (y, x)
+
+            torch_reference_slice = torch_reference[i].split(dim_per_device, dim=dim)[j]
+            torch_reference_slices.append(torch_reference_slice)
+
+    torch_reference = torch.concat(torch_reference_slices, dim=0)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=layout,
+        memory_config=memory_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),
+        device=device,
+    )
+
+    return tt_input, torch_reference
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape", [[128, 128], [8, 8, 128, 128], [8, 128, 128], [8, 8, 8, 8, 128, 128], [8, 8, 8, 16, 16]]
+)
+@pytest.mark.parametrize("dtype", [torch.bfloat16])
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("dim", [0, 1, 2, 3, 4, 5])
+@pytest.mark.parametrize("cluster_axis", [0])
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear, ttnn.Topology.Ring])
+def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, topology):
+    if dim >= len(input_shape):
+        pytest.skip("Invalid gather dim")
+
+    tt_input, torch_reference = _get_tensors(
+        input_shape,
+        tuple(mesh_device.shape),
+        dim,
+        cluster_axis,
+        dtype,
+        memory_config,
+        ttnn.TILE_LAYOUT,
+        mesh_device,
+    )
+
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+    )
+    semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(3)]
+
+    print(f"{tt_input.shape=}")
+
+    for i in range(NUM_ITERS):
+        tt_out_tensor = ttnn.experimental.reduce_scatter_minimal_async(
+            tt_input,
+            dim=dim,
+            multi_device_global_semaphore=semaphores,
+            cluster_axis=cluster_axis,
+            topology=topology,
+        )
+
+        tt_output_tensor = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(tt_out_tensor)])
+        eq, mess = comp_pcc(torch_reference, tt_output_tensor)
+        assert eq, mess

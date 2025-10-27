@@ -5,7 +5,7 @@
 #include "jit_build/genfiles.hpp"
 
 #include <circular_buffer_constants.h>
-#include <data_format.hpp>
+#include "data_format.hpp"
 #include <stdint.h>
 #include <tt_backend_api_types.hpp>
 #include <cstddef>
@@ -125,7 +125,7 @@ void jit_build_genfiles_triscs_src(
 namespace {
 
 std::string data_format_vec_to_string(const vector<DataFormat>& formats) {
-    std::string formats_string = "";
+    std::string formats_string;
     for (int i = 0; i < formats.size(); i++) {
         formats_string += to_string((int)formats[i]) + ",";
     }
@@ -299,7 +299,7 @@ void generate_data_format_descriptors(JitBuildOptions& options, const tt::ARCH a
 }
 
 std::string array_to_string(const uint32_t arr[]) {
-    std::string formats_string = "";
+    std::string formats_string;
     for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
         formats_string += to_string((int)arr[i]) + ",";
     }

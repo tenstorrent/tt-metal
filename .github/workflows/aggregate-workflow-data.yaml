@@ -4,7 +4,7 @@ on:
     branches:
       - mchiou/0-aggregate-workflow-report
   schedule:
-    - cron: '0 * * * *' # every hour
+    - cron: '*/15 * * * *' # every 15 minutes
   workflow_dispatch:
     inputs:
       days:
@@ -20,8 +20,10 @@ jobs:
       commits-path: ${{ steps.fetch.outputs.commits-path }}
       annotations-root: ${{ steps.fetch.outputs.annotations-root }}
       annotations-index-path: ${{ steps.fetch.outputs.annotations-index-path }}
-      logs-root: ${{ steps.fetch.outputs.logs-root }}
-      logs-index-path: ${{ steps.fetch.outputs.logs-index-path }}
+      gtest-logs-root: ${{ steps.fetch.outputs.gtest-logs-root }}
+      gtest-logs-index-path: ${{ steps.fetch.outputs.gtest-logs-index-path }}
+      other-logs-root: ${{ steps.fetch.outputs.other-logs-root }}
+      other-logs-index-path: ${{ steps.fetch.outputs.other-logs-index-path }}
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
 
@@ -58,13 +60,22 @@ jobs:
           path: ${{ steps.fetch.outputs.commits-path }}
           retention-days: 1
 
-      - name: Upload logs artifact (if any)
+      - name: Upload gtest logs artifact (if any)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
         with:
-          name: workflow-logs
+          name: workflow-gtest-logs
           path: |
-            ${{ steps.fetch.outputs.logs-root }}/
-            ${{ steps.fetch.outputs.logs-index-path }}
+            ${{ steps.fetch.outputs.gtest-logs-root }}/
+            ${{ steps.fetch.outputs.gtest-logs-index-path }}
+          retention-days: 1
+
+      - name: Upload other logs artifact (if any)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
+        with:
+          name: workflow-other-logs
+          path: |
+            ${{ steps.fetch.outputs.other-logs-root }}/
+            ${{ steps.fetch.outputs.other-logs-index-path }}
           retention-days: 1
 
       - name: Debug cache file
@@ -139,11 +150,16 @@ jobs:
         with:
           name: workflow-annotations
           path: ${{ github.workspace }}/annotations
-      - name: Download logs (if any)
+      - name: Download gtest logs (if any)
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
-          name: workflow-logs
-          path: ${{ github.workspace }}/logs
+          name: workflow-gtest-logs
+          path: ${{ github.workspace }}/logs/gtest
+      - name: Download other logs (if any)
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          name: workflow-other-logs
+          path: ${{ github.workspace }}/logs/other
       - name: Download commits index
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
@@ -159,7 +175,8 @@ jobs:
           previous-cache-path: ${{ github.workspace }}/prev/workflow-data.json
           annotations-index-path: ${{ github.workspace }}/annotations/annotations-index.json
           commits-path: ${{ github.workspace }}/commits-main.json
-          logs-index-path: ${{ github.workspace }}/logs/logs-index.json
+          gtest-logs-index-path: ${{ github.workspace }}/logs/gtest/gtest-logs-index.json
+          other-logs-index-path: ${{ github.workspace }}/logs/other/other-logs-index.json
           alert-all: 'false'
           workflow_configs: |
             [

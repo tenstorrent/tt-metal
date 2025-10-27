@@ -454,3 +454,22 @@ FORCE_INLINE void read_activation_data(
     noc_async_read_barrier();
     reader_offset += window_outer_offset;
 }
+
+// Helper functions for split reader synchronization
+FORCE_INLINE void signal_reserve_done(volatile tt_l1_ptr uint32_t* semaphore_addr_ptr) {
+    noc_semaphore_set(semaphore_addr_ptr, VALID);
+}
+
+FORCE_INLINE void wait_reserve_done(volatile tt_l1_ptr uint32_t* semaphore_addr_ptr) {
+    noc_semaphore_wait(semaphore_addr_ptr, VALID);
+    noc_semaphore_set(semaphore_addr_ptr, INVALID);
+}
+
+FORCE_INLINE void signal_write_done(volatile tt_l1_ptr uint32_t* semaphore_addr_ptr) {
+    noc_semaphore_set(semaphore_addr_ptr, VALID);
+}
+
+FORCE_INLINE void wait_write_done(volatile tt_l1_ptr uint32_t* semaphore_addr_ptr) {
+    noc_semaphore_wait(semaphore_addr_ptr, VALID);
+    noc_semaphore_set(semaphore_addr_ptr, INVALID);
+}

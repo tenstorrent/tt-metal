@@ -370,7 +370,7 @@ int main(int argc, char** argv) {
     tt::tt_fabric::SetFabricConfig(
         tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-    std::vector<chip_id_t> all_device_ids;
+    std::vector<tt::ChipId> all_device_ids;
     all_device_ids.reserve(num_devices);
     for (unsigned int id = 0; id < num_devices; id++) {
         all_device_ids.push_back(id);

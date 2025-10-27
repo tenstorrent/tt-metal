@@ -6,8 +6,10 @@ Standalone application that currently presents a web-based GUI. To build and run
 
 ```
 ./build_metal.sh --build-telemetry
-build/tt_telemetry/tt_telemetry_server
+build/tt_telemetry/tt_telemetry_server --fsd=/path/to/system/fsd/file
 ```
+
+A factory system descriptor (FSD) is required to run telemetry now.
 
 If running on an IRD machine, the Debuda port (usually 5555) is exposed and can be used as the web server port:
 
@@ -80,8 +82,45 @@ fi
 mpirun -x TT_METAL_HOME -hostfile hosts.txt /home/btrzynadlowski/tt-metal/run_telemetry.sh
 ```
 
+# Docker
+
+A Dockerfile is provided in `tt_telemetry/docker/Dockerfile` with two targets: `dev` and `release`. Currently, this is a work-in-progress and intended for internal Tenstorrent use.
+
+To build the development container, which assumes the tt-metal repo is in the context directory:
+
+```
+tt_telemetry/docker/build.sh
+```
+
+The image will be `ghcr.io/btrzynadlowski-tt/tt-telemetry-dev:latest`. If you have the appropriate credentials, log in and push it using:
+
+```
+echo $GITHUB_TOKEN | docker login ghcr.io -u btrzynadlowski-tt --password-stdin
+docker push ghcr.io/btrzynadlowski-tt/tt-telemetry-dev:latest
+```
+
+To pass in an FSD file, use `-v` to mount it and then pass it in as a commandline argument:
+
+```
+docker run -h `hostname` --device /dev/tenstorrent -p 8080:8080 -p 8081:8081 -v /path/to/fsd.textproto:/path/inside/container/fsd.textproto ghcr.io/btrzynadlowski-tt/tt-telemetry-dev:latest --fsd=/path/inside/container/fsd.textproto
+```
+
+The container host name is set with `-h` to match the actual machine host name. Ports 8080 and 8081 must be exposed for the web server and intra-process communication, respectively. UMD requires `/dev/tenstorrent` to be passed through. For systems that require it (systems that do not use IOMMU for DMA), `-v /dev/hugepages-1G:/dev/hugepages-1G` will need to be added.
+
+# Generating Factory System Descriptors
+
+For basic single-node machine types, one of the unit tests will produce FSD files, which must be hand-edited to populate host names.
+
+```
+./build_metal.sh --build-metal-tests
+./build/test/tools/scaleout/test_factory_system_descriptor --gtest_filter="Cluster.TestFactorySystemDescriptorSingleNodeTypes"
+```
+
+The files will be placed in `fsd/`. FSD files should be placed in `/var/telemetry` to be usable with the Docker container.
+
 # TODO
 
+- If a machine is down, the aggregator won't receive its metrics and that host will not appear in the GUI. We need to instead somehow mark the machine as being down, perhaps by having the aggregator create metrics associated with hosts it expects to see, or by having a fake bool metric e.g. "/hostname".
 - Wait until each `TelemetrySubscriber` has finished processing a buffer before fetching a new one and continue to use existing buffer until ready for hand off. May not be necessary but we should at least watch for slow consumers causing the number of buffers
 being allocated to increase (ideally, there should only be two at any given time -- one being written, one being consumed).
 - On Blackhole, Ethernet link status update rate is not clear and we may want to investigate triggering a forced update, although this may have adverse performance effects. Requires further discussion. Sample code:
@@ -94,7 +133,7 @@ bool is_ethernet_endpoint_up(const tt::Cluster &cluster, const EthernetEndpoint 
         // The link status should be auto-updated periodically by code running on RISC0 but this
         // may not be guaranteed in some cases, so we retain the option to do it explicitly.
         tt::llrt::internal_::send_msg_to_eth_mailbox(
-            ep.chip.id,         // device ID (chip_id_t)
+            ep.chip.id,         // device ID (ChipId)
             virtual_eth_core,   // virtual core (CoreCoord == tt_cxy_pair)
             tt::tt_metal::FWMailboxMsg::ETH_MSG_LINK_STATUS_CHECK,
             {0xffffffff},       // args: arg0=copy_addr -- we don't want to copy this anywhere so as not to overwrite anything, just perform update of existing struct we will read LINK_UP from
