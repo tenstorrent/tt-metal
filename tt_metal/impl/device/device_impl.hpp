@@ -238,7 +238,6 @@ private:
     program_cache::detail::ProgramCache program_cache_;
 
     uint32_t trace_buffers_size_ = 0;
-    uint32_t ethernet_core_count_on_dispatcher_ = 0;
 };
 
 }  // namespace tt::tt_metal
