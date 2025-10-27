@@ -276,9 +276,7 @@ PinnedMemory& PinnedMemory::operator=(PinnedMemory&& other) noexcept = default;
 
 tt::umd::SysmemBuffer& PinnedMemory::get_buffer(ChipId device_id) { return pImpl->get_buffer(device_id); }
 
-const tt::umd::SysmemBuffer& PinnedMemory::get_buffer(ChipId device_id) const {
-    return pImpl->get_buffer(device_id);
-}
+const tt::umd::SysmemBuffer& PinnedMemory::get_buffer(ChipId device_id) const { return pImpl->get_buffer(device_id); }
 
 void* PinnedMemory::get_host_ptr() { return pImpl->get_host_ptr(); }
 
