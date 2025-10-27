@@ -104,7 +104,9 @@ template <
     requires CompositeOperationConcept<operation_t>
 void def_call_operator(py_operation_t& py_operation, const nanobind_overload_t<function_t, py_args_t...>& overload) {
     std::apply(
-        [&py_operation, &overload](auto... args) { py_operation.def("__call__", overload.function, args...); },
+        [&py_operation, &overload](auto... args) {
+            py_operation.def("__call__", overload.function, nb::is_method(), args...);
+        },
         overload.args.value);
 }
 
