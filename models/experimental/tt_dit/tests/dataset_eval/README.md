@@ -8,6 +8,6 @@
 4. Tmux for lasting terminal:
     - if don't have tmux: `sudo apt install tmux`
     - `tmux new -s new_session`
-4. Run desired test, ex. `pytest models/experimental/tt_dit/tests/dataset_eval/flux/test_flux_accuracy.py --num-prompts 500`
+4. Run desired test, ex. `TT_MM_THROTTLE_PERF=5 pytest models/experimental/tt_dit/tests/dataset_eval/flux/test_flux_accuracy.py --num-prompts 500`
 
 Results will generate to the corresponding results .json file, ex. `test_reports/flux_test_results.json`
