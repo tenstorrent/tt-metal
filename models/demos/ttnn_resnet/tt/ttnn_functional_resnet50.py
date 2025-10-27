@@ -179,7 +179,6 @@ class resnet50Bottleneck:
                     ),
                     enable_weights_double_buffer=True if input_width < 56 else False,
                     full_inner_dim=True,
-                    force_split_reader=None if height_sharding else True,
                 ),
             }
 
@@ -246,7 +245,6 @@ class resnet50Bottleneck:
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
                 ),
                 reshard_if_not_optimal=reshard_if_not_optimal,
-                force_split_reader=None if height_sharding else True,
             ),
         }
 
@@ -295,7 +293,6 @@ class resnet50Bottleneck:
                 enable_act_double_buffer=enable_act_double_buffer,
                 enable_weights_double_buffer=True,
                 full_inner_dim=True,
-                force_split_reader=None if height_sharding else True,
             ),
         }
 
@@ -341,7 +338,6 @@ class resnet50Bottleneck:
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
                 ),
                 reshard_if_not_optimal=reshard_if_not_optimal,
-                force_split_reader=None if height_sharding else True,
             ),
         }
 
