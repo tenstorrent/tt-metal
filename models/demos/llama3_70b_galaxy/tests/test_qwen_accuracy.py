@@ -511,9 +511,9 @@ def test_qwen_model_acc(
     tt_model.tt_ccl.close()
 
     logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")
-    # assert (
-    #     total_top1_acc >= min_top1_acc
-    # ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"
-    # assert (
-    #     total_top5_acc >= min_top5_acc
-    # ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"
+    assert (
+        total_top1_acc >= min_top1_acc
+    ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"
+    assert (
+        total_top5_acc >= min_top5_acc
+    ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"
