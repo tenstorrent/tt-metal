@@ -42,13 +42,6 @@ void reduce_scatter_common_validates(
     TT_FATAL(rank > 1, "reduce_scatter currently supports rank 2 tensors at minimum");
     TT_FATAL(dim < rank, "Invalid scatter dim {} for rank {} tensor", dim, rank);
 
-    if (rank > 2) {
-        TT_FATAL(
-            dim != 0,
-            "reduce_scatter_minimal_async does not support scattering on 0th dimension (unless rank 2), got: {}",
-            dim);
-    }
-
     const uint32_t normalized_dim = std::get<0>(composite_common::normalize_dim_4d(dim, rank));
     if (normalized_dim == 2 || normalized_dim == 3) {
         const auto& input_shape = input_tensor.padded_shape();
