@@ -65,9 +65,16 @@ static bool should_use_split_reader(const Tensor& input_tensor, const Tensor& gr
 }
 
 // Utility functions
-static uint32_t get_grid_batching_factor(const Tensor& grid_tensor, bool use_precomputed_grid) {
-    return grid_tensor.logical_shape()[-1] /
-           (use_precomputed_grid ? PRECOMPUTED_GRID_ELEMENTS_PER_POINT : STANDARD_GRID_ELEMENTS_PER_POINT);
+static uint32_t get_grid_batching_factor(
+    const Tensor& grid_tensor, bool use_precomputed_grid, const std::string& mode = "bilinear") {
+    uint32_t elements_per_point;
+    if (use_precomputed_grid) {
+        elements_per_point =
+            (mode == "nearest") ? PRECOMPUTED_GRID_ELEMENTS_PER_POINT_NEAREST : PRECOMPUTED_GRID_ELEMENTS_PER_POINT;
+    } else {
+        elements_per_point = STANDARD_GRID_ELEMENTS_PER_POINT;
+    }
+    return grid_tensor.logical_shape()[-1] / elements_per_point;
 }
 
 static uint32_t get_aligned_stick_size(const ttnn::Shape& shape, const Tensor& tensor) {
@@ -84,6 +91,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const Tensor& output_tensor,
     const std::string& mode,
     const std::string& padding_mode,
+    bool align_corners,
     bool use_precomputed_grid,
     bool batch_output_channels) {
     const bool is_sharded = grid_tensor.is_sharded();
@@ -102,9 +110,8 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const uint32_t input_height = input_shape[1], input_width = input_shape[2];
     const uint32_t grid_height = grid_shape[1], grid_width = grid_shape[2];
     const uint32_t grid_hw = grid_height * grid_width;
-    const uint32_t grid_batching_factor = get_grid_batching_factor(grid_tensor, use_precomputed_grid);
+    const uint32_t grid_batching_factor = get_grid_batching_factor(grid_tensor, use_precomputed_grid, mode);
     const bool enable_split_reader = should_use_split_reader(input_tensor, grid_tensor, use_precomputed_grid);
-
     tt::tt_metal::CoreRangeSet all_cores, core_group_1, core_group_2;
     uint32_t num_cores, grid_nsticks_per_core, output_nsticks_per_core = 0;
     uint32_t num_sticks_per_core_group_1 = 0, num_sticks_per_core_group_2 = 0;
@@ -170,8 +177,10 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             cb_idx++, program, all_cores, scalar_cb_page_size, BUFFERING_FACTOR, input_cb_data_format);
     }
 
-    const uint32_t out_ntiles_c = (uint32_t)std::ceil((float)output_shape[-1] / tt::constants::FACE_WIDTH);
-    const uint32_t output_cb_page_size = tt::constants::FACE_WIDTH * output_tensor.element_size();
+    const uint32_t out_ntiles_c =
+        mode == "nearest" ? 1 : (uint32_t)std::ceil((float)output_shape[-1] / tt::constants::FACE_WIDTH);
+    const uint32_t output_cb_page_size =
+        mode == "nearest" ? (float)output_shape[-1] : tt::constants::FACE_WIDTH * output_tensor.element_size();
     const uint32_t output_cb_pages =
         is_sharded ? output_nsticks_per_core * out_ntiles_c : out_ntiles_c * BUFFERING_FACTOR;
     const auto [output_cb_index, output_cb_handle] = tt::tt_metal::create_cb(
@@ -187,7 +196,6 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const uint32_t input_stick_size = get_aligned_stick_size(input_shape, input_tensor);
     const uint32_t grid_stick_size_arg =
         is_sharded ? grid_shape[-1] * grid_tensor.element_size() : get_aligned_stick_size(grid_shape, grid_tensor);
-
     // Reader compile-time arguments - shared arguments first, then specific ones
     std::vector<uint32_t> reader_compile_time_args = {
         input_cb_index_0,                            // ct_arg[0]: input_cb_index_0
@@ -200,11 +208,11 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
         grid_batching_factor,                        // ct_arg[7]: grid_batching_factor (shared)
         static_cast<uint32_t>(grid_tensor.dtype()),  // ct_arg[8]: grid_dtype (shared)
         grid_hw,                                     // ct_arg[9]: grid_hw (shared)
-        use_precomputed_grid ? 1U : 0U               // ct_arg[10]: use_precomputed_grid (shared)
+        use_precomputed_grid ? 1U : 0U,              // ct_arg[10]: use_precomputed_grid (shared)
     };
 
     if (is_sharded) {
-        reader_compile_time_args.push_back(enable_split_reader ? 1U : 0U);   // ct_arg[11]: enable_split_reader
+        reader_compile_time_args.push_back(enable_split_reader ? 1U : 0U);  // ct_arg[11]: enable_split_reader
         reader_compile_time_args.push_back(0U);  // ct_arg[12]: reader_id (will be set later per reader)
         reader_compile_time_args.push_back(grid_nsticks_per_core);  // ct_arg[13]: grid_nsticks_per_core
     }
@@ -224,38 +232,43 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
         return tt::tt_metal::DataMovementConfig{.processor = processor, .noc = noc, .compile_args = args};
     };
 
-    tt::tt_metal::KernelHandle reader0_kernel_id, reader1_kernel_id = 0;
-    if (is_sharded) {
-        auto reader0_compile_time_args = reader_compile_time_args;
-        reader0_compile_time_args[12] = 0;  // ct_arg[12]: reader_id = 0
+    tt::tt_metal::KernelHandle reader0_kernel_id = 0, reader1_kernel_id = 0;
+    if (mode == "bilinear") {
+        if (is_sharded) {
+            auto reader0_compile_time_args = reader_compile_time_args;
+            reader0_compile_time_args[12] = 0;  // ct_arg[12]: reader_id = 0
 
-        reader0_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            reader_kernel_path,
-            all_cores,
-            create_reader_config(
-                reader0_compile_time_args,
-                tt::tt_metal::DataMovementProcessor::RISCV_0,
-                tt::tt_metal::NOC::RISCV_0_default));
-
-        if (enable_split_reader) {
-            auto reader1_compile_time_args = reader_compile_time_args;
-            reader1_compile_time_args[0] = input_cb_index_1;   // ct_arg[0]: input_cb_index_1
-            reader1_compile_time_args[2] = scalar_cb_index_1;  // ct_arg[2]: scalar_cb_index_1
-            reader1_compile_time_args[12] = 1;                 // ct_arg[12]: reader_id = 1
-
-            reader1_kernel_id = tt::tt_metal::CreateKernel(
+            reader0_kernel_id = tt::tt_metal::CreateKernel(
                 program,
                 reader_kernel_path,
                 all_cores,
                 create_reader_config(
-                    reader1_compile_time_args,
-                    tt::tt_metal::DataMovementProcessor::RISCV_1,
-                    tt::tt_metal::NOC::RISCV_1_default));
+                    reader0_compile_time_args,
+                    tt::tt_metal::DataMovementProcessor::RISCV_0,
+                    tt::tt_metal::NOC::RISCV_0_default));
+
+            if (enable_split_reader) {
+                auto reader1_compile_time_args = reader_compile_time_args;
+                reader1_compile_time_args[0] = input_cb_index_1;   // ct_arg[0]: input_cb_index_1
+                reader1_compile_time_args[2] = scalar_cb_index_1;  // ct_arg[2]: scalar_cb_index_1
+                reader1_compile_time_args[12] = 1;                 // ct_arg[12]: reader_id = 1
+
+                reader1_kernel_id = tt::tt_metal::CreateKernel(
+                    program,
+                    reader_kernel_path,
+                    all_cores,
+                    create_reader_config(
+                        reader1_compile_time_args,
+                        tt::tt_metal::DataMovementProcessor::RISCV_1,
+                        tt::tt_metal::NOC::RISCV_1_default));
+            }
+        } else {
+            reader0_kernel_id = tt::tt_metal::CreateKernel(
+                program,
+                reader_kernel_path,
+                all_cores,
+                tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
         }
-    } else {
-        reader0_kernel_id = tt::tt_metal::CreateKernel(
-            program, reader_kernel_path, all_cores, tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     }
 
     const bool is_output_tiled = false;
@@ -266,34 +279,34 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     // Compute kernels
     const uint32_t channels_per_shard = input_shape[-1];
     const uint32_t in_nblocks_c = (uint32_t)std::ceil((float)in_ntiles_c / MAX_TILES_PER_REDUCTION);
-
-    auto create_compute_kernel = [&](tt::tt_metal::CoreRangeSet cores, uint32_t total_interpolations) {
-        // Compute kernel compile-time arguments
-        std::vector<uint32_t> compute_compile_time_args = {
-            in_ntiles_c,                       // ct_arg[0]: in_ntiles_c
-            REDUCTION_SIZE,                    // ct_arg[1]: REDUCTION_SIZE
-            enable_split_reader,               // ct_arg[2]: enable_split_reader
-            total_interpolations,              // ct_arg[3]: total_interpolations
-            channels_per_shard,                // ct_arg[4]: channels_per_shard
-            in_nblocks_c,                      // ct_arg[5]: in_nblocks_c
-            MAX_ROWS_FOR_REDUCTION,            // ct_arg[6]: MAX_ROWS_FOR_REDUCTION
-            input_cb_index_0,                  // ct_arg[7]: input_cb_index_0
-            input_cb_index_1,                  // ct_arg[8]: input_cb_index_1
-            scalar_cb_index_0,                 // ct_arg[9]: scalar_cb_index_0
-            scalar_cb_index_1,                 // ct_arg[10]: scalar_cb_index_1
-            DUMMY_CB_ID,                       // ct_arg[11]: unused
-            DUMMY_CB_ID,                       // ct_arg[12]: unused
-            DUMMY_CB_ID,                       // ct_arg[13]: unused
-            DUMMY_CB_ID,                       // ct_arg[14]: unused
-            DUMMY_CB_ID,                       // ct_arg[15]: unused
-            DUMMY_CB_ID,                       // ct_arg[16]: unused
-            output_cb_index,                   // ct_arg[17]: output_cb_index
-            DUMMY_CB_ID,                       // ct_arg[18]: unused
-            ONE_SCALAR_PER_CORE,               // ct_arg[19]: ONE_SCALAR_PER_CORE
+    if (mode == "bilinear") {
+        auto create_compute_kernel = [&](tt::tt_metal::CoreRangeSet cores, uint32_t total_interpolations) {
+            // Compute kernel compile-time arguments
+            std::vector<uint32_t> compute_compile_time_args = {
+                in_ntiles_c,                       // ct_arg[0]: in_ntiles_c
+                REDUCTION_SIZE,                    // ct_arg[1]: REDUCTION_SIZE
+                enable_split_reader,               // ct_arg[2]: enable_split_reader
+                total_interpolations,              // ct_arg[3]: total_interpolations
+                channels_per_shard,                // ct_arg[4]: channels_per_shard
+                in_nblocks_c,                      // ct_arg[5]: in_nblocks_c
+                MAX_ROWS_FOR_REDUCTION,            // ct_arg[6]: MAX_ROWS_FOR_REDUCTION
+                input_cb_index_0,                  // ct_arg[7]: input_cb_index_0
+                input_cb_index_1,                  // ct_arg[8]: input_cb_index_1
+                scalar_cb_index_0,                 // ct_arg[9]: scalar_cb_index_0
+                scalar_cb_index_1,                 // ct_arg[10]: scalar_cb_index_1
+                DUMMY_CB_ID,                       // ct_arg[11]: unused
+                DUMMY_CB_ID,                       // ct_arg[12]: unused
+                DUMMY_CB_ID,                       // ct_arg[13]: unused
+                DUMMY_CB_ID,                       // ct_arg[14]: unused
+                DUMMY_CB_ID,                       // ct_arg[15]: unused
+                DUMMY_CB_ID,                       // ct_arg[16]: unused
+                output_cb_index,                   // ct_arg[17]: output_cb_index
+                DUMMY_CB_ID,                       // ct_arg[18]: unused
+                ONE_SCALAR_PER_CORE,               // ct_arg[19]: ONE_SCALAR_PER_CORE
             pre_tilize_cb_id,                  // ct_arg[20]: pre_tilize_cb_id
-            is_output_tiled ? 1U : 0U,         // ct_arg[21]: is_output_tiled
-            is_output_block_format ? 1U : 0U,  // ct_arg[22]: is_output_block_format
-            false,                             // ct_arg[23]: return_indices (unused)
+                is_output_tiled ? 1U : 0U,         // ct_arg[21]: is_output_tiled
+                is_output_block_format ? 1U : 0U,  // ct_arg[22]: is_output_block_format
+                false,                             // ct_arg[23]: return_indices (unused)
             1,                                 // ct_arg[24]: stride_h (unused)
             1,                                 // ct_arg[25]: stride_w (unused)
             1,                                 // ct_arg[26]: in_h_padded (unused)
@@ -303,33 +316,35 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             1,                                 // ct_arg[30]: pad_l (unused)
         };
 
-        return tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp",
-            cores,
-            tt::tt_metal::ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = false,
-                .math_approx_mode = false,
-                .compile_args = compute_compile_time_args,
-                .defines = get_defines(pool::Pool2DType::AVG_POOL2D)});
-    };
+            return tt::tt_metal::CreateKernel(
+                program,
+                "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp",
+                cores,
+                tt::tt_metal::ComputeConfig{
+                    .math_fidelity = MathFidelity::HiFi4,
+                    .fp32_dest_acc_en = false,
+                    .math_approx_mode = false,
+                    .compile_args = compute_compile_time_args,
+                    .defines = get_defines(pool::Pool2DType::AVG_POOL2D)});
+        };
 
-    tt::tt_metal::KernelHandle compute_kernel_group_1 = 0, compute_kernel_group_2 = 0;
-    if (is_sharded || core_group_1.num_cores() > 0) {
-        compute_kernel_group_1 = create_compute_kernel(
-            is_sharded ? all_cores : core_group_1,
-            grid_batching_factor * (is_sharded ? grid_nsticks_per_core : num_sticks_per_core_group_1));
-    }
-    if (!is_sharded && core_group_2.num_cores() > 0) {
-        compute_kernel_group_2 =
-            create_compute_kernel(core_group_2, grid_batching_factor * num_sticks_per_core_group_2);
+        // Compute kernels (not needed for nearest mode)
+        tt::tt_metal::KernelHandle compute_kernel_group_1 = 0, compute_kernel_group_2 = 0;
+        if (is_sharded || core_group_1.num_cores() > 0) {
+            compute_kernel_group_1 = create_compute_kernel(
+                is_sharded ? all_cores : core_group_1,
+                grid_batching_factor * (is_sharded ? grid_nsticks_per_core : num_sticks_per_core_group_1));
+        }
+        if (!is_sharded && core_group_2.num_cores() > 0) {
+            compute_kernel_group_2 =
+                create_compute_kernel(core_group_2, grid_batching_factor * num_sticks_per_core_group_2);
+        }
     }
 
-    // Writer kernel (interleaved only)
-    tt::tt_metal::KernelHandle writer_kernel_id = 0;
+    // Writer kernel
+    tt::tt_metal::KernelHandle writer_kernel_id = 0, writer1_kernel_id = 0;
     if (!is_sharded) {
-        // Writer compile-time arguments - expanded row by row for readability
+        // Writer compile-time arguments for interleaved output - expanded row by row for readability
         std::vector<uint32_t> writer_compile_time_args = {
             output_cb_index,                                      // ct_arg[0]: output_cb_index
             get_aligned_stick_size(output_shape, output_tensor),  // ct_arg[1]: output_stick_size
@@ -342,10 +357,67 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/dataflow/writer_grid_sample_interleaved.cpp",
             all_cores,
             tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    } else if (mode == "nearest") {
+        // Writer for nearest mode with sharded grid - matches sharded reader argument structure
+        std::vector<uint32_t> writer_compile_time_args = {
+            input_cb_index_0,                            // ct_arg[0]: input_cb_index
+            grid_cb_index,                               // ct_arg[1]: grid_cb_index
+            output_cb_index,                             // ct_arg[2]: output_cb_index (replaces scalar_cb_index)
+            input_stick_size,                            // ct_arg[3]: input_stick_size
+            grid_stick_size_arg,                         // ct_arg[4]: grid_stick_size
+            input_height,                                // ct_arg[5]: input_height
+            input_width,                                 // ct_arg[6]: input_width
+            grid_batching_factor,                        // ct_arg[7]: grid_batching_factor
+            static_cast<uint32_t>(grid_tensor.dtype()),  // ct_arg[8]: grid_dtype
+            grid_hw,                                     // ct_arg[9]: grid_hw
+            use_precomputed_grid ? 1U : 0U,              // ct_arg[10]: use_precomputed_grid
+            align_corners ? 1U : 0U,                     // ct_arg[11]: align_corners
+            enable_split_reader ? 1U : 0U,               // ct_arg[12]: split_reader (same as reader)
+            0U,                                          // ct_arg[13]: reader_id (will be set per core)
+            grid_nsticks_per_core                        // ct_arg[14]: grid_nsticks_per_core
+        };
+
+        // Add tensor accessor args for input tensor (15 compile time args offset)
+        tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(writer_compile_time_args);
+
+        auto create_writer_config = [&](const std::vector<uint32_t>& args, auto processor, auto noc) {
+            return tt::tt_metal::DataMovementConfig{.processor = processor, .noc = noc, .compile_args = args};
+        };
+
+        writer_kernel_id = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/dataflow/writer_grid_sample_nearest_sharded.cpp",
+            all_cores,
+            create_writer_config(
+                writer_compile_time_args,
+                tt::tt_metal::DataMovementProcessor::RISCV_0,
+                tt::tt_metal::NOC::RISCV_0_default));
+
+        if (enable_split_reader) {
+            auto writer1_compile_time_args = writer_compile_time_args;
+            writer1_compile_time_args[0] = input_cb_index_1;  // ct_arg[0
+            writer1_compile_time_args[13] = 1;  // ct_arg[13]: reader_id = 1
+
+            writer1_kernel_id = tt::tt_metal::CreateKernel(
+                program,
+                "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/dataflow/"
+                "writer_grid_sample_nearest_sharded.cpp",
+                all_cores,
+                create_writer_config(
+                    writer1_compile_time_args,
+                    tt::tt_metal::DataMovementProcessor::RISCV_1,
+                    tt::tt_metal::NOC::RISCV_1_default));
+        }
     }
 
     // Set runtime arguments
     if (is_sharded) {
+        auto kernel0_id = reader0_kernel_id;
+        auto kernel1_id = reader1_kernel_id;
+        if (mode == "nearest") {
+            kernel0_id = writer_kernel_id;
+            kernel1_id = writer1_kernel_id;
+        }
         for (uint32_t i = 0; i < num_cores; i++) {
             const CoreCoord& core = logical_cores[i];
 
@@ -355,9 +427,9 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
                 i * grid_nsticks_per_core          // rt_arg[1]: grid_stick_offset
             };
 
-            tt::tt_metal::SetRuntimeArgs(program, reader0_kernel_id, core, reader_runtime_args);
+            tt::tt_metal::SetRuntimeArgs(program, kernel0_id, core, reader_runtime_args);
             if (enable_split_reader) {
-                tt::tt_metal::SetRuntimeArgs(program, reader1_kernel_id, core, reader_runtime_args);
+                tt::tt_metal::SetRuntimeArgs(program, kernel1_id, core, reader_runtime_args);
             }
         }
     } else {
@@ -407,13 +479,17 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             if (is_sharded) {
                 tt::tt_metal::UpdateDynamicCircularBufferAddress(prog, grid_cb_handle, *grid_tensor.buffer());
                 tt::tt_metal::UpdateDynamicCircularBufferAddress(prog, output_cb_handle, *output_tensor.buffer());
-
+                auto kernel0_id = reader0_kernel_id;
+                auto kernel1_id = reader1_kernel_id;
+                if (mode == "nearest") {
+                    kernel0_id = writer_kernel_id;
+                    kernel1_id = writer1_kernel_id;
+                }
                 for (uint32_t i = 0; i < num_cores; i++) {
                     const CoreCoord& core = logical_cores[i];
-                    tt::tt_metal::GetRuntimeArgs(prog, reader0_kernel_id, core)[0] = input_tensor.buffer()->address();
+                    tt::tt_metal::GetRuntimeArgs(prog, kernel0_id, core)[0] = input_tensor.buffer()->address();
                     if (enable_split_reader) {
-                        tt::tt_metal::GetRuntimeArgs(prog, reader1_kernel_id, core)[0] =
-                            input_tensor.buffer()->address();
+                        tt::tt_metal::GetRuntimeArgs(prog, kernel1_id, core)[0] = input_tensor.buffer()->address();
                     }
                 }
             } else {

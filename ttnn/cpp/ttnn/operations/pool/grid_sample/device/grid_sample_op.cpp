@@ -35,14 +35,14 @@ void GridSample::validate(const std::vector<Tensor>& input_tensors) const {
 
     uint32_t grid_last_dim = grid_tensor.logical_shape()[-1];
     if (use_precomputed_grid_) {
-        TT_FATAL(
-            grid_last_dim % PRECOMPUTED_GRID_ELEMENTS_PER_POINT == 0 &&
-                grid_last_dim >= PRECOMPUTED_GRID_ELEMENTS_PER_POINT,
-            "Precomputed grid tensor last dimension must be a multiple of {} (for h_nw, w_nw, weight_nw, weight_ne, "
-            "weight_sw, weight_se), but got {} in shape {}",
-            PRECOMPUTED_GRID_ELEMENTS_PER_POINT,
-            grid_last_dim,
-            grid_tensor.logical_shape());
+        // TT_FATAL(
+        //     grid_last_dim % PRECOMPUTED_GRID_ELEMENTS_PER_POINT == 0 &&
+        //         grid_last_dim >= PRECOMPUTED_GRID_ELEMENTS_PER_POINT,
+        //     "Precomputed grid tensor last dimension must be a multiple of {} (for h_nw, w_nw, weight_nw, weight_ne, "
+        //     "weight_sw, weight_se), but got {} in shape {}",
+        //     PRECOMPUTED_GRID_ELEMENTS_PER_POINT,
+        //     grid_last_dim,
+        //     grid_tensor.logical_shape());
     } else {
         TT_FATAL(
             grid_last_dim % STANDARD_GRID_ELEMENTS_PER_POINT == 0 && grid_last_dim >= STANDARD_GRID_ELEMENTS_PER_POINT,
@@ -64,7 +64,9 @@ void GridSample::validate(const std::vector<Tensor>& input_tensors) const {
     // batch_output_channels validation - must have batched input (K > 1)
     if (batch_output_channels_) {
         const uint32_t num_elements_per_grid_point =
-            use_precomputed_grid_ ? PRECOMPUTED_GRID_ELEMENTS_PER_POINT : STANDARD_GRID_ELEMENTS_PER_POINT;
+            use_precomputed_grid_
+                ? mode_ == "nearest" ? PRECOMPUTED_GRID_ELEMENTS_PER_POINT_NEAREST : PRECOMPUTED_GRID_ELEMENTS_PER_POINT
+                : STANDARD_GRID_ELEMENTS_PER_POINT;
         const uint32_t grid_batching_factor = grid_last_dim / num_elements_per_grid_point;
         TT_FATAL(
             grid_batching_factor > 1,
@@ -86,8 +88,6 @@ void GridSample::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR, "Input tensor must be ROW_MAJOR layout");
     TT_FATAL(grid_tensor.layout() == Layout::ROW_MAJOR, "Grid tensor must be ROW_MAJOR layout");
 
-    // Parameter validation - currently only support fixed configuration
-    TT_FATAL(mode_ == "bilinear", "Only bilinear interpolation mode is currently supported");
     TT_FATAL(padding_mode_ == "zeros", "Only zeros padding mode is currently supported");
 
     // Memory layout validation - support interleaved and height sharded
@@ -148,7 +148,9 @@ std::vector<TensorSpec> GridSample::compute_output_specs(const std::vector<Tenso
     // Calculate the number of batched grid points per grid row
 
     const uint32_t num_of_elements_per_grid_point =
-        use_precomputed_grid_ ? PRECOMPUTED_GRID_ELEMENTS_PER_POINT : STANDARD_GRID_ELEMENTS_PER_POINT;
+        use_precomputed_grid_
+            ? mode_ == "nearest" ? PRECOMPUTED_GRID_ELEMENTS_PER_POINT_NEAREST : PRECOMPUTED_GRID_ELEMENTS_PER_POINT
+            : STANDARD_GRID_ELEMENTS_PER_POINT;
     uint32_t grid_batching_factor = grid_last_dim / num_of_elements_per_grid_point;
 
     // Define output shape based on batch_output_channels flag
@@ -242,7 +244,14 @@ operation::ProgramWithCallbacks GridSample::create_program(
     Tensor& output_tensor = output_tensors.at(0);
 
     return grid_sample_program_factory(
-        input_tensor, grid_tensor, output_tensor, mode_, padding_mode_, use_precomputed_grid_, batch_output_channels_);
+        input_tensor,
+        grid_tensor,
+        output_tensor,
+        mode_,
+        padding_mode_,
+        align_corners_,
+        use_precomputed_grid_,
+        batch_output_channels_);
 }
 
 }  // namespace ttnn::operations::grid_sample
