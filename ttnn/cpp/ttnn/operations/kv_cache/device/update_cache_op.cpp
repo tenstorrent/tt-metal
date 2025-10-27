@@ -28,16 +28,32 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(
         input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16 ||
             input_tensor.dtype() == DataType::BFLOAT8_B,
-        "Error");
+        "Input tensor dtype must be FLOAT32, BFLOAT16, or BFLOAT8_B but got {}",
+        input_tensor.dtype());
     TT_FATAL(
         cache_tensor.dtype() == DataType::FLOAT32 || cache_tensor.dtype() == DataType::BFLOAT16 ||
             cache_tensor.dtype() == DataType::BFLOAT8_B,
-        "Error");
+        "Cache tensor dtype must be FLOAT32, BFLOAT16, or BFLOAT8_B but got {}",
+        cache_tensor.dtype());
 
-    TT_FATAL(input_tensor.padded_shape()[-1] == cache_tensor.padded_shape()[-1], "Error");
-    TT_FATAL(input_tensor.padded_shape()[0] == 1, "Error");
-    TT_FATAL(input_tensor.padded_shape()[1] == cache_tensor.padded_shape()[1], "Error");
-    TT_FATAL(cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
+    TT_FATAL(
+        input_tensor.padded_shape()[-1] == cache_tensor.padded_shape()[-1],
+        "Input tensor width ({}) must equal cache tensor width ({})",
+        input_tensor.padded_shape()[-1],
+        cache_tensor.padded_shape()[-1]);
+    TT_FATAL(
+        input_tensor.padded_shape()[0] == 1,
+        "Input tensor batch size must be 1 but got {}",
+        input_tensor.padded_shape()[0]);
+    TT_FATAL(
+        input_tensor.padded_shape()[1] == cache_tensor.padded_shape()[1],
+        "Input tensor height ({}) must equal cache tensor height ({})",
+        input_tensor.padded_shape()[1],
+        cache_tensor.padded_shape()[1]);
+    TT_FATAL(
+        cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "Cache tensor memory layout must be INTERLEAVED but got {}",
+        cache_tensor.memory_config().memory_layout());
     if (this->op_type == UpdateCacheOpType::FILL) {
         // TODO: If we want to support mixed precision like decode, we need to add simple compute kernel for conversion
         TT_FATAL(input_tensor.dtype() == cache_tensor.dtype(), "Input and cache tensors must have same dtype!");
@@ -53,20 +69,38 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
                 input_tensor.padded_shape()[1] * input_tensor.padded_shape()[-2] / TILE_HEIGHT;
             const auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
             TT_FATAL(
-                (num_blocks_of_work <= compute_with_storage_grid_size.x * compute_with_storage_grid_size.y), "Error");
+                (num_blocks_of_work <= compute_with_storage_grid_size.x * compute_with_storage_grid_size.y),
+                "Number of work blocks ({}) must be <= total grid size ({})",
+                num_blocks_of_work,
+                compute_with_storage_grid_size.x * compute_with_storage_grid_size.y);
         }
 
         if (input_tensor.is_sharded()) {
-            TT_FATAL(input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED, "Error");
-            TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.padded_shape()[-1], "Error");
+            TT_FATAL(
+                input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
+                "Input tensor memory layout must not be WIDTH_SHARDED but got {}",
+                input_tensor.memory_config().memory_layout());
+            TT_FATAL(
+                input_tensor.shard_spec().value().shape[1] == input_tensor.padded_shape()[-1],
+                "Input tensor shard width ({}) must equal padded width ({})",
+                input_tensor.shard_spec().value().shape[1],
+                input_tensor.padded_shape()[-1]);
             // Require even work division along seq_len and also only 1 head per core
             TT_FATAL(
                 input_tensor.padded_shape()[-2] % input_tensor.shard_spec().value().shape[0] == 0,
                 "Seq len must be divisible by shard height!");
         }
 
-        TT_FATAL(this->batch_idx < cache_tensor.padded_shape()[0], "Error");
-        TT_FATAL(input_tensor.padded_shape()[-2] <= cache_tensor.padded_shape()[-2], "Error");
+        TT_FATAL(
+            this->batch_idx < cache_tensor.padded_shape()[0],
+            "Batch index ({}) must be less than cache tensor batch size ({})",
+            this->batch_idx,
+            cache_tensor.padded_shape()[0]);
+        TT_FATAL(
+            input_tensor.padded_shape()[-2] <= cache_tensor.padded_shape()[-2],
+            "Input tensor height ({}) must be <= cache tensor height ({})",
+            input_tensor.padded_shape()[-2],
+            cache_tensor.padded_shape()[-2]);
     } else if (this->op_type == UpdateCacheOpType::UPDATE) {
         if (input_tensor.device()->arch() == tt::ARCH::GRAYSKULL) {
             TT_FATAL(
@@ -75,8 +109,15 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
                 "cache tensor");
         }
         if (input_tensor.is_sharded()) {
-            TT_FATAL(input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED, "Error");
-            TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.padded_shape()[-1], "Error");
+            TT_FATAL(
+                input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
+                "Input tensor memory layout must not be WIDTH_SHARDED but got {}",
+                input_tensor.memory_config().memory_layout());
+            TT_FATAL(
+                input_tensor.shard_spec().value().shape[1] == input_tensor.padded_shape()[-1],
+                "Input tensor shard width ({}) must equal padded width ({})",
+                input_tensor.shard_spec().value().shape[1],
+                input_tensor.padded_shape()[-1]);
             // Require even work division for now
             TT_FATAL(
                 (input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) %
@@ -84,14 +125,25 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
                     0,
                 "Error");
         } else {
-            TT_FATAL(input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
+            TT_FATAL(
+                input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                "Input tensor memory layout must be INTERLEAVED but got {}",
+                input_tensor.memory_config().memory_layout());
         }
-        TT_FATAL(cache_tensor.padded_shape()[0] <= input_tensor.padded_shape()[-2], "Error");
+        TT_FATAL(
+            cache_tensor.padded_shape()[0] <= input_tensor.padded_shape()[-2],
+            "Cache tensor batch size ({}) must be <= input tensor height ({})",
+            cache_tensor.padded_shape()[0],
+            input_tensor.padded_shape()[-2]);
         // batch offset is only valid if num_user less than 32 and batch_offset + num_user <= 32
         if (cache_tensor.padded_shape()[0] < 32) {
-            TT_FATAL(this->batch_offset + cache_tensor.padded_shape()[0] <= 32, "Error");
+            TT_FATAL(
+                this->batch_offset + cache_tensor.padded_shape()[0] <= 32,
+                "Batch offset ({}) + cache tensor batch size ({}) must be <= 32",
+                this->batch_offset,
+                cache_tensor.padded_shape()[0]);
         } else {
-            TT_FATAL(this->batch_offset == 0, "Error");
+            TT_FATAL(this->batch_offset == 0, "Batch offset must be 0 when cache tensor batch size >= 32");
         }
     }
 }
