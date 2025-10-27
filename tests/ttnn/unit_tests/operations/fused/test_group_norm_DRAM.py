@@ -19,11 +19,7 @@ from models.common.utility_functions import run_for_blackhole
 
 # Helper function to get welford parameters based on device type
 def get_welford_params():
-    """Return welford parameters - only legacy mode for Blackhole, both modes for other devices"""
-    if is_blackhole():
-        return ("legacy",)
-    else:
-        return ("legacy", "welford_normal", "welford_reciprocal")
+    return ("legacy", "welford_normal", "welford_reciprocal")
 
 
 welford_flavors = get_welford_params()

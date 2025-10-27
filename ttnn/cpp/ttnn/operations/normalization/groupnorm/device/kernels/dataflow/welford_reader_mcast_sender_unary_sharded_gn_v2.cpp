@@ -203,15 +203,22 @@ void kernel_main() {
             noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
 
             for (uint32_t i = 1; i < num_mcast_cores; ++i) {
-                noc_async_read_one_packet(multicast_data_noc | global_means_ptr, global_means_ptr + i * 32, 32);
-                noc_async_read_one_packet(multicast_data_noc | global_vars_ptr, global_vars_ptr + i * 32, 32);
+                noc_async_read_one_packet(
+                    multicast_data_noc | global_means_ptr,
+                    global_means_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES,
+                    NOC_L1_READ_ALIGNMENT_BYTES);
+                noc_async_read_one_packet(
+                    multicast_data_noc | global_vars_ptr,
+                    global_vars_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES,
+                    NOC_L1_READ_ALIGNMENT_BYTES);
             }
             noc_async_read_barrier();
         }
 
         // Read mean and variance arrays from cb_ex_global, then combine using Welford
         auto global_result =
-            combine_welford_stats<num_mcast_cores, block_hw * 32 * 32, 16>(p_global_means, p_global_vars);
+            combine_welford_stats<num_mcast_cores, block_hw * 32 * 32, NOC_L1_READ_ALIGNMENT_BYTES / 2>(
+                p_global_means, p_global_vars);
 
         // Write this to cb_ex_global
         p_global_means[0] = global_result.mean;

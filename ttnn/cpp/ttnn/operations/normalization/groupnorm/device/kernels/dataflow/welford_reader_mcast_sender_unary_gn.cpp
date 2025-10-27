@@ -352,6 +352,7 @@ void kernel_main() {
                     auto p_local_means = reinterpret_cast<volatile uint16_t*>(local_read_ptr);
                     auto p_local_vars = reinterpret_cast<volatile uint16_t*>(local_read_ptr + single_tile_size_bytes);
 
+                    //Stride is 2 due to LLK Strided write pattern in SFPU
                     auto local_result = combine_welford_stats<tt::constants::TILE_WIDTH, num_channels_per_group * num_rows_per_group / tt::constants::TILE_WIDTH, 2>(p_local_means, p_local_vars);
 
                     // Write this to cb_ex_global
@@ -374,14 +375,14 @@ void kernel_main() {
                                 get_noc_addr(noc_coord_x[i], noc_coord_y[i], global_means_ptr);
                             uint64_t noc_vars_addr =
                                 get_noc_addr(noc_coord_x[i], noc_coord_y[i], global_vars_ptr);
-                            noc_async_read_one_packet(noc_means_addr, global_means_ptr + i * NOC_DRAM_READ_ALIGNMENT_BYTES, NOC_DRAM_READ_ALIGNMENT_BYTES);
-                            noc_async_read_one_packet(noc_vars_addr, global_vars_ptr + i * NOC_DRAM_READ_ALIGNMENT_BYTES, NOC_DRAM_READ_ALIGNMENT_BYTES);
+                            noc_async_read_one_packet(noc_means_addr, global_means_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES, NOC_L1_READ_ALIGNMENT_BYTES);
+                            noc_async_read_one_packet(noc_vars_addr, global_vars_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES, NOC_L1_READ_ALIGNMENT_BYTES);
                         }
                         noc_async_read_barrier();
                     }
 
                     // Read mean and variance arrays from cb_ex_global, then combine using Welford
-                    auto global_result = combine_welford_stats<num_mcast_cores, num_channels_per_group * num_rows_per_group, 16>(p_global_means, p_global_vars);
+                    auto global_result = combine_welford_stats<num_mcast_cores, num_channels_per_group * num_rows_per_group, NOC_L1_READ_ALIGNMENT_BYTES/2>(p_global_means, p_global_vars);
 
                     // Write this to cb_ex_global
                     p_global_means[0] = global_result.mean;
