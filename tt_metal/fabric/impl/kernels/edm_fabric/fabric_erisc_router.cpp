@@ -1886,6 +1886,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids_ordered) {
     size_t did_nothing_count = 0;
+    uint64_t local_heartbeat_counter = 0;
+    volatile uint64_t* heartbeat_addr =
+        reinterpret_cast<volatile uint64_t*>(eth_l1_mem::address_map::AERISC_FABRIC_HEARTBEAT_ADDR);
     *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
 
     // May want to promote to part of the handshake but for now we just initialize in this standalone way
@@ -2038,6 +2041,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 write_perf_recording_window_results(inner_loop_perf_telemetry_collector, local_perf_telemetry_buffer);
             }
         }
+
+        local_heartbeat_counter++;
+        *heartbeat_addr = local_heartbeat_counter;
     }
 }
 
