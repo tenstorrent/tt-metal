@@ -65,7 +65,8 @@ We also provide other input prompt files with longer sequence lengths. They can 
 
 #### Note regarding precision
 
-This model supports an initial version of batched prefill.
+This model supports an initial version of batched prefill. Currently this consists of exactly 32 users, for prefill lengths up to 2048 tokens. Above this length there's no benefit since prefill gets compute-bound.
+
 To maximize compute, the processing of a prefill batch relies on concatenating all of the batch prompts into a single tensor, which is fed into the model and later sliced. Due to model precision being bfloat8, the math when processing the concatenated users will be slightly different when compared to processing a user at a time.
 
 This can show up in some users not having the exact same output, when the same prompt is used and no sampling is performed (argmax). We tracked the precision impact down to the QKV matmul in the attention layer. Increasing the OPs precision to bfloat16 makes all users match again.
