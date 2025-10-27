@@ -18,7 +18,10 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/experimental/jit/lazy_tensor.hpp"
+#include "ttnn/experimental/jit/lazy_operation.hpp"
 
+#pragma optimize("", off)
 namespace ttnn {
 namespace operations {
 namespace creation {
@@ -242,15 +245,47 @@ struct OnesLike : FullLikeWith<1.0f> {};
 inline constexpr ZerosLike zeros_like{};
 inline constexpr OnesLike ones_like{};
 
-struct Empty {
+struct Empty : public ttnn::experimental::jit::LazyOperation {
+    ttnn::Shape shape;
+    DataType dtype;
+    Layout layout;
+    MeshDevice* device;
+    MemoryConfig memory_config;
+
+    // This is being called from the binding layer, ttnn::empty -> this invoke
+    // I return a lazy tensor
+    ttnn::experimental::jit::LazyTensor new_invoke(
+        const ttnn::Shape& shape,
+        const DataType& dtype,
+        const Layout& layout,
+        MeshDevice* device,
+        const MemoryConfig& memory_config) {
+        this->shape = shape;
+        this->dtype = dtype;
+        this->layout = layout;
+        this->device = device;
+        this->memory_config = memory_config;
+
+        ttnn::experimental::jit::LazyTensor lazy_tensor(std::vector<ttnn::experimental::jit::LazyTensor>{}, this);
+        return lazy_tensor;
+    }
+
+    // this is also being called from the binding layer, but its going to happen if the previousw method does not exists
+    // just for the sake of compatibility
+    // This will also take care of executing the operation when I need to materialize it d
     static Tensor invoke(
         const ttnn::Shape& shape,
         const DataType& dtype,
         const Layout& layout,
         MeshDevice* device,
         const MemoryConfig& memory_config) {
-        return allocate_tensor_on_device(
-            TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device);
+        return {allocate_tensor_on_device(
+            TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device)};
+    }
+
+    // When the LazyTensor is evaluated, I actually return tensors in device
+    std::vector<Tensor> invoke(std::vector<ttnn::experimental::jit::LazyTensor> input_tensors) override {
+        return {Empty::invoke(shape, dtype, layout, device, memory_config)};
     }
 };
 

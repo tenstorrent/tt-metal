@@ -10,7 +10,7 @@
 
 namespace ttnn::experimental::jit {
 
-struct IDeviceOperation;
+struct LazyOperation;
 using LazyTensorId = uint32_t;
 enum class LazyTensorState {
     LAZY,         // Contains graph node information
@@ -18,18 +18,19 @@ enum class LazyTensorState {
     MATERIALIZED  // Contains actual data
 };
 
+enum class JitOperationType {
+    LAZY_JIT,
+    EAGER_JIT,
+};
+
+static JitOperationType jit_operation_type = JitOperationType::LAZY_JIT;
+
 class LazyTensor {
 public:
     LazyTensor() = delete;
-    LazyTensor(
-        ttnn::TensorSpec tensor_spec,
-        const std::vector<LazyTensor>& inputs,
-        const std::string&& operation_name,
-        std::shared_ptr<ttnn::experimental::jit::IDeviceOperation>&& Args);
+    LazyTensor(std::vector<LazyTensor> inputs, ttnn::experimental::jit::LazyOperation* Args);
 
     ~LazyTensor();
-
-    std::string_view operation_name() const { return operation_name_; };
 
     const std::vector<LazyTensor>& inputs() const { return inputs_; };
     const std::vector<LazyTensor>& outputs() const { return outputs_; };
@@ -45,17 +46,19 @@ public:
 
     const LazyTensorId id() const { return id_; };
 
-    ttnn::TensorSpec get_tensor_spec() const { return tensor_spec_; }
+    // This is not optional, but let's keep it like this for now
+    std::optional<ttnn::TensorSpec> get_tensor_spec() const { return tensor_spec_; }
+
+    void set_tensor_spec(const ttnn::TensorSpec& tensor_spec) { tensor_spec_ = tensor_spec; }
 
 private:
     std::vector<tt::tt_metal::Tensor> output_tensors_;
-    ttnn::TensorSpec tensor_spec_;
-    std::shared_ptr<ttnn::experimental::jit::IDeviceOperation> args_;
+    std::optional<ttnn::TensorSpec> tensor_spec_;
+    std::shared_ptr<ttnn::experimental::jit::LazyOperation> args_;
     std::vector<LazyTensor> inputs_;
     std::vector<LazyTensor> outputs_;
     LazyTensorState state_;
     std::vector<LazyTensorId> output_nodes_;
-    std::string operation_name_;
     LazyTensorId id_;
 };
 

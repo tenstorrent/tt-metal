@@ -39,7 +39,6 @@
 #include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial_pybind.hpp"
 #include "ttnn/operations/data_movement/slice/slice_pybind.hpp"
 #include "ttnn/operations/data_movement/split/split_pybind.hpp"
-#include "ttnn/operations/data_movement/split/split_experimental_pybind.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze_pybind.hpp"
 #include "ttnn/operations/data_movement/stack/stack_pybind.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize_pybind.hpp"
@@ -51,7 +50,6 @@
 #include "ttnn/operations/data_movement/sort/sort_pybind.hpp"
 #include "ttnn/operations/data_movement/gather/gather_pybind.hpp"
 #include "ttnn/operations/data_movement/gather/tosa/gather_tosa_pybind.hpp"
-#include "ttnn/operations/data_movement/reshape_on_device/reshape_experimental_pybind.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -68,7 +66,6 @@ void py_module(py::module& module) {
     detail::bind_repeat_interleave(module);
     detail::bind_slice(module);
     detail::bind_split(module);
-    detail::bind_experimental_split(module);
     detail::bind_tilize(module);
     detail::bind_tilize_with_val_padding(module);
     detail::bind_tilize_with_zero_padding(module);
@@ -90,7 +87,6 @@ void py_module(py::module& module) {
     py_bind_repeat(module);
     py_bind_reshape_enum(module);
     py_bind_reshape(module);
-    py_bind_experimental_reshape(module);
     py_bind_reshape_view(module);
     py_bind_view(module);
     py_bind_reshard(module);

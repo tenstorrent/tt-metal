@@ -14,103 +14,33 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
-std::vector<ttnn::Tensor> ReshapeDeviceOperation::invoke(std::vector<Tensor> input_tensors) {
-    // // No-op (Will do a tensor copy)
-    // if (((input_tensor.layout() == Layout::TILE or input_tensor.layout() == Layout::ROW_MAJOR) &&
-    //      padded_output_shape[3] == input_tensor.padded_shape()[3])) {
-    //     // Don't need to do a check here to see the H and W both divisible by 32
-    //     // since handled within the tensor reshape method
-    //     return ttnn::experimental::view(input_tensor, logical_output_shape, padded_output_shape);
-    // }
-    // if (input_tensor.padded_shape() == padded_output_shape) {
-    //     return ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(
-    //         input_tensor, output_mem_config);
-    // }
-    // uint32_t ROW_MAJOR_WIDTH = 8;
-    // if (input_tensor.layout() == Layout::ROW_MAJOR &&
-    //     (input_tensor.padded_shape()[3] % ROW_MAJOR_WIDTH != 0 || padded_output_shape[3] % ROW_MAJOR_WIDTH != 0) &&
-    //     ((padded_output_shape.volume() / padded_output_shape[-1]) % TILE_HEIGHT != 0 ||
-    //      padded_output_shape[-1] % TILE_WIDTH != 0 || input_tensor.padded_shape()[-1] % TILE_WIDTH != 0 ||
-    //      (input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) % TILE_HEIGHT != 0)) {
-    //     TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16, "Error");
-
-    //     return detail::manual_insertion(
-    //         (tt::tt_metal::Tensor)input_tensor,
-    //         logical_output_shape,
-    //         padded_output_shape,
-    //         input_tensor.device(),
-    //         output_mem_config);
-    // }
-    return tt::tt_metal::operation::run(*this, input_tensors);
-}
-
-void ReshapeDeviceOperation::set_output_tensors(std::vector<Tensor> output_tensors) {
-    output_tensors_ = output_tensors;
-}
-
-std::vector<Tensor> ReshapeDeviceOperation::get_output_tensors() const { return output_tensors_; }
-
-std::vector<Tensor> ReshapeDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    if (output_tensors_.size() > 0) {
-        return output_tensors_;
-    }
-
-    auto output_specs = compute_output_specs(input_tensors);
-
-    // Create output tensors for each spec
-    std::vector<ttnn::Tensor> output_tensors;
-    for (const auto& spec : output_specs) {
-        // I am not entirely sure if this is true in any device...
-        auto output_tensor = tt::tt_metal::create_device_tensor(spec, input_tensors[0].device());
-        output_tensor = tt::tt_metal::set_tensor_id(output_tensor);
-        output_tensors.push_back(output_tensor);
-    }
-
-    return output_tensors;
-}
-
 void ReshapeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to reshape need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::FLOAT32, "Error");
 
-    // Maybe call validate again?
-}
-
-void ReshapeDeviceOperation::validate(const std::vector<ttnn::experimental::jit::LazyTensor>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(
-        input_tensor_a.get_tensor_spec().data_type() == DataType::BFLOAT16 ||
-            input_tensor_a.get_tensor_spec().data_type() == DataType::FLOAT32,
-        "Error BFloat16 or Float32 only supported!");
-
-    TT_FATAL(
-        input_tensor_a.get_tensor_spec().layout() == Layout::TILE ||
-            input_tensor_a.get_tensor_spec().layout() == Layout::ROW_MAJOR,
+        input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR,
         "Only tile and row major reshape supported!");
 
     TT_FATAL(
-        input_tensor_a.get_tensor_spec().memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "Only interleaved memory layout is supported for inputs. Use ttnn::reshape for reshaping sharded inputs");
+        input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "Use ttnn::reshape for reshaping sharded inputs");
+    TT_FATAL(
+        this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "Reshape does not currently support sharding. Use ttnn::reshape for reshaping sharded inputs");
 
-    if (input_tensor_a.get_tensor_spec().tensor_layout().get_layout() == Layout::TILE) {
-        TT_FATAL(input_tensor_a.get_tensor_spec().padded_shape().volume() % TILE_HW == 0, "Error");
-    } else if (input_tensor_a.get_tensor_spec().tensor_layout().get_layout() == Layout::ROW_MAJOR) {
+    if (input_tensor_a.layout() == Layout::TILE) {
+        TT_FATAL(input_tensor_a.physical_volume() % TILE_HW == 0, "Error");
+    } else if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
         uint32_t ROW_MAJOR_WIDTH = 8;
         TT_FATAL(
-            input_tensor_a.get_tensor_spec().padded_shape()[3] % ROW_MAJOR_WIDTH == 0,
+            input_tensor_a.padded_shape()[3] % ROW_MAJOR_WIDTH == 0 && padded_output_shape[3] % ROW_MAJOR_WIDTH == 0,
             "Operand/target width must be a multiple of 8");
-        TT_FATAL(padded_output_shape[3] % ROW_MAJOR_WIDTH == 0, "Operand/target width must be a multiple of 8");
     } else {
         TT_THROW("Unsupported layout for reshape");
     }
-}
-
-std::vector<ttnn::TensorSpec> ReshapeDeviceOperation::compute_output_specs(
-    const std::vector<ttnn::experimental::jit::LazyTensor>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    return {input_tensor_a.get_tensor_spec()};
 }
 
 std::vector<ttnn::TensorSpec> ReshapeDeviceOperation::compute_output_specs(

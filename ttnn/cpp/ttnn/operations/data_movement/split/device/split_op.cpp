@@ -13,10 +13,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
-std::vector<ttnn::Tensor> SplitDeviceOperation::invoke(std::vector<Tensor> input_tensors) {
-    return tt::tt_metal::operation::run(*this, input_tensors);
-}
-
 void SplitDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
 
@@ -41,25 +37,16 @@ void SplitDeviceOperation::validate(const std::vector<Tensor>& input_tensors) co
     TT_FATAL(input_tensor.layout() == Layout::TILE, "Tensor needs to be in TILE Layout");
 }
 
-void SplitDeviceOperation::validate(const std::vector<ttnn::experimental::jit::LazyTensor>& input_tensors) const {}
-
-std::vector<ttnn::TensorSpec> SplitDeviceOperation::compute_output_specs(
-    const std::vector<ttnn::experimental::jit::LazyTensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.get_tensor_spec()};
-}
-
 std::vector<ttnn::TensorSpec> SplitDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto input_shape_array = input_tensor.padded_shape().to_array_4D();
     auto output_shape_array = input_shape_array;
-    auto split_size = output_shape_array[this->dim] /= this->num_splits;
-    output_shape_array[this->dim] /= split_size;
+    output_shape_array[this->dim] /= this->num_splits;
     TensorSpec spec(
         Shape(output_shape_array),
         TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), output_mem_config));
-    return std::vector<ttnn::TensorSpec>(split_size, spec);
+    return std::vector<ttnn::TensorSpec>(this->num_splits, spec);
 }
 
 operation::ProgramWithCallbacks SplitDeviceOperation::create_program(
@@ -67,7 +54,6 @@ operation::ProgramWithCallbacks SplitDeviceOperation::create_program(
     const auto& input_tensor = input_tensors.at(0);
     return detail::split_last_dim_two_chunks_tiled(input_tensor, output_tensors, this->output_mem_config);
 }
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
 SplitDeviceOperation::create_op_performance_model(
     const std::vector<Tensor>& input_tensors,
@@ -80,17 +66,5 @@ SplitDeviceOperation::create_op_performance_model(
         input_tensors, output_tensors, ideal_dev_clock_cycles);
     return result;
 }
-
-std::vector<Tensor> SplitDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    if (output_tensors_.size() > 0) {
-        return output_tensors_;
-    }
-    auto output_specs = compute_output_specs(input_tensors);
-    return {create_device_tensor(output_specs[0], input_tensors[0].device())};
-}
-
-std::vector<Tensor> SplitDeviceOperation::get_output_tensors() const { return output_tensors_; }
-
-void SplitDeviceOperation::set_output_tensors(std::vector<Tensor> output_tensors) { output_tensors_ = output_tensors; }
 
 }  // namespace ttnn::operations::data_movement

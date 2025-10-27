@@ -43,6 +43,7 @@
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
 #include <tracy/Tracy.hpp>
+
 #pragma optimize("", off)
 using namespace tt::tt_metal;
 
