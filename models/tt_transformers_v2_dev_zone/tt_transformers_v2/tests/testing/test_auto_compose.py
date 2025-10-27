@@ -12,9 +12,9 @@ import os
 
 import pytest
 import torch
-import ttnn
-
 from tt_transformers_v2.src.testing.auto_compose import to_torch_auto_compose
+
+import ttnn
 
 # ======================================================================================
 # Test Parameters

@@ -15,6 +15,7 @@ Key Features:
 
 import numpy as np
 import torch
+
 import ttnn
 
 assert hasattr(ttnn, "Tensor")

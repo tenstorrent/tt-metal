@@ -9,8 +9,9 @@ sharded ttnn.Tensor's topology metadata and use it to compose shards on host.
 from typing import Optional
 
 import torch
-import ttnn
 from loguru import logger
+
+import ttnn
 
 # ======================================================================================
 # Public API

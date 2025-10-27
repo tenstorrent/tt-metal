@@ -8,8 +8,6 @@ against reference PyTorch implementations with automatic metrics collection.
 
 import pytest
 import torch
-import ttnn
-
 from tt_transformers_v2.src.testing import (
     clear_validation_results,
     device_validate_against,
@@ -18,6 +16,8 @@ from tt_transformers_v2.src.testing import (
     host_validate_against,
     to_torch_auto_compose,
 )
+
+import ttnn
 
 # ============================================================================
 # Example 1: Validating RMSNorm against PyTorch reference
