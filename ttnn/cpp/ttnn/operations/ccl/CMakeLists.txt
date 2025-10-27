@@ -26,6 +26,7 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES
+            all_broadcast/device/all_broadcast_op.hpp # seems odd to have some of this file, but it's needed for tt-train to consume
             ccl_common.hpp
             ccl_host_datastructures.hpp
             ccl_host_types.hpp
