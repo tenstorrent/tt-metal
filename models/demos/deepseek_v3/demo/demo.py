@@ -17,9 +17,16 @@ from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 
 def _default_mesh_shape() -> ttnn.MeshShape:
     device_ids = ttnn.get_device_ids()
-    if len(device_ids) == 32:
-        return ttnn.MeshShape(4, 8)
-    return ttnn.MeshShape(1, max(1, len(device_ids)))
+    mesh_device_env = os.getenv("MESH_DEVICE")
+    if mesh_device_env == "DUAL":
+        default_mesh_shape = ttnn.MeshShape(8, 8)  # If running on DUAL system
+    elif mesh_device_env == "QUAD":
+        default_mesh_shape = ttnn.MeshShape(16, 8)  # If running on QUAD system
+    elif mesh_device_env == "TG" or len(device_ids) == 32:  # If running on Galaxy system
+        default_mesh_shape = ttnn.MeshShape(4, 8)
+    else:
+        default_mesh_shape = ttnn.MeshShape(1, len(device_ids))
+    return default_mesh_shape
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -201,12 +208,13 @@ def run_demo(
                 prompt_list = prompts
 
         # Multi-prompt generation
-        generations = gen.generate(
+        generations, statistics = gen.generate(
             prompt_list,
             max_new_tokens=max_new_tokens,
             teacher_forcing=token_acc,
             early_print_first_user=early_print_first_user,
         )
+
         # Process all generations
         results = []
         for i, generation_tokens in enumerate(generations):
@@ -218,7 +226,7 @@ def run_demo(
                 result.update({"accuracy_top1": acc.get("top1"), "accuracy_top5": acc.get("top5")})
             results.append(result)
 
-        return {"generations": results}
+        return {"generations": results, "statistics": statistics}
     finally:
         # Clean up mesh device(s)
         for submesh in mesh_device.get_submeshes():
@@ -270,6 +278,19 @@ def main() -> None:
         print("-" * 30)
 
     print("=====================\n")
+
+    # Print performance metrics if available
+    if "statistics" in results and results["statistics"]:
+        statistics = results["statistics"]
+        logger.info("=== Performance Metrics ===")
+        logger.info(f"Config preparation - Prefill: {statistics.get('preparing_prefill_config', 0)*1000:.2f}ms")
+        logger.info(f"Config preparation - Decode: {statistics.get('preparing_decode_config', 0)*1000:.2f}ms")
+        logger.info(f"Prefill time: {statistics['inference_prefill']*1000:.2f}ms")
+        logger.info(f"Average time to first token: {statistics['prefill_time_to_token']*1000:.2f}ms")
+        logger.info(f"Prefill tokens/sec: {statistics['prefill_t/s']:.2f}")
+        logger.info(f"Decode tokens/sec/user: {statistics['decode_t/s/u']:.2f}")
+        logger.info(f"Decode tokens/sec (total): {statistics['decode_t/s']:.2f}")
+        logger.info(f"Full demo runtime: {statistics['Full demo runtime']:.2f}s")
 
 
 if __name__ == "__main__":
