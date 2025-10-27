@@ -83,7 +83,17 @@ class Conv2dNormActivation:
         Returns:
             Output tensor after Conv2d + GroupNorm + ReLU
         """
-        # Conv2d with DRAM slicing
+        from loguru import logger
+
+        logger.info(f"Conv2dNormActivation: Starting forward pass")
+        logger.info(f"  Input shape: {x.shape}")
+        logger.info(f"  batch_size={batch_size}, H={input_height}, W={input_width}")
+
+        # Conv2d operation
+        logger.info(f"Conv2dNormActivation: Calling ttnn.conv2d...")
+        logger.info(f"  kernel_size={list(self.kernel_size)}, stride={list(self.stride)}, padding={list(self.padding)}")
+        logger.info(f"  weight shape: {self.conv_weight.shape}")
+
         x = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.conv_weight,
@@ -91,9 +101,9 @@ class Conv2dNormActivation:
             out_channels=self.out_channels,
             device=self.device,
             bias_tensor=None,
-            kernel_size=self.kernel_size,
-            stride=self.stride,
-            padding=self.padding,
+            kernel_size=list(self.kernel_size),
+            stride=list(self.stride),
+            padding=list(self.padding),
             batch_size=batch_size,
             input_height=input_height,
             input_width=input_width,
@@ -102,6 +112,7 @@ class Conv2dNormActivation:
 
         # Get output shape after conv
         N, H_out, W_out, C = x.shape
+        logger.info(f"  After conv2d: shape={x.shape}, H_out={H_out}, W_out={W_out}")
 
         # Calculate padding needed for tile alignment
         # GroupNorm requires H_out * W_out divisible by (grid_size.y * 32)
@@ -140,9 +151,14 @@ class Conv2dNormActivation:
             # Slice back to original spatial size
             x_normalized = x_normalized[:, :, :spatial_size, :]
 
-        # Reshape back to (N, H, W, C)
-        x = ttnn.reshape(x_normalized, (N, H_out, W_out, C))
-
+        # Reshape back using PRESERVED dimensions
+        x = ttnn.reshape(x_normalized, (N, input_height, input_width, C))
+        logger.info(f"  After reshape back: shape={x.shape}")
+        # Store original spatial dimensions
+        original_H = input_height
+        original_W = input_width
+        H_out = input_height
+        W_out = input_width
         # ReLU activation
         x = ttnn.relu(x)
 
