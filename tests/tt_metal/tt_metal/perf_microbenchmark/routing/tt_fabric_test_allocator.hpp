@@ -663,15 +663,16 @@ private:
         CoreCoord worker_grid = device_info_provider_.get_worker_grid_size();
         uint32_t total_worker_cores = worker_grid.x * worker_grid.y;
 
-        // 2. Determine mux cores per device (if flow control enabled)
+        // 2. Determine mux cores per device and num_links (if flow control enabled)
         uint32_t mux_cores_per_device = 0;
+        uint32_t num_links = 1;  // Default to 1 link
         if (config.enable_flow_control) {
             // Determine num_links from test config
             uint32_t max_link_id = 0;
             for (const auto& sender : config.senders) {
                 max_link_id = std::max(max_link_id, sender.link_id);
             }
-            uint32_t num_links = max_link_id + 1;  // link_id is 0-indexed
+            num_links = max_link_id + 1;  // link_id is 0-indexed
 
             // Per device max: 4 directions × num_links
             mux_cores_per_device = NUM_DIRECTIONS * num_links;
@@ -770,8 +771,34 @@ private:
                 TT_FATAL(false, "Infeasible allocation: insufficient receiver cores");
             }
 
-            // Compute required configs per core
+            // Compute required configs per core based on available cores
             uint32_t required = (num_receivers + available_for_receivers - 1) / available_for_receivers;
+
+            // Apply mux client cap if flow control is enabled
+            // Since link duplication uniformly distributes receivers across links,
+            // we divide total receivers by num_links to get receivers per link
+            if (config.enable_flow_control && num_links > 0) {
+                uint32_t receivers_per_link = num_receivers / num_links;
+
+                if (receivers_per_link > MAX_RECV_CORES_PER_LINK_WITH_MUX) {
+                    // Calculate minimum sharing factor needed to satisfy mux client cap
+                    uint32_t sharing_factor_per_link =
+                        (receivers_per_link + MAX_RECV_CORES_PER_LINK_WITH_MUX - 1) / MAX_RECV_CORES_PER_LINK_WITH_MUX;
+
+                    // Apply the stricter constraint (mux cap vs available cores)
+                    required = std::max(required, sharing_factor_per_link);
+
+                    log_debug(
+                        tt::LogTest,
+                        "Device [mesh={}, chip={}]: Mux client cap applied. "
+                        "Receivers per link: {}, Cap: {}, Sharing factor: {}",
+                        device_id.mesh_id,
+                        device_id.chip_id,
+                        receivers_per_link,
+                        MAX_RECV_CORES_PER_LINK_WITH_MUX,
+                        sharing_factor_per_link);
+                }
+            }
 
             if (required > max_configs_per_core_needed) {
                 max_configs_per_core_needed = required;
@@ -830,6 +857,10 @@ private:
     static constexpr uint32_t SAFETY_MARGIN_CORES = 2;
     static constexpr uint32_t DEFAULT_MIN_CONFIGS_PER_CORE = 1;
     static constexpr uint32_t NUM_DIRECTIONS = 4;  // N, S, E, W
+
+    // Mux kernel stack constraint: Maximum receiver cores per device per link when flow control enabled
+    // Beyond this limit, receiver cores must be shared to prevent mux kernel stack overflow
+    static constexpr uint32_t MAX_RECV_CORES_PER_LINK_WITH_MUX = 20;
 };
 
 inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
