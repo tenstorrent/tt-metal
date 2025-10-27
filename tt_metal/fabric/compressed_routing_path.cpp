@@ -34,8 +34,6 @@ template <>
 void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
     FabricNodeId src_fabric_node_id, tt_metal::distributed::MeshShape& mesh_shape) {
     uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
-    uint8_t ew_dim = mesh_shape[1];
-    uint8_t ns_dim = mesh_shape[0];
     auto& src_chip_id = src_fabric_node_id.chip_id;
     auto& mesh_id = src_fabric_node_id.mesh_id;
 
@@ -91,50 +89,50 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
         uint8_t ns_direction = 0;
         uint8_t ew_direction = 0;
 
+        auto is_ns = [](RoutingDirection d) { return d == RoutingDirection::N || d == RoutingDirection::S; };
+        auto is_ew = [](RoutingDirection d) { return d == RoutingDirection::E || d == RoutingDirection::W; };
+
+        auto make_node = [mesh_id](uint16_t chip) { return tt::tt_fabric::FabricNodeId(mesh_id, chip); };
+        auto next_dir = [&](uint16_t from_chip, uint16_t to_chip) {
+            return control_plane.get_forwarding_direction(make_node(from_chip), make_node(to_chip));
+        };
+        auto ns_bit = [](RoutingDirection d) { return (uint8_t)(d == RoutingDirection::S); };
+        auto ew_bit = [](RoutingDirection d) { return (uint8_t)(d == RoutingDirection::E); };
+        auto it = best_chip_sequence.cbegin();
         uint16_t prev_chip = src_chip_id;
-        auto topology = control_plane.get_fabric_context().get_fabric_topology();
-        bool is_torus = (topology == tt::tt_fabric::Topology::Torus);
-        for (uint16_t curr_chip : best_chip_sequence) {
-            uint16_t prev_row = prev_chip / ew_dim;
-            uint16_t prev_col = prev_chip % ew_dim;
-            uint16_t curr_row = curr_chip / ew_dim;
-            uint16_t curr_col = curr_chip % ew_dim;
-
-            int dr = static_cast<int>(curr_row) - static_cast<int>(prev_row);
-            int dc = static_cast<int>(curr_col) - static_cast<int>(prev_col);
-
-            if (dr != 0) {
-                // Count NS hop; set direction only on first NS step
-                if (ns_hops == 0) {
-                    uint8_t step_dir;
-                    if (is_torus) {
-                        // Wrap-aware: treat a delta of -(ns_dim-1) as SOUTH (wrap), and +1 as SOUTH
-                        step_dir = (dr == 1 || dr == -(static_cast<int>(ns_dim) - 1));
-                    } else {  // Mesh
-                        step_dir = (dr > 0);
-                    }
-                    ns_direction = step_dir;
-                }
-                ++ns_hops;
-            } else if (dc != 0) {
-                // Count EW hop; set direction only on first EW step
-                if (ew_hops == 0) {
-                    uint8_t step_dir;
-                    if (is_torus) {
-                        // Wrap-aware: treat a delta of -(ew_dim-1) as EAST (wrap), and +1 as EAST
-                        step_dir = (dc == 1 || dc == -(static_cast<int>(ew_dim) - 1));
-                    } else {  // Mesh
-                        step_dir = (dc > 0);
-                    }
-                    ew_direction = step_dir;
-                }
-                ++ew_hops;
+        auto consume_axis = [&](auto is_axis, auto dir_to_bit, uint8_t& hops, uint8_t& dir_bit) {
+            if (it == best_chip_sequence.cend()) {
+                return;
             }
-            prev_chip = curr_chip;
+            uint16_t curr_chip = *it;
+            auto dir_opt = next_dir(prev_chip, curr_chip);
+            if (!dir_opt.has_value() || !is_axis(*dir_opt)) {
+                return;
+            }
+
+            dir_bit = dir_to_bit(*dir_opt);
+            do {
+                ++hops;
+                prev_chip = curr_chip;
+                ++it;
+                if (it == best_chip_sequence.cend()) {
+                    break;
+                }
+                curr_chip = *it;
+                dir_opt = next_dir(prev_chip, curr_chip);
+                if (!dir_opt.has_value()) {
+                    break;
+                }
+            } while (dir_opt.has_value() && is_axis(*dir_opt));
+        };
+
+        if (it != best_chip_sequence.cend()) {
+            // Consume NS first (if present), then EW
+            consume_axis(is_ns, ns_bit, ns_hops, ns_direction);
+            consume_axis(is_ew, ew_bit, ew_hops, ew_direction);
         }
 
-        uint8_t turn_after_ns = ns_hops;
-        paths[dst_chip_id].set(ns_hops, ew_hops, ns_direction, ew_direction, turn_after_ns);
+        paths[dst_chip_id].set(ns_hops, ew_hops, ns_direction, ew_direction, ns_hops);
     }
 }
 
