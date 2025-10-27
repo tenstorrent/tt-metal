@@ -244,7 +244,7 @@ jobs:
         env:
           SOURCE_LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.1-8B-Instruct
           LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.1-8B-Instruct
-        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $SOURCE_LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
+        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $SOURCE_LLAMA_DIR:$LLAMA_DIR -e LLAMA_DIR ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
   test-bh-multicard-image:
     needs:
       - get-image-tags
