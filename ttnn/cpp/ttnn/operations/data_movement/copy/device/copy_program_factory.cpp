@@ -39,6 +39,10 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
     if (sharded && !tilized) {
         output_unit_size = output.memory_config().shard_spec()->shape[1] * output.element_size();
     }
+    if (tilized) {
+        TT_FATAL(input_unit_size % input.element_size() == 0, "Input tile size must be a multiple of element size");
+        TT_FATAL(output_unit_size % output.element_size() == 0, "Output tile size must be a multiple of element size");
+    }
 
     bool convert_dtype = input_cb_data_format != output_cb_data_format;
 

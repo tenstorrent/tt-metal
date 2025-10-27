@@ -84,6 +84,9 @@ def test_copy_block_sharded(device, layout, shape, shard_scheme, dtype):
     ttnn.copy(input_tensor, output_tensor)
     input_tensor = ttnn.to_torch(input_tensor)
     outout_tensor = ttnn.to_torch(output_tensor)
+    if dtype == ttnn.uint32:
+        print("input_tensor", input_tensor)
+        print("outout_tensor", outout_tensor)
     assert_with_pcc(input_tensor, outout_tensor, 1)
     assert_equal(input_tensor, outout_tensor)
 
