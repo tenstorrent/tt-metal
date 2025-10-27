@@ -28,7 +28,7 @@ def test_ci_dispatch(hf_model_name, is_ci_env, is_ci_v2_env, model_location_gene
         "models/demos/gemma3/tests/test_mmp.py",
     ]
     ci_v1_tests = [
-        "models/demos/gemma3/tests/test_benchmark_vision_cross_attention_transformer.py",
+        "models/demos/gemma3/tests/test_perf_vision_cross_attention_transformer.py",
         "models/demos/siglip/tests/test_attention.py",
         "models/demos/gemma3/tests/test_patch_embedding.py",
         "models/demos/gemma3/tests/test_vision_attention.py",
@@ -56,8 +56,8 @@ def test_ci_dispatch(hf_model_name, is_ci_env, is_ci_v2_env, model_location_gene
 
     # Pass the exit code of pytest to proper keep track of failures during runtime
     exit_code = pytest.main(tests + ["-x"])
-    if exit_code == pytest.ExitCode.TESTS_FAILED:
+    if exit_code != pytest.ExitCode.OK:
         pytest.fail(
-            f"One or more CI dispatch tests failed for {hf_model_name}. Please check the log above for more info",
+            f"Pytest failed with exit code {exit_code} for {hf_model_name}. " "Check logs above for details.",
             pytrace=False,
         )
