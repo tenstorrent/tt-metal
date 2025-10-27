@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import ml_dtypes
 import numpy as np
 import pytest
 import os
@@ -98,21 +99,104 @@ def do_test_numpy_autograd_conversion(
 
 
 default_tensor_data = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
-all_test_cases = [
-    (default_tensor_data, np.float32, None, None),
-    (default_tensor_data, np.float32, None, ttml.Layout.ROW_MAJOR),
-    (default_tensor_data, np.float32, None, ttml.Layout.TILE),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.BFLOAT16, None),
+numpy_data_types = [np.float32, np.int32, np.uint32, ml_dtypes.bfloat16]
+metal_data_types = [
+    None,
+    ttml.autograd.DataType.BFLOAT16,
+    ttml.autograd.DataType.BFLOAT4_B,
+    ttml.autograd.DataType.BFLOAT8_B,
+    ttml.autograd.DataType.FLOAT32,
+    ttml.autograd.DataType.INT32,
+    ttml.autograd.DataType.UINT32,
+]
+layouts = [None, ttml.Layout.ROW_MAJOR, ttml.Layout.TILE]
+
+
+def generate_all_test_cases():
+    ret = []
+    for numpy_data_type in numpy_data_types:
+        for metal_data_type in metal_data_types:
+            for layout in layouts:
+                ret.append(
+                    (default_tensor_data, numpy_data_type, metal_data_type, layout)
+                )
+    return ret
+
+
+all_test_cases = generate_all_test_cases()
+
+
+def join_lists(*lists):
+    ret = []
+    for l in lists:
+        for o in l:
+            ret.append(o)
+    return ret
+
+
+def cases_except(cases, *cases_to_skip):
+    actual_cases_to_skip = []
+    for case_or_cases in cases_to_skip:
+        if type(case_or_cases) == list:
+            for case in case_or_cases:
+                actual_cases_to_skip.append(case)
+        else:
+            actual_cases_to_skip.append(case_or_cases)
+    return [test_case for test_case in cases if test_case not in actual_cases_to_skip]
+
+
+"""cases which violate format conversion rules codified in C++ nanobind python bindings"""
+unsupported_format_cases = [
+    (default_tensor_data, ml_dtypes.bfloat16, ttml.autograd.DataType.BFLOAT4_B, None),
     (
         default_tensor_data,
-        np.float32,
-        ttml.autograd.DataType.BFLOAT16,
+        ml_dtypes.bfloat16,
+        ttml.autograd.DataType.BFLOAT4_B,
         ttml.Layout.ROW_MAJOR,
     ),
     (
         default_tensor_data,
-        np.float32,
-        ttml.autograd.DataType.BFLOAT16,
+        ml_dtypes.bfloat16,
+        ttml.autograd.DataType.BFLOAT4_B,
+        ttml.Layout.TILE,
+    ),
+    (default_tensor_data, ml_dtypes.bfloat16, ttml.autograd.DataType.BFLOAT8_B, None),
+    (
+        default_tensor_data,
+        ml_dtypes.bfloat16,
+        ttml.autograd.DataType.BFLOAT8_B,
+        ttml.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        ml_dtypes.bfloat16,
+        ttml.autograd.DataType.BFLOAT8_B,
+        ttml.Layout.TILE,
+    ),
+    (default_tensor_data, ml_dtypes.bfloat16, ttml.autograd.DataType.BFLOAT4_B, None),
+    (
+        default_tensor_data,
+        ml_dtypes.bfloat16,
+        ttml.autograd.DataType.BFLOAT4_B,
+        ttml.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        ml_dtypes.bfloat16,
+        ttml.autograd.DataType.BFLOAT4_B,
+        ttml.Layout.TILE,
+    ),
+    (default_tensor_data, ml_dtypes.bfloat16, ttml.autograd.DataType.BFLOAT8_B, None),
+    (
+        default_tensor_data,
+        ml_dtypes.bfloat16,
+        ttml.autograd.DataType.BFLOAT8_B,
+        ttml.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        ml_dtypes.bfloat16,
+        ttml.autograd.DataType.BFLOAT8_B,
         ttml.Layout.TILE,
     ),
     (default_tensor_data, np.float32, ttml.autograd.DataType.BFLOAT4_B, None),
@@ -141,160 +225,6 @@ all_test_cases = [
         ttml.autograd.DataType.BFLOAT8_B,
         ttml.Layout.TILE,
     ),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.FLOAT32, None),
-    (
-        default_tensor_data,
-        np.float32,
-        ttml.autograd.DataType.FLOAT32,
-        ttml.Layout.ROW_MAJOR,
-    ),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.FLOAT32, ttml.Layout.TILE),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.INT32, None),
-    (
-        default_tensor_data,
-        np.float32,
-        ttml.autograd.DataType.INT32,
-        ttml.Layout.ROW_MAJOR,
-    ),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.INT32, ttml.Layout.TILE),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.UINT32, None),
-    (
-        default_tensor_data,
-        np.float32,
-        ttml.autograd.DataType.UINT32,
-        ttml.Layout.ROW_MAJOR,
-    ),
-    (default_tensor_data, np.float32, ttml.autograd.DataType.UINT32, ttml.Layout.TILE),
-    (default_tensor_data, np.int32, None, None),
-    (default_tensor_data, np.int32, None, ttml.Layout.ROW_MAJOR),
-    (default_tensor_data, np.int32, None, ttml.Layout.TILE),
-    (default_tensor_data, np.int32, ttml.autograd.DataType.BFLOAT16, None),
-    (
-        default_tensor_data,
-        np.int32,
-        ttml.autograd.DataType.BFLOAT16,
-        ttml.Layout.ROW_MAJOR,
-    ),
-    (default_tensor_data, np.int32, ttml.autograd.DataType.BFLOAT16, ttml.Layout.TILE),
-    (default_tensor_data, np.int32, ttml.autograd.DataType.BFLOAT4_B, None),
-    (
-        default_tensor_data,
-        np.int32,
-        ttml.autograd.DataType.BFLOAT4_B,
-        ttml.Layout.ROW_MAJOR,
-    ),
-    (default_tensor_data, np.int32, ttml.autograd.DataType.BFLOAT4_B, ttml.Layout.TILE),
-    (default_tensor_data, np.int32, ttml.autograd.DataType.BFLOAT8_B, None),
-    (
-        default_tensor_data,
-        np.int32,
-        ttml.autograd.DataType.BFLOAT8_B,
-        ttml.Layout.ROW_MAJOR,
-    ),
-    (default_tensor_data, np.int32, ttml.autograd.DataType.BFLOAT8_B, ttml.Layout.TILE),
-    (default_tensor_data, np.int32, ttml.autograd.DataType.FLOAT32, None),
-    (default_tensor_data, np.int32, ttml.autograd.DataType.FLOAT32, ttml.Layout.TILE),
-    (default_tensor_data, np.int32, ttml.autograd.DataType.INT32, None),
-    (
-        default_tensor_data,
-        np.int32,
-        ttml.autograd.DataType.INT32,
-        ttml.Layout.ROW_MAJOR,
-    ),
-    (default_tensor_data, np.int32, ttml.autograd.DataType.INT32, ttml.Layout.TILE),
-    (default_tensor_data, np.int32, ttml.autograd.DataType.UINT32, None),
-    (
-        default_tensor_data,
-        np.int32,
-        ttml.autograd.DataType.UINT32,
-        ttml.Layout.ROW_MAJOR,
-    ),
-    (default_tensor_data, np.int32, ttml.autograd.DataType.UINT32, ttml.Layout.TILE),
-    (default_tensor_data, np.uint32, None, None),
-    (default_tensor_data, np.uint32, None, ttml.Layout.ROW_MAJOR),
-    (default_tensor_data, np.uint32, None, ttml.Layout.TILE),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.BFLOAT16, None),
-    (
-        default_tensor_data,
-        np.uint32,
-        ttml.autograd.DataType.BFLOAT16,
-        ttml.Layout.ROW_MAJOR,
-    ),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.BFLOAT16, ttml.Layout.TILE),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.BFLOAT4_B, None),
-    (
-        default_tensor_data,
-        np.uint32,
-        ttml.autograd.DataType.BFLOAT4_B,
-        ttml.Layout.ROW_MAJOR,
-    ),
-    (
-        default_tensor_data,
-        np.uint32,
-        ttml.autograd.DataType.BFLOAT4_B,
-        ttml.Layout.TILE,
-    ),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.BFLOAT8_B, None),
-    (
-        default_tensor_data,
-        np.uint32,
-        ttml.autograd.DataType.BFLOAT8_B,
-        ttml.Layout.ROW_MAJOR,
-    ),
-    (
-        default_tensor_data,
-        np.uint32,
-        ttml.autograd.DataType.BFLOAT8_B,
-        ttml.Layout.TILE,
-    ),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.FLOAT32, None),
-    (
-        default_tensor_data,
-        np.uint32,
-        ttml.autograd.DataType.FLOAT32,
-        ttml.Layout.ROW_MAJOR,
-    ),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.FLOAT32, ttml.Layout.TILE),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.INT32, None),
-    (
-        default_tensor_data,
-        np.uint32,
-        ttml.autograd.DataType.INT32,
-        ttml.Layout.ROW_MAJOR,
-    ),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.INT32, ttml.Layout.TILE),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.UINT32, None),
-    (
-        default_tensor_data,
-        np.uint32,
-        ttml.autograd.DataType.UINT32,
-        ttml.Layout.ROW_MAJOR,
-    ),
-    (default_tensor_data, np.uint32, ttml.autograd.DataType.UINT32, ttml.Layout.TILE),
-]
-
-
-def join_lists(*lists):
-    ret = []
-    for l in lists:
-        for o in l:
-            ret.append(o)
-    return ret
-
-
-def cases_except(cases, *cases_to_skip):
-    actual_cases_to_skip = []
-    for case_or_cases in cases_to_skip:
-        if type(case_or_cases) == list:
-            for case in case_or_cases:
-                actual_cases_to_skip.append(case)
-        else:
-            actual_cases_to_skip.append(case_or_cases)
-    return [test_case for test_case in cases if test_case not in actual_cases_to_skip]
-
-
-"""cases which violate format conversion rules codified in C++ nanobind python bindings"""
-unsupported_format_cases = [
     (default_tensor_data, np.float32, ttml.autograd.DataType.BFLOAT4_B, None),
     (
         default_tensor_data,
@@ -386,6 +316,12 @@ typecast_issue_cases = [
         ttml.autograd.DataType.FLOAT32,
         ttml.Layout.ROW_MAJOR,
     ),
+    (
+        default_tensor_data,
+        ml_dtypes.bfloat16,
+        ttml.autograd.DataType.FLOAT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
 ]
 
 """TODO: multiplication cases which get the wrong answer"""
@@ -417,6 +353,24 @@ multiplication_issue_cases = [
         ttml.Layout.ROW_MAJOR,
     ),
     (default_tensor_data, np.uint32, ttml.autograd.DataType.UINT32, ttml.Layout.TILE),
+    (
+        default_tensor_data,
+        ml_dtypes.bfloat16,
+        ttml.autograd.DataType.UINT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        ml_dtypes.bfloat16,
+        ttml.autograd.DataType.UINT32,
+        ttml.Layout.TILE,
+    ),
+    (
+        default_tensor_data,
+        ml_dtypes.bfloat16,
+        ttml.autograd.DataType.UINT32,
+        None,
+    ),
 ]
 
 """TODO: division cases which get the wrong answer"""
@@ -475,6 +429,42 @@ division_issue_cases = [
         ttml.Layout.ROW_MAJOR,
     ),
     (default_tensor_data, np.uint32, ttml.autograd.DataType.UINT32, ttml.Layout.TILE),
+    (
+        default_tensor_data,
+        ml_dtypes.bfloat16,
+        ttml.autograd.DataType.UINT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        ml_dtypes.bfloat16,
+        ttml.autograd.DataType.UINT32,
+        ttml.Layout.TILE,
+    ),
+    (
+        default_tensor_data,
+        ml_dtypes.bfloat16,
+        ttml.autograd.DataType.UINT32,
+        None,
+    ),
+    (
+        default_tensor_data,
+        ml_dtypes.bfloat16,
+        ttml.autograd.DataType.INT32,
+        ttml.Layout.ROW_MAJOR,
+    ),
+    (
+        default_tensor_data,
+        ml_dtypes.bfloat16,
+        ttml.autograd.DataType.INT32,
+        ttml.Layout.TILE,
+    ),
+    (
+        default_tensor_data,
+        ml_dtypes.bfloat16,
+        ttml.autograd.DataType.INT32,
+        None,
+    ),
 ]
 
 
