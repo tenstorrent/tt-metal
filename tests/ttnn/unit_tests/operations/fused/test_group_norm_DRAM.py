@@ -250,7 +250,9 @@ def test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits):
     input_mask_tensor = ttnn.create_group_norm_input_mask(C_per_split, num_groups_per_split, 1, ttnn.DataType.BFLOAT8_B)
     input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
 
-    input_negative_mask_tensor = ttnn.create_group_norm_input_negative_mask(C_per_split, num_groups_per_split, 1, ttnn.DataType.BFLOAT8_B)
+    input_negative_mask_tensor = ttnn.create_group_norm_input_negative_mask(
+        C_per_split, num_groups_per_split, 1, ttnn.DataType.BFLOAT8_B
+    )
     input_negative_mask_tensor = ttnn.to_device(input_negative_mask_tensor, device)
 
     tt_input_tensor = ttnn.to_device(tt_input_tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)

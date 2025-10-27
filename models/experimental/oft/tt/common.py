@@ -223,7 +223,9 @@ class GroupNorm:
         input_mask_tensor = ttnn.create_group_norm_input_mask(self.channels, self.num_groups, grid_y, ttnn.bfloat16)
         input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
         if negative_mask:
-            input_nmask_tensor = ttnn.create_group_norm_input_negative_mask(self.channels, self.num_groups, grid_y, ttnn.bfloat16)
+            input_nmask_tensor = ttnn.create_group_norm_input_negative_mask(
+                self.channels, self.num_groups, grid_y, ttnn.bfloat16
+            )
             input_nmask_tensor = ttnn.to_device(input_nmask_tensor, device)
         else:
             input_nmask_tensor = None

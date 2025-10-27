@@ -30,8 +30,8 @@ static int64_t find_max_tile_span(int64_t W, int64_t group_size, int64_t tile_wi
     return max_tile_span;
 }
 
-ttnn::Tensor create_group_norm_input_mask_impl(const int64_t num_channel, const int64_t num_groups,
-      const int64_t num_cores_across_channel, DataType data_type, bool is_negative_mask) {
+ttnn::Tensor create_group_norm_input_mask_impl(int64_t num_channel, int64_t num_groups,
+      int64_t num_cores_across_channel, DataType data_type, bool is_negative_mask) {
     int64_t block_wt = find_max_tile_span(num_channel, num_channel / num_groups, TILE_WIDTH);
 
     const int64_t out_num_groups = num_groups;
@@ -88,13 +88,13 @@ ttnn::Tensor create_group_norm_input_mask_impl(const int64_t num_channel, const 
     return mask;
 }
 
-ttnn::Tensor create_group_norm_input_mask(const int64_t num_channel, const int64_t num_groups,
-      const int64_t num_cores_across_channel, DataType data_type) {
+ttnn::Tensor create_group_norm_input_mask(int64_t num_channel, int64_t num_groups,
+      int64_t num_cores_across_channel, DataType data_type) {
     return create_group_norm_input_mask_impl(num_channel, num_groups, num_cores_across_channel, data_type, false);
 }
 
 ttnn::Tensor create_group_norm_input_negative_mask(
-    const int64_t num_channel, const int64_t num_groups, const int64_t num_cores_across_channel, DataType data_type) {
+    int64_t num_channel, int64_t num_groups, int64_t num_cores_across_channel, DataType data_type) {
     return create_group_norm_input_mask_impl(num_channel, num_groups, num_cores_across_channel, data_type, true);
 }
 }  // namespace normalization

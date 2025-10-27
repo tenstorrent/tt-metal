@@ -545,7 +545,9 @@ def test_sdxl_base_group_norm_negative_mask(device, input_shape):
     input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.x, ttnn.DataType.BFLOAT8_B)
     input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
 
-    input_negative_mask_tensor = ttnn.create_group_norm_input_negative_mask(C, num_groups, grid_size.x, ttnn.DataType.BFLOAT8_B)
+    input_negative_mask_tensor = ttnn.create_group_norm_input_negative_mask(
+        C, num_groups, grid_size.x, ttnn.DataType.BFLOAT8_B
+    )
     input_negative_mask_tensor = ttnn.to_device(input_negative_mask_tensor, device)
 
     gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_size.x)
