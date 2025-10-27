@@ -724,7 +724,7 @@ def test_demo_for_audio_classification_dataset(
     "temperatures,compression_ratio_threshold,logprob_threshold,no_speech_threshold,return_timestamps",
     [
         (0.0, None, None, None, False),
-        # ((0.0, 0.2, 0.4, 0.6, 0.8, 1.0), 2.4, -1.0, 0.6, True),       # generation with generate_kwargs
+        ((0.0, 0.2, 0.4, 0.6, 0.8, 1.0), 2.4, -1.0, 0.6, True),  # generation with generate_kwargs
     ],
 )
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
