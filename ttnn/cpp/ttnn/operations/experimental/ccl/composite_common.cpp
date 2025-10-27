@@ -240,10 +240,9 @@ bool use_composite_all_gather(
     auto input_memory_config = input_tensor.memory_config();
     auto output_memory_config = memory_config.value_or(input_memory_config);
 
-    if (is_fabric_2d()) {
-        return true;
+    if (tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D) {
+        return true;  // 2D dynamic and 1D both work, but 2D standard does not
     }
-
     // Use composite for row-major tensors
     if (input_tensor.layout() == ttnn::Layout::ROW_MAJOR) {
         return true;
