@@ -44,6 +44,9 @@ inputs:
   other-logs-index-path:
     description: 'Path to JSON mapping run_id -> extracted other logs dir (optional)'
     required: false
+  last-success-timestamps-path:
+    description: 'Path to JSON mapping workflow_name -> last success timestamp info (optional)'
+    required: false
 
 outputs:
   failed_workflows:

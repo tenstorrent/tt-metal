@@ -49,6 +49,8 @@ outputs:
     description: 'Absolute path to directory containing downloaded other logs per run (failures without annotations)'
   other-logs-index-path:
     description: 'Absolute path to JSON mapping of run_id -> other logs dir'
+  last-success-timestamps-path:
+    description: 'Absolute path to JSON mapping of workflow_name -> last success timestamp info'
 
 runs:
   using: 'node20'
