@@ -118,16 +118,51 @@ public:
         bool use_dynamic_policies = true) {
         fixture_ = std::move(fixture);
         allocation_policies_ = policies;
+        use_dynamic_policies_ = use_dynamic_policies;  // Store for prepare_for_test()
 
         // Initialize memory maps for all available devices
         initialize_memory_maps();
 
+        // Create dynamic policy manager if needed
+        if (use_dynamic_policies_) {
+            policy_manager_ =
+                std::make_unique<tt::tt_fabric::fabric_tests::DynamicPolicyManager>(*this->fixture_, *this->fixture_);
+        }
+
         // Create allocator with memory maps
+        // Note: Memory maps will be updated in prepare_for_test() if using dynamic policies
         this->allocator_ = std::make_unique<tt::tt_fabric::fabric_tests::GlobalAllocator>(
             *this->fixture_, *this->fixture_, policies, sender_memory_map_, receiver_memory_map_);
+    }
 
-        // Set whether to use dynamic policies
-        this->allocator_->set_use_dynamic_policies(use_dynamic_policies);
+    void prepare_for_test(const TestConfig& config) {
+        // OPTIMIZATION 1: Skip reconstruction entirely for explicit YAML policies
+        if (!use_dynamic_policies_) {
+            log_debug(tt::LogTest, "[Explicit YAML Policy] Test: {}", config.parametrized_name);
+            log_debug(
+                tt::LogTest, "  max_configs_per_core: {}", allocation_policies_.receiver_config.max_configs_per_core);
+            log_debug(
+                tt::LogTest, "  payload_chunk_size: {} KB", allocation_policies_.default_payload_chunk_size / 1024);
+            return;  // Early return - allocator and maps already correct, reset() will clean up state
+        }
+
+        // Ask policy manager if a new policy is needed
+        // Returns nullopt if cached policy should be reused, otherwise returns new policy
+        auto new_policy = policy_manager_->get_new_policy_for_test(config);
+
+        if (new_policy.has_value()) {
+            // New policy computed - need to reconstruct allocator and memory maps
+            update_memory_maps(new_policy.value());
+
+            allocator_.reset();
+            allocator_ = std::make_unique<tt::tt_fabric::fabric_tests::GlobalAllocator>(
+                *fixture_, *fixture_, new_policy.value(), sender_memory_map_, receiver_memory_map_);
+        }
+
+        // Validate packet size (uses either new policy or cached policy)
+        const auto& policy_to_validate =
+            new_policy.has_value() ? new_policy.value() : policy_manager_->get_cached_policy();
+        validate_packet_sizes_for_policy(config, policy_to_validate.default_payload_chunk_size);
     }
 
     uint32_t get_randomized_master_seed() const { return fixture_->get_randomized_master_seed(); }
@@ -708,25 +743,56 @@ private:
     }
 
     void initialize_memory_maps() {
-        // Get uniform L1 memory layout (same across all devices)
-        uint32_t l1_unreserved_base = this->fixture_->get_l1_unreserved_base();
-        uint32_t l1_unreserved_size = this->fixture_->get_l1_unreserved_size();
-        uint32_t l1_alignment = this->fixture_->get_l1_alignment();
-        uint32_t default_payload_chunk_size = allocation_policies_.default_payload_chunk_size;
-        uint32_t max_configs_per_core = std::max(
-            allocation_policies_.sender_config.max_configs_per_core,
-            allocation_policies_.receiver_config.max_configs_per_core);
+        // Use allocation_policies_ from init() call
+        update_memory_maps(allocation_policies_);
+    }
 
-        // Create memory maps directly using constructors
+    void update_memory_maps(const tt::tt_fabric::fabric_tests::AllocatorPolicies& policies) {
+        // Get uniform L1 memory layout (same across all devices)
+        auto l1_unreserved_base = fixture_->get_l1_unreserved_base();
+        auto l1_unreserved_size = fixture_->get_l1_unreserved_size();
+        auto l1_alignment = fixture_->get_l1_alignment();
+
+        // Create/update sender map
         sender_memory_map_ =
             tt::tt_fabric::fabric_tests::SenderMemoryMap(l1_unreserved_base, l1_unreserved_size, l1_alignment);
 
+        // Create/update receiver map with policy-specific parameters
         receiver_memory_map_ = tt::tt_fabric::fabric_tests::ReceiverMemoryMap(
-            l1_unreserved_base, l1_unreserved_size, l1_alignment, default_payload_chunk_size, max_configs_per_core);
+            l1_unreserved_base,
+            l1_unreserved_size,
+            l1_alignment,
+            policies.default_payload_chunk_size,
+            policies.receiver_config.max_configs_per_core);
 
         // Validate memory maps
         if (!sender_memory_map_.is_valid() || !receiver_memory_map_.is_valid()) {
             TT_THROW("Invalid memory map configuration");
+        }
+    }
+
+    void validate_packet_sizes_for_policy(const TestConfig& config, uint32_t payload_chunk_size) {
+        uint32_t max_packet_size = 0;
+        for (const auto& sender : config.senders) {
+            for (const auto& pattern : sender.patterns) {
+                if (pattern.size.has_value()) {
+                    max_packet_size = std::max(max_packet_size, pattern.size.value());
+                }
+            }
+        }
+
+        if (max_packet_size > payload_chunk_size) {
+            TT_FATAL(
+                false,
+                "Test '{}' configuration is INVALID!\n"
+                "  Max packet size: {} bytes\n"
+                "  Computed buffer size: {} bytes\n"
+                "  The packet size exceeds buffer capacity.\n"
+                "  Fix: Reduce packet size to <= {} bytes or adjust parametrization.",
+                config.parametrized_name,
+                max_packet_size,
+                payload_chunk_size,
+                payload_chunk_size);
         }
     }
 
@@ -1509,11 +1575,17 @@ private:
     std::shared_ptr<TestFixture> fixture_;
     std::unordered_map<MeshCoordinate, TestDevice> test_devices_;
     std::unique_ptr<tt::tt_fabric::fabric_tests::GlobalAllocator> allocator_;
+    std::unique_ptr<tt::tt_fabric::fabric_tests::DynamicPolicyManager>
+        policy_manager_;  // Manages dynamic policy computation and caching
 
     // Uniform memory maps shared across all devices
     tt::tt_fabric::fabric_tests::SenderMemoryMap sender_memory_map_;
     tt::tt_fabric::fabric_tests::ReceiverMemoryMap receiver_memory_map_;
     tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies_;
+
+    // Dynamic allocation policy control
+    bool use_dynamic_policies_ = true;  // Whether to compute dynamic policies per test
+
     bool benchmark_mode_ = false;     // Benchmark mode for current test
     bool telemetry_enabled_ = false;  // Telemetry enabled for current test
     bool global_sync_ = false;        // Line sync for current test

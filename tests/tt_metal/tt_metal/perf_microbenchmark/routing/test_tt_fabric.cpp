@@ -181,6 +181,9 @@ int main(int argc, char** argv) {
             for (auto& built_test : built_tests) {
                 log_info(tt::LogTest, "Running Test: {}", built_test.parametrized_name);
 
+                // NEW: Prepare allocator and memory maps for this specific test
+                test_context.prepare_for_test(built_test);
+
                 test_context.setup_devices();
                 log_info(tt::LogTest, "Device setup complete");
 
