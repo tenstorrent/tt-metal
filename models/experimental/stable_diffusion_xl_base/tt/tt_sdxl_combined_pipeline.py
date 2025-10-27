@@ -7,6 +7,10 @@ from loguru import logger
 import torch
 
 from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtSDXLPipeline, TtSDXLPipelineConfig
+from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_img2img_pipeline import (
+    TtSDXLImg2ImgPipeline,
+    TtSDXLImg2ImgPipelineConfig,
+)
 from models.common.utility_functions import profiler
 
 MAX_SEQUENCE_LENGTH = 77
@@ -17,9 +21,8 @@ CONCATENATED_TEXT_EMBEDINGS_SIZE = 2048  # text_encoder_1_hidden_size + text_enc
 @dataclass
 class TtSDXLCombinedPipelineConfig:
     base_config: TtSDXLPipelineConfig
-    refiner_config: TtSDXLPipelineConfig
-    denoising_split: float = 0.8  # Base does 80%, refiner does 20%
-    use_refiner: bool = True
+    refiner_config: TtSDXLImg2ImgPipelineConfig
+    denoising_split: float = 0.8  # Base does 80%, refiner does 20%. Set to 1.0 to disable refiner
 
     def __post_init__(self):
         # Validate denoising_split
@@ -30,28 +33,26 @@ class TtSDXLCombinedPipelineConfig:
             0.0 <= self.denoising_split <= 1.0
         ), f"denoising_split must be in range [0.0, 1.0] but is {self.denoising_split}"
 
-        # Force base to skip VAE decode if refiner is enabled
-        if self.use_refiner:
-            self.base_config.skip_vae_decode = True
-
-        # Refiner should not skip VAE decode - it produces the final image
-        self.refiner_config.skip_vae_decode = False
+    @property
+    def use_refiner(self):
+        """Refiner is used when denoising_split < 1.0"""
+        return self.denoising_split < 1.0
 
 
 class TtSDXLCombinedPipeline:
     """
-    Combined pipeline that orchestrates SDXL base and refiner models.
+    Combined pipeline that orchestrates SDXL base and img2img refiner models.
 
-    The base model performs initial denoising up to a specified split point,
-    then the refiner model takes over to complete the denoising and decode the final image.
+    The base model (TtSDXLPipeline) performs initial denoising up to a specified split point,
+    then the refiner model (TtSDXLImg2ImgPipeline) takes over to complete the denoising and decode the final image.
     Both models share the same scheduler instance for coordinated timestep management.
     """
 
     def __init__(self, ttnn_device, tt_base_pipeline, tt_refiner_pipeline, config: TtSDXLCombinedPipelineConfig):
-        assert isinstance(tt_base_pipeline, TtSDXLPipeline), "base_torch_pipeline must be an instance of TtSDXLPipeline"
+        assert isinstance(tt_base_pipeline, TtSDXLPipeline), "tt_base_pipeline must be an instance of TtSDXLPipeline"
         assert isinstance(
-            tt_refiner_pipeline, TtSDXLPipeline
-        ), "tt_refiner_pipeline must be an instance of TtSDXLPipeline"
+            tt_refiner_pipeline, TtSDXLImg2ImgPipeline
+        ), "tt_refiner_pipeline must be an instance of TtSDXLImg2ImgPipeline"
 
         self.ttnn_device = ttnn_device
         self.config = config
@@ -99,7 +100,7 @@ class TtSDXLCombinedPipeline:
         dummy_embeds = torch.randn(self.batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE)
         dummy_text_embeds = torch.randn(self.batch_size, 2, TEXT_ENCODER_2_PROJECTION_DIM)
 
-        tt_latents, tt_prompt_embeds, tt_add_text_embeds = self.base_pipeline.generate_input_tensors(
+        _, _, _ = self.base_pipeline.generate_input_tensors(
             all_prompt_embeds_torch=dummy_embeds,
             torch_add_text_embeds=dummy_text_embeds,
         )
@@ -111,9 +112,13 @@ class TtSDXLCombinedPipeline:
         # 4. Compile refiner if enabled
         if self.config.use_refiner:
             logger.info("Allocating device tensors for refiner pipeline...")
-            _, refiner_prompt_embeds, refiner_text_embeds = self.refiner_pipeline.generate_input_tensors(
+            # Create dummy image tensor for img2img pipeline
+            dummy_image = torch.randn(self.batch_size, 3, 1024, 1024)
+
+            _, _, _ = self.refiner_pipeline.generate_input_tensors(
                 all_prompt_embeds_torch=dummy_embeds,
                 torch_add_text_embeds=dummy_text_embeds,
+                torch_image=dummy_image,
             )
 
             logger.info("Compiling refiner pipeline image processing...")

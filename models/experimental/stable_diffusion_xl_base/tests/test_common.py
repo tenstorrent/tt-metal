@@ -746,7 +746,6 @@ def run_tt_image_gen(
     use_cfg_parallel=False,
     guidance_rescale=0.0,
     one_minus_guidance_rescale=1.0,
-    skip_vae_decode=False,
 ):
     assert not (capture_trace and num_steps != 1), "Trace should capture only 1 iteration"
     profiler.start("image_gen")
@@ -847,15 +846,6 @@ def run_tt_image_gen(
     tt_scheduler.set_begin_index(0)
 
     profiler.end("denoising_loop")
-
-    # If skip_vae_decode is True, return latents directly without VAE decoding
-    if skip_vae_decode:
-        profiler.start("read_output_tensor")
-        latents = ttnn.to_torch(tt_latents, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0))[:batch_size, ...]
-        ttnn.synchronize_device(ttnn_device)
-        profiler.end("read_output_tensor")
-        profiler.end("image_gen")
-        return latents, tid, output_device, output_shape, tid_vae
 
     vae_on_device = isinstance(vae, TtAutoencoderKL)
 
