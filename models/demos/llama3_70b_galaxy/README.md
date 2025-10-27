@@ -71,7 +71,7 @@ To maximize compute, the processing of a prefill batch relies on concatenating a
 
 This can show up in some users not having the exact same output, when the same prompt is used and no sampling is performed (argmax). We tracked the precision impact down to the QKV matmul in the attention layer. Increasing the OPs precision to bfloat16 makes all users match again.
 
-This is not necessarily a bug, and thus will not be threated as such. For further information please see issue (30601)[https://github.com/tenstorrent/tt-metal/issues/30601]. If you require further precision you can change the QKV matmul to bfloat16.
+This is not necessarily a bug, and thus will not be treated as such. For further information please see issue (30601)[https://github.com/tenstorrent/tt-metal/issues/30601]. If you require further precision you can change the QKV matmul to bfloat16.
 
 ## Testing
 ### Dev-only and debugging
