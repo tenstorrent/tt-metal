@@ -1,11 +1,15 @@
 import pytest
 import torch
-from diffusers import DiffusionPipeline
+from diffusers import DiffusionPipeline, StableDiffusionXLImg2ImgPipeline
 
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_combined_pipeline import (
     TtSDXLCombinedPipeline,
     TtSDXLCombinedPipelineConfig,
+)
+from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_img2img_pipeline import (
+    TtSDXLImg2ImgPipeline,
+    TtSDXLImg2ImgPipelineConfig,
 )
 from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtSDXLPipeline, TtSDXLPipelineConfig
 
@@ -16,17 +20,19 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtS
     indirect=True,
 )
 def test_refiner(mesh_device):
-    refiner = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
-        torch_dtype=torch.float32,
-        use_safetensors=True,
-    )
+    # Load base and refiner torch pipelines
     base = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
     )
+    refiner = StableDiffusionXLImg2ImgPipeline.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+    )
 
+    # Create TT base pipeline (text-to-image)
     tt_base = TtSDXLPipeline(
         ttnn_device=mesh_device,
         torch_pipeline=base,
@@ -34,32 +40,35 @@ def test_refiner(mesh_device):
             num_inference_steps=50,
             guidance_scale=7.5,
             is_galaxy=False,
-            skip_vae_decode=True,
             use_cfg_parallel=False,
             encoders_on_device=True,
         ),
     )
 
-    tt_refiner = TtSDXLPipeline(
+    # Create TT refiner pipeline (image-to-image)
+    tt_refiner = TtSDXLImg2ImgPipeline(
         ttnn_device=mesh_device,
         torch_pipeline=refiner,
-        pipeline_config=TtSDXLPipelineConfig(
+        pipeline_config=TtSDXLImg2ImgPipelineConfig(
             num_inference_steps=50,
             guidance_scale=7.5,
             is_galaxy=False,
-            skip_vae_decode=False,
             use_cfg_parallel=False,
             vae_on_device=True,
+            strength=0.3,
+            aesthetic_score=6.0,
+            negative_aesthetic_score=2.5,
         ),
     )
 
+    # Create combined pipeline config (denoising_split < 1.0 means refiner is enabled)
     config = TtSDXLCombinedPipelineConfig(
         base_config=tt_base.pipeline_config,
         refiner_config=tt_refiner.pipeline_config,
-        denoising_split=0.8,
-        use_refiner=True,
+        denoising_split=1.0,  # Base does 80%, refiner does 20%
     )
 
+    # Create combined pipeline
     combined = TtSDXLCombinedPipeline(
         ttnn_device=mesh_device,
         tt_base_pipeline=tt_base,
@@ -67,6 +76,7 @@ def test_refiner(mesh_device):
         config=config,
     )
 
+    # Generate images
     combined.generate(
         prompts=["A beautiful sunset over a calm ocean"],
         negative_prompts=[""],
