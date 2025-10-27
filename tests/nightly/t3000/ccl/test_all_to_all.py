@@ -405,9 +405,9 @@ def test_all_to_all_unaligned(
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
         pytest.skip("Row-major layout is not supported for bfloat8_b")
 
-    # TODO uncomment the below once all_broadcast_async is fixed (Issue #29183)
+    # TODO uncomment the below once all_broadcast is fixed (Issue #29183)
     if mem_config.buffer_type == ttnn.BufferType.L1 and in_dim == 3:
-        pytest.skip("Temporarily skipping due to bug in all_broadcast_async (Issue #29183)")
+        pytest.skip("Temporarily skipping due to bug in all_broadcast (Issue #29183)")
 
     run_all_to_all_impl(
         mesh_device,

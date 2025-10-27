@@ -68,6 +68,9 @@ target_sources(
         common/host/ccl_command_stream_builders.cpp
         common/host/moe_utils.cpp
         # Ops
+        all_broadcast/all_broadcast.cpp
+        all_broadcast/device/all_broadcast_op.cpp
+        all_broadcast/device/all_broadcast_program.cpp
         all_gather/all_gather.cpp
         all_gather/device/all_gather_device_operation.cpp
         all_gather/device/all_gather_program_factory.cpp
