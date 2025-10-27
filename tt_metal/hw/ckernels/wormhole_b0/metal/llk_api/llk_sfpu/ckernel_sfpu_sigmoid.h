@@ -36,7 +36,7 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
 
 // sigmoid is anti-symmetric and offset by 1
 // sigmoid[-x] = 1 - sigmoid[x]
-sfpi_inline sfpi::vFloat _sfpu_sigmoid_legacy_(sfpi::vFloat x) {
+sfpi_inline sfpi::vFloat _sfpu_sigmoid_legacy_(sfpi::vFloat val) {
     vFloat result = 0.0f;
 
     v_if(val < 0.0f) { val = -val; }
@@ -47,14 +47,16 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_legacy_(sfpi::vFloat x) {
     val = dst_reg[0];
     v_if(val < 0.0f) { result = 1.0f - result; }
     v_endif;
+
+    return result;
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 inline void calculate_sigmoid() {
-    static_assert(ITERATIONS == 8, "ITERATIONS must be 8");
     if constexpr (!APPROXIMATION_MODE) {
         for (int d = 0; d < ITERATIONS; d++) {
             vFloat val = dst_reg[0];
+
             vFloat result = _sfpu_sigmoid_<is_fp32_dest_acc_en>(val);
 
             dst_reg[0] = result;
