@@ -66,7 +66,6 @@ CCLOpConfig::CCLOpConfig(
     output_sharded(output_tensors.at(0).is_sharded()),
     is_row_major(input_tensors.at(0).layout() == Layout::ROW_MAJOR),
     df(tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype())),
-    tile(),
     input_tensors(&input_tensors),
     output_tensors(&output_tensors) {
     if (input_tensors.at(0).layout() == Layout::TILE) {
