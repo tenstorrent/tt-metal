@@ -22,6 +22,10 @@ class TTSampling(LightweightModule):
     model implementations by accepting configuration parameters rather than assuming specific
     args structures.
 
+    Multi-device sampling works by partitioning the vocabulary across devices. Each device
+    computes top-k locally on its vocabulary partition, then all-gather operations combine
+    the results across devices to perform global top-k selection before final sampling.
+
     Args:
         mesh_device: The device or MeshDevice for computations
         tt_ccl: CCL object for distributed operations (supports both line_all_gather and tt_all_gather)
@@ -38,8 +42,8 @@ class TTSampling(LightweightModule):
         k, p, temp: Initial sampling parameters (tensors of size max_batch_size)
 
     Note:
-        Persistent buffers are used automatically when CCL supports line_all_gather (llama3_70b_galaxy),
-        and gracefully degrades to regular tt_all_gather for simpler CCL implementations (tt-transformers).
+        Uses persistent buffers when CCL supports line_all_gather (llama3_70b_galaxy),
+        otherwise uses standard all_gather where the CCL API handles memory allocation (tt-transformers).
     """
 
     def __init__(
@@ -77,6 +81,8 @@ class TTSampling(LightweightModule):
             self.sampling_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
         # Set defaults for sampling parameters if not provided
+        # Default: k=1 (top-1), p=0 (effectively argmax), temp=1 (no temperature scaling)
+        # When p=0, the sampling operation will select the token with highest probability (argmax)
         if k is None:
             k = torch.ones(self.max_batch_size)
         if p is None:
@@ -165,19 +171,13 @@ class TTSampling(LightweightModule):
             # Use tt_all_gather
             cluster_axis = None
             num_links = 1
-            tt_logits = ttnn.experimental.all_gather_async(
+            tt_logits = ttnn.all_gather(
                 tensor,
-                persistent_output_buffer=None,
                 dim=dim,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
                 num_links=num_links,
                 memory_config=tensor.memory_config(),
                 cluster_axis=cluster_axis,
                 topology=ttnn.Topology.Linear,
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
             )
             return tt_logits
 
@@ -214,6 +214,10 @@ class TTSampling(LightweightModule):
     ):
         """
         Perform on-device sampling on logits tensor.
+        The logits are sharded over the devices in the cluster.
+        We perform local top-k on each device, then all-gather the top-k values and indices across all devices.
+        We then convert the gathered values and indices to the appropriate format, add the device offsets to get the global vocabulary indices,
+        and perform the actual sampling with top-k, top-p, and temperature.
 
         Args:
             x: Input logits tensor
@@ -223,12 +227,12 @@ class TTSampling(LightweightModule):
         Returns:
             Sampled token indices tensor
         """
-        # Warmup run to ensure all operations are properly initialized
+        # Warmup needed for this issue: https://github.com/tenstorrent/tt-metal/issues/30289
         if self.warmup_done is False:
             self.warmup_done = True
             self.forward(x, seed=42, tt_out_tok=tt_out_tok)
 
-        # Convert to bfloat16 for top-k operations
+        # Convert to bfloat16 for top-k operations (typecast is no-op if already bfloat16)
         x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
 
         # Perform local top-k on each device
@@ -265,8 +269,8 @@ class TTSampling(LightweightModule):
             ttnn.deallocate(topk_values_gathered_bf16)
         else:
             topk_values_gathered_bf16_interleaved = topk_values_gathered
-        # Gather top-k indices across all devices
 
+        # Gather top-k indices across all devices
         topk_indices_gathered = self._perform_all_gather(
             topk_indices,
             dim=3,
@@ -279,6 +283,9 @@ class TTSampling(LightweightModule):
         ttnn.deallocate(topk_indices)
 
         # Convert indices to appropriate data types
+        # TODO: Create issue for direct uint16->int32 typecast support (Issue #XXXXX)
+        # Currently requires intermediate uint32 step: uint16 -> uint32 -> int32
+        # Skipping uint32 intermediate step does not work due to typecast limitations
         topk_indices_gathered_uint32 = ttnn.typecast(
             topk_indices_gathered, dtype=ttnn.uint32, sub_core_grids=self.sub_core_grids
         )
@@ -322,7 +329,7 @@ class TTSampling(LightweightModule):
             sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
                 self.start_core, self.max_batch_size, self.sub_core_grids, row_wise=True
             )
-            if self.sub_core_grids != None
+            if self.sub_core_grids is not None
             else None,
             output_tensor=tt_out_tok,
         )
@@ -350,8 +357,8 @@ def format_sampling_params(sampling_params):
         update_dict = {field.name: [getattr(sampling_params, field.name)] for field in fields(sampling_params)}
         sampling_params = replace(sampling_params, **update_dict)
 
-    # must pad sampling_params to max_batch_size
-    default_params = {"temp": 0.0, "p": 1.0, "k": 1.0}
+    # Must pad sampling_params to max_batch_size
+    default_params = {"temp": 0.0, "p": 1.0, "k": 1}
     target_len = 32
     for name, tensor in zip(
         ("temp", "p", "k"), (sampling_params.temperature, sampling_params.top_p, sampling_params.top_k)
@@ -360,9 +367,11 @@ def format_sampling_params(sampling_params):
         if current_len < target_len:
             tensor.extend([default_params[name]] * (target_len - current_len))
 
-    # we must clamp top-p in range [0.0, 1.0)
-    # cannot rely on external SamplingParams to be clamped
+    # We must clamp top-p in range [0.0, 1.0)
+    # Cannot rely on external SamplingParams to be clamped
     TOP_P_MIN = 0.0
+    # TOP_P_MAX is 0.99 instead of 1.0 to ensure numerical stability in cumulative probability calculations
+    # A value of 1.0 can cause floating point precision issues when comparing cumulative probabilities
     TOP_P_MAX = 0.99
 
     for i, (top_p, temp) in enumerate(zip(sampling_params.top_p, sampling_params.temperature)):

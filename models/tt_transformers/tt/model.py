@@ -131,7 +131,8 @@ class Transformer(LightweightModule):
         )
 
         # Initialize on-device sampling if supported
-        # N150 does not support on-device sampling
+        # https://github.com/tenstorrent/tt-metal/issues/31134
+        # N150 and P150 do not support on-device sampling currently
         # Sampling on device is supported only if each device has maximum logits size of 64*1024
         self._supports_on_device_sampling = (
             self.args.vocab_size // self.args.num_devices <= 64 * 1024 and self.mesh_device.shape != (1, 1)
@@ -333,6 +334,7 @@ class Transformer(LightweightModule):
         Input is ttnn host tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
         if is_tokens:
+            # Pad to 32 to match the expected batch size for decode operations (tiles are 32x32)
             padded_batch_size = 32
             tt_out = ttnn.reshape(tt_out, ttnn.Shape([1, 1, padded_batch_size, 1]))
             return self.concat_host_output(tt_out)[0, 0, :B, 0]

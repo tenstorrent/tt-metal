@@ -292,6 +292,7 @@ def prepare_generator_args(
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {
+                # Use linspace to test diverse sampling parameters across batch with different temperature and top_p values per user
                 "temperature": torch.linspace(0.0, 1.0, steps=32).tolist(),
                 "top_p": torch.linspace(0.08, 1.0, steps=32).tolist(),
                 "top_k": torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
@@ -861,13 +862,16 @@ def test_demo_text(
         user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
 
         # Use device sampling for all cases when supported
+        # https://github.com/tenstorrent/tt-metal/issues/31134
+        # On-device sampling is not supported on N150/P150 currently
         device_sampling_params = (
             SamplingParams(
                 temperature=sampling_params["temperature"],
                 top_k=sampling_params["top_k"],
                 top_p=sampling_params["top_p"],
             )
-            if model_args[0].vocab_size // num_devices <= 64 * 1024 and os.environ.get("MESH_DEVICE") != "N150"
+            if model_args[0].vocab_size // num_devices <= 64 * 1024
+            and os.environ.get("MESH_DEVICE") not in ["N150", "P150"]
             else None
         )
 
