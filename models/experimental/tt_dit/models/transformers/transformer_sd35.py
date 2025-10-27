@@ -250,8 +250,8 @@ class SD35TransformerBlock:
         """
 
         time_embed_11BE = ttnn.silu(time_embed_11BE, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        spatial_time_11BF = self.norm1_linear(time_embed_11BE, core_grid=self.core_grid)
-        prompt_time_11BE = self.norm1_context_linear(time_embed_11BE, core_grid=self.core_grid)
+        spatial_time_11BF = self.norm1_linear(time_embed_11BE)
+        prompt_time_11BE = self.norm1_context_linear(time_embed_11BE)
 
         (
             spatial_shift_attn,
@@ -341,7 +341,7 @@ class SD35TransformerBlock:
                 **self.ccl_manager.get_ag_hyperparams(spatial_normed_1BND.shape),
             )
 
-        spatial_ff_1BND = self.ff(spatial_normed_1BND, core_grid=self.core_grid)
+        spatial_ff_1BND = self.ff(spatial_normed_1BND)
         spatial_ff_1BND = spatial_ff_1BND * spatial_gate_ff
 
         spatial_1BND += spatial_ff_1BND
@@ -370,7 +370,7 @@ class SD35TransformerBlock:
                 **self.ccl_manager.get_ag_hyperparams(prompt_normed_1BLD.shape),
             )
 
-        prompt_ff_1BLD = self.ff_context(prompt_normed_1BLD, core_grid=self.core_grid)
+        prompt_ff_1BLD = self.ff_context(prompt_normed_1BLD)
         prompt_ff_1BLD = prompt_ff_1BLD * prompt_gate_ff
 
         prompt_1BLD += prompt_ff_1BLD
@@ -559,9 +559,7 @@ class SD35Transformer2DModel:
         for block in self.transformer_blocks:
             spatial, prompt_embed = block(spatial, prompt_embed, time_embed, N, L)
         # Final normalization and projection
-        spatial_time = self.norm_out_linear(
-            ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG), core_grid=self.core_grid
-        )
+        spatial_time = self.norm_out_linear(ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG))
         scale, shift = chunk_time(spatial_time, 2)
 
         # Gather spatial such that it is fully replicated for final norm and projection
@@ -602,9 +600,7 @@ class SD35Transformer2DModel:
 
         spatial = self.norm_out_norm(spatial) * (1 + scale) + shift
 
-        spatial_out = self.proj_out(
-            spatial, core_grid=self.core_grid, compute_kernel_config=self.hifi_compute_kernel_config
-        )
+        spatial_out = self.proj_out(spatial, compute_kernel_config=self.hifi_compute_kernel_config)
 
         # NOTE: While we should be able to gather on sequence after norm and proj,
         # it leads to terrible outputs for 2x2sp1tp0. Need to debug.

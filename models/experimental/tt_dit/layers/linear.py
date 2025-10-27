@@ -52,7 +52,7 @@ class Linear(Module):
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], self.weight.data.padded_shape[-1]
         core_grid = self.mesh_device.compute_with_storage_grid_size()
         matmul_config = get_matmul_config(M, K, N, core_grid)
@@ -62,7 +62,7 @@ class Linear(Module):
             bias_tensor=self.bias.data if self.bias is not None else None,
             config=matmul_config,
             fused_activation=self.fused_activation_fn,
-            compute_kernel_config=self.compute_config,
+            compute_kernel_config=compute_kernel_config or self.compute_config,
         )
         if self.activation_fn == "decomposed_gelu":
             output = gelu_decomposed(output)
@@ -165,7 +165,7 @@ class ColParallelLinear(Module):
                 bias = permute_for_swiglu(bias)
             state["bias"] = bias
 
-    def forward(self, x: ttnn.Tensor, core_grid=None, compute_kernel_config=None) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
         """
         Expects x to be replicated.
         Return output fractured on columns.
@@ -189,7 +189,7 @@ class ColParallelLinear(Module):
             bias_tensor=self.bias.data if self.bias is not None else None,
             config=matmul_config,
             fused_activation=self.fused_activation_fn,
-            compute_kernel_config=self.compute_config,
+            compute_kernel_config=compute_kernel_config or self.compute_config,
         )
         if self.activation_fn == "decomposed_gelu":
             output = gelu_decomposed(output)
@@ -263,7 +263,7 @@ class RowParallelLinear(Module):
                 bias = torch.cat([bias, zero_bias], dim=-1)
             state["bias"] = bias
 
-    def forward(self, x: ttnn.Tensor, core_grid=None, compute_kernel_config=None) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
         """
         Expects x to be column fractured.
         Return output fractured on columns.
@@ -286,7 +286,7 @@ class RowParallelLinear(Module):
             weight_tensor=weight,
             bias_tensor=self.bias.data if self.bias is not None else None,
             config=matmul_config,
-            compute_kernel_config=self.compute_config,
+            compute_kernel_config=compute_kernel_config or self.compute_config,
         )
 
         if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
