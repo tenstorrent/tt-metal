@@ -6,12 +6,12 @@ This demonstrates how to use @validate_against to compare TTNN implementations
 against reference PyTorch implementations with automatic metrics collection.
 """
 
-import os
-
+import pytest
 import torch
 import ttnn
 
 from tt_transformers_v2.src.testing import (
+    clear_validation_results,
     device_validate_against,
     enable_validation,
     get_validation_registry,
@@ -138,6 +138,7 @@ def ttnn_matmul_reverse(a, b):
 # ============================================================================
 
 
+# todo)) run this test case
 def custom_attention_reference(q, k, v, scale):
     """Reference attention computation"""
     scores = torch.matmul(q, k.transpose(-2, -1)) * scale
@@ -179,93 +180,108 @@ def ttnn_attention(q, k, v, scale):
 
 
 # ============================================================================
-# Demo function
+# Test functions
 # ============================================================================
 
+# [INFO] the purpose of this test is to validate the validation framework itself,
+# which does not care about the mesh shape or tensor layout; we have other test files on those topics.
+pytestmark = [
+    pytest.mark.parametrize(
+        "ttnn_mesh_device",
+        [
+            (1, 1),  # single device # [INFO] apply auto_compose on single device would incur error in c++ code
+        ],
+        ids=[
+            "1x1",
+        ],
+        indirect=True,
+    ),
+]
 
-def demo():
-    """Demonstrate validation decorator usage"""
 
-    print("Validation Decorator System Demo")
-    print("=" * 80)
+def test_validation_rmsnorm_host_and_device(ttnn_mesh_device: ttnn.MeshDevice):
+    registry = get_validation_registry()
 
-    # Setup TTNN device
-    if os.environ.get("MESH_DEVICE") == "N150":
-        device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape([1, 1]))
-    elif os.environ.get("MESH_DEVICE") == "N300":
-        device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape([1, 2]))
-    else:
-        device_ids = ttnn.get_device_ids()
-        num_devices = len(device_ids)
-        if num_devices >= 1:
-            device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape([1, 1]))
-        else:
-            raise RuntimeError("No devices found")
-
-    print(f"Using {device.get_num_devices()} device(s)")
-    print()
-
-    # Example 1: RMSNorm validation
-    print("\n1. Testing RMSNorm validation...")
-    hidden_size = 512
+    hidden_size = 64
     batch_size = 1
-    seq_len = 32
+    seq_len = 8
 
-    weight = torch.randn(hidden_size).to(torch.bfloat16)
-    rms_norm = DeviceValidatedRMSNorm(weight, eps=1e-6, device=device)
+    weight = torch.randn(hidden_size, dtype=torch.bfloat16)
 
+    # Device-validated RMSNorm
+    rms_device = DeviceValidatedRMSNorm(weight, eps=1e-6, device=ttnn_mesh_device)
     x = torch.randn(batch_size, seq_len, hidden_size, dtype=torch.bfloat16)
-    x_tt = ttnn.from_torch(x.unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    x_tt = ttnn.from_torch(x.unsqueeze(0), device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    _ = rms_device(x_tt)
 
-    output = rms_norm(x_tt)
-    print("   Device-Validated RMSNorm validation complete")
+    # Host-validated RMSNorm
+    rms_host = HostValidatedRMSNorm(weight, eps=1e-6, device=ttnn_mesh_device)
+    x2 = torch.randn(batch_size, seq_len, hidden_size, dtype=torch.bfloat16)
+    x2_tt = ttnn.from_torch(x2.unsqueeze(0), device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    _ = rms_host(x2_tt)
 
-    rms_norm = HostValidatedRMSNorm(weight, eps=1e-6, device=device)
+    assert len(registry.results) >= 2
+    # Expect the last two validations to fail max_abs_error and mean_abs_error checks (known issue??)
+    assert not registry.results[-1].metrics["max_abs_error"].passed
+    assert not registry.results[-2].metrics["max_abs_error"].passed
+    assert not registry.results[-1].metrics["mean_abs_error"].passed
+    assert not registry.results[-2].metrics["mean_abs_error"].passed
+    # Expect the last two validations to pass pcc check
+    assert registry.results[-1].metrics["pcc"].passed
+    assert registry.results[-2].metrics["pcc"].passed
 
-    x = torch.randn(batch_size, seq_len, hidden_size, dtype=torch.bfloat16)
-    x_tt = ttnn.from_torch(x.unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
-    # Invoke and check registry
-    _ = rms_norm(x_tt)
-    print("   Host-Validated RMSNorm validation complete")
+def test_validation_matmul(ttnn_mesh_device: ttnn.MeshDevice):
+    registry = get_validation_registry()
 
-    # Example 2: Matrix multiplication validation
-    print("\n2. Testing matrix multiplication validation...")
-    m, n, k = 32, 64, 48
-
+    m, n, k = 16, 24, 12
     a = torch.randn(1, m, k, dtype=torch.bfloat16)
     b = torch.randn(1, k, n, dtype=torch.bfloat16)
 
-    a_tt = ttnn.from_torch(a.unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    b_tt = ttnn.from_torch(b.unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    a_tt = ttnn.from_torch(a.unsqueeze(0), device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    b_tt = ttnn.from_torch(b.unsqueeze(0), device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
-    output = ttnn_matmul(a_tt, b_tt)
-    output_reverse = ttnn_matmul_reverse(b_tt, a_tt)
-    print("   Matmul validation complete")
+    _ = ttnn_matmul(a_tt, b_tt)
+    _ = ttnn_matmul_reverse(b_tt, a_tt)
 
-    # Demonstrate enabling/disabling validation
+    # Expect two validations recorded and both passed
+    assert len(registry.results) >= 2
+    assert registry.results[-1].passed
+    assert registry.results[-2].passed
+
+
+def test_validation_enable_disable(ttnn_mesh_device: ttnn.MeshDevice):
     registry = get_validation_registry()
-    print(f"   Validation registry: {len(registry.results)} results")
 
-    print("\n3. Testing validation control...")
-    enable_validation(False)
-    print("   Validation disabled - functions run without validation")
-
-    a_tt = ttnn.from_torch(a.unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    b_tt = ttnn.from_torch(b.unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    output = ttnn_matmul(a_tt, b_tt)
-    print(f"   No new validations recorded: {len(registry.results)} total")
-
+    # Enable validation: should record
     enable_validation(True)
-    print("   Validation re-enabled")
+    a = torch.randn(1, 8, 8, dtype=torch.bfloat16)
+    b = torch.randn(1, 8, 8, dtype=torch.bfloat16)
+    a_tt = ttnn.from_torch(a.unsqueeze(0), device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    b_tt = ttnn.from_torch(b.unsqueeze(0), device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    _ = ttnn_matmul(a_tt, b_tt)
+    recorded_after_enable = len(registry.results)
+    assert recorded_after_enable >= 1 and registry.results[-1].passed
 
-    # Print validation report
-    print("\n")
+    # Disable validation: should not record
+    enable_validation(False)
+    _ = ttnn_matmul(a_tt, b_tt)
+    assert len(registry.results) == recorded_after_enable
+
+    # Re-enable for subsequent tests
+    enable_validation(True)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _print_validation_report_after_module(request):
+    # Runs once after all tests in this module finish
+    yield
+    registry = get_validation_registry()
+    reporter = request.config.pluginmanager.get_plugin("terminalreporter")
+    reporter.write_line("Printing validation report after yield")
     registry.print_report()
 
-    # Cleanup
-    ttnn.close_mesh_device(device)
 
-
-if __name__ == "__main__":
-    demo()
+@pytest.fixture(scope="module", autouse=True)
+def _clear_validation_results_before_module():
+    clear_validation_results()

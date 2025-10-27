@@ -159,13 +159,22 @@ def host_validate_against(
 
 
 @dataclass
+class MetricResult:
+    """Per-metric validation outcome"""
+
+    value: float = float("inf")
+    passed: bool = False
+    error: str = ""
+
+
+@dataclass
 class ValidationResult:
     """Results from a single validation run"""
 
     function_name: str
     passed: bool
-    metrics: Dict[str, float] = field(default_factory=dict)
-    errors: List[str] = field(default_factory=list)
+    # Map of metric name to its result (value/pass/fail/error)
+    metrics: Dict[str, MetricResult] = field(default_factory=dict)
     execution_time_impl: float = 0.0
     execution_time_ref: float = 0.0
     timestamp: float = field(default_factory=time.time)
@@ -223,13 +232,20 @@ class ValidationRegistry:
 
             if result.metrics:
                 print(f"  Metrics:")
-                for metric, value in result.metrics.items():
-                    print(f"    {metric}: {value:.6f}")
+                for metric_name, mres in result.metrics.items():
+                    if mres.value is not None:
+                        try:
+                            val_str = f"{mres.value:.6f}"
+                        except Exception:
+                            val_str = str(mres.value)
+                    else:
+                        val_str = "-"
+                    status = "PASS" if mres.passed else "FAIL"
+                    print(f"    {metric_name}: {val_str} — {status}")
+                    if mres.error:
+                        print(f"      error: {mres.error}")
 
-            if result.errors:
-                print(f"  Errors:")
-                for error in result.errors:
-                    print(f"    - {error}")
+            # All errors are reported via per-metric entries
             print()
         print("=" * 80 + "\n")
 
@@ -358,11 +374,15 @@ def __validate_against(
                 ref_output = reference_fn(*ref_args, **ref_kwargs)
                 ref_time = time.perf_counter() - start_time
             except Exception as e:
-                # If reference fails, just return impl output and log error
+                # If reference fails, just return impl output and log error via metrics
                 result = ValidationResult(
                     function_name=f"{func.__module__}.{func.__qualname__}",
                     passed=False,
-                    errors=[f"Reference execution failed: {str(e)}"],
+                    metrics={
+                        "reference_execution": MetricResult(
+                            value=None, passed=False, error=f"Reference execution failed: {str(e)}"
+                        )
+                    },
                     execution_time_impl=impl_time,
                 )
                 _validation_registry.add_result(result)
@@ -377,7 +397,11 @@ def __validate_against(
                 result = ValidationResult(
                     function_name=f"{func.__module__}.{func.__qualname__}",
                     passed=False,
-                    errors=[f"Output mapping failed: {str(e)}"],
+                    metrics={
+                        "output_mapping": MetricResult(
+                            value=None, passed=False, error=f"Output mapping failed: {str(e)}"
+                        )
+                    },
                     execution_time_impl=impl_time,
                     execution_time_ref=ref_time,
                 )
@@ -385,8 +409,7 @@ def __validate_against(
                 return impl_output
 
             # Compute metrics
-            computed_metrics = {}
-            errors = []
+            computed_metrics: Dict[str, MetricResult] = {}
             passed = True
 
             # Metrics where higher is better (correlation-like metrics)
@@ -394,24 +417,32 @@ def __validate_against(
 
             for metric_name, metric_fn in metrics_to_use.items():
                 try:
-                    # Check tolerance
+                    # Only compute metrics we have tolerances for
                     if metric_name in tolerances:
                         value = metric_fn(impl_comparable, ref_comparable)
-                        computed_metrics[metric_name] = value
                         threshold = tolerances[metric_name]
 
                         if metric_name in higher_is_better_metrics:
                             # For correlation metrics: value should be >= threshold
-                            if value < threshold:
+                            ok = value >= threshold
+                            if not ok:
                                 passed = False
-                                errors.append(f"{metric_name}={value:.6e} below threshold {threshold:.6e}")
+                                msg = f"{metric_name}={value:.6e} below threshold {threshold:.6e}"
+                            computed_metrics[metric_name] = MetricResult(
+                                value=value, passed=ok, error=(msg if not ok else None)
+                            )
                         else:
                             # For error metrics: value should be <= threshold
-                            if value > threshold:
+                            ok = value <= threshold
+                            if not ok:
                                 passed = False
-                                errors.append(f"{metric_name}={value:.6e} exceeds tolerance {threshold:.6e}")
+                                msg = f"{metric_name}={value:.6e} exceeds tolerance {threshold:.6e}"
+                            computed_metrics[metric_name] = MetricResult(
+                                value=value, passed=ok, error=(msg if not ok else None)
+                            )
                 except Exception as e:
-                    errors.append(f"Metric {metric_name} failed: {str(e)}")
+                    msg = f"Metric {metric_name} failed: {str(e)}"
+                    computed_metrics[metric_name] = MetricResult(value=None, passed=False, error=msg)
                     passed = False
 
             # Record results
@@ -419,7 +450,6 @@ def __validate_against(
                 function_name=f"{func.__module__}.{func.__qualname__}",
                 passed=passed,
                 metrics=computed_metrics,
-                errors=errors,
                 execution_time_impl=impl_time,
                 execution_time_ref=ref_time,
             )
