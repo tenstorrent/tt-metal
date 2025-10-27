@@ -27,7 +27,11 @@ EXTERNAL_SERVER_BASE_URL = "http://large-file-cache.large-file-cache.svc.cluster
 LOCAL_BASE_DIRECTORY = "tutorials_data"
 
 TUTORIALS_DATA_PATHS = {
-    "ttnn_simplecnn_inference": {LOCAL_SOURCE_PATH_KEY: "./data", EXTERNAL_SOURCE_PATH_KEY: "ttnn_simplecnn_inference"},
+    "ttnn_simplecnn_inference": {
+        LOCAL_SOURCE_PATH_KEY: "./data",
+        EXTERNAL_SOURCE_PATH_KEY: "ttnn_simplecnn_inference",
+        ENVIRONMENT_VARIABLE_MODEL: None,
+    },
     "ttnn_clip_zero_shot_image_classification": {
         LOCAL_SOURCE_PATH_KEY: "./ttnn_clip_zero_shot_image_classification",
         EXTERNAL_SOURCE_PATH_KEY: "ttnn_clip_zero_shot_image_classification",
