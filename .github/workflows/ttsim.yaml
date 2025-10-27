@@ -18,7 +18,7 @@ on:
       ttsim-ref:
         required: false
         type: string
-        default: "dd4e39719e9816baf3f527de892a3b4f0ab6a654"
+        default: "6a29a2ca053cf30f6540b3af8131398987cd02a5"
 
 jobs:
   ttsim-integration:
@@ -220,9 +220,6 @@ jobs:
             tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py \
             tests/ttnn/unit_tests/operations/ccl/test_qkv_all_reduce_minimal.py \
             tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_N300_post_commit.py \
-            tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_TG_nightly.py \
-            tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_async.py \
-            tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_async_TG_nightly.py \
             tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_llama_perf_sweep.py \
             tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_nightly.py \
             tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_post_commit.py \
