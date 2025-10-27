@@ -6,6 +6,7 @@
 #include <tt_stl/assert.hpp>
 
 #include <topology/topology.hpp>
+#include <utils/hex.hpp>
 
 template <typename Key, typename Value, typename KeyHash>
 static std::unordered_map<Value, Key> invert_map(const std::unordered_map<Key, Value, KeyHash>& map) {
@@ -31,8 +32,10 @@ TopologyHelper::TopologyHelper(
     //  chip_id -> (asic_location,tray_id)
     //  chip_id -> ASICDescriptor
     for (auto [unique_id, asic_descriptor] : psd->get_asic_descriptors()) {
+        std::cout << "-- unique_id=" << hex(*unique_id) << ", tray=" << *asic_descriptor.tray_id << ", location=" << *asic_descriptor.asic_location << std::endl;
         auto it = unique_id_to_chip_id.find(*unique_id);
         if (it == unique_id_to_chip_id.end()) {
+            std::cout << "  ** no chip id for unique_id=" << hex(*unique_id) << std::endl;
             continue;
         }
         tt::ChipId chip_id = it->second;
