@@ -605,8 +605,7 @@ on:
     - cron: "0 4 * * 3" # This cron schedule runs the workflow at 4:00 AM UTC on Wednesdays (comprehensive run)
     - cron: "0 5 * * 6" # This cron schedule runs the workflow at 5:00 AM UTC on Saturdays (comprehensive run)
 concurrency:
-  group: ttnn-sweeps-${{ github.ref }}-${{ github.event.inputs.arch || 'wormhole_b0' }}-${{ github.event.inputs['runner-label'] || 'N150' }}
-  cancel-in-progress: true
+  group: ttnn-sweeps-${{ github.ref }}-${{ github.event.inputs.arch || 'wormhole_b0' }}-${{ github.event.inputs.runner-label || 'N150' }}-${{ github.event.inputs.sweep_name }}
 
 jobs:
   build-artifact:
