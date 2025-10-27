@@ -101,6 +101,6 @@ int main(int argc, char** argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass, "Error");
+    TT_FATAL(pass, "PCIe L1 read/write test failed");
     return 0;
 }

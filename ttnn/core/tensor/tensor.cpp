@@ -620,9 +620,19 @@ void write_tensor(const Tensor& src, Tensor& dst, bool blocking, std::optional<t
         return;
     }
 
-    TT_FATAL(src.logical_shape() == dst.logical_shape(), "Error");
-    TT_FATAL(src.dtype() == dst.dtype(), "Error");
-    TT_FATAL(src.tensor_spec().page_config() == dst.tensor_spec().page_config(), "Error");
+    TT_FATAL(
+        src.logical_shape() == dst.logical_shape(),
+        "Source and destination tensors must have the same logical shape. Source: {}, Destination: {}",
+        src.logical_shape(),
+        dst.logical_shape());
+    TT_FATAL(
+        src.dtype() == dst.dtype(),
+        "Source and destination tensors must have the same data type. Source: {}, Destination: {}",
+        src.dtype(),
+        dst.dtype());
+    TT_FATAL(
+        src.tensor_spec().page_config() == dst.tensor_spec().page_config(),
+        "Source and destination tensors must have the same page configuration");
 
     auto mesh_buffer = dst.device_storage().mesh_buffer;
     TT_FATAL(!blocking, "Blocking is not supported for host to device copy");
