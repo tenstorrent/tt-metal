@@ -135,8 +135,7 @@ void AllGatherAsync::validate_with_output_tensors(
         }
         TT_FATAL(input_tensor.logical_shape().rank() >= 2, "AllGatherAsync requires tensor of rank 2 or greater");
     } else {
-        TT_FATAL(
-            input_tensor.logical_shape().rank() == 4, "Llama specific all_gather requires tensor of rank 4 or greater");
+        TT_FATAL(input_tensor.logical_shape().rank() == 4, "Llama specific all_gather requires tensor of rank 4");
     }
 }
 
