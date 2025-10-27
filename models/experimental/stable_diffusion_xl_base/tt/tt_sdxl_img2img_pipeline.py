@@ -48,11 +48,15 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
         self.pipeline_config.negative_aesthetic_score = negative_aesthetic_score
         self.generated_input_tensors = False
 
-    def _prepare_timesteps(self, timesteps=None, sigmas=None):
+    def _prepare_timesteps(self, timesteps=None, sigmas=None, denoising_start=None):
         super()._prepare_timesteps(timesteps, sigmas)
 
         self.ttnn_timesteps, self.num_inference_steps = get_timesteps(
-            self.torch_pipeline.scheduler, self.num_inference_steps, self.pipeline_config.strength, None
+            self.torch_pipeline.scheduler,
+            self.num_inference_steps,
+            self.pipeline_config.strength,
+            denoising_start,
+            self.torch_pipeline,
         )
 
         if self.num_inference_steps < 1:
@@ -70,6 +74,7 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
         fixed_seed_for_batch=False,
         timesteps=None,
         sigmas=None,
+        denoising_start=None,
     ):
         # Generate user input tensors for the TT model.
         # Validate timesteps/sigmas at the beginning if custom values are provided
@@ -80,7 +85,7 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
         profiler.start("prepare_latents")
 
         # This cuts number of inference steps relative by strength parameter
-        self._prepare_timesteps(timesteps, sigmas)
+        self._prepare_timesteps(timesteps, sigmas, denoising_start)
 
         num_channels_image_latents = self.torch_pipeline.vae.config.latent_channels
         height = width = 1024
@@ -93,6 +98,8 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
 
         if start_latent_seed is not None:
             torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed)
+
+        add_noise = True if denoising_start is None else False
         img_latents = prepare_image_latents(
             self.torch_pipeline,
             self,
@@ -104,7 +111,7 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
             all_prompt_embeds_torch.dtype,
             torch_image,
             False,  # No max strength path in ref img2img implementation
-            True,  # Make this configurable
+            add_noise,
             None,  # passed in latents
         )
         B, C, H, W = img_latents.shape  # 1, 4, 128, 128
