@@ -44,9 +44,9 @@ inline const AnalysisMarkerTypes AnalysisMarkerTypesAny = {
 using AnalysisMarkerNameKeywords = std::unordered_set<tracy::MarkerDetails::MarkerNameKeyword>;
 
 struct OpId {
-    uint64_t runtime_id;
-    uint64_t trace_id;
-    uint64_t trace_id_counter;
+    uint64_t runtime_id = tracy::TTDeviceMarker::INVALID_NUM;
+    uint64_t trace_id = tracy::TTDeviceMarker::INVALID_NUM;
+    uint64_t trace_id_counter = tracy::TTDeviceMarker::INVALID_NUM;
 
     bool operator==(const OpId& other) const {
         return runtime_id == other.runtime_id && trace_id == other.trace_id &&
@@ -124,10 +124,10 @@ struct OpsPerfResults {
     struct SingleOpPerfResults {
         struct OpMetaData {
             ChipId device_id;
-            ARCH device_arch;
+            ARCH device_arch = ARCH::Invalid;
             std::string op_name;
-            uint32_t num_fw_cores;
-            uint32_t num_available_worker_cores;
+            uint32_t num_fw_cores = 0;
+            uint32_t num_available_worker_cores = 0;
         };
         OpMetaData op_meta_data;
         std::vector<AnalysisResults::SingleResult> analysis_results;
