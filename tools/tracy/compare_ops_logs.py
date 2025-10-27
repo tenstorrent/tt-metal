@@ -13,7 +13,7 @@ from tracy.common import PROFILER_LOGS_DIR, PROFILER_CPP_DEVICE_OPS_PERF_REPORT
 from tracy.process_model_log import get_latest_ops_log_filename
 
 
-def compare_ops_logs(python_ops_perf_report=None, cpp_ops_perf_report=None):
+def compare_ops_logs(python_ops_perf_report=None, cpp_ops_perf_report=None, only_compare_op_ids=False):
     if not python_ops_perf_report:
         python_ops_perf_report = get_latest_ops_log_filename()
     if not cpp_ops_perf_report:
@@ -61,6 +61,10 @@ def compare_ops_logs(python_ops_perf_report=None, cpp_ops_perf_report=None):
     python_df_sorted = python_df_filtered.sort_values(by=sort_columns, na_position="first").reset_index(drop=True)
     cpp_df_sorted = cpp_df_filtered.sort_values(by=sort_columns, na_position="first").reset_index(drop=True)
 
+    if only_compare_op_ids:
+        python_df_sorted = python_df_sorted[sort_columns]
+        cpp_df_sorted = cpp_df_sorted[sort_columns]
+
     are_equal = python_df_sorted.equals(cpp_df_sorted)
     if are_equal:
         logger.info("Ops perf reports are equal")
@@ -72,10 +76,11 @@ def compare_ops_logs(python_ops_perf_report=None, cpp_ops_perf_report=None):
 
 
 @click.command()
+@click.option("--only-compare-op-ids", is_flag=True, help="Only compare op ids")
 @click.argument("python_ops_perf_report", type=click.Path(), required=False)
 @click.argument("cpp_ops_perf_report", type=click.Path(), required=False)
-def cli(python_ops_perf_report, cpp_ops_perf_report):
-    compare_ops_logs(python_ops_perf_report, cpp_ops_perf_report)
+def cli(only_compare_op_ids, python_ops_perf_report, cpp_ops_perf_report):
+    compare_ops_logs(python_ops_perf_report, cpp_ops_perf_report, only_compare_op_ids)
 
 
 if __name__ == "__main__":
