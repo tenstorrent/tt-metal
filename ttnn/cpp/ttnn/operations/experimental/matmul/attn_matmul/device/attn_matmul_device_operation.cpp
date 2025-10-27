@@ -15,7 +15,7 @@ void AttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_tensor
     // intermediate: [q_heads, batch, batch, kv_len]
     // output: [q_len, q_heads, batch, kv_len]
 
-    TT_FATAL(input_tensors.size() == 2, "Error");
+    TT_FATAL(input_tensors.size() == 2, "Expected 2 input tensors but got {}", input_tensors.size());
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     TT_FATAL(

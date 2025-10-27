@@ -27,10 +27,19 @@ void SplitFusedQKVAndSplitHeadsDeviceOperation::validate_with_output_tensors(
         TT_FATAL(
             (bbox.end_coord.x < this->compute_with_storage_grid_size.x &&
              bbox.end_coord.y < this->compute_with_storage_grid_size.y),
-            "Error");
-        TT_FATAL(input_tensor.shard_spec().value().grid.ranges().size() == 1, "Error");
+            "Bounding box end coordinates ({}, {}) must be less than grid size ({}, {})",
+            bbox.end_coord.x,
+            bbox.end_coord.y,
+            this->compute_with_storage_grid_size.x,
+            this->compute_with_storage_grid_size.y);
         TT_FATAL(
-            input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED, "Error");
+            input_tensor.shard_spec().value().grid.ranges().size() == 1,
+            "Input tensor shard spec must have exactly 1 grid range but got {}",
+            input_tensor.shard_spec().value().grid.ranges().size());
+        TT_FATAL(
+            input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
+            "Input tensor memory layout must be BLOCK_SHARDED but got {}",
+            input_tensor.memory_config().memory_layout());
     }
 
     if (!output_tensors.empty()) {

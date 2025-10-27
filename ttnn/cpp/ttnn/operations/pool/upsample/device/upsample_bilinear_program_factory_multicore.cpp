@@ -135,7 +135,11 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
         "Output sticks per shard {} should be same as output sticks per core {}",
         out_nsticks_per_core,
         output_nsticks_per_core);
-    TT_FATAL(input_nsticks_per_core % in_w == 0, "Error");
+    TT_FATAL(
+        input_nsticks_per_core % in_w == 0,
+        "Input sticks per core ({}) must be divisible by input width ({})",
+        input_nsticks_per_core,
+        in_w);
 
     // creating halo input tensor
     auto halo_in = HaloTensorCreation(input);
