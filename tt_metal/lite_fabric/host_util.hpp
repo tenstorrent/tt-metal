@@ -5,12 +5,12 @@
 #pragma once
 
 #include "hal/lite_fabric_hal.hpp"
-#include "tt_cluster.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/control_plane.hpp>
+#include <memory>
 
 namespace lite_fabric {
 
-void LaunchLiteFabric(tt::Cluster& cluster, const tt::tt_metal::Hal& hal, const SystemDescriptor& desc);
+void InitializeLiteFabric(std::shared_ptr<lite_fabric::LiteFabricHal>& lite_fabric_hal);
 
 }  // namespace lite_fabric

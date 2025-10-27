@@ -103,8 +103,7 @@ void BlackholeLiteFabricHal::launch(tt::Cluster& cluster, const SystemDescriptor
     cluster.l1_barrier(0);
     // Wait for ready
     for (auto tunnel_1x : desc.tunnels_from_mmio) {
-        wait_for_state(
-            cluster, tunnel_1x.mmio_cxy_virtual(), GetStateAddress(), lite_fabric::InitState::READY);
+        wait_for_state(cluster, tunnel_1x.mmio_cxy_virtual(), lite_fabric::InitState::READY);
         log_info(
             tt::LogMetal,
             "Lite Fabric {} (virtual={}) is ready",
@@ -128,6 +127,15 @@ void BlackholeLiteFabricHal::terminate(tt::Cluster& cluster, const SystemDescrip
     }
     cluster.l1_barrier(0);
     LiteFabricHal::set_reset_state(cluster, desc, true);
+}
+
+void BlackholeLiteFabricHal::wait_for_state(
+    tt::Cluster& cluster, tt_cxy_pair virtual_core, lite_fabric::InitState state) {
+    std::vector<uint32_t> readback{static_cast<uint32_t>(lite_fabric::InitState::UNKNOWN)};
+    while (static_cast<lite_fabric::InitState>(readback[0]) != state) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        cluster.read_core(readback, sizeof(uint32_t), virtual_core, GetStateAddress());
+    }
 }
 
 std::vector<std::filesystem::path> BlackholeLiteFabricHal::build_includes(const std::filesystem::path& root_dir) {

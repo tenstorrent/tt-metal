@@ -22,6 +22,9 @@ void WormholeLiteFabricHal::launch(tt::Cluster& cluster, const SystemDescriptor&
 void WormholeLiteFabricHal::terminate(tt::Cluster& cluster, const SystemDescriptor& desc) {
 }
 
+void WormholeLiteFabricHal::wait_for_state(
+    tt::Cluster& cluster, tt_cxy_pair virtual_core, lite_fabric::InitState state) {}
+
 std::vector<std::filesystem::path> WormholeLiteFabricHal::build_includes(const std::filesystem::path& root_dir) {
     return {};
 }

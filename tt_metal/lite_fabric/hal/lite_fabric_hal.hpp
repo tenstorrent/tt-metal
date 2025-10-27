@@ -39,12 +39,12 @@ struct SystemDescriptor {
 // Abstract interface for the Lite Fabric cluster
 class LiteFabricHal {
 private:
-    LiteFabricHal(tt::Cluster& cluster);
-
     SystemDescriptor system_descriptor_;
 
 public:
-    static std::shared_ptr<LiteFabricHal> create(tt::ARCH arch);
+    LiteFabricHal(tt::Cluster& cluster);
+
+    static std::shared_ptr<LiteFabricHal> create();
 
     virtual ~LiteFabricHal() = default;
 
@@ -58,7 +58,7 @@ public:
 
     virtual tt::umd::tt_version get_binary_version() = 0;
 
-    virtual void wait_for_state(tt::Cluster& cluster, tt_cxy_pair virtual_core, uint32_t addr, lite_fabric::InitState state) = 0;
+    virtual void wait_for_state(tt::Cluster& cluster, tt_cxy_pair virtual_core, lite_fabric::InitState state) = 0;
 
     virtual std::vector<std::filesystem::path> build_includes(const std::filesystem::path& root_dir) = 0;
 
@@ -66,7 +66,7 @@ public:
 
     virtual std::vector<std::filesystem::path> build_linker(const std::filesystem::path& root_dir) = 0;
 
-    void wait_for_state(tt::Cluster& cluster, const SystemDescriptor& desc, uint32_t addr, lite_fabric::InitState state);
+    void wait_for_state(tt::Cluster& cluster, const SystemDescriptor& desc, lite_fabric::InitState state);
 
     void set_pc(tt::Cluster& cluster, const SystemDescriptor& desc, uint32_t pc_addr, uint32_t pc_val);
 

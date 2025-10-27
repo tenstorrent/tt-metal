@@ -66,19 +66,13 @@ namespace lite_fabric {
 LiteFabricHal::LiteFabricHal(tt::Cluster& cluster) : system_descriptor_(GetSystemDescriptor(cluster)) {
 }
 
-std::shared_ptr<LiteFabricHal> LiteFabricHal::create(tt::ARCH arch) {
+std::shared_ptr<LiteFabricHal> LiteFabricHal::create() {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto arch = cluster.arch();
     switch (arch) {
-        case tt::ARCH::WORMHOLE_B0: return std::make_shared<WormholeLiteFabricHal>();
-        case tt::ARCH::BLACKHOLE: return std::make_shared<BlackholeLiteFabricHal>();
+        case tt::ARCH::WORMHOLE_B0: return std::make_shared<WormholeLiteFabricHal>(cluster);
+        case tt::ARCH::BLACKHOLE: return std::make_shared<BlackholeLiteFabricHal>(cluster);
         default: TT_THROW("Unsupported architecture {}", arch);
-    }
-}
-
-void LiteFabricHal::wait_for_state(tt::Cluster& cluster, tt_cxy_pair virtual_core, uint32_t addr, lite_fabric::InitState state) {
-    std::vector<uint32_t> readback{static_cast<uint32_t>(lite_fabric::InitState::UNKNOWN)};
-    while (static_cast<lite_fabric::InitState>(readback[0]) != state) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        cluster.read_core(readback, sizeof(uint32_t), virtual_core, addr);
     }
 }
 
@@ -91,6 +85,12 @@ void LiteFabricHal::set_pc(tt::Cluster& cluster, const SystemDescriptor& desc, u
 void LiteFabricHal::set_reset_state(tt::Cluster& cluster, const SystemDescriptor& desc, bool assert_reset) {
     for (auto tunnel_1x : desc.tunnels_from_mmio) {
         set_reset_state(cluster, tunnel_1x.mmio_cxy_virtual(), assert_reset);
+    }
+}
+
+void LiteFabricHal::wait_for_state(tt::Cluster& cluster, const SystemDescriptor& desc, lite_fabric::InitState state) {
+    for (auto tunnel_1x : desc.tunnels_from_mmio) {
+        wait_for_state(cluster, tunnel_1x.mmio_cxy_virtual(), state);
     }
 }
 

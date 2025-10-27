@@ -11,10 +11,7 @@
 #include <vector>
 #include <string>
 #include <fmt/format.h>
-#include "tt_cluster.hpp"
-
-// TODO: Cleanup this file
-// https://github.com/tenstorrent/tt-metal/issues/28324
+#include "tt_metal/lite_fabric/hal/lite_fabric_hal.hpp"
 
 namespace {
 std::string GetToolchainPath(const std::string& root_dir) {
@@ -66,7 +63,7 @@ std::string GetCommonOptions() {
 namespace lite_fabric {
 
 int CompileFabricLite(
-    tt::Cluster& cluster,
+    const std::shared_ptr<lite_fabric::LiteFabricHal>& lite_fabric_hal,
     const std::filesystem::path& root_dir,
     const std::filesystem::path& out_dir,
     const std::vector<std::string>& extra_defines) {
