@@ -133,9 +133,9 @@ void strided_fabric_mux_connection_rt_args(
 
 tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_default(
     const Tensor& input_tensor,
-    IDevice* sender_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
@@ -154,9 +154,9 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     return strided_all_gather_async_minimal_default_helper(
         program,
         input_tensor,
-        sender_device,
-        forward_device,
-        backward_device,
+        sender_device_coord,
+        forward_coord,
+        backward_coord,
         output_tensor,
         dim,
         num_links,
@@ -177,9 +177,9 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
 tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_default_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
-    IDevice* sender_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
@@ -240,15 +240,16 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     uint32_t page_size = input_tensor.buffer()->page_size();
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
-    auto [unicast_forward_args, unicast_backward_args] =
-        ccl::get_forward_backward_line_unicast_configuration(topology, sender_device, forward_device, backward_device);
+    auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
+        topology, sender_device_coord, forward_coord, backward_coord, mesh_device);
     auto [barrier_mcast_forward_args, barrier_mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
         topology,
-        sender_device,
-        forward_device,
-        backward_device,
-        topology == ccl::Topology::Linear ? num_targets_forward : ring_size - 1,
-        topology == ccl::Topology::Linear ? num_targets_backward : ring_size - 1);
+        sender_device_coord,
+        forward_coord,
+        backward_coord,
+        num_targets_forward,
+        num_targets_backward,
+        mesh_device);
 
     TT_FATAL(
         !((topology == ccl::Topology::Linear) && fuse_op), "linear is not support when using fused for all-gather");
@@ -325,7 +326,7 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
     const uint32_t l1_unreserved_base_address =
-        sender_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
     for (uint32_t link = 0; link < num_links; link++) {
         uint32_t batch_head_size = input_tensor_shape[0] * input_tensor_shape[1];
@@ -359,7 +360,7 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                 mux_base_l1_address);
 
             const bool mux_connection_valid =
-                (dir && backward_device.has_value()) || (!dir && forward_device.has_value());
+                (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
             if (mux_connection_valid) {
                 auto mux_kernel_id = tt::tt_metal::CreateKernel(
                     program,
@@ -371,15 +372,13 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                         .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
                         .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
                 std::vector<uint32_t> mux_rt_args = {};
-                const auto src_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+                const auto src_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
                 if (dir) {  // forward
-                    const auto dst_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+                    const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                     mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
                         src_node_id, dst_node_id, link, program, {mux_logical_core});
                 } else {
-                    const auto dst_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+                    const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                     mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
                         src_node_id, dst_node_id, link, program, {mux_logical_core});
                 }
