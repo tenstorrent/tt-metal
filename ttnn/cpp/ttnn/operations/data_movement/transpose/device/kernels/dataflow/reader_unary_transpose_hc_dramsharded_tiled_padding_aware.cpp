@@ -55,6 +55,9 @@ void kernel_main() {
     bool warmup =
         true;  // = true for first few iterations until we reach num_reads_in_flight, during which don't use barrier
 
+    // gate all the writes until reads complete
+    cb_reserve_back(tt::CBIndex::c_2, 1);
+
 // read a ublock of tiles from src to CB, and then push the ublock to unpacker
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_tiles;
@@ -107,4 +110,7 @@ void kernel_main() {
         tt::data_movement::common::fill_with_val(l1_write_addr, num_writes, padding_val_packed);
         cb_push_back(tt::CBIndex::c_1, 1);
     }
+
+    // done reads, ungate writes
+    cb_push_back(tt::CBIndex::c_2, 1);
 }

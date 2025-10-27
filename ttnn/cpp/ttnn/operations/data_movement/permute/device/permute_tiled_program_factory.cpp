@@ -322,6 +322,7 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t padding_cb_index = tt::CBIndex::c_1;
+    uint32_t sem_cb_index = tt::CBIndex::c_2;
     uint32_t output_cb_index = src0_cb_index;
 
     uint32_t num_input_pages_to_read = 2;
@@ -366,9 +367,14 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
         num_tiles_per_core_padding);
 
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(num_input_pages_to_read * input_page_size, {{src0_cb_index, cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(
+            (num_tiles_per_core + 2) * input_page_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, input_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+
+    tt::tt_metal::CircularBufferConfig cb_sem_config =
+        tt::tt_metal::CircularBufferConfig(4, {{sem_cb_index, DataFormat::UInt32}}).set_page_size(sem_cb_index, 4);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_sem_config);
 
     uint32_t output_H = input_shape[dims[rank - 2]];
     uint32_t element_size = input_tensor.element_size();

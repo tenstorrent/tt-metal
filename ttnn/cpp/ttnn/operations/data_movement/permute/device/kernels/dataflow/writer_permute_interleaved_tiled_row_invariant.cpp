@@ -174,6 +174,10 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     // 6) Main loop over all tiles [start_tile..end_tile)
     // ------------------------------------------------------------------------
+
+    // wait for all reads
+    cb_wait_front(tt::CBIndex::c_2, 1);
+
     uint32_t src_multi_idx[RANK];
     uint32_t dest_multi_idx[RANK];
 
@@ -333,4 +337,7 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(tt::CBIndex::c_1, 1);
     }
+
+    // done
+    cb_pop_front(tt::CBIndex::c_2, 1);
 }
