@@ -421,6 +421,9 @@ tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
     if (!control_plane_) {
         this->initialize_control_plane();
     }
+    if (!control_plane_->is_initialized()) {
+        control_plane_->initialize();
+    }
     return *control_plane_;
 }
 
@@ -534,8 +537,6 @@ void MetalContext::initialize_fabric_config() {
     this->cluster_->configure_ethernet_cores_for_fabric_routers(
         this->fabric_config_, this->num_fabric_active_routing_planes_);
     auto& control_plane = this->get_control_plane();
-
-    control_plane.initialize_control_plane();
 
     if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
         control_plane.initialize_fabric_context(this->fabric_config_);

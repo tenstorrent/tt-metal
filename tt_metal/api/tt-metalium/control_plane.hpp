@@ -76,7 +76,7 @@ public:
     ~ControlPlane();
 
     // Generate routing tables and validate connectivity in control plane
-    void initialize_control_plane();
+    void initialize();
 
     // Printing functions
     void print_routing_tables() const;
@@ -204,11 +204,14 @@ public:
     const std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>&
     get_global_logical_bindings() const;
 
+    bool is_initialized() const { return is_initialized_; }
+
 private:
     // Check if the provided mesh is local to this host
     bool is_local_mesh(MeshId mesh_id) const;
 
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
+    bool is_initialized_ = false;
     // TODO: remove this from local node control plane. Can get it from the global control plane
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
 
