@@ -6,7 +6,6 @@ import torch
 import pytest
 from loguru import logger
 import urllib.request
-import tracy
 import ttnn
 from models.experimental.petr.reference.petr import PETR
 from models.experimental.petr.tt.ttnn_petr import ttnn_PETR
@@ -83,7 +82,5 @@ def test_petr(device, reset_seeds):
         query_embedding_input=query_embedding_input,
         device=device,
     )
-    tracy.signpost("start")
     ttnn_output = ttnn_model.predict(ttnn_inputs, ttnn_batch_img_metas, skip_post_processing=True)
     verify_output(torch_output, ttnn_output)
-    tracy.signpost("end")

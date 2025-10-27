@@ -5,6 +5,7 @@ import ttnn
 from models.experimental.petr.tt.common import Conv, Conv_with_split
 import torch
 from torch.nn import functional as F
+from loguru import logger
 
 
 class ttnn_hsigmoid:
@@ -74,7 +75,7 @@ class ttnn_osa_module:
                         parameters["{}_{}".format(module_name, i)],
                         activation="relu",
                         act_block_h=128,
-                        height_sharding=True,
+                        height_sharding=False,
                     )
                 )
             elif i == 0 and "OSA3_1" not in module_name_with_i and "OSA2" not in module_name_with_i:
@@ -84,7 +85,7 @@ class ttnn_osa_module:
                         parameters["{}_{}".format(module_name, i)],
                         activation="relu",
                         act_block_h=128,
-                        height_sharding=True,
+                        height_sharding=False,
                     )
                 )
             elif (
@@ -99,7 +100,7 @@ class ttnn_osa_module:
                         parameters["{}_{}".format(module_name, i)],
                         activation="relu",
                         act_block_h=128,
-                        height_sharding=True,
+                        height_sharding=False,
                     )
                 )
             else:
@@ -108,7 +109,7 @@ class ttnn_osa_module:
                         [1, 1, 1, 1],
                         parameters["{}_{}".format(module_name, i)],
                         activation="relu",
-                        height_sharding=True,
+                        height_sharding=False,
                     )
                 )
 
@@ -118,28 +119,28 @@ class ttnn_osa_module:
                     [1, 1, 0, 0],
                     parameters["{}_{}".format(module_name, "concat")],
                     activation="relu",
-                    height_sharding=True,
+                    height_sharding=False,
                 )
             elif module_name == "OSA4_1":
                 self.conv_concat = Conv(
                     [1, 1, 0, 0],
                     parameters["{}_{}".format(module_name, "concat")],
                     activation="relu",
-                    height_sharding=True,
+                    height_sharding=False,
                 )
             elif "OSA5" in module_name:
                 self.conv_concat = Conv(
                     [1, 1, 0, 0],
                     parameters["{}_{}".format(module_name, "concat")],
                     activation="relu",
-                    height_sharding=True,
+                    height_sharding=False,
                 )
             else:
                 self.conv_concat = Conv(
                     [1, 1, 0, 0],
                     parameters["{}_{}".format(module_name, "concat")],
                     activation="relu",
-                    height_sharding=True,
+                    height_sharding=False,
                 )
         if module_name == "OSA5_1" or module_name == "OSA5_2" or module_name == "OSA5_3":
             self.ese = ttnn_esemodule(parameters, is_split=True)
@@ -197,16 +198,14 @@ class ttnn_osa_module:
         if self.identity:
             x = x + identity_feat
 
-        # Ensure we're maintaining 4D shape
         if len(x.shape) != 4:
-            print(f"ERROR: {self.module_name} produced non-4D tensor: {x.shape}")
+            logger.error(f"ERROR: {self.module_name} produced non-4D tensor: {x.shape}")
 
         if len(x.shape) == 4 and x.shape[1] == 1 and x.shape[2] > 100:
             batch_size = x.shape[0]
             channels = x.shape[3]
             total_spatial = x.shape[2]
 
-            # Determine expected dimensions based on module name
             if "OSA2" in self.module_name:
                 height, width = 80, 200
             elif "OSA3" in self.module_name:
@@ -363,16 +362,15 @@ class ttnn_VoVNetCP:
 
         # Convert to NCHW for processing
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        # Stem conv 1 (stride=2, padding=1)
+        # Stem conv 1
         x = self.stem_conv1(device, x)
-        # Stem conv 2 (stride=1, padding=1)
+        # Stem conv 2
         x = self.stem_conv2(device, x)
 
-        # Stem conv 3 (stride=2, padding=1)
+        # Stem conv 3
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x = self.stem_conv3(device, x)
 
-        # Now x is ready for stages
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         stage2 = self.stage2(device, x)
         x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)

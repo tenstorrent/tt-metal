@@ -101,8 +101,6 @@ class ttnn_PETRHead:
             reg_branch.append(ttnn.relu)
         reg_branch.append(ttnn.linear)
 
-        # reg_branch.append(*reg_branch)
-
         self.cls_branches = [fc_cls for _ in range(self.num_pred)]
         self.reg_branches = [reg_branch for _ in range(self.num_pred)]
 
@@ -156,17 +154,9 @@ class ttnn_PETRHead:
             bin_size = (self.position_range[3] - self.depth_start) / self.depth_num
             coords_d = self.depth_start + bin_size * index
 
-        coords_h = ttnn.to_layout(coords_h, ttnn.ROW_MAJOR_LAYOUT)
-        coords_w = ttnn.to_layout(coords_w, ttnn.ROW_MAJOR_LAYOUT)
-        coords_d = ttnn.to_layout(coords_d, ttnn.ROW_MAJOR_LAYOUT)
-
-        coords_h = ttnn.reshape(coords_h, [-1])
-        coords_w = ttnn.reshape(coords_w, [-1])
-        coords_d = ttnn.reshape(coords_d, [-1])
-
-        coords_h = ttnn.to_torch(coords_h)
-        coords_w = ttnn.to_torch(coords_w)
-        coords_d = ttnn.to_torch(coords_d)
+        coords_h = ttnn.to_torch(coords_h).reshape(-1)
+        coords_w = ttnn.to_torch(coords_w).reshape(-1)
+        coords_d = ttnn.to_torch(coords_d).reshape(-1)
 
         coords = torch.stack(torch.meshgrid([coords_w, coords_h, coords_d])).permute(1, 2, 3, 0)  # W, H, D, 3
 
@@ -224,20 +214,8 @@ class ttnn_PETRHead:
         return ttnn.reshape(coords_position_embeding, (B, N, self.embed_dims, H, W)), coords_mask
 
     def __call__(self, mlvl_feats, img_metas, device=None):
-        """Forward function.
-
-        Args:
-            mlvl_feats (tuple[Tensor]): Features from the upstream
-                network, each is a 5D-tensor with shape
-                (B, N, C, H, W).
-        Returns:
-            all_cls_scores (Tensor): Outputs from the classification head, \
-                shape [nb_dec, bs, num_query, cls_out_channels]. Note \
-                cls_out_channels should includes background.
-            all_bbox_preds (Tensor): Sigmoid outputs from the regression \
-                head with normalized coordinate format \
-                (cx, cy, w, l, cz, h, theta, vx, vy). \
-                Shape [nb_dec, bs, num_query, 9].
+        """
+        PETR Head Forward function.
         """
         for i in range(len(mlvl_feats)):
             mlvl_feats[i] = ttnn.to_memory_config(mlvl_feats[i], memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -275,7 +253,6 @@ class ttnn_PETRHead:
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
                 sin_embed = self.positional_encoding(masks)
-                # sin_embed = self.adapt_pos3d(sin_embed.flatten(0, 1))
                 masks = ttnn.to_torch(masks)
                 masks = masks
                 sin_embed = ttnn.permute(
@@ -289,10 +266,8 @@ class ttnn_PETRHead:
                         sin_embed = i(device, sin_embed)
                 sin_embed = ttnn.permute(sin_embed, (0, 3, 1, 2))
                 sin_embed = ttnn.reshape(sin_embed, (x.shape[0], x.shape[1], x.shape[2], x.shape[3], x.shape[4]))
-                # .view(x.size())
                 pos_embed = pos_embed + sin_embed
             else:
-                # This is not invoked in our run
                 pos_embeds = []
                 for i in range(num_cams):
                     xy_embed = self.positional_encoding(masks[:, i, :, :])
@@ -301,7 +276,6 @@ class ttnn_PETRHead:
                 sin_embed = self.adapt_pos3d(sin_embed.flatten(0, 1)).view(x.size())
                 pos_embed = pos_embed + sin_embed
         else:
-            # This is not invoked in our run
             if self.with_multiview:
                 pos_embed = self.positional_encoding(masks)
                 pos_embed = self.adapt_pos3d(pos_embed.flatten(0, 1)).view(x.size())
@@ -318,9 +292,7 @@ class ttnn_PETRHead:
             logger.error("reference_points contains NaN/Inf at initialization!")
             ref_check = torch.nan_to_num(ref_check, nan=0.5, posinf=1.0, neginf=0.0)
             self.parameters.reference_points.weight = ttnn.from_torch(ref_check, dtype=ttnn.bfloat16, device=device)
-        for index, i in enumerate(
-            self.query_embedding
-        ):  # replaced this by preprocessing pos2posemb3d(reference_points))
+        for index, i in enumerate(self.query_embedding):
             if index == 0:
                 query_embeds = i(
                     self.query_embedding_input,
@@ -337,25 +309,23 @@ class ttnn_PETRHead:
                 query_embeds = i(query_embeds)
 
         reference_points = ttnn.reshape(reference_points, (1, reference_points.shape[0], reference_points.shape[1]))
-        reference_points = ttnn.repeat_interleave(reference_points, batch_size, dim=0)  # .sigmoid()
+        reference_points = ttnn.repeat_interleave(reference_points, batch_size, dim=0)
         masks = masks.to(dtype=torch.float16)
         masks = ttnn.from_torch(masks, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-        outs_dec, _ = self.transformer(device, x, masks, query_embeds, pos_embed)  # , self.reg_branches)
+        outs_dec, _ = self.transformer(device, x, masks, query_embeds, pos_embed)
 
-        outs_dec_torch = ttnn.to_torch(outs_dec).to(torch.bfloat16)
         outs_dec_torch = ttnn.to_torch(outs_dec).to(torch.bfloat16)
         if torch.isnan(outs_dec_torch).any() or torch.isinf(outs_dec_torch).any():
             logger.warning(f"NaN/Inf detected in outs_dec! Applying nan_to_num")
             outs_dec_torch = torch.nan_to_num(outs_dec_torch, nan=0.0, posinf=1e6, neginf=-1e6)
             outs_dec = ttnn.from_torch(outs_dec_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            outs_dec = ttnn.to_device(outs_dec, device)
         outs_dec = ttnn.from_torch(outs_dec_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        outs_dec = ttnn.to_device(outs_dec, device)
         outputs_classes = []
         outputs_coords = []
+        reference_points_cloned = ttnn.clone(reference_points)
         for lvl in range(outs_dec.shape[0]):
-            reference = ttnn_inverse_sigmoid(ttnn.clone(reference_points))
+            reference = ttnn_inverse_sigmoid(reference_points_cloned)
 
             ref_torch = ttnn.to_torch(reference)
             if torch.isnan(ref_torch).any() or torch.isinf(ref_torch).any():
@@ -374,7 +344,6 @@ class ttnn_PETRHead:
 
             for index, operation in enumerate(self.cls_branches[lvl]):
                 if operation == ttnn.linear:
-                    # Keep using ttnn.linear but with float32 tensors
                     outputs_class_f32 = operation(
                         outputs_class_f32,
                         self.parameters["cls_branches"][lvl][index].weight,
@@ -387,9 +356,9 @@ class ttnn_PETRHead:
                         outputs_class_f32,
                         weight=self.parameters["cls_branches"][lvl][index].weight,
                         bias=self.parameters["cls_branches"][lvl][index].bias,
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
                     )
 
-            # Convert back to bfloat16
             outputs_class = ttnn.from_torch(
                 ttnn.to_torch(outputs_class_f32).to(torch.bfloat16), dtype=ttnn.bfloat16, device=device
             )
@@ -401,6 +370,7 @@ class ttnn_PETRHead:
                         tmp,
                         self.parameters["reg_branches"][lvl][index].weight,
                         bias=self.parameters["reg_branches"][lvl][index].bias,
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
                     )
                 elif operation == ttnn.relu:
                     tmp = operation(tmp)
@@ -413,7 +383,6 @@ class ttnn_PETRHead:
             reference = ttnn.to_torch(reference).to(torch.bfloat16)
             tmp_torch[..., 0:2] = tmp_torch[..., 0:2] + reference[..., 0:2]
 
-            # Safety clamp before sigmoid to prevent overflow
             tmp_torch[..., 0:2] = torch.clamp(tmp_torch[..., 0:2], min=-10.0, max=10.0)
             tmp_torch[..., 0:2] = tmp_torch[..., 0:2].sigmoid()
 
@@ -427,9 +396,7 @@ class ttnn_PETRHead:
                 tmp_torch = torch.nan_to_num(tmp_torch, nan=0.0, posinf=1.0, neginf=0.0)
 
             tmp = ttnn.from_torch(tmp_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            tmp = ttnn.to_device(tmp, device)
             reference = ttnn.from_torch(reference, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            reference = ttnn.to_device(reference, device)
 
             outputs_coord = tmp
             outputs_classes.append(outputs_class)
@@ -454,9 +421,7 @@ class ttnn_PETRHead:
             all_bbox_preds = torch.nan_to_num(all_bbox_preds, nan=0.0, posinf=51.0, neginf=-51.0)
 
         all_cls_scores = ttnn.from_torch(all_cls_scores, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
-        all_cls_scores = ttnn.to_device(all_cls_scores, device)
         all_bbox_preds = ttnn.from_torch(all_bbox_preds, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
-        all_bbox_preds = ttnn.to_device(all_bbox_preds, device)
 
         outs = {
             "all_cls_scores": all_cls_scores,

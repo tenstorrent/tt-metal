@@ -73,13 +73,13 @@ class Conv:
         input_width = input_tensor.shape[2]
         input_channels = input_tensor.shape[3]
 
-        # Ensure input is in L1 and interleaved
+        # Ensure input is in L1
         input_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         if hasattr(input_tensor, "memory_config") and input_tensor.memory_config().is_sharded():
             input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
 
-        # Ensure weights are in DRAM and interleaved
+        # Ensure weights are in L1
         if hasattr(self.weights, "memory_config") and self.weights.memory_config().is_sharded():
             self.weights = ttnn.sharded_to_interleaved(self.weights, ttnn.L1_MEMORY_CONFIG)
 
@@ -91,8 +91,15 @@ class Conv:
             packer_l1_acc=True,
             math_approx_mode=False,
         )
-
-        # Single unified path for all convolutions
+        conv_config = ttnn.Conv2dConfig(
+            weights_dtype=ttnn.bfloat16,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+            shard_layout=self.shard_layout,
+            deallocate_activation=self.deallocate,
+            enable_act_double_buffer=False,
+            reshard_if_not_optimal=True,
+        )
+        # convolutions
         [output_tensor, [_out_height, _out_width]] = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.weights,
@@ -297,7 +304,6 @@ def stem_parameters_preprocess(model):
                 if prefix not in parameters:
                     parameters[prefix] = {}
                 conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(conv_layer, norm_layer)
-                # Convert to ttnn format
                 parameters[prefix]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16)
                 parameters[prefix]["bias"] = ttnn.from_torch(
                     torch.reshape(conv_bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16

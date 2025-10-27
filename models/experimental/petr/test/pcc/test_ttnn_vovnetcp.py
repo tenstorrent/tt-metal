@@ -3,6 +3,8 @@
 
 import torch
 import ttnn
+import os
+import urllib.request
 import pytest
 from models.experimental.petr.reference.vovnetcp import (
     VoVNetCP,
@@ -136,9 +138,20 @@ def test_vovnetcp(
 ):
     torch_input_tensor = torch.randn(1, 3, 320, 800)
     ttnn_input_tensor = ttnn.from_torch(torch_input_tensor.permute(0, 2, 3, 1), dtype=ttnn.bfloat16, device=device)
-    weights_state_dict = torch.load(
-        "models/experimental/functional_petr/resources/petr_vovnet_gridmask_p4_800x320-e2191752.pth", weights_only=False
-    )["state_dict"]
+    weights_url = (
+        "https://download.openmmlab.com/mmdetection3d/v1.1.0_models/petr/petr_vovnet_gridmask_p4_800x320-e2191752.pth"
+    )
+    resources_dir = os.path.join(os.path.dirname(__file__), "..", "..", "resources")
+    weights_path = os.path.abspath(os.path.join(resources_dir, "petr_vovnet_gridmask_p4_800x320-e2191752.pth"))
+
+    if not os.path.exists(resources_dir):
+        os.makedirs(resources_dir)
+    if not os.path.exists(weights_path):
+        logger.info(f"Downloading PETR weights from {weights_url} ...")
+        urllib.request.urlretrieve(weights_url, weights_path)
+        logger.info(f"Weights downloaded to {weights_path}")
+
+    weights_state_dict = torch.load(weights_path, weights_only=False)["state_dict"]
     torch_model = VoVNetCP("V-99-eSE")
     torch_model.load_state_dict(
         {k.replace("img_backbone.", ""): v for k, v in weights_state_dict.items() if "img_backbone" in k}

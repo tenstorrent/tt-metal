@@ -5,6 +5,7 @@ import torch
 import pytest
 import ttnn
 import tracy
+from loguru import logger
 from models.experimental.petr.reference.petr import PETR
 from models.experimental.petr.tt.ttnn_petr import ttnn_PETR
 import os
@@ -35,9 +36,9 @@ def prepare_torch_model():
     if not os.path.exists(weights_path):
         import urllib.request
 
-        print(f"Downloading PETR weights from {weights_url} ...")
+        logger.info(f"Downloading PETR weights from {weights_url} ...")
         urllib.request.urlretrieve(weights_url, weights_path)
-        print(f"Weights downloaded to {weights_path}")
+        logger.info(f"Weights downloaded to {weights_path}")
 
     weights_state_dict = torch.load(weights_path, weights_only=False)["state_dict"]
     torch_model.load_state_dict(weights_state_dict)

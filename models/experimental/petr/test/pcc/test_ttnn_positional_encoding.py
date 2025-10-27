@@ -4,7 +4,7 @@
 import ttnn
 import torch
 import pytest
-
+from loguru import logger
 from models.experimental.petr.reference.positional_encoding import SinePositionalEncoding3D
 from models.experimental.petr.tt.ttnn_positional_encoding import ttnn_SinePositionalEncoding3D
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
@@ -23,6 +23,6 @@ def test_SinePositionalEncoding3D(device):
 
     ttnn_output = ttnn.to_torch(ttnn_output)
     passed, msg = check_with_pcc(output, ttnn_output, pcc=0.99)
-    print(f"Output PCC: {msg}")
+    logger.info(f"Output PCC: {msg}")
 
-    assert_with_pcc(output, ttnn_output, pcc=0.99)  # 0.6691
+    assert_with_pcc(output, ttnn_output, pcc=0.99)

@@ -40,7 +40,7 @@ class TTPETRMultiheadAttention:
         key_padding_mask=None,
         batch_first=False,
     ):
-        torch_fallback = True
+        torch_fallback = False  # Its kept for debug purpose if needed but currently ttnn softmax is used
         if key is None:
             key = query
         if value is None:
@@ -49,7 +49,6 @@ class TTPETRMultiheadAttention:
             identity = query
         if key_pos is None:
             if query_pos is not None:
-                # use query_pos if key_pos is not available
                 if query_pos.shape == key.shape:
                     key_pos = query_pos
 
@@ -142,6 +141,7 @@ class TTPETRMultiheadAttention:
         else:
             attn_output_weights = ttnn.matmul(q_scaled, key_transposed, dtype=ttnn.bfloat16)
         if torch_fallback:
+            # currently torch softmax is not invoked as ttnn softmax is used
             # TORCH Softmax
             attn_weights_torch = ttnn.to_torch(attn_output_weights).to(torch.bfloat16)
             attn_weights_torch = torch.nn.functional.softmax(attn_weights_torch, dim=-1)
@@ -202,7 +202,7 @@ class TTFFN:
         self.l1_weight = ttnn.to_device(self.l1_weight, self.device)
         self.l1_bias = ttnn.to_device(self.l1_bias, self.device)
 
-        # First linear transformation + ReLU
+        # First linear
         x = ttnn.linear(x, self.l1_weight, bias=self.l1_bias)
         x = ttnn.relu(x)
 
@@ -216,7 +216,7 @@ class TTFFN:
         x = ttnn.linear(x, self.l2_weight, bias=self.l2_bias)
 
         # Residual connection
-        return input + x
+        return x + input
 
 
 class TTPETRTransformerDecoderLayer(nn.Module):
@@ -323,11 +323,8 @@ class TTPETRTransformer:
         pos_embed,
     ):
         bs, n, c, h, w = x.shape
-        print(x.shape)
-        # memory = ttnn.to_torch(x)
         memory = x
         memory = ttnn.permute(memory, (1, 3, 4, 0, 2))
-        # memory = ttnn.from_torch(memory, dtype=ttnn.bfloat16, device=device)
         memory = ttnn.reshape(memory, (-1, bs, c))
         pos_embed = ttnn.permute(pos_embed, (1, 3, 4, 0, 2))
         pos_embed = ttnn.reshape(pos_embed, (-1, bs, c))
