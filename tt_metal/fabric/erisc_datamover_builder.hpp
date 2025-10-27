@@ -314,7 +314,7 @@ struct FabricEriscDatamoverConfig {
 
     // Channel Allocations
     std::size_t max_l1_loading_size = 0;
-    std::vector<MemoryRegion> available_buffer_memory_regions = {};
+    std::vector<MemoryRegion> available_buffer_memory_regions;
 
     FabricEriscDatamoverConfig(
         std::size_t channel_buffer_size_bytes,
@@ -411,7 +411,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
 // TODO: will be deprecated
 void append_worker_to_fabric_edm_sender_rt_args(
     const SenderWorkerAdapterSpec& connection,
-    chip_id_t chip_id,
+    ChipId chip_id,
     const CoreRangeSet& worker_cores,
     size_t sender_worker_teardown_semaphore_id,
     size_t sender_worker_buffer_index_semaphore_id,
@@ -467,8 +467,8 @@ public:
         tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
         const CoreCoord& ethernet_core,
-        chip_id_t local_physical_chip_id,
-        chip_id_t peer_physical_chip_id,
+        ChipId local_physical_chip_id,
+        ChipId peer_physical_chip_id,
         const FabricEriscDatamoverConfig& config,
         bool build_in_worker_connection_mode = false,
         FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default,
@@ -520,7 +520,7 @@ public:
     size_t handshake_address = 0;
     size_t channel_buffer_size = 0;
 
-    std::shared_ptr<tt::tt_fabric::ChannelConnectionWriterAdapter> receiver_channel_to_downstream_adapter = {};
+    std::shared_ptr<tt::tt_fabric::ChannelConnectionWriterAdapter> receiver_channel_to_downstream_adapter;
     std::array<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>, FabricEriscDatamoverConfig::max_downstream_edms> downstream_allocators = {};
 
     std::array<size_t, builder_config::num_receiver_channels> receiver_channels_num_buffers = {};

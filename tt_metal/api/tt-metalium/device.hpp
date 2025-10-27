@@ -70,8 +70,8 @@ public:
 
     virtual tt::ARCH arch() const = 0;
 
-    virtual chip_id_t id() const = 0;
-    virtual chip_id_t build_id() const = 0;
+    virtual ChipId id() const = 0;
+    virtual ChipId build_id() const = 0;
 
     virtual uint8_t num_hw_cqs() const = 0;
 
@@ -120,8 +120,8 @@ public:
 
     // Returns true if the ethernet core is active
     virtual bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores = false) const = 0;
-    virtual std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const = 0;
-    virtual std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const = 0;
+    virtual std::tuple<ChipId, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const = 0;
+    virtual std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const = 0;
     virtual bool is_inactive_ethernet_core(CoreCoord logical_core) const = 0;
 
     virtual CoreCoord compute_with_storage_grid_size() const = 0;

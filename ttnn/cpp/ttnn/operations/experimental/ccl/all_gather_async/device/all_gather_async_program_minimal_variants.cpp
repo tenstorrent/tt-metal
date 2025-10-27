@@ -9,6 +9,7 @@
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -163,15 +164,15 @@ void all_gather_async_minimal_default_helper_override_runtime_arguments(
                 auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
                 worker_reader_sender_runtime_args[0] = input.buffer()->address();
                 worker_reader_sender_runtime_args[1] = output.buffer()->address();
-                worker_reader_sender_runtime_args[13] = out_ready_semaphore.address();
+                worker_reader_sender_runtime_args[2] = out_ready_semaphore.address();
 
                 // sender writer
                 auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = output.buffer()->address();
-                worker_writer_sender_runtime_args[14] = out_ready_semaphore.address();
+                worker_writer_sender_runtime_args[3] = out_ready_semaphore.address();
 
                 if (barrier_semaphore.has_value()) {
-                    worker_writer_sender_runtime_args[18] = barrier_semaphore.value().address();
+                    worker_writer_sender_runtime_args[5] = barrier_semaphore.value().address();
                 }
 
                 core_idx++;
@@ -418,18 +419,19 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
             // implicitly reshape lower dims so it is treated as 4D
             uint32_t batch_head_size = std::accumulate(
                 input_tensor_shape.cbegin(), input_tensor_shape.cend() - 2, 1, std::multiplies<uint32_t>());
-            auto dim_normalization = static_cast<int32_t>(input_tensor_shape.rank()) - 4;
-            uint32_t normalized_dim = (dim < std::abs(dim_normalization)) ? dim : dim - dim_normalization;
+
+            auto [normalized_dim, rank_diff] = composite_common::normalize_dim_4d(dim, input_tensor_shape.rank());
+
             // if the gather dim is 4D normalized to 0,2,3 we can proceed as if nothing has changed
             // if not we have to roll up the lower dims from the gather dim up to 1 into C and gather on 1.
             uint32_t c_includes_dim;
-            if (dim_normalization >= 1 && dim <= dim_normalization) {
+            if (rank_diff >= 1 && dim <= rank_diff) {
                 // gather dim to rank-3 accumulated into C
                 c_includes_dim = dim;
                 normalized_dim = 1;
             } else {
                 // C will be 4D normalized dim 1
-                c_includes_dim = 1 + dim_normalization;
+                c_includes_dim = 1 + rank_diff;
             }
 
             uint32_t input_tensor_C = std::accumulate(
@@ -530,6 +532,9 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                     HEURISTIC_MAX_CHUNKS_PER_SYNC));
                 log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
+                uint32_t start_pages_read_in_row = input_tile_id_start % input_tensor_Wt;
+                uint32_t start_row_offset = input_tile_id_start / input_tensor_Wt * output_tensor_Wt;
+
                 uint32_t self_write_done_semaphore;
                 if (fuse_op) {
                     self_write_done_semaphore = CreateSemaphore(program, {core}, 0);
@@ -537,17 +542,30 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
 
                 // Reader
                 std::vector<uint32_t> sender_reader_compile_args = {
+                    ring_size,                        // ring_size
                     ring_index,                       // my_chip_id
                     sender_cb_index,                  // cb_forward_id
                     num_tiles_to_write_per_packet,    // num_tiles_to_write_per_packet
-                    page_size,                        // tensor0_page_size
+                    page_size,                        // page_size
                     num_targets_forward,              // num_slices_forward_direction
                     num_targets_backward,             // num_slices_backward_direction
                     static_cast<uint32_t>(topology),  // topology
                     dir,                              // direction
-                    fuse_op,                          // fused op
-                    chunks_per_sync_val,
-                    reverse_order,
+                    normalized_dim,                   // gather_dim
+                    batch_head_size,                  // input_batch_head_count (product of the first two dims)
+                    input_tensor_Wt,                  // input_tensor_Wt
+                    input_tensor_Ht,                  // input_tensor_Ht
+                    input_tensor_C,                   // input_tensor_C
+                    output_tensor_Wt,                 // output_tensor_Wt
+                    output_tensor_Ht,                 // output_tensor_Ht
+                    output_tensor_C,                  // output_tensor_C
+                    input_tile_id_start,              // input_tile_id_start
+                    input_tile_id_end,                // input_tile_id_end
+                    start_pages_read_in_row,          // start_pages_read_in_row
+                    start_row_offset,                 // start_row_offset
+                    fuse_op,                          // fuse_op
+                    chunks_per_sync_val,              // chunks_per_sync
+                    reverse_order,                    // reverse
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
@@ -568,22 +586,9 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                 reader_kernel_ids.push_back(worker_sender_reader_kernel_id);
 
                 std::vector<uint32_t> reader_rt_args = {
-                    input_tensor.buffer()->address(),                         // input_tensor_address
-                    output_tensor.buffer()->address(),                        // output_tensor_address
-                    input_tensor_Wt,                                          // width in tiles of the output shard
-                    input_tensor_Ht,                                          // height in tiles of the output shard
-                    input_tensor_C,                                           // num input channels
-                    output_tensor_Wt,                                         // width in tiles of entire output
-                    output_tensor_Ht,                                         // height in tiles of entire output
-                    output_tensor_C,                                          // num output channels
-                    normalized_dim,                                           // dim to gather on
-                    batch_head_size,                                          // product of the first two dims
-                    input_tile_id_start,                                      //
-                    input_tile_id_end,                                        //
-                    ring_size,                                                // ring_size
-                    semaphore.at(dir).address(),                              // out_ready_semaphore_forward
-                    input_tile_id_start % input_tensor_Wt,                    // start_pages_read_in_row
-                    input_tile_id_start / input_tensor_Wt * output_tensor_Wt  // start_row_offset
+                    input_tensor.buffer()->address(),   // input_tensor_address
+                    output_tensor.buffer()->address(),  // output_tensor_address
+                    semaphore.at(dir).address(),        // out_ready_sem
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
@@ -617,17 +622,30 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
 
                 // Writer
                 std::vector<uint32_t> sender_writer_compile_args = {
+                    ring_size,                        // ring_size
                     ring_index,                       // my_chip_id
                     sender_cb_index,                  // cb_forward_id
                     num_tiles_to_write_per_packet,    // num_tiles_to_write_per_packet
-                    page_size,                        // tensor0_page_size
+                    page_size,                        // page_size
                     num_targets_forward,              // num_targets_forward_direction
                     num_targets_backward,             // num_targets_backward_direction
-                    fuse_op,                          // fused op
                     static_cast<uint32_t>(topology),  // topology
                     dir,                              // direction
-                    chunks_per_sync_val,
-                    reverse_order,
+                    normalized_dim,                   // gather_dim
+                    batch_head_size,                  // input_batch_head_count (product of the first two dims)
+                    input_tensor_Wt,                  // input_tensor_Wt
+                    input_tensor_Ht,                  // input_tensor_Ht
+                    input_tensor_C,                   // input_tensor_C
+                    output_tensor_Wt,                 // output_tensor_Wt
+                    output_tensor_Ht,                 // output_tensor_Ht
+                    output_tensor_C,                  // output_tensor_C
+                    input_tile_id_start,              // input_tile_id_start
+                    input_tile_id_end,                // input_tile_id_end
+                    start_pages_read_in_row,          // start_pages_read_in_row
+                    start_row_offset,                 // start_row_offset
+                    fuse_op,                          // fuse_op
+                    chunks_per_sync_val,              // chunks_per_sync
+                    reverse_order,                    // reverse
                 };
                 fabric_mux_connection_ct_args(
                     worker == 0,
@@ -666,22 +684,9 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
 
                 std::vector<uint32_t> writer_rt_args = {
                     output_tensor.buffer()->address(),                           // output_tensor_address
-                    input_tensor_Wt,                                             // width in tiles of the output shard
-                    input_tensor_Ht,                                             // height in tiles of the output shard
-                    input_tensor_C,                                              // num input channels
-                    output_tensor_Wt,                                            // width in tiles of entire output
-                    output_tensor_Ht,                                            // height in tiles of entire output
-                    output_tensor_C,                                             // num output channels
-                    normalized_dim,                                              // dim to gather on
-                    batch_head_size,                                             // product of the first two dims
-                    input_tile_id_start,                                         //
-                    input_tile_id_end,                                           //
                     virtual_core.x,                                              // out_ready_sem_noc0_x
                     virtual_core.y,                                              // out_ready_sem_noc0_y
-                    ring_size,                                                   // ring_size
                     semaphore.at(dir).address(),                                 // out_ready_semaphore_forward
-                    input_tile_id_start % input_tensor_Wt,                       // start_pages_read_in_row
-                    input_tile_id_start / input_tensor_Wt * output_tensor_Wt,    // start_row_offset
                     barrier_semaphore.has_value() && !using_persistent_buffers,  // use synchronize barrier semaphore
                     barrier_semaphore.has_value()                                // synchronize barrier semaphore
                         ? barrier_semaphore.value().address()

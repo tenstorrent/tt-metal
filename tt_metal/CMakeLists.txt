@@ -42,7 +42,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/constants.hpp
     api/tt-metalium/control_plane.hpp
     api/tt-metalium/core_coord.hpp
-    api/tt-metalium/data_format.hpp
     api/tt-metalium/data_types.hpp
     api/tt-metalium/device.hpp
     api/tt-metalium/device_pool.hpp
@@ -91,7 +90,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/program_descriptors.hpp
     api/tt-metalium/routing_table_generator.hpp
     api/tt-metalium/runtime_args_data.hpp
-    api/tt-metalium/semaphore.hpp
     api/tt-metalium/shape.hpp
     api/tt-metalium/shape2d.hpp
     api/tt-metalium/shape_base.hpp
@@ -175,6 +173,7 @@ target_sources(
             fabric/mesh_graph_descriptors/p150_x4_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/p300_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/single_galaxy_torus_x_graph_descriptor.yaml
@@ -191,6 +190,7 @@ target_sources(
             fabric/mesh_graph_descriptors/p150_x4_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/p300_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/single_galaxy_torus_x_graph_descriptor.textproto

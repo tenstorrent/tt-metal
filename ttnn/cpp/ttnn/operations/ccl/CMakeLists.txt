@@ -71,6 +71,7 @@ target_sources(
         all_gather/all_gather.cpp
         all_gather/device/all_gather_device_operation.cpp
         all_gather/device/all_gather_program_factory.cpp
+        all_reduce/all_reduce.cpp
         all_to_all_combine/all_to_all_combine.cpp
         all_to_all_combine/device/all_to_all_combine_device_operation.cpp
         all_to_all_combine/device/all_to_all_combine_program_factory.cpp
@@ -86,6 +87,9 @@ target_sources(
         barrier/device/host/barrier_full_worker_grid.cpp
         barrier/device/barrier_op.cpp
         barrier/barrier.cpp
+        broadcast/broadcast.cpp
+        broadcast/device/broadcast_op.cpp
+        broadcast/device/broadcast_program.cpp
 )
 
 target_include_directories(ttnn_op_ccl PRIVATE ${FixmeOpIncDirs})

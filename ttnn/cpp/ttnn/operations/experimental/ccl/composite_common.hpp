@@ -24,6 +24,8 @@
 
 namespace composite_common {
 
+std::tuple<uint32_t, int32_t> normalize_dim_4d(uint32_t dim, uint32_t rank);
+
 bool use_composite_reduce_scatter(const ttnn::Tensor& input_tensor, int32_t dim, std::optional<uint32_t> cluster_axis);
 bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const ttnn::MemoryConfig& output_mem_config);
 bool use_composite_all_gather(
@@ -65,5 +67,7 @@ ttnn::Tensor composite_all_to_all(
     uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id);
+
+bool is_fabric_2d();
 
 }  // namespace composite_common

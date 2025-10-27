@@ -391,6 +391,7 @@ from ttnn.operations.pool import (
 )
 
 from ttnn._ttnn.operations.experimental import Conv3dConfig
+from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
@@ -410,6 +411,26 @@ def get_arch_name():
 
 from ttnn._ttnn.operations.data_movement import TileReshapeMapMode
 
-if "TT_METAL_HOME" not in os.environ:
-    this_dir = os.path.dirname(__file__)
-    SetRootDir(os.path.join(os.path.abspath(this_dir), "tt-metalium"))
+import pathlib
+import importlib.util
+
+
+def _is_editable():
+    spec = importlib.util.find_spec(__package__)
+    if not spec or not spec.origin:
+        return False
+    path = pathlib.Path(spec.origin).resolve()
+    return "site-packages" not in str(path) and "dist-packages" not in str(path)
+
+
+if "TT_METAL_RUNTIME_ROOT" not in os.environ:
+    this_dir = pathlib.Path(__file__).resolve().parent
+
+    if _is_editable():
+        # Go two levels up from the package's __init__.py location
+        root_dir = this_dir.parent.parent
+    else:
+        # For installed packages, reference bundled data directory
+        root_dir = this_dir
+
+    SetRootDir(str(root_dir))

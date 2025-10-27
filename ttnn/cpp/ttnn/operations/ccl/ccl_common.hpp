@@ -62,8 +62,8 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_pro
 // Configuration structure for a device, containing its receiver and sender device ids.
 struct SenderReceiverConfig {
     uint32_t device_index = 0;
-    std::optional<chip_id_t> sender_device_id;
-    std::optional<chip_id_t> receiver_device_id;
+    std::optional<tt::ChipId> sender_device_id;
+    std::optional<tt::ChipId> receiver_device_id;
 };
 
 // Returns `SenderReceiverConfig` for a given device, given topology.
@@ -521,8 +521,7 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
    public:
     ~InterleavedRingAllGatherTensorSlicer() override = default;
     InterleavedRingAllGatherTensorSlicer(
-         const Tensor & input_tensor,  const Tensor & output_tensor, int slice_dim, uint32_t slice_idx) :
-        LegacyCclTensorSlicer() {
+        const Tensor& input_tensor, const Tensor& output_tensor, int slice_dim, uint32_t slice_idx) {
         this->row_major = input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR;
         this->slice_dim_is_width = input_tensor.padded_shape().rank() - 1 == slice_dim;
         this->is_sharded = input_tensor.is_sharded();
