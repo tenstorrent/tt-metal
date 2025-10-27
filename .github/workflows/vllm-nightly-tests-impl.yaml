@@ -262,10 +262,9 @@ jobs:
           vllm bench serve \
             --backend vllm \
             --model ${{ matrix.test-group.model }} \
-            --dataset-name sonnet \
-            --sonnet-input-len 300 \
-            --sonnet-output-len 100 \
-            --dataset-path $vllm_dir/benchmarks/sonnet.txt \
+            --dataset-name random \
+            --random-input-len 100 \
+            --random-output-len 100 \
             --num-prompts 32 \
             --ignore-eos \
             --percentile-metrics ttft,tpot,itl,e2el \
@@ -319,9 +318,9 @@ jobs:
           2>&1 | tee ${FILE_MULTIMODAL_TEST_LOG}
 
           # If the test fails, the response will not contain the expected word
-          status_ok="\"code\":200"
-          if ! grep -q -i "$status_ok" "${FILE_MULTIMODAL_TEST_LOG}"; then
-            echo "❌ Status OK ($status_ok) not found in the response"
+          keyword="cat"
+          if ! grep -q -i "$keyword" "${FILE_MULTIMODAL_TEST_LOG}"; then
+            echo "❌ The keyword \"$keyword\" not found in the response"
             echo "Check out the server log in a step below."
             exit 1
           fi
