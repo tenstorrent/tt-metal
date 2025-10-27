@@ -33,41 +33,16 @@ if [ ${#TARGETS[@]} -eq 0 ]; then
     TARGETS=("host.docker.internal:8080")
 fi
 
-# Resolve hostname to IPv4 address if possible
-# Falls back to original value if resolution fails
-resolve_target() {
-    local target="$1"
-    local host="${target%:*}"
-    local port="${target##*:}"
-
-    # If it's already an IP address, return as-is
-    if [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "$target"
-        return
-    fi
-
-    # Try to resolve hostname to IPv4
-    local resolved_ip
-    if resolved_ip=$(getent hosts "$host" 2>/dev/null | awk '{print $1; exit}'); then
-        echo "  Resolved $host -> $resolved_ip" >&2
-        echo "$resolved_ip:$port"
-    elif resolved_ip=$(host -t A "$host" 2>/dev/null | awk '/has address/ {print $NF; exit}'); then
-        echo "  Resolved $host -> $resolved_ip" >&2
-        echo "$resolved_ip:$port"
-    elif resolved_ip=$(nslookup "$host" 2>/dev/null | awk '/^Address: / && !/127\.0\.0\.1/ {print $2; exit}'); then
-        echo "  Resolved $host -> $resolved_ip" >&2
-        echo "$resolved_ip:$port"
-    else
-        echo "  Warning: Could not resolve $host, using as-is" >&2
-        echo "$target"
-    fi
-}
-
-# Resolve all targets
-RESOLVED_TARGETS=()
+# Deduplicate targets
+UNIQUE_TARGETS=()
+declare -A seen_targets
 for target in "${TARGETS[@]}"; do
-    RESOLVED_TARGETS+=("$(resolve_target "$target")")
+    if [[ ! -v seen_targets["$target"] ]]; then
+        UNIQUE_TARGETS+=("$target")
+        seen_targets["$target"]=1
+    fi
 done
+TARGETS=("${UNIQUE_TARGETS[@]}")
 
 # Generate prometheus.yml with targets
 generate_prometheus_config() {
@@ -85,32 +60,19 @@ scrape_configs:
   - job_name: 'tt-telemetry'
     metrics_path: '/api/metrics'
     static_configs:
-      - targets: [
 EOF
 
-    for i in "${!RESOLVED_TARGETS[@]}"; do
-        if [ $i -eq 0 ]; then
-            echo -n "          '${RESOLVED_TARGETS[$i]}'" >> prometheus.yml
-        else
-            echo "," >> prometheus.yml
-            echo -n "          '${RESOLVED_TARGETS[$i]}'" >> prometheus.yml
-        fi
+    # Create separate target block for each host with its own host label
+    for i in "${!TARGETS[@]}"; do
+        local target="${TARGETS[$i]}"
+        local host="${target%:*}"
+        cat >> prometheus.yml <<EOF
+      - targets: ['${target}']
+        labels:
+          host: '${host}'
+EOF
     done
 
-    cat >> prometheus.yml <<EOF
-
-        ]
-    relabel_configs:
-      # Split instance into host and port labels for easier querying
-      - source_labels: [__address__]
-        regex: '([^:]+):(\d+)'
-        target_label: host
-        replacement: '$${1}'
-      - source_labels: [__address__]
-        regex: '([^:]+):(\d+)'
-        target_label: port
-        replacement: '$${2}'
-EOF
 }
 
 echo "==================================================================="
@@ -118,7 +80,7 @@ echo "TT-Metal Telemetry Monitoring Stack"
 echo "==================================================================="
 echo ""
 echo "TT-Metal Telemetry endpoints:"
-for target in "${RESOLVED_TARGETS[@]}"; do
+for target in "${TARGETS[@]}"; do
     echo "  - http://$target/api/metrics"
 done
 
