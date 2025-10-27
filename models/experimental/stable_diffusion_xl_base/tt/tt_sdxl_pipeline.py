@@ -40,7 +40,6 @@ class TtSDXLPipelineConfig:
     use_cfg_parallel: bool = False
     crop_coords_top_left: tuple = (0, 0)
     guidance_rescale: float = 0.0
-    skip_vae_decode: bool = False
     _debug_mode: bool = False
     _torch_pipeline_type = StableDiffusionXLPipeline
 
@@ -353,7 +352,6 @@ class TtSDXLPipeline(LightweightModule):
                 use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
                 guidance_rescale=self.guidance_rescale,
                 one_minus_guidance_rescale=self.one_minus_guidance_rescale,
-                skip_vae_decode=self.pipeline_config.skip_vae_decode,
             )
             ttnn.synchronize_device(self.ttnn_device)
             profiler.end("warmup_run")
@@ -639,7 +637,6 @@ class TtSDXLPipeline(LightweightModule):
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
             guidance_rescale=self.guidance_rescale,
             one_minus_guidance_rescale=self.one_minus_guidance_rescale,
-            skip_vae_decode=self.pipeline_config.skip_vae_decode,
         )
         self._reset_num_inference_steps()
         return imgs
@@ -680,7 +677,7 @@ class TtSDXLPipeline(LightweightModule):
                     self.tt_vae_model_config,
                     debug_mode=pipeline_config._debug_mode,
                 )
-                if pipeline_config.vae_on_device and not pipeline_config.skip_vae_decode
+                if pipeline_config.vae_on_device
                 else None
             )
             self.tt_scheduler = TtEulerDiscreteScheduler(
@@ -825,7 +822,6 @@ class TtSDXLPipeline(LightweightModule):
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
             guidance_rescale=self.guidance_rescale,
             one_minus_guidance_rescale=self.one_minus_guidance_rescale,
-            skip_vae_decode=self.pipeline_config.skip_vae_decode,
         )
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("capture_model_trace")
