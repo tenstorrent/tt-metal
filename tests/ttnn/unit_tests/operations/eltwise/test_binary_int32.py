@@ -741,7 +741,8 @@ def test_div_int32(input_shapes, low_a, high_a, low_b, high_b, use_legacy, devic
         (-2147483647, 2147483647, -2147483647, 2147483647),  # full range
         (-10, 10, -2147483647, 2147483647),  # small numerator, large denominator
         # -2147483648 is not supported because the input is typecasted to float32 and ttnn.typecast rounds -2147483648 to 0.
-        # ToDo: enable the following test case after fixing the precision issue with large numerator and small denominator.
+        # ToDo:
+        # Enable the following test case after fixing the precision issue with large numerator and small denominator.
         # Problematic case for rounding modes floor and trunc: (-2147483647, 2147483647, -10, 10) -> large numerator, small denominator
         # For example, 2021531526/9 = 224614614. But, in PyTorch:
         #   torch.div([2021531526], [9], rounding_mode=None) = 224614608.0      (float32 result) -> division computed in float32 precision
@@ -785,6 +786,7 @@ def test_div_int32_round_modes(input_shapes, low_a, high_a, low_b, high_b, round
         torch_input_tensor_a, torch_input_tensor_b, round_mode=round_mode, device=device
     )
 
+    # round modes are not supported in binary ng, so we use legacy implementation for testing
     output_tensor = ttnn.div(input_tensor_a, input_tensor_b, round_mode=round_mode, use_legacy=True)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -844,13 +846,15 @@ def test_div_edge_cases(round_mode, device):
         torch_input_tensor_a, torch_input_tensor_b, round_mode=round_mode, device=device
     )
 
+    # round modes are not supported in binary ng, so we use legacy implementation for testing
     output_tensor = ttnn.div(input_tensor_a, input_tensor_b, round_mode=round_mode, use_legacy=True)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-6, equal_nan=False)
 
 
-def test_div_inf_nan_cases(device):
+@pytest.mark.parametrize("use_legacy", [True, False])
+def test_div_inf_nan_cases(use_legacy, device):
     torch_input_tensor_a = torch.tensor([0, 1, -1, 0, 0, 1, -1, -1, 1, 2147483647, 0], dtype=torch.int32)
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -872,7 +876,7 @@ def test_div_inf_nan_cases(device):
     golden_function = ttnn.get_golden_function(ttnn.div)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
-    output_tensor = ttnn.div(input_tensor_a, input_tensor_b, use_legacy=True)
+    output_tensor = ttnn.div(input_tensor_a, input_tensor_b, use_legacy=use_legacy)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-5, equal_nan=True)
