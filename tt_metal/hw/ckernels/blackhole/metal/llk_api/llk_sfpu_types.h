@@ -131,4 +131,5 @@ enum SfpuType {
     rpow,
     cbrt,  // cube root
     hardmish,
+    reduce_sum_avg,
 };
