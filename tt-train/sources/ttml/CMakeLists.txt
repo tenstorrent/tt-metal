@@ -490,25 +490,24 @@ target_link_libraries(
         ttml
 )
 target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
-install(TARGETS _ttml LIBRARY DESTINATION ttml)
+install(
+    TARGETS
+        _ttml
+    LIBRARY
+        DESTINATION ttml
+        COMPONENT ttml-runtime
+)
 
 # Install Python source files
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/ttml/ DESTINATION ttml FILES_MATCHING PATTERN "*.py")
-
 install(
-    TARGETS
-        _ttml
-    ARCHIVE
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    LIBRARY
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT tar
-)
-install(
-    TARGETS
-        _ttml
-        DESTINATION
-        ${PROJECT_SOURCE_DIR}/tt-train/sources/ttml
-        COMPONENT
-        ttml
+    DIRECTORY
+        ${CMAKE_CURRENT_SOURCE_DIR}/ttml/
+    DESTINATION ttml
+    COMPONENT ttml-runtime
+    FILES_MATCHING
+    PATTERN
+    "*.py"
+    PATTERN
+    "__pycache__"
+        EXCLUDE
 )
