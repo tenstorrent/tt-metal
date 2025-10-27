@@ -1,22 +1,10 @@
 # Vanilla UNet
 
-## Platforms:
-        Wormhole (n150, n300), Blackhole (p150)
-
 ## Model Overview
 
 Vanilla UNet is a convolutional neural network architecture designed for biomedical image segmentation. The model uses an encoder-decoder structure with skip connections, enabling it to capture both high-level semantic information and fine-grained spatial details.
 
 ### Architecture
-
-## How to run
-
-Find Unet Vanilla instructions for the following devices:
-
-- Wormhole (n150, n300): [models/demos/wormhole/vanilla_unet](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/vanilla_unet)
-
-- Blackhole (p150): [models/demos/blackhole/vanilla_unet](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/blackhole/vanilla_unet)
-
 
 The UNet architecture consists of:
 - **Encoder Path**: Four downsampling blocks, each with two 3x3 convolutions followed by batch normalization, ReLU activation, and 2x2 max pooling
