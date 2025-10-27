@@ -1,35 +1,56 @@
 import numpy as np
-import sys
-import os
 import pytest
+# Try this order at the top of your test file
+import os
+import sys
 
+import ctypes
+import glob
+
+# Preload TT-Metal libraries
+tt_lib_path = f"{os.environ['TT_METAL_HOME']}/build/lib"
+for lib in glob.glob(f"{tt_lib_path}/*.so"):
+    try:
+        ctypes.CDLL(lib, mode=ctypes.RTLD_GLOBAL)
+    except:
+        pass
+
+# Set environment first
+sys.path.append(f"{os.environ['TT_METAL_HOME']}/tt-train/sources/ttml")
+
+# Import torch/transformers BEFORE ttml
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from huggingface_hub import hf_hub_download
 
-sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/sources/ttml')
-
+# Then import ttml
 import ttml
-from ttml.common.config import *
+from ttml.common.config import get_config
 from ttml.common.model_factory import TransformerModelFactory
-from ttml.common.data import build_causal_mask
 from ttml.common.utils import round_up_to_tile
 
+from huggingface_hub import hf_hub_download
+
+@pytest.fixture(scope="session", autouse=True)
+def setup_environment():
+    original_cwd = os.getcwd()
+    os.chdir(f"{os.environ['TT_METAL_HOME']}/tt-train")
+    yield
+    os.chdir(original_cwd)
 
 @pytest.fixture
 def tinyllama_model(tokenizer):
+    print("in tinyllama_model fixture")
     safetensors_path = hf_hub_download(
         repo_id="TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T", filename="model.safetensors"
     )
     safetensors_path = safetensors_path.replace("model.safetensors", "")
 
-    yaml_config = get_config(f'{os.environ["TT_METAL_HOME"]}/tt-train/configs/training_shakespeare_tinyllama.yaml')
+    yaml_config = get_config('training_shakespeare_tinyllama.yaml')
 
     orig_vocab_size = tokenizer.vocab_size
     tt_model_factory = TransformerModelFactory(yaml_config)
     tt_model_factory.transformer_config.vocab_size = orig_vocab_size
     tt_model_factory.transformer_config.max_sequence_length = 128
-
     model = tt_model_factory.create_model()
     model.load_from_safetensors(safetensors_path)
 
@@ -43,10 +64,10 @@ def tokenizer():
 
 @pytest.fixture
 def causal_mask(tinyllama_model):
-    max_sequence_length = tinyllama_model.config.max_sequence_length
-    causal_mask = build_causal_mask(max_sequence_length)
-    causal_mask = ttml.autograd.Tensor.from_numpy(causal_mask, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.BFLOAT16)
-    return causal_mask
+    # [1,1,T,T] float32 with 1s for allowed positions (i >= j), else 0\n",
+    T = tinyllama_model.transformer_config.max_sequence_length
+    m = np.tril(np.ones((T, T), dtype=np.float32))
+    return ttml.autograd.Tensor.from_numpy(m.reshape(1, 1, T, T), ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16)
 
 
 @pytest.fixture
@@ -54,7 +75,9 @@ def logits_mask_tensor(tinyllama_model, tokenizer):
     orig_vocab_size = tokenizer.vocab_size
     padded_vocab_size = round_up_to_tile(orig_vocab_size, 32)
 
-    return logits_mask_tensor
+    logits_mask = np.zeros((1, 1, 1, padded_vocab_size), dtype=np.float32)
+    logits_mask[:, :, :, orig_vocab_size:] = 1e4
+    return ttml.autograd.Tensor.from_numpy(logits_mask, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16)   # [1,1,1,T], bfloat16
 
 
 @pytest.fixture
