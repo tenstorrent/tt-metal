@@ -730,6 +730,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         tile_granularity,               // packet_size_in_pages
                         page_size,                      // page_size
                         num_tiles_to_write_per_packet,  // num_tiles_to_write_per_packet
+                        output_tensor_num_pages,        // output_num_pages
                         input_batch_num_pages,          // batch_num_pages
                         slice_B,                        // slice_B
                         dir,                            // direction
