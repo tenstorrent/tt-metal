@@ -25,8 +25,7 @@ class DistributedNorm(LightweightModule):
             num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
             hidden_size_per_device_distributed_ln = args.dim // 4
             self.gather_in_mem_cfg = ttnn.create_sharded_memory_config(
-                shape=(1, 1, 32, hidden_size_per_device_distributed_ln // num_cores_ln),  # [1, 1, 32, 64]
-                # shape=(1, 1, 32, 160),
+                shape=(1, 1, 32, hidden_size_per_device_distributed_ln // num_cores_ln),
                 core_grid=ttnn.CoreRangeSet(
                     {
                         core_range,
@@ -65,10 +64,6 @@ class DistributedNorm(LightweightModule):
         """Apply a norm, possibly gathering inputs if required."""
         if self.TG:
             if mode == "decode":
-                # if self.args.qk_norm:
-                #     x = ttnn.to_memory_config(x, self.gather_in_mem_cfg)
-                #     res = ttnn.to_memory_config(res, self.gather_in_mem_cfg) if res is not None else None
-
                 return tt_sharded_distributed_rmsnorm(
                     x,
                     res,
@@ -82,16 +77,6 @@ class DistributedNorm(LightweightModule):
                     output_mem_config=self.norm.output_mem_config,
                     ccl_topology=self.ccl_topology,
                 )
-                # return tt_distributed_rmsnorm(
-                #     x,
-                #     epsilon=self.norm.eps,
-                #     gamma=self.norm.weight_distributed,
-                #     mesh_device=self.args.mesh_device,
-                #     program_config=self.ln_prg_cfg,
-                #     memory_config=self.ln_sharded_stats_memcfg,
-                #     compute_kernel_config=self.ln_cfg,
-                #     tt_ccl=self.tt_ccl,
-                # )
             else:
                 return tt_distributed_rmsnorm(
                     x,
