@@ -41,50 +41,24 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks StridedAllGatherAsync::create
 
 tt::tt_metal::operation::ProgramWithCallbacks StridedAllGatherAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    log_debug(tt::LogOp, "DEBUG: create_program_at is called");
-    auto mesh_device = input_tensors[0].device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
-    std::vector<IDevice*> devices_to_use = {};
-    if (this->cluster_axis.has_value()) {
-        const auto& mesh_view = input_tensors[0].device()->get_view();
-        // User specified the cluster-axis. Derive devices based on the current coordinate
-        // and the cluster-axis.
-        devices_to_use = (this->cluster_axis.value() == 0) ? mesh_view.get_devices_on_column(coord[1])
-                                                           : mesh_view.get_devices_on_row(coord[0]);
-    } else {
-        devices_to_use = devices;
-    }
-    uint32_t target_ring_size = devices_to_use.size();
+    uint32_t device_index = ccl::get_linearized_index_from_physical_coord(input_tensors[0], coord, this->cluster_axis);
 
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
-    uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < target_ring_size; ++i) {
-        if (devices_to_use.at(i) == target_device) {
-            device_index = i;
-            if (i != 0) {
-                backward_device = devices_to_use.at(i - 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices_to_use.at(target_ring_size - 1);
-            }
-            if (i != target_ring_size - 1) {
-                forward_device = devices_to_use.at(i + 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices_to_use.at(0);
-            }
-        }
-    }
+    std::optional<MeshCoordinate> forward_coord =
+        ccl::get_physical_neighbor_from_physical_coord(input_tensors[0], coord, 1, this->topology, this->cluster_axis);
 
-    log_trace(tt::LogOp, "Detected all gather specialized shape. strided_all_gather_async_minimal_default is called");
+    std::optional<MeshCoordinate> backward_coord =
+        ccl::get_physical_neighbor_from_physical_coord(input_tensors[0], coord, -1, this->topology, this->cluster_axis);
+    TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
+
     return strided_all_gather_async_minimal_default(
         input_tensors[0],
-        target_device,
-        forward_device,
-        backward_device,
+        coord,
+        forward_coord,
+        backward_coord,
         output_tensors[0],
         this->dim,
         this->num_links,
-        target_ring_size,
+        this->ring_size,
         device_index,
         this->topology,
         this->semaphore,
@@ -150,16 +124,7 @@ Tensor strided_all_gather_async_impl(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "strided_all_gather_async op is only supported for Fast Dispatch");
 
-    uint32_t num_devices;
-    if (cluster_axis.has_value()) {
-        auto mesh_device = input_tensor.device();
-        TT_FATAL(mesh_device != nullptr, "Mesh device is required when cluster_axis is set");
-        const auto& mesh_view = mesh_device->get_view();
-        // Use the mesh dimensions to determine the ring size
-        num_devices = (cluster_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-    } else {
-        num_devices = devices.size();
-    }
+    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, std::nullopt);
 
     TT_FATAL(
         num_devices > 1, "strided_all_gather_async op will only work for num_devices > 1, but has {}", num_devices);
