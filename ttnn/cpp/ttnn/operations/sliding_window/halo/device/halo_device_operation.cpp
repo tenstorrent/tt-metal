@@ -94,7 +94,6 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
     std::array<uint32_t, 2> shard_shape = {
         tt::div_up(output_shape[0] * output_shape[2], config_.num_cores_nhw),
         input_tensor.memory_config().shard_spec()->shape[1]};
-    log_info(tt::LogOp, "real size: {}", shard_shape[0] * shard_shape[1] * 2);
 
     auto out_mem_config = output_memory_config_.with_shard_spec(ShardSpec{
         output_memory_config_.shard_spec()->grid, shard_shape, output_memory_config_.shard_spec()->orientation});

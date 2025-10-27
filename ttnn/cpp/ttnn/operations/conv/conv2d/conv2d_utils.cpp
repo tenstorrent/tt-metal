@@ -898,9 +898,9 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         // Set act_block_h_override to min value to be conservative with L1 memory usage;
         // When activation reuse is enabled, the activation CB usage is constant regardless of the act_block_h_override
         // and the bigger the act block height the better the reuse since we apply optimization within single act block
-        // if (conv_config.act_block_h_override == 0 && !conv_config.enable_activation_reuse) {
-        //     conv_config.act_block_h_override = tt::constants::TILE_HEIGHT;
-        // }
+        if (conv_config.act_block_h_override == 0 && !conv_config.enable_activation_reuse) {
+            conv_config.act_block_h_override = tt::constants::TILE_HEIGHT;
+        }
 
         const uint32_t input_channels_alignment =
             get_input_channels_alignment(shard_layout, input_layout, false, is_mm_conv, std::nullopt);
@@ -1114,8 +1114,15 @@ static Conv2dSliceConfig::SliceType determine_conv_slice_type(
         }
     }
 }
+
+using ConvDRAML1CacheKey = std::pair<ConvDRAMParamters, Conv2dSliceConfig>;
+std::map<ConvDRAML1CacheKey, std::pair<uint32_t, Conv2dConfig>> conv_dram_slice_L1_usage_cache;
 static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
-    const ConvDRAMParamters& params, MeshDevice* device, const Conv2dSliceConfig& dram_slice_config) {
+    const ConvDRAMParamters& params, const Conv2dSliceConfig& dram_slice_config) {
+    if (conv_dram_slice_L1_usage_cache.contains({params, dram_slice_config})) {
+        log_info(tt::LogOp, "Cache hit DRAM Slice L1 usage {}", dram_slice_config);
+        return conv_dram_slice_L1_usage_cache.at({params, dram_slice_config});
+    }
     Conv2dConfig conv_config = params.conv_config;
     TT_FATAL(
         dram_slice_config.num_slices > 0, "Number of slices must be greater than 0 for DRAM L1 usage calculation.");
@@ -1190,7 +1197,7 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
             ttnn::Shape({params.batch_size, input_slice_height, input_slice_width, params.in_channels}),
             ttnn::Shape({params.batch_size, output_slice_height, output_slice_width, params.out_channels}),
             params.mm_conv,
-            device->compute_with_storage_grid_size(),
+            params.compute_grid,
             params.input_layout,
             num_slices == 1 ? BufferType::L1 : BufferType::DRAM,
             std::nullopt,
@@ -1419,6 +1426,7 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
         max_memory_index,
         max_memory_consumed,
         params);
+    conv_dram_slice_L1_usage_cache[{params, dram_slice_config}] = {max_memory_consumed, conv_config};
     return {max_memory_consumed, conv_config};
 }
 
@@ -1448,7 +1456,7 @@ std::pair<Conv2dSliceConfig, Conv2dConfig> determine_conv2d_slice_config(
     uint32_t l1_usage;
     while (current_num_slices <= output_sliced_dim) {
         return_slice_config.num_slices = current_num_slices;
-        std::tie(l1_usage, conv_config) = calculate_conv_dram_slice_L1_usage(params, device, return_slice_config);
+        std::tie(l1_usage, conv_config) = calculate_conv_dram_slice_L1_usage(params, return_slice_config);
         log_debug(
             tt::LogOp, "Conv2D DRAM Auto slice with {} slices requires {} L1 memory", current_num_slices, l1_usage);
         if (L1_stats.total_free_bytes >= l1_usage) {
@@ -1690,6 +1698,14 @@ void tilize_with_optional_deallocation(Tensor& input_tensor_on_device, bool deal
         }
         input_tensor_on_device = std::move(input_tensor_tilized);
     }
+}
+
+bool ConvDRAMParamters::operator<(const ConvDRAMParamters& other) const {
+    return fmt::format("{}", *this) < fmt::format("{}", other);
+}
+
+bool operator<(const ConvDRAML1CacheKey& a, const ConvDRAML1CacheKey& b) {
+    return fmt::format("{}-{}", a.first, a.second) < fmt::format("{}-{}", b.first, b.second);
 }
 
 }  // namespace operations::conv
