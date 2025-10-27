@@ -804,250 +804,276 @@ jobs:
           echo "$TEAM_MEMBERS" > "${RUNNER_TEMP}/team_members.txt"
           echo "Saved team members data to ${RUNNER_TEMP}/team_members.txt ($(echo "$TEAM_MEMBERS" | wc -c) bytes)"
 
-          # Collect pending and approved groups separately
+          # PHASE 1: Collect all teams and individuals with their metadata (don't determine approval yet)
+          # This allows us to check combined approval for groups with the same files
+
+          echo "DEBUG: Phase 1 - Collecting all groups with metadata"
+
+          # Arrays to store group metadata
+          declare -A GROUP_TYPE          # team or pattern
+          declare -A GROUP_NAME          # display name (team name or pattern)
+          declare -A GROUP_MEMBERS_INFO  # formatted member info string
+          declare -A GROUP_MEMBERS_LIST  # comma-separated usernames for approval checking
+          declare -A GROUP_FILES         # comma-separated sorted file list
+          declare -A GROUP_FILES_HTML    # formatted HTML file list
+          GROUP_KEYS=()  # Array to track all group keys in order
+
+          GROUP_INDEX=0
+
+          # Collect teams
+          if [ -n "$TEAMS" ]; then
+            echo "DEBUG generate-comment: TEAMS='$TEAMS'"
+            IFS='§' read -ra TEAM_ARRAY <<< "$TEAMS"
+            echo "DEBUG generate-comment: Split into ${#TEAM_ARRAY[@]} team entries"
+            for team_entry in "${TEAM_ARRAY[@]}"; do
+              [ -z "$team_entry" ] && continue
+
+              team=$(echo "$team_entry" | cut -d':' -f1)
+              [ -z "$team" ] && continue
+
+              # Skip the large-changes team
+              if [ "$team" = "@tenstorrent/metalium-codeowners-large-changes" ]; then
+                continue
+              fi
+
+              team_files=$(echo "$team_entry" | cut -d':' -f2-)
+              clean_team=$(echo "$team" | sed 's/^@//')
+
+              # Sort files for comparison (normalize file list)
+              sorted_files=$(echo "$team_files" | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//')
+
+              KEY="team_$GROUP_INDEX"
+              GROUP_KEYS+=("$KEY")
+              GROUP_TYPE["$KEY"]="team"
+              GROUP_NAME["$KEY"]="$clean_team"
+              GROUP_FILES["$KEY"]="$sorted_files"
+
+              # Get team members
+              team_members_info=""
+              team_members_list=""
+
+              if [ -n "$TEAM_MEMBERS" ]; then
+                team_members_entry=$(echo "$TEAM_MEMBERS" | tr '|' '\n' | grep "^$team:" | head -1)
+                if [ -n "$team_members_entry" ]; then
+                  team_owners=$(echo "$team_members_entry" | cut -d':' -f2)
+
+                  if [ "$team_owners" = "insufficient-permissions" ]; then
+                    team_members_info="Members: (insufficient token permissions)"
+                  elif [ "$team_owners" = "team-not-found" ]; then
+                    team_members_info="Members: (team not found)"
+                  elif [ "$team_owners" = "unauthorized" ]; then
+                    team_members_info="Members: (unauthorized access)"
+                  elif [ "$team_owners" = "api-error" ]; then
+                    team_members_info="Members: (API error)"
+                  elif [ "$team_owners" = "no-members" ]; then
+                    team_members_info="Members: (no members)"
+                  else
+                    # Get full names for team members
+                    all_members=""
+                    IFS=',' read -ra MEMBERS_ARRAY <<< "$team_owners"
+                    for member in "${MEMBERS_ARRAY[@]}"; do
+                      member_name="$member"
+                      if [ -n "$member" ] && [ "$member" != " " ]; then
+                        USER_API="https://api.github.com/users/$member"
+                        USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                                       -H "Accept: application/vnd.github.v3+json" \
+                                       "$USER_API" 2>/dev/null)
+                        USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                        if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
+                          member_name="$USER_NAME"
+                        fi
+                      fi
+                      all_members="$all_members$member_name, "
+                    done
+                    all_members=$(echo "$all_members" | sed 's/, $//')
+                    team_members_info="Members: $all_members"
+                    team_members_list="$team_owners"  # Store usernames for approval checking
+                  fi
+                else
+                  team_members_info="Members: (team not found)"
+                fi
+              else
+                team_members_info="Members: (no team data)"
+              fi
+
+              GROUP_MEMBERS_INFO["$KEY"]="$team_members_info"
+              GROUP_MEMBERS_LIST["$KEY"]="$team_members_list"
+
+              # Create file list HTML
+              file_list_html=""
+              if [ -n "$team_files" ] && [ "$team_files" != "null" ]; then
+                file_list_html="\n  <details><summary>&#128193; Files owned by this team</summary>\n\n"
+                IFS=',' read -ra TEAM_FILES_ARRAY <<< "$team_files"
+                for file in "${TEAM_FILES_ARRAY[@]}"; do
+                  if [ -n "$file" ]; then
+                    escaped_file=$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g')
+                    file_hash=$(echo -n "$file" | sha256sum | cut -d' ' -f1)
+                    file_url="${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER/files#diff-$file_hash"
+                    file_list_html="$file_list_html  - [<code>$escaped_file</code>]($file_url)\n"
+                  fi
+                done
+                file_list_html="$file_list_html\n  </details>"
+              fi
+              GROUP_FILES_HTML["$KEY"]="$file_list_html"
+
+              GROUP_INDEX=$((GROUP_INDEX + 1))
+            done
+          fi
+
+          # Collect individual patterns
+          if [ -n "$INDIVIDUALS" ]; then
+            IFS='§' read -ra PATTERN_GROUPS <<< "$INDIVIDUALS"
+            for pattern_group in "${PATTERN_GROUPS[@]}"; do
+              [ -z "$pattern_group" ] && continue
+
+              files=$(echo "$pattern_group" | rev | cut -d':' -f1 | rev)
+              pattern_and_owners=$(echo "$pattern_group" | rev | cut -d':' -f2- | rev)
+              pattern=$(echo "$pattern_and_owners" | cut -d':' -f1)
+              owners=$(echo "$pattern_and_owners" | cut -d':' -f2-)
+
+              # Sort files for comparison
+              sorted_files=$(echo "$files" | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//')
+
+              KEY="pattern_$GROUP_INDEX"
+              GROUP_KEYS+=("$KEY")
+              GROUP_TYPE["$KEY"]="pattern"
+              GROUP_NAME["$KEY"]="$pattern"
+              GROUP_FILES["$KEY"]="$sorted_files"
+
+              # Parse owners
+              all_owners=""
+              usernames_list=""
+
+              IFS=',' read -ra OWNERS_ARRAY <<< "$owners"
+              for owner_pair in "${OWNERS_ARRAY[@]}"; do
+                username=$(echo "$owner_pair" | cut -d'|' -f1)
+                full_name=$(echo "$owner_pair" | cut -d'|' -f2)
+                all_owners="$all_owners$full_name, "
+                usernames_list="$usernames_list$username,"
+              done
+              all_owners=$(echo "$all_owners" | sed 's/, $//')
+              usernames_list=$(echo "$usernames_list" | sed 's/,$//')
+
+              GROUP_MEMBERS_INFO["$KEY"]="Members: $all_owners"
+              GROUP_MEMBERS_LIST["$KEY"]="$usernames_list"
+
+              # Create file list HTML
+              file_list_html=""
+              if [ -n "$files" ] && [ "$files" != "null" ]; then
+                file_list_html="\n  <details><summary>&#128193; Files owned by this group</summary>\n\n"
+                IFS=',' read -ra FILES_ARRAY <<< "$files"
+                for file in "${FILES_ARRAY[@]}"; do
+                  if [ -n "$file" ]; then
+                    escaped_file=$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g')
+                    file_hash=$(echo -n "$file" | sha256sum | cut -d' ' -f1)
+                    file_url="${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER/files#diff-$file_hash"
+                    file_list_html="$file_list_html  - [<code>$escaped_file</code>]($file_url)\n"
+                  fi
+                done
+                file_list_html="$file_list_html\n  </details>"
+              fi
+              GROUP_FILES_HTML["$KEY"]="$file_list_html"
+
+              GROUP_INDEX=$((GROUP_INDEX + 1))
+            done
+          fi
+
+          # PHASE 2: Check combined approval for groups with same files
+          echo "DEBUG: Phase 2 - Checking combined approval for groups with same files"
+
+          declare -A GROUP_APPROVED_BY  # Will store approved member names
+          declare -A GROUP_IS_APPROVED  # Will store true/false
+
+          for key in "${GROUP_KEYS[@]}"; do
+            files="${GROUP_FILES[$key]}"
+            members="${GROUP_MEMBERS_LIST[$key]}"
+
+            # Find all groups with the same file list (from same CODEOWNERS line)
+            combined_members="$members"
+            for other_key in "${GROUP_KEYS[@]}"; do
+              if [ "$other_key" != "$key" ]; then
+                other_files="${GROUP_FILES[$other_key]}"
+                if [ "$files" = "$other_files" ]; then
+                  # Same files - combine members
+                  other_members="${GROUP_MEMBERS_LIST[$other_key]}"
+                  if [ -n "$other_members" ]; then
+                    combined_members="$combined_members,$other_members"
+                  fi
+                fi
+              fi
+            done
+
+            # Check if ANY member from combined set has approved
+            approved_names=""
+            if [ -n "$combined_members" ]; then
+              IFS=',' read -ra COMBINED_ARRAY <<< "$combined_members"
+              for member in "${COMBINED_ARRAY[@]}"; do
+                [ -z "$member" ] && continue
+                if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
+                  # Get full name
+                  USER_API="https://api.github.com/users/$member"
+                  USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                                 -H "Accept: application/vnd.github.v3+json" \
+                                 "$USER_API" 2>/dev/null)
+                  USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                  if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
+                    approved_names="$approved_names$USER_NAME, "
+                  else
+                    approved_names="$approved_names$member, "
+                  fi
+                fi
+              done
+            fi
+
+            if [ -n "$approved_names" ]; then
+              approved_names=$(echo "$approved_names" | sed 's/, $//')
+              GROUP_IS_APPROVED["$key"]="true"
+              GROUP_APPROVED_BY["$key"]="$approved_names"
+              echo "DEBUG: Group $key (${GROUP_NAME[$key]}) with files=$files is APPROVED by: $approved_names"
+            else
+              GROUP_IS_APPROVED["$key"]="false"
+              echo "DEBUG: Group $key (${GROUP_NAME[$key]}) with files=$files is PENDING"
+            fi
+          done
+
+          # PHASE 3: Build display strings
+          echo "DEBUG: Phase 3 - Building display strings"
+
           PENDING_GROUPS=""
           APPROVED_GROUPS=""
           PENDING_COUNT=0
           APPROVED_COUNT=0
 
-          # Display teams with member information and approval status
-          if [ -n "$TEAMS" ]; then
-            # Teams are now in format: "@team1:files1§@team2:files2"
-            echo "DEBUG generate-comment: TEAMS='$TEAMS'"
-            IFS='§' read -ra TEAM_ARRAY <<< "$TEAMS"
-            echo "DEBUG generate-comment: Split into ${#TEAM_ARRAY[@]} team entries"
-            for team_entry in "${TEAM_ARRAY[@]}"; do
-              echo "DEBUG generate-comment: Processing team_entry='$team_entry'"
-              # Skip empty entries
-              [ -z "$team_entry" ] && continue
+          for key in "${GROUP_KEYS[@]}"; do
+            group_type="${GROUP_TYPE[$key]}"
+            group_name="${GROUP_NAME[$key]}"
+            members_info="${GROUP_MEMBERS_INFO[$key]}"
+            file_list_html="${GROUP_FILES_HTML[$key]}"
+            is_approved="${GROUP_IS_APPROVED[$key]}"
+            approved_by="${GROUP_APPROVED_BY[$key]}"
 
-              # Extract team and files from team:files format
-              team=$(echo "$team_entry" | cut -d':' -f1)
-              echo "DEBUG generate-comment: Extracted team='$team'"
-
-              # Skip if team name is empty
-              if [ -z "$team" ]; then
-                echo "DEBUG generate-comment: Skipping empty team name"
-                continue
-              fi
-
-              # Get everything after first colon as files (in case there are colons in file paths)
-              team_files=$(echo "$team_entry" | cut -d':' -f2-)
-
-              # Skip the large-changes team as requested
-              if [ "$team" = "@tenstorrent/metalium-codeowners-large-changes" ]; then
-                echo "DEBUG generate-comment: Skipping large-changes team"
-                continue
-              fi
-
-              # Remove @ prefix for display
-              clean_team=$(echo "$team" | sed 's/^@//')
-              echo "DEBUG generate-comment: clean_team='$clean_team'"
-
-              # Get team members
-              team_members_info=""
-              approved_members=""
-
-              # Check team members against approved reviewers
-              if [ -n "$TEAM_MEMBERS" ]; then
-                echo "DEBUG generate-comment: TEAM_MEMBERS data available, looking for $team"
-                # Find this team's members (extract just this team's entry)
-                team_members_entry=$(echo "$TEAM_MEMBERS" | tr '|' '\n' | grep "^$team:" | head -1)
-                echo "DEBUG generate-comment: Found team_members_entry='$team_members_entry'"
-                if [ -n "$team_members_entry" ]; then
-                  team_owners=$(echo "$team_members_entry" | cut -d':' -f2)
-                  echo "DEBUG generate-comment: team_owners='$team_owners'"
-
-                  if [ "$team_owners" = "insufficient-permissions" ]; then
-                      # Token doesn't have permission to read team members
-                      team_members_info="Members: (insufficient token permissions)"
-                    elif [ "$team_owners" = "team-not-found" ]; then
-                      # Team doesn't exist
-                      team_members_info="Members: (team not found)"
-                    elif [ "$team_owners" = "unauthorized" ]; then
-                      # Unauthorized access
-                      team_members_info="Members: (unauthorized access)"
-                    elif [ "$team_owners" = "api-error" ]; then
-                      # Other API error
-                      team_members_info="Members: (API error)"
-                    elif [ "$team_owners" = "no-members" ]; then
-                      # Team exists but has no members
-                      team_members_info="Members: (no members)"
-                    else
-                      # Get full names for team members
-                      all_members=""
-                      IFS=',' read -ra MEMBERS_ARRAY <<< "$team_owners"
-                      for member in "${MEMBERS_ARRAY[@]}"; do
-                        # Try to get full name for this team member
-                        member_name="$member"  # Default to username
-                        if [ -n "$member" ] && [ "$member" != " " ]; then
-                          # Get user info from GitHub API
-                          USER_API="https://api.github.com/users/$member"
-                          USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
-                                         -H "Accept: application/vnd.github.v3+json" \
-                                         "$USER_API" 2>/dev/null)
-                          USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
-                          if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
-                            member_name="$USER_NAME"
-                          fi
-                        fi
-                        all_members="$all_members$member_name, "
-                      done
-                      # Remove trailing comma and space
-                      all_members=$(echo "$all_members" | sed 's/, $//')
-                      team_members_info="Members: $all_members"
-
-                      # Check which members have approved
-                      for member in "${MEMBERS_ARRAY[@]}"; do
-                        if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
-                          # Get full name for approved member
-                          approved_name="$member"
-                          USER_API="https://api.github.com/users/$member"
-                          USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
-                                         -H "Accept: application/vnd.github.v3+json" \
-                                         "$USER_API" 2>/dev/null)
-                          USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
-                          if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
-                            approved_name="$USER_NAME"
-                          fi
-                          approved_members="$approved_members$approved_name, "
-                        fi
-                      done
-                    fi
-                  else
-                    # No team_members_entry found - team data wasn't fetched
-                    echo "DEBUG generate-comment: Setting team not found message"
-                    team_members_info="Members: (team not found)"
-                  fi
-                else
-                  # TEAM_MEMBERS variable is empty
-                  echo "DEBUG generate-comment: TEAM_MEMBERS variable is empty"
-                  team_members_info="Members: (no team data)"
-                fi
-
-                # Create collapsible file list for this team
-                team_file_list_html=""
-                if [ -n "$team_files" ] && [ "$team_files" != "null" ]; then
-                  # Create expandable details section with file list
-                  # Indent with 2 spaces to be part of the list item
-                  team_file_list_html="\n  <details><summary>&#128193; Files owned by this team</summary>\n\n"
-                  IFS=',' read -ra TEAM_FILES_ARRAY <<< "$team_files"
-                  for file in "${TEAM_FILES_ARRAY[@]}"; do
-                    if [ -n "$file" ]; then
-                      # Escape special characters for HTML
-                      escaped_file=$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g')
-                      # Create clickable link to file in PR (GitHub uses SHA256 hash of file path)
-                      file_hash=$(echo -n "$file" | sha256sum | cut -d' ' -f1)
-                      file_url="${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER/files#diff-$file_hash"
-                      team_file_list_html="$team_file_list_html  - [<code>$escaped_file</code>]($file_url)\n"
-                    fi
-                  done
-                  team_file_list_html="$team_file_list_html\n  </details>"
-                fi
-
-                if [ -n "$approved_members" ]; then
-                  # Remove trailing comma and space
-                  approved_members=$(echo "$approved_members" | sed 's/, $//')
-                  if [ -n "$APPROVED_GROUPS" ]; then
-                    APPROVED_GROUPS="$APPROVED_GROUPS\n---\n\n- ✅ **$clean_team** (Team) - $team_members_info | **Approved by:** $approved_members$team_file_list_html"
-                  else
-                    APPROVED_GROUPS="- ✅ **$clean_team** (Team) - $team_members_info | **Approved by:** $approved_members$team_file_list_html"
-                  fi
-                  APPROVED_COUNT=$((APPROVED_COUNT + 1))
-                else
-                  if [ -n "$PENDING_GROUPS" ]; then
-                    PENDING_GROUPS="$PENDING_GROUPS\n---\n\n- ⏳ **$clean_team** (Team) - $team_members_info | **Pending approval**$team_file_list_html"
-                  else
-                    PENDING_GROUPS="- ⏳ **$clean_team** (Team) - $team_members_info | **Pending approval**$team_file_list_html"
-                  fi
-                  PENDING_COUNT=$((PENDING_COUNT + 1))
-                fi
-              done
+            if [ "$group_type" = "team" ]; then
+              type_label="Team"
+            else
+              type_label="Group"
             fi
 
-            # Add pattern groups with member information and approval status
-            if [ -n "$INDIVIDUALS" ]; then
-              # Individuals are now grouped by pattern: "pattern:username1|full_name1,username2|full_name2:file1,file2,file3§pattern2:..."
-              IFS='§' read -ra PATTERN_GROUPS <<< "$INDIVIDUALS"
-              for pattern_group in "${PATTERN_GROUPS[@]}"; do
-                # Skip empty groups
-                [ -z "$pattern_group" ] && continue
-
-                # Split pattern:owners:files - use robust parsing to handle colons in patterns
-                # Split on last colon to separate files, then split remaining on first colon to separate pattern from owners
-                files=$(echo "$pattern_group" | rev | cut -d':' -f1 | rev)
-                pattern_and_owners=$(echo "$pattern_group" | rev | cut -d':' -f2- | rev)
-                pattern=$(echo "$pattern_and_owners" | cut -d':' -f1)
-                owners=$(echo "$pattern_and_owners" | cut -d':' -f2-)
-
-                # Parse owners - each is username|full_name
-                all_owners=""
-                usernames=()
-                full_names=()
-
-                IFS=',' read -ra OWNERS_ARRAY <<< "$owners"
-                for owner_pair in "${OWNERS_ARRAY[@]}"; do
-                  # Split username|full_name
-                  username=$(echo "$owner_pair" | cut -d'|' -f1)
-                  full_name=$(echo "$owner_pair" | cut -d'|' -f2)
-
-                  usernames+=("$username")
-                  full_names+=("$full_name")
-                  all_owners="$all_owners$full_name, "
-                done
-
-                # Remove trailing comma and space
-                all_owners=$(echo "$all_owners" | sed 's/, $//')
-
-                # Check if any owner in this pattern group has approved
-                approved_owners=""
-                for i in "${!usernames[@]}"; do
-                  username="${usernames[$i]}"
-                  full_name="${full_names[$i]}"
-                  if echo "$APPROVED_REVIEWERS" | grep -q "$username"; then
-                    approved_owners="$approved_owners$full_name, "
-                  fi
-                done
-
-                # Create collapsible file list for this pattern
-                file_list_html=""
-                if [ -n "$files" ] && [ "$files" != "null" ]; then
-                  # Create expandable details section with file list
-                  # Indent with 2 spaces to be part of the list item
-                  file_list_html="\n  <details><summary>&#128193; Files owned by this group</summary>\n\n"
-                  IFS=',' read -ra FILES_ARRAY <<< "$files"
-                  for file in "${FILES_ARRAY[@]}"; do
-                    if [ -n "$file" ]; then
-                      # Escape special characters for HTML
-                      escaped_file=$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g')
-                      # Create clickable link to file in PR (GitHub uses SHA256 hash of file path)
-                      file_hash=$(echo -n "$file" | sha256sum | cut -d' ' -f1)
-                      file_url="${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER/files#diff-$file_hash"
-                      file_list_html="$file_list_html  - [<code>$escaped_file</code>]($file_url)\n"
-                    fi
-                  done
-                  file_list_html="$file_list_html\n  </details>"
-                fi
-
-                if [ -n "$approved_owners" ]; then
-                  # Remove trailing comma and space
-                  approved_owners=$(echo "$approved_owners" | sed 's/, $//')
-                  if [ -n "$APPROVED_GROUPS" ]; then
-                    APPROVED_GROUPS="$APPROVED_GROUPS\n---\n\n- ✅ **$pattern** (Group) - Members: $all_owners | **Approved by:** $approved_owners$file_list_html"
-                  else
-                    APPROVED_GROUPS="- ✅ **$pattern** (Group) - Members: $all_owners | **Approved by:** $approved_owners$file_list_html"
-                  fi
-                  APPROVED_COUNT=$((APPROVED_COUNT + 1))
-                else
-                  if [ -n "$PENDING_GROUPS" ]; then
-                    PENDING_GROUPS="$PENDING_GROUPS\n---\n\n- ⏳ **$pattern** (Group) - Members: $all_owners | **Pending approval**$file_list_html"
-                  else
-                    PENDING_GROUPS="- ⏳ **$pattern** (Group) - Members: $all_owners | **Pending approval**$file_list_html"
-                  fi
-                  PENDING_COUNT=$((PENDING_COUNT + 1))
-                fi
-              done
+            if [ "$is_approved" = "true" ]; then
+              if [ -n "$APPROVED_GROUPS" ]; then
+                APPROVED_GROUPS="$APPROVED_GROUPS\n---\n\n- ✅ **$group_name** ($type_label) - $members_info | **Approved by:** $approved_by$file_list_html"
+              else
+                APPROVED_GROUPS="- ✅ **$group_name** ($type_label) - $members_info | **Approved by:** $approved_by$file_list_html"
+              fi
+              APPROVED_COUNT=$((APPROVED_COUNT + 1))
+            else
+              if [ -n "$PENDING_GROUPS" ]; then
+                PENDING_GROUPS="$PENDING_GROUPS\n---\n\n- ⏳ **$group_name** ($type_label) - $members_info | **Pending approval**$file_list_html"
+              else
+                PENDING_GROUPS="- ⏳ **$group_name** ($type_label) - $members_info | **Pending approval**$file_list_html"
+              fi
+              PENDING_COUNT=$((PENDING_COUNT + 1))
             fi
+          done
 
             # Get requester information
           REQUESTER_NAME=""
@@ -1785,22 +1811,138 @@ jobs:
             esac
           }
 
-          # Collect owners/groups for notification (both individual users and Slack groups)
+          # STEP 1: Build file -> combined members mapping
+          # This allows us to check combined approval (same logic as display)
+          echo "DEBUG select-owners: Step 1 - Building file to members mapping"
+
+          declare -A FILES_TO_MEMBERS  # sorted_files -> comma-separated usernames
+          declare -A FILES_TO_TEAMS    # sorted_files -> comma-separated team names (for Slack groups)
+
+          # Collect team members by files
+          if [ -n "$TEAMS" ]; then
+            IFS='§' read -ra TEAM_ARRAY <<< "$TEAMS"
+            for team_entry in "${TEAM_ARRAY[@]}"; do
+              [ -z "$team_entry" ] && continue
+
+              team=$(echo "$team_entry" | cut -d':' -f1)
+              [ -z "$team" ] && continue
+
+              if [ "$team" = "@tenstorrent/metalium-codeowners-large-changes" ]; then
+                continue
+              fi
+
+              team_files=$(echo "$team_entry" | cut -d':' -f2-)
+              sorted_files=$(echo "$team_files" | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//')
+
+              # Track team for this file set
+              if [ -n "${FILES_TO_TEAMS[$sorted_files]}" ]; then
+                FILES_TO_TEAMS["$sorted_files"]="${FILES_TO_TEAMS[$sorted_files]}|$team"
+              else
+                FILES_TO_TEAMS["$sorted_files"]="$team"
+              fi
+
+              # Get team members
+              if [ -n "$TEAM_MEMBERS" ]; then
+                team_members_entry=$(echo "$TEAM_MEMBERS" | tr '|' '\n' | grep "^$team:" | head -1)
+                if [ -n "$team_members_entry" ]; then
+                  team_owners=$(echo "$team_members_entry" | cut -d':' -f2)
+                  if [ "$team_owners" != "insufficient-permissions" ] && [ "$team_owners" != "team-not-found" ] && [ "$team_owners" != "unauthorized" ] && [ "$team_owners" != "api-error" ] && [ "$team_owners" != "no-members" ]; then
+                    # Add team members to combined list for these files
+                    if [ -n "${FILES_TO_MEMBERS[$sorted_files]}" ]; then
+                      FILES_TO_MEMBERS["$sorted_files"]="${FILES_TO_MEMBERS[$sorted_files]},$team_owners"
+                    else
+                      FILES_TO_MEMBERS["$sorted_files"]="$team_owners"
+                    fi
+                  fi
+                fi
+              fi
+            done
+          fi
+
+          # Collect individual members by files
+          if [ -n "$INDIVIDUALS" ]; then
+            IFS='§' read -ra PATTERN_GROUPS <<< "$INDIVIDUALS"
+            for pattern_group in "${PATTERN_GROUPS[@]}"; do
+              [ -z "$pattern_group" ] && continue
+
+              files=$(echo "$pattern_group" | rev | cut -d':' -f1 | rev)
+              pattern_and_owners=$(echo "$pattern_group" | rev | cut -d':' -f2- | rev)
+              owners=$(echo "$pattern_and_owners" | cut -d':' -f2-)
+
+              sorted_files=$(echo "$files" | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//')
+
+              # Extract usernames
+              usernames_list=""
+              IFS=',' read -ra OWNERS_ARRAY <<< "$owners"
+              for owner_pair in "${OWNERS_ARRAY[@]}"; do
+                username=$(echo "$owner_pair" | cut -d'|' -f1)
+                usernames_list="$usernames_list$username,"
+              done
+              usernames_list=$(echo "$usernames_list" | sed 's/,$//')
+
+              # Add individual members to combined list for these files
+              if [ -n "${FILES_TO_MEMBERS[$sorted_files]}" ]; then
+                FILES_TO_MEMBERS["$sorted_files"]="${FILES_TO_MEMBERS[$sorted_files]},$usernames_list"
+              else
+                FILES_TO_MEMBERS["$sorted_files"]="$usernames_list"
+              fi
+            done
+          fi
+
+          # STEP 2: Check combined approval for each file set
+          echo "DEBUG select-owners: Step 2 - Checking combined approval"
+
+          declare -A FILES_HAS_APPROVAL  # sorted_files -> true/false
+
+          for sorted_files in "${!FILES_TO_MEMBERS[@]}"; do
+            combined_members="${FILES_TO_MEMBERS[$sorted_files]}"
+
+            # Check if ANY member from combined set has approved
+            has_approval=false
+            if [ -n "$combined_members" ]; then
+              IFS=',' read -ra COMBINED_ARRAY <<< "$combined_members"
+              for member in "${COMBINED_ARRAY[@]}"; do
+                [ -z "$member" ] && continue
+                if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
+                  has_approval=true
+                  echo "DEBUG select-owners: Files [$sorted_files] approved by $member"
+                  break
+                fi
+              done
+            fi
+
+            FILES_HAS_APPROVAL["$sorted_files"]="$has_approval"
+          done
+
+          # STEP 3: Select owners/groups for notification (only from pending file sets)
+          echo "DEBUG select-owners: Step 3 - Selecting owners for notification"
+
           TEMP_SELECTED_OWNERS=""
           SELECTED_SLACK_GROUPS=""
 
-          # Process pending teams - check for Slack groups first, then individual selection
+          # Process teams - check for Slack groups first, then individual selection
           if [ -n "$TEAMS" ]; then
             echo "DEBUG: Processing TEAMS='$TEAMS'"
             IFS='§' read -ra TEAM_ARRAY <<< "$TEAMS"
             echo "DEBUG: Split into ${#TEAM_ARRAY[@]} team entries"
             for team_entry in "${TEAM_ARRAY[@]}"; do
               echo "DEBUG: Processing team_entry='$team_entry'"
-              # Extract team name from team:files format
               team=$(echo "$team_entry" | cut -d':' -f1)
               echo "DEBUG: Extracted team='$team'"
+              [ -z "$team" ] && continue
+
               if [ "$team" = "@tenstorrent/metalium-codeowners-large-changes" ]; then
                 echo "DEBUG: Skipping large-changes team"
+                continue
+              fi
+
+              team_files=$(echo "$team_entry" | cut -d':' -f2-)
+              sorted_files=$(echo "$team_files" | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//')
+
+              # Check combined approval for this file set
+              has_approval="${FILES_HAS_APPROVAL[$sorted_files]}"
+              if [ "$has_approval" = "true" ]; then
+                echo "Team $team already approved (combined check), skipping"
                 continue
               fi
 
@@ -1810,37 +1952,11 @@ jobs:
 
               if [ -n "$SLACK_GROUP_ID" ]; then
                 echo "Team $team has Slack group: $SLACK_GROUP_ID"
-
-                # Check if team needs approval (same logic as before)
-                if [ -n "$TEAM_MEMBERS" ]; then
-                  team_members_entry=$(echo "$TEAM_MEMBERS" | tr '|' '\n' | grep "^$team:" | head -1)
-                  if [ -n "$team_members_entry" ]; then
-                    team_owners=$(echo "$team_members_entry" | cut -d':' -f2)
-                    if [ "$team_owners" != "insufficient-permissions" ] && [ "$team_owners" != "team-not-found" ] && [ "$team_owners" != "unauthorized" ] && [ "$team_owners" != "api-error" ] && [ "$team_owners" != "no-members" ]; then
-                      IFS=',' read -ra MEMBERS_ARRAY <<< "$team_owners"
-
-                      # Check if any member of this team has approved
-                      team_has_approval=false
-                      for member in "${MEMBERS_ARRAY[@]}"; do
-                        if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
-                          team_has_approval=true
-                          break
-                        fi
-                      done
-
-                      # Only add Slack group for pending teams
-                      if [ "$team_has_approval" = false ]; then
-                        SELECTED_SLACK_GROUPS="$SELECTED_SLACK_GROUPS$SLACK_GROUP_ID,"
-                        echo "Added pending Slack group: $team -> $SLACK_GROUP_ID"
-                      else
-                        echo "Team $team already approved, skipping Slack group"
-                      fi
-                    fi
-                  fi
-                fi
+                SELECTED_SLACK_GROUPS="$SELECTED_SLACK_GROUPS$SLACK_GROUP_ID,"
+                echo "Added pending Slack group: $team -> $SLACK_GROUP_ID"
               else
                 echo "Team $team has no Slack group, using individual selection"
-                # Original individual selection logic for teams without Slack groups
+                # Select individuals from team
                 if [ -n "$TEAM_MEMBERS" ]; then
                   team_members_entry=$(echo "$TEAM_MEMBERS" | tr '|' '\n' | grep "^$team:" | head -1)
                   if [ -n "$team_members_entry" ]; then
@@ -1848,51 +1964,35 @@ jobs:
                     if [ "$team_owners" != "insufficient-permissions" ] && [ "$team_owners" != "team-not-found" ] && [ "$team_owners" != "unauthorized" ] && [ "$team_owners" != "api-error" ] && [ "$team_owners" != "no-members" ]; then
                       IFS=',' read -ra MEMBERS_ARRAY <<< "$team_owners"
 
-                      # Check if any member of this team has approved
-                      team_has_approval=false
+                      # Collect unapproved members, excluding moreh team members and PR author
+                      TEAM_UNAPPROVED=""
                       for member in "${MEMBERS_ARRAY[@]}"; do
-                        if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
-                          team_has_approval=true
-                          break
+                        if ! echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
+                          if is_moreh_member "$member"; then
+                            echo "Excluding $member (thirdparty-moreh team member) from selection"
+                          elif is_pr_author "$member"; then
+                            echo "Excluding $member (PR author) from selection"
+                          else
+                            TEAM_UNAPPROVED="$TEAM_UNAPPROVED$member,"
+                          fi
                         fi
                       done
+                      TEAM_UNAPPROVED=$(echo "$TEAM_UNAPPROVED" | sed 's/,$//')
 
-                      # Only select owners from pending teams
-                      if [ "$team_has_approval" = false ]; then
-                        # Collect unapproved members for this team, excluding moreh team members and PR author
-                        TEAM_UNAPPROVED=""
-                        for member in "${MEMBERS_ARRAY[@]}"; do
-                          if ! echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
-                            # Check if member is in moreh team and exclude them
-                            if is_moreh_member "$member"; then
-                              echo "Excluding $member (thirdparty-moreh team member) from selection"
-                            # Check if member is the PR author and exclude them
-                            elif is_pr_author "$member"; then
-                              echo "Excluding $member (PR author) from selection"
-                            else
-                              TEAM_UNAPPROVED="$TEAM_UNAPPROVED$member,"
-                            fi
-                          fi
-                        done
-                        TEAM_UNAPPROVED=$(echo "$TEAM_UNAPPROVED" | sed 's/,$//')
+                      # Select up to 2 owners from this pending team
+                      if [ -n "$TEAM_UNAPPROVED" ]; then
+                        IFS=',' read -ra TEAM_MEMBERS_ARRAY <<< "$TEAM_UNAPPROVED"
+                        TEAM_MEMBER_COUNT=${#TEAM_MEMBERS_ARRAY[@]}
 
-                        # Select up to 2 owners from this pending team
-                        if [ -n "$TEAM_UNAPPROVED" ]; then
-                          IFS=',' read -ra TEAM_MEMBERS_ARRAY <<< "$TEAM_UNAPPROVED"
-                          TEAM_MEMBER_COUNT=${#TEAM_MEMBERS_ARRAY[@]}
-
-                          if [ $TEAM_MEMBER_COUNT -eq 1 ]; then
-                            # Only 1 member
-                            TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[0]},"
-                          elif [ $TEAM_MEMBER_COUNT -ge 2 ]; then
-                            # Select 2 random members
-                            RAND1=$((RANDOM % TEAM_MEMBER_COUNT))
+                        if [ $TEAM_MEMBER_COUNT -eq 1 ]; then
+                          TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[0]},"
+                        elif [ $TEAM_MEMBER_COUNT -ge 2 ]; then
+                          RAND1=$((RANDOM % TEAM_MEMBER_COUNT))
+                          RAND2=$((RANDOM % TEAM_MEMBER_COUNT))
+                          while [ $RAND2 -eq $RAND1 ]; do
                             RAND2=$((RANDOM % TEAM_MEMBER_COUNT))
-                            while [ $RAND2 -eq $RAND1 ]; do
-                              RAND2=$((RANDOM % TEAM_MEMBER_COUNT))
-                            done
-                            TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[$RAND1]},${TEAM_MEMBERS_ARRAY[$RAND2]},"
-                          fi
+                          done
+                          TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[$RAND1]},${TEAM_MEMBERS_ARRAY[$RAND2]},"
                         fi
                       fi
                     fi
@@ -1902,66 +2002,58 @@ jobs:
             done
           fi
 
-          # Process pending individual patterns - select up to 2 owners from each pending pattern
+          # Process individual patterns - select up to 2 owners from each pending pattern
           if [ -n "$INDIVIDUALS" ]; then
             IFS='§' read -ra PATTERN_GROUPS <<< "$INDIVIDUALS"
             for pattern_group in "${PATTERN_GROUPS[@]}"; do
               [ -z "$pattern_group" ] && continue
-              # Parse pattern:owners:files format - extract owners (second to second-last colon section)
-              # Split on last colon to separate files, then split remaining on first colon to separate pattern from owners
-              files_part=$(echo "$pattern_group" | rev | cut -d':' -f1 | rev)
+
+              files=$(echo "$pattern_group" | rev | cut -d':' -f1 | rev)
               pattern_and_owners=$(echo "$pattern_group" | rev | cut -d':' -f2- | rev)
               pattern=$(echo "$pattern_and_owners" | cut -d':' -f1)
               owners=$(echo "$pattern_and_owners" | cut -d':' -f2-)
+
+              sorted_files=$(echo "$files" | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//')
+
+              # Check combined approval for this file set
+              has_approval="${FILES_HAS_APPROVAL[$sorted_files]}"
+              if [ "$has_approval" = "true" ]; then
+                echo "Pattern $pattern already approved (combined check), skipping"
+                continue
+              fi
+
               IFS=',' read -ra OWNERS_ARRAY <<< "$owners"
 
-              # Check if any owner in this pattern has approved
-              pattern_has_approval=false
+              # Collect unapproved owners, excluding moreh team members and PR author
+              PATTERN_UNAPPROVED=""
               for owner_pair in "${OWNERS_ARRAY[@]}"; do
                 username=$(echo "$owner_pair" | cut -d'|' -f1)
-                if echo "$APPROVED_REVIEWERS" | grep -q "$username"; then
-                  pattern_has_approval=true
-                  break
+                if ! echo "$APPROVED_REVIEWERS" | grep -q "$username"; then
+                  if is_moreh_member "$username"; then
+                    echo "Excluding $username (thirdparty-moreh team member) from pattern selection"
+                  elif is_pr_author "$username"; then
+                    echo "Excluding $username (PR author) from pattern selection"
+                  else
+                    PATTERN_UNAPPROVED="$PATTERN_UNAPPROVED$username,"
+                  fi
                 fi
               done
+              PATTERN_UNAPPROVED=$(echo "$PATTERN_UNAPPROVED" | sed 's/,$//')
 
-              # Only select owners from pending patterns
-              if [ "$pattern_has_approval" = false ]; then
-                # Collect unapproved owners for this pattern, excluding moreh team members and PR author
-                PATTERN_UNAPPROVED=""
-                for owner_pair in "${OWNERS_ARRAY[@]}"; do
-                  username=$(echo "$owner_pair" | cut -d'|' -f1)
-                  if ! echo "$APPROVED_REVIEWERS" | grep -q "$username"; then
-                    # Check if user is in moreh team and exclude them
-                    if is_moreh_member "$username"; then
-                      echo "Excluding $username (thirdparty-moreh team member) from pattern selection"
-                    # Check if user is the PR author and exclude them
-                    elif is_pr_author "$username"; then
-                      echo "Excluding $username (PR author) from pattern selection"
-                    else
-                      PATTERN_UNAPPROVED="$PATTERN_UNAPPROVED$username,"
-                    fi
-                  fi
-                done
-                PATTERN_UNAPPROVED=$(echo "$PATTERN_UNAPPROVED" | sed 's/,$//')
+              # Select up to 2 owners from this pending pattern
+              if [ -n "$PATTERN_UNAPPROVED" ]; then
+                IFS=',' read -ra PATTERN_OWNERS_ARRAY <<< "$PATTERN_UNAPPROVED"
+                PATTERN_OWNER_COUNT=${#PATTERN_OWNERS_ARRAY[@]}
 
-                # Select up to 2 owners from this pending pattern
-                if [ -n "$PATTERN_UNAPPROVED" ]; then
-                  IFS=',' read -ra PATTERN_OWNERS_ARRAY <<< "$PATTERN_UNAPPROVED"
-                  PATTERN_OWNER_COUNT=${#PATTERN_OWNERS_ARRAY[@]}
-
-                  if [ $PATTERN_OWNER_COUNT -eq 1 ]; then
-                    # Only 1 owner
-                    TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${PATTERN_OWNERS_ARRAY[0]},"
-                  elif [ $PATTERN_OWNER_COUNT -ge 2 ]; then
-                    # Select 2 random owners
-                    RAND1=$((RANDOM % PATTERN_OWNER_COUNT))
+                if [ $PATTERN_OWNER_COUNT -eq 1 ]; then
+                  TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${PATTERN_OWNERS_ARRAY[0]},"
+                elif [ $PATTERN_OWNER_COUNT -ge 2 ]; then
+                  RAND1=$((RANDOM % PATTERN_OWNER_COUNT))
+                  RAND2=$((RANDOM % PATTERN_OWNER_COUNT))
+                  while [ $RAND2 -eq $RAND1 ]; do
                     RAND2=$((RANDOM % PATTERN_OWNER_COUNT))
-                    while [ $RAND2 -eq $RAND1 ]; do
-                      RAND2=$((RANDOM % PATTERN_OWNER_COUNT))
-                    done
-                    TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${PATTERN_OWNERS_ARRAY[$RAND1]},${PATTERN_OWNERS_ARRAY[$RAND2]},"
-                  fi
+                  done
+                  TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${PATTERN_OWNERS_ARRAY[$RAND1]},${PATTERN_OWNERS_ARRAY[$RAND2]},"
                 fi
               fi
             done
