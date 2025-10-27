@@ -43,6 +43,9 @@ static std::vector<std::unique_ptr<BoolMetric>> bool_metrics_;
 static std::vector<std::unique_ptr<UIntMetric>> uint_metrics_;
 static std::vector<std::unique_ptr<DoubleMetric>> double_metrics_;
 
+// System-level metrics (host health, not device telemetry)
+static std::vector<std::unique_ptr<SystemBoolMetric>> system_bool_metrics_;
+
 // Unbounded queue for storing received telemetry snapshots from aggregate endpoints
 static SimpleConcurrentQueue<std::pair<std::string, TelemetrySnapshot>> received_snapshots_;
 
@@ -213,7 +216,26 @@ static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySub
     }
 }
 
+// Helper to build system metric path with labels embedded
+static std::string get_system_metric_path_with_labels(const SystemBoolMetric& metric) {
+    // Format: hostname/system/MetricName
+    // Labels will be added by prom_formatter from the metric's label map
+    return std::string(hostname_) + "/system/" + metric.name();
+}
+
 static void update_delta_snapshot_with_local_telemetry(std::shared_ptr<TelemetrySnapshot> snapshot) {
+    // Update system metrics
+    for (size_t i = 0; i < system_bool_metrics_.size(); i++) {
+        if (!system_bool_metrics_[i]->changed_since_transmission()) {
+            continue;
+        }
+        std::string path = get_system_metric_path_with_labels(*system_bool_metrics_[i]);
+        snapshot->system_bool_metrics[path] = system_bool_metrics_[i]->value();
+        snapshot->system_bool_metric_labels[path] = system_bool_metrics_[i]->labels();
+        snapshot->system_bool_metric_timestamps[path] = system_bool_metrics_[i]->timestamp();
+        system_bool_metrics_[i]->mark_transmitted();
+    }
+
     for (size_t i = 0; i < bool_metrics_.size(); i++) {
         if (!bool_metrics_[i]->changed_since_transmission()) {
             continue;
@@ -261,7 +283,8 @@ static void telemetry_thread(
     const std::vector<std::string>& aggregate_endpoints,
     const tt::llrt::RunTimeOptions& rtoptions,
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd,
-    int watchdog_timeout_seconds) {
+    int watchdog_timeout_seconds,
+    int failure_exposure_duration_seconds) {
     try {
         Watchdog watchdog(watchdog_timeout_seconds);
         TT_FATAL(
@@ -270,25 +293,91 @@ static void telemetry_thread(
             watchdog_timeout_seconds,
             MONITOR_INTERVAL_SECONDS.count());
 
+        // Create TelemetryRunning system metric BEFORE UMD initialization
+        system_bool_metrics_.push_back(std::make_unique<SystemBoolMetric>("TelemetryRunning"));
+        system_bool_metrics_.back()->set_value(false);  // Initially not running
+
+        // Keep reference for updates (safe since vector never removes elements)
+        auto& telemetry_running = *system_bool_metrics_.back();
+
         std::unique_ptr<tt::umd::Cluster> cluster;
         std::unique_ptr<tt::tt_metal::Hal> hal;
         std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> psd;
         std::unique_ptr<TopologyHelper> topology_translation;
 
         if (telemetry_enabled) {
-            cluster = std::make_unique<tt::umd::Cluster>();
-            auto distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-            hal = create_hal(cluster);
-            psd = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
-                cluster, distributed_context, hal.get(), rtoptions);
-            topology_translation = std::make_unique<TopologyHelper>(cluster, psd);
-            log_info(tt::LogAlways, "Created cluster, physical system descriptor, and HAL");
-            log_info(tt::LogAlways, "Our hostname is: {}", topology_translation->my_host_name);
+            try {
+                log_info(tt::LogAlways, "Initializing UMD and device metrics...");
+                cluster = std::make_unique<tt::umd::Cluster>();
+                auto distributed_context =
+                    tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+                hal = create_hal(cluster);
+                psd = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
+                    cluster, distributed_context, hal.get(), rtoptions);
+                topology_translation = std::make_unique<TopologyHelper>(cluster, psd);
+                log_info(tt::LogAlways, "Created cluster, physical system descriptor, and HAL");
+                log_info(tt::LogAlways, "Our hostname is: {}", topology_translation->my_host_name);
 
-            create_ethernet_metrics(
-                bool_metrics_, uint_metrics_, double_metrics_, cluster, fsd, topology_translation, hal);
-            create_arc_metrics(bool_metrics_, uint_metrics_, double_metrics_, cluster, topology_translation, hal);
-            log_info(tt::LogAlways, "Initialized metrics");
+                create_ethernet_metrics(
+                    bool_metrics_, uint_metrics_, double_metrics_, cluster, fsd, topology_translation, hal);
+                create_arc_metrics(bool_metrics_, uint_metrics_, double_metrics_, cluster, topology_translation, hal);
+                log_info(tt::LogAlways, "Initialized metrics");
+
+                // Update TelemetryRunning metric to success state
+                telemetry_running.set_value(true);
+            } catch (const std::exception& e) {
+                log_fatal(tt::LogAlways, "UMD initialization failed: {}", e.what());
+
+                // Update TelemetryRunning metric to failure state
+                // Error details are logged above and available in application logs
+                telemetry_running.set_value(false);
+
+                // Run failure exposure loop to allow Prometheus to scrape the failure state
+                auto failure_start = std::chrono::steady_clock::now();
+                auto failure_duration = std::chrono::seconds(failure_exposure_duration_seconds);
+                auto failure_end = failure_start + failure_duration;
+
+                // Calculate end time as system_clock time for display
+                auto now_system = std::chrono::system_clock::now();
+                auto end_time_system = now_system + failure_duration;
+                auto end_time_t = std::chrono::system_clock::to_time_t(end_time_system);
+                std::tm tm_buf;
+                localtime_r(&end_time_t, &tm_buf);
+                char time_str[32];
+                std::strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", &tm_buf);
+
+                log_info(
+                    tt::LogAlways,
+                    "Exposing failure metric for {} seconds (until approximately {})",
+                    failure_exposure_duration_seconds,
+                    time_str);
+
+                // Create collection clients so aggregators can still connect
+                CollectionClients collection_clients(aggregate_endpoints, on_snapshot_received);
+
+                int iteration = 0;
+
+                while (std::chrono::steady_clock::now() < failure_end) {
+                    std::this_thread::sleep_for(MONITOR_INTERVAL_SECONDS);
+
+                    // Send failure metric to subscribers
+                    std::shared_ptr<TelemetrySnapshot> failure_snapshot = get_writeable_buffer();
+                    update_delta_snapshot_with_local_telemetry(failure_snapshot);
+
+                    for (auto& subscriber : subscribers) {
+                        subscriber->on_telemetry_ready(failure_snapshot);
+                    }
+
+                    log_debug(tt::LogAlways, "Sent failure metric snapshot (iteration {})", ++iteration);
+                    watchdog.heartbeat();
+                }
+
+                log_fatal(tt::LogAlways, "Failure exposure period complete, exiting to allow orchestrator restart");
+                throw std::runtime_error("UMD initialization failed - telemetry unavailable");
+            }
+        } else {
+            // Telemetry disabled - metric remains false (not running)
+            log_info(tt::LogAlways, "Telemetry collection disabled");
         }
 
         // Create collection clients to connect to aggregate endpoints (if any specified)
@@ -351,7 +440,8 @@ void run_telemetry_collector(
     const std::vector<std::string>& aggregate_endpoints,
     const tt::llrt::RunTimeOptions& rtoptions,
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd,
-    int watchdog_timeout_seconds) {
+    int watchdog_timeout_seconds,
+    int failure_exposure_duration_seconds) {
     // Prefill hostname
     gethostname(hostname_, sizeof(hostname_));
 
@@ -364,6 +454,7 @@ void run_telemetry_collector(
         aggregate_endpoints,
         std::cref(rtoptions),
         fsd,
-        watchdog_timeout_seconds);
+        watchdog_timeout_seconds,
+        failure_exposure_duration_seconds);
     t.wait();
 }
