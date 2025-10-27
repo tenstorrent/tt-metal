@@ -527,10 +527,10 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     // Compute PCIe NOC0 XY encoding for the MMIO device and split 64-bit PCIe address
-    chip_id_t mmio_device_id =
+    ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
     const auto& soc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(mmio_device_id);
-    const auto& pcie_cores = soc.get_cores(CoreType::PCIE, tt::umd::CoordSystem::NOC0);
+    const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::NOC0);
     TT_ASSERT(!pcie_cores.empty());
     auto pcie_xy = pcie_cores.front();
     uint32_t pcie_xy_enc = tt::tt_metal::MetalContext::instance().hal().noc_xy_pcie64_encoding(pcie_xy.x, pcie_xy.y);
