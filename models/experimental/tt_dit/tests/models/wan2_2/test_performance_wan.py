@@ -6,11 +6,13 @@ import statistics
 import pytest
 import torch
 import ttnn
+import numpy as np
 from loguru import logger
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
-
 from models.experimental.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
+from diffusers.utils import export_to_video
 from ....parallel.config import DiTParallelConfig, VaeHWParallelConfig, ParallelFactor
+from ....utils.test import line_params, ring_params
 
 
 @pytest.mark.parametrize(
@@ -25,8 +27,34 @@ from ....parallel.config import DiTParallelConfig, VaeHWParallelConfig, Parallel
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_pipeline_performance(mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology) -> None:
+def test_pipeline_performance(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    mesh_shape: tuple,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    dynamic_load: dict,
+    topology: ttnn.Topology,
+    is_ci_env: bool,
+    galaxy_type: str,
+) -> None:
     """Performance test for Wan pipeline with detailed timing analysis."""
+
+    # Skip 4U.
+    if galaxy_type == "4U":
+        # NOTE: Pipelines fail if a performance test is skipped without providing a benchmark output.
+        if is_ci_env:
+            with benchmark_profiler("run", iteration=0):
+                pass
+
+            benchmark_data = BenchmarkData()
+            benchmark_data.save_partial_run_json(
+                benchmark_profiler,
+                run_type="empty_run",
+                ml_model_name="empty_run",
+            )
+        pytest.skip("4U is not supported for this test")
 
     benchmark_profiler = BenchmarkProfiler()
 
@@ -62,7 +90,6 @@ def test_pipeline_performance(mesh_device, mesh_shape, sp_axis, tp_axis, num_lin
     num_frames = 81
     num_inference_steps = 40
 
-    print(f"Running inference with prompt: '{prompt}'")
     print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
     pipeline = WanPipeline(
@@ -86,12 +113,12 @@ def test_pipeline_performance(mesh_device, mesh_shape, sp_axis, tp_axis, num_lin
             height=height,
             width=width,
             num_frames=num_frames,
-            num_inference_steps=num_inference_steps,
+            num_inference_steps=2,  # Small number of steps to reduce test time.
             guidance_scale=3.0,
             guidance_scale_2=4.0,
         )
 
-    logger.info(f"Warmup completed in {tt_pipe.timing_data['total']:.2f}s")
+    logger.info(f"Warmup completed in {pipeline.timing_data['total']:.2f}s")
 
     # Check output
     if hasattr(result, "frames"):
@@ -126,19 +153,21 @@ def test_pipeline_performance(mesh_device, mesh_shape, sp_axis, tp_axis, num_lin
         # Run pipeline with different prompt
         prompt_idx = (i + 1) % len(prompts)
         with benchmark_profiler("run", iteration=i):
-            frames = tt_pipe(
-                prompts[prompt_idx],
-                num_inference_steps=num_inference_steps,
-                guidance_scale=guidance_scale,
-                num_frames=num_frames,
-                height=image_h,
-                width=image_w,
-                generator=generator,
-            ).frames[0]
+            with torch.no_grad():
+                result = pipeline(
+                    prompt=prompts[0],
+                    negative_prompt=negative_prompt,
+                    height=height,
+                    width=width,
+                    num_frames=num_frames,
+                    num_inference_steps=num_inference_steps,
+                    guidance_scale=3.0,
+                    guidance_scale_2=4.0,
+                )
 
         # Collect timing data
-        all_timings.append(tt_pipe.timing_data)
-        logger.info(f"  Run {i+1} completed in {tt_pipe.timing_data['total']:.2f}s")
+        all_timings.append(pipeline.timing_data)
+        logger.info(f"  Run {i+1} completed in {pipeline.timing_data['total']:.2f}s")
 
     # Calculate statistics
     text_encoder_times = [t["text_encoder"] for t in all_timings]
@@ -147,17 +176,13 @@ def test_pipeline_performance(mesh_device, mesh_shape, sp_axis, tp_axis, num_lin
     total_times = [t["total"] for t in all_timings]
 
     # Report results
-    cfg_factor = tt_pipe.parallel_config.cfg_parallel.factor
-    sp_factor = tt_pipe.parallel_config.sequence_parallel.factor
-    tp_factor = tt_pipe.parallel_config.tensor_parallel.factor
-
     print("\n" + "=" * 80)
     print("WAN PERFORMANCE RESULTS")
     print("=" * 80)
     print(f"Image Size: {width}x{height}")
     print(f"Inference Steps: {num_inference_steps}")
     print(f"Num Frames: {num_frames}")
-    print(f"DiT Configuration: cfg={cfg_factor}, sp={sp_factor}, tp={tp_factor}")
+    print(f"DiT Configuration: sp={sp_factor}, tp={tp_factor}")
     print(f"Mesh Shape: {mesh_device.shape}")
     print(f"Topology: {topology}")
     print("-" * 80)
@@ -193,10 +218,10 @@ def test_pipeline_performance(mesh_device, mesh_shape, sp_axis, tp_axis, num_lin
     }
     if tuple(mesh_device.shape) == (2, 4):
         expected_metrics = {
-            "text_encoding_time": 10000,
-            "denoising_time": 10000,
-            "vae_decoding_time": 10000,
-            "total_time": 10000,
+            "text_encoding_time": 15.3,
+            "denoising_time": 1001,
+            "vae_decoding_time": 63.6,
+            "total_time": 1082,
         }
     elif tuple(mesh_device.shape) == (4, 8):
         expected_metrics = {
