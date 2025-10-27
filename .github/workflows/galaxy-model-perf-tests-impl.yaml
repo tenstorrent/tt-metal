@@ -77,7 +77,7 @@ jobs:
             arch: wormhole_b0,
             save-perf-data: true,
             timeout: 60,
-            cmd: 'TT_MM_THROTTLE_PERF=5 pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k "4x8sp0tp1"',
+            cmd: 'HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub TT_MM_THROTTLE_PERF=5 pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k "4x8sp0tp1"',
             owner_id: U08TED0JM9D # Samuel Adesoye
           },
           {

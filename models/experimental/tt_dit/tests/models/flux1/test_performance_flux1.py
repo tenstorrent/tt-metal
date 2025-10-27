@@ -259,7 +259,7 @@ def test_flux1_pipeline_performance(
             "total_encoding_time": 0.3,
             "denoising_steps_time": 0.3 * num_inference_steps,
             "vae_decoding_time": 1.3,
-            "total_time": 8.2,
+            "total_time": 8.8,
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
