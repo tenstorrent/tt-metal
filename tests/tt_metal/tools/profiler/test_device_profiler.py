@@ -410,7 +410,7 @@ def test_dispatch_cores():
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {
         "Ethernet CQ Dispatch": [590, 1080, 1430, 1660, 1994, 3285, 3769, 4237, 6681],
-        "Ethernet CQ Prefetch": [572, 1058, 4030],
+        "Ethernet CQ Prefetch": [572, 1058, 4030, 7795],
     }
     devicesData = run_device_profiler_test(
         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops -k DispatchCoreType.ETH",
