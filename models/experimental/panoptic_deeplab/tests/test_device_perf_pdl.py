@@ -11,7 +11,7 @@ from models.perf.device_perf_utils import run_device_perf, check_device_perf, pr
     [
         (
             "pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py::test_panoptic_deeplab",
-            84_325_413,
+            77_029_529,
             "panoptic_deeplab",
             "panoptic_deeplab",
             1,
