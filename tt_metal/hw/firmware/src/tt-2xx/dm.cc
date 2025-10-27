@@ -164,7 +164,7 @@ int main() {
                 // cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
                 //     RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
 
-                run_triscs(enables);
+                // run_triscs(enables);
 
                 // noc_index = launch_msg_address->kernel_config.brisc_noc_id;
                 // noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;

@@ -28,7 +28,7 @@ const std::unique_ptr<tt::umd::Cluster> PhysicalSystemDescriptor::null_cluster =
 namespace {
 
 // This reimplements tt::Cluster::get_bus_id() and should be moved to tt::umd::Cluster
-inline uint16_t get_bus_id(const std::unique_ptr<tt::umd::Cluster>& cluster, chip_id_t chip) {
+inline uint16_t get_bus_id(const std::unique_ptr<tt::umd::Cluster>& cluster, ChipId chip) {
     return cluster->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().pci_bus;
 }
 
@@ -36,14 +36,14 @@ inline uint16_t get_bus_id(const std::unique_ptr<tt::umd::Cluster>& cluster, chi
 tt::ARCH get_arch(const std::unique_ptr<tt::umd::Cluster>& cluster) {
     // Pick a chip and query its architecture
     auto cluster_descriptor = cluster->get_cluster_description();
-    const std::unordered_set<chip_id_t>& chips = cluster_descriptor->get_all_chips();
+    const std::unordered_set<ChipId>& chips = cluster_descriptor->get_all_chips();
     TT_FATAL(!chips.empty(), "Unable to determine architecture because UMD driver detected no chips.");
     tt::ARCH arch = cluster_descriptor->get_arch(*chips.begin());
     TT_FATAL(arch != tt::ARCH::Invalid, "Chip {} has invalid architecture.", *chips.begin());
 
     // We don't yet support mixed architecture clusters. Check that all chips are the same architecture.
     bool all_same_arch = std::all_of(
-        chips.begin(), chips.end(), [&](chip_id_t chip_id) { return cluster_descriptor->get_arch(chip_id) == arch; });
+        chips.begin(), chips.end(), [&](ChipId chip_id) { return cluster_descriptor->get_arch(chip_id) == arch; });
 
     TT_FATAL(all_same_arch, "Chips with differing architectures detected. This is unsupported.");
 
@@ -70,7 +70,7 @@ std::string get_mobo_name() {
 
 TrayID get_tray_id_for_chip(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
-    chip_id_t chip_id,
+    ChipId chip_id,
     const std::string& mobo_name,
     bool using_mock_cluster_desc) {
     static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
@@ -90,7 +90,7 @@ TrayID get_tray_id_for_chip(
 }
 
 std::pair<TrayID, ASICLocation> get_asic_position(
-    const std::unique_ptr<tt::umd::Cluster>& cluster, tt::ARCH arch, chip_id_t chip_id, bool using_mock_cluster_desc) {
+    const std::unique_ptr<tt::umd::Cluster>& cluster, tt::ARCH arch, ChipId chip_id, bool using_mock_cluster_desc) {
     auto cluster_desc = cluster->get_cluster_description();
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB) {
         constexpr std::string_view ubb_mobo_name = "S7T-MB";
@@ -263,7 +263,7 @@ void PhysicalSystemDescriptor::run_local_discovery() {
     auto& asic_graph = system_graph_.asic_connectivity_graph[hostname];
     auto& exit_nodes = exit_node_connection_table_[hostname];
 
-    auto add_local_asic_descriptor = [&](AsicID src_unique_id, chip_id_t src_chip_id) {
+    auto add_local_asic_descriptor = [&](AsicID src_unique_id, ChipId src_chip_id) {
         auto [tray_id, asic_location] =
             get_asic_position(cluster_, get_arch(cluster_), src_chip_id, using_mock_cluster_desc_);
         asic_descriptors_[src_unique_id] = ASICDescriptor{
@@ -274,7 +274,7 @@ void PhysicalSystemDescriptor::run_local_discovery() {
         auto src_unique_id = AsicID{chip_unique_ids.at(src)};
         // Populate ASIC Descriptor with Physical Information
         add_local_asic_descriptor(src_unique_id, src);
-        std::unordered_map<chip_id_t, size_t> visited_dst;
+        std::unordered_map<ChipId, size_t> visited_dst;
         // Populate ASIC Graph for Current Host
         for (auto& [chan, dst] : conn) {
             auto dst_chip = std::get<0>(dst);
@@ -316,7 +316,7 @@ void PhysicalSystemDescriptor::run_local_discovery() {
                 .eth_conn = EthConnection(eth_chan, dst_chan, false)});
         }
     }
-    this->generate_ethernet_metrics();
+    this->generate_local_ethernet_metrics();
     system_graph_.host_connectivity_graph[hostname] = {};
 }
 
@@ -798,7 +798,7 @@ std::pair<AsicID, uint8_t> PhysicalSystemDescriptor::get_connected_asic_and_chan
     return {AsicID{0}, 0};
 }
 
-void PhysicalSystemDescriptor::generate_ethernet_metrics() {
+void PhysicalSystemDescriptor::generate_local_ethernet_metrics() {
     const auto& local_asics = get_asics_connected_to_host(my_host_name());
     const auto& local_asic_graph = get_asic_topology(my_host_name());
 

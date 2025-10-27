@@ -157,11 +157,14 @@ ttnn::Tensor bound_matmul(
 
     if (parameters.user_fused_activation.has_value() && !has_user_grid) {
         const UnaryOpType& op_type = parameters.user_fused_activation.value().op_type;
+
+        // Gelu must have approximation disabled for model accuracy. Other activations are run as-is.
+        auto activation = (op_type == UnaryOpType::GELU)
+                              ? ttnn::operations::unary::EltwiseUnaryWithParam{op_type, static_cast<float>(false)}
+                              : ttnn::operations::unary::EltwiseUnaryWithParam{op_type};
+
         output_tensor = ttnn::operations::unary::Unary_chain::invoke(
-            output_tensor,
-            {ttnn::operations::unary::EltwiseUnaryWithParam{op_type}},
-            parameters.output_mem_config,
-            optional_output_tensor);
+            output_tensor, {activation}, parameters.output_mem_config, optional_output_tensor);
     }
 
     return output_tensor;
@@ -398,6 +401,7 @@ Tensor SparseMatmulOperation::invoke(
     const Tensor& sparsity,
     const std::optional<uint32_t> nnz,
     bool is_input_a_sparse,
+    bool is_input_b_sparse,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const DataType> dtype,
     const std::optional<const MatmulProgramConfig>& program_config,
@@ -416,6 +420,7 @@ Tensor SparseMatmulOperation::invoke(
         SparseMatmul{
             nnz,
             is_input_a_sparse,
+            is_input_b_sparse,
             program_config,
             memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
             dtype,

@@ -123,37 +123,6 @@ class TransformerConfig:
             self.low_freq_factor = self.rope.get("low_freq_factor", None)
             self.original_context_length = self.rope.get("original_context_length", None)
 
-    def update_config(self, yaml_config: dict):
-        """Update transformer configuration from another YAML config.
-
-        Args:
-            yaml_config: Dictionary containing configuration
-        """
-        if "transformer_config" not in yaml_config:
-            return
-
-        tc = yaml_config.get("transformer_config", {})
-        self.runner_type = tc.get("runner_type", self.runner_type)
-        self.num_heads = int(tc.get("num_heads", self.num_heads))
-        self.embedding_dim = int(tc.get("embedding_dim", self.embedding_dim))
-        self.dropout_prob = float(tc.get("dropout_prob", self.dropout_prob))
-        self.num_blocks = int(tc.get("num_blocks", self.num_blocks))
-        self.vocab_size = int(tc.get("vocab_size", self.vocab_size))
-        self.weight_tying = tc.get("weight_tying", self.weight_tying)
-        self.max_sequence_length = int(tc.get("max_sequence_length", self.max_sequence_length))
-
-        self.intermediate_dim = tc.get("intermediate_dim", self.intermediate_dim)
-        self.theta = tc.get("theta", self.theta)
-        self.num_groups = tc.get("num_groups", self.num_groups)
-
-        if "rope_scaling" in tc:
-            self.rope = tc.get("rope_scaling", self.rope)
-            if self.rope:
-                self.scaling_factor = self.rope.get("scaling_factor", self.scaling_factor)
-                self.high_freq_factor = self.rope.get("high_freq_factor", self.high_freq_factor)
-                self.low_freq_factor = self.rope.get("low_freq_factor", self.low_freq_factor)
-                self.original_context_length = self.rope.get("original_context_length", self.original_context_length)
-
 
 class SchedulerConfig:
     """Configuration for learning rate scheduler."""
@@ -170,14 +139,31 @@ class SchedulerConfig:
         self.warmup_steps = int(sc.get("warmup_steps", 100))
         self.hold_steps = int(sc.get("hold_steps", 0))
 
-    def update_config(self, yaml_config: dict):
-        """Update scheduler configuration from another YAML config.
 
-        Args:
-            yaml_config: Dictionary containing configuration
-        """
-        sc = yaml_config.get("scheduler_config", {})
-        self.max_lr = float(sc.get("max_lr", self.max_lr))
-        self.min_lr = float(sc.get("min_lr", self.min_lr))
-        self.warmup_steps = int(sc.get("warmup_steps", self.warmup_steps))
-        self.hold_steps = int(sc.get("hold_steps", self.hold_steps))
+class PipelineParallelHostConfig:
+    """Host-side representation of pipeline-parallel configuration.
+
+    Parsed from YAML under multihost_config.pipeline_parallel_config.
+    """
+
+    def __init__(self, cfg: dict):
+        self.num_blocks = int(cfg.get("num_blocks", 0))
+        self.blocks_per_rank = {int(k): int(v) for k, v in dict(cfg.get("blocks_per_rank", {})).items()}
+
+
+class MultiHostConfig:
+    """Configuration for multihost (multi-process) execution.
+
+    Captures transport and optional pipeline-parallel settings.
+    """
+
+    def __init__(self, yaml_config: dict):
+        mh = yaml_config.get("multihost_config", {})
+        self.enabled = bool(mh.get("enabled", False))
+        self.num_workers = int(mh.get("num_workers", 1))
+        # Keep as lowercase string to avoid importing native enums here
+        self.socket_type = str(mh.get("socket_type", "mpi")).strip().lower()
+
+        pp_cfg = mh.get("pipeline_parallel_config")
+        self.pipeline_parallel_config = PipelineParallelHostConfig(pp_cfg) if isinstance(pp_cfg, dict) else None
+

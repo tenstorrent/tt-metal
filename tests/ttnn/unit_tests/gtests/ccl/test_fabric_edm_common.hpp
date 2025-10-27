@@ -294,7 +294,7 @@ Correctness run_output_check(CONTAINER_T const& inputs, CONTAINER_T output_buffe
     return pass ? Correctness::Correct : Correctness::Incorrect;
 };
 
-void run_workloads(
+inline void run_workloads(
     std::vector<tt::tt_metal::distributed::MeshWorkload>& workloads,
     const std::vector<std::shared_ptr<MeshDevice>>& devices) {
     EXPECT_EQ(workloads.size(), devices.size());
@@ -349,7 +349,7 @@ using mode_variant_t = std::variant<mcast_send, unicast_send>;
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
-ttnn::ccl::Shape4D<uint32_t> shape_to_shape_in_tiles(const ttnn::Shape& shape) {
+inline ttnn::ccl::Shape4D<uint32_t> shape_to_shape_in_tiles(const ttnn::Shape& shape) {
     auto logical_shape = shape;
     logical_shape[-2] /= tt::constants::TILE_HEIGHT;
     logical_shape[-1] /= tt::constants::TILE_WIDTH;
@@ -660,7 +660,8 @@ bool RunPipelinedWorkersTest(
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include "ttnn/operations/experimental/ccl/all_gather_command_processor_async/device/all_gather_command_processor_async_op.hpp"
-void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_links, const ttnn::Shape& input_shape) {
+inline void run_all_gather_with_persistent_fabric(
+    const size_t dim, const size_t num_links, const ttnn::Shape& input_shape) {
     log_info(tt::LogTest, "entering test");
     constexpr auto layout = Layout::TILE;
     // DEVICES setuip
@@ -717,7 +718,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
     log_info(tt::LogTest, "Finished");
 }
 
-void run_ring_all_gather_with_persistent_fabric(
+inline void run_ring_all_gather_with_persistent_fabric(
     const size_t dim, const size_t num_links, const ttnn::Shape& input_shape) {
     log_info(tt::LogTest, "entering test");
     constexpr auto layout = Layout::TILE;

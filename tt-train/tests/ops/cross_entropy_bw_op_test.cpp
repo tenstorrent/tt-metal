@@ -262,7 +262,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Backward) {
 
 TEST_F(CrossEntropyBackwardTest, NIGHTLY_CrossEntropyBackward_Huge_Backward) {
     auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
-    if (board == BoardType::P100 || board == BoardType::P150) {
+    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
         GTEST_SKIP() << "Skipping on P100/P150 boards";
     }
     using namespace ttml;
@@ -321,7 +321,7 @@ TEST_F(CrossEntropyBackwardTest, NIGHTLY_CrossEntropyBackward_Huge_Backward) {
 TEST_F(CrossEntropyBackwardTest, CrossEntropyForwardBackward_ReduceMeanVsNone) {
     using namespace ttml;
 
-    const uint32_t N = 1U, C = 1U, H = 91U, W = 187U;
+    const uint32_t N = 5U, C = 1U, H = 91U, W = 187U;
     const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
 
     std::random_device rd;
@@ -334,7 +334,6 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyForwardBackward_ReduceMeanVsNone) {
         []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
         seed);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
-    xt::xarray<float> grad_tensor = xt::ones<float>({1U, 1U, 1U, 1U});
 
     std::uniform_int_distribution<uint32_t> class_dist(0, W - 1);
     for (uint32_t n = 0; n < N; ++n) {
@@ -360,11 +359,6 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyForwardBackward_ReduceMeanVsNone) {
 
     auto result_none_after_mean_xtensor = core::to_xtensor(result_none_with_mean_after->get_value());
     auto result_mean_xtensor = core::to_xtensor(result_mean->get_value());
-
-    // print all shapes
-    std::cout << "Result_none_shape: " << result_none->get_shape() << std::endl;
-    std::cout << "Result_mean_shape: " << result_mean->get_shape() << std::endl;
-    std::cout << "Result_none_with_mean_after_shape: " << result_none_with_mean_after->get_shape() << std::endl;
 
     assert((result_none_after_mean_xtensor.shape() == result_mean_xtensor.shape()));
     EXPECT_TRUE(xt::allclose(result_none_after_mean_xtensor, result_mean_xtensor, 3e-2F, 1e-2F));

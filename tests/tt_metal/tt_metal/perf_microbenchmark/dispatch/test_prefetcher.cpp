@@ -80,9 +80,9 @@ constexpr uint32_t PCIE_TRANSFER_SIZE_DEFAULT = 4096;
 
 constexpr uint32_t host_data_dirty_pattern = 0xbaadf00d;
 
-constexpr CoreType DISPATCH_CORE_TYPE =
-    CoreType::WORKER;  // If this changes, need to pass it into CreateDevice. TODO: Clean this up when when we clean up
-                       // single device creation.
+constexpr tt::CoreType DISPATCH_CORE_TYPE =
+    tt::CoreType::WORKER;  // If this changes, need to pass it into CreateDevice. TODO: Clean this up when when we clean
+                           // up single device creation.
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // Test dispatch program performance
@@ -192,7 +192,8 @@ void init(int argc, char** argv) {
         test_args::get_command_option_uint32(input_args, "-hp", DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE);
     prefetch_q_entries_g = test_args::get_command_option_uint32(input_args, "-hq", DEFAULT_PREFETCH_Q_ENTRIES);
     cmddat_q_size_g = test_args::get_command_option_uint32(input_args, "-cs", DEFAULT_CMDDAT_Q_SIZE);
-    max_prefetch_command_size_g = cmddat_q_size_g / 2;  // note: half this for best perf
+    max_prefetch_command_size_g =
+        cmddat_q_size_g / 2 - (CQ_PREFETCH_CMD_BARE_MIN_SIZE - 1);  // note: half this for best perf
     scratch_db_size_g = test_args::get_command_option_uint32(input_args, "-ss", DEFAULT_SCRATCH_DB_SIZE);
     use_coherent_data_g = test_args::has_command_option(input_args, "-c");
     readback_every_iteration_g = !test_args::has_command_option(input_args, "-rb");
@@ -377,9 +378,10 @@ void add_prefetcher_cmd_to_hostq(
     uint32_t new_size = (cmds.size() - prior_end) * sizeof(uint32_t);
     TT_FATAL(
         new_size <= max_prefetch_command_size_g,
-        "Generated prefetcher command {} exceeds max command size {}",
+        "Generated prefetcher command {} exceeds max command size {} (padding size {} B)",
         new_size,
-        max_prefetch_command_size_g);
+        max_prefetch_command_size_g,
+        pad_size_bytes);
     TT_FATAL((new_size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "HostQ command too large to represent");
     sizes.push_back(new_size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
 }
@@ -1190,7 +1192,7 @@ void gen_rnd_test(
                     gen_rnd_debug_cmd(prefetch_cmds, cmd_sizes, device_data);
                 }
                 break;
-            default: TT_THROW("Invalid prefetch cmd {} in gen_rnd_test", cmd);
+            default: gen_rnd_test(device, prefetch_cmds, cmd_sizes, device_data); break;
         }
     }
 }
@@ -1773,7 +1775,7 @@ void write_prefetcher_cmd(
     uint32_t prefetch_q_base,
     uint32_t prefetch_q_rd_ptr_addr,
     CoreCoord phys_prefetch_core,
-    tt::Writer& prefetch_q_writer) {
+    umd::Writer& prefetch_q_writer) {
     static vector<uint32_t> read_vec;  // static to avoid realloc
 
     // wait for space
@@ -1832,7 +1834,7 @@ void write_prefetcher_cmds(
     uint32_t prefetch_q_base,
     uint32_t prefetch_q_rd_ptr_addr,
     CoreCoord phys_prefetch_core,
-    tt::Writer& prefetch_q_writer,
+    umd::Writer& prefetch_q_writer,
     bool is_control_only) {
     static uint32_t* host_mem_ptr;
     static uint32_t prefetch_q_dev_ptr;
@@ -1918,7 +1920,7 @@ std::chrono::duration<double> run_test(
     uint32_t prefetch_q_base,
     uint32_t prefetch_q_rd_ptr_addr,
     CoreCoord phys_prefetch_core,
-    tt::Writer& prefetch_q_writer) {
+    umd::Writer& prefetch_q_writer) {
     auto start = std::chrono::system_clock::now();
 
     std::thread t1([&]() {
@@ -2009,7 +2011,7 @@ void configure_for_single_chip(
     TT_ASSERT(cmddat_q_size_g >= 2 * max_prefetch_command_size_g);
 
     // NOTE: this test hijacks hugepage
-    chip_id_t mmio_device_id =
+    ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
@@ -2439,7 +2441,7 @@ int main(int argc, char** argv) {
         }
         log_info(LogTest, "Iterations: {}", iterations_g);
 
-        tt::Writer prefetch_q_writer = tt::tt_metal::MetalContext::instance().get_cluster().get_static_tlb_writer(
+        umd::Writer prefetch_q_writer = tt::tt_metal::MetalContext::instance().get_cluster().get_static_tlb_writer(
             tt_cxy_pair(device->id(), phys_prefetch_core_g));
 
         vector<uint32_t> cmds, terminate_cmds;

@@ -30,7 +30,8 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case LOGADDEXP:
         case LOGADDEXP2:
         case LDEXP:
-        case BIAS_GELU: return (a == FLOAT32 && b == FLOAT32);
+        case BIAS_GELU:
+        case HYPOT: return (a == FLOAT32 && b == FLOAT32);
         case RSUB:
         case GT:
         case LT:
@@ -147,8 +148,6 @@ void validate_sharding(
     TensorMemoryLayout memory_layout_y,
     const ShardSpec& shard_spec_y,
     SubtileBroadcastType subtile_broadcast_type) {
-    TT_FATAL(memory_layout_x == memory_layout_y, "Operands to eltwise binary need to have the same memory layout");
-
     switch (subtile_broadcast_type) {
         case SubtileBroadcastType::NONE:
             TT_FATAL(shard_spec_x == shard_spec_y, "Operands to eltwise binary need to have the same shard spec");
