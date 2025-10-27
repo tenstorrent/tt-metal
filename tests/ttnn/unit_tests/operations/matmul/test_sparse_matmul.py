@@ -116,7 +116,8 @@ def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_batches, tile_h, t
 @pytest.mark.parametrize("tile_h", [16])
 @pytest.mark.parametrize("tile_w", [32])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat8_b])
-def test_sparse_matmul_without_nnz(device, mkn, num_experts, num_batches, tile_h, tile_w, in1_dtype):
+@pytest.mark.parametrize("core_grid", [(4, 4)])
+def test_sparse_matmul_without_nnz(device, mkn, num_experts, num_batches, tile_h, tile_w, in1_dtype, core_grid):
     torch.manual_seed(0)
     m, k, n = mkn
     b, s = num_batches
@@ -163,6 +164,7 @@ def test_sparse_matmul_without_nnz(device, mkn, num_experts, num_batches, tile_h
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    core_x, core_y = core_grid
     output_tile = ttnn.Tile([tile_h, tile_w])
     output_t = ttnn.sparse_matmul(
         in0_t,
@@ -170,6 +172,19 @@ def test_sparse_matmul_without_nnz(device, mkn, num_experts, num_batches, tile_h
         sparsity=sparsity_t,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         output_tile=output_tile,
+        program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            out_block_h=1,
+            out_block_w=1,
+            per_core_M=m // tile_h,
+            per_core_N=int(math.ceil(n / tile_w)) // (core_x * core_y),
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+        ),
     )
 
     output_tensor = ttnn.to_torch(output_t)
