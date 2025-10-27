@@ -89,6 +89,37 @@ protected:
     bool value_ = false;
 };
 
+// System-level boolean metric with labels (for host health, not device metrics)
+class SystemBoolMetric : public BoolMetric {
+public:
+    SystemBoolMetric(
+        std::string_view name,
+        const std::unordered_map<std::string, std::string>& labels = {},
+        MetricUnit metric_units = MetricUnit::UNITLESS) :
+        BoolMetric(metric_units), name_(name), labels_(labels) {}
+
+    void set_value(bool value) {
+        value_ = value;
+        changed_since_transmission_ = true;
+        timestamp_ =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+                .count();
+    }
+
+    void set_labels(const std::unordered_map<std::string, std::string>& labels) {
+        labels_ = labels;
+        changed_since_transmission_ = true;
+    }
+
+    std::string_view name() const { return name_; }
+
+    const std::unordered_map<std::string, std::string>& labels() const { return labels_; }
+
+private:
+    std::string name_;
+    std::unordered_map<std::string, std::string> labels_;
+};
+
 class UIntMetric: public Metric {
 public:
     UIntMetric(MetricUnit metric_units = MetricUnit::UNITLESS) : Metric(metric_units) {}

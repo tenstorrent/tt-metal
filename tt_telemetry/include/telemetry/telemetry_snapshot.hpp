@@ -29,12 +29,17 @@ struct TelemetrySnapshot {
     std::unordered_map<std::string, uint64_t> uint_metrics;
     std::unordered_map<std::string, double> double_metrics;
 
+    // System-level metrics (host health, not device telemetry)
+    std::unordered_map<std::string, bool> system_bool_metrics;
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> system_bool_metric_labels;
+
     // Metadata maps: path -> metadata
     std::unordered_map<std::string, uint64_t> bool_metric_timestamps;
     std::unordered_map<std::string, uint16_t> uint_metric_units;
     std::unordered_map<std::string, uint64_t> uint_metric_timestamps;
     std::unordered_map<std::string, uint16_t> double_metric_units;
     std::unordered_map<std::string, uint64_t> double_metric_timestamps;
+    std::unordered_map<std::string, uint64_t> system_bool_metric_timestamps;
 
     // Unit label maps
     std::unordered_map<uint16_t, std::string> metric_unit_display_label_by_code;
@@ -44,11 +49,14 @@ struct TelemetrySnapshot {
         bool_metrics.clear();
         uint_metrics.clear();
         double_metrics.clear();
+        system_bool_metrics.clear();
+        system_bool_metric_labels.clear();
         bool_metric_timestamps.clear();
         uint_metric_units.clear();
         uint_metric_timestamps.clear();
         double_metric_units.clear();
         double_metric_timestamps.clear();
+        system_bool_metric_timestamps.clear();
         metric_unit_display_label_by_code.clear();
         metric_unit_full_label_by_code.clear();
     }
@@ -109,6 +117,17 @@ private:
         }
         for (const auto& [path, timestamp] : other.double_metric_timestamps) {
             double_metric_timestamps[path] = timestamp;
+        }
+
+        // Update system metrics and their metadata
+        for (const auto& [path, value] : other.system_bool_metrics) {
+            system_bool_metrics[path] = value;
+        }
+        for (const auto& [path, labels] : other.system_bool_metric_labels) {
+            system_bool_metric_labels[path] = labels;
+        }
+        for (const auto& [path, timestamp] : other.system_bool_metric_timestamps) {
+            system_bool_metric_timestamps[path] = timestamp;
         }
     }
 
@@ -211,6 +230,17 @@ private:
         for (const auto& [path, timestamp] : other.double_metric_timestamps) {
             double_metric_timestamps[path] = timestamp;
         }
+
+        // Validate and merge system metrics
+        for (const auto& [path, value] : other.system_bool_metrics) {
+            system_bool_metrics[path] = value;
+        }
+        for (const auto& [path, labels] : other.system_bool_metric_labels) {
+            system_bool_metric_labels[path] = labels;
+        }
+        for (const auto& [path, timestamp] : other.system_bool_metric_timestamps) {
+            system_bool_metric_timestamps[path] = timestamp;
+        }
     }
 
 public:
@@ -221,11 +251,14 @@ public:
          {"bool_metrics", t.bool_metrics},
          {"uint_metrics", t.uint_metrics},
          {"double_metrics", t.double_metrics},
+         {"system_bool_metrics", t.system_bool_metrics},
+         {"system_bool_metric_labels", t.system_bool_metric_labels},
          {"bool_metric_timestamps", t.bool_metric_timestamps},
          {"uint_metric_units", t.uint_metric_units},
          {"uint_metric_timestamps", t.uint_metric_timestamps},
          {"double_metric_units", t.double_metric_units},
          {"double_metric_timestamps", t.double_metric_timestamps},
+         {"system_bool_metric_timestamps", t.system_bool_metric_timestamps},
          {"metric_unit_display_label_by_code", t.metric_unit_display_label_by_code},
          {"metric_unit_full_label_by_code", t.metric_unit_full_label_by_code},
      };
@@ -235,11 +268,14 @@ static inline void from_json(const nlohmann::json &j, TelemetrySnapshot &t) {
     j.at("bool_metrics").get_to(t.bool_metrics);
     j.at("uint_metrics").get_to(t.uint_metrics);
     j.at("double_metrics").get_to(t.double_metrics);
+    j.at("system_bool_metrics").get_to(t.system_bool_metrics);
+    j.at("system_bool_metric_labels").get_to(t.system_bool_metric_labels);
     j.at("bool_metric_timestamps").get_to(t.bool_metric_timestamps);
     j.at("uint_metric_units").get_to(t.uint_metric_units);
     j.at("uint_metric_timestamps").get_to(t.uint_metric_timestamps);
     j.at("double_metric_units").get_to(t.double_metric_units);
     j.at("double_metric_timestamps").get_to(t.double_metric_timestamps);
+    j.at("system_bool_metric_timestamps").get_to(t.system_bool_metric_timestamps);
     j.at("metric_unit_display_label_by_code").get_to(t.metric_unit_display_label_by_code);
     j.at("metric_unit_full_label_by_code").get_to(t.metric_unit_full_label_by_code);
 }
