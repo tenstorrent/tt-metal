@@ -275,7 +275,7 @@ jobs:
         with:
           device_perf_model_name: "vanilla_unet"
           commands: |
-            pytest models/demos/vanilla_unet/tests -m models_device_performance_bare_metal
+            pytest models/demos/vanilla_unet/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 

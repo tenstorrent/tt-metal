@@ -4,94 +4,18 @@
 
 import argparse
 import os
-import time
 
 import pytest
 import torch
 from loguru import logger
 from skimage.io import imsave
-from ttnn.model_preprocessing import preprocess_model_parameters
+from tqdm import tqdm
 
 import ttnn
 from models.common.utility_functions import run_for_wormhole_b0
+from models.demos.vanilla_unet.common import VANILLA_UNET_L1_SMALL_SIZE, load_torch_model
 from models.demos.vanilla_unet.demo import demo_utils
-from models.demos.vanilla_unet.tt.common import (
-    VANILLA_UNET_L1_SMALL_SIZE,
-    VANILLA_UNET_TRACE_SIZE,
-    create_unet_preprocessor,
-    load_reference_model,
-)
-from models.demos.vanilla_unet.tt.config import create_unet_configs_from_parameters
-from models.demos.vanilla_unet.tt.model import create_unet_from_configs
-
-# Constants
-DEFAULT_RESOLUTION = (480, 640)
-INPUT_CHANNELS = 3
-DEMO_IMAGE_DIR = "models/demos/vanilla_unet/demo/images"
-DEMO_IMAGE_NAME = "TCGA_CS_4944_20010208_1.tif"
-DEMO_MASK_NAME = "TCGA_CS_4944_20010208_1_mask.tif"
-WEIGHTS_PATH = "models/demos/vanilla_unet/unet.pt"
-WEIGHTS_DOWNLOAD_SCRIPT = "models/demos/vanilla_unet/weights_download.sh"
-PRED_DIR = "models/demos/vanilla_unet/demo/pred"
-
-
-def get_weights_path(model_location_generator):
-    """Get the path to model weights, downloading if necessary."""
-    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
-        if not os.path.exists(WEIGHTS_PATH):
-            logger.info("Downloading weights...")
-            os.system(f"bash {WEIGHTS_DOWNLOAD_SCRIPT}")
-        return WEIGHTS_PATH
-    else:
-        return (
-            model_location_generator("vision-models/unet_vanilla", model_subdir="", download_if_ci_v2=True) / "unet.pt"
-        )
-
-
-def prepare_ttnn_input(x, batch_size, resolution, device, memory_config):
-    """Convert PyTorch input tensor to TT-NN format."""
-    ttnn_input = x.reshape(batch_size, 1, INPUT_CHANNELS, resolution[0] * resolution[1])
-    ttnn_input = ttnn.from_torch(
-        ttnn_input,
-        dtype=ttnn.bfloat16,
-        device=device,
-        memory_config=memory_config,
-    )
-    return ttnn_input
-
-
-def run_ttnn_inference(model, x, batch_size, resolution, device, configs):
-    """Run inference using TT-NN model."""
-    start_time = time.time()
-    logger.info("Running model compilation and inference...")
-
-    ttnn_input = prepare_ttnn_input(x, batch_size, resolution, device, configs.l1_input_memory_config)
-    y_pred = model(ttnn_input)
-
-    y_pred = ttnn.to_torch(y_pred)
-    y_pred = y_pred.reshape(batch_size, 1, resolution[0], resolution[1])
-    y_pred = y_pred.to(torch.float)
-
-    logger.info(f"Model compilation and inference completed in {time.time() - start_time:.2f}s")
-    return y_pred
-
-
-def run_torch_inference(model, x):
-    """Run inference using PyTorch reference model."""
-    start_time = time.time()
-    logger.info("Running inference...")
-    y_pred = model(x)
-    logger.info(f"Inference completed in {time.time() - start_time:.2f}s")
-    return y_pred
-
-
-def save_visualization(y_pred_np, y_true_np, output_path):
-    """Create and save visualization with predicted and ground truth outlines."""
-    image = demo_utils.gray2rgb(y_pred_np[0, 0])
-    image = demo_utils.outline(image, y_pred_np[0, 0], color=[255, 0, 0])  # Predicted (red)
-    image = demo_utils.outline(image, y_true_np[0, 0], color=[0, 255, 0])  # Ground truth (green)
-    imsave(output_path, image)
-    logger.info(f"Saved result to: {output_path}")
+from models.demos.vanilla_unet.runner.performant_runner import VanillaUNetPerformantRunner
 
 
 def run_unet_demo_single_image(
@@ -100,80 +24,91 @@ def run_unet_demo_single_image(
     model_location_generator,
     use_torch_model,
     batch_size,
-    resolution=DEFAULT_RESOLUTION,
+    act_dtype,
+    weight_dtype,
+    resolution=(480, 640),
     filename="result_ttnn_1.png",
 ):
-    logger.info(f"Starting Vanilla UNet demo with resolution=({resolution[0]}x{resolution[1]}) and batch={batch_size}")
+    if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
+        weights_path = "models/demos/vanilla_unet/unet.pt"
+        if not os.path.exists(weights_path):
+            os.system("bash models/demos/vanilla_unet/weights_download.sh")
+    else:
+        weights_path = (
+            model_location_generator("vision-models/unet_vanilla", model_subdir="", download_if_ci_v2=True) / "unet.pt"
+        )
 
-    weights_path = get_weights_path(model_location_generator)
-    os.makedirs(PRED_DIR, exist_ok=True)
+    pred_dir = "models/demos/vanilla_unet/demo/pred"
+    # Create the directory if it doesn't exist
+    if not os.path.exists(pred_dir):
+        os.makedirs(pred_dir)
 
-    image_path = os.path.join(DEMO_IMAGE_DIR, DEMO_IMAGE_NAME)
-    mask_path = os.path.join(DEMO_IMAGE_DIR, DEMO_MASK_NAME)
-
-    logger.info(f"Loading test image: {image_path}")
     args = argparse.Namespace(
-        image=image_path,
-        mask=mask_path,
-        image_size=resolution,
-        batch_size=batch_size,
+        device="cpu",  # Choose "cpu" or "cuda:0" based on your setup
+        batch_size=1,
+        weights=weights_path,  # Path to the pre-trained model weights
+        image="models/demos/vanilla_unet/demo/images/TCGA_CS_4944_20010208_1.tif",  # Path to your input image
+        mask="models/demos/vanilla_unet/demo/images/TCGA_CS_4944_20010208_1_mask.tif",  # Path to your input mask
+        image_size=resolution,  # Resize input image to this size
+        predictions="models/demos/vanilla_unet/demo/pred",  # Directory to save prediction results
     )
-    loader = demo_utils.data_loader(args)
 
-    start_time = time.time()
-    logger.info("Loading reference model...")
-    reference_model = load_reference_model(model_location_generator)
-    logger.info(f"Reference model loaded in {time.time() - start_time:.2f}s")
+    loader = demo_utils.data_loader(args)  # loader will load just a single image
+    reference_model = load_torch_model(model_location_generator)
 
-    ttnn_model = None
-    ttnn_configs = None
-    if not use_torch_model:
-        start_time = time.time()
-        logger.info("Initializing TT-NN model...")
-        parameters = preprocess_model_parameters(
-            initialize_model=lambda: reference_model,
-            custom_preprocessor=create_unet_preprocessor(device),
-            device=None,
-        )
-        ttnn_configs = create_unet_configs_from_parameters(
-            parameters=parameters,
-            input_height=resolution[0],
-            input_width=resolution[1],
-            batch_size=batch_size,
-        )
-        ttnn_model = create_unet_from_configs(ttnn_configs, device)
-        logger.info(f"TT-NN model initialized in {time.time() - start_time:.2f}s")
+    performant_runner = VanillaUNetPerformantRunner(
+        device,
+        batch_size,
+        act_dtype,
+        weight_dtype,
+        resolution=resolution,
+        model_location_generator=model_location_generator,
+    )
 
-    for data in loader:
+    # Processing the data
+    for data in tqdm(loader):
         x, y_true = data
         x = x.squeeze(1)
-
+        # Get the prediction
         if use_torch_model:
-            y_pred = run_torch_inference(reference_model, x)
+            y_pred = reference_model(x)
         else:
-            y_pred = run_ttnn_inference(ttnn_model, x, batch_size, resolution, device, ttnn_configs)
+            y_pred = performant_runner.run(x)
+            y_pred = ttnn.to_torch(y_pred, mesh_composer=performant_runner.runner_infra.output_mesh_composer)
+            y_pred = y_pred.permute(0, 3, 1, 2)
+            y_pred = y_pred.reshape(batch_size, 1, resolution[0], resolution[1])
+            y_pred = y_pred.to(torch.float)
 
+        # Convert predictions to numpy
         y_pred_np = y_pred.detach().cpu().numpy()
         y_true_np = y_true.detach().cpu().numpy()
-        output_path = os.path.join(PRED_DIR, filename)
-        save_visualization(y_pred_np, y_true_np, output_path)
 
-    logger.info("Demo completed successfully!")
+        # Save the result
+        image = demo_utils.gray2rgb(y_pred_np[0, 0])  # Grayscale to RGB
+        image = demo_utils.outline(image, y_pred_np[0, 0], color=[255, 0, 0])  # Predicted outline (red)
+        image = demo_utils.outline(image, y_true_np[0, 0], color=[0, 255, 0])  # True outline (green)
+
+        filepath = os.path.join(args.predictions, filename)
+        imsave(filepath, image)
+
+    logger.info(f"All Predictions are saved to:{pred_dir} ")
 
 
 @run_for_wormhole_b0()
-@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize(
+    "batch_size, act_dtype, weight_dtype",
+    ((1, ttnn.bfloat8_b, ttnn.bfloat8_b),),
+)
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "l1_small_size": VANILLA_UNET_L1_SMALL_SIZE,
-            "trace_region_size": VANILLA_UNET_TRACE_SIZE,
-            "num_command_queues": 2,
-        }
-    ],
+    [{"l1_small_size": VANILLA_UNET_L1_SMALL_SIZE, "trace_region_size": 1605632, "num_command_queues": 2}],
     indirect=True,
 )
 @pytest.mark.parametrize("use_torch_model", [False])
-def test_unet_demo_single_image(device, reset_seeds, model_location_generator, use_torch_model, batch_size):
-    return run_unet_demo_single_image(device, reset_seeds, model_location_generator, use_torch_model, batch_size)
+@run_for_wormhole_b0()
+def test_unet_demo_single_image(
+    device, reset_seeds, model_location_generator, use_torch_model, batch_size, act_dtype, weight_dtype
+):
+    return run_unet_demo_single_image(
+        device, reset_seeds, model_location_generator, use_torch_model, batch_size, act_dtype, weight_dtype
+    )
