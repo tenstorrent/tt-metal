@@ -10,6 +10,7 @@
 #include <string>
 #include <nlohmann/json.hpp>
 
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <common/TracyTTDeviceData.hpp>
 #include <tt_stl/assert.hpp>
 #include "thread_pool.hpp"
@@ -122,7 +123,7 @@ struct AnalysisConfig {
 struct OpsPerfResults {
     struct SingleOpPerfResults {
         struct OpMetaData {
-            chip_id_t device_id;
+            ChipId device_id;
             ARCH device_arch;
             std::string op_name;
             uint32_t num_fw_cores;

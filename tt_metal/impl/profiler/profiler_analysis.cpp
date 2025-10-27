@@ -128,7 +128,7 @@ std::map<OpId, OpsPerfResults::SingleOpPerfResults::OpMetaData> getMetaDataForOp
         const OpId op_id = {marker.runtime_host_id, marker.trace_id, marker.trace_id_counter};
         if (op_id_to_meta_data.find(op_id) == op_id_to_meta_data.end()) {
             const Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-            const tt_ClusterDescriptor* cluster_desc = cluster.get_cluster_desc();
+            const umd::ClusterDescriptor* cluster_desc = cluster.get_cluster_desc();
             const ARCH device_arch = cluster_desc->get_arch(marker.chip_id);
 
             const uint8_t num_hw_cqs =
