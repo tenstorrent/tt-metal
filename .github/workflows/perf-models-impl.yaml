@@ -79,7 +79,7 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           commands: pytest -n auto models/demos/vanilla_unet/tests/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' }}
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
       - name: Run functional_unet model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
