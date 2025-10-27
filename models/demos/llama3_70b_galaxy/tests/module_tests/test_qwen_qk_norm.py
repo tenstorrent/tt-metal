@@ -6,13 +6,18 @@ import pytest
 
 import ttnn
 import torch
+import torch.nn as nn
 from loguru import logger
 from models.demos.llama3_70b_galaxy.tt.model_config import (
     get_core_ranges,
 )
-from models.common.utility import torch_random
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.common.rmsnorm import RMSNorm
+from models.common.utility_functions import (
+    torch_random,
+    comp_pcc,
+    comp_allclose,
+)
 
 
 @pytest.mark.parametrize(
@@ -129,8 +134,6 @@ def test_qwen3_tg_qk_norm(
 
     global_semaphore = ttnn.create_global_semaphore(mesh_device, sub_core_grids, 0)
 
-    logger.info(f"Starting rs_create_heads")
-
     # Perform rs_create_heads using ttnn
     (
         q_heads_pre_rot_1BQD,
@@ -153,10 +156,6 @@ def test_qwen3_tg_qk_norm(
         use_noc1_only=False,
         use_optimal_ccl_for_llama=False,
     )
-
-    logger.info(f"Finished rs_create_heads")
-
-    logger.info(f"Starting qk_norm")
 
     q_norm_weights = torch.randn([1, 128])  # [1, 128] ==> [1 (32), 32 x 4]
     k_norm_weights = torch.randn([1, 128])
@@ -213,7 +212,6 @@ def test_qwen3_tg_qk_norm(
         state_dict_prefix=None,
         weight_dtype=ttnn.bfloat16,
         weight_key="q_norm",
-        # weight_memory_config=norm_weight_mem_cfg,
         sharded_program_config=norm_program_cfg,
         sharded_output_config=reshape_output_mem_cfg,
     )
@@ -224,15 +222,11 @@ def test_qwen3_tg_qk_norm(
         state_dict_prefix=None,
         weight_dtype=ttnn.bfloat16,
         weight_key="k_norm",
-        # weight_memory_config=norm_weight_mem_cfg,
         sharded_program_config=norm_program_cfg,
         sharded_output_config=reshape_output_mem_cfg,
     )
 
     # [1, 8, 8, 128] ==> [1, 1, 64, 128] ==> [1, 1, 64, 32 x 4]
-
-    breakpoint()
-
     rm_mem_cfg_q = q_heads_pre_rot_1BQD.memory_config()
     rm_mem_cfg_k = k_heads_pre_rot_1BKD.memory_config()
 
@@ -245,6 +239,9 @@ def test_qwen3_tg_qk_norm(
     q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.TILE_LAYOUT)
     k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.TILE_LAYOUT)
 
+    q_heads_intermediate_after_reshape_mem_cfg = q_heads_pre_rot_1BQD.memory_config()
+    k_heads_intermediate_after_reshape_mem_cfg = k_heads_pre_rot_1BKD.memory_config()
+
     q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, memory_config=reshape_output_mem_cfg)
     k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, memory_config=reshape_output_mem_cfg)
 
@@ -253,14 +250,15 @@ def test_qwen3_tg_qk_norm(
     q_heads_pre_rot_1BQD = q_norm(q_heads_pre_rot_1BQD, mode="decode", in_sharded=True, out_sharded=True)
     k_heads_pre_rot_1BKD = k_norm(k_heads_pre_rot_1BKD, mode="decode", in_sharded=True, out_sharded=True)
 
-    logger.info(f"Finished qk_norm")
-
-    breakpoint()
+    q_heads_pre_rot_1BQD = ttnn.to_memory_config(
+        q_heads_pre_rot_1BQD, memory_config=q_heads_intermediate_after_reshape_mem_cfg
+    )
+    k_heads_pre_rot_1BKD = ttnn.to_memory_config(
+        k_heads_pre_rot_1BKD, memory_config=k_heads_intermediate_after_reshape_mem_cfg
+    )
 
     q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.ROW_MAJOR_LAYOUT)
     k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT)
-
-    breakpoint()
 
     q_heads_pre_rot_1BQD = ttnn.reshape(q_heads_pre_rot_1BQD, [1, 8, 8, 128])
     k_heads_pre_rot_1BKD = ttnn.reshape(k_heads_pre_rot_1BKD, [1, 8, 8, 128])
@@ -268,4 +266,64 @@ def test_qwen3_tg_qk_norm(
     q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, memory_config=rm_mem_cfg_q)
     k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, memory_config=rm_mem_cfg_k)
 
-    breakpoint()
+    # Convert ttnn results back to torch for comparison
+    ttnn_q_heads_normalized = ttnn.to_torch(
+        q_heads_pre_rot_1BQD, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=(8, 4))
+    )
+    ttnn_k_heads_normalized = ttnn.to_torch(
+        k_heads_pre_rot_1BKD, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 2), mesh_shape=(8, 4))
+    )
+
+    ttnn_q_heads_normalized = ttnn_q_heads_normalized[:1, :, :, :]
+    ttnn_k_heads_normalized = ttnn_k_heads_normalized[:1, :, ::8, :].reshape(1, 32, 1, 128)
+
+    # ===== TORCH REFERENCE IMPLEMENTATION =====
+
+    # Create torch RMSNorm modules matching the ttnn implementation
+    class TorchRMSNorm(nn.Module):
+        def __init__(self, dim: int, eps: float = 1e-6):
+            super().__init__()
+            self.eps = eps
+            self.weight = nn.Parameter(torch.ones(dim))
+
+        def _norm(self, x):
+            return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+
+        def forward(self, x):
+            output = self._norm(x.float()).type_as(x)
+            return output * self.weight
+
+    # Initialize torch RMSNorm with the same weights as ttnn
+    torch_q_norm = TorchRMSNorm(128)
+    torch_k_norm = TorchRMSNorm(128)
+
+    # Set the weights to match the ttnn implementation
+    with torch.no_grad():
+        torch_q_norm.weight.copy_(q_norm_weights.squeeze())
+        torch_k_norm.weight.copy_(k_norm_weights.squeeze())
+
+    torch_xq = torch_xqkv_tensor[:, :, :, : 8 * 128].reshape(1, 32, 8, 128)  # [1, 32, 8, 128]
+    torch_xk = torch_xqkv_tensor[:, :, :, 8 * 128 : (9 * 128)]  # [1, 1, 32, 128]
+
+    # Apply QK normalization in torch (same as in Attention.forward)
+    torch_q_heads_normalized = torch_q_norm(torch_xq)  # [1, 8, 8, 128]
+    torch_k_heads_normalized = torch_k_norm(torch_xk)  # [1, 8, 8, 128]
+    idx = torch.arange(32).reshape(4, 8).T.flatten()
+    torch_k_heads_normalized = torch_k_heads_normalized[:, :, idx, :].view(1, 32, 1, 128)
+
+    # Compare results
+    logger.info("Comparing Q heads normalization results")
+    q_pcc = comp_pcc(torch_q_heads_normalized, ttnn_q_heads_normalized)
+    q_allclose = comp_allclose(torch_q_heads_normalized, ttnn_q_heads_normalized)
+    logger.info(f"Q heads PCC: {q_pcc}, AllClose: {q_allclose}")
+
+    logger.info("Comparing K heads normalization results")
+    k_pcc = comp_pcc(torch_k_heads_normalized, ttnn_k_heads_normalized)
+    k_allclose = comp_allclose(torch_k_heads_normalized, ttnn_k_heads_normalized)
+    logger.info(f"K heads PCC: {k_pcc}, AllClose: {k_allclose}")
+
+    # Assert that results are close enough
+    assert q_pcc[1] > 0.99, f"Q heads PCC {q_pcc[1]} is too low"
+    assert k_pcc[1] > 0.99, f"K heads PCC {k_pcc[1]} is too low"
+
+    logger.info("QK norm test passed successfully!")
