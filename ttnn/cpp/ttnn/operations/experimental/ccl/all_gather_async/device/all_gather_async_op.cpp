@@ -29,8 +29,6 @@ void AllGatherAsync::validate_with_output_tensors(
         "by the fabric api");
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
 
-    TT_FATAL(input_tensor.logical_shape().rank() > 2, "AllGatherAsync requires tensor of rank 3 or greater");
-
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_gather need to be allocated in buffers on device!");
     TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0 but has {}", this->num_links);
@@ -135,6 +133,9 @@ void AllGatherAsync::validate_with_output_tensors(
                 input_tensor.memory_config().buffer_type() == BufferType::L1,
                 "We don't support input DRAM block sharding");
         }
+        TT_FATAL(input_tensor.logical_shape().rank() >= 2, "AllGatherAsync requires tensor of rank 2 or greater");
+    } else {
+        TT_FATAL(input_tensor.logical_shape().rank() == 4, "Llama specific all_gather requires tensor of rank 4");
     }
 }
 
