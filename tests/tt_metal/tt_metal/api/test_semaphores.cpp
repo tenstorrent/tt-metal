@@ -151,8 +151,7 @@ void try_creating_semaphores_out_of_bounds(
     std::shared_ptr<distributed::MeshDevice> mesh_device, distributed::MeshWorkload& workload) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     // Get mesh dimensions and use an out-of-bounds coordinate
-    auto mesh_shape = mesh_device->logical_mesh_shape();
-    CoreRange core_range({0, 0}, {0, mesh_shape.y}); // mesh_shape.y is out of bounds (max valid is mesh_shape.y - 1)
+    CoreRange core_range({0, 0}, {0, 20});
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program = workload.get_programs().at(device_range);
     constexpr static uint32_t val = 5;
