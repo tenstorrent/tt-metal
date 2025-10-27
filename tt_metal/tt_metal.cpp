@@ -1198,10 +1198,9 @@ uint32_t CreateSemaphore(
         },
         core_spec);
     std::optional<uint32_t> semaphore_id;
-    TT_FATAL(crs.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
+    TT_FATAL(!crs.ranges().empty(), "Expecting a non-empty CoreRangeSet!");
     TT_FATAL(
-        tt::tt_metal::MetalContext::instance().is_coord_in_range(
-            (crs.ranges()[crs.ranges().size() - 1]).end_coord, core_type),
+        tt::tt_metal::MetalContext::instance().is_coord_in_range((crs.ranges().back()).end_coord, core_type),
         "Coordinates out of range");
     for (const auto& core_range : crs.ranges()) {
         std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(program, core_range, core_type);
