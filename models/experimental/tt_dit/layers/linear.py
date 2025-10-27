@@ -305,6 +305,8 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
         return t
     if activation_fn == "silu":
         return ttnn.silu(t)
+    if activation_fn == "gelu":
+        return ttnn.gelu(t)
     if activation_fn == "decomposed_gelu":
         return gelu_decomposed(t)
     if activation_fn == "quick_gelu":
