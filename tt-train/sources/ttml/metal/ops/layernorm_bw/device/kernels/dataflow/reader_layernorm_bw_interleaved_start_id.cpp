@@ -11,7 +11,6 @@ constexpr uint32_t cb_mask_w_idx = tt::CBIndex::c_1;      // mask for width dime
 constexpr uint32_t cb_gamma_idx = tt::CBIndex::c_2;       // gamma (scale parameter)
 constexpr uint32_t cb_rstd_idx = tt::CBIndex::c_4;        // rstd from forward pass
 constexpr uint32_t cb_dL_out_idx = tt::CBIndex::c_5;      // upstream gradient
-constexpr uint32_t cb_mat_mul_reduce = tt::CBIndex::c_6;  // reduction vector
 constexpr uint32_t cb_input_idx = tt::CBIndex::c_7;       // input tensor
 constexpr uint32_t cb_mean_idx = tt::CBIndex::c_8;        // mean from forward pass
 
@@ -60,8 +59,6 @@ void kernel_main() {
     }
     // Generate tile with scalar (1/N).
     generate_tile_with_packed_bfloat16_value(cb_scaler_idx, packed_scaler);
-    // Generate tile for matmul row reduce.
-    generate_matmul_row_reduce_tile(cb_mat_mul_reduce);
 
     const uint32_t tile_bytes = get_tile_size(cb_scaler_idx);
     constexpr auto gamma_args = TensorAccessorArgs<4>();

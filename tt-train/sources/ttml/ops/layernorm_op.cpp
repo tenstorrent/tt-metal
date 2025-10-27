@@ -15,6 +15,7 @@
 #include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/operations.hpp"
 
 namespace ttml::ops {
 
@@ -65,11 +66,49 @@ autograd::TensorPtr layernorm(
             /* memory_config */ std::nullopt,
             /* compute_kernel_config */ std::nullopt);
 
-        autograd::ctx().get_profiler().read_results(&autograd::ctx().get_device(), "updating grad vars started", 1);
         tensor->add_grad(res[0].value());
         gamma->add_grad(res[1].value());
         beta->add_grad(res[2].value());
-        autograd::ctx().get_profiler().read_results(&autograd::ctx().get_device(), "updating grad vars completed", 1);
+    };
+
+    auto links = autograd::get_links(tensor);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+
+    return out;
+}
+
+autograd::TensorPtr layernorm_bw_fused(
+    const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, const autograd::TensorPtr& beta) {
+    auto tensor_shape = tensor->get_value().logical_shape();
+    auto mean = core::empty(
+        ttnn::Shape({tensor_shape[0], tensor_shape[1], tensor_shape[2], 1}),
+        &autograd::ctx().get_device(),
+        tensor->get_value().memory_config());
+    auto rstd = ttnn::empty_like(mean);
+    auto output = ttnn::empty_like(tensor->get_value());
+
+    auto out_tensors = ttnn::moreh_layer_norm(
+        tensor->get_value(),
+        1,
+        1e-6F,
+        /* gamma */ gamma->get_value(),
+        /* beta */ beta->get_value(),
+        output,
+        mean,
+        rstd,
+        /* memory_config */ std::nullopt,
+        /* compute_kernel_config */ std::nullopt);
+
+    auto out = autograd::create_tensor();
+    out->set_value(out_tensors[0].value());
+    mean = out_tensors[1].value();
+    rstd = out_tensors[2].value();
+
+    autograd::GradFunction grad = [tensor, out, mean, rstd, gamma, beta]() {
+        auto res = ttml::metal::layernorm_bw(tensor->get_value(), gamma->get_value(), mean, rstd, out->get_grad());
+        tensor->add_grad(res[0].value());
+        gamma->add_grad(res[1].value());
+        beta->add_grad(res[2].value());
     };
 
     auto links = autograd::get_links(tensor);
