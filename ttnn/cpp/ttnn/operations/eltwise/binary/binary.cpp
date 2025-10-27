@@ -34,12 +34,12 @@ inline bool is_block_format(DataType dtype) {
     }
 }
 
-inline bool is_layout(const Tensor& input, Layout layout) { return input.layout() == layout; }
+inline bool is_layout_or_scalar(const Tensor& input, Layout layout) { return input.layout() == layout; }
 
-inline bool is_layout([[maybe_unused]] float input, [[maybe_unused]] Layout layout) { return true; }
+inline bool is_layout_or_scalar([[maybe_unused]] float input, [[maybe_unused]] Layout layout) { return true; }
 
 inline Tensor to_layout(const Tensor& input, Layout layout) {
-    if (detail::is_layout(input, layout)) {
+    if (detail::is_layout_or_scalar(input, layout)) {
         return input;
     }
 
@@ -370,8 +370,8 @@ inline auto invoke_binary_ng(
 
     // RM is never BFLOAT8 or BFLOAT4 so we can assume it goes in here.
     if (not typecast_a and not typecast_b) {
-        const auto input_a_rm = detail::is_layout(lhs, Layout::ROW_MAJOR);
-        const auto input_b_rm = detail::is_layout(rhs, Layout::ROW_MAJOR);
+        const auto input_a_rm = detail::is_layout_or_scalar(lhs, Layout::ROW_MAJOR);
+        const auto input_b_rm = detail::is_layout_or_scalar(rhs, Layout::ROW_MAJOR);
         const auto input_a = detail::to_layout(lhs, Layout::TILE);
         const auto input_b = detail::to_layout(rhs, Layout::TILE);
 
@@ -379,7 +379,8 @@ inline auto invoke_binary_ng(
             // we don't support to_layout with optional output tensor
             TT_FATAL(
                 !output_preallocated,
-                "Optional output tensor with Row Major input is not supported right now for Elementwise operations");
+                "Optional output tensor with Row Major input is not supported right now for Elementwise "
+                "operations");
         }
 
         auto result = ttnn::prim::binary_ng(
