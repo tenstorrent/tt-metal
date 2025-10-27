@@ -1,8 +1,5 @@
-#!/usr/bin/env python3
 """
-Example usage of the validation decorator system.
-
-This demonstrates how to use @validate_against to compare TTNN implementations
+These tests demonstrate how to use @validate_against to compare TTNN implementations
 against reference PyTorch implementations with automatic metrics collection.
 """
 
@@ -18,6 +15,21 @@ from tt_transformers_v2.src.testing import (
 )
 
 import ttnn
+
+# [INFO] the purpose of this test is to validate the validation framework itself,
+# which does not care about the mesh shape or tensor layout; we have other test files on those topics.
+pytestmark = [
+    pytest.mark.parametrize(
+        "ttnn_mesh_device",
+        [
+            (1, 1),  # single device # [INFO] apply auto_compose on single device would incur error in c++ code
+        ],
+        ids=[
+            "1x1",
+        ],
+        indirect=True,
+    ),
+]
 
 # ============================================================================
 # Example 1: Validating RMSNorm against PyTorch reference
@@ -102,103 +114,6 @@ class DeviceValidatedRMSNorm:
         return ttnn.mul(x_normed, self.weight)
 
 
-# ============================================================================
-# Example 2: Validating matrix multiplication
-# ============================================================================
-
-
-@host_validate_against(
-    reference_fn=torch.matmul,
-    tolerances={
-        "max_abs_error": 1e-1,
-        "pcc": 0.99,
-    },
-)
-def ttnn_matmul(a, b):
-    """TTNN matrix multiplication with validation"""
-    return ttnn.matmul(a, b)
-
-
-# make a test case to show how to directly use auto_compose to convert ttnn to torch
-@host_validate_against(
-    reference_fn=torch.matmul,
-    input_to_torch=lambda args, kwargs: ((to_torch_auto_compose(args[1]), to_torch_auto_compose(args[0])), {}),
-    tolerances={
-        "max_abs_error": 1e-1,
-        "pcc": 0.99,
-    },
-)
-def ttnn_matmul_reverse(a, b):
-    """TTNN matrix multiplication with validation"""
-    return ttnn.matmul(b, a)
-
-
-# ============================================================================
-# Example 3: Custom metrics and complex mappings
-# ============================================================================
-
-
-# todo)) run this test case
-def custom_attention_reference(q, k, v, scale):
-    """Reference attention computation"""
-    scores = torch.matmul(q, k.transpose(-2, -1)) * scale
-    attn_weights = torch.nn.functional.softmax(scores, dim=-1)
-    return torch.matmul(attn_weights, v)
-
-
-@host_validate_against(
-    reference_fn=custom_attention_reference,
-    input_to_torch=lambda args, kwargs: (
-        (
-            ttnn.to_torch(args[0]).squeeze(0),
-            ttnn.to_torch(args[1]).squeeze(0),
-            ttnn.to_torch(args[2]).squeeze(0),
-            args[3],
-        ),
-        {},
-    ),
-    output_to_torch=lambda x: ttnn.to_torch(x).squeeze(0),
-    metrics={
-        "max_abs_error": lambda impl, ref: (impl - ref).abs().max().item(),
-        "mean_abs_error": lambda impl, ref: (impl - ref).abs().mean().item(),
-        "pearson_correlation": lambda impl, ref: torch.corrcoef(torch.stack([impl.flatten(), ref.flatten()]))[
-            0, 1
-        ].item(),
-    },
-    tolerances={
-        "max_abs_error": 0.1,
-        "mean_abs_error": 0.01,
-        "pcc": 0.99,
-    },
-)
-def ttnn_attention(q, k, v, scale):
-    """Simplified attention with validation"""
-    scores = ttnn.matmul(q, ttnn.transpose(k, -2, -1))
-    scores = ttnn.mul(scores, scale)
-    attn_weights = ttnn.softmax(scores, dim=-1)
-    return ttnn.matmul(attn_weights, v)
-
-
-# ============================================================================
-# Test functions
-# ============================================================================
-
-# [INFO] the purpose of this test is to validate the validation framework itself,
-# which does not care about the mesh shape or tensor layout; we have other test files on those topics.
-pytestmark = [
-    pytest.mark.parametrize(
-        "ttnn_mesh_device",
-        [
-            (1, 1),  # single device # [INFO] apply auto_compose on single device would incur error in c++ code
-        ],
-        ids=[
-            "1x1",
-        ],
-        indirect=True,
-    ),
-]
-
-
 def test_validation_rmsnorm_host_and_device(ttnn_mesh_device: ttnn.MeshDevice):
     registry = get_validation_registry()
 
@@ -231,6 +146,37 @@ def test_validation_rmsnorm_host_and_device(ttnn_mesh_device: ttnn.MeshDevice):
     assert registry.results[-2].metrics["pcc"].passed
 
 
+# ============================================================================
+# Example 2: Validating matrix multiplication
+# ============================================================================
+
+
+@host_validate_against(
+    reference_fn=torch.matmul,
+    tolerances={
+        "max_abs_error": 1e-1,
+        "pcc": 0.99,
+    },
+)
+def ttnn_matmul(a, b):
+    """TTNN matrix multiplication with validation"""
+    return ttnn.matmul(a, b)
+
+
+# make a test case to show how to directly use auto_compose to convert ttnn to torch
+@host_validate_against(
+    reference_fn=torch.matmul,
+    input_to_torch=lambda args, kwargs: ((to_torch_auto_compose(args[1]), to_torch_auto_compose(args[0])), {}),
+    tolerances={
+        "max_abs_error": 1e-1,
+        "pcc": 0.99,
+    },
+)
+def ttnn_matmul_reverse(a, b):
+    """TTNN matrix multiplication with validation"""
+    return ttnn.matmul(b, a)
+
+
 def test_validation_matmul(ttnn_mesh_device: ttnn.MeshDevice):
     registry = get_validation_registry()
 
@@ -248,6 +194,73 @@ def test_validation_matmul(ttnn_mesh_device: ttnn.MeshDevice):
     assert len(registry.results) >= 2
     assert registry.results[-1].passed
     assert registry.results[-2].passed
+
+
+# ============================================================================
+# Example 3: Custom metrics and complex mappings
+# ============================================================================
+
+
+def custom_attention_reference(q, k, v, scale):
+    """Reference attention computation"""
+    scores = torch.matmul(q, k.transpose(-2, -1)) * scale
+    attn_weights = torch.nn.functional.softmax(scores, dim=-1)
+    return torch.matmul(attn_weights, v)
+
+
+@host_validate_against(
+    reference_fn=custom_attention_reference,
+    input_to_torch=lambda args, kwargs: (
+        (
+            to_torch_auto_compose(args[0]),
+            to_torch_auto_compose(args[1]),
+            to_torch_auto_compose(args[2]),
+            args[3],
+        ),
+        {},
+    ),
+    metrics={
+        "max_abs_error": lambda impl, ref: (impl - ref).abs().max().item(),
+        "mean_abs_error": lambda impl, ref: (impl - ref).abs().mean().item(),
+        "pearson_correlation": lambda impl, ref: torch.corrcoef(torch.stack([impl.flatten(), ref.flatten()]))[
+            0, 1
+        ].item(),
+    },
+    tolerances={
+        "max_abs_error": 0.1,
+        "mean_abs_error": 0.01,
+        "pcc": 0.99,
+    },
+)
+def ttnn_attention(q, k, v, scale):
+    """Simplified attention with validation"""
+    scores = ttnn.matmul(q, ttnn.transpose(k, -2, -1))
+    scores = ttnn.mul(scores, scale)
+    attn_weights = ttnn.softmax(scores, dim=-1)
+    return ttnn.matmul(attn_weights, v)
+
+
+def test_validation_attention(ttnn_mesh_device: ttnn.MeshDevice):
+    m, n, dk, dv = 8, 8, 16, 16
+    q = torch.randn(1, m, dk, dtype=torch.bfloat16)
+    k = torch.randn(1, n, dk, dtype=torch.bfloat16)
+    v = torch.randn(1, n, dv, dtype=torch.bfloat16)
+
+    q_tt = ttnn.from_torch(q.unsqueeze(0), device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    k_tt = ttnn.from_torch(k.unsqueeze(0), device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    v_tt = ttnn.from_torch(v.unsqueeze(0), device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    registry = get_validation_registry()
+    before = len(registry.results)
+    scale = 1.0 / (dk**0.5)
+    _ = ttnn_attention(q_tt, k_tt, v_tt, scale)
+    assert len(registry.results) == before + 1
+    assert registry.results[-1].passed
+
+
+# ============================================================================
+# Additional test functions
+# ============================================================================
 
 
 def test_validation_enable_disable(ttnn_mesh_device: ttnn.MeshDevice):
@@ -270,6 +283,9 @@ def test_validation_enable_disable(ttnn_mesh_device: ttnn.MeshDevice):
 
     # Re-enable for subsequent tests
     enable_validation(True)
+
+
+# todo)) add test cases where validate_against is used as normal function without the decorator
 
 
 @pytest.fixture(scope="module", autouse=True)
