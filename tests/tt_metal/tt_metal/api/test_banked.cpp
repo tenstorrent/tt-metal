@@ -73,8 +73,8 @@ bool reader_cb_writer(
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
-    std::string reader_kernel_name = "";
-    std::string writer_kernel_name = "";
+    std::string reader_kernel_name;
+    std::string writer_kernel_name;
     size_t input_page_size_bytes = 0;
     size_t output_page_size_bytes = 0;
     std::vector<uint32_t> reader_runtime_args = {};
