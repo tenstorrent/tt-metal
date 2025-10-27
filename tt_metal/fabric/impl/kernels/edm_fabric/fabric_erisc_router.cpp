@@ -2720,7 +2720,6 @@ void kernel_main() {
     }
 
     // initialize the local receiver channel buffers
-    // NEW WAY (multi-pool support): addresses come directly from pools
     local_receiver_channels.init<channel_pools_args>(
         channel_buffer_size,
         sizeof(PACKET_HEADER_TYPE));
