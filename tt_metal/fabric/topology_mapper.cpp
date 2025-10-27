@@ -812,7 +812,7 @@ std::optional<MeshHostRankId> TopologyMapper::get_host_rank_for_chip(MeshId mesh
     return get_host_rank_for_coord(mesh_id, coord);
 }
 
-std::optional<MeshHostRankId> TopologyMapper::get_host_rank_for_coord(MeshId mesh_id, MeshCoordinate coord) const {
+std::optional<MeshHostRankId> TopologyMapper::get_host_rank_for_coord(MeshId mesh_id, const MeshCoordinate& coord) const {
     for (const auto& [key, range] : mesh_host_rank_coord_ranges_) {
         if (key.first == mesh_id && range.contains(coord)) {
             return key.second;
