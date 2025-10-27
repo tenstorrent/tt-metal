@@ -210,7 +210,7 @@ def test_unet(
     model_location_generator,
     reset_seeds,
 ):
-    run_unet_model(
+    run_refiner_unet_model(
         device,
         input_shape,
         timestep_shape,
