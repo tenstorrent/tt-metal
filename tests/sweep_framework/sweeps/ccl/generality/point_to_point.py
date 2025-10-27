@@ -103,7 +103,7 @@ def _get_tensors(input_shape, coord0, dtype, layout, device):
 
     device_shard_shape = tuple(s * (num_devices if i == 0 else 1) for i, s in enumerate(input_shape))
     input_tensor_torch = torch.zeros(device_shard_shape).bfloat16()
-    input_tensor_torch[idx_start0:idx_end0, :, :, :] = torch.randn(input_shape).bfloat16()
+    input_tensor_torch[idx_start0:idx_end0] = torch.randn(input_shape).bfloat16()
 
     tt_input = ttnn.from_torch(
         input_tensor_torch,
