@@ -23,7 +23,8 @@ uint32_t GetEthChannelMask(tt::ChipId device_id) {
     return mask;
 }
 
-lite_fabric::SystemDescriptor GetSystemDescriptor(tt::Cluster& cluster) {
+lite_fabric::SystemDescriptor GetSystemDescriptor() {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     lite_fabric::SystemDescriptor desc;
 
     const auto mmio_chip_ids  = cluster.mmio_chip_ids();
@@ -36,24 +37,31 @@ lite_fabric::SystemDescriptor GetSystemDescriptor(tt::Cluster& cluster) {
         const auto connected_id = cluster.get_ethernet_connected_device_ids(mmio_device_id);
         for (const auto& dev_id : connected_id) {
                 desc.enabled_eth_channels[dev_id] = GetEthChannelMask(dev_id);
-            int hop_count = 0;
-            for (const auto& mmio_eth_core : cluster.get_ethernet_sockets(mmio_device_id, dev_id)) {
-                const auto& [other_device, other_core] = cluster.get_connected_ethernet_core({mmio_device_id, mmio_eth_core});
-                desc.tunnels_from_mmio.push_back(lite_fabric::TunnelDescriptor{
-                    .mmio_id = mmio_device_id,
-                    .mmio_core_virtual = cluster.get_virtual_coordinate_from_logical_coordinates(
-                        mmio_device_id, mmio_eth_core, tt::CoreType::ETH),
-                    .mmio_core_logical = mmio_eth_core,
-                    .connected_id = other_device,
-                    .connected_core_virtual = cluster.get_virtual_coordinate_from_logical_coordinates(
-                        other_device, other_core, tt::CoreType::ETH),
-                    .connected_core_logical = other_core,
-                    .num_hops = hop_count,
-                });
-                hop_count++;
-                log_info(
-                    tt::LogMetal, "Add tunnel from {} {} to {} {} ({} hops)", mmio_device_id, mmio_eth_core, other_device, other_core, hop_count);
-            }
+                // We only support 1 hop
+                constexpr int hop_count = 1;
+                for (const auto& mmio_eth_core : cluster.get_ethernet_sockets(mmio_device_id, dev_id)) {
+                    const auto& [other_device, other_core] =
+                        cluster.get_connected_ethernet_core({mmio_device_id, mmio_eth_core});
+                    desc.tunnels_from_mmio.push_back(lite_fabric::TunnelDescriptor{
+                        .mmio_id = mmio_device_id,
+                        .mmio_core_virtual = cluster.get_virtual_coordinate_from_logical_coordinates(
+                            mmio_device_id, mmio_eth_core, tt::CoreType::ETH),
+                        .mmio_core_logical = mmio_eth_core,
+                        .connected_id = other_device,
+                        .connected_core_virtual = cluster.get_virtual_coordinate_from_logical_coordinates(
+                            other_device, other_core, tt::CoreType::ETH),
+                        .connected_core_logical = other_core,
+                        .num_hops = hop_count,
+                    });
+                    log_info(
+                        tt::LogMetal,
+                        "Add tunnel from {} {} to {} {} ({} hops)",
+                        mmio_device_id,
+                        mmio_eth_core,
+                        other_device,
+                        other_core,
+                        hop_count);
+                }
         }
     }
 
@@ -63,34 +71,33 @@ lite_fabric::SystemDescriptor GetSystemDescriptor(tt::Cluster& cluster) {
 
 namespace lite_fabric {
 
-LiteFabricHal::LiteFabricHal(tt::Cluster& cluster) : system_descriptor_(GetSystemDescriptor(cluster)) {
-}
+LiteFabricHal::LiteFabricHal() : system_descriptor_(GetSystemDescriptor()) {}
 
 std::shared_ptr<LiteFabricHal> LiteFabricHal::create() {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto arch = cluster.arch();
     switch (arch) {
-        case tt::ARCH::WORMHOLE_B0: return std::make_shared<WormholeLiteFabricHal>(cluster);
-        case tt::ARCH::BLACKHOLE: return std::make_shared<BlackholeLiteFabricHal>(cluster);
+        case tt::ARCH::WORMHOLE_B0: return std::make_shared<WormholeLiteFabricHal>();
+        case tt::ARCH::BLACKHOLE: return std::make_shared<BlackholeLiteFabricHal>();
         default: TT_THROW("Unsupported architecture {}", arch);
     }
 }
 
-void LiteFabricHal::set_pc(tt::Cluster& cluster, const SystemDescriptor& desc, uint32_t pc_addr, uint32_t pc_val) {
-    for (auto tunnel_1x : desc.tunnels_from_mmio) {
-        set_pc(cluster, tunnel_1x.mmio_cxy_virtual(), pc_addr, pc_val);
+void LiteFabricHal::set_pc(uint32_t pc_val) {
+    for (auto tunnel_1x : system_descriptor_.tunnels_from_mmio) {
+        set_pc(tunnel_1x.mmio_cxy_virtual(), pc_val);
     }
 }
 
-void LiteFabricHal::set_reset_state(tt::Cluster& cluster, const SystemDescriptor& desc, bool assert_reset) {
-    for (auto tunnel_1x : desc.tunnels_from_mmio) {
-        set_reset_state(cluster, tunnel_1x.mmio_cxy_virtual(), assert_reset);
+void LiteFabricHal::set_reset_state(bool assert_reset) {
+    for (auto tunnel_1x : system_descriptor_.tunnels_from_mmio) {
+        set_reset_state(tunnel_1x.mmio_cxy_virtual(), assert_reset);
     }
 }
 
-void LiteFabricHal::wait_for_state(tt::Cluster& cluster, const SystemDescriptor& desc, lite_fabric::InitState state) {
-    for (auto tunnel_1x : desc.tunnels_from_mmio) {
-        wait_for_state(cluster, tunnel_1x.mmio_cxy_virtual(), state);
+void LiteFabricHal::wait_for_state(lite_fabric::InitState state) {
+    for (auto tunnel_1x : system_descriptor_.tunnels_from_mmio) {
+        wait_for_state(tunnel_1x.mmio_cxy_virtual(), state);
     }
 }
 

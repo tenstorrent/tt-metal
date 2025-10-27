@@ -17,10 +17,9 @@ int CompileFabricLite(
     const std::filesystem::path& out_dir,
     const std::vector<std::string>& defines = {});
 
-int LinkFabricLite(
+std::optional<std::filesystem::path> LinkFabricLite(
     const std::shared_ptr<lite_fabric::LiteFabricHal>& lite_fabric_hal,
     const std::filesystem::path& root_dir,
-    const std::filesystem::path& out_dir,
-    const std::filesystem::path& elf_out);
+    const std::filesystem::path& out_dir);
 
 }  // namespace lite_fabric
