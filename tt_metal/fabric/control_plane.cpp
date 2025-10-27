@@ -1973,7 +1973,6 @@ bool ControlPlane::is_cross_host_eth_link(ChipId chip_id, chan_id_t chan_id) con
 }
 
 std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(ChipId chip_id, bool skip_reserved_cores) const {
-    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
     std::unordered_set<CoreCoord> active_ethernet_cores;
@@ -2035,7 +2034,6 @@ std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(ChipId chi
 }
 
 std::unordered_set<CoreCoord> ControlPlane::get_inactive_ethernet_cores(ChipId chip_id) const {
-    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     std::unordered_set<CoreCoord> active_ethernet_cores = this->get_active_ethernet_cores(chip_id);
     std::unordered_set<CoreCoord> inactive_ethernet_cores;
