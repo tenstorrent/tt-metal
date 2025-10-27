@@ -597,15 +597,31 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 uint32_t worker_id = (link * num_workers_per_direction) + worker;
                 uint32_t num_workers = num_links * num_workers_per_direction;
 
-                uint32_t start_tiles_read = worker_id * output_channel_num_pages / num_workers;
-                uint32_t start_tiles_to_read = (worker_id + 1) * output_channel_num_pages / num_workers;
+                uint32_t start_tiles_read;
+                uint32_t start_tiles_to_read;
 
-                uint32_t start_pages_read_in_row = start_tiles_read % slice_Wt;
-                uint32_t start_row_offset = start_tiles_read / slice_Wt * input_tensor_Wt;
+                uint32_t start_pages_read_in_row = 0;  // not used for dim 0 scatter
+                uint32_t start_row_offset = 0;         // not used for dim 0 scatter
 
-                uint32_t chunks_per_sync_val =
-                    chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
-                        topology, start_tiles_to_read * slice_C, start_tiles_read * slice_C, tile_granularity));
+                uint32_t chunks_per_sync_val;
+                if (normalized_dim == 0) {
+                    start_tiles_read = worker_id * output_batch_num_pages / num_workers;
+                    start_tiles_to_read = (worker_id + 1) * output_batch_num_pages / num_workers;
+
+                    // TODO (GR): Old default assignment (before Saad sweep), need updated calculation
+                    chunks_per_sync_val = chunks_per_sync.value_or(
+                        std::max((start_tiles_to_read - start_tiles_read) / tile_granularity / 2, (uint32_t)1));
+                } else {
+                    start_tiles_read = worker_id * output_channel_num_pages / num_workers;
+                    start_tiles_to_read = (worker_id + 1) * output_channel_num_pages / num_workers;
+
+                    start_pages_read_in_row = start_tiles_read % slice_Wt;
+                    start_row_offset = start_tiles_read / slice_Wt * input_tensor_Wt;
+
+                    chunks_per_sync_val =
+                        chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
+                            topology, start_tiles_to_read * slice_C, start_tiles_read * slice_C, tile_granularity));
+                }
                 log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
                 // Reader
