@@ -21,26 +21,49 @@ struct ParsedMetric {
     std::unordered_map<std::string, std::string> labels;
 };
 
+// Helper to strip hostname prefix from path
+// Returns the path after "hostname/" as a string_view (no copies)
+std::string_view strip_hostname_prefix(std::string_view path, std::string_view hostname) {
+    // Find and remove hostname from the path
+    size_t hostname_pos = path.find(hostname);
+    if (hostname_pos == std::string::npos) {
+        throw std::runtime_error(
+            "Metric path does not contain hostname '" + std::string(hostname) + "': " + std::string(path));
+    }
+
+    // Skip hostname and the expected slash after it
+    size_t after_hostname = hostname_pos + hostname.length();
+    if (after_hostname >= path.length() || path[after_hostname] != '/') {
+        throw std::runtime_error("Expected slash after hostname in metric path: " + std::string(path));
+    }
+
+    return path.substr(after_hostname + 1);  // string_view::substr is O(1), no copy
+}
+
+// Parse system metric path (simpler format: hostname/system/MetricName)
+// Returns: metric_name (no labels extracted from path, labels come from metric itself)
+ParsedMetric parse_system_metric_path(std::string_view path, std::string_view hostname) {
+    ParsedMetric result;
+    std::string_view path_after_hostname = strip_hostname_prefix(path, hostname);
+
+    // Expected format: system/MetricName
+    constexpr std::string_view system_prefix = "system/";
+    if (path_after_hostname.starts_with(system_prefix)) {
+        result.metric_name = std::string(path_after_hostname.substr(system_prefix.length()));
+    } else {
+        throw std::runtime_error("System metric path must start with 'system/': " + std::string(path_after_hostname));
+    }
+
+    return result;
+}
+
 // Parse metric path and extract labels
 // Path format: hostname/tray3/chip0/[channel5/]metric_name
 // Returns: metric_name and labels (tray, chip, channel if present)
 ParsedMetric parse_metric_path(std::string_view path, std::string_view hostname) {
     ParsedMetric result;
-    std::string path_str(path);
-
-    // Find and remove hostname from the path
-    size_t hostname_pos = path_str.find(hostname);
-    if (hostname_pos == std::string::npos) {
-        throw std::runtime_error("Metric path does not contain hostname '" + std::string(hostname) + "': " + path_str);
-    }
-
-    // Skip hostname and the expected slash after it
-    size_t after_hostname = hostname_pos + hostname.length();
-    if (after_hostname >= path_str.length() || path_str[after_hostname] != '/') {
-        throw std::runtime_error("Expected slash after hostname in metric path: " + path_str);
-    }
-    after_hostname++;  // Skip the slash
-    path_str = path_str.substr(after_hostname);
+    std::string_view path_view = strip_hostname_prefix(path, hostname);
+    std::string path_str(path_view);  // Only copy when we need mutable string for splitting
 
     // Split path into components
     std::vector<std::string> components;
@@ -182,6 +205,46 @@ void process_metrics(
     }
 }
 
+// Template helper to process system-level metrics
+template <typename ValueType, typename ValueConverter>
+void process_system_metrics(
+    std::stringstream& output,
+    const std::unordered_map<std::string, ValueType>& metrics,
+    const std::unordered_map<std::string, std::unordered_map<std::string, std::string>>& labels_map,
+    const std::unordered_map<std::string, uint64_t>& timestamps,
+    std::string_view hostname,
+    std::string_view help_text,
+    ValueConverter value_converter) {
+    std::unordered_set<std::string> written_metric_names;
+
+    for (const auto& [path, value] : metrics) {
+        try {
+            // Parse system metric path (hostname/system/MetricName)
+            ParsedMetric parsed = parse_system_metric_path(path, hostname);
+            std::string value_str = value_converter(value);
+
+            // Get timestamp
+            uint64_t timestamp = 0;
+            auto ts_it = timestamps.find(path);
+            if (ts_it != timestamps.end()) {
+                timestamp = ts_it->second;
+            }
+
+            // Get labels from labels map
+            auto labels_it = labels_map.find(path);
+            if (labels_it != labels_map.end()) {
+                parsed.labels = labels_it->second;
+            }
+
+            format_metric(
+                output, parsed.metric_name, parsed.labels, value_str, help_text, "", timestamp, written_metric_names);
+        } catch (const std::exception& e) {
+            // Log warning but continue processing other metrics
+            log_warning(tt::LogAlways, "Failed to format system metric '{}': {}", path, e.what());
+        }
+    }
+}
+
 }  // anonymous namespace
 
 std::string format_snapshot_as_prometheus(const TelemetrySnapshot& snapshot, std::string_view hostname) {
@@ -196,6 +259,16 @@ std::string format_snapshot_as_prometheus(const TelemetrySnapshot& snapshot, std
     output << "# Tenstorrent Metal Telemetry Metrics\n";
     output << "# Host: " << hostname << "\n";
     output << "# Generated at: " << std::put_time(&tm_buf, "%c") << "\n\n";
+
+    // Process system metrics first (host-level health)
+    process_system_metrics(
+        output,
+        snapshot.system_bool_metrics,
+        snapshot.system_bool_metric_labels,
+        snapshot.system_bool_metric_timestamps,
+        hostname,
+        "System-level health metric",
+        [](bool v) { return std::to_string(v ? 1 : 0); });
 
     // Process bool metrics (no units)
     process_metrics(

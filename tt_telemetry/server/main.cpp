@@ -185,7 +185,11 @@ int main(int argc, char* argv[]) {
         "watchdog-timeout",
         "Watchdog timeout in seconds (default: 10). Watchdog will terminate the process if the telemetry thread "
         "does not advance within this time.",
-        cxxopts::value<int>()->default_value("10"));
+        cxxopts::value<int>()->default_value("10"))(
+        "failure-exposure-duration",
+        "Duration in seconds to expose failure metrics before exiting when initialization fails (default: 30). "
+        "This allows Prometheus time to scrape the failure state before the process exits.",
+        cxxopts::value<int>()->default_value("30"));
 
     auto result = options.parse(argc, argv);
 
@@ -210,6 +214,9 @@ int main(int argc, char* argv[]) {
     if (watchdog_disabled) {
         watchdog_timeout = 0;  // 0 indicates disabled
     }
+
+    // Failure exposure duration
+    int failure_exposure_duration = result["failure-exposure-duration"].as<int>();
 
     // Are we in collector (collect telemetry and export on collection endpoint) or aggregator
     // (connect to collectors and aggregate) mode?
@@ -276,7 +283,14 @@ int main(int argc, char* argv[]) {
         auto rtoptions = tt::llrt::RunTimeOptions();
         std::string fsd_filepath = result["fsd"].as<std::string>();
         tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd = load_fsd(result["fsd"].as<std::string>());
-        run_telemetry_collector(telemetry_enabled, subscribers, aggregate_endpoints, rtoptions, fsd, watchdog_timeout);
+        run_telemetry_collector(
+            telemetry_enabled,
+            subscribers,
+            aggregate_endpoints,
+            rtoptions,
+            fsd,
+            watchdog_timeout,
+            failure_exposure_duration);
     }
 
     // Run until finished
