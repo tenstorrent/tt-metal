@@ -31,6 +31,9 @@ let __gtestLogsIndexMap = undefined;
 // Optional other logs index mapping (runId -> directory)
 let __otherLogsIndexMap = undefined;
 
+// Optional last success timestamps mapping (workflow name -> timestamp info)
+let __lastSuccessTimestamps = undefined;
+
 
 
 /**
@@ -95,6 +98,46 @@ function getOtherLogsDirForRunId(runId) {
     return __otherLogsIndexMap.get(key);
   } catch (_) {
     return undefined;
+  }
+}
+
+function loadLastSuccessTimestamps(filePath) {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return undefined;
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const json = JSON.parse(raw);
+    const map = new Map();
+    if (json && typeof json === 'object' && !Array.isArray(json)) {
+      for (const [k, v] of Object.entries(json)) {
+        if (v && typeof v === 'object') map.set(String(k), v);
+      }
+      return map;
+    }
+  } catch (_) { /* ignore */ }
+  return undefined;
+}
+
+function getTimeSinceLastSuccess(workflowName) {
+  try {
+    if (!__lastSuccessTimestamps) return EMPTY_VALUE;
+    const info = __lastSuccessTimestamps.get(workflowName);
+    if (!info) return EMPTY_VALUE;
+
+    if (info.never_succeeded) {
+      return 'Never';
+    }
+
+    if (!info.timestamp) return EMPTY_VALUE;
+
+    const lastSuccessDate = new Date(info.timestamp);
+    const now = new Date();
+    const daysSince = Math.floor((now - lastSuccessDate) / (1000 * 60 * 60 * 24));
+
+    if (daysSince === 0) return 'Today';
+    if (daysSince === 1) return '1 day ago';
+    return `${daysSince} days ago`;
+  } catch (_) {
+    return EMPTY_VALUE;
   }
 }
 
@@ -1192,6 +1235,7 @@ async function run() {
     const commitsPath = core.getInput('commits-path', { required: false }); // optional: path to commits index JSON
     const gtestLogsIndexPath = core.getInput('gtest-logs-index-path', { required: false }); // optional: path to gtest logs index JSON
     const otherLogsIndexPath = core.getInput('other-logs-index-path', { required: false }); // optional: path to other logs index JSON
+    const lastSuccessTimestampsPath = core.getInput('last-success-timestamps-path', { required: false }); // optional: path to last success timestamps JSON
 
     // Validate inputs
     if (!fs.existsSync(cachePath)) {
@@ -1234,6 +1278,15 @@ async function run() {
         core.info(`Loaded other logs index with ${__otherLogsIndexMap.size} entries from ${otherLogsIndexPath}`);
       } else if (otherLogsIndexPath) {
         core.info(`No valid entries found in other logs index file at ${otherLogsIndexPath}`);
+      }
+    }
+
+    if (lastSuccessTimestampsPath) {
+      __lastSuccessTimestamps = loadLastSuccessTimestamps(lastSuccessTimestampsPath);
+      if (__lastSuccessTimestamps && __lastSuccessTimestamps.size) {
+        core.info(`Loaded last success timestamps with ${__lastSuccessTimestamps.size} entries from ${lastSuccessTimestampsPath}`);
+      } else if (lastSuccessTimestampsPath) {
+        core.info(`No valid entries found in last success timestamps file at ${lastSuccessTimestampsPath}`);
       }
     }
 
@@ -1664,6 +1717,8 @@ async function run() {
         const lines = regressedDetails.map(it => { // for each regressed pipeline, build a markdown line with details
           // Build the workflow name with optional link for the summary (use HTML anchor tag, not markdown)
           const workflowName = it.workflow_url ? `<a href="${it.workflow_url}">${it.name}</a>` : it.name;
+          const timeSinceSuccess = getTimeSinceLastSuccess(it.name);
+          const timeBadge = timeSinceSuccess !== EMPTY_VALUE ? ` <em>(Last success: ${timeSinceSuccess})</em>` : '';
 
           if (it.first_failed_run_url) { // if we found the first failing run in the window
             // Extract the short SHA for the first failing commit
@@ -1694,7 +1749,7 @@ async function run() {
                 : '';
               // Return a collapsible workflow with details
               const content = `  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLine}`;
-              return ['<details>',`<summary>${workflowName}</summary>`,'',content, errorsList,'</details>',''].join('\n');
+              return ['<details>',`<summary>${workflowName}${timeBadge}</summary>`,'',content, errorsList,'</details>',''].join('\n');
             }
 
             // If we found a success in the window, show commits between success and first failure
@@ -1713,10 +1768,10 @@ async function run() {
               : '';
             // Return the full collapsible workflow with all details
             const content = `  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}${latestLine}`;
-            return ['<details>',`<summary>${workflowName}</summary>`,'',content, errorsList, commitsList,'</details>',''].join('\n');
+            return ['<details>',`<summary>${workflowName}${timeBadge}</summary>`,'',content, errorsList, commitsList,'</details>',''].join('\n');
           }
           // If no first_failed_run_url, just return a collapsed workflow name
-          return ['<details>',`<summary>${workflowName}</summary>`,'','  - No failure details available','</details>',''].join('\n');
+          return ['<details>',`<summary>${workflowName}${timeBadge}</summary>`,'','  - No failure details available','</details>',''].join('\n');
         });
         // Build the regressions section with header and all lines
         regressionsSection = ['', '## Regressions (Pass → Fail)', ...lines, ''].join('\n');
@@ -1728,6 +1783,8 @@ async function run() {
         const lines = stayedFailingDetails.map(it => { // for each stayed-failing pipeline, build a markdown line
           // Build the workflow name with optional link for the summary (use HTML anchor tag, not markdown)
           const workflowName = it.workflow_url ? `<a href="${it.workflow_url}">${it.name}</a>` : it.name;
+          const timeSinceSuccess = getTimeSinceLastSuccess(it.name);
+          const timeBadge = timeSinceSuccess !== EMPTY_VALUE ? ` <em>(Last success: ${timeSinceSuccess})</em>` : '';
 
           if (it.first_failed_run_url) { // if we found the first failing run in the window
             // Extract the short SHA for the first failing commit
@@ -1754,7 +1811,7 @@ async function run() {
                 : '';
               // Return a collapsible workflow with details
               const content = `  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLine}`;
-              return ['<details>',`<summary>${workflowName}</summary>`,'',content, errorsList,'</details>',''].join('\n');
+              return ['<details>',`<summary>${workflowName}${timeBadge}</summary>`,'',content, errorsList,'</details>',''].join('\n');
             }
 
             // If there is a success boundary in-window, show commits between; otherwise, just show first failure
@@ -1773,10 +1830,10 @@ async function run() {
               : '';
             // Return the full collapsible workflow with all details
             const content = `  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLine}`;
-            return ['<details>',`<summary>${workflowName}</summary>`,'',content, errorsList, commitsList,'</details>',''].join('\n');
+            return ['<details>',`<summary>${workflowName}${timeBadge}</summary>`,'',content, errorsList, commitsList,'</details>',''].join('\n');
           }
           // If no first_failed_run_url, just return a collapsed workflow name
-          return ['<details>',`<summary>${workflowName}</summary>`,'','  - No failure details available','</details>',''].join('\n');
+          return ['<details>',`<summary>${workflowName}${timeBadge}</summary>`,'','  - No failure details available','</details>',''].join('\n');
         });
         // Build the stayed-failing section with header and all lines
         stayedFailingSection = ['', '## Still Failing (No Recovery)', ...lines, ''].join('\n');
