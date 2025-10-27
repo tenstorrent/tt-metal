@@ -484,7 +484,7 @@ async function run() {
 
         // Search through workflow history to find the last successful run
         let foundSuccess = false;
-        const maxPagesToSearch = 10; // Limit search to ~1000 most recent runs to avoid excessive API calls
+        const maxPagesToSearch = 10; // Limit search to up to 1000 most recent runs to avoid excessive API calls
 
         for (let page = 1; page <= maxPagesToSearch; page++) {
           const { data } = await octokit.rest.actions.listWorkflowRuns({

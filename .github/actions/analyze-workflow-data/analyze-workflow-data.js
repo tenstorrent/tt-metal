@@ -1285,7 +1285,7 @@ async function run() {
       __lastSuccessTimestamps = loadLastSuccessTimestamps(lastSuccessTimestampsPath);
       if (__lastSuccessTimestamps && __lastSuccessTimestamps.size) {
         core.info(`Loaded last success timestamps with ${__lastSuccessTimestamps.size} entries from ${lastSuccessTimestampsPath}`);
-      } else if (lastSuccessTimestampsPath) {
+      } else {
         core.info(`No valid entries found in last success timestamps file at ${lastSuccessTimestampsPath}`);
       }
     }
