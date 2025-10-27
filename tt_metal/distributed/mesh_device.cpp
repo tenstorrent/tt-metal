@@ -237,7 +237,7 @@ MeshDevice::MeshDevice(
         tt::umd::Cluster umd_cluster;
         auto mmio_ids = umd_cluster.get_target_mmio_device_ids();
         if (!mmio_ids.empty()) {
-            chip_id_t mmio_id = *mmio_ids.begin();
+            ChipId mmio_id = *mmio_ids.begin();
             auto pci = umd_cluster.get_tt_device(mmio_id)->get_pci_device();
             if (pci) {
                 iommu_enabled = pci->is_iommu_enabled();

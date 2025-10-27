@@ -843,7 +843,7 @@ void Cluster::read_sysmem(
 }
 
 std::unique_ptr<tt::umd::SysmemBuffer> Cluster::allocate_sysmem_buffer(
-    chip_id_t device_id, size_t sysmem_buffer_size, bool map_to_noc) const {
+    ChipId device_id, size_t sysmem_buffer_size, bool map_to_noc) const {
     tt::umd::SysmemManager* sysmem_manager = this->driver_->get_chip(device_id)->get_sysmem_manager();
     if (!sysmem_manager) {
         TT_THROW("Failed to get SysmemManager for device {}", device_id);
@@ -852,7 +852,7 @@ std::unique_ptr<tt::umd::SysmemBuffer> Cluster::allocate_sysmem_buffer(
 }
 
 std::unique_ptr<tt::umd::SysmemBuffer> Cluster::map_sysmem_buffer(
-    chip_id_t device_id, void* buffer, size_t sysmem_buffer_size, bool map_to_noc) const {
+    ChipId device_id, void* buffer, size_t sysmem_buffer_size, bool map_to_noc) const {
     tt::umd::SysmemManager* sysmem_manager = this->driver_->get_chip(device_id)->get_sysmem_manager();
     if (!sysmem_manager) {
         TT_THROW("Failed to get SysmemManager for device {}", device_id);
