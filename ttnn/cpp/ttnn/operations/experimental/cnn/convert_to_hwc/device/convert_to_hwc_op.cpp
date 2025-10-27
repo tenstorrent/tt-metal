@@ -19,7 +19,7 @@ void ConvertToHWC::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& C = shape[-2];
 
     TT_FATAL(shape.size() == 4, "Input shape must be rank 4 (was rank {})", shape.size());
-    TT_FATAL(shape[0] == 1 && shape[1] == 1, "Expected input tensor to be shape [1, 1, C, HW] (shape was {})", shape);
+    TT_FATAL(shape[0] == 1, "Expected input tensor to be shape [1, B, C, HW] (shape was {})", shape);
     TT_FATAL(C <= TILE_HEIGHT, "C must be less than or equal to 32 (was {})", C);
 
     TT_FATAL(input.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Input tensor must be in row-major layout");
@@ -37,7 +37,7 @@ void ConvertToHWC::validate(const std::vector<Tensor>& input_tensors) const {
 
 std::vector<ttnn::TensorSpec> ConvertToHWC::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& shape = input_tensors.at(0).logical_shape();
-    const int B = shape[0];
+    const int B = shape[1];
     const int C = shape[2];
     const int HW = shape[3];
 
@@ -46,7 +46,7 @@ std::vector<ttnn::TensorSpec> ConvertToHWC::compute_output_specs(const std::vect
     const auto output_channels = tt::round_up(C, alignment_elements);
 
     return {TensorSpec(
-        Shape({B, 1, HW, output_channels}),
+        Shape({1, 1, B * HW, output_channels}),
         tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), memory_config))};
 }
 
