@@ -435,51 +435,38 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_asic_id(uint64_t asic_id) con
     return FabricNodeId(MeshId{0}, 0);
 }
 
-void ControlPlane::init_control_plane(
-    const std::string& mesh_graph_desc_file,
-    std::optional<std::reference_wrapper<const std::map<FabricNodeId, ChipId>>>
-        logical_mesh_chip_id_to_physical_chip_id_mapping) {
+void ControlPlane::initialize_control_plane() {
     const auto& driver = tt::tt_metal::MetalContext::instance().get_cluster().get_driver();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
+    this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(this->mesh_graph_desc_file_);
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
         driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
     this->initialize_distributed_contexts();
 
-    if (logical_mesh_chip_id_to_physical_chip_id_mapping.has_value()) {
-        // Do not initialize topology mapper if user provided physical chip mapping
-        this->topology_mapper_ = nullptr;
-        this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
-    } else {
+    if (this->logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
             *this->routing_table_generator_->mesh_graph, *this->physical_system_descriptor_, this->local_mesh_binding_);
-        this->load_physical_chip_mapping(
-            topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_ =
+            this->topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping();
     }
+    this->validate_mesh_connections();
+
     this->generate_intermesh_connectivity();
 
     // Printing, only enabled with log_debug
     this->routing_table_generator_->mesh_graph->print_connectivity();
 }
 
-ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
-    init_control_plane(mesh_graph_desc_file, std::nullopt);
-}
+ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) : mesh_graph_desc_file_(mesh_graph_desc_file) {}
 
 ControlPlane::ControlPlane(
     const std::string& mesh_graph_desc_file,
-    const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
-    init_control_plane(mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
-}
-
-void ControlPlane::load_physical_chip_mapping(
-    const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
-    this->logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
-    this->validate_mesh_connections();
-}
+    const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) :
+    mesh_graph_desc_file_(mesh_graph_desc_file),
+    logical_mesh_chip_id_to_physical_chip_id_mapping_(logical_mesh_chip_id_to_physical_chip_id_mapping) {}
 
 void ControlPlane::validate_mesh_connections(MeshId mesh_id) const {
     MeshShape mesh_shape = routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id);
