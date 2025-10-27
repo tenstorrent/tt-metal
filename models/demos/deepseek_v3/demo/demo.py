@@ -220,6 +220,11 @@ def run_demo(
 
         return {"generations": results}
     finally:
+        # Clean up generator resources
+        try:
+            gen.cleanup_all()
+        except Exception as e:
+            logger.warning(f"Failed to cleanup generator: {e}")
         # Clean up mesh device(s)
         for submesh in mesh_device.get_submeshes():
             ttnn.close_mesh_device(submesh)
