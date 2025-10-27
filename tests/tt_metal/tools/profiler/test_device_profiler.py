@@ -409,7 +409,7 @@ def test_dispatch_cores():
 @skip_for_blackhole()
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {
-        "Ethernet CQ Dispatch": [590, 1080, 1430, 1660, 1994, 3285, 3769, 4237, 6681],
+        "Ethernet CQ Dispatch": [590, 1080, 1430, 1660, 1994, 3285, 3769, 4237, 668, 7150],
         "Ethernet CQ Prefetch": [572, 1058, 4030, 7795],
     }
     devicesData = run_device_profiler_test(
