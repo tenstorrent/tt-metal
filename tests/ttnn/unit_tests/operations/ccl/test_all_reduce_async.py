@@ -736,12 +736,14 @@ def test_all_reduce_sharded(
         ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
     ],
+    ids=["sharded_l1", "interleaved_dram", "interleaved_l1"],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}],
     indirect=True,
+    ids=["fabric_2d_standard", "fabric_2d_dynamic"],
 )
 def test_all_reduce_fabric_2d(
     mesh_device,
@@ -753,6 +755,7 @@ def test_all_reduce_fabric_2d(
     layout,
     memory_config,
     function_level_defaults,
+    device_params,
 ):
     num_devices = tuple(mesh_device.shape)[cluster_axis]
 
@@ -772,3 +775,15 @@ def test_all_reduce_fabric_2d(
         cluster_axis=cluster_axis,
         use_semaphore_free_all_reduce_impl=True,
     )
+
+    if memory_config.is_sharded() == False:
+        if device_params["fabric_config"] == ttnn.FabricConfig.FABRIC_2D:
+            logger.info(f"Number of program cache entries: {mesh_device.num_program_cache_entries()}")
+            assert (
+                mesh_device.num_program_cache_entries() == 3
+            ), f"Number of program cache entries: {mesh_device.num_program_cache_entries()} but was expecting 3 as we are using fabric 2D, which fallsback to composite all gather + local reduce"
+        elif device_params["fabric_config"] == ttnn.FabricConfig.FABRIC_2D_DYNAMIC:
+            logger.info(f"Number of program cache entries: {mesh_device.num_program_cache_entries()}")
+            assert (
+                mesh_device.num_program_cache_entries() == 2
+            ), f"Number of program cache entries: {mesh_device.num_program_cache_entries()} but was expecting 2 as we are using fabric 2D dynamic, which uses reduce scatter + all gather"

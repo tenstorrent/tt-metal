@@ -186,7 +186,8 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     }
 
     if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) ||
-        composite_common::is_fabric_2d()) {
+        tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D) {
+        log_debug(tt::LogOp, "Using composite all gather + local reduce");
         // All reduce = all gather + local reduce
         composite_dim = 0;
         auto reshaped_tensor = ttnn::reshape(
@@ -215,6 +216,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     // Reduce scatter + all gather
     bool use_llama_sharded = composite_common::use_all_gather_async_llama_sharded(padded_tensor, out_memory_config);
     padded_tensor.deallocate();
+    log_debug(tt::LogOp, "Using reduce scatter + all gather");
     ttnn::Tensor scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
         interleaved_tensor,
         std::nullopt,
@@ -279,7 +281,8 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     bool composite_reduce_scatter =
         composite_common::use_composite_reduce_scatter(padded_tensor, composite_dim, cluster_axis);
     if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) ||
-        composite_common::is_fabric_2d()) {
+        tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D) {
+        log_debug(tt::LogOp, "Using composite all gather + local reduce");
         // All reduce = all gather + local reduce
         composite_dim = 0;
         auto reshaped_tensor = ttnn::reshape(
@@ -308,6 +311,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     // Reduce scatter + all gather
     bool use_llama_sharded = composite_common::use_all_gather_async_llama_sharded(padded_tensor, out_memory_config);
     padded_tensor.deallocate();
+    log_debug(tt::LogOp, "Using reduce scatter + all gather");
     ttnn::Tensor scattered_tensor;
     if (rs_global_semaphores.has_value() && barrier_semaphores.has_value()) {
         TT_FATAL(topology.has_value(), "Topology is required for experimental reduce scatter");
