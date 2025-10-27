@@ -16,6 +16,9 @@ class RMSNorm(Module):
     def __init__(self, embedding_dim, norm_eps=1e-5, norm_elementwise_affine=True, bias=True, mesh_device=None):
         super().__init__()
 
+        # https://github.com/tenstorrent/tt-metal/issues/31216
+        assert embedding_dim % 32 == 0, "embedding_dim must be divisible by tile size"
+
         self.embedding_dim = embedding_dim
         self.norm_eps = norm_eps
         self.norm_elementwise_affine = norm_elementwise_affine
@@ -57,6 +60,8 @@ class LayerNorm(Module):
         use_row_major_workaround=False,  # Issue #20789
     ):
         super().__init__()
+
+        assert embedding_dim % 32 == 0, "embedding_dim must be divisible by tile size"
 
         self.embedding_dim = embedding_dim
         self.norm_eps = norm_eps
@@ -154,6 +159,9 @@ class DistributedRMSNorm(Module):
 
         n = self.TILE_SIZE * self.mesh_width
         use_packed_weight = embedding_dim % n == 0
+
+        # https://github.com/tenstorrent/tt-metal/issues/31216
+        assert embedding_dim % n == 0, "embedding_dim must be divisible by tile size times mesh width"
 
         self.weight = (
             Parameter(
@@ -256,6 +264,8 @@ class DistributedLayerNorm(Module):
 
         n = self.TILE_SIZE * self.mesh_width
         shape = [embedding_dim // n, n]
+
+        assert embedding_dim % n == 0, "embedding_dim must be divisible by tile size times mesh width"
 
         self.weight = (
             Parameter(total_shape=shape, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[None, mesh_axis], device=mesh_device)
