@@ -760,8 +760,9 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                     ring_size,                // ring_size
                     input_tensor_B,           // input_tensor_B
                     slice_C,                  // slice_C
-                    dir};                     // dir
-
+                    dir,                      // dir
+                    start_tiles_read,         // start_tiles_read
+                    start_tiles_to_read};     // start_tiles_to_read
                 auto sender_reduce_kernel_id = tt::tt_metal::CreateKernel(
                     program,
                     "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
@@ -771,8 +772,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 reduce_kernel_ids.push_back(sender_reduce_kernel_id);
 
                 std::vector<uint32_t> reduce_rt_args = {
-                    start_tiles_read,    // start_tiles_read
-                    start_tiles_to_read  // start_tiles_to_read
+
                 };
                 tt::tt_metal::SetRuntimeArgs(program, sender_reduce_kernel_id, {core}, reduce_rt_args);
             }
