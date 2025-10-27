@@ -107,7 +107,7 @@ void kernel_main() {
 
     // DRAM sharded read API
     uint64_t src_addr = get_noc_addr_from_bank_id<true>(0, DRAM_ALIGNMENT);
-    noc_async_read_one_packet_set_state<true>(src_addr, page_size, 0, noc_index);
+    noc_async_read_one_packet_set_state<true>(src_addr, page_size, vc, noc_index);
     for (uint32_t i = 0; i < iteration; i++) {
         uint32_t trid = i % (NOC_MAX_TRANSACTION_ID + 1);
         noc_async_read_tile_dram_sharded_with_state_with_trid(src_addr, DRAM_ALIGNMENT, l1_read_addr, trid, noc_index);
