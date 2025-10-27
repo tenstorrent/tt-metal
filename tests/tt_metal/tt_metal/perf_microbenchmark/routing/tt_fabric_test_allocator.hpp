@@ -18,6 +18,7 @@
 #include "tt_fabric_test_common_types.hpp"
 #include "tt_fabric_test_config.hpp"
 #include "tt_fabric_test_memory_map.hpp"
+#include <tt-metalium/tt_align.hpp>
 
 namespace tt::tt_fabric::fabric_tests {
 
@@ -811,6 +812,9 @@ private:
         // 5. Apply bounds
         uint32_t max_configs_per_core = std::min(max_configs_per_core_needed, MAX_CONFIGS_PER_CORE_CEILING);
         uint32_t payload_chunk_size = USABLE_L1_SIZE_BYTES / max_configs_per_core;
+
+        // since L1 alignment is not available here, align to 64 bytes as a safe minimum
+        payload_chunk_size = tt::align(payload_chunk_size, 64);
 
         // 6. Log computed policy
         if (worst_case_device.has_value()) {
