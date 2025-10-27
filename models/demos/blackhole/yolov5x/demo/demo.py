@@ -11,7 +11,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
+from models.common.utility_functions import disable_persistent_kernel_cache, run_for_blackhole
 from models.demos.utils.common_demo_utils import (
     LoadImages,
     load_coco_class_names,
@@ -94,7 +94,7 @@ def run_yolov5x_demo(model_location_generator, device, model_type, input_loc, ba
     dataset = LoadImages(path=os.path.abspath(input_loc), batch=batch_size)
     im_tensor, orig_images, paths_images = process_images(dataset, (640, 640), batch_size)
     names = load_coco_class_names()
-    save_dir = "models/demos/yolov5x/demo/runs"
+    save_dir = "models/demos/blackhole/yolov5x/demo/runs"
 
     run_inference_and_save(
         model, runner, model_type, mesh_composer, im_tensor, orig_images, paths_images, save_dir, names
@@ -118,7 +118,7 @@ def run_yolov5x_demo_dataset(model_location_generator, device, model_type, batch
     with open(os.path.expanduser("~") + "/fiftyone/coco-2017/info.json") as f:
         names = json.load(f)["classes"]
 
-    save_dir = "models/demos/yolov5x/demo/runs"
+    save_dir = "models/demos/blackhole/yolov5x/demo/runs"
     run_inference_and_save(
         model, runner, model_type, mesh_composer, im_tensor, orig_images, paths_images, save_dir, names
     )
@@ -128,7 +128,7 @@ def run_yolov5x_demo_dataset(model_location_generator, device, model_type, batch
     logger.info("Inference done")
 
 
-@run_for_wormhole_b0()
+@run_for_blackhole()
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": YOLOV5X_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
@@ -139,7 +139,7 @@ def run_yolov5x_demo_dataset(model_location_generator, device, model_type, batch
     [
         (
             1,
-            "models/demos/yolov5x/demo/images",
+            "models/demos/blackhole/yolov5x/demo/images",
         ),
     ],
 )
@@ -160,7 +160,7 @@ def test_demo(model_location_generator, device, batch_size_per_device, input_loc
     )
 
 
-@run_for_wormhole_b0()
+@run_for_blackhole()
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": YOLOV5X_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
@@ -171,7 +171,7 @@ def test_demo(model_location_generator, device, batch_size_per_device, input_loc
     [
         (
             1,
-            "models/demos/yolov5x/demo/images",
+            "models/demos/blackhole/yolov5x/demo/images",
         ),
     ],
 )
@@ -192,7 +192,7 @@ def test_demo_dp(model_location_generator, mesh_device, batch_size_per_device, i
     )
 
 
-@run_for_wormhole_b0()
+@run_for_blackhole()
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": YOLOV5X_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
@@ -214,7 +214,7 @@ def test_demo_dataset(model_location_generator, device, model_type):
     )
 
 
-@run_for_wormhole_b0()
+@run_for_blackhole()
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": YOLOV5X_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],

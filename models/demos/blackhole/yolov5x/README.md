@@ -1,0 +1,50 @@
+# Yolov5x
+
+## Platforms:
+
+    Blackhole (p150)
+
+## Introduction
+**YOLOv5x** is the largest variant in the YOLOv5 series, delivering top-tier accuracy and performance for advanced object detection tasks. It features a deeper and wider architecture, making it ideal for high-precision applications where accuracy is prioritized over model size or inference speed.
+
+## Prerequisites
+- Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
+- Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
+
+## How to Run:
+Use the following command to run the model:
+```
+pytest --disable-warnings models/demos/blackhole/yolov5x/tests/pcc/test_ttnn_yolov5x.py::test_yolov5x
+```
+
+### Model performant running with Trace+2CQ
+
+#### Single Device (BS=1) :
+- For `640x640`, end-2-end perf is `127` FPS (**On P150**)
+
+  ```
+  pytest --disable-warnings models/demos/blackhole/yolov5x/tests/perf/test_e2e_performant.py::test_e2e_performant
+  ```
+
+### Demo:
+
+#### Single Device (BS=1):
+
+##### Custom Images:
+- Use the following command to run demo for `640x640` resolution :
+    ```
+    pytest --disable-warnings models/demos/blackhole/yolov5x/demo/demo.py::test_demo
+    ```
+
+##### Coco-2017 dataset:
+- Use the following command to run demo for `640x640` resolution :
+  ```
+  pytest --disable-warnings models/demos/blackhole/yolov5x/demo/demo.py::test_demo_dataset
+  ```
+
+## Details
+- The entry point to the yolov5x is located at:`models/demos/yolov5x/tt/yolov5x.py`
+- Batch Size :1
+- Supported Input Resolution - (640,640) (Height,Width)
+- Dataset used for evaluation : **COCO-2017**
+- Note: The post-processing is performed using PyTorch.

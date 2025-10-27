@@ -5,11 +5,11 @@
 import pytest
 from loguru import logger
 
-from models.common.utility_functions import run_for_wormhole_b0
+from models.common.utility_functions import run_for_blackhole
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 
 
-@run_for_wormhole_b0()
+@run_for_blackhole()
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
@@ -22,7 +22,7 @@ def test_perf_yolov5x(batch_size, expected_perf):
     num_iterations = 1
     margin = 0.03
 
-    command = f"pytest models/demos/yolov5x/tests/pcc/test_ttnn_yolov5x.py"
+    command = f"pytest models/demos/blackhole/yolov5x/tests/pcc/test_ttnn_yolov5x.py"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
