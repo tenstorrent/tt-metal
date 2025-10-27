@@ -164,7 +164,7 @@ public:
      * The chip_id parameter is the Fabric Node (logical) chip id for mesh_id.
      * The returned rank is derived from TopologyMapper's host-rank coordinate ranges.
      */
-    std::optional<MeshHostRankId> get_host_rank_for_coord(MeshId mesh_id, MeshCoordinate coord) const;
+    std::optional<MeshHostRankId> get_host_rank_for_coord(MeshId mesh_id, const MeshCoordinate& coord) const;
 
     /**
      * @brief Get the logical chip ids for a mesh or a host submesh
