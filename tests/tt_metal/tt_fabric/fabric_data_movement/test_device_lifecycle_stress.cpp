@@ -8,6 +8,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/context/metal_context.hpp"
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <chrono>
 #include <thread>
 #include <algorithm>
@@ -19,13 +20,13 @@ namespace fabric_router_tests {
 class DeviceLifecycleHelper {
 public:
     static void OpenDevices(
-        std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& devices_map,
+        std::map<ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& devices_map,
         std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& devices) {
         
         log_debug(tt::LogTest, "Opening devices (no fabric config)...");
         
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-        std::vector<chip_id_t> ids;
+        std::vector<int> ids;
         ids.reserve(num_devices);
         for (unsigned int id = 0; id < num_devices; id++) {
             ids.push_back(id);
@@ -45,7 +46,7 @@ public:
     }
     
     static void CloseDevices(
-        std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& devices_map,
+        std::map<ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& devices_map,
         std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& devices) {
         
         log_debug(tt::LogTest, "Closing devices...");
@@ -58,7 +59,7 @@ public:
     }
     
     static void OpenCloseCycle(
-        std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& devices_map,
+        std::map<ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& devices_map,
         std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& devices) {
         
         OpenDevices(devices_map, devices);
@@ -69,7 +70,7 @@ public:
 // Fixture for device lifecycle stress testing (no fabric)
 class DeviceLifecycleStressFixture : public ::testing::Test {
 protected:
-    std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_map_;
+    std::map<ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_map_;
     std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
     
     void SetUp() override {
@@ -185,7 +186,7 @@ TEST_F(DeviceLifecycleStressFixture, AlternateLongShortLifetime_15Cycles) {
 
 // Test 7: Verify device IDs are consistent across open/close cycles
 TEST_F(DeviceLifecycleStressFixture, ConsistentDeviceIDs_10Cycles) {
-    std::vector<chip_id_t> expected_ids;
+    std::vector<ChipId> expected_ids;
     
     // First cycle - capture device IDs
     DeviceLifecycleHelper::OpenDevices(devices_map_, devices_);
@@ -201,7 +202,7 @@ TEST_F(DeviceLifecycleStressFixture, ConsistentDeviceIDs_10Cycles) {
         
         DeviceLifecycleHelper::OpenDevices(devices_map_, devices_);
         
-        std::vector<chip_id_t> current_ids;
+        std::vector<ChipId> current_ids;
         for (const auto& [id, device] : devices_map_) {
             current_ids.push_back(id);
         }
