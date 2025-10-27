@@ -203,7 +203,7 @@ def test_llama_tg_ScaledDotProductAttentionDecode(
         dtype,
         grid_size,
         q_dtype,
-        cur_pos=127,
+        cur_pos=256,
         block_size=32,
         q_chunk_size=0,
         k_chunk_size=0,

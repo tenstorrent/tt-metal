@@ -8,6 +8,7 @@
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     /*
@@ -85,6 +86,8 @@ void kernel_main() {
         if (cur_pos_arg != UINT32_MAX) {
             cur_pos = cur_pos_arg;
         } else {
+            DeviceZoneScopedN("READ CUR_POS");
+
             constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
             cb_reserve_back(cb_index_id, 1);
             uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
@@ -158,6 +161,8 @@ void kernel_main() {
     uint32_t q_batch_offset = cur_batch * q_chunk_tiles;
 
     if constexpr (is_q_sharded) {
+        DeviceZoneScopedN("READ Q");
+
         uint64_t q_read_addr;
         uint32_t q_write_ptr;
         if (is_output_core) {
@@ -190,6 +195,8 @@ void kernel_main() {
             cb_push_back(cb_q_in, q_chunk_tiles);
         }
     } else {
+        DeviceZoneScopedN("READ Q");
+
         const auto q_reader = TensorAccessor(q_args, q_addr, q_page_size_bytes);
         uint32_t q_tile_id = q_batch_offset;
         cb_reserve_back(cb_q_in, q_chunk_tiles);
@@ -237,6 +244,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint16_t* page_table_ptr_u16 = nullptr;
     volatile tt_l1_ptr uint32_t* page_table_ptr_u32 = nullptr;
     if constexpr (is_paged_attention) {
+        DeviceZoneScopedN("READ PT");
+
         constexpr uint32_t cb_id_page_table = tt::CBIndex::c_9;
         uint32_t num_pages_to_read = is_page_table_sharded ? B : 1;
         cb_reserve_back(cb_id_page_table, num_pages_to_read);
@@ -271,6 +280,8 @@ void kernel_main() {
                 const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t_dynamic;
                 uint64_t k_base_read_ptr;
                 {
+                    DeviceZoneScopedN("READ K");
+
                     // Read K chunk in row-major order (to simplify page mapping). Write tiles to CB in transposed
                     // order.
                     cb_reserve_back(cb_k_in, k_chunk_tiles);
@@ -325,6 +336,8 @@ void kernel_main() {
                             }
                         }
                     } else {
+                        DeviceZoneScopedN("READ V");
+
                         // Read V chunk in row major order, write in row-major order
                         cb_reserve_back(cb_v_in, v_chunk_tiles);
                         uint32_t v_write_ptr = get_write_ptr(cb_v_in);

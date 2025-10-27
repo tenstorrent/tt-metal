@@ -60,7 +60,8 @@ template <
     uint32_t in0_cb,
     uint32_t scale_cb,
     uint32_t rows,
-    int vector_mode = (int)VectorMode::RC>
+    int vector_mode = (int)VectorMode::RC,
+    bool is_fp32_acc_en = false>
 void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_max = false) {
     // Precondition: in0_cb has rows*cols produced (row–major).
     // Precondition: scale_cb has 1 produced.
@@ -78,9 +79,9 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
 
     for (uint32_t r = 0; r < rows; ++r) {
         acquire_dst();
-        reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
+        reduce_init<pool_type, reduce_dim, is_fp32_acc_en>(in0_cb, scale_cb, out_cb);
         for (uint32_t c = 0; c < cols; ++c) {
-            reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, r * cols + c, 0, reduce_dst_idx);
+            reduce_tile<pool_type, reduce_dim, is_fp32_acc_en>(in0_cb, scale_cb, r * cols + c, 0, reduce_dst_idx);
         }
         reduce_uninit();
         if (do_eltwise_max) {

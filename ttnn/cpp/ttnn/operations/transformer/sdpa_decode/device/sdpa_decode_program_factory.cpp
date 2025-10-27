@@ -828,6 +828,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         use_half_tile,
         scale_union.u,
         sliding_window_size.value_or(0),
+        fp32_dest_acc_en,
     };
 
     // Determine granularity for compute loops

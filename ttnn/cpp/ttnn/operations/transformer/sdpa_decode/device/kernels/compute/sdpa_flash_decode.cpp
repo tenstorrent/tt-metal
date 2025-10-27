@@ -22,6 +22,7 @@
 #include "compute_common.hpp"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/untilize.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 
@@ -63,6 +64,7 @@ void MAIN {
     constexpr bool use_half_tile = get_compile_time_arg_val(27);
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(28);
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(29);
+    constexpr bool is_fp32_acc_en = get_compile_time_arg_val(30) == 1;
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -164,21 +166,24 @@ void MAIN {
     }
 
     // We tilize input Q if it is in ROW MAJOR layout
-    if constexpr (tilize_q) {
-        compute_kernel_hw_startup(cb_q_rm, cb_q_in);
-        tilize_init(cb_q_rm, q_chunk_tiles, cb_q_in);
-        cb_wait_front(cb_q_rm, q_chunk_tiles);
-        cb_reserve_back(cb_q_in, q_chunk_tiles);
-        tilize_block(cb_q_rm, q_chunk_tiles, cb_q_in);
-        tilize_uninit(cb_q_rm, cb_q_in);
-        cb_push_back(cb_q_in, q_chunk_tiles);
-        cb_pop_front(cb_q_rm, q_chunk_tiles);
-        mm_init_short(cb_q_in, cb_k_in);
-    } else {
-        mm_init(cb_q_in, cb_k_in, cb_qk_im);
-    }
-    cb_wait_front(cb_q_in, q_chunk_tiles);
 
+    {
+        DeviceZoneScopedN("TILIZE_Q");
+        if constexpr (tilize_q) {
+            compute_kernel_hw_startup(cb_q_rm, cb_q_in);
+            tilize_init(cb_q_rm, q_chunk_tiles, cb_q_in);
+            cb_wait_front(cb_q_rm, q_chunk_tiles);
+            cb_reserve_back(cb_q_in, q_chunk_tiles);
+            tilize_block(cb_q_rm, q_chunk_tiles, cb_q_in);
+            tilize_uninit(cb_q_rm, cb_q_in);
+            cb_push_back(cb_q_in, q_chunk_tiles);
+            cb_pop_front(cb_q_rm, q_chunk_tiles);
+            mm_init_short(cb_q_in, cb_k_in);
+        } else {
+            mm_init(cb_q_in, cb_k_in, cb_qk_im);
+        }
+        cb_wait_front(cb_q_in, q_chunk_tiles);
+    }
     // Define dynamic matmul configs
 #ifdef DYNAMIC_CHUNK_SIZE
     const uint32_t qk_subblock_h_dynamic = 1;
@@ -293,46 +298,50 @@ void MAIN {
                     mask_cb_to_use = cb_sliding_window_mask_in;  // Use sliding window mask buffer
                 }
 
-                cb_matmul_blocks(
-                    cb_q_in,
-                    cb_k_in,
-                    cb_qk_im,
-                    Sq_chunk_t,
-                    Sk_chunk_t_dynamic,
-                    DHt,
-                    qk_num_blocks,
-                    qk_in0_num_subblocks_dynamic,
-                    qk_in1_num_subblocks_dynamic,
-                    qk_in0_block_w,
-                    qk_subblock_h_dynamic,
-                    qk_subblock_w_dynamic,
-                    true,
-                    add_mask_fusion,
-                    mask_cb_to_use,
-                    cb_zero_in);
-
+                {
+                    DeviceZoneScopedN("QK MM");
+                    cb_matmul_blocks(
+                        cb_q_in,
+                        cb_k_in,
+                        cb_qk_im,
+                        Sq_chunk_t,
+                        Sk_chunk_t_dynamic,
+                        DHt,
+                        qk_num_blocks,
+                        qk_in0_num_subblocks_dynamic,
+                        qk_in1_num_subblocks_dynamic,
+                        qk_in0_block_w,
+                        qk_subblock_h_dynamic,
+                        qk_subblock_w_dynamic,
+                        true,
+                        add_mask_fusion,
+                        mask_cb_to_use,
+                        cb_zero_in);
+                }
                 /* QK += MASK */
-                if (!add_mask_fusion) {
-                    if constexpr (is_causal) {
-                        // For decode, we only apply mask at the last chunk for causal mode
-                        if (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk) {
-                            reconfig_data_format(cb_qk_im, cb_mask_in);
-                            add_block_inplace<false>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
+                {
+                    DeviceZoneScopedN("ADD-MASK");
+                    if (!add_mask_fusion) {
+                        if constexpr (is_causal) {
+                            // For decode, we only apply mask at the last chunk for causal mode
+                            if (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk) {
+                                reconfig_data_format(cb_qk_im, cb_mask_in);
+                                add_block_inplace<false>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
+                            }
+                        } else {
+                            if constexpr (use_attention_mask) {
+                                reconfig_data_format(cb_qk_im, cb_mask_in);
+                                add_block_inplace<true>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
+                            }
                         }
-                    } else {
-                        if constexpr (use_attention_mask) {
-                            reconfig_data_format(cb_qk_im, cb_mask_in);
-                            add_block_inplace<true>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
-                        }
-                    }
 
-                    // Apply sliding window mask to the first chunk (only on the core that processes it)
-                    if (k_chunk == window_start_chunk && window_start_unaligned > 0) {
-                        reconfig_data_format(cb_qk_im, cb_sliding_window_mask_in);
-                        add_block_inplace<false>(cb_qk_im, cb_sliding_window_mask_in, qk_chunk_tiles_dynamic);
+                        // Apply sliding window mask to the first chunk (only on the core that processes it)
+                        if (k_chunk == window_start_chunk && window_start_unaligned > 0) {
+                            reconfig_data_format(cb_qk_im, cb_sliding_window_mask_in);
+                            add_block_inplace<false>(cb_qk_im, cb_sliding_window_mask_in, qk_chunk_tiles_dynamic);
+                        }
                     }
                 }
-
                 /**
                  * OPTIMIZATION
                  * Typically, scores are multiplied by a scalar here, but an optimization was employed
@@ -346,14 +355,24 @@ void MAIN {
                 /**
                  * OPTIMIZATION
                  * reduce_c can perform both reduce_max and eltwise max with previous result.
+                 # fp32 dest acc will perform reduct tile LLK in full fp32 precision which reduces PCC fluctuations.
                  * if do_eltwise_max:
                  *  cur_max = eltwise_max(prev_max, max(qk, dim=-1))
                  * else:
                  *  cur_max = max(qk, dim=-1)
                  */
-                reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
-                    cb_cur_max, cb_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
 
+                {
+                    DeviceZoneScopedN("REDUCE MAX");
+                    reduce_c<
+                        PoolType::MAX,
+                        ReduceDim::REDUCE_ROW,
+                        cb_qk_im,
+                        cb_identity_scale_in,
+                        Sq_chunk_t,
+                        vector_mode,
+                        is_fp32_acc_en>(cb_cur_max, cb_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
+                }
                 /* QK -= cb_cur_max */
                 /* QK = exp(QK)*/
                 reconfig_data_format(cb_qk_im, cb_cur_max);
@@ -362,43 +381,54 @@ void MAIN {
                 /**
                  * sub_exp performs `QK = exp((QK - cur_max) * scale)`
                  */
-                sub_exp_block_bcast_cols_inplace_reduce<
-                    cb_qk_im,
-                    Sq_chunk_t,
-                    scale_fp32,
-                    vector_mode,
-                    cb_identity_scale_in>(cb_cur_max, cb_cur_sum, Sk_chunk_t_dynamic);
-                cb_wait_front(cb_qk_im, qk_chunk_tiles_dynamic);
-
+                {
+                    DeviceZoneScopedN("SUB-EXP");
+                    sub_exp_block_bcast_cols_inplace_reduce<
+                        cb_qk_im,
+                        Sq_chunk_t,
+                        scale_fp32,
+                        vector_mode,
+                        cb_identity_scale_in>(cb_cur_max, cb_cur_sum, Sk_chunk_t_dynamic);
+                    cb_wait_front(cb_qk_im, qk_chunk_tiles_dynamic);
+                }
                 // Reconfig register DF
                 reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                 pack_reconfig_data_format(cb_cur_sum);
 
                 /* reduce_c performs CUR_SUM = sum(QK, dim = -1) */
-                reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
-                    cb_cur_sum, cb_cur_sum, Sk_chunk_t_dynamic, false);
-
+                {
+                    DeviceZoneScopedN("REDUCE SUM");
+                    reduce_c<
+                        PoolType::SUM,
+                        ReduceDim::REDUCE_ROW,
+                        cb_qk_im,
+                        cb_identity_scale_in,
+                        Sq_chunk_t,
+                        vector_mode>(cb_cur_sum, cb_cur_sum, Sk_chunk_t_dynamic, false);
+                }
                 /* OUT_IM = QK @ V_CHUNK */
                 reconfig_data_format(cb_qk_im, cb_v_in);  // DEBUG
                 pack_reconfig_data_format(cb_out_im);
-                cb_matmul_blocks(
-                    cb_qk_im,
-                    cb_v_in,
-                    cb_out_mm,
-                    Sq_chunk_t,
-                    vDHt,
-                    Sk_chunk_t_dynamic,
-                    out_num_blocks_dynamic,
-                    out_in0_num_subblocks,
-                    out_in1_num_subblocks,
-                    out_in0_block_w_dynamic,
-                    out_subblock_h,
-                    out_subblock_w,
-                    false /*transpose*/,
-                    false,
-                    cb_mask_in,
-                    cb_zero_in);
-
+                {
+                    DeviceZoneScopedN("QKV MM");
+                    cb_matmul_blocks(
+                        cb_qk_im,
+                        cb_v_in,
+                        cb_out_mm,
+                        Sq_chunk_t,
+                        vDHt,
+                        Sk_chunk_t_dynamic,
+                        out_num_blocks_dynamic,
+                        out_in0_num_subblocks,
+                        out_in1_num_subblocks,
+                        out_in0_block_w_dynamic,
+                        out_subblock_h,
+                        out_subblock_w,
+                        false /*transpose*/,
+                        false,
+                        cb_mask_in,
+                        cb_zero_in);
+                }
                 // Reconfig register DF
                 reconfig_data_format_srca(cb_out_im);
                 cb_pop_front(cb_qk_im, qk_chunk_tiles_dynamic);
@@ -408,6 +438,7 @@ void MAIN {
                     cb_out_mm = cb_out_im;
                 } else {
                     // When there is more than 1 chunk, we perform Lazy Softmax
+                    DeviceZoneScopedN("CORRECTION");
 
                     // Reconfig register DF
                     reconfig_data_format(cb_prev_max, cb_cur_max);
@@ -467,6 +498,8 @@ void MAIN {
                 // Iterate through each worker
 
                 for (uint32_t i = 0; i < num_cores_to_wait; i++) {
+                    DeviceZoneScopedN("REMOTE CORRECTION");
+
                     // OUT_ACC_2 <- WORKER_OUT
                     move_block<true>(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
 
@@ -535,8 +568,10 @@ void MAIN {
 
             reconfig_data_format(cb_cur_sum, cb_cur_sum);
             pack_reconfig_data_format(cb_cur_sum);
-            recip_block_inplace<vector_mode>(cb_cur_sum, Sq_chunk_t);
-
+            {
+                DeviceZoneScopedN("RECIP");
+                recip_block_inplace<vector_mode>(cb_cur_sum, Sq_chunk_t);
+            }
             /* OUT_ACC *= CUR_SUM */
             reconfig_data_format(cb_out_accumulate_im, cb_cur_sum);
             pack_reconfig_data_format(cb_out_accumulate_im);
@@ -546,6 +581,8 @@ void MAIN {
 
             // Untilize output to ROW MAJOR if input Q was also ROW MAJOR
             if constexpr (untilize_output) {
+                DeviceZoneScopedN("UNTILIZE OUT");
+
                 // Conditionally use pack_untilize or untilize
                 if constexpr (use_pack_untilize) {
                     pack_untilize_init<out_chunk_tiles>(cb_out_accumulate_im, cb_out_final);
