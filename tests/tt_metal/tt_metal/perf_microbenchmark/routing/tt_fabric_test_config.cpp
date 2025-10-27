@@ -1511,7 +1511,7 @@ void TestConfigBuilder::expand_perimeter_linear_unicast_or_multicast(
             }
 
             ParsedTrafficPatternConfig specific_pattern;
-            specific_pattern.destination = ParsedDestinationConfig{.hops = hops.value()};
+            specific_pattern.destination = ParsedDestinationConfig{.hops = hops};
 
             auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
             test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
