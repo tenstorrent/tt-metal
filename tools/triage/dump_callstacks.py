@@ -5,11 +5,12 @@
 
 """
 Usage:
-    dump_callstacks [--full-callstack] [--gdb-callstack] [--all-cores]
+    dump_callstacks [--full-callstack] [--gdb-callstack] [--active-eth] [--all-cores]
 
 Options:
     --full-callstack   Dump full callstack with all frames. Defaults to dumping only the top frame.
     --gdb-callstack    Dump callstack using GDB client instead of built-in methods.
+    --active-eth       Override default behaivour of not dumping callstack for active ethe cores if full callstack or gdb callstack is used.
     --all-cores        Show all cores including ones with Go Message = DONE. By default, DONE cores are filtered out.
 
 Description:
@@ -24,6 +25,7 @@ Description:
 from dataclasses import dataclass
 
 from triage import ScriptConfig, TTTriageError, log_check, recurse_field, triage_field, hex_serializer, run_script
+from ttexalens import util
 from ttexalens.hw.tensix.wormhole.wormhole import WormholeDevice
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
 from elfs_cache import run as get_elfs_cache, ElfsCache
@@ -436,15 +438,25 @@ def start_gdb_server(port: int, context: Context) -> GdbServer:
 def run(args, context: Context):
     from triage import set_verbose_level
 
-    full_callstack = args["--full-callstack"]
-    gdb_callstack = args["--gdb-callstack"]
-    show_all_cores = args["--all-cores"]
+    full_callstack: bool = args["--full-callstack"]
+    gdb_callstack: bool = args["--gdb-callstack"]
+    show_all_cores: bool = args["--all-cores"]
+    active_eth: bool = args["--active-eth"]
 
     # Set verbose level from -v count (controls which columns are displayed)
     verbose_level = args["-v"]
     set_verbose_level(verbose_level)
 
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
+    should_skip_active_eth = full_callstack or gdb_callstack
+
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"] if should_skip_active_eth else ["tensix", "idle_eth", "active_eth"]
+    # If we override default behaviour print warning message
+    if active_eth and should_skip_active_eth:
+        BLOCK_TYPES_TO_CHECK.append("active_eth")
+        util.WARN(
+            "Getting full or gdb callstack may break active eth core. Use tt-smi reset to fix. See issue #661 in tt-exalens for more details."
+        )
+
     elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
