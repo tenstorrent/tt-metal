@@ -439,6 +439,8 @@ async function run() {
     // For each workflow, find the last successful run (even if outside the window)
     // This is used to calculate "days since last success" for failing workflows
     const lastSuccessTimestamps = new Map();
+    const owner = github.context.repo.owner;
+    const repo = github.context.repo.repo;
 
     for (const [name, runs] of grouped.entries()) {
       try {
@@ -544,8 +546,6 @@ async function run() {
     // The logs will be extracted under a dedicated directory so downstream steps
     // can parse them without performing network calls again.
     // Separate gtest logs from other logs (non-gtest failures with no annotations)
-    const owner = github.context.repo.owner;
-    const repo = github.context.repo.repo;
     const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
     const gtestLogsRoot = path.join(workspace, 'logs', 'gtest');
     const otherLogsRoot = path.join(workspace, 'logs', 'other');
