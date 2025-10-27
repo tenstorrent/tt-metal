@@ -337,7 +337,7 @@
 <dd class="field-odd">
 <ul class="simple">
 <li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – the input tensor.</p></li>
-<li><p><strong>fill_value</strong> (<em>float</em>) – The value to be filled in the output tensor.</p></li>
+<li><p><strong>fill_value</strong> (<em>float/int</em>) – The value to be filled in the output tensor.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
@@ -367,13 +367,13 @@
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, BFLOAT8_B</p></td>
+<td><p>BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32</p></td>
 <td><p>TILE</p></td>
-<td><p>2, 3, 4</p></td>
+<td><p>1, 2, 3, 4, 5, 6</p></td>
 </tr>
 </tbody>
 </table>
-<p>Support provided for float32 dtypes in Wormhole_B0. System memory is not supported.</p>
+<p>Host memory is not supported.</p>
 </div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
