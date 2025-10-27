@@ -342,7 +342,7 @@ class GroupNorm(Module):
             num_groups: Number of groups.
             eps: Epsilon value for numerical stability.
             mesh_device: The device to use.
-            mesh_axis: The axis to shard the on.
+            mesh_axis: The mesh axis to use for sharding.
             core_grid: The core grid to use.
             num_out_blocks: The number of output blocks to use.
             torch_ref: The torch reference layer.
