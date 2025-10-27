@@ -72,9 +72,11 @@ def test_convert_to_hwc(device, C, HW, core_grid, padded_sharded_dim, provide_me
         )
         actual = ttnn.experimental.convert_to_hwc(input_tensor, memory_config=output_mem_config, dtype=ttnn.bfloat16)
     else:
+        print(input_tensor.shape, input_tensor.memory_config())
         actual = ttnn.experimental.convert_to_hwc(input_tensor, dtype=ttnn.bfloat16)
 
     actual = ttnn.to_torch(actual)
+    print(actual, expected)
 
     passed, message = assert_equal(
         expected, actual[:, :, :, : expected.shape[-1]]

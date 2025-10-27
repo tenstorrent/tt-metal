@@ -55,6 +55,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
                                             uint32_t page_size,
                                             const tt::DataFormat& format,
                                             tt::tt_metal::Buffer* buffer = nullptr) -> tt::tt_metal::CBHandle {
+        log_info(tt::LogType::LogAlways, "Creating circular buffer id={} -> page_size={}, total_size={}", index, page_size, total_size);
         auto config = tt::tt_metal::CircularBufferConfig(total_size, {{index, format}}).set_page_size(index, page_size);
         if (buffer != nullptr) {
             config = config.set_globally_allocated_address(*buffer);
@@ -62,16 +63,23 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         return tt::tt_metal::CreateCircularBuffer(program, l1_input_core_grid, config);
     };
 
+    const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    const uint32_t input_element_size = tt::datum_size(input_format);
+
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
     const uint32_t intermediary_tile_size = tt::tile_size(intermediary_format);
 
+    const uint32_t cb_full_input_id = tt::CBIndex::c_5;
+    const uint32_t cb_full_input_page_size = l1_input_shard_width * input_element_size;
+    const uint32_t cb_full_input_total_size = l1_input_shard_height * cb_full_input_page_size;
+    const auto cb_full_input = create_circular_buffer(
+        cb_full_input_id, cb_full_input_total_size, cb_full_input_page_size, input_format, a.buffer()); // DONT DO THIS IF DRAM
+
     const uint32_t cb_in_id = tt::CBIndex::c_0;
-    const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    const uint32_t input_element_size = tt::datum_size(input_format);
     const uint32_t cb_in_page_size = l1_input_shard_width * input_element_size;
     const uint32_t cb_in_total_size = l1_input_shard_height * cb_in_page_size;
-    const auto cb_in = create_circular_buffer(
-        cb_in_id, cb_in_total_size, cb_in_page_size, input_format, is_input_in_dram ? nullptr : a.buffer());
+    create_circular_buffer(
+        cb_in_id, cb_in_total_size, cb_in_page_size, input_format);
 
     const uint32_t cb_in_tiled_id = tt::CBIndex::c_1;
     const uint32_t cb_in_tiled_total_size = tt::div_up(l1_input_shard_width, TILE_WIDTH) * intermediary_tile_size;
@@ -122,6 +130,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     const uint32_t total_num_sticks_kernel_1 = l1_input_shard_height - total_num_sticks_kernel_0;
 
     std::vector<uint32_t> writer_compile_time_args0 = {
+        cb_full_input_id,
         cb_in_id,
         cb_in_transpose_id0,
         cb_out_id,
@@ -136,8 +145,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         dram_write_stride_bytes,
         dram_read_stride_bytes,
         total_num_sticks_kernel_0};
+    log_info(tt::LogType::LogAlways, "writer_compile_time_args_1 = {}", writer_compile_time_args0);
 
     std::vector<uint32_t> writer_compile_time_args1 = {
+        cb_full_input_id,
         cb_in_id,
         cb_in_transpose_id1,
         cb_out_id,
@@ -184,7 +195,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
             .math_approx_mode = false,
             .compile_args = compute_compile_time_args});
 
-    auto set_runtime_args = [cb_in,
+    auto set_runtime_args = [cb_full_input,
                              cb_out,
                              is_input_in_dram,
                              l1_input_cores,
@@ -223,7 +234,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
             }
         } else {
             tt::tt_metal::Buffer* a_buffer = a.buffer();
-            UpdateDynamicCircularBufferAddress(program, cb_in, *a_buffer);
+            UpdateDynamicCircularBufferAddress(program, cb_full_input, *a_buffer);
         }
         tt::tt_metal::Buffer* output_buffer = output.buffer();
         UpdateDynamicCircularBufferAddress(program, cb_out, *output_buffer);
