@@ -21,7 +21,6 @@ void bind_moreh_norm_operation(nb::module_& mod) {
         ttnn::nanobind_arguments_t{
             nb::arg("input"),
             nb::arg("p"),
-            nb::kw_only(),
             nb::arg("dim") = nb::none(),
             nb::arg("keepdim") = false,
             nb::arg("output") = nb::none(),

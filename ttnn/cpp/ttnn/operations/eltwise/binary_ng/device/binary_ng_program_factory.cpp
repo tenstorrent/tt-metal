@@ -719,10 +719,12 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     if (is_sfpu_op) {
         if (op_type != BinaryOpType::POWER) {
-            unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-            unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-            unpack_to_dest_mode[src0interim_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-            unpack_to_dest_mode[src1interim_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+            if (a_dtype == DataType::FLOAT32) {
+                unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+                unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+                unpack_to_dest_mode[src0interim_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+                unpack_to_dest_mode[src1interim_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+            }
         } else {
             unpack_to_dest_mode[src0_cb_index] =
                 (a_dtype == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;

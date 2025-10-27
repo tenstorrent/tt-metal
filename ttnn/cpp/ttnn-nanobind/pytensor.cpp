@@ -128,7 +128,9 @@ ttnn::DataType ndarray_dtype_to_ttnn(const nb::ndarray<Ts...>& arr) {
     switch (static_cast<dtype_code>(dt.code)) {
         case dtype_code::Int:
             switch (dt.bits) {
+                case 16: ttnn_dt = ttnn::DataType::UINT16; break;
                 case 32: ttnn_dt = ttnn::DataType::INT32; break;
+                case 64: ttnn_dt = ttnn::DataType::INT32; break;
                 default: ttnn_dt = ttnn::DataType::INVALID; dtype_str = "Int";
             }
             break;

@@ -632,7 +632,6 @@ void py_module(nb::module_& mod) {
             },
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
-            nb::kw_only(),
             nb::arg("transpose_a") = false,
             nb::arg("transpose_b") = false,
             nb::arg("memory_config") = nb::none(),

@@ -313,7 +313,21 @@ std::vector<Tensor> MatmulBatchedWeightsOperation::invoke(
 
 void AddmmOperation::validate(
     const Tensor& input_tensor, const Tensor& mat1_tensor, const Tensor& mat2_tensor, float alpha, float beta) {
-    TT_FATAL(alpha != 0.0, "alpha parameter cannot be 0");
+    const auto& input_dtype = input_tensor.dtype();
+    const auto& mat1_dtype = mat1_tensor.dtype();
+    const auto& mat2_dtype = mat2_tensor.dtype();
+    TT_FATAL(
+        (input_dtype == ttnn::DataType::BFLOAT16 || input_dtype == ttnn::DataType::FLOAT32 ||
+         input_dtype == ttnn::DataType::BFLOAT8_B) &&
+            (mat1_dtype == ttnn::DataType::BFLOAT16 || mat1_dtype == ttnn::DataType::FLOAT32 ||
+             mat1_dtype == ttnn::DataType::BFLOAT8_B) &&
+            (mat2_dtype == ttnn::DataType::BFLOAT16 || mat2_dtype == ttnn::DataType::FLOAT32 ||
+             mat2_dtype == ttnn::DataType::BFLOAT8_B),
+        "only ttnn.bfloat16, ttnn.float32 and ttnn.bfloat8_b types are supported");
+
+    TT_FATAL(
+        alpha != 0.0,
+        "alpha parameter cannot be 0, for alpha=0 case, should call `ttnn.add(input_tensor, 0, beta=beta)`");
 
     if (beta != 0.0) {
         const auto& input_shape = input_tensor.logical_shape();

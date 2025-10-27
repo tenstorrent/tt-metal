@@ -207,7 +207,13 @@ def test_sample_data_for_visualizer(device):
                 ttnn.relu(intermediate_tensor),
             )
             ttnn.deallocate(intermediate_tensor)
-            intermediate_tensor = ttnn.softmax(sum(output_tensors), dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+            sum_of_tensors = ttnn.add(output_tensors[0], output_tensors[1])
+            ttnn.add(sum_of_tensors, output_tensors[2], output_tensor=sum_of_tensors)
+
+            intermediate_tensor = ttnn.softmax(sum_of_tensors, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(sum_of_tensors)
+
             for tensor in output_tensors:
                 ttnn.deallocate(tensor)
             output_tensor = ttnn.matmul(intermediate_tensor, weights[layer_index], memory_config=ttnn.L1_MEMORY_CONFIG)
