@@ -86,6 +86,19 @@ RunTimeOptions::RunTimeOptions() :
         }
     }
 
+    if (this->root_dir.empty()) {
+        log_critical(
+            tt::LogMetal,
+            "Failed to determine TT-Metal root directory. "
+            "Root directory must be set via one of the following methods:\n"
+            "1. Automatically determined when using a package install\n"
+            "2. Set TT_METAL_RUNTIME_ROOT environment variable to the path containing tt_metal/\n"
+            "3. Call RunTimeOptions::set_root_dir() API before creating RunTimeOptions\n"
+            "4. Run from the root of the repository\n"
+            "Current working directory: {}",
+            std::filesystem::current_path().string());
+    }
+
     TT_FATAL(!this->root_dir.empty(), "Root Directory is not set.");
 
     {
@@ -1192,7 +1205,7 @@ void RunTimeOptions::ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feat
 uint32_t RunTimeOptions::get_watcher_hash() const {
     // These values will cause kernels / firmware to be recompiled if they change
     // Only the ones which have #define on the device side need to be listed here
-    std::string hash_str = "";
+    std::string hash_str;
     hash_str += std::to_string(watcher_feature_disabled(watcher_waypoint_str));
     hash_str += std::to_string(watcher_feature_disabled(watcher_noc_sanitize_str));
     hash_str += std::to_string(watcher_feature_disabled(watcher_assert_str));
