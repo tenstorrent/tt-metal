@@ -442,7 +442,7 @@ void try_advance_inline_write_or_atomic_inc(command_context_t<Addrgen>& cmd_ctx)
         uint64_t dest_noc_addr_for_pkt = safe_get_noc_addr(dest_noc0_x, dest_noc0_y, dest_bank_addr, 0);
         if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC) {
             pkt_hdr->to_noc_unicast_atomic_inc(
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{dest_noc_addr_for_pkt, static_cast<uint32_t>(value)});
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{dest_noc_addr_for_pkt, static_cast<uint16_t>(value), 32});
         } else {
             pkt_hdr->to_noc_unicast_inline_write(
                 tt::tt_fabric::NocUnicastInlineWriteCommandHeader{dest_noc_addr_for_pkt, static_cast<uint16_t>(value)});

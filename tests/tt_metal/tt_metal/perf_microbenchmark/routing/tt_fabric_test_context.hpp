@@ -199,6 +199,7 @@ public:
                             .payload_size_bytes = sync_pattern.size.value(),
                             .num_packets = sync_pattern.num_packets.value(),
                             .atomic_inc_val = sync_pattern.atomic_inc_val,
+                            .atomic_inc_wrap = sync_pattern.atomic_inc_wrap,
                             .mcast_start_hops = sync_pattern.mcast_start_hops,
                             .seed = config.seed,
                             .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
@@ -283,6 +284,7 @@ public:
                     .payload_size_bytes = pattern.size.value(),
                     .num_packets = pattern.num_packets.value(),
                     .atomic_inc_val = pattern.atomic_inc_val,
+                    .atomic_inc_wrap = pattern.atomic_inc_wrap,
                     .mcast_start_hops = pattern.mcast_start_hops,
                     .enable_flow_control = config.enable_flow_control,  // Propagate from test-level config
                     .seed = config.seed,

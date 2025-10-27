@@ -58,6 +58,7 @@ struct CclCommandWaitValue {
 };
 struct CclCommandAtomicInc {
     uint32_t value = 1;
+    uint32_t wrap_value = std::numeric_limits<uint32_t>::max();
 };
 
 struct noc_transfer_info {
@@ -428,14 +429,17 @@ struct CclCommandArg<CclCommandArgCode::SET_ATOMIC_INC_VALUE>
           CclCommandArgCode::SET_ATOMIC_INC_VALUE> {
     static void pack_to(args_elem_t* args, CclCommandAtomicInc const& atomic_inc_args) {
         args[0] = atomic_inc_args.value;
+        args[1] = atomic_inc_args.wrap_value;
     }
     void pack_to(args_elem_t* args) { pack_to(&args[0], this->value); }
 
     static void unpack(volatile args_elem_t const* args, CclCommandAtomicInc& out) {
         out.value = args[0];
+        out.wrap_value = args[1];
     }
     void unpack(volatile args_elem_t const* args) {
         this->value.value = args[0];
+        this->value.wrap_value = args[1];
     }
 };
 

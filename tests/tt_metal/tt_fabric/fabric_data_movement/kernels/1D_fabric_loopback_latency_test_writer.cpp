@@ -100,11 +100,12 @@ void kernel_main() {
     if constexpr (enable_fused_payload_with_sync) {
         payload_packet_header->to_noc_fused_unicast_write_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                dest_payload_noc_addr, dest_semaphore_noc_addr, 1, false},
+                dest_payload_noc_addr, dest_semaphore_noc_addr, 1, std::numeric_limits<uint16_t>::max(), false},
             payload_size_bytes);
     } else {
         payload_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{dest_payload_noc_addr}, payload_size_bytes);
-        sem_inc_packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{dest_semaphore_noc_addr, 1});
+        sem_inc_packet_header->to_noc_unicast_atomic_inc(
+            NocUnicastAtomicIncCommandHeader{dest_semaphore_noc_addr, 1, std::numeric_limits<uint16_t>::max()});
     }
 
     auto send_seminc_packet = [&fabric_connection, sem_inc_packet_header]() {
@@ -185,7 +186,8 @@ void kernel_main() {
                                      size_t num_hops_on_fabric) {
         // Now that we are done, we need to notify all other congestion writers to teardown
         fabric_set_unicast_route<false>(packet_header, num_hops_on_fabric);
-        packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{teardown_noc_addr, 1});
+        packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+            teardown_noc_addr, 1, std::numeric_limits<uint16_t>::max()});
 
         fabric_connection.wait_for_empty_write_slot();
         fabric_connection.send_payload_flush_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));

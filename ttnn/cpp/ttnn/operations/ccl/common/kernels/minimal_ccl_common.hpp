@@ -39,13 +39,14 @@ FORCE_INLINE void perform_atomic_fabric_write(
     size_t& l1_read_addr,
     uint32_t payload_size_bytes,
     uint64_t semaphore_noc_addr,
-    const uint32_t val,
+    const uint16_t val,
+    const uint16_t wrap,
     const bool flush,
     uint32_t offset = 0) {
     tt::tt_fabric::linear::to_noc_fused_unicast_write_atomic_inc(
         payload_size_bytes,
         pkt_hdr,
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{semaphore_noc_addr, val, flush},
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{semaphore_noc_addr, val, wrap, flush},
         dest_id,
         addrgen,
         offset);
@@ -230,7 +231,8 @@ FORCE_INLINE void fused_write_atomic_and_advance_local_read_address_for_fabric_w
     size_t& l1_read_addr,
     uint32_t payload_size_bytes,
     uint64_t semaphore_noc_addr,
-    const uint32_t val,
+    const uint16_t val,
+    const uint16_t wrap,
     const bool flush) {
     const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
     const size_t payload_l1_address = l1_read_addr;
@@ -238,7 +240,8 @@ FORCE_INLINE void fused_write_atomic_and_advance_local_read_address_for_fabric_w
     noc_async_write(payload_l1_address, safe_get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr), payload_size_bytes);
     if (fabric_connection.has_forward_connection()) {
         pkt_hdr_forward->to_noc_fused_unicast_write_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc0_dest_noc_addr, semaphore_noc_addr, val, flush},
+            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                noc0_dest_noc_addr, semaphore_noc_addr, val, wrap, flush},
             payload_size_bytes);
         perform_payload_send(
             fabric_connection.get_forward_connection(), l1_read_addr, payload_size_bytes, pkt_hdr_forward);
@@ -246,7 +249,8 @@ FORCE_INLINE void fused_write_atomic_and_advance_local_read_address_for_fabric_w
 
     if (fabric_connection.has_backward_connection()) {
         pkt_hdr_backward->to_noc_fused_unicast_write_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc0_dest_noc_addr, semaphore_noc_addr, val, flush},
+            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                noc0_dest_noc_addr, semaphore_noc_addr, val, wrap, flush},
             payload_size_bytes);
         perform_payload_send(
             fabric_connection.get_backward_connection(), l1_read_addr, payload_size_bytes, pkt_hdr_backward);
@@ -265,7 +269,8 @@ FORCE_INLINE void fused_write_atomic_and_advance_local_read_address_for_fabric_w
     size_t& l1_read_addr,
     uint32_t payload_size_bytes,
     uint64_t semaphore_noc_addr,
-    const uint32_t val,
+    const uint16_t val,
+    const uint16_t wrap,
     const bool flush,
     uint32_t offset = 0) {
     // This assumes payload size equals page size
@@ -281,6 +286,7 @@ FORCE_INLINE void fused_write_atomic_and_advance_local_read_address_for_fabric_w
             payload_size_bytes,
             semaphore_noc_addr,
             val,
+            wrap,
             flush,
             offset);
     }
@@ -295,6 +301,7 @@ FORCE_INLINE void fused_write_atomic_and_advance_local_read_address_for_fabric_w
             payload_size_bytes,
             semaphore_noc_addr,
             val,
+            wrap,
             flush,
             offset);
     }

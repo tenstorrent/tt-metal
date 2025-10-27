@@ -75,13 +75,16 @@ void kernel_main() {
                             connections,
                             route_id,
                             tt::tt_fabric::NocUnicastAtomicIncCommandHeader(
-                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 0, false));
+                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 0, 0, false));
                     } else {
                         fabric_multicast_noc_unicast_atomic_inc(
                             connections,
                             route_id,
                             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 1, true},
+                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
+                                1,
+                                std::numeric_limits<uint16_t>::max(),
+                                true},
                             hop_info.mcast.start_distance,
                             hop_info.mcast.range);
                     }
@@ -98,6 +101,7 @@ void kernel_main() {
                                 get_noc_addr(noc_x_start, noc_y_start, target_address),
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
                                 0,
+                                0,
                                 false));
                     } else {
                         fabric_multicast_noc_fused_unicast_with_atomic_inc(
@@ -109,6 +113,7 @@ void kernel_main() {
                                 get_noc_addr(noc_x_start, noc_y_start, target_address),
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
                                 1,
+                                std::numeric_limits<uint16_t>::max(),
                                 true},
                             hop_info.mcast.start_distance,
                             hop_info.mcast.range);
@@ -126,13 +131,16 @@ void kernel_main() {
                             connections,
                             route_id,
                             tt::tt_fabric::NocUnicastAtomicIncCommandHeader(
-                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 0, false));
+                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 0, 0, false));
                     } else {
                         fabric_unicast_noc_unicast_atomic_inc(
                             connections,
                             route_id,
                             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 1, true},
+                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
+                                1,
+                                std::numeric_limits<uint16_t>::max(),
+                                true},
                             hop_info.ucast.num_hops);
                     }
                 } break;
@@ -148,6 +156,7 @@ void kernel_main() {
                                 get_noc_addr(noc_x_start, noc_y_start, target_address),
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
                                 0,
+                                0,
                                 false));
                     } else {
                         fabric_unicast_noc_fused_unicast_with_atomic_inc(
@@ -159,6 +168,7 @@ void kernel_main() {
                                 get_noc_addr(noc_x_start, noc_y_start, target_address),
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
                                 1,
+                                std::numeric_limits<uint16_t>::max(),
                                 true},
                             hop_info.ucast.num_hops);
                     }
@@ -177,14 +187,17 @@ void kernel_main() {
                             connections,
                             route_id,
                             tt::tt_fabric::NocUnicastAtomicIncCommandHeader(
-                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 0, false));
+                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 0, 0, false));
                     } else {
                         fabric_multicast_noc_unicast_atomic_inc(
                             connections,
                             route_id,
                             ranges,
                             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 1, true});
+                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
+                                1,
+                                std::numeric_limits<uint16_t>::max(),
+                                true});
                     }
                 } break;
                 case NOC_FUSED_UNICAST_ATOMIC_INC: {
@@ -199,6 +212,7 @@ void kernel_main() {
                                 get_noc_addr(noc_x_start, noc_y_start, target_address),
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
                                 0,
+                                0,
                                 false));
                     } else {
                         fabric_multicast_noc_fused_unicast_with_atomic_inc(
@@ -211,6 +225,7 @@ void kernel_main() {
                                 get_noc_addr(noc_x_start, noc_y_start, target_address),
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
                                 1,
+                                std::numeric_limits<uint16_t>::max(),
                                 true});
                     }
                 } break;
@@ -226,13 +241,16 @@ void kernel_main() {
                             connections,
                             route_id,
                             tt::tt_fabric::NocUnicastAtomicIncCommandHeader(
-                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 0, false));
+                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 0, 0, false));
                     } else {
                         fabric_unicast_noc_unicast_atomic_inc(
                             connections,
                             route_id,
                             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 1, true});
+                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
+                                1,
+                                std::numeric_limits<uint16_t>::max(),
+                                true});
                     }
                 } break;
                 case NOC_FUSED_UNICAST_ATOMIC_INC: {
@@ -247,6 +265,7 @@ void kernel_main() {
                                 get_noc_addr(noc_x_start, noc_y_start, target_address),
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
                                 0,
+                                0,
                                 false));
                     } else {
                         fabric_unicast_noc_fused_unicast_with_atomic_inc(
@@ -258,6 +277,7 @@ void kernel_main() {
                                 get_noc_addr(noc_x_start, noc_y_start, target_address),
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
                                 1,
+                                std::numeric_limits<uint16_t>::max(),
                                 true});
                     }
                 } break;

@@ -58,7 +58,8 @@ void kernel_main() {
     fabric_set_unicast_route<false>(ready_packet_header, hops_to_latency_writer);
     auto ready_sem_noc_addr =
         safe_get_noc_addr(latency_writer_noc_x, latency_writer_noc_y, latency_writer_ready_sem, 0);
-    ready_packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{ready_sem_noc_addr, 1});
+    ready_packet_header->to_noc_unicast_atomic_inc(
+        NocUnicastAtomicIncCommandHeader{ready_sem_noc_addr, 1, std::numeric_limits<uint16_t>::max()});
 
     // Send initial traffic burst before signaling ready
     static constexpr size_t INITIAL_BURST_SIZE = 8;

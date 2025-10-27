@@ -169,13 +169,14 @@ void kernel_main() {
             // only initialize if we're actually going to send something over fabric
             ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_sem_inc, barrier_multicast_route_info);
             fabric_multicast_noc_unicast_atomic_inc_set_state<
-                UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+                UnicastAtomicIncUpdateMask::Wrap | UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
                 pkt_hdr_sem_inc,
                 static_cast<uint8_t>(barrier_multicast_route_info.start_distance_in_hops),
                 static_cast<uint8_t>(barrier_multicast_route_info.range_hops),
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                    0,  // ignore
-                    static_cast<uint32_t>(1)});
+                    0,                         // ignore
+                    static_cast<uint16_t>(1),  // increment 1
+                    32});
 
             if constexpr (topology == Topology::Linear) {
                 // multicast to both the forward and backward worker on all devices that you write to.
@@ -188,7 +189,7 @@ void kernel_main() {
                 fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     mux_connection_handle,
                     pkt_hdr_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{same_direction_barrier_sem_noc_addr_in_pkt, 0});
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{same_direction_barrier_sem_noc_addr_in_pkt, 0, 0});
 
                 // device going in the opposite direction
                 uint64_t opposite_direction_barrier_sem_noc_addr_in_pkt =
@@ -196,7 +197,8 @@ void kernel_main() {
                 fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     mux_connection_handle,
                     pkt_hdr_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_direction_barrier_sem_noc_addr_in_pkt, 0});
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                        opposite_direction_barrier_sem_noc_addr_in_pkt, 0, 0});
 
             } else if constexpr (topology == Topology::Ring) {
                 // multicast to entire ring of workers going in the same direction
@@ -205,7 +207,7 @@ void kernel_main() {
                 fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     mux_connection_handle,
                     pkt_hdr_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0, 0});
             } else {
                 ASSERT(false);
             }
@@ -254,12 +256,13 @@ void kernel_main() {
             pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, page_size);
 
         fabric_unicast_noc_unicast_atomic_inc_set_state<
-            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            UnicastAtomicIncUpdateMask::Wrap | UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
             pkt_hdr_sem_inc,
             static_cast<uint8_t>(unicast_route_info.distance_in_hops),
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                0,  // ignore
-                static_cast<uint32_t>(1)});
+                0,                         // ignore
+                static_cast<uint16_t>(1),  // increment 1
+                32});
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
@@ -363,7 +366,9 @@ void kernel_main() {
                     fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                         mux_connection_handle,
                         pkt_hdr_sem_inc,
-                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                            out_ready_sem_noc_addr_in_pkt, 0, 0  // ignore
+                        });
                 }
             }
             noc_async_writes_flushed();
@@ -377,7 +382,9 @@ void kernel_main() {
                 fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     mux_connection_handle,
                     pkt_hdr_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                        out_ready_sem_noc_addr_in_pkt, 0, 0  // ignore
+                    });
             }
         }
 
@@ -523,7 +530,9 @@ void kernel_main() {
                     fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                         mux_connection_handle,
                         pkt_hdr_sem_inc,
-                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                            out_ready_sem_noc_addr_in_pkt, 0, 0  // ignore
+                        });
                 }
                 noc_async_writes_flushed();
             }
@@ -533,7 +542,9 @@ void kernel_main() {
                 fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     mux_connection_handle,
                     pkt_hdr_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                        out_ready_sem_noc_addr_in_pkt, 0, 0  // ignore
+                    });
             }
 
             num_channels_processed_in_current_batch++;

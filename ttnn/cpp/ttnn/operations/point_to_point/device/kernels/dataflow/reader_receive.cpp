@@ -45,7 +45,8 @@ void kernel_main() {
 
     auto* sem_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)sem_header_ptr, sender_num_hops);
-    sem_header_ptr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sender_sem_noc_addr, 1});
+    sem_header_ptr->to_noc_unicast_atomic_inc(
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sender_sem_noc_addr, 1, 32});
 
     fabric_connection.open_finish();
     auto& connection_direction =

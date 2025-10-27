@@ -301,19 +301,26 @@ struct NocUnicastWriteFields {
 struct NocUnicastAtomicIncFields {
     template <bool IS_SOURCE>
     static NocUnicastAtomicIncFields build_from_args(size_t& arg_idx) {
-        uint32_t atomic_inc_val = get_local_arg_val<uint32_t>(arg_idx++);
+        uint16_t atomic_inc_val = get_local_arg_val<uint32_t>(arg_idx++);
+        uint16_t atomic_inc_wrap = get_local_arg_val<uint32_t>(arg_idx++);
         uint32_t dst_address = get_local_arg_val<uint32_t>(arg_idx++);
         uint32_t dst_noc_encoding = 0;
         if constexpr (IS_SOURCE) {
             dst_noc_encoding = get_local_arg_val<uint32_t>(arg_idx++);
         }
-        return NocUnicastAtomicIncFields(atomic_inc_val, dst_address, dst_noc_encoding);
+
+        return NocUnicastAtomicIncFields(atomic_inc_val, atomic_inc_wrap, dst_address, dst_noc_encoding);
     }
 
-    NocUnicastAtomicIncFields(uint32_t atomic_inc_val, uint32_t dst_address, uint32_t dst_noc_encoding) :
-        atomic_inc_val(atomic_inc_val), dst_address(dst_address), dst_noc_encoding(dst_noc_encoding) {}
+    NocUnicastAtomicIncFields(
+        uint16_t atomic_inc_val, uint16_t atomic_inc_wrap, uint32_t dst_address, uint32_t dst_noc_encoding) :
+        atomic_inc_val(atomic_inc_val),
+        atomic_inc_wrap(atomic_inc_wrap),
+        dst_address(dst_address),
+        dst_noc_encoding(dst_noc_encoding) {}
 
-    uint32_t atomic_inc_val;
+    uint16_t atomic_inc_val;
+    uint16_t atomic_inc_wrap;
     uint32_t dst_address;
     uint32_t dst_noc_encoding;
 };
@@ -740,7 +747,8 @@ struct LineSyncConfig {
         line_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fields.dst_address);
 
         uint64_t noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_address);
-        packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val});
+        packet_header->to_noc_unicast_atomic_inc(
+            NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val, fields.atomic_inc_wrap});
     }
 
     void global_sync_start() {
@@ -755,8 +763,8 @@ struct LineSyncConfig {
 
 private:
     FabricConnectionArray* connection_manager_;
-    void* connection_ptr_;    // Cached connection pointer
-    uint8_t connection_idx_;  // Index into the connection array
+    void* connection_ptr_;                                 // Cached connection pointer
+    uint8_t connection_idx_;                               // Index into the connection array
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header;
     volatile tt_l1_ptr uint32_t* line_sync_ptr;
     uint32_t line_sync_val;
@@ -1164,7 +1172,8 @@ inline void NocAtomicSenderOperations::parse_and_setup_impl(SenderKernelTrafficC
     auto fields = NocUnicastAtomicIncFields::build_from_args<true>(arg_idx);
 
     uint64_t noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_address);
-    config->packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val});
+    config->packet_header->to_noc_unicast_atomic_inc(
+        NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val, fields.atomic_inc_wrap});
 
     config->noc_fields_.atomic_inc_fields = fields;
     config->payload_size_bytes = 0;
@@ -1183,7 +1192,11 @@ inline void NocFusedSenderOperations::parse_and_setup_impl(SenderKernelTrafficCo
         get_noc_addr_helper(fields.atomic_inc_fields.dst_noc_encoding, fields.atomic_inc_fields.dst_address);
 
     config->packet_header->to_noc_fused_unicast_write_atomic_inc(
-        NocUnicastAtomicIncFusedCommandHeader{write_noc_addr, atomic_noc_addr, fields.atomic_inc_fields.atomic_inc_val},
+        NocUnicastAtomicIncFusedCommandHeader{
+            write_noc_addr,
+            atomic_noc_addr,
+            fields.atomic_inc_fields.atomic_inc_val,
+            fields.atomic_inc_fields.atomic_inc_wrap},
         fields.write_fields.payload_size_bytes);
 
     config->noc_fields_.write_atomic_inc_fields = fields;
@@ -1199,7 +1212,11 @@ inline void NocFusedSenderOperations::update_header_impl(SenderKernelTrafficConf
         get_noc_addr_helper(fields.atomic_inc_fields.dst_noc_encoding, fields.atomic_inc_fields.dst_address);
 
     config->packet_header->to_noc_fused_unicast_write_atomic_inc(
-        NocUnicastAtomicIncFusedCommandHeader{write_noc_addr, atomic_noc_addr, fields.atomic_inc_fields.atomic_inc_val},
+        NocUnicastAtomicIncFusedCommandHeader{
+            write_noc_addr,
+            atomic_noc_addr,
+            fields.atomic_inc_fields.atomic_inc_val,
+            fields.atomic_inc_fields.atomic_inc_wrap},
         fields.write_fields.payload_size_bytes);
 }
 
@@ -1644,7 +1661,7 @@ private:
 // Encapsulates all credit batching logic in one place
 // Works with FabricConnectionArray (supports both direct and mux connections)
 struct ReceiverCreditManager {
-    ReceiverCreditManager() : credit_fields_(0, 0, 0) {}
+    ReceiverCreditManager() : credit_fields_(0, 0, 0, 0) {}
 
     template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
     void setup_packet_header(size_t& arg_idx, uint32_t packet_header_address) {
@@ -1654,7 +1671,7 @@ struct ReceiverCreditManager {
         credit_fields_ = NocUnicastAtomicIncFields::build_from_args<true>(arg_idx);
         uint64_t noc_addr = get_noc_addr_helper(credit_fields_.dst_noc_encoding, credit_fields_.dst_address);
         packet_header_->to_noc_unicast_atomic_inc(
-            NocUnicastAtomicIncCommandHeader{noc_addr, credit_fields_.atomic_inc_val});
+            NocUnicastAtomicIncCommandHeader{noc_addr, credit_fields_.atomic_inc_val, credit_fields_.atomic_inc_wrap});
     }
 
     // Initialize with credit info and fabric connection array
@@ -1712,7 +1729,8 @@ private:
         noc_async_writes_flushed();
 
         uint64_t noc_addr = get_noc_addr_helper(credit_fields_.dst_noc_encoding, credit_fields_.dst_address);
-        packet_header_->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc_addr, num_credits});
+        packet_header_->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
+            noc_addr, static_cast<uint16_t>(num_credits), credit_fields_.atomic_inc_wrap});
 
         connection_manager_->wait_for_empty_write_slot<false>(connection_ptr_, connection_idx_);
         connection_manager_->send_header_flush_blocking<false>(
@@ -1804,6 +1822,7 @@ struct AtomicIncValidationConfig : public TrafficValidationConfigBase {
 
         poll_address = reinterpret_cast<tt_l1_ptr uint32_t*>(atomic_inc_fields.dst_address);
         value_step_size = atomic_inc_fields.atomic_inc_val;
+        wrap_boundary = atomic_inc_fields.atomic_inc_wrap;
 
         // set the initial expected value equal to the step size
         expected_value = value_step_size;
@@ -1821,12 +1840,20 @@ struct AtomicIncValidationConfig : public TrafficValidationConfigBase {
 
     static void update_impl(TrafficValidationConfigBase* base_config) {
         auto* config = static_cast<AtomicIncValidationConfig*>(base_config);
+
+        /* TODO: the wrap around logic doesnt work as expected, need to deprecate
+        if (config->expected_value > config->wrap_boundary - config->value_step_size) {
+            config->expected_value = config->value_step_size;  // Wrap around
+        } else {
+            config->expected_value += config->value_step_size;
+        }*/
         config->expected_value += config->value_step_size;
     }
 
     volatile tt_l1_ptr uint32_t* poll_address;
     uint32_t expected_value;
     uint32_t value_step_size;
+    uint32_t wrap_boundary;
 };
 
 struct WriteValidationConfig : public TrafficValidationConfigBase {
@@ -1878,6 +1905,7 @@ struct WriteAtomicIncValidationConfig : public TrafficValidationConfigBase {
 
         atomic_inc_address = reinterpret_cast<tt_l1_ptr uint32_t*>(atomic_fields.dst_address);
         atomic_inc_val = atomic_fields.atomic_inc_val;
+        atomic_inc_wrap = atomic_fields.atomic_inc_wrap;
         expected_atomic_value = atomic_inc_val;
     }
 
@@ -1903,6 +1931,12 @@ struct WriteAtomicIncValidationConfig : public TrafficValidationConfigBase {
         auto* config = static_cast<WriteAtomicIncValidationConfig*>(base_config);
         config->metadata.seed = prng_next(config->metadata.seed);
 
+        /* TODO: the wrap around logic doesnt work as expected, need to deprecate
+        if (config->expected_atomic_value > config->atomic_inc_wrap - config->atomic_inc_val) {
+            config->expected_atomic_value = config->atomic_inc_val;  // Wrap around
+        } else {
+            config->expected_atomic_value += config->atomic_inc_val;
+        } */
         config->expected_atomic_value += config->atomic_inc_val;
 
         config->payload_buffer_->advance();
@@ -1912,6 +1946,7 @@ struct WriteAtomicIncValidationConfig : public TrafficValidationConfigBase {
     ReceiverPayloadBuffer* payload_buffer_;
     volatile tt_l1_ptr uint32_t* atomic_inc_address;
     uint32_t atomic_inc_val;
+    uint32_t atomic_inc_wrap;
     uint32_t expected_atomic_value;
 };
 

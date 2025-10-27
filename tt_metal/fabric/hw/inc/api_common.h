@@ -32,8 +32,9 @@ enum class UnicastInlineWriteUpdateMask : uint32_t {
 enum class UnicastAtomicIncUpdateMask : uint32_t {
     None = 0,
     DstAddr = 1u << 0,
-    Val = 1u << 1,
-    Flush = 1u << 2,
+    Wrap = 1u << 1,
+    Val = 1u << 2,
+    Flush = 1u << 3,
 };
 
 // Scatter write dynamic mask (coarse-grained)
@@ -49,9 +50,10 @@ enum class UnicastFusedAtomicIncUpdateMask : uint32_t {
     None = 0,
     WriteDstAddr = 1u << 0,
     SemaphoreAddr = 1u << 1,
-    Val = 1u << 2,
-    Flush = 1u << 3,
-    PayloadSize = 1u << 4,
+    Wrap = 1u << 2,
+    Val = 1u << 3,
+    Flush = 1u << 4,
+    PayloadSize = 1u << 5,
 };
 
 // Bitwise helpers for enum class flags
@@ -180,6 +182,9 @@ static FORCE_INLINE void populate_unicast_atomic_inc_fields(
         auto noc_addr = safe_get_noc_addr(comps.first.x, comps.first.y, comps.second, edm_to_local_chip_noc);
         packet_header->command_fields.unicast_seminc.noc_address = noc_addr;
     }
+    if constexpr (has_flag(UpdateMask, UnicastAtomicIncUpdateMask::Wrap)) {
+        packet_header->command_fields.unicast_seminc.wrap = command_header.wrap;
+    }
     if constexpr (has_flag(UpdateMask, UnicastAtomicIncUpdateMask::Val)) {
         packet_header->command_fields.unicast_seminc.val = command_header.val;
     }
@@ -220,6 +225,9 @@ static FORCE_INLINE void populate_unicast_fused_atomic_inc_fields(
         auto scomps = get_noc_address_components(command_header.semaphore_noc_address);
         auto snoc = safe_get_noc_addr(scomps.first.x, scomps.first.y, scomps.second, edm_to_local_chip_noc);
         packet_header->command_fields.unicast_seminc_fused.semaphore_noc_address = snoc;
+    }
+    if constexpr (has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::Wrap)) {
+        packet_header->command_fields.unicast_seminc_fused.wrap = command_header.wrap;
     }
     if constexpr (has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::Val)) {
         packet_header->command_fields.unicast_seminc_fused.val = command_header.val;

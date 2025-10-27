@@ -945,7 +945,7 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
                             a.worker_slice_offset.x);
                     },
                     [&ss](CclCommandAtomicInc const& a) {
-                        ss << fmt::format("(val:{})", a.value);
+                        ss << fmt::format("(val:{}, wrap: {})", a.value, a.wrap_value);
                     },
                     [&ss](CclCommandWaitValue const& a) { ss << fmt::format("(wait_value: {})", a.target_value); },
                     [&ss](CclCommandInlineReadWrite const& a) { ss << fmt::format("(value: {})", a.value); },

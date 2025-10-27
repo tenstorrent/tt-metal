@@ -150,6 +150,7 @@ void kernel_main() {
             tensor0_page_size,
             out_ready_sem_noc_addr_in_pkt,
             1,  // increment 1
+            32,
             false);
 
         fabric_connection.close_start();

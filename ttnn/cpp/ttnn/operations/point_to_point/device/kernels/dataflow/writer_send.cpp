@@ -106,7 +106,8 @@ void kernel_main() {
 
     auto* sem_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)sem_header_ptr, dst_num_hops);
-    sem_header_ptr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{receive_sem_noc_addr, 1});
+    sem_header_ptr->to_noc_unicast_atomic_inc(
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{receive_sem_noc_addr, 1, 32});
 
     connection_direction.wait_for_empty_write_slot();
     connection_direction.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);

@@ -134,11 +134,13 @@ struct NocUnicastWriteFields {
 
 struct NocUnicastAtomicIncFields {
     static constexpr uint32_t default_atomic_inc_val = 1;
+    static constexpr uint16_t default_atomic_inc_wrap = std::numeric_limits<uint16_t>::max();
 
     NocUnicastAtomicIncFields(uint32_t dst_address, std::optional<uint32_t> dst_noc_encoding = std::nullopt) :
         dst_address(dst_address), dst_noc_encoding(dst_noc_encoding) {}
 
-    void set_atomic_inc_val(uint32_t value) { this->atomic_inc_val = value; }
+    void set_atomic_inc_val(uint16_t value) { this->atomic_inc_val = value; }
+    void set_atomic_inc_wrap(uint16_t value) { this->atomic_inc_wrap = value; }
 
     template <bool IS_SOURCE>
     std::vector<uint32_t> get_args() const {
@@ -148,14 +150,18 @@ struct NocUnicastAtomicIncFields {
                 throw std::runtime_error("Unexpected NocUnicastAtomicIncFields");
             }
         }
-        std::vector<uint32_t> args = {atomic_inc_val.value_or(default_atomic_inc_val), dst_address};
+        std::vector<uint32_t> args = {
+            atomic_inc_val.value_or(default_atomic_inc_val),
+            atomic_inc_wrap.value_or(default_atomic_inc_wrap),
+            dst_address};
         if (dst_noc_encoding.has_value()) {
             args.push_back(dst_noc_encoding.value());
         }
         return args;
     }
 
-    std::optional<uint32_t> atomic_inc_val;
+    std::optional<uint16_t> atomic_inc_val;
+    std::optional<uint16_t> atomic_inc_wrap;
     uint32_t dst_address;
     std::optional<uint32_t> dst_noc_encoding;
 };
@@ -232,7 +238,8 @@ struct TrafficParameters {
     NocSendType noc_send_type;
     size_t payload_size_bytes;
     size_t num_packets;
-    std::optional<uint32_t> atomic_inc_val;
+    std::optional<uint16_t> atomic_inc_val;
+    std::optional<uint16_t> atomic_inc_wrap;
     std::optional<uint32_t> mcast_start_hops;
     bool enable_flow_control = false;
 
@@ -416,6 +423,9 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
             if (this->parameters.atomic_inc_val.has_value()) {
                 atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
             }
+            if (this->parameters.atomic_inc_wrap.has_value()) {
+                atomic_inc_fields.set_atomic_inc_wrap(this->parameters.atomic_inc_wrap.value());
+            }
             const auto atomic_inc_args = atomic_inc_fields.get_args<true>();
             args.insert(args.end(), atomic_inc_args.begin(), atomic_inc_args.end());
         } break;
@@ -426,6 +436,9 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
                 NocUnicastAtomicIncFields(this->atomic_inc_address.value(), this->dst_noc_encoding);
             if (this->parameters.atomic_inc_val.has_value()) {
                 atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
+            }
+            if (this->parameters.atomic_inc_wrap.has_value()) {
+                atomic_inc_fields.set_atomic_inc_wrap(this->parameters.atomic_inc_wrap.value());
             }
             const auto fused_fields = NocUnicastWriteAtomicIncFields(write_fields, atomic_inc_fields);
             const auto fused_args = fused_fields.get_args<true>();
@@ -496,6 +509,9 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
             if (this->parameters.atomic_inc_val.has_value()) {
                 atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
             }
+            if (this->parameters.atomic_inc_wrap.has_value()) {
+                atomic_inc_fields.set_atomic_inc_wrap(this->parameters.atomic_inc_wrap.value());
+            }
             const auto atomic_inc_args = atomic_inc_fields.get_args<false>();
             args.insert(args.end(), atomic_inc_args.begin(), atomic_inc_args.end());
             break;
@@ -505,6 +521,9 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
             auto atomic_inc_fields = NocUnicastAtomicIncFields(this->atomic_inc_address.value());
             if (this->parameters.atomic_inc_val.has_value()) {
                 atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
+            }
+            if (this->parameters.atomic_inc_wrap.has_value()) {
+                atomic_inc_fields.set_atomic_inc_wrap(this->parameters.atomic_inc_wrap.value());
             }
             const auto fused_fields = NocUnicastWriteAtomicIncFields(write_fields, atomic_inc_fields);
             const auto fused_args = fused_fields.get_args<false>();
