@@ -9,7 +9,6 @@
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -419,19 +418,18 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
             // implicitly reshape lower dims so it is treated as 4D
             uint32_t batch_head_size = std::accumulate(
                 input_tensor_shape.cbegin(), input_tensor_shape.cend() - 2, 1, std::multiplies<uint32_t>());
-
-            auto [normalized_dim, rank_diff] = composite_common::normalize_dim_4d(dim, input_tensor_shape.rank());
-
+            auto dim_normalization = static_cast<int32_t>(input_tensor_shape.rank()) - 4;
+            uint32_t normalized_dim = (dim < std::abs(dim_normalization)) ? dim : dim - dim_normalization;
             // if the gather dim is 4D normalized to 0,2,3 we can proceed as if nothing has changed
             // if not we have to roll up the lower dims from the gather dim up to 1 into C and gather on 1.
             uint32_t c_includes_dim;
-            if (rank_diff >= 1 && dim <= rank_diff) {
+            if (dim_normalization >= 1 && dim <= dim_normalization) {
                 // gather dim to rank-3 accumulated into C
                 c_includes_dim = dim;
                 normalized_dim = 1;
             } else {
                 // C will be 4D normalized dim 1
-                c_includes_dim = 1 + rank_diff;
+                c_includes_dim = 1 + dim_normalization;
             }
 
             uint32_t input_tensor_C = std::accumulate(
