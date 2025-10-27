@@ -358,7 +358,7 @@ def test_device_trace_run():
 @skip_for_blackhole()
 def test_dispatch_cores():
     REF_COUNT_DICT = {
-        "Tensix CQ Dispatch*": [600, 760, 1310, 2330],
+        "Tensix CQ Dispatch*": [600, 760, 1310, 2330, 6383],
         "Tensix CQ Prefetch": [900, 1440, 3870, 5000],
         "dispatch_total_cq_cmd_op_time": [236],
         "dispatch_go_send_wait_time": [236],
