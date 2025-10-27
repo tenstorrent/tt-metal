@@ -43,8 +43,8 @@ def test_ci_dispatch(hf_model_name, is_ci_env, is_ci_v2_env, model_location_gene
         "models/tt_transformers/tests/test_embedding.py",
         "models/tt_transformers/tests/test_rms_norm.py",
         "models/tt_transformers/tests/test_mlp.py",
-        # "models/tt_transformers/tests/test_attention.py",
-        # "models/tt_transformers/tests/test_attention_prefill.py",
+        "models/tt_transformers/tests/test_attention.py",
+        "models/tt_transformers/tests/test_attention_prefill.py",
         "models/tt_transformers/tests/test_decoder.py",
         "models/tt_transformers/tests/test_decoder_prefill.py",
     ]
