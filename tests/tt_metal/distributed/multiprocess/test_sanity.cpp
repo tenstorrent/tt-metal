@@ -16,8 +16,8 @@
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/distributed.hpp>
-
 #include <tt-metalium/tt_metal.hpp>
+#include "tt_metal/fabric/topology_mapper.hpp"
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -107,32 +107,35 @@ TEST_F(BigMeshDualRankTest2x4, SystemMeshValidation) {
     const auto& system_mesh = SystemMesh::instance();
     EXPECT_EQ(system_mesh.local_shape(), MeshShape(2, 2));
 
-    auto& control_plane = MetalContext::instance().get_control_plane();
-    auto rank = control_plane.get_local_host_rank_id_binding();
-
     auto mapped_devices = system_mesh.get_mapped_devices(MeshShape(2, 4));
     const MeshContainer<MaybeRemote<int>> physical_device_ids(MeshShape(2, 4), std::move(mapped_devices.device_ids));
     const MeshContainer<tt::tt_fabric::FabricNodeId> fabric_node_ids(
         MeshShape(2, 4), std::move(mapped_devices.fabric_node_ids));
-    if (rank == MeshHostRankId{0}) {
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 0)).is_local());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 1)).is_local());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 0)).is_local());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 1)).is_local());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 2)).is_remote());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 3)).is_remote());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 2)).is_remote());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 3)).is_remote());
-    } else {
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 0)).is_remote());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 1)).is_remote());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 0)).is_remote());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 1)).is_remote());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 2)).is_local());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(0, 3)).is_local());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 2)).is_local());
-        EXPECT_TRUE(physical_device_ids.at(MeshCoordinate(1, 3)).is_local());
+
+    // Generic local/remote validation
+    int local_count = 0;
+    int remote_count = 0;
+    int col_counts[4] = {0, 0, 0, 0};
+
+    for (uint32_t row = 0; row < 2; ++row) {
+        for (uint32_t col = 0; col < 4; ++col) {
+            MeshCoordinate coord(row, col);
+            const auto& dev = physical_device_ids.at(coord);
+            if (dev.is_local()) {
+                local_count++;
+                col_counts[col]++;
+            } else if (dev.is_remote()) {
+                remote_count++;
+            } else {
+                FAIL() << "Device at " << coord << " is neither local nor remote";
+            }
+        }
     }
+
+    EXPECT_EQ(local_count, 4);
+    EXPECT_EQ(remote_count, 4);
+
+    EXPECT_THAT(col_counts, ::testing::AnyOf(ElementsAre(2, 2, 0, 0), ElementsAre(0, 0, 2, 2)));
 
     // Check fabric node IDs are set for all devices, globally.
     EXPECT_EQ(fabric_node_ids.at(MeshCoordinate(0, 0)).chip_id, 0);
@@ -151,15 +154,15 @@ TEST_F(BigMeshDualRankTest2x4, DistributedHostBuffer) {
     DistributedHostBuffer host_buffer = DistributedHostBuffer::create(mesh_device_->get_view());
     auto rank = control_plane.get_local_host_rank_id_binding();
 
-    host_buffer.emplace_shard(MeshCoordinate(0, 0), []() { return HostBuffer(std::vector<int>{0, 0, 0}); });
-    host_buffer.emplace_shard(MeshCoordinate(0, 1), []() { return HostBuffer(std::vector<int>{0, 0, 0}); });
-    host_buffer.emplace_shard(MeshCoordinate(1, 0), []() { return HostBuffer(std::vector<int>{0, 0, 0}); });
-    host_buffer.emplace_shard(MeshCoordinate(1, 1), []() { return HostBuffer(std::vector<int>{0, 0, 0}); });
-
-    host_buffer.emplace_shard(MeshCoordinate(0, 2), []() { return HostBuffer(std::vector<int>{1, 1, 1}); });
-    host_buffer.emplace_shard(MeshCoordinate(0, 3), []() { return HostBuffer(std::vector<int>{1, 1, 1}); });
-    host_buffer.emplace_shard(MeshCoordinate(1, 2), []() { return HostBuffer(std::vector<int>{1, 1, 1}); });
-    host_buffer.emplace_shard(MeshCoordinate(1, 3), []() { return HostBuffer(std::vector<int>{1, 1, 1}); });
+    for (const auto& coord : ::tt::tt_metal::distributed::MeshCoordinateRange(mesh_device_->get_view().shape())) {
+        auto shard_rank =
+            control_plane.get_topology_mapper().get_host_rank_for_coord(mesh_device_->get_view().mesh_id(), coord);
+        if (shard_rank.has_value()) {
+            int shard_rank_value = **shard_rank;
+            host_buffer.emplace_shard(
+                coord, [shard_rank_value]() { return HostBuffer(std::vector<int>(3, shard_rank_value)); });
+        }
+    }
 
     auto validate_local_shards = [rank](const HostBuffer& buffer) {
         fmt::print(

@@ -322,6 +322,7 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
             "Not specifying both TT_MESH_ID and TT_MESH_HOST_RANK is only supported for single host systems.");
         std::vector<MeshId> local_mesh_ids;
         for (const auto& mesh_id : this->routing_table_generator_->mesh_graph->get_mesh_ids()) {
+            // TODO: #24528 - Move this to use TopologyMapper once Topology mapper works for multi-mesh systems
             const auto& host_ranks = this->routing_table_generator_->mesh_graph->get_host_ranks(mesh_id);
             TT_FATAL(
                 host_ranks.size() == 1 && *host_ranks.values().front() == 0,
@@ -2037,6 +2038,12 @@ void ControlPlane::assign_direction_to_fabric_eth_core(
 }
 
 const MeshGraph& ControlPlane::get_mesh_graph() const { return *routing_table_generator_->mesh_graph; }
+
+const TopologyMapper& ControlPlane::get_topology_mapper() const {
+    // TODO: #24528 - Remove this once Topology mapper works for multi-mesh systems
+    TT_FATAL(topology_mapper_ != nullptr, "Topology mapper not initialized");
+    return *topology_mapper_;
+}
 
 std::vector<MeshId> ControlPlane::get_local_mesh_id_bindings() const {
     const auto& mesh_id_bindings = this->local_mesh_binding_.mesh_ids;
