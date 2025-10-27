@@ -129,6 +129,8 @@ def multimodal_rope_from_hf(
         second_per_grid_ts=None,
         attention_mask=padded_attention_mask,
     )
+    logger.info(f"position_ids: {position_ids.shape}")
+    logger.info(f"rope_deltas: {rope_deltas.shape}")
     # Qwen2_5_VLModel.forward:
     cos, sin = reference_model.model.language_model.rotary_emb(input_embeds, position_ids)
     # apply_multimodal_rotary_pos_emb:
@@ -138,8 +140,9 @@ def multimodal_rope_from_hf(
     sin = torch.cat([m[i % 3] for i, m in enumerate(sin.split(mrope_section, dim=-1))], dim=-1).unsqueeze(unsqueeze_dim)
     # convert to meta-style interleaved format:
     cos, sin = convert_rope_style_hf_to_meta(cos, sin)
+    logger.info(f"rope_deltas: {rope_deltas}")
     # we have precomputed embeddings for the entire sequence length and converted to 1D so we no longer need to track rope_deltas
-    return cos, sin
+    return cos, sin, rope_deltas
 
 
 def check_tensor(ttnn_tensor, name, mesh_device):
