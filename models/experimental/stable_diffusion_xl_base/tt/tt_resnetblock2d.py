@@ -27,6 +27,8 @@ class TtResnetBlock2D(LightweightModule):
         split_in=1,
         split_out=1,
         debug_mode=False,
+        use_negative_mask=False,
+        dram_groupnorm=False,
     ):
         super().__init__()
 
@@ -67,22 +69,35 @@ class TtResnetBlock2D(LightweightModule):
             conv_weights_3 = state_dict[f"{module_path}.conv_shortcut.weight"].squeeze()
             conv_bias_3 = state_dict[f"{module_path}.conv_shortcut.bias"]
 
-        self.norm_core_grid_1 = ttnn.CoreGrid(y=8, x=8)
-        self.gamma_t_1, self.beta_t_1 = prepare_gn_beta_gamma(
-            device, norm_weights_1, norm_bias_1, self.norm_core_grid_1.y
-        )
-        self.input_mask_1 = prepare_gn_mask(
-            self.device, norm_weights_1.shape[0], self.norm_groups, self.norm_core_grid_1.y
-        )
-        if "up_blocks.2" in module_path:
-            # For these groupnomrms, for them to be able to fit into L1 memory, we need to use negative mask
-            # This is the same mask as the regular groupnorm mask, except that ones and zeros are inverted.
-            # This allows us to get rid of one CB in the groupnorm, so it can fit into L1 memory.
-            self.input_negative_mask_1 = prepare_gn_mask_negative_mask(
-                self.device, norm_weights_1.shape[0], self.norm_groups, self.norm_core_grid_1.y
+        self.dram_groupnorm = dram_groupnorm
+        if dram_groupnorm:
+            self.norm_blocks_1 = 2
+            self.norm_core_grid_1 = ttnn.CoreGrid(y=8, x=4)
+            [self.gamma_t_1, self.beta_t_1], self.input_mask_1 = ttnn.dram_group_norm_params_from_torch(
+                [norm_weights_1, norm_bias_1],
+                norm_weights_1.shape[0],
+                self.norm_groups,
+                device,
+                core_grid=self.norm_core_grid_1,
+                return_mask=True,
             )
         else:
-            self.input_negative_mask_1 = None
+            self.norm_core_grid_1 = ttnn.CoreGrid(y=8, x=8)
+            self.gamma_t_1, self.beta_t_1 = prepare_gn_beta_gamma(
+                device, norm_weights_1, norm_bias_1, self.norm_core_grid_1.y
+            )
+            self.input_mask_1 = prepare_gn_mask(
+                self.device, norm_weights_1.shape[0], self.norm_groups, self.norm_core_grid_1.y
+            )
+            if use_negative_mask:
+                # For these groupnomrms, for them to be able to fit into L1 memory, we need to use negative mask
+                # This is the same mask as the regular groupnorm mask, except that ones and zeros are inverted.
+                # This allows us to get rid of one CB in the groupnorm, so it can fit into L1 memory.
+                self.input_negative_mask_1 = prepare_gn_mask_negative_mask(
+                    self.device, norm_weights_1.shape[0], self.norm_groups, self.norm_core_grid_1.y
+                )
+            else:
+                self.input_negative_mask_1 = None
 
         self.gamma_t_2, self.beta_t_2 = prepare_gn_beta_gamma(
             device, norm_weights_2, norm_bias_2, self.norm_core_grid_2.y
@@ -149,27 +164,42 @@ class TtResnetBlock2D(LightweightModule):
         B, C, H, W = input_shape
         hidden_states = input_tensor
 
-        hidden_states = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-        grid_coord = ttnn.CoreCoord(self.norm_core_grid_1.x - 1, self.norm_core_grid_1.y - 1)
-        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-        shard_shape = B * H * W // self.norm_core_grid_1.x, C // self.norm_core_grid_1.y
-        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-        sharded_mem_config = ttnn.MemoryConfig(
-            ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
-        )
-        hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_config)
+        if self.dram_groupnorm:
+            hidden_states = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+            hidden_states = ttnn.group_norm(
+                hidden_states,
+                num_groups=self.norm_groups,
+                input_mask=self.input_mask_1,
+                weight=self.gamma_t_1,
+                bias=self.beta_t_1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                core_grid=self.norm_core_grid_1,
+                epsilon=self.norm_eps,
+                inplace=False,
+                num_out_blocks=self.norm_blocks_1,
+            )
+        else:
+            hidden_states = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+            grid_coord = ttnn.CoreCoord(self.norm_core_grid_1.x - 1, self.norm_core_grid_1.y - 1)
+            shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+            shard_shape = B * H * W // self.norm_core_grid_1.x, C // self.norm_core_grid_1.y
+            shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+            sharded_mem_config = ttnn.MemoryConfig(
+                ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+            )
+            hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_config)
 
-        hidden_states = ttnn.group_norm(
-            hidden_states,
-            num_groups=self.norm_groups,
-            input_mask=self.input_mask_1,
-            weight=self.gamma_t_1,
-            bias=self.beta_t_1,
-            memory_config=sharded_mem_config,
-            core_grid=self.norm_core_grid_1,
-            epsilon=self.norm_eps,
-            negative_mask=self.input_negative_mask_1,
-        )
+            hidden_states = ttnn.group_norm(
+                hidden_states,
+                num_groups=self.norm_groups,
+                input_mask=self.input_mask_1,
+                weight=self.gamma_t_1,
+                bias=self.beta_t_1,
+                memory_config=sharded_mem_config,
+                core_grid=self.norm_core_grid_1,
+                epsilon=self.norm_eps,
+                negative_mask=self.input_negative_mask_1,
+            )
 
         hidden_states = ttnn.silu(hidden_states, output_tensor=hidden_states)
         # TBD: reshard
@@ -200,6 +230,8 @@ class TtResnetBlock2D(LightweightModule):
                 groups=self.groups,
             )
         else:
+            if self.dram_groupnorm:
+                hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
             [hidden_states, [H, W], [tt_conv1_weights, tt_conv1_bias]] = ttnn.conv2d(
                 input_tensor=hidden_states,
                 weight_tensor=self.tt_conv1_weights,
