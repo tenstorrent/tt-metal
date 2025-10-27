@@ -68,10 +68,6 @@ private:
 
     bool are_env_vars_set() {
         bool are_set = true;
-        if (!tt::tt_metal::MetalContext::instance().rtoptions().is_root_dir_specified()) {
-            log_info(tt::LogTest, "Skipping test: TT_METAL_HOME must be set");
-            are_set = false;
-        }
         if (!tt::tt_metal::MetalContext::instance().rtoptions().is_kernel_dir_specified()) {
             log_info(tt::LogTest, "Skipping test: TT_METAL_KERNEL_PATH must be set");
             are_set = false;

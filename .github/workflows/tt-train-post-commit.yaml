@@ -51,6 +51,7 @@ jobs:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
+        TT_METAL_RUNTIME_ROOT: /work
         LD_LIBRARY_PATH: /work/build/lib
         TEST_DATA_DIR: /work/data
         ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
@@ -73,7 +74,6 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          cp ./build/tt-train/3rd_party/wandb-cpp/libwandbcpp.so build/lib/
           cd /work/build/tt-train
           mkdir -p generated/test_reports
           ldd tests/ttml_tests || true

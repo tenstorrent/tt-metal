@@ -95,7 +95,6 @@ struct InspectorSettings {
 };
 
 class RunTimeOptions {
-    bool is_root_dir_set = false;
     std::string root_dir;
 
     bool is_cache_dir_env_var_set = false;
@@ -210,7 +209,7 @@ class RunTimeOptions {
     bool enable_fabric_telemetry = false;
 
     // Mock cluster initialization using a provided cluster descriptor
-    std::string mock_cluster_desc_path = "";
+    std::string mock_cluster_desc_path;
 
     // Consolidated target device selection
     TargetDevice runtime_target_device_ = TargetDevice::Silicon;
@@ -228,7 +227,6 @@ public:
     RunTimeOptions(const RunTimeOptions&) = delete;
     RunTimeOptions& operator=(const RunTimeOptions&) = delete;
 
-    bool is_root_dir_specified() const { return this->is_root_dir_set; }
     static void set_root_dir(const std::string& root_dir);
     const std::string& get_root_dir() const;
 
