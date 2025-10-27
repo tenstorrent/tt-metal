@@ -63,8 +63,8 @@ void bind_normalization_layernorm_pre_all_gather_operation(py::module& module) {
             py::arg("residual_input_tensor") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("program_config") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("distributed_program_config") = LayerNormDistributedDefaultProgramConfig{}});
+            py::arg("distributed_program_config") = LayerNormDistributedDefaultProgramConfig{},
+            py::arg("memory_config") = std::nullopt});
 }
 
 void bind_normalization_layernorm_post_all_gather_operation(py::module& module) {
@@ -118,8 +118,8 @@ void bind_normalization_layernorm_post_all_gather_operation(py::module& module) 
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("program_config") = std::nullopt,
-            py::arg("dtype") = std::nullopt,
-            py::arg("distributed_program_config") = LayerNormDistributedDefaultProgramConfig{}});
+            py::arg("distributed_program_config") = LayerNormDistributedDefaultProgramConfig{},
+            py::arg("dtype") = std::nullopt});
 }
 
 void bind_normalization_layernorm_distributed(py::module& module) {

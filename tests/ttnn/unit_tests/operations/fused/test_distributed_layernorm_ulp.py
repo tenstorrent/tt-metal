@@ -183,6 +183,7 @@ def test_distributed_norm_comparison(
             ttnn_input,
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,
+            distributed_program_config=use_new,
         )
     elif norm_type == "rms_norm":
         ttnn_stats = ttnn.rms_norm_pre_all_gather(

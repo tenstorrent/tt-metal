@@ -17,8 +17,8 @@ ttnn::Tensor ExecuteLayerNormPreAllGather::invoke(
     const std::optional<const ttnn::Tensor>& residual_input_tensor,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const LayerNormProgramConfig>& program_config,
-    const std::optional<MemoryConfig>& memory_config,
-    const LayerNormDistributedDefaultProgramConfig& distributed_program_config) {
+    const LayerNormDistributedDefaultProgramConfig& distributed_program_config,
+    const std::optional<MemoryConfig>& memory_config) {
     auto arch = input_tensor.storage_type() == StorageType::DEVICE
                     ? input_tensor.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
