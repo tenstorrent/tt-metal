@@ -14,8 +14,8 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
 from models.demos.utils.common_demo_utils import LoadImages, get_mesh_mappers, load_coco_class_names, preprocess
+from models.demos.wormhole.yolov7.demo.demo_utils import postprocess
 from models.demos.yolov7.common import YOLOV7_L1_SMALL_SIZE, load_torch_model
-from models.demos.yolov7.demo.demo_utils import postprocess
 from models.demos.yolov7.reference import yolov7_model, yolov7_utils
 from models.demos.yolov7.runner.performant_runner import YOLOv7PerformantRunner
 
@@ -121,7 +121,7 @@ def run_yolov7_demo_dataset(model_location_generator, device, model_type, batch_
     with open(os.path.expanduser("~") + "/fiftyone/coco-2017/info.json") as f:
         names = json.load(f)["classes"]
 
-    save_dir = "models/demos/yolov7/demo/runs"
+    save_dir = "models/demos/wormhole/yolov7/demo/runs"
     run_inference_and_save(
         model,
         runner,
@@ -152,7 +152,7 @@ def run_yolov7_demo_dataset(model_location_generator, device, model_type, batch_
     [
         (
             1,
-            "models/demos/yolov7/demo/images",
+            "models/demos/wormhole/yolov7/demo/images",
         ),
     ],
 )
@@ -184,7 +184,7 @@ def test_demo(model_location_generator, device, batch_size_per_device, input_loc
     [
         (
             1,
-            "models/demos/yolov7/demo/images",
+            "models/demos/wormhole/yolov7/demo/images",
         ),
     ],
 )

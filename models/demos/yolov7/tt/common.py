@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
@@ -73,7 +74,18 @@ class TtYOLOv7Conv2D:
             math_approx_mode=self.math_approx_mode,
         )
         if self.num_cores_nhw is not None:
-            shard_grid = get_shard_grid_from_num_cores(self.num_cores_nhw, device)
+            if is_blackhole():
+                # Use rectangular grids for Blackhole to avoid block sharding errors
+                if self.num_cores_nhw == 64:
+                    # Use 8x8 grid
+                    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+                elif self.num_cores_nhw == 56:
+                    # Use 7x8 grid
+                    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))})
+                else:
+                    shard_grid = get_shard_grid_from_num_cores(self.num_cores_nhw, device)
+            else:
+                shard_grid = get_shard_grid_from_num_cores(self.num_cores_nhw, device)
             conv_config.core_grid = shard_grid
             conv_config.override_sharding_config = True
 

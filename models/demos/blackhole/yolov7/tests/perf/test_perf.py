@@ -28,7 +28,7 @@ def test_perf_device_yolov7(batch_size, expected_perf):
     num_iterations = 1
     margin = 0.03
 
-    command = f"pytest models/demos/yolov7/tests/pcc/test_ttnn_yolov7.py::test_yolov7"
+    command = f"pytest models/demos/wormhole/yolov7/tests/pcc/test_ttnn_yolov7.py::test_yolov7"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"

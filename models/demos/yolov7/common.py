@@ -48,7 +48,7 @@ def load_torch_model(model_location_generator=None):
 
     torch_model = Yolov7_model()
     if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
-        weights_path = "models/demos/yolov7/tests/pcc/yolov7.pt"
+        weights_path = "models/demos/yolov7/yolov7.pt"
         if not os.path.exists(weights_path):
             torch.hub.download_url_to_file(
                 "https://github.com/WongKinYiu/yolov7/releases/download/v0.1/yolov7.pt", weights_path

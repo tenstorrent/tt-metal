@@ -148,7 +148,9 @@ def increment_path(path, exist_ok=True, sep=""):
         return f"{path}{sep}{n}"
 
 
-def postprocess(preds, img, orig_imgs, batch, names, path, dataset, save_dir="models/demos/yolov7/demo/runs/detect"):
+def postprocess(
+    preds, img, orig_imgs, batch, names, path, dataset, save_dir="models/demos/wormhole/yolov7/demo/runs/detect"
+):
     args = {"conf": 0.5, "iou": 0.7, "agnostic_nms": False, "max_det": 300, "classes": None}
     save_txt = False
     save_dir = Path(increment_path(Path(save_dir) / "exp", exist_ok=False))

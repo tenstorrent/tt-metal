@@ -45,10 +45,10 @@ except ImportError:
 
 # Handle optional imports
 try:
-    from models.utility_functions import run_for_wormhole_b0
+    from models.common.utility_functions import run_for_blackhole
 except ImportError:
 
-    def run_for_wormhole_b0():
+    def run_for_blackhole():
         def decorator(func):
             return func
 
@@ -195,7 +195,7 @@ class YOLOv7PerformantRunner:
             ttnn.release_trace(self.device, self.tid)
 
 
-@run_for_wormhole_b0()
+@run_for_blackhole()
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": YOLOV7_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],

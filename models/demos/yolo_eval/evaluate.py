@@ -254,7 +254,12 @@ def evaluation(
 
             results = postprocess_yolov10(preds, im, im0s, batch, classes)[0]
         elif model_name == "YOLOv7":
-            from models.demos.yolov7.demo.demo_utils import postprocess as postprocess_yolov7
+            if is_wormhole_b0():
+                from models.demos.wormhole.yolov7.demo.demo_utils import postprocess as postprocess_yolov7
+            elif is_blackhole():
+                from models.demos.blackhole.yolov7.demo.demo_utils import postprocess as postprocess_yolov7
+            else:
+                print("Device not supported for YOLOv7 evaluation.")
 
             results = postprocess_yolov7(
                 preds,
