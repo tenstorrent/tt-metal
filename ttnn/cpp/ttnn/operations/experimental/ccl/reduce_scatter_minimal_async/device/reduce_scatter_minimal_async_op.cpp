@@ -43,8 +43,8 @@ void reduce_scatter_common_validates(
     TT_FATAL(dim < rank, "Invalid scatter dim {} for rank {} tensor", dim, rank);
 
     const uint32_t normalized_dim = std::get<0>(composite_common::normalize_dim_4d(dim, rank));
+    const auto& input_shape = input_tensor.padded_shape();
     if (normalized_dim == 2 || normalized_dim == 3) {
-        const auto& input_shape = input_tensor.padded_shape();
         uint32_t tile_size = normalized_dim == 2 ? tt::constants::TILE_HEIGHT : tt::constants::TILE_WIDTH;
         TT_FATAL(
             (input_shape[dim] / tile_size) % ring_size == 0,
@@ -52,6 +52,13 @@ void reduce_scatter_common_validates(
             "of tiles is {} and the ring_size is {}",
             dim,
             input_shape[dim] / tile_size,
+            ring_size);
+    } else {
+        TT_FATAL(
+            input_shape[dim] % ring_size == 0,
+            "Error, input tensor dimension {} should be divisible by ring_size but is {} and the ring_size is {}",
+            dim,
+            input_shape[dim],
             ring_size);
     }
 
@@ -102,7 +109,6 @@ void reduce_scatter_common_validates(
 
         // check the output tensor size
         auto output_shape = output_tensor.padded_shape();
-        auto input_shape = input_tensor.padded_shape();
         TT_FATAL(
             output_shape.size() == input_shape.size(),
             "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",

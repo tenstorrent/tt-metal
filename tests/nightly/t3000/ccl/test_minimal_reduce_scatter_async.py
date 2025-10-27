@@ -251,6 +251,8 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "rs_input_shape, dim, layout, rs_input_dtype, use_new",
     [
+        # Dim 0 tests
+        ([8, 2, 128, 128], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),  # use batching when fused
         # Dim 1 tests
         ([2, 24, 256, 256], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
         ([2, 16, 56, 56], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
@@ -276,6 +278,7 @@ def run_reduce_scatter_impl(
         ([1, 1, 29, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True),
     ],
     ids=[
+        "scatter_dim_0_test_one",
         "scatter_dim_1_test_one",
         "scatter_dim_1_test_two",
         "scatter_dim_1_test_three",
