@@ -159,7 +159,7 @@ class ModelOptimizations:
         All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
         base_model_name = get_base_model_name(model_name)
-        if base_model_name == "Qwen2.5-7B" or base_model_name == "Qwen3-8B":
+        if base_model_name == "Qwen2.5-7B":
             logger.info(
                 f"Model {model_name} is degraded under standard high-performance settings, using BF16 attention and BFP8 MLP"
             )
@@ -180,6 +180,25 @@ class ModelOptimizations:
                     },
                 }
             )
+        elif base_model_name == "Qwen3-8B":
+            logger.info(
+                f"Model {model_name} is degraded under standard high-performance settings, using BF16 attention and BFP8 MLP"
+            )
+            settings = {
+                "TensorPrecision": {
+                    TensorGroup.WQKV: PrecisionSetting.BFP8,
+                    TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                    TensorGroup.WO: PrecisionSetting.BFP8,
+                },
+                "OpFidelity": {
+                        OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2_FP16,
+                        OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2_FP16,
+                        OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_FP16,
+                        OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI2_FP16,
+                        OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2_FP16,
+                        OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2_FP16,
+                    },
+            }
         else:
             settings = {
                 "TensorPrecision": {TensorGroup.FF1_FF3: PrecisionSetting.BFP4},
