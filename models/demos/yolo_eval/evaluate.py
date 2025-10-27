@@ -15,7 +15,7 @@ from loguru import logger
 from sklearn.metrics import average_precision_score, precision_recall_curve
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache
+from models.common.utility_functions import disable_persistent_kernel_cache, is_blackhole, is_wormhole_b0
 from models.demos.utils.common_demo_utils import LoadImages, postprocess, preprocess, save_yolo_predictions_by_model
 from models.demos.yolov4.post_processing import gen_yolov4_boxes_confs
 
@@ -267,8 +267,12 @@ def evaluation(
                 save_dir=save_dir,
             )[0]
         elif model_name == "YOLOv6l":
-            from models.demos.yolov6l.demo.demo_utils import postprocess as postprocess_yolov6l
-
+            if is_wormhole_b0():
+                from models.demos.wormhole.yolov6l.demo.demo_utils import postprocess as postprocess_yolov6l
+            elif is_blackhole():
+                from models.demos.blackhole.yolov6l.demo.demo_utils import postprocess as postprocess_yolov6l
+            else:
+                print("Device not supported for YOLOv6l evaluation.")
             conf_thres = 0.4
             max_det = 1000
             results = postprocess_yolov6l(preds, im, im0s, batch, classes, conf_thres, max_det)[0]

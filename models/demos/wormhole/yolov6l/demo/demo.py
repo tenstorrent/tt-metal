@@ -19,8 +19,8 @@ from models.demos.utils.common_demo_utils import (
     preprocess,
     save_yolo_predictions_by_model,
 )
+from models.demos.wormhole.yolov6l.demo.demo_utils import postprocess
 from models.demos.yolov6l.common import YOLOV6L_L1_SMALL_SIZE, load_torch_model
-from models.demos.yolov6l.demo.demo_utils import postprocess
 from models.demos.yolov6l.runner.performant_runner import YOLOv6lPerformantRunner
 
 
@@ -107,7 +107,7 @@ def run_yolov6l_demo(
     dataset = LoadImages(path=os.path.abspath(input_loc), batch=batch_size)
     im_tensor, orig_images, paths_images = process_images(dataset, res, batch_size)
     names = load_coco_class_names()
-    save_dir = "models/demos/yolov6l/demo/runs"
+    save_dir = "models/demos/wormhole/yolov6l/demo/runs"
 
     run_inference_and_save(
         model, runner, model_type, mesh_composer, im_tensor, orig_images, paths_images, save_dir, names
@@ -137,7 +137,7 @@ def run_yolov6l_demo_dataset(
     with open(os.path.expanduser("~") + "/fiftyone/coco-2017/info.json") as f:
         names = json.load(f)["classes"]
 
-    save_dir = "models/demos/yolov6l/demo/runs"
+    save_dir = "models/demos/wormhole/yolov6l/demo/runs"
     run_inference_and_save(
         model, runner, model_type, mesh_composer, im_tensor, orig_images, paths_images, save_dir, names
     )
@@ -168,7 +168,7 @@ def run_yolov6l_demo_dataset(
     "input_loc, batch_size_per_device ",
     [
         (
-            "models/demos/yolov6l/demo/images",
+            "models/demos/wormhole/yolov6l/demo/images",
             1,
         ),
     ],
@@ -208,7 +208,7 @@ def test_demo(
     "input_loc, batch_size_per_device ",
     [
         (
-            "models/demos/yolov6l/demo/images",
+            "models/demos/wormhole/yolov6l/demo/images",
             1,
         ),
     ],

@@ -6,11 +6,11 @@
 import pytest
 from loguru import logger
 
-from models.common.utility_functions import is_wormhole_b0, run_for_wormhole_b0
+from models.common.utility_functions import run_for_blackhole
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 
 
-@run_for_wormhole_b0()
+@run_for_blackhole()
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
@@ -22,9 +22,9 @@ def test_perf_device_yolov6l(batch_size, expected_perf):
     subdir = "ttnn_yolov6l"
     num_iterations = 1
     margin = 0.05
-    expected_perf = expected_perf if is_wormhole_b0() else 0
+    expected_perf = expected_perf
 
-    command = f"pytest models/demos/yolov6l/tests/pcc/test_ttnn_yolov6l.py::test_yolov6l"
+    command = f"pytest models/demos/blackhole/yolov6l/tests/pcc/test_ttnn_yolov6l.py::test_yolov6l"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
