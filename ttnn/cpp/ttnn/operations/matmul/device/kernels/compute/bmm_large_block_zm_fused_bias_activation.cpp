@@ -79,23 +79,6 @@ inline void reblock_and_untilize(
     cb_pop_front(interm_cb_id, num_tiles_in_row_of_subblocks);
 }
 
-inline uint32_t get_nnz(uint32_t nnz_cb_id, uint32_t tile_index) {
-    uint32_t nnz;
-    UNPACK(uint32_t operand_id = get_operand_id(nnz_cb_id);
-           uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
-           uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
-           uint32_t byte_address = (base_address + offset_address) << 4;
-           auto nnz_addr_ptr = (volatile uint32_t*)byte_address;
-           // The first 4 entries have metadata, so we look at the 5th entry
-           // for our value pushed from the reader.
-           nnz = nnz_addr_ptr[4];
-           mailbox_write(ThreadId::MathThreadId, nnz);
-           mailbox_write(ThreadId::PackThreadId, nnz);)
-    MATH(nnz = mailbox_read(ThreadId::UnpackThreadId);)
-    PACK(nnz = mailbox_read(ThreadId::UnpackThreadId);)
-    return nnz;
-}
-
 void MAIN {
 // RUNTIME ARGS
 #ifdef MATMUL_DRAM_SHARDED
@@ -134,10 +117,6 @@ void MAIN {
     constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
     constexpr uint32_t out_cb_id = tt::CBIndex::c_4;
     constexpr uint32_t mm_partials_cb_id = tt::CBIndex::c_5;
-    // Reader will use this CB to pass the number of non-zero (nnz) entries in the sparsity tensor.
-    constexpr uint32_t nnz_cb_id = tt::CBIndex::c_25;
-    volatile uint32_t* nnz_addr_ptr;
-
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
 
 #ifdef FUSE_BIAS
@@ -164,11 +143,11 @@ void MAIN {
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
-            cb_wait_front(nnz_cb_id, 1);
-            uint32_t nnz = get_nnz(nnz_cb_id, 0);
-            cb_pop_front(nnz_cb_id, 1);
-
-            if (nnz == 0) {
+            bool is_batch_valid;
+            UNPACK(is_batch_valid = (bool)mailbox_read_full(0);)  // 0 is BRISC ThreadID, no enum for that.
+            MATH(is_batch_valid = (bool)mailbox_read_full(0);)    // 0 is BRISC ThreadID, no enum for that.
+            PACK(is_batch_valid = (bool)mailbox_read_full(0);)    // 0 is BRISC ThreadID, no enum for that.
+            if (!is_batch_valid) {
                 continue;
             }
         }

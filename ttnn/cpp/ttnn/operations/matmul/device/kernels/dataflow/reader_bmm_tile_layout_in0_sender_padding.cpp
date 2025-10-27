@@ -69,9 +69,6 @@ void kernel_main() {
     constexpr auto in0_args = TensorAccessorArgs<25>();
     constexpr auto sparsity_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
 
-    // Reader will use this CB to pass the number of non-zero (nnz) entries in the sparsity tensor.
-    constexpr uint32_t nnz_cb_id = tt::CBIndex::c_25;
-
     // 0 is used to specify "INVALID" state, i.e. when the multicasted data has not been received by the receiver.
     // 0x1 is used to specify "VALID" state, i.e. when the batch is valid.
     // 0x2 is used to specify "IGNORE_BATCH" state, i.e. when the batch is not valid.
@@ -171,11 +168,10 @@ void kernel_main() {
                     // Reset the semaphore value to VALID
                     noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, VALID);
 #endif  // SKIP_MCAST
-        // We need to pass the value to compute UNPACK regardless of the value of is_batch_valid
-                    cb_reserve_back(nnz_cb_id, 1);
-                    auto nnz_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(nnz_cb_id));
-                    nnz_ptr[0] = is_batch_valid;
-                    cb_push_back(nnz_cb_id, 1);
+        // We need to pass the value to compute cores regardless of the value of is_batch_valid
+                    (reinterpret_cast<volatile uint32_t tt_reg_ptr*>(0xFFEC1000))[0] = (uint32_t)is_batch_valid;
+                    (reinterpret_cast<volatile uint32_t tt_reg_ptr*>(0xFFEC2000))[0] = (uint32_t)is_batch_valid;
+                    (reinterpret_cast<volatile uint32_t tt_reg_ptr*>(0xFFEC3000))[0] = (uint32_t)is_batch_valid;
                 }
 
                 if (!is_batch_valid) {
