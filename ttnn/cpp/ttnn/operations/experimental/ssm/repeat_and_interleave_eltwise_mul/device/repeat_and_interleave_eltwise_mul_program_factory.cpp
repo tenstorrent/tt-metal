@@ -139,21 +139,21 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
     // Load kernels
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/device/kernels/"
+        "ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/device/kernels/"
         "reader_ssm_eltwise_mul.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, ssm_eltwise_defines));
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/device/kernels/"
+        "ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/device/kernels/"
         "writer_ssm_eltwise_mul.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/device/kernels/"
+        "ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/device/kernels/"
         "ssm_eltwise_mul.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{

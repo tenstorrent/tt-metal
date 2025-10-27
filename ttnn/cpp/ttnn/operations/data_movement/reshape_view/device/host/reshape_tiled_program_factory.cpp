@@ -370,7 +370,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
     tt::tt_metal::TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/reader_reshape_tiled.cpp",
+        "ttnn/operations/data_movement/reshape_view/device/device/dataflow/reader_reshape_tiled.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -386,7 +386,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/"
+        "ttnn/operations/data_movement/reshape_view/device/device/dataflow/"
         "writer_reshape_tiled.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));

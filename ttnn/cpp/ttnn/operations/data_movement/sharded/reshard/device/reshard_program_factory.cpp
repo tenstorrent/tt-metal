@@ -644,9 +644,8 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     }
     const uint32_t total_size = std::min(local_units_per_shard, remote_units_per_shard) * unit_size;
     const std::string kernel_name =
-        is_reader
-            ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_reader.cpp"
-            : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_writer.cpp";
+        is_reader ? "ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_reader.cpp"
+                  : "ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_writer.cpp";
 
     bool interface_with_dram = (remote_core_type == tt::CoreType::DRAM);
     tt::tt_metal::KernelHandle kernel_id_0 = tt::tt_metal::CreateKernel(
@@ -798,8 +797,8 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
     tt::tt_metal::KernelHandle kernel_id_0 = tt::tt_metal::CreateKernel(
         program,
         input.buffer()->page_size() != output.buffer()->page_size()
-            ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader_diff_width.cpp"
-            : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader.cpp",
+            ? "ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader_diff_width.cpp"
+            : "ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(
             {dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size, unit_size}));
@@ -807,8 +806,8 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
     tt::tt_metal::KernelHandle kernel_id_1 = tt::tt_metal::CreateKernel(
         program,
         input.buffer()->page_size() != output.buffer()->page_size()
-            ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader_diff_width.cpp"
-            : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader.cpp",
+            ? "ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader_diff_width.cpp"
+            : "ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(
             {dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size, unit_size}));
@@ -937,9 +936,8 @@ operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& inp
     auto cb_0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
 
     const std::string kernel_name =
-        is_reader
-            ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_height_reader.cpp"
-            : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_height_writer.cpp";
+        is_reader ? "ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_height_reader.cpp"
+                  : "ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_height_writer.cpp";
 
     tt::tt_metal::KernelHandle kernel_id_0 = tt::tt_metal::CreateKernel(
         program, kernel_name, all_cores, tt::tt_metal::ReaderDataMovementConfig({cb_index, interface_with_dram}));

@@ -109,7 +109,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
 
     auto reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/index_fill/device/kernels/reader_index_fill.cpp",
+        "ttnn/operations/index_fill/device/kernels/reader_index_fill.cpp",
         all_cores,
         ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -118,7 +118,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
 
     auto writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/index_fill/device/kernels/writer_index_fill.cpp",
+        "ttnn/operations/index_fill/device/kernels/writer_index_fill.cpp",
         all_cores,
         WriterDataMovementConfig(writer_compile_time_args));
 

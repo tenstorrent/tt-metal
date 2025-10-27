@@ -141,7 +141,7 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/permute/device/kernels/dataflow/"
         "reader_permute_interleaved_tiled_invariant.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_compile_time_args));
@@ -151,7 +151,7 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -161,7 +161,7 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
         bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;
         compute_kernel_id = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh.cpp",
+            "ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh.cpp",
             all_cores,
             tt::tt_metal::ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -396,7 +396,7 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
         "reader_unary_transpose_hc_interleaved_tiled_padding_aware.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_compile_time_args));
@@ -407,7 +407,7 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
         bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;
         compute_kernel_id = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh.cpp",
+            "ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh.cpp",
             all_cores,
             tt::tt_metal::ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -436,7 +436,7 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/permute/device/kernels/dataflow/"
         "writer_permute_interleaved_tiled_row_invariant.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_named_compile_time_args));
@@ -747,7 +747,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/permute/device/kernels/dataflow/"
         "reader_permute_interleaved_tiled_generic.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_compile_time_args));
@@ -757,7 +757,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/compute/transpose_xw_tiled.cpp",
+        "ttnn/operations/data_movement/permute/device/kernels/compute/transpose_xw_tiled.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -794,7 +794,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/permute/device/kernels/dataflow/"
         "writer_permute_interleaved_tiled_generic.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_named_compile_time_args));

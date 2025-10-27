@@ -587,9 +587,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     // reader kernel
     auto reader_mcast_sender_kernels_id = CreateKernel(
         program,
-        (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+        (use_welford ? "ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                        "welford_reader_mcast_sender_unary_sharded_gn_v2.cpp"
-                     : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                     : "ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                        "reader_mcast_sender_unary_sharded_gn_v2.cpp"),
         mcast_sender_cores,
         tt::tt_metal::DataMovementConfig{
@@ -601,9 +601,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     if (use_mcast) {
         reader_mcast_receiver_kernels_id = CreateKernel(
             program,
-            (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+            (use_welford ? "ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                            "welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp"
-                         : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                         : "ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                            "reader_mcast_receiver_unary_sharded_gn_v2.cpp"),
             mcast_receiver_cores,
             tt::tt_metal::DataMovementConfig{
@@ -658,7 +658,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
 
     // writer kernel
     std::string writer_kernel =
-        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/writer_unary_sharded_gn_rm_gb_v2.cpp";
+        "ttnn/operations/normalization/groupnorm/device/kernels/dataflow/writer_unary_sharded_gn_rm_gb_v2.cpp";
     auto writer_kernels_id = CreateKernel(
         program,
         writer_kernel,
@@ -755,10 +755,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";
     CreateKernel(
         program,
-        (use_welford
-             ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/"
-               "welford_groupnorm_sharded_v2.cpp"
-             : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp"),
+        (use_welford ? "ttnn/operations/normalization/groupnorm/device/kernels/compute/"
+                       "welford_groupnorm_sharded_v2.cpp"
+                     : "ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp"),
         mcast_sender_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -768,10 +767,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
             .defines = eltwise_binary_defines});
     CreateKernel(
         program,
-        (use_welford
-             ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/"
-               "welford_groupnorm_sharded_v2.cpp"
-             : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp"),
+        (use_welford ? "ttnn/operations/normalization/groupnorm/device/kernels/compute/"
+                       "welford_groupnorm_sharded_v2.cpp"
+                     : "ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp"),
         mcast_receiver_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -1664,9 +1662,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
     // reader kernel
     auto reader_mcast_sender_kernels_id_group_1 = CreateKernel(
         program,
-        (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+        (use_welford ? "ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                        "welford_reader_mcast_sender_unary_gn.cpp"
-                     : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                     : "ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                        "reader_mcast_sender_unary_gn.cpp"),
         mcast_sender_cores_group_1,
         tt::tt_metal::DataMovementConfig{
@@ -1678,9 +1676,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
         });
     auto reader_mcast_sender_kernels_id_group_2 = CreateKernel(
         program,
-        (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+        (use_welford ? "ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                        "welford_reader_mcast_sender_unary_gn.cpp"
-                     : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                     : "ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                        "reader_mcast_sender_unary_gn.cpp"),
         mcast_sender_cores_group_2,
         tt::tt_metal::DataMovementConfig{
@@ -1777,7 +1775,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
 
     // writer kernel
     std::string writer_kernel =
-        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/writer_unary_gn_rm_gb.cpp";
+        "ttnn/operations/normalization/groupnorm/device/kernels/dataflow/writer_unary_gn_rm_gb.cpp";
     auto writer_kernels_id_group_1 = CreateKernel(
         program,
         writer_kernel,
@@ -1885,8 +1883,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
     eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";
     CreateKernel(
         program,
-        (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"
-                     : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp"),
+        (use_welford ? "ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"
+                     : "ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp"),
         mcast_sender_cores_group_1,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -1898,8 +1896,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
         });
     CreateKernel(
         program,
-        (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"
-                     : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp"),
+        (use_welford ? "ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"
+                     : "ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp"),
         mcast_sender_cores_group_2,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -2854,9 +2852,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core_mcast(
     // reader kernel
     auto reader_mcast_sender_kernels_id_group_1 = CreateKernel(
         program,
-        (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+        (use_welford ? "ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                        "welford_reader_mcast_sender_unary_gn.cpp"
-                     : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                     : "ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                        "reader_mcast_sender_unary_gn.cpp"),
         mcast_sender_cores_group_1,
         tt::tt_metal::DataMovementConfig{
@@ -2868,9 +2866,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core_mcast(
     KernelHandle reader_mcast_receiver_kernels_id_group_1 = -1;
     reader_mcast_receiver_kernels_id_group_1 = CreateKernel(
         program,
-        (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+        (use_welford ? "ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                        "welford_reader_mcast_receiver_unary_gn.cpp"
-                     : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                     : "ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                        "reader_mcast_receiver_unary_gn.cpp"),
         mcast_receiver_cores_group_1,
         tt::tt_metal::DataMovementConfig{
@@ -2931,7 +2929,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_mcast(
 
     // writer kernel
     std::string writer_kernel =
-        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/writer_unary_gn_rm_gb.cpp";
+        "ttnn/operations/normalization/groupnorm/device/kernels/dataflow/writer_unary_gn_rm_gb.cpp";
     auto writer_kernels_id_group_1 = CreateKernel(
         program,
         writer_kernel,
@@ -3026,8 +3024,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_mcast(
     eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";
     CreateKernel(
         program,
-        (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"
-                     : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp"),
+        (use_welford ? "ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"
+                     : "ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp"),
         mcast_sender_cores_group_1,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -3038,8 +3036,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_mcast(
             .named_compile_args = mcast_sender_compute_named_compile_time_args});
     CreateKernel(
         program,
-        (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"
-                     : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp"),
+        (use_welford ? "ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"
+                     : "ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp"),
         mcast_receiver_cores_group_1,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,

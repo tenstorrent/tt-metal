@@ -156,7 +156,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
 
     tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/ccl/all_to_all_combine/device/kernels/dataflow/reader_all_to_all_combine.cpp",
+        "ttnn/operations/ccl/all_to_all_combine/device/kernels/dataflow/reader_all_to_all_combine.cpp",
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
@@ -180,7 +180,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
 
     tt::tt_metal::KernelHandle binary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/moe_expert_token_remap/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/moe_expert_token_remap/device/kernels/dataflow/"
         "writer_moe_expert_token_remap.cpp",
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));

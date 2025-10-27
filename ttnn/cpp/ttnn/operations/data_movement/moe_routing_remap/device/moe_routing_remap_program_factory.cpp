@@ -112,7 +112,7 @@ MoeRoutingRemapDeviceOperation::SingleCore::create_at(
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/moe_routing_remap/device/kernels/dataflow/reader_moe_routing_remap.cpp",
+        "ttnn/operations/data_movement/moe_routing_remap/device/kernels/dataflow/reader_moe_routing_remap.cpp",
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
@@ -126,7 +126,7 @@ MoeRoutingRemapDeviceOperation::SingleCore::create_at(
     tt::tt_metal::TensorAccessorArgs(*tensor_return_value.buffer()).append_to(writer_ct_args);
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/moe_routing_remap/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/moe_routing_remap/device/kernels/dataflow/"
         "writer_moe_routing_remap.cpp",
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));

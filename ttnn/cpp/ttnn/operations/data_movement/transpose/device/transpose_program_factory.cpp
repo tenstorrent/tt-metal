@@ -147,14 +147,14 @@ operation::ProgramWithCallbacks transpose_cn_multi_core(const Tensor& a, Tensor&
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
         "reader_unary_transpose_cn_interleaved_start_id.cpp",
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -573,7 +573,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
         "reader_unary_transpose_hc_interleaved_tiled_padding_aware.cpp",
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_compile_time_args));
@@ -596,7 +596,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
         "writer_unary_transpose_hc_interleaved_tiled_padding_aware.cpp",
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
@@ -726,19 +726,18 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        row_major ? "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+        row_major ? "ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
                     "reader_unary_transpose_hc_interleaved_partitioned_rm.cpp"
-                  : "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+                  : "ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
                     "reader_unary_transpose_hc_interleaved_partitioned.cpp",
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        row_major
-            ? "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
-              "writer_unary_transpose_hc_interleaved_start_id_rm.cpp"
-            : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        row_major ? "ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+                    "writer_unary_transpose_hc_interleaved_start_id_rm.cpp"
+                  : "ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -1173,7 +1172,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor& a,
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
         "reader_unary_transpose_hc_sharded_rm.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
@@ -1185,7 +1184,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor& a,
 
         writer_kernel_id = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+            "ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
             "writer_unary_transpose_hc_sharded_rm.cpp",
             all_cores,
             tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
@@ -1555,19 +1554,18 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor&
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        row_major ? "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+        row_major ? "ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
                     "reader_unary_transpose_wh_interleaved_start_id_rm.cpp"
-                  : "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+                  : "ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
                     "reader_unary_transpose_wh_interleaved_start_id.cpp",
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        row_major
-            ? "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
-              "writer_unary_transpose_wh_interleaved_start_id_rm.cpp"
-            : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        row_major ? "ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+                    "writer_unary_transpose_wh_interleaved_start_id_rm.cpp"
+                  : "ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -1579,8 +1577,8 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor&
     }
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        row_major ? "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh_rm.cpp"
-                  : "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh.cpp",
+        row_major ? "ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh_rm.cpp"
+                  : "ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh.cpp",
         total_cores,
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -1737,19 +1735,19 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
+        "ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh_sharded.cpp",
+        "ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh_sharded.cpp",
         total_cores,
         tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_compile_time_args});
 
@@ -2015,7 +2013,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
         "reader_unary_transpose_wh_sharded_rm.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
@@ -2032,7 +2030,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
 
     tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
         "writer_unary_transpose_wh_sharded_rm.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
@@ -2054,7 +2052,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
 
     tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh_rm.cpp",
+        "ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh_rm.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,

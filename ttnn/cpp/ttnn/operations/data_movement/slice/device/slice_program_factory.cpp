@@ -227,14 +227,14 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args_vec);
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/slice/device/kernels/dataflow/"
         "slice_reader_unary_unpad_dims_rm_interleaved_start_id.cpp",
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args_vec));
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/slice/device/kernels/dataflow/"
         "slice_writer_unary_stick_layout_interleaved_start_id.cpp",
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec));
@@ -357,7 +357,7 @@ operation::ProgramWithCallbacks slice_rm_strided_single_core_n_dims(
     TensorAccessorArgs(*a.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/slice/device/kernels/dataflow/"
         "strided_slice_reader_rm_interleaved_nd.cpp",
         core,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
@@ -366,7 +366,7 @@ operation::ProgramWithCallbacks slice_rm_strided_single_core_n_dims(
     TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/strided_slice_writer_rm_interleaved.cpp",
+        "ttnn/operations/data_movement/slice/device/kernels/dataflow/strided_slice_writer_rm_interleaved.cpp",
         core,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -663,7 +663,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/slice/device/kernels/dataflow/"
         "slice_reader_unary_unpad_dims_rm_sharded.cpp",
         all_cores_unpadded,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
@@ -897,14 +897,14 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/slice/device/kernels/dataflow/"
         "reader_unary_unpad_dims_interleaved_start_id.cpp",
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 

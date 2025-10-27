@@ -81,14 +81,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode
         in_num_cores_y};
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/device/kernels/dataflow/"
+        "ttnn/operations/experimental/transformer/nlp_concat_heads_decode/device/kernels/dataflow/"
         "reader_tm_tile_layout_nlp_concat_heads_decode.cpp",
         q_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     reader_compile_time_args[6] = 2;  // read the second phase
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/device/kernels/dataflow/"
+        "ttnn/operations/experimental/transformer/nlp_concat_heads_decode/device/kernels/dataflow/"
         "reader_tm_tile_layout_nlp_concat_heads_decode.cpp",
         q_cores,
         tt_metal::WriterDataMovementConfig(reader_compile_time_args));
@@ -220,14 +220,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode
         face_hw};
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/device/kernels/dataflow/"
+        "ttnn/operations/experimental/transformer/nlp_concat_heads_decode/device/kernels/dataflow/"
         "reader_tm_tile_layout_nlp_concat_heads_decode_subcoregrid.cpp",
         q_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     reader_compile_time_args[6] = 2;  // read the second phase
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/device/kernels/dataflow/"
+        "ttnn/operations/experimental/transformer/nlp_concat_heads_decode/device/kernels/dataflow/"
         "reader_tm_tile_layout_nlp_concat_heads_decode_subcoregrid.cpp",
         q_cores,
         tt_metal::WriterDataMovementConfig(reader_compile_time_args));

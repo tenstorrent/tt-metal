@@ -92,7 +92,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/rm_reshape_interleaved.cpp",
+        "ttnn/operations/data_movement/reshape_view/device/device/rm_reshape_interleaved.cpp",
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(compile_time_args));
     uint32_t src2_cb_index = 2;
@@ -111,7 +111,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
         compile_time_args[3] = src3_cb_index;
         reader_kernel_id2 = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/rm_reshape_interleaved.cpp",
+            "ttnn/operations/data_movement/reshape_view/device/device/rm_reshape_interleaved.cpp",
             total_cores,
             tt::tt_metal::WriterDataMovementConfig(compile_time_args));
     }

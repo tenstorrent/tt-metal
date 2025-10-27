@@ -250,11 +250,11 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
 
     std::string writer_kernel_fname, reader_kernel_fname, compute_kernel_fname;
 
-    reader_kernel_fname = std::string(
-        "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/reader_bilinear_multi_core_sharded.cpp");
-    writer_kernel_fname = std::string(
-        "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/reader_bilinear_multi_core_sharded.cpp");
-    compute_kernel_fname = std::string("ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/compute/bilinear.cpp");
+    reader_kernel_fname =
+        std::string("ttnn/operations/pool/upsample/device/kernels/dataflow/reader_bilinear_multi_core_sharded.cpp");
+    writer_kernel_fname =
+        std::string("ttnn/operations/pool/upsample/device/kernels/dataflow/reader_bilinear_multi_core_sharded.cpp");
+    compute_kernel_fname = std::string("ttnn/operations/pool/upsample/device/kernels/compute/bilinear.cpp");
 
     std::vector<uint32_t> compute_compile_time_args = {
         in_cb_id1,

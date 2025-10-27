@@ -47,7 +47,7 @@ operation::ProgramWithCallbacks nd_reshard_multicore_copy_pages(const Tensor& in
     // Create kernels
     KernelHandle reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/nd_reshard_copy_pages_reader.cpp",
+        "ttnn/operations/data_movement/sharded/reshard/device/kernels/nd_reshard_copy_pages_reader.cpp",
         grid,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -57,7 +57,7 @@ operation::ProgramWithCallbacks nd_reshard_multicore_copy_pages(const Tensor& in
 
     KernelHandle writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/nd_reshard_copy_pages_writer.cpp",
+        "ttnn/operations/data_movement/sharded/reshard/device/kernels/nd_reshard_copy_pages_writer.cpp",
         grid,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
@@ -195,7 +195,7 @@ operation::ProgramWithCallbacks nd_reshard_multicore_copy_local_shard(
     // Create kernels
     KernelHandle brisc_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/nd_reshard_copy_local_shards.cpp",
+        "ttnn/operations/data_movement/sharded/reshard/device/kernels/nd_reshard_copy_local_shards.cpp",
         grid,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -205,7 +205,7 @@ operation::ProgramWithCallbacks nd_reshard_multicore_copy_local_shard(
 
     KernelHandle ncrisc_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/nd_reshard_copy_local_shards.cpp",
+        "ttnn/operations/data_movement/sharded/reshard/device/kernels/nd_reshard_copy_local_shards.cpp",
         grid,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,

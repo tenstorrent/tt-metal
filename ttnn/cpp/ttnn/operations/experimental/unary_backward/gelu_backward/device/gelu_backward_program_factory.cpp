@@ -74,13 +74,13 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
 
     tt::tt_metal::KernelHandle binary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp",
+        "ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -94,9 +94,9 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
 
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        args.approximate == "tanh" ? "ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/"
+        args.approximate == "tanh" ? "ttnn/operations/experimental/unary_backward/gelu_backward/device/"
                                      "kernels/compute/eltwise_bw_gelu_approx_tanh.cpp"
-                                   : "ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/"
+                                   : "ttnn/operations/experimental/unary_backward/gelu_backward/device/"
                                      "kernels/compute/eltwise_bw_gelu_approx_none.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = unpack_to_dest_mode});

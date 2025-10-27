@@ -240,7 +240,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     auto reader_defines = dataflow_defines;
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/reader_batch_norm.cpp",
+        "ttnn/operations/normalization/batch_norm/device/kernels/dataflow/reader_batch_norm.cpp",
         all_device_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, std::move(reader_defines)));
 
@@ -248,7 +248,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     auto writer_defines = dataflow_defines;
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/writer_batch_norm.cpp",
+        "ttnn/operations/normalization/batch_norm/device/kernels/dataflow/writer_batch_norm.cpp",
         all_device_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, std::move(writer_defines)));
 
@@ -286,7 +286,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
         fmt::format(
-            "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_{}.cpp",
+            "ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_{}.cpp",
             fp32_dest_acc_en ? "sfpu_kernel" : "kernel"),
         all_device_cores,
         tt_metal::ComputeConfig{

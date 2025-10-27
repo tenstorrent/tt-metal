@@ -239,10 +239,9 @@ operation::ProgramWithCallbacks argmax_single_core(
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(ctime_args);
 
     // Kernel
-    std::string kernel_path =
-        input.layout() == Layout::ROW_MAJOR
-            ? "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved.cpp"
-            : "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_tile_layout.cpp";
+    std::string kernel_path = input.layout() == Layout::ROW_MAJOR
+                                  ? "ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved.cpp"
+                                  : "ttnn/operations/reduction/argmax/device/kernels/reader_argmax_tile_layout.cpp";
 
     const std::map<std::string, std::string> kernel_defines;
     const tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -519,7 +518,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
     std::map<std::string, std::string> kernel_defines;
     tt::tt_metal::KernelHandle reader_kernel_id0 = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
+        "ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
         cores0,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -530,7 +529,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
     if (num_cores1 > 0) {
         reader_kernel_id1 = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
+            "ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
             cores1,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,

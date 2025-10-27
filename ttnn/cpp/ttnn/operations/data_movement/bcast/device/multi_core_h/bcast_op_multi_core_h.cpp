@@ -92,14 +92,14 @@ operation::ProgramWithCallbacks bcast_multi_core_h(
 
     KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/bcast/device/kernels/dataflow/"
         "reader_bcast_h_interleaved_input_rows_partitioned.cpp",
         all_device_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/bcast/device/kernels/dataflow/"
         "writer_unary_interleaved_input_cols_batched.cpp",
         all_device_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
@@ -107,7 +107,7 @@ operation::ProgramWithCallbacks bcast_multi_core_h(
     std::map<std::string, std::string> bcast_defines = bcast_op_utils::get_defines(BcastOpDim::H, bcast_math);
     auto bcast_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_h.cpp",
+        "ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_h.cpp",
         all_device_cores,
         tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines});
 

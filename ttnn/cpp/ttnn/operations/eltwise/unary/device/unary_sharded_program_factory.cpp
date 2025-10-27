@@ -13,7 +13,7 @@
 
 namespace ttnn::operations::unary::program {
 
-static const std::string compute_root_sharded = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/";
+static const std::string compute_root_sharded = "ttnn/operations/eltwise/unary/device/kernels/compute/";
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -114,7 +114,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     std::map<std::string, std::string> kernel_defines;
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
 

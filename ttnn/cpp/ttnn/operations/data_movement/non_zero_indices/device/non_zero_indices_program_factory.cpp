@@ -80,7 +80,7 @@ operation::ProgramWithCallbacks non_zero_indices_single_core(
 
     auto kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/non_zero_indices/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/non_zero_indices/device/kernels/dataflow/"
         "non_zero_indices_sc_reader.cpp",
         core,
         tt::tt_metal::ReaderDataMovementConfig(compile_time_args, defines));

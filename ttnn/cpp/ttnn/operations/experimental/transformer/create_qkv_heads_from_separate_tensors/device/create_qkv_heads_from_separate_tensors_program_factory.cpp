@@ -65,7 +65,7 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_qkv_separate(
     }
     tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/create_qkv_heads_from_separate_tensors/device/kernels/"
+        "ttnn/operations/experimental/transformer/create_qkv_heads_from_separate_tensors/device/kernels/"
         "reader_create_qkv_heads_sharded_separate.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
@@ -76,7 +76,7 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_qkv_separate(
         };
         tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/device/kernels/"
+            "ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/device/kernels/"
             "compute/transpose_wh_sharded.cpp",
             all_cores,
             tt_metal::ComputeConfig{.compile_args = compute_args});

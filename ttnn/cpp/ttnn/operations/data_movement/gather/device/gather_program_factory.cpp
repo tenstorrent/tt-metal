@@ -132,7 +132,7 @@ GatherProgramFactorySingleRowSingleCore::cached_program_t GatherProgramFactorySi
         compute_with_storage_grid_size.y};
     TensorAccessorArgs(*input_index_tensor_buffer).append_to(reader_compile_time_args);
     const std::string gather_reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/gather/device/kernels/dataflow/"
         "gather_reader_single_row_single_core.cpp";
     tt::tt_metal::KernelHandle gather_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -162,7 +162,7 @@ GatherProgramFactorySingleRowSingleCore::cached_program_t GatherProgramFactorySi
     TensorAccessorArgs(*input_tensor_buffer).append_to(writer_compile_time_args);
     TensorAccessorArgs(*output_tensor_buffer).append_to(writer_compile_time_args);
     const std::string gather_writer_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/gather/device/kernels/dataflow/"
         "gather_writer_single_row_single_core.cpp";
     tt::tt_metal::KernelHandle gather_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -376,7 +376,7 @@ GatherProgramFactorySingleRowMultiCore::cached_program_t GatherProgramFactorySin
         compute_with_storage_grid_size.y};
     TensorAccessorArgs(*input_index_tensor_buffer).append_to(reader_compile_time_args);
     const std::string gather_reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_reader_single_row_multi_core.cpp";
+        "ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_reader_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle gather_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         gather_reader_kernel_path,
@@ -405,7 +405,7 @@ GatherProgramFactorySingleRowMultiCore::cached_program_t GatherProgramFactorySin
     TensorAccessorArgs(*input_tensor_buffer).append_to(writer_compile_time_args);
     TensorAccessorArgs(*output_tensor_buffer).append_to(writer_compile_time_args);
     const std::string gather_writer_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_writer_single_row_multi_core.cpp";
+        "ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_writer_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle gather_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         gather_writer_kernel_path,

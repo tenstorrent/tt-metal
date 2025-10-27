@@ -53,13 +53,13 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_single_core(
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         core,
         tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
         tt_metal::WriterDataMovementConfig{writer_compile_time_args});
 
@@ -72,7 +72,7 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_single_core(
     bool math_approx_mode = true;
     tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_all.cpp",
+        "ttnn/operations/reduction/prod/device/kernels/compute/prod_all.cpp",
         core,
         tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,

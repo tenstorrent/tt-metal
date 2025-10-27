@@ -271,7 +271,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
 
     auto concat_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/"
+        "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/"
         "llama_concat_reader.cpp",
         q_cores_updated,
         tt::tt_metal::DataMovementConfig{
@@ -286,7 +286,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     };
     tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/"
+        "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/"
         "tilize_writer.cpp",
         q_cores_updated,
         tt::tt_metal::DataMovementConfig{
@@ -298,7 +298,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
 
     tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/tilize_compute.cpp",
+        "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/tilize_compute.cpp",
         q_cores_updated,
         tt::tt_metal::ComputeConfig{.compile_args = {1, 2, tt::CBIndex::c_17, tt::CBIndex::c_16}});
 
@@ -313,7 +313,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
 
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/"
+        "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/"
         "llama_all_gather_concat_reader.cpp",
         sender_worker_core_range,
         tt::tt_metal::DataMovementConfig{
@@ -340,7 +340,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
 
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/"
+        "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/"
         "llama_all_gather_concat_writer.cpp",
         sender_worker_core_range,
         tt::tt_metal::DataMovementConfig{

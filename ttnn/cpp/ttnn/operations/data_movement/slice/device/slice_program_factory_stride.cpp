@@ -281,15 +281,15 @@ operation::ProgramWithCallbacks slice_rm_multi_core_stride(
     if (input_shape.rank() <= 4) {
         // Use optimized 4D kernels for 1D-4D tensors
         reader_kernel_path =
-            "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_multicore_slice_4d.cpp";
+            "ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_multicore_slice_4d.cpp";
         writer_kernel_path =
-            "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_multicore_slice_4d.cpp";
+            "ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_multicore_slice_4d.cpp";
     } else {
         // Use generic N-dimensional kernels for 5D+ tensors
         reader_kernel_path =
-            "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_multicore_slice_nd.cpp";
+            "ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_multicore_slice_nd.cpp";
         writer_kernel_path =
-            "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_multicore_slice_nd.cpp";
+            "ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_multicore_slice_nd.cpp";
     }
 
     // Circular buffer configuration - same as single-core but for multiple cores

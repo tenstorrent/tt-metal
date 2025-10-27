@@ -243,7 +243,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
     tt::tt_metal::NOC writer_noc = reader_noc_is_NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
     auto reader_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/dataflow/"
+        "ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/dataflow/"
         "reader_mcast_transformer_group_attn_matmul.cpp",
         all_device_cores,
         tt::tt_metal::DataMovementConfig{
@@ -255,7 +255,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
 
     auto writer_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/dataflow/"
+        "ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/dataflow/"
         "writer_transformer_group_attn_matmul.cpp",
         all_device_cores,
         tt::tt_metal::DataMovementConfig{
@@ -275,7 +275,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
 
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/compute/"
+        "ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/compute/"
         "transformer_group_attn_matmul.cpp",
         all_device_cores,
         tt::tt_metal::ComputeConfig{

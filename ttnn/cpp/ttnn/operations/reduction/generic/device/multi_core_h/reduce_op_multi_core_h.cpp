@@ -126,7 +126,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
         reader_defines["REDUCE_SCALER"] = "1";
         reader_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
+            "ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "reader_unary_transpose_wh_interleaved_input_cols_partitioned_sharded.cpp",
             all_cores,
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
@@ -136,7 +136,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
         reader_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
+            "ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "reader_unary_transpose_wh_universal_input_cols_partitioned.cpp",
             all_cores,
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
@@ -151,7 +151,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
         };
         writer_kernel_id = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
+            "ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
             all_cores,
             WriterDataMovementConfig(writer_ct_args));
     } else {
@@ -160,7 +160,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
         writer_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_universal_start_id.cpp",
+            "ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_universal_start_id.cpp",
             all_cores,
             tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }
@@ -174,7 +174,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
     tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h.cpp",
+        "ttnn/operations/reduction/generic/device/kernels/compute/reduce_h.cpp",
         core_group_1,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -192,7 +192,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
         tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h.cpp",
+            "ttnn/operations/reduction/generic/device/kernels/compute/reduce_h.cpp",
             core_group_2,
             tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity,

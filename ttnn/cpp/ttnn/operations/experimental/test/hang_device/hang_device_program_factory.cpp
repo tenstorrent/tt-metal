@@ -20,7 +20,7 @@ ExecuteTestHangDeviceOperation::SingleCore::cached_program_t ExecuteTestHangDevi
     std::vector<uint32_t> compute_kernel_args = {};
     CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/test/hang_device/device/kernels/compute/hang_device_kernel.cpp",
+        "ttnn/operations/experimental/test/hang_device/device/kernels/compute/hang_device_kernel.cpp",
         core,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,

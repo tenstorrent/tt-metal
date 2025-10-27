@@ -83,7 +83,7 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
     tt::tt_metal::TensorAccessorArgs(args.false_value_tensor.buffer()).append_to(reader_compile_time_vec);
     KernelHandle reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/where/device/kernels/dataflow/elemwise_reader_kernel.cpp",
+        "ttnn/operations/experimental/where/device/kernels/dataflow/elemwise_reader_kernel.cpp",
         all_device_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_vec, reader_defines));
 
@@ -95,14 +95,14 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_vec);
     KernelHandle writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/where/device/kernels/dataflow/elemwise_writer_kernel.cpp",
+        "ttnn/operations/experimental/where/device/kernels/dataflow/elemwise_writer_kernel.cpp",
         all_device_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_vec, writer_defines));
 
     /* Use the add_tiles operation in the compute kernel */
     KernelHandle compute_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/where/device/kernels/compute/elemwise_where_kernel.cpp",
+        "ttnn/operations/experimental/where/device/kernels/compute/elemwise_where_kernel.cpp",
         all_device_cores,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,

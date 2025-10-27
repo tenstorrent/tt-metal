@@ -160,14 +160,14 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(
 
     auto reader_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/matmul/attn_matmul/device/kernels/dataflow/"
+        "ttnn/operations/experimental/matmul/attn_matmul/device/kernels/dataflow/"
         "reader_transformer_attn_matmul.cpp",
         all_device_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     auto writer_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_device_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -178,7 +178,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(
 
     auto eltwise_binary_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/matmul/attn_matmul/device/kernels/compute/transformer_attn_matmul.cpp",
+        "ttnn/operations/experimental/matmul/attn_matmul/device/kernels/compute/transformer_attn_matmul.cpp",
         all_device_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args});

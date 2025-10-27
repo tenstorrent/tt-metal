@@ -159,10 +159,10 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const auto reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_norm_backward/device/kernels/"
+        "ttnn/operations/moreh/moreh_norm_backward/device/kernels/"
         "reader_moreh_norm_backward.cpp";
     const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_norm_backward/device/kernels/"
+        "ttnn/operations/moreh/moreh_norm_backward/device/kernels/"
         "writer_moreh_norm_backward.cpp";
 
     std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(input_grad_rank)};
@@ -178,7 +178,7 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const auto compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_norm_backward/device/kernels/"
+        "ttnn/operations/moreh/moreh_norm_backward/device/kernels/"
         "moreh_norm_backward_kernel.cpp";
     std::map<std::string, std::string> compute_defines{};
     if (fp32_dest_acc_en) {

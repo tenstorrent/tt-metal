@@ -132,10 +132,10 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     }
 
     const auto reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_sgd/device/kernels/"
+        "ttnn/operations/moreh/moreh_sgd/device/kernels/"
         "reader_moreh_sgd.cpp";
     const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_sgd/device/kernels/"
+        "ttnn/operations/moreh/moreh_sgd/device/kernels/"
         "writer_moreh_sgd.cpp";
 
     const auto reader_kernel_id =
@@ -149,7 +149,7 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     const std::vector<uint32_t> compute_args_group_1{num_tiles_per_core_group_1};
 
     const auto compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_sgd/device/kernels/"
+        "ttnn/operations/moreh/moreh_sgd/device/kernels/"
         "moreh_sgd.cpp";
 
     auto compute_kernel_id = CreateComputeKernel(

@@ -101,7 +101,7 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
 
     auto reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         all_cores,
         ReaderDataMovementConfig(reader_ct_args));
 
@@ -110,7 +110,7 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
 
     auto writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
         "writer_unary_stick_layout_split_rows_interleaved_parallel_columns.cpp",
         all_cores,
         WriterDataMovementConfig(writer_ct_args));
@@ -126,13 +126,11 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
     }
-    std::string compute_kernel(
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
+    std::string compute_kernel("ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
         (a.dtype() == DataType::FLOAT32 && ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel =
-            std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
+        compute_kernel = std::string("ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
@@ -280,7 +278,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
 
     auto unary_reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         all_cores,
         ReaderDataMovementConfig(reader_ct_args));
 
@@ -289,7 +287,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
 
     auto unary_writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
         "writer_unary_stick_layout_split_rows_interleaved_parallel_columns.cpp",
         all_cores,
         WriterDataMovementConfig(writer_ct_args));
@@ -311,13 +309,11 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
     }
-    std::string compute_kernel(
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
+    std::string compute_kernel("ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
         (a.dtype() == DataType::FLOAT32 && ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel =
-            std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
+        compute_kernel = std::string("ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
@@ -568,7 +564,7 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_wh_multicore.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_wh_multicore.cpp",
         all_cores,
         ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -578,7 +574,7 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
         "writer_unary_stick_layout_wh_multicore.cpp",
         all_cores,
         WriterDataMovementConfig(writer_ct_args));
@@ -592,9 +588,8 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
     if (!core_range.empty()) {
         CreateKernel(
             program,
-            use_pack_kernel
-                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
-                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            use_pack_kernel ? "ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
+                            : "ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -603,9 +598,8 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
     if (has_cliff_col && has_cliff_row) {
         CreateKernel(
             program,
-            use_pack_kernel
-                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
-                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            use_pack_kernel ? "ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
+                            : "ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             cliff_col_row_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -614,9 +608,8 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
     if (has_cliff_row) {
         CreateKernel(
             program,
-            use_pack_kernel
-                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
-                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            use_pack_kernel ? "ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
+                            : "ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             cliff_row_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -626,9 +619,8 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
     if (has_cliff_col) {
         CreateKernel(
             program,
-            use_pack_kernel
-                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
-                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            use_pack_kernel ? "ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
+                            : "ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             cliff_col_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -778,7 +770,7 @@ operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_type_
     // Reader kernel
     KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
         shard_spec.grid,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -788,7 +780,7 @@ operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_type_
     // Writer kernel
     KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
+        "ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
         shard_spec.grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -808,12 +800,10 @@ operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_type_
     if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
         (a.dtype() == DataType::FLOAT32 && num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel =
-            std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
+        compute_kernel = std::string("ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
-        compute_kernel =
-            std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
+        compute_kernel = std::string("ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     }
     CreateKernel(
         program,
@@ -1007,7 +997,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
         unary_reader_kernel_id = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
+            "ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
             compute_core_range,
             tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     } else {
@@ -1016,7 +1006,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
         unary_reader_kernel_id = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
+            "ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
             "reader_unary_start_id.cpp",
             compute_core_range,
             ReaderDataMovementConfig(reader_compile_time_args));
@@ -1058,7 +1048,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     // Writer kernel
     KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
         "writer_unary_stick_layout_split_rows_multi_core.cpp",
         compute_core_range,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_compute_defines));
@@ -1069,11 +1059,11 @@ operation::ProgramWithCallbacks untilize_multi_core(
         (a.dtype() == DataType::FLOAT32 && num_tiles_per_input_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel = std::string(
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp");
+            "ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp");
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
         compute_kernel = std::string(
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/"
+            "ttnn/operations/data_movement/untilize/device/kernels/compute/"
             "pack_untilize_variable_num_blocks.cpp");
     }
 
@@ -1382,7 +1372,7 @@ operation::ProgramWithCallbacks untilize_single_core(
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
         "reader_unary_start_id.cpp",
         core,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_compute_defines));
@@ -1407,7 +1397,7 @@ operation::ProgramWithCallbacks untilize_single_core(
     // Untilized writer
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
         "writer_unary_stick_layout_split_rows_single_core.cpp",
         core,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_compute_defines));
@@ -1417,13 +1407,11 @@ operation::ProgramWithCallbacks untilize_single_core(
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
     }
-    std::string compute_kernel(
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
+    std::string compute_kernel("ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
         (a.dtype() == DataType::FLOAT32 && num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel =
-            std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
+        compute_kernel = std::string("ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }

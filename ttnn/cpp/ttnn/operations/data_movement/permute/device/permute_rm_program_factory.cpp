@@ -79,7 +79,7 @@ PermuteDeviceOperation::MultiCoreRowInvariant::cached_program_t PermuteDeviceOpe
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/permute/device/kernels/dataflow/"
         "reader_permute_interleaved_rm_row_invariant.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_compile_time_args));
@@ -90,7 +90,7 @@ PermuteDeviceOperation::MultiCoreRowInvariant::cached_program_t PermuteDeviceOpe
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/permute/device/kernels/dataflow/"
         "writer_permute_interleaved_rm_row_invariant.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_named_compile_time_args));
@@ -256,7 +256,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/permute/device/kernels/dataflow/"
         "reader_permute_interleaved_rm_blocked_generic.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_compile_time_args));
@@ -284,7 +284,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/permute/device/kernels/dataflow/"
         "writer_permute_interleaved_rm_blocked_generic.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_named_compile_time_args));
@@ -295,7 +295,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
     bool fp32_dest_acc_en = cb_data_format_output == tt::DataFormat::Float32;
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/compute/transpose_xw_rm_single_tile_size.cpp",
+        "ttnn/operations/data_movement/permute/device/kernels/compute/transpose_xw_rm_single_tile_size.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,

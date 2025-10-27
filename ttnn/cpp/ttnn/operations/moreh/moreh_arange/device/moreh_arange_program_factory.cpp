@@ -50,8 +50,8 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
     auto kernel_id = CreateWriteKernel(
         program,
         operation_attributes.untilize_out
-            ? "ttnn/cpp/ttnn/operations/moreh/moreh_arange/device/kernels/writer_moreh_arange_rm.cpp"
-            : "ttnn/cpp/ttnn/operations/moreh/moreh_arange/device/kernels/writer_moreh_arange.cpp",
+            ? "ttnn/operations/moreh/moreh_arange/device/kernels/writer_moreh_arange_rm.cpp"
+            : "ttnn/operations/moreh/moreh_arange/device/kernels/writer_moreh_arange.cpp",
         all_cores,
         writer_compile_time_args,
         writer_defines);

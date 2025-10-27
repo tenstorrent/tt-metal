@@ -79,7 +79,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     tt::tt_metal::TensorAccessorArgs(output_tensors.at(0).buffer()).append_to(reader_ct_args);
     tt::tt_metal::KernelHandle receive_unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/reader_receive.cpp",
+        "ttnn/operations/point_to_point/device/kernels/dataflow/reader_receive.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
@@ -88,7 +88,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct_args);
     tt::tt_metal::KernelHandle receive_unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/writer_unary_interleaved_start_id_gen.cpp",
+        "ttnn/operations/point_to_point/device/kernels/dataflow/writer_unary_interleaved_start_id_gen.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 

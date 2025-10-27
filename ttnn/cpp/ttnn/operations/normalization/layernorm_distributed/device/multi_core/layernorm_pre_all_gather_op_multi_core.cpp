@@ -163,14 +163,14 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core_2d(
 
     auto reader_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
+        "ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
         "reader_layernorm_preallgather_2d.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     auto writer_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
+        "ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
         "writer_unary_interleaved_start_id_blocked.cpp",
         merge_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
@@ -179,7 +179,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core_2d(
 
     auto compute_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
+        "ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
         "layernorm_pre_allgather_2d.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
@@ -438,14 +438,14 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
 
     auto reader_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
+        "ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
         "reader_unary_interleaved_ln_rm_gb_pre_allgather.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     auto writer_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
+        "ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
         "writer_unary_interleaved_start_id_blocked.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
@@ -454,7 +454,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
 
     auto compute_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
+        "ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
         "layernorm_pre_allgather.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{

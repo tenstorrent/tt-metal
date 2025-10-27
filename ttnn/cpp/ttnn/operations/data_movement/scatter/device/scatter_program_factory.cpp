@@ -102,9 +102,9 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     create_cb(program, output_tensor.dtype(), ScatterCB::DST, all_cores, output_page_size_bytes);
 
     constexpr const char* reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/scatter/device/kernels/dataflow/reader_scatter.cpp";
+        "ttnn/operations/data_movement/scatter/device/kernels/dataflow/reader_scatter.cpp";
     constexpr const char* writer_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/scatter/device/kernels/dataflow/writer_scatter.cpp";
+        "ttnn/operations/data_movement/scatter/device/kernels/dataflow/writer_scatter.cpp";
 
     std::vector<uint32_t> compile_time_args{
         input_tensor.buffer()->address(),

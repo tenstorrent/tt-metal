@@ -193,16 +193,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     }
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        tilized ? "ttnn/cpp/ttnn/operations/ccl/broadcast/device/kernels/broadcast_tile_reader.cpp"
-                : "ttnn/cpp/ttnn/operations/ccl/broadcast/device/kernels/broadcast_rm_reader.cpp",
+        tilized ? "ttnn/operations/ccl/broadcast/device/kernels/broadcast_tile_reader.cpp"
+                : "ttnn/operations/ccl/broadcast/device/kernels/broadcast_rm_reader.cpp",
         sender_worker_core_range,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args, kernel_defines));
 
     // Writer
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        tilized ? "ttnn/cpp/ttnn/operations/ccl/broadcast/device/kernels/broadcast_tile_writer.cpp"
-                : "ttnn/cpp/ttnn/operations/ccl/broadcast/device/kernels/broadcast_rm_writer.cpp",
+        tilized ? "ttnn/operations/ccl/broadcast/device/kernels/broadcast_tile_writer.cpp"
+                : "ttnn/operations/ccl/broadcast/device/kernels/broadcast_rm_writer.cpp",
         sender_worker_core_range,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_args, kernel_defines));
 

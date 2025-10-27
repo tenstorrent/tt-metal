@@ -308,7 +308,7 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
     // Create reader kernel
     auto unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
+        "ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
         "reader_paged_fused_update_cache_interleaved_start_id.cpp",
         all_cores_bb,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
@@ -316,7 +316,7 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
     // Create writer kernel
     auto unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
+        "ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
         "writer_paged_fused_update_cache_interleaved_start_id.cpp",
         all_cores_bb,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
@@ -324,7 +324,7 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
     // Create compute kernel
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/compute/paged_fused_update_cache.cpp",
+        "ttnn/operations/experimental/paged_cache/device/kernels/compute/paged_fused_update_cache.cpp",
         all_cores_bb,
         tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_kernel_args});
 
@@ -797,7 +797,7 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
     // Create reader kernel
     const auto unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
+        "ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
         "reader_paged_row_major_fused_update_cache_interleaved_start_id.cpp",
         all_cores_bb,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
@@ -805,7 +805,7 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
     // Create writer kernel
     const auto unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
+        "ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
         "writer_paged_row_major_fused_update_cache_interleaved_start_id.cpp",
         all_cores_bb,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
@@ -813,7 +813,7 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
     // Create compute kernel
     const auto compute_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/compute/"
+        "ttnn/operations/experimental/paged_cache/device/kernels/compute/"
         "paged_row_major_fused_update_cache.cpp",
         all_cores_bb,
         tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_kernel_args});

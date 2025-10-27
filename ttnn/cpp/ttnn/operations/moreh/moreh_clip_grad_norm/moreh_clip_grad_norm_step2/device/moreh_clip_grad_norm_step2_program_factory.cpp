@@ -81,10 +81,10 @@ MorehClipGradNormStep2Operation::ProgramFactory::create(
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const auto reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step2/device/kernels/"
+        "ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step2/device/kernels/"
         "reader_moreh_clip_grad_norm_step2.cpp";
     const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step2/device/kernels/"
+        "ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step2/device/kernels/"
         "writer_moreh_clip_grad_norm_step2.cpp";
 
     std::vector<uint32_t> reader_ct_args = {};
@@ -98,7 +98,7 @@ MorehClipGradNormStep2Operation::ProgramFactory::create(
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const auto compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step2/device/kernels/"
+        "ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step2/device/kernels/"
         "moreh_clip_grad_norm_step2_kernel.cpp";
 
     const auto compute_kernel_id = CreateComputeKernel(program, compute_kernel_file, {single_core, num_tiles});

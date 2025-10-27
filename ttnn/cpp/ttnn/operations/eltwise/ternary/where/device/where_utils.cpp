@@ -101,7 +101,7 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
 }
 
 std::string get_kernel_file_path(KernelName kernel_name) {
-    constexpr std::string_view root = "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels";
+    constexpr std::string_view root = "ttnn/operations/eltwise/ternary/where/device/kernels";
     constexpr std::string_view dataflow = "{}/dataflow/{}";
     constexpr std::string_view compute = "{}/compute/{}";
 
@@ -115,41 +115,41 @@ std::string get_kernel_file_path(KernelName kernel_name) {
         case KernelName::ReaderScalarBcastTTS: return fmt::format(dataflow, root, "tst_tts_reader_scalar_bcast.cpp");
         case KernelName::ReaderScalarBcastTST: return fmt::format(dataflow, root, "tst_tts_reader_scalar_bcast.cpp");
         case KernelName::ReaderScalarBcastTTT:
-            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
+            return "ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
                    "ternary_reader_scalar_ttt.cpp";
         case KernelName::ReaderColBcastTTT:
-            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
+            return "ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
                    "ternary_reader_colbcast_ttt.cpp";
         case KernelName::ReaderColBcastTTS:
-            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
+            return "ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
                    "tts_tst_reader_col_bcast.cpp";
         case KernelName::ReaderColBcastTST:
-            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
+            return "ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
                    "tts_tst_reader_col_bcast.cpp";
         case KernelName::ReaderRowBcastTTT:
-            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
+            return "ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
                    "ternary_reader_rowbcast_ttt.cpp";
         case KernelName::ReaderRowBcastTST:
         case KernelName::ReaderRowBcastTTS:
-            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
+            return "ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
                    "tts_tst_reader_row_bcast.cpp";
 
         case KernelName::WriterNoBcast:
-            return "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+            return "ttnn/operations/eltwise/unary/device/kernels/dataflow/"
                    "writer_unary_interleaved_start_id.cpp";
         case KernelName::WriterColBcastTTT:
             // Use unary writer (simple and works with 3 args: dst_addr, num_tiles, start_id)
-            return "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+            return "ttnn/operations/eltwise/unary/device/kernels/dataflow/"
                    "writer_unary_interleaved_start_id.cpp";
 
         case KernelName::ComputeNoBcastTTT: return fmt::format(compute, root, "where_sfpu_no_bcast_ttt.cpp");
         case KernelName::ComputeBcastTTT:
-            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/"
+            return "ttnn/operations/eltwise/ternary/where/device/kernels/compute/"
                    "where_sfpu_col_scalar_bcast_ttt.cpp";
         case KernelName::ComputeBcastTTS_TST:
             return fmt::format(compute, root, "where_sfpu_col_scalar_bcast_tts_tst.cpp");
         case KernelName::ComputeNoBcastTTS_TST:
-            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/"
+            return "ttnn/operations/eltwise/ternary/where/device/kernels/compute/"
                    "where_sfpu_no_bcast_tts_tst.cpp";
         default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match
     }

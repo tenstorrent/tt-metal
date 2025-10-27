@@ -876,7 +876,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     // Compute
     auto compute_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp",
+        "ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp",
         core_grid,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -888,14 +888,14 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     // Reader
     auto reader_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/reader_decode_all.cpp",
+        "ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/reader_decode_all.cpp",
         core_grid,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args_common));
 
     // Writer
     auto writer_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/writer_decode_all.cpp",
+        "ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/writer_decode_all.cpp",
         core_grid,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args_common));
 

@@ -76,15 +76,15 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
 
     auto read_kernel_id = CreateKernel(
         program,
-        tilized ? "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/read_kernel.cpp"
-                : "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/read_kernel_rm.cpp",
+        tilized ? "ttnn/operations/data_movement/clone/device/kernels/read_kernel.cpp"
+                : "ttnn/operations/data_movement/clone/device/kernels/read_kernel_rm.cpp",
         all_cores,
         ReaderDataMovementConfig(reader_compile_time_args, {}));
 
     auto write_kernel_id = CreateKernel(
         program,
-        tilized ? "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/write_kernel.cpp"
-                : "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/write_kernel_rm.cpp",
+        tilized ? "ttnn/operations/data_movement/clone/device/kernels/write_kernel.cpp"
+                : "ttnn/operations/data_movement/clone/device/kernels/write_kernel_rm.cpp",
         all_cores,
         WriterDataMovementConfig(writer_compile_time_args, {}));
 
@@ -100,7 +100,7 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
                 };
                 CreateKernel(
                     program,
-                    "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/compute_kernel.cpp",
+                    "ttnn/operations/data_movement/clone/device/kernels/compute_kernel.cpp",
                     core_group,
                     ComputeConfig{
                         .math_fidelity = math_fidelity,

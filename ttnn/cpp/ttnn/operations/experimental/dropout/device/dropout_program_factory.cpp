@@ -17,11 +17,10 @@
 namespace ttnn::operations::experimental::dropout::program {
 namespace {
 constexpr auto kWriterKernelPath =
-    "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/dataflow/writer_dropout_interleaved_start_id.cpp";
+    "ttnn/operations/experimental/dropout/device/kernels/dataflow/writer_dropout_interleaved_start_id.cpp";
 constexpr auto kReaderKernelPath =
-    "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/dataflow/reader_dropout_interleaved_start_id.cpp";
-constexpr auto kComputeKernelPath =
-    "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/compute/dropout_kernel.cpp";
+    "ttnn/operations/experimental/dropout/device/kernels/dataflow/reader_dropout_interleaved_start_id.cpp";
+constexpr auto kComputeKernelPath = "ttnn/operations/experimental/dropout/device/kernels/compute/dropout_kernel.cpp";
 constexpr auto kSeedIdx = 0;
 constexpr auto kDstBufferIdx = 0;
 constexpr auto kSrcBufferIdx = 0;

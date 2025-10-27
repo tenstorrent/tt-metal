@@ -146,7 +146,7 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(
     tt::tt_metal::TensorAccessorArgs(expert_mask_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/reader_create_index_tensor.cpp",
+        "ttnn/operations/reduction/moe/device/kernels/dataflow/reader_create_index_tensor.cpp",
         core,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -166,7 +166,7 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/writer_unary_interleaved.cpp",
+        "ttnn/operations/reduction/moe/device/kernels/dataflow/writer_unary_interleaved.cpp",
         core,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -200,7 +200,7 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(
 
     tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/compute/moe.cpp",
+        "ttnn/operations/reduction/moe/device/kernels/compute/moe.cpp",
         core,
         tt::tt_metal::ComputeConfig{.compile_args = compute_args});
 

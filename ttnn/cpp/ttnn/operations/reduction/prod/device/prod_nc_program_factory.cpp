@@ -96,10 +96,9 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)cb_id_out};
     tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
-    const auto reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/dataflow/reader_prod_nc.cpp";
+    const auto reader_kernel_file = "ttnn/operations/reduction/prod/device/kernels/dataflow/reader_prod_nc.cpp";
     const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
     const auto reader_kernel_id =
         ttnn::operations::CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernel_id =
@@ -111,7 +110,7 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1};
     std::map<std::string, std::string> compute_defines;
 
-    const auto compute_kernel_file = "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_nc.cpp";
+    const auto compute_kernel_file = "ttnn/operations/reduction/prod/device/kernels/compute/prod_nc.cpp";
     const auto compute_kernel_1_id = ttnn::operations::CreateComputeKernel(
         program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1}, compute_defines);
 

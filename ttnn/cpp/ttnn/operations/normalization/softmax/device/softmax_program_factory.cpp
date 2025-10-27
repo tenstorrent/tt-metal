@@ -13,9 +13,8 @@
 
 #include <utility>
 
-constexpr const char* SOFTMAX_KERNEL_PATH_GENERAL = "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels";
-constexpr const char* SOFTMAX_KERNEL_PATH_ATTENTION =
-    "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention";
+constexpr const char* SOFTMAX_KERNEL_PATH_GENERAL = "ttnn/operations/moreh/moreh_softmax/device/kernels";
+constexpr const char* SOFTMAX_KERNEL_PATH_ATTENTION = "ttnn/operations/normalization/softmax/device/kernels/attention";
 
 namespace ttnn::operations::normalization::softmax::program {
 // General-purpose softmax with arbitrary dimension support

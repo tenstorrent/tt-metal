@@ -176,7 +176,7 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
             TensorAccessorArgs(*input_buffer).append_to(reader_kernel_config.compile_args);
             auto worker_reader_kernel_id = tt::tt_metal::CreateKernel(
                 program,
-                "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
+                "ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
                 "minimal_default_reader.cpp",
                 {core},
                 reader_kernel_config);
@@ -208,7 +208,7 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
             TensorAccessorArgs(*output_buffer).append_to(writer_kernel_config.compile_args);
             auto worker_writer_kernel_id = tt::tt_metal::CreateKernel(
                 program,
-                "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
+                "ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
                 "minimal_default_writer.cpp",
                 {core},
                 writer_kernel_config);

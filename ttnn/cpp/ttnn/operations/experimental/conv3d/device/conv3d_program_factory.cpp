@@ -217,7 +217,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
 
     auto reader_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/reader_vol2col.cpp",
+        "ttnn/operations/experimental/conv3d/device/kernels/reader_vol2col.cpp",
         core_grid,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -280,7 +280,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
 
     auto compute_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/compute.cpp",
+        "ttnn/operations/experimental/conv3d/device/kernels/compute.cpp",
         core_grid,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -318,7 +318,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
 
     auto writer_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp",
+        "ttnn/operations/experimental/conv3d/device/kernels/writer.cpp",
         core_grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 

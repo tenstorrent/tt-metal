@@ -91,21 +91,21 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     }
     const auto reader_kernel_id = CreateReadKernel(
         program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/reader_moreh_mean_w.cpp",
+        "ttnn/operations/moreh/moreh_mean/device/kernels/reader_moreh_mean_w.cpp",
         all_cores,
         reader_compile_time_args,
         reader_defines);
 
     const auto writer_kernel_id = CreateWriteKernel(
         program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/writer_moreh_mean_unary_interleaved_start_id.cpp",
+        "ttnn/operations/moreh/moreh_mean/device/kernels/writer_moreh_mean_unary_interleaved_start_id.cpp",
         all_cores,
         writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ///////////////////////////////////////////////////////////////////////////
-    std::string compute_kernel_name = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_w.cpp";
+    std::string compute_kernel_name = "ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_w.cpp";
     auto reduce_op = ReduceOpMath::SUM;
     auto reduce_dim = ReduceOpDim::W;
     std::map<std::string, std::string> compute_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);

@@ -98,7 +98,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
 
     auto writer_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full.cpp",
+        "ttnn/operations/full/device/kernels/writer_full.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
