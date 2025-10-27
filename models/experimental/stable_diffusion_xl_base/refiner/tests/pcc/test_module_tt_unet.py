@@ -68,7 +68,7 @@ def prepare_ttnn_tensors(
     return ttnn_input_tensor, [B, C, H, W], ttnn_timestep_tensor, ttnn_encoder_tensor, ttnn_added_cond_kwargs
 
 
-def run_unet_model(
+def run_refiner_unet_model(
     device,
     input_shape,
     timestep_shape,
