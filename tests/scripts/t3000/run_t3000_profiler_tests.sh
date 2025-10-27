@@ -129,6 +129,8 @@ run_profiling_test() {
 
     run_async_tracing_T3000_test
 
+    run_async_tracing_mid_run_dump_T3000_test
+
     run_mid_run_data_dump
 
     TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py --noconftest --timeout 360
