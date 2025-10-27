@@ -16,6 +16,30 @@ class RefinerModelOptimisations(ModelOptimisations):
     ):
         super().__init__(conv_act_dtype, conv_w_dtype, attention_weights_dtype, ff_weights_dtype)
 
+        self.conv_configs["ABH_128_ADB_WDB_HS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=128,
+        )
+
+        self.conv_configs["ABH_128_NO_ADB_WDB_HS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=128,
+        )
+
         self.conv_configs["ABH_32_ADB_WDB_BS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -118,6 +142,10 @@ class RefinerModelOptimisations(ModelOptimisations):
                     return self.conv_configs["ABH_256_ADB_WDB_BS"]
             else:
                 return self.conv_configs["ABH_512_ADB_WDB_BS"]
+        if "conv_in" in conv_path:
+            return self.conv_configs["ABH_128_ADB_WDB_HS"]
+        if "conv_out" in conv_path:
+            return self.conv_configs["ABH_128_NO_ADB_WDB_HS"]
         return None
 
     def get_conv_compute_config(self, module_path):

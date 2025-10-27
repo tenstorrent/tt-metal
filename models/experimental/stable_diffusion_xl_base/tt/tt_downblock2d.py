@@ -45,10 +45,10 @@ class TtDownBlock2D(LightweightModule):
         for resnet in self.resnets:
             hidden_states, [C, H, W] = resnet.forward(hidden_states, temb, [B, C, H, W])
             residual = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
-            output_states = output_states + (residual,)
+            output_states = output_states + (ttnn.clone(residual),)
 
         if self.downsamplers is not None:
             hidden_states, [C, H, W] = self.downsamplers.forward(hidden_states, [B, C, H, W])
             residual = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
-            output_states = output_states + (residual,)
+            output_states = output_states + (ttnn.clone(residual),)
         return hidden_states, [C, H, W], output_states
