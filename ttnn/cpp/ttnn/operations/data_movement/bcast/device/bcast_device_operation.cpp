@@ -66,8 +66,14 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(
     const auto& input_shape_a = input_tensor_a.padded_shape();
     const auto& input_shape_b = input_tensor_b.padded_shape();
 
-    TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Error");
-    TT_FATAL(input_tensor_b.layout() == Layout::TILE, "Error");
+    TT_FATAL(
+        input_tensor_a.layout() == Layout::TILE,
+        "Input tensor A layout must be TILE but got {}",
+        input_tensor_a.layout());
+    TT_FATAL(
+        input_tensor_b.layout() == Layout::TILE,
+        "Input tensor B layout must be TILE but got {}",
+        input_tensor_b.layout());
     TT_FATAL(is_floating_point(input_tensor_a.dtype()), "Unsupported data format");
     if (!output_tensors.empty() && output_tensors.at(0).has_value()) {
         TT_FATAL(is_floating_point(output_tensors.at(0).value().dtype()), "Unsupported data format");
@@ -80,8 +86,16 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(
             out_tensor.padded_shape());
     }
     if (this->in_place) {
-        TT_FATAL(input_tensor_a.memory_config().memory_layout() == this->output_mem_config.memory_layout(), "Error");
-        TT_FATAL(input_tensor_a.memory_config().buffer_type() == this->output_mem_config.buffer_type(), "Error");
+        TT_FATAL(
+            input_tensor_a.memory_config().memory_layout() == this->output_mem_config.memory_layout(),
+            "Input tensor A memory layout ({}) must match output memory config layout ({})",
+            input_tensor_a.memory_config().memory_layout(),
+            this->output_mem_config.memory_layout());
+        TT_FATAL(
+            input_tensor_a.memory_config().buffer_type() == this->output_mem_config.buffer_type(),
+            "Input tensor A buffer type ({}) must match output memory config buffer type ({})",
+            input_tensor_a.memory_config().buffer_type(),
+            this->output_mem_config.buffer_type());
     }
     auto out_mem_config = (!output_tensors.empty() && output_tensors.at(0).has_value())
                               ? output_tensors.at(0).value().memory_config()
@@ -133,13 +147,31 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(
 
     // validate input dimensions
     if (this->dim == BcastOpDim::W) {
-        TT_FATAL(height_a == height_b && width_b == TILE_WIDTH, "Error");
+        TT_FATAL(
+            height_a == height_b && width_b == TILE_WIDTH,
+            "For width broadcast: height_a ({}) must equal height_b ({}) and width_b ({}) must equal TILE_WIDTH ({})",
+            height_a,
+            height_b,
+            width_b,
+            TILE_WIDTH);
     }
     if (this->dim == BcastOpDim::H) {
-        TT_FATAL(width_a == width_b && height_b == TILE_HEIGHT, "Error");
+        TT_FATAL(
+            width_a == width_b && height_b == TILE_HEIGHT,
+            "For height broadcast: width_a ({}) must equal width_b ({}) and height_b ({}) must equal TILE_HEIGHT ({})",
+            width_a,
+            width_b,
+            height_b,
+            TILE_HEIGHT);
     }
     if (this->dim == BcastOpDim::HW) {
-        TT_FATAL(width_b == TILE_WIDTH && height_b == TILE_HEIGHT, "Error");
+        TT_FATAL(
+            width_b == TILE_WIDTH && height_b == TILE_HEIGHT,
+            "For HW broadcast: width_b ({}) must equal TILE_WIDTH ({}) and height_b ({}) must equal TILE_HEIGHT ({})",
+            width_b,
+            TILE_WIDTH,
+            height_b,
+            TILE_HEIGHT);
     }
 }
 

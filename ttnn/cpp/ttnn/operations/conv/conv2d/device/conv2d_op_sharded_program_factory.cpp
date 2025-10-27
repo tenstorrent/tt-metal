@@ -344,8 +344,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             TT_THROW("Bias is not supported for depthwise conv1d");
         }
         // Tensor bias is of shape {output_channels}
-        TT_FATAL(bias.has_value(), "Error");
-        TT_FATAL(bias.value().buffer() != nullptr, "Error");
+        TT_FATAL(bias.has_value(), "Bias tensor must be provided when has_bias is true");
+        TT_FATAL(bias.value().buffer() != nullptr, "Bias tensor buffer must not be null");
         auto bias_shape_without_padding = bias.value().logical_shape();
         TT_FATAL(bias_shape_without_padding[0] == 1, "Bias should have batch == 1");
     }
@@ -559,13 +559,21 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     log_trace(tt::LogOp, "Conv2D Config Tensor : {}", conv_reader_indices_tensor);
     const tt::tt_metal::DeviceStorage& conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
 
-    TT_FATAL(act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0, "Error");
+    TT_FATAL(
+        act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0,
+        "Activation matrix height in tiles ({}) must be divisible by per-core output matrix height in tiles ({})",
+        act_matrix_height_ntiles,
+        per_core_out_matrix_height_ntiles);
     uint32_t total_noop_cores = total_num_cores_per_weight_slice - parallelization_config.num_cores_nhw;
     uint32_t total_active_num_cores = parallelization_config.num_cores_nhw * num_weight_slices_width;
     TT_FATAL(!block_sharded || total_noop_cores == 0, "All cores should be active for block sharded convs");
 
     if (has_bias) {
-        TT_FATAL(bias_ntiles == weight_matrix_width_ntiles, "Error");
+        TT_FATAL(
+            bias_ntiles == weight_matrix_width_ntiles,
+            "Bias tiles ({}) must equal weight matrix width in tiles ({})",
+            bias_ntiles,
+            weight_matrix_width_ntiles);
     }
     uint32_t bias_ntiles_per_core = bias_ntiles / num_weight_slices_width;
 
@@ -1346,7 +1354,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             // Reader config indices is an optional static sharded tensor, so no need to update address
-            TT_FATAL(output_tensors.size() == 1, "Error");
+            TT_FATAL(output_tensors.size() == 1, "Expected exactly 1 output tensor but got {}", output_tensors.size());
 
             auto src_buffer_a = input_tensors.at(0).buffer();
             auto src_buffer_b = input_tensors.at(1).buffer();
@@ -1354,7 +1362,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             std::optional<tt::tt_metal::Buffer*> src_buffer_c = std::nullopt;
             if (has_bias) {
                 src_buffer_c = optional_input_tensors.at(0).value().buffer();
-                TT_FATAL(src_buffer_c.value() != nullptr, "Error");
+                TT_FATAL(src_buffer_c.value() != nullptr, "Source buffer C must not be null when bias is present");
             }
 
             auto& writer_sender_kernel_args_by_core = GetRuntimeArgs(program, writer_mcast_sender_id);

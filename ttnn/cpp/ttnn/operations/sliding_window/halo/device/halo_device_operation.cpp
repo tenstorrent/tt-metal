@@ -25,7 +25,11 @@ void HaloDeviceOperation::validate(const std::vector<Tensor>& input_tensors) con
         // skip the untilize, only do halo
         log_debug(tt::LogOp, "Input is ROW_MAJOR, no need to untilize.");
     } else {
-        TT_FATAL(input_tensor.physical_volume() % tt::constants::TILE_HW == 0, "Error");
+        TT_FATAL(
+            input_tensor.physical_volume() % tt::constants::TILE_HW == 0,
+            "Input tensor physical volume ({}) must be divisible by TILE_HW ({})",
+            input_tensor.physical_volume(),
+            tt::constants::TILE_HW);
     }
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||

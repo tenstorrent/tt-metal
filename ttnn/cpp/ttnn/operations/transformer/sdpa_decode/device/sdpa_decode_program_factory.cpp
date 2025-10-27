@@ -823,11 +823,19 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     if (Sk_chunk_t > 0) {
         const uint32_t sub_exp_granularity = std::min(Sk_chunk_t, dst_size);
         const uint32_t log2_sub_exp_granularity = std::log2(sub_exp_granularity);
-        TT_FATAL(sub_exp_granularity == (1 << log2_sub_exp_granularity), "Error");
+        TT_FATAL(
+            sub_exp_granularity == (1 << log2_sub_exp_granularity),
+            "Sub-exp granularity ({}) must be a power of 2 (2^{})",
+            sub_exp_granularity,
+            log2_sub_exp_granularity);
 
         const uint32_t mul_bcast_granularity = std::min(PNHt * Sk_chunk_t, dst_size);
         const uint32_t log2_mul_bcast_granularity = std::log2(mul_bcast_granularity);
-        TT_FATAL(mul_bcast_granularity == (1 << log2_mul_bcast_granularity), "Error");
+        TT_FATAL(
+            mul_bcast_granularity == (1 << log2_mul_bcast_granularity),
+            "Mul-bcast granularity ({}) must be a power of 2 (2^{})",
+            mul_bcast_granularity,
+            log2_mul_bcast_granularity);
 
         compute_defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
         compute_defines["LOG2_SUB_EXP_GRANULARITY"] = std::to_string(log2_sub_exp_granularity);

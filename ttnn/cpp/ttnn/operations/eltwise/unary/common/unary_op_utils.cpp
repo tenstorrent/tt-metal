@@ -101,7 +101,10 @@ template <typename T>
 std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     UnaryOpType op_type, std::span<const T> params, const std::string& idst, std::optional<DataType> input_dtype) {
     std::pair<std::string, std::string> op_init_and_name;
-    TT_FATAL(is_parametrized_type(op_type), "operator should support at least one parameter", "Error");
+    TT_FATAL(
+        is_parametrized_type(op_type),
+        "operator should support at least one parameter but op_type {} does not",
+        op_type);
     // TODO don't cast T to float when precision needs to be preserved
     const T param0_raw = params[0];
     float param0 = static_cast<float>(params[0]);
