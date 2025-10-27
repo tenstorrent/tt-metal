@@ -121,7 +121,8 @@ std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connecti
 
 }  // namespace
 
-MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) : top_level_id_(static_cast<GlobalNodeId>(-1)), backwards_compatible_(backwards_compatible) {
+MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) :
+    backwards_compatible_(backwards_compatible), top_level_id_(static_cast<GlobalNodeId>(-1)) {
     proto::MeshGraphDescriptor temp_proto;
     google::protobuf::TextFormat::Parser parser;
 
