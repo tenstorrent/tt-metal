@@ -28,7 +28,7 @@ from models.experimental.detr3d.ttnn.position_embedding import TtnnPositionEmbed
 class TtnnModel3DETR(LightweightModule):
     """
     NOTE: The Encoder and Decoder layers use batch first as compared to batch second in reference model,
-          this helps remove lot of unnecessary permute operations within the network
+          this helps remove lot of unnecessary permute operations within the network.
 
     Main 3DETR model. Consists of the following learnable sub-models
     - pre_encoder: takes raw point cloud, subsamples it and projects into "D" dimensions
@@ -74,9 +74,7 @@ class TtnnModel3DETR(LightweightModule):
             pos_type=position_embedding, normalize=True, parameters=parameters.pos_embedding, device=self.device
         )
         self.query_projection = TtnnGenericMLP(
-            parameters.query_projection,
-            device,
-            output_use_activation=True,
+            parameters.query_projection, device, output_use_activation=True, deallocate_activation=True
         )
         self.decoder = decoder
         self.build_mlp_heads()
@@ -119,6 +117,7 @@ class TtnnModel3DETR(LightweightModule):
 
         pos_embed = self.pos_embedding(torch_query_xyz, input_range=point_cloud_dims)
         query_embed = self.query_projection(pos_embed)
+        ttnn.deallocate(pos_embed)
         return torch_query_xyz, query_embed
 
     def _break_up_pc(self, torch_pc):
@@ -140,6 +139,7 @@ class TtnnModel3DETR(LightweightModule):
 
         # xyz points are batch x npoint x channel order torch tensor
         torch_enc_xyz, enc_features, _ = self.encoder(pre_enc_features, xyz=torch_pre_enc_xyz)
+        ttnn.deallocate(pre_enc_features)
 
         return torch_enc_xyz, enc_features, _
 
@@ -163,6 +163,7 @@ class TtnnModel3DETR(LightweightModule):
         size_normalized = self.mlp_heads["size_head"](box_features)
         angle_logits = self.mlp_heads["angle_cls_head"](box_features)
         angle_residual_normalized = self.mlp_heads["angle_residual_head"](box_features)
+        ttnn.deallocate(box_features)
 
         center_offset = ttnn.sigmoid(center_offset) - 0.5
         size_normalized = ttnn.sigmoid(size_normalized)
@@ -177,7 +178,6 @@ class TtnnModel3DETR(LightweightModule):
         )
         angle_residual = angle_residual_normalized * (np.pi / angle_residual_normalized.shape[-1])
 
-        # TODO: Deallocate ttnn tensors here or add function for it
         # send outputs to torch for box processing
         torch_cls_logits = ttnn.to_torch(cls_logits)
         torch_center_offset = ttnn.to_torch(center_offset)
@@ -185,6 +185,12 @@ class TtnnModel3DETR(LightweightModule):
         torch_angle_logits = ttnn.to_torch(angle_logits)
         torch_angle_residual_normalized = ttnn.to_torch(angle_residual_normalized)
         torch_angle_residual = ttnn.to_torch(angle_residual)
+        ttnn.deallocate(cls_logits)
+        ttnn.deallocate(center_offset)
+        ttnn.deallocate(size_normalized)
+        ttnn.deallocate(angle_logits)
+        ttnn.deallocate(angle_residual_normalized)
+        ttnn.deallocate(angle_residual)
 
         torch_outputs = []
         for l in range(num_layers):
@@ -264,7 +270,11 @@ class TtnnModel3DETR(LightweightModule):
 
         # decoder expects: batch x npoints x channel
         tgt = ttnn.zeros_like(query_embed, dtype=ttnn.bfloat16)
-        box_features = self.decoder(tgt, enc_features, query_pos=query_embed, pos=enc_pos)[0]
+        box_features = self.decoder(tgt, enc_features, query_pos=query_embed, pos=enc_pos)
+        ttnn.deallocate(tgt)
+        ttnn.deallocate(enc_features)
+        ttnn.deallocate(query_embed)
+        ttnn.deallocate(enc_pos)
 
         torch_box_predictions = self.get_box_predictions(torch_query_xyz, torch_point_cloud_dims, box_features)
         return torch_box_predictions

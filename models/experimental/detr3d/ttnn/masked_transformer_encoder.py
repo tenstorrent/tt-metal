@@ -58,16 +58,18 @@ class TtnnTransformerEncoderLayer(LightweightModule):
         # Feedforward weights
         if "linear1" in parameters:
             self.ff_weights1 = parameters["linear1"]["weight"]
-            self.ff1_bias = parameters["linear1"].get("bias")
+            self.ff1_bias = parameters["linear1"].get("bias", None)
         if "linear2" in parameters:
             self.ff_weights2 = parameters["linear2"]["weight"]
-            self.ff2_bias = parameters["linear2"].get("bias")
+            self.ff2_bias = parameters["linear2"].get("bias", None)
 
         # Normalization weights
-        for i, norm_name in enumerate(["norm1", "norm2"], 1):
-            if norm_name in parameters:
-                setattr(self, f"norm{i}_weights", parameters[norm_name]["weight"])
-                setattr(self, f"norm{i}_bias", parameters[norm_name].get("bias"))
+        if "norm1" in parameters:
+            self.norm1_weights = parameters["norm1"]["weight"]
+            self.norm1_bias = parameters["norm1"].get("bias", None)
+        if "norm2" in parameters:
+            self.norm2_weights = parameters["norm2"]["weight"]
+            self.norm2_bias = parameters["norm2"].get("bias", None)
 
     def with_pos_embed(self, tensor, pos):
         return tensor if pos is None else ttnn.add(tensor, pos)
@@ -77,44 +79,44 @@ class TtnnTransformerEncoderLayer(LightweightModule):
         src,
         src_mask=None,
         pos=None,
-        return_attn_weights=False,
     ):
         if self.normalize_before:
-            return self.forward_pre(src, src_mask, pos, return_attn_weights)
+            return self.forward_pre(src, src_mask, pos)
         else:
-            return self.forward_post(src, src_mask, pos, return_attn_weights)
+            return self.forward_post(src, src_mask, pos)
 
     def forward_post(
         self,
         src,
         src_mask=None,
         pos=None,
-        return_attn_weights=False,
     ):
         q = k = self.with_pos_embed(src, pos)
-        value = src
 
         # Self-attention
-        src2 = self.self_attn(q, k, value, src_mask)
-        src = ttnn.add(src, src2)
-        src = ttnn.layer_norm(src, weight=self.norm1_weights, bias=getattr(self, "norm1_bias", None))
+        src2 = self.self_attn(q, k, value=src, attn_mask=src_mask)
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+
+        src = ttnn.add(src, src2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        src = ttnn.layer_norm(src, weight=self.norm1_weights, bias=self.norm1_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Feedforward network
         if self.use_ffn:
-            src = ttnn.to_memory_config(src, ttnn.L1_MEMORY_CONFIG)
             src2 = ttnn.linear(
-                src, self.ff_weights1, bias=getattr(self, "ff1_bias", None), memory_config=ttnn.L1_MEMORY_CONFIG
+                src,
+                self.ff_weights1,
+                bias=self.ff1_bias,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                activation="relu",
             )
-            src2 = ttnn.relu(src2)
-            src2 = ttnn.to_memory_config(src2, ttnn.L1_MEMORY_CONFIG)
-            src2 = ttnn.linear(
-                src2, self.ff_weights2, bias=getattr(self, "ff2_bias", None), memory_config=ttnn.L1_MEMORY_CONFIG
+            src2 = ttnn.linear(src2, self.ff_weights2, bias=self.ff2_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+            src = ttnn.add(src, src2, memory_config=ttnn.L1_MEMORY_CONFIG)
+            src = ttnn.layer_norm(
+                src, weight=self.norm2_weights, bias=self.norm2_bias, memory_config=ttnn.L1_MEMORY_CONFIG
             )
-            src = ttnn.add(src, src2)
-            src = ttnn.layer_norm(src, weight=self.norm2_weights, bias=getattr(self, "norm2_bias", None))
+        ttnn.deallocate(src2)
 
-        if return_attn_weights:
-            return src, None  # TTNN doesn't return attention weights
         return src
 
     def forward_pre(
@@ -122,33 +124,32 @@ class TtnnTransformerEncoderLayer(LightweightModule):
         src,
         src_mask=None,
         pos=None,
-        return_attn_weights=False,
     ):
         src = ttnn.to_layout(src, ttnn.TILE_LAYOUT)
+
         # Pre-norm self-attention
-        src2 = ttnn.layer_norm(src, weight=self.norm1_weights, bias=getattr(self, "norm1_bias", None))
-        value = src2
+        src2 = ttnn.layer_norm(
+            src, weight=self.norm1_weights, bias=self.norm1_bias, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         q = k = self.with_pos_embed(src2, pos)
-        src2 = self.self_attn(q, k, value, src_mask)
-        src = ttnn.add(src, src2)
+        src2 = self.self_attn(q, k, value=src2, attn_mask=src_mask)
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+
+        src = ttnn.add(src, src2, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Pre-norm feedforward
         if self.use_ffn:
-            src = ttnn.to_memory_config(src, ttnn.L1_MEMORY_CONFIG)
-            src2 = ttnn.layer_norm(src, weight=self.norm2_weights, bias=getattr(self, "norm2_bias", None))
-            src2 = ttnn.to_memory_config(src2, ttnn.L1_MEMORY_CONFIG)
-            src2 = ttnn.linear(
-                src2, self.ff_weights1, bias=getattr(self, "ff1_bias", None), memory_config=ttnn.L1_MEMORY_CONFIG
+            src2 = ttnn.layer_norm(
+                src, weight=self.norm2_weights, bias=self.norm2_bias, memory_config=ttnn.L1_MEMORY_CONFIG
             )
-            src2 = ttnn.relu(src2)
-            src2 = ttnn.to_memory_config(src2, ttnn.L1_MEMORY_CONFIG)
             src2 = ttnn.linear(
-                src2, self.ff_weights2, bias=getattr(self, "ff2_bias", None), memory_config=ttnn.L1_MEMORY_CONFIG
+                src2, self.ff_weights1, bias=self.ff1_bias, memory_config=ttnn.L1_MEMORY_CONFIG, activation="relu"
             )
-            src = ttnn.add(src, src2)
+            src2 = ttnn.linear(src2, self.ff_weights2, bias=self.ff2_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+            src = ttnn.add(src, src2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(src2)
 
-        if return_attn_weights:
-            return src, None
         return src
 
 
@@ -262,7 +263,7 @@ class TtnnMaskedTransformerEncoder(LightweightModule):
         src,
         mask: Optional[ttnn.Tensor] = None,
         pos: Optional[ttnn.Tensor] = None,
-        xyz: Optional[ttnn.Tensor] = None,
+        xyz: Optional[torch.Tensor] = None,
         transpose_swap: Optional[bool] = False,
     ):
         if transpose_swap:
@@ -291,6 +292,7 @@ class TtnnMaskedTransformerEncoder(LightweightModule):
             # encoder layer is implemented in batch first form to make use of ttnn.sdpa
             # output is in batch x npoints x channels
             output = layer(output, src_mask=attn_mask, pos=pos)
+            ttnn.deallocate(attn_mask)
 
             if idx == 0 and self.interim_downsampling:
                 # convert output to batch x channels x npoints format for pointnet

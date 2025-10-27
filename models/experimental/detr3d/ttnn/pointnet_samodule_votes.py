@@ -337,12 +337,17 @@ class TtnnPointnetSAModuleVotes(LightweightModule):
                             memory_config=ttnn.DRAM_MEMORY_CONFIG,
                         )
                     )
+                    ttnn.deallocate(slice_input)
 
                 for i in range(len(partial_maxpool_out)):
                     partial_maxpool_out[i] = ttnn.reshape(partial_maxpool_out[i], (B, H, C))
 
-                new_features = ttnn.concat((partial_maxpool_out), dim=1)
-                new_features = ttnn.permute(new_features, (0, 2, 1))  # (B, mlp[-1], npoint)
+                new_features = ttnn.concat((partial_maxpool_out), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
+                new_features = ttnn.permute(
+                    new_features, (0, 2, 1), memory_config=ttnn.L1_MEMORY_CONFIG
+                )  # (B, mlp[-1], npoint)
+                for i in range(len(partial_maxpool_out)):
+                    ttnn.deallocate(partial_maxpool_out[i])
             else:
                 B, H, W, C = new_features.shape
                 new_features = ttnn.reshape(new_features, (1, 1, B * H * W, C))
@@ -357,10 +362,12 @@ class TtnnPointnetSAModuleVotes(LightweightModule):
                     padding=[0, 0],
                     dilation=[1, 1],
                     applied_shard_scheme=None,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
-                new_features = ttnn.reshape(new_features, (B, H, C))
-                new_features = ttnn.permute(new_features, (0, 2, 1))  # (B, mlp[-1], npoint
+                new_features = ttnn.reshape(new_features, (B, H, C), memory_config=ttnn.L1_MEMORY_CONFIG)
+                new_features = ttnn.permute(
+                    new_features, (0, 2, 1), memory_config=ttnn.L1_MEMORY_CONFIG
+                )  # (B, mlp[-1], npoint
         else:
             raise NotImplementedError("Currently only Maxpool is supported")
 

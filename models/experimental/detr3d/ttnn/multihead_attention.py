@@ -42,13 +42,13 @@ class TtnnMultiheadAttention(LightweightModule):
 
     def forward(self, query, key, value, attn_mask=None):
         # Apply linear projections separately to avoid concat issues
-        query = ttnn.to_memory_config(query, ttnn.L1_MEMORY_CONFIG)
-        key = ttnn.to_memory_config(key, ttnn.L1_MEMORY_CONFIG)
-        value = ttnn.to_memory_config(value, ttnn.L1_MEMORY_CONFIG)
+        q = ttnn.to_memory_config(query, ttnn.L1_MEMORY_CONFIG)
+        k = ttnn.to_memory_config(key, ttnn.L1_MEMORY_CONFIG)
+        v = ttnn.to_memory_config(value, ttnn.L1_MEMORY_CONFIG)
 
-        q = ttnn.linear(query, self.q_weight, bias=self.q_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-        k = ttnn.linear(key, self.k_weight, bias=self.k_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-        v = ttnn.linear(value, self.v_weight, bias=self.v_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+        q = ttnn.linear(q, self.q_weight, bias=self.q_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+        k = ttnn.linear(k, self.k_weight, bias=self.k_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+        v = ttnn.linear(v, self.v_weight, bias=self.v_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Get dimensions for reshaping
         batch_size = q.shape[0]
@@ -58,17 +58,13 @@ class TtnnMultiheadAttention(LightweightModule):
         # Reshape each tensor separately for multi-head attention
         # [batch, seq_len, d_model] -> [batch, seq_len, num_heads, head_dim] -> [batch, num_heads, seq_len, head_dim]
         q = ttnn.reshape(q, (batch_size, q_seq_len, self.nhead, self.head_dim))
-        q = ttnn.permute(q, (0, 2, 1, 3))
+        q = ttnn.permute(q, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         k = ttnn.reshape(k, (batch_size, k_seq_len, self.nhead, self.head_dim))
-        k = ttnn.permute(k, (0, 2, 1, 3))
+        k = ttnn.permute(k, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         v = ttnn.reshape(v, (batch_size, k_seq_len, self.nhead, self.head_dim))
-        v = ttnn.permute(v, (0, 2, 1, 3))
-
-        q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
-        k = ttnn.to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG)
-        v = ttnn.to_memory_config(v, ttnn.DRAM_MEMORY_CONFIG)
+        v = ttnn.permute(v, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # Use SDPA for attention computation
         context = ttnn.transformer.scaled_dot_product_attention(
@@ -80,11 +76,15 @@ class TtnnMultiheadAttention(LightweightModule):
             attn_mask=attn_mask,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
 
         # Concatenate heads back to original format
         context = ttnn.transformer.concatenate_heads(context, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Output projection
         output = ttnn.linear(context, self.out_weight, bias=self.out_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(context)
 
         return output

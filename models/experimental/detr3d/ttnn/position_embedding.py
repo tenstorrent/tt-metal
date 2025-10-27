@@ -72,4 +72,10 @@ class TtnnPositionEmbeddingCoordsSine(LightweightModule):
         else:
             input_range_ttnn = input_range
         assert len(xyz_ttnn.shape) == 3
-        return self.get_fourier_embeddings(xyz_ttnn, input_range_ttnn)
+        embeddings = self.get_fourier_embeddings(xyz_ttnn, input_range_ttnn)
+        if isinstance(xyz, torch.Tensor):
+            ttnn.deallocate(xyz_ttnn)
+        if isinstance(input_range[0], torch.Tensor):
+            ttnn.deallocate(input_range_ttnn[0])
+            ttnn.deallocate(input_range_ttnn[1])
+        return embeddings

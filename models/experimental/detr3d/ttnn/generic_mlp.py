@@ -15,9 +15,11 @@ class TtnnGenericMLP(LightweightModule):
         activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         output_use_activation=False,
         use_conv=True,
+        deallocate_activation=False,
     ):
         super().__init__()
         assert use_conv, f"Currently only supports Conv1d"
+        self.deallocate_activation = deallocate_activation
 
         layer_args = list()
         layer_params = list()
@@ -35,6 +37,7 @@ class TtnnGenericMLP(LightweightModule):
                     device,
                     activation=activation,
                     return_dims=True,
+                    deallocate_activation=True,
                     math_fidelity=ttnn.MathFidelity.HiFi2,
                     shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 )
@@ -46,14 +49,18 @@ class TtnnGenericMLP(LightweightModule):
                 device,
                 activation=activation if output_use_activation else None,
                 return_dims=True,
+                deallocate_activation=True,
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             )
         )
 
-    def forward(self, x):
-        shape = x.shape
+    def forward(self, input):
+        shape = input.shape
+        out = ttnn.clone(input)
+        if self.deallocate_activation:
+            ttnn.deallocate(input)
         for layer in self.layers:
-            x, shape = layer(x, shape)
-        x = ttnn.reshape(x, shape)
-        return x
+            out, shape = layer(out, shape)
+        out = ttnn.reshape(out, shape)
+        return out

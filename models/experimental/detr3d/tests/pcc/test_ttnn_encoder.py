@@ -116,7 +116,7 @@ def test_transformer_encoder_layer_inference(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     # Run TTNN model
-    tt_output = tt_model(tt_src, src_mask=attn_mask_ttnn, pos=None, return_attn_weights=False)
+    tt_output = tt_model(tt_src, src_mask=attn_mask_ttnn, pos=None)
 
     if isinstance(ref_output, tuple):
         ref_output = ref_output[0]  # Get the tensor, ignore attention weights

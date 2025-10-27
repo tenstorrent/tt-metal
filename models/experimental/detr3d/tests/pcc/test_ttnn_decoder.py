@@ -123,7 +123,7 @@ def test_transformer_decoder_layer_inference(
     )
 
     # Run TTNN model
-    tt_output, _ = tt_model(tt_tgt, tt_memory, query_pos=tt_query_pos, pos=tt_pos, return_attn_weights=False)
+    tt_output = tt_model(tt_tgt, tt_memory, query_pos=tt_query_pos, pos=tt_pos)
 
     if isinstance(ref_output, tuple):
         ref_output = ref_output[0]  # Get the tensor, ignore attention weights
@@ -215,12 +215,11 @@ def test_transformer_decoder_inference(tgt_shape, enc_features_shape, device):
     )
 
     # Run TTNN decoder
-    tt_output, _ = tt_decoder(
+    tt_output = tt_decoder(
         tt_tgt,
         tt_enc_features,
         query_pos=tt_query_embed,
         pos=tt_enc_pos,
-        return_attn_weights=False,
     )
 
     # Convert back to torch for comparison

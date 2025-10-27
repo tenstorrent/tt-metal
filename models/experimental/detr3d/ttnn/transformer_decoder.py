@@ -68,10 +68,15 @@ class TtnnTransformerDecoderLayer(LightweightModule):
             self.ff2_bias = parameters["linear2"].get("bias", None)
 
         # Normalization weights
-        for i, norm_name in enumerate(["norm1", "norm2", "norm3"], 1):
-            if norm_name in parameters:
-                setattr(self, f"norm{i}_weights", parameters[norm_name]["weight"])
-                setattr(self, f"norm{i}_bias", parameters[norm_name].get("bias", None))
+        if "norm1" in parameters:
+            self.norm1_weights = parameters["norm1"]["weight"]
+            self.norm1_bias = parameters["norm1"].get("bias", None)
+        if "norm2" in parameters:
+            self.norm2_weights = parameters["norm2"]["weight"]
+            self.norm2_bias = parameters["norm2"].get("bias", None)
+        if "norm3" in parameters:
+            self.norm3_weights = parameters["norm3"]["weight"]
+            self.norm3_bias = parameters["norm3"].get("bias", None)
 
     def with_pos_embed(self, tensor, pos):
         return tensor if pos is None else ttnn.add(tensor, pos)
@@ -84,7 +89,6 @@ class TtnnTransformerDecoderLayer(LightweightModule):
         memory_mask=None,
         pos=None,
         query_pos=None,
-        return_attn_weights=False,
     ):
         if self.normalize_before:
             return self.forward_pre(
@@ -94,7 +98,6 @@ class TtnnTransformerDecoderLayer(LightweightModule):
                 memory_mask,
                 pos,
                 query_pos,
-                return_attn_weights,
             )
         else:
             return self.forward_post(
@@ -104,7 +107,6 @@ class TtnnTransformerDecoderLayer(LightweightModule):
                 memory_mask,
                 pos,
                 query_pos,
-                return_attn_weights,
             )
 
     def forward_post(
@@ -115,15 +117,17 @@ class TtnnTransformerDecoderLayer(LightweightModule):
         memory_mask=None,
         pos=None,
         query_pos=None,
-        return_attn_weights=False,
     ):
-        q = k = self.with_pos_embed(tgt, query_pos)
         tgt = ttnn.to_memory_config(tgt, ttnn.L1_MEMORY_CONFIG)
+        q = k = self.with_pos_embed(tgt, query_pos)
 
         # Self-attention using proper QKV projections
-        tgt2 = self.self_attn(q, k, tgt, tgt_mask)
-        tgt = ttnn.add(tgt, tgt2)
-        tgt = ttnn.layer_norm(tgt, weight=self.norm1_weights, bias=self.norm1_bias)
+        tgt2 = self.self_attn(q, k, value=tgt, attn_mask=tgt_mask)
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+
+        tgt = ttnn.add(tgt, tgt2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        tgt = ttnn.layer_norm(tgt, weight=self.norm1_weights, bias=self.norm1_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Cross-attention using proper QKV projections
         tgt2 = self.multihead_attn(
@@ -132,21 +136,19 @@ class TtnnTransformerDecoderLayer(LightweightModule):
             value=memory,
             attn_mask=memory_mask,
         )
-        tgt = ttnn.add(tgt, tgt2)
-        tgt = ttnn.layer_norm(tgt, weight=self.norm2_weights, bias=self.norm2_bias)
+        tgt = ttnn.add(tgt, tgt2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        tgt = ttnn.layer_norm(tgt, weight=self.norm2_weights, bias=self.norm2_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Feedforward
-        tgt = ttnn.to_memory_config(tgt, ttnn.L1_MEMORY_CONFIG)
-        tgt2 = ttnn.linear(tgt, self.ff_weights1, bias=self.ff1_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-        tgt2 = ttnn.relu(tgt2)
-        tgt2 = ttnn.to_memory_config(tgt2, ttnn.L1_MEMORY_CONFIG)
+        tgt2 = ttnn.linear(
+            tgt, self.ff_weights1, bias=self.ff1_bias, activation="relu", memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         tgt2 = ttnn.linear(tgt2, self.ff_weights2, bias=self.ff2_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-        tgt = ttnn.add(tgt, tgt2)
-        tgt = ttnn.layer_norm(tgt, weight=self.norm3_weights, bias=self.norm3_bias)
+        tgt = ttnn.add(tgt, tgt2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        tgt = ttnn.layer_norm(tgt, weight=self.norm3_weights, bias=self.norm3_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(tgt2)
 
-        if return_attn_weights:
-            return tgt, None  # TTNN doesn't return attention weights
-        return tgt, None
+        return tgt
 
     def forward_pre(
         self,
@@ -156,39 +158,44 @@ class TtnnTransformerDecoderLayer(LightweightModule):
         memory_mask=None,
         pos=None,
         query_pos=None,
-        return_attn_weights=False,
     ):
         tgt = ttnn.to_memory_config(tgt, ttnn.L1_MEMORY_CONFIG)
 
         # Pre-norm self-attention
-        tgt2 = ttnn.layer_norm(tgt, weight=self.norm1_weights, bias=self.norm1_bias)
+        tgt2 = ttnn.layer_norm(
+            tgt, weight=self.norm1_weights, bias=self.norm1_bias, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         q = k = self.with_pos_embed(tgt2, query_pos)
         tgt2 = self.self_attn(q, k, value=tgt2, attn_mask=tgt_mask)
-        tgt = ttnn.add(tgt, tgt2)
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+
+        tgt = ttnn.add(tgt, tgt2, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Pre-norm cross-attention
-        tgt2 = ttnn.layer_norm(tgt, weight=self.norm2_weights, bias=self.norm2_bias)
+        tgt2 = ttnn.layer_norm(
+            tgt, weight=self.norm2_weights, bias=self.norm2_bias, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         tgt2 = self.multihead_attn(
             query=self.with_pos_embed(tgt2, query_pos),
             key=self.with_pos_embed(memory, pos),
             value=memory,
             attn_mask=memory_mask,
         )
-        tgt = ttnn.add(tgt, tgt2)
+        tgt = ttnn.add(tgt, tgt2, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Pre-norm feedforward
-        tgt = ttnn.to_memory_config(tgt, ttnn.L1_MEMORY_CONFIG)
-        tgt2 = ttnn.layer_norm(tgt, weight=self.norm3_weights, bias=self.norm3_bias)
-        tgt2 = ttnn.to_memory_config(tgt2, ttnn.L1_MEMORY_CONFIG)
-        tgt2 = ttnn.linear(tgt2, self.ff_weights1, bias=self.ff1_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-        tgt2 = ttnn.relu(tgt2)
-        tgt2 = ttnn.to_memory_config(tgt2, ttnn.L1_MEMORY_CONFIG)
+        tgt2 = ttnn.layer_norm(
+            tgt, weight=self.norm3_weights, bias=self.norm3_bias, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        tgt2 = ttnn.linear(
+            tgt2, self.ff_weights1, bias=self.ff1_bias, activation="relu", memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         tgt2 = ttnn.linear(tgt2, self.ff_weights2, bias=self.ff2_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-        tgt = ttnn.add(tgt, tgt2)
+        tgt = ttnn.add(tgt, tgt2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(tgt2)
 
-        if return_attn_weights:
-            return tgt, None
-        return tgt, None
+        return tgt
 
 
 class TtnnTransformerDecoder(LightweightModule):
@@ -233,38 +240,32 @@ class TtnnTransformerDecoder(LightweightModule):
         pos=None,
         query_pos=None,
         transpose_swap=False,
-        return_attn_weights=False,
     ):
         # Handle transpose_swap for memory tensor
         if transpose_swap:
-            # memory: bs, c, h, w -> t, b, c
+            # memory: bs, c, h, w -> b, t, c
             memory = ttnn.reshape(memory, (memory.shape[0], memory.shape[1], -1))
-            memory = ttnn.permute(memory, (2, 0, 1))
+            memory = ttnn.permute(memory, (0, 2, 1))
             if pos is not None:
                 pos = ttnn.reshape(pos, (pos.shape[0], pos.shape[1], -1))
-                pos = ttnn.permute(pos, (2, 0, 1))
+                pos = ttnn.permute(pos, (0, 2, 1))
 
         output = tgt
         intermediate = []
-        attns = []
 
         # Pass through each decoder layer
         for layer in self.layers:
-            output, attn = layer(
+            output = layer(
                 output,
                 memory,
                 tgt_mask=tgt_mask,
                 memory_mask=memory_mask,
                 pos=pos,
                 query_pos=query_pos,
-                return_attn_weights=return_attn_weights,
             )
 
             if self.return_intermediate and self.norm_weights is not None:
                 intermediate.append(ttnn.layer_norm(output, weight=self.norm_weights, bias=self.norm_bias))
-
-            if return_attn_weights:
-                attns.append(attn)
 
         # Apply final layer norm
         if self.norm_weights is not None:
@@ -274,16 +275,10 @@ class TtnnTransformerDecoder(LightweightModule):
                 if intermediate:
                     intermediate[-1] = output
 
-        # Stack results if needed
-        if return_attn_weights and attns:
-            # TTNN doesn't support torch.stack directly, using ttnn.concat for now
-            attns = [ttnn.unsqueeze(t, 0) for t in attns]
-            attns = ttnn.concat(attns, dim=0, memory_config=ttnn.L1_MEMORY_CONFIG)
-
         if self.return_intermediate:
             # TTNN doesn't support torch.stack directly, using ttnn.concat for now
             intermediate = [ttnn.unsqueeze(t, 0) for t in intermediate]
             intermediate = ttnn.concat(intermediate, dim=0, memory_config=ttnn.L1_MEMORY_CONFIG)
-            return intermediate, attns if return_attn_weights else None
+            return intermediate
 
-        return output, attns if return_attn_weights else None
+        return output
