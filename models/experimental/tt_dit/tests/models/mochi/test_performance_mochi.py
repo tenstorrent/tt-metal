@@ -62,10 +62,6 @@ def test_mochi_pipeline_performance(
 
     benchmark_profiler = BenchmarkProfiler()
 
-    # Process skips
-    if is_ci_env and use_cache:
-        pytest.skip("use_cache not necessary for performance test in CI. See pipeline test.")
-
     # Skip 4U.
     if galaxy_type == "4U":
         # NOTE: Pipelines fail if a performance test is skipped without providing a benchmark output.
