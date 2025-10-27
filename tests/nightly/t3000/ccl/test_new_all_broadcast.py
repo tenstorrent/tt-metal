@@ -261,6 +261,7 @@ def run_all_broadcast_impl(
             ttnn.bfloat16,
             ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ),
+        (4, 1, [2, 2, 2, 16, 16], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)),
     ],
 )
 @pytest.mark.parametrize("num_iters", [3])
