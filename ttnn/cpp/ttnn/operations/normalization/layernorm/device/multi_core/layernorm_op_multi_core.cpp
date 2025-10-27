@@ -70,7 +70,7 @@ std::pair<std::optional<Tensor>, uint32_t> create_reciprocal_tensor_if_needed(
         if (auto p_mesh_device = dynamic_cast<distributed::MeshDevice*>(device)) {
             recip_tensor = Tensor::from_vector(std::move(reciprocals), tensor_spec, p_mesh_device);
         } else {
-            TT_FATAL(false, "Internal error: Cannot cast to MeshDevice");
+            TT_THROW("Cannot cast to MeshDevice");
         }
 
         reciprocal_CB_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
