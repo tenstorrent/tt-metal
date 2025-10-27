@@ -86,6 +86,11 @@ T3K_MODELS = [
     "Qwen/Qwen3-32B",
 ]
 
+OTHER_MODELS = [
+    "stabilityai/stable-diffusion-xl-base-1.0",
+    "stabilityai/stable-diffusion-xl-refiner-1.0",
+]
+
 # TODO: add configs, splits, etc
 DATASETS = [
     "hf-internal-testing/librispeech_asr_dummy",
@@ -109,6 +114,7 @@ ARGUMENT_TO_MODELS = {
     "python": PYTHON_MODELS,
     "single": SINGLE_CARD_MODELS,
     "t3k": T3K_MODELS,
+    "other": OTHER_MODELS,
 }
 
 
@@ -187,6 +193,7 @@ def get_parser():
     parser.add_argument("--python", action="store_true", help="download Python models")
     parser.add_argument("--single", action="store_true", help="download Single Card models")
     parser.add_argument("--t3k", action="store_true", help="download T3000 models")
+    parser.add_argument("--other", action="store_true", help="download T3000 models")
     parser.add_argument("--datasets", action="store_true", help="download datasets")
     parser.add_argument("--metrics", action="store_true", help="download metrics")
     return parser
