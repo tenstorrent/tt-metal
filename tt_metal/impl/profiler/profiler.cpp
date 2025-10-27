@@ -1737,14 +1737,10 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
     }
 
     if (!this->thread_pool) {
-        const auto& profiler_state_manager = tt::tt_metal::MetalContext::instance().profiler_state_manager();
-        if (profiler_state_manager) {
-            this->thread_pool = create_device_bound_thread_pool(
-                profiler_state_manager->calculate_optimal_num_threads_for_device_profiler_thread_pool());
-        } else {
-            // Profiler not enabled, skip thread pool creation
-            return;
-        }
+        this->thread_pool =
+            create_device_bound_thread_pool(tt::tt_metal::MetalContext::instance()
+                                                .profiler_state_manager()
+                                                ->calculate_optimal_num_threads_for_device_profiler_thread_pool());
     }
 
     initializeMissingTracyContexts(/*blocking=*/is_mid_run_dump);
@@ -1767,9 +1763,9 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_cpp_post_process()) {
         generateAnalysesForDeviceMarkers(
             device_markers_vec, this->device_logs_output_dir / PROFILER_OPS_PERF_REPORT_NAME, *this->thread_pool);
-    } else {
-        this->thread_pool->enqueue([this]() { writeDeviceResultsToFiles(); });
     }
+
+    this->thread_pool->enqueue([this]() { writeDeviceResultsToFiles(); });
 
     pushTracyDeviceResults(device_markers_vec);
 
