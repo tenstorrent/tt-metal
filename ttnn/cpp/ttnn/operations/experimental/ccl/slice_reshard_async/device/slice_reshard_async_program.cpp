@@ -72,7 +72,7 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
     bool is_last_device = !forward_device.has_value();
     // output coords for this device, in the input space
     uint32_t global_output_outer_dim_start = output_dim_offset + output_outer_dim_size * ring_index;
-    uint32_t global_output_outer_dim_end = output_dim_offset + output_outer_dim_size * (ring_index + 1) - 1;
+    uint32_t global_output_outer_dim_end = output_dim_offset + (output_outer_dim_size * (ring_index + 1)) - 1;
     // input coords for this device, in the input space
     uint32_t global_input_outer_dim_start = input_outer_dim_size * ring_index;
     uint32_t global_input_outer_dim_end = (input_outer_dim_size * (ring_index + 1)) - 1;
