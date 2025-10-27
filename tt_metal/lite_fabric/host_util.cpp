@@ -18,7 +18,8 @@ void InitializeLiteFabric(std::shared_ptr<lite_fabric::LiteFabricHal>& lite_fabr
     if (lite_fabric::CompileFabricLite(lite_fabric_hal, home_directory, output_directory)) {
         throw std::runtime_error("Failed to compile lite fabric");
     }
-    if (lite_fabric::LinkFabricLite(home_directory, output_directory, output_directory / "lite_fabric.elf")) {
+    if (lite_fabric::LinkFabricLite(
+            lite_fabric_hal, home_directory, output_directory, output_directory / "lite_fabric.elf")) {
         throw std::runtime_error("Failed to link lite fabric");
     }
 

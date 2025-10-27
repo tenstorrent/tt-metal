@@ -69,53 +69,8 @@ int CompileFabricLite(
     const std::vector<std::string>& extra_defines) {
     const std::filesystem::path lite_fabric_src = root_dir / "tt_metal/lite_fabric/hw/src/lite_fabric.cpp";
 
-    std::vector<std::filesystem::path> includes = {
-        root_dir,
-        root_dir.parent_path(),
-        root_dir / "ttnn",
-        root_dir / "ttnn/cpp",
-        root_dir / "tt_metal",
-        root_dir / "tt_metal/include",
-        root_dir / "tt_metal/hw/inc",
-        root_dir / "tt_metal/hw/inc/ethernet",
-        root_dir / "tt_metal/hostdevcommon/api",
-        root_dir / "tt_metal/hw/inc/debug",
-        root_dir / "tt_metal/hw/inc/tt-1xx/",
-        root_dir / "tt_metal/hw/inc/tt-1xx/blackhole",
-        root_dir / "tt_metal/hw/inc/tt-1xx/blackhole/blackhole_defines",
-        root_dir / "tt_metal/hw/inc/tt-1xx/blackhole/noc",
-        root_dir / "tt_metal/hw/ckernels/blackhole/metal/common",
-        root_dir / "tt_metal/hw/ckernels/blackhole/metal/llk_io",
-        root_dir / "tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc",
-        root_dir / "tt_metal/api/",
-        root_dir / "tt_metal/api/tt-metalium/",
-        root_dir / "tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib",
-        root_dir / "tt_metal/lite_fabric/hw/inc"};  // For memory configuration headers
-
-    std::vector<std::string> defines{
-        "ARCH_BLACKHOLE",
-        "TENSIX_FIRMWARE",
-        "LOCAL_MEM_EN=0",
-        "COMPILE_FOR_ERISC",  // This is needed to enable the ethernet APIs
-        "ERISC",
-        "RISC_B0_HW",
-        "FW_BUILD",
-        "NOC_INDEX=0",
-        "DISPATCH_MESSAGE_ADDR=0",
-        "COMPILE_FOR_LITE_FABRIC=1",
-        "ROUTING_FW_ENABLED",
-        // This is needed to get things to compile
-        "NUM_DRAM_BANKS=1",
-        "NUM_L1_BANKS=1",
-        "LOG_BASE_2_OF_NUM_DRAM_BANKS=0",
-        "LOG_BASE_2_OF_NUM_L1_BANKS=0",
-        // We do not access the PCIe cores
-        "PCIE_NOC_X=0",
-        "PCIE_NOC_Y=0",
-        // Lite Fabric is intended to run on risc1
-        "PROCESSOR_INDEX=1",
-    };
-
+    auto includes = lite_fabric_hal->build_includes(root_dir);
+    auto defines = lite_fabric_hal->build_defines();
     defines.insert(defines.end(), extra_defines.begin(), extra_defines.end());
 
     std::ostringstream oss;
@@ -148,8 +103,10 @@ int CompileFabricLite(
 }
 
 int LinkFabricLite(
-    const std::filesystem::path& root_dir, const std::filesystem::path& out_dir, const std::filesystem::path& elf_out) {
-    // First, preprocess the linker script to resolve #include directives
+    const std::shared_ptr<LiteFabricHal>& lite_fabric_hal,
+    const std::filesystem::path& root_dir,
+    const std::filesystem::path& out_dir,
+    const std::filesystem::path& elf_out) {
     const std::filesystem::path tunneling_dir = root_dir / "tt_metal/lite_fabric/hw/inc";
     const std::filesystem::path input_ld = root_dir / "tt_metal/lite_fabric/toolchain/lite_fabric.ld";
     const std::filesystem::path output_ld = out_dir / "lite_fabric_preprocessed.ld";
@@ -178,9 +135,12 @@ int LinkFabricLite(
     link_oss << fmt::format("-T{} ", output_ld.string());  // Use preprocessed linker script
     link_oss << fmt::format("-Wl,-Map={}/lite_fabric.map ", out_dir.string());
     link_oss << fmt::format("-save-temps {}/lite_fabric.o ", out_dir.string());
-    link_oss << fmt::format("{}/runtime/hw/lib/blackhole/tmu-crt0.o ", root_dir.string());     // FIXME: hardcoded path
-    link_oss << fmt::format("{}/runtime/hw/lib/blackhole/substitutes.o ", root_dir.string());  // FIXME: hardcoded path
-    link_oss << fmt::format("-o {}", elf_out.string());
+    link_oss << fmt::format("-o {} ", elf_out.string());
+
+    auto linker_flags = lite_fabric_hal->build_linker(root_dir);
+    for (const auto& flag : linker_flags) {
+        link_oss << fmt::format("{} ", flag.string());
+    }
 
     std::string link_cmd = link_oss.str();
     log_info(tt::LogMetal, "link:\n{}", link_cmd);
