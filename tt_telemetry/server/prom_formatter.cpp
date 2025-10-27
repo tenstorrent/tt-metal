@@ -9,6 +9,7 @@
 #include <chrono>
 #include <stdexcept>
 #include <optional>
+#include <unordered_set>
 
 namespace tt::telemetry {
 
@@ -90,10 +91,13 @@ void format_metric(
     std::string_view value,
     std::string_view help_text,
     std::string_view unit_label,
-    uint64_t timestamp) {
-    // Write HELP and TYPE (only once per unique metric name)
-    output << "# HELP " << metric_name << " " << help_text << "\n";
-    output << "# TYPE " << metric_name << " gauge\n";
+    uint64_t timestamp,
+    std::unordered_set<std::string>& written_metric_names) {
+    // Write HELP and TYPE only once per unique metric name
+    if (written_metric_names.insert(std::string(metric_name)).second) {
+        output << "# HELP " << metric_name << " " << help_text << "\n";
+        output << "# TYPE " << metric_name << " gauge\n";
+    }
 
     // Write metric line with labels
     output << metric_name << "{";
@@ -135,6 +139,8 @@ void process_metrics(
     std::string_view hostname,
     std::string_view help_text,
     ValueConverter value_converter) {
+    std::unordered_set<std::string> written_metric_names;
+
     for (const auto& [path, value] : metrics) {
         try {
             // Parse metric path to extract name and labels
@@ -160,7 +166,15 @@ void process_metrics(
                 }
             }
 
-            format_metric(output, parsed.metric_name, parsed.labels, value_str, help_text, unit_label, timestamp);
+            format_metric(
+                output,
+                parsed.metric_name,
+                parsed.labels,
+                value_str,
+                help_text,
+                unit_label,
+                timestamp,
+                written_metric_names);
         } catch (const std::exception& e) {
             // Log warning but continue processing other metrics
             log_warning(tt::LogAlways, "Failed to format metric '{}': {}", path, e.what());
