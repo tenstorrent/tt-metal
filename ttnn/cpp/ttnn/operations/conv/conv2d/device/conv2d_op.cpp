@@ -7,6 +7,7 @@
 #include <optional>
 #include <utility>
 #include "conv2d_op.hpp"
+#include <fmt/format.h>
 #include <tt-metalium/math.hpp>
 
 #include <tt-metalium/tt_metal.hpp>

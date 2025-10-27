@@ -263,6 +263,55 @@ struct ConvDRAMParamters {
     Layout input_layout;
     bool enable_bias;
     bool mm_conv;
+
+    bool operator<(const ConvDRAMParamters& other) const;
+
+    static constexpr auto attribute_names = std::make_tuple(
+        "in_channels",
+        "out_channels",
+        "batch_size",
+        "input_height",
+        "input_width",
+        "output_height",
+        "output_width",
+        "kernel_size",
+        "stride",
+        "padding_n4",
+        "dilation",
+        "groups",
+        "conv_config",
+        "compute_kernel_config",
+        "compute_grid",
+        "weights_datatype",
+        "input_datatype",
+        "output_datatype",
+        "input_layout",
+        "enable_bias",
+        "mm_conv");
+    auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->in_channels),
+            std::cref(this->out_channels),
+            std::cref(this->batch_size),
+            std::cref(this->input_height),
+            std::cref(this->input_width),
+            std::cref(this->output_height),
+            std::cref(this->output_width),
+            std::cref(this->kernel_size),
+            std::cref(this->stride),
+            std::cref(this->padding_n4),
+            std::cref(this->dilation),
+            std::cref(this->groups),
+            std::cref(this->conv_config),
+            std::cref(this->compute_kernel_config),
+            std::cref(this->compute_grid),
+            std::cref(this->weights_datatype),
+            std::cref(this->input_datatype),
+            std::cref(this->output_datatype),
+            std::cref(this->input_layout),
+            std::cref(this->enable_bias),
+            std::cref(this->mm_conv));
+    }
 };
 
 std::pair<Conv2dSliceConfig, Conv2dConfig> determine_conv2d_slice_config(
