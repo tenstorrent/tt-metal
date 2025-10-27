@@ -141,14 +141,14 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         core,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // Untilized writer
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
         "writer_unary_unpad_dims_split_rows.cpp",
         core,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
@@ -163,12 +163,11 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
     if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
     }
-    std::string compute_kernel(
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
+    std::string compute_kernel("ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
         (input_cb_data_format == tt::DataFormat::Float32 && num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+        compute_kernel = "ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
@@ -345,7 +344,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_wh_multicore.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_wh_multicore.cpp",
         all_cores,
         ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -355,7 +354,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
         "writer_unary_stick_layout_wh_multicore.cpp",
         all_cores,
         WriterDataMovementConfig(writer_ct_args));
@@ -369,9 +368,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
     if (!core_range.empty()) {
         CreateKernel(
             program,
-            use_pack_kernel
-                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
-                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            use_pack_kernel ? "ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
+                            : "ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -380,9 +378,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
     if (has_cliff_col && has_cliff_row) {
         CreateKernel(
             program,
-            use_pack_kernel
-                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
-                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            use_pack_kernel ? "ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
+                            : "ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             cliff_col_row_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -391,9 +388,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
     if (has_cliff_row) {
         CreateKernel(
             program,
-            use_pack_kernel
-                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
-                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            use_pack_kernel ? "ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
+                            : "ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             cliff_row_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -403,9 +399,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
     if (has_cliff_col) {
         CreateKernel(
             program,
-            use_pack_kernel
-                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
-                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            use_pack_kernel ? "ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
+                            : "ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             cliff_col_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -561,7 +556,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_col_multicore.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_col_multicore.cpp",
         all_cores,
         ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -572,14 +567,14 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
         "writer_unary_stick_layout_col_multicore.cpp",
         all_cores,
         WriterDataMovementConfig(writer_ct_args));
 
     // compute
 
-    std::string compute_kernel("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_w.cpp");
+    std::string compute_kernel("ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_w.cpp");
 
     if (!core_range.empty()) {
         CreateKernel(
@@ -734,7 +729,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         all_cores,
         ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -748,7 +743,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
         "writer_unary_stick_layout_split_rows_multicore.cpp",
         all_cores,
         WriterDataMovementConfig(writer_ct_args));
@@ -759,11 +754,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
     }
-    std::string compute_kernel(
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
+    std::string compute_kernel("ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
         (input_cb_data_format == tt::DataFormat::Float32 && num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH)) {
-        compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+        compute_kernel = "ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
     }
 
     if (!core_range.empty()) {
@@ -966,7 +960,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
 
     unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
@@ -978,11 +972,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
             (uint32_t)output_cb_index, (uint32_t)sharded_output_cb_index, aligned_page_size};
         unary_writer_kernel_id = CreateKernel(
             program,
-            unpad_tensor_w_16
-                ? "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
-                  "writer_unary_unpad_width_16_sharded.cpp"
-                : "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
-                  "writer_unary_unpad_batch_rows_sharded.cpp",
+            unpad_tensor_w_16 ? "ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
+                                "writer_unary_unpad_width_16_sharded.cpp"
+                              : "ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
+                                "writer_unary_unpad_batch_rows_sharded.cpp",
             all_cores,
             WriterDataMovementConfig(writer_ct_args));
     } else {
@@ -993,7 +986,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
         unary_writer_kernel_id = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp",
+            "ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp",
             all_cores,
             WriterDataMovementConfig(writer_ct_args));
     }
@@ -1011,17 +1004,16 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
     }
-    std::string compute_kernel(
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
+    std::string compute_kernel("ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (unpad_tensor_w_16) {
         // Use copy compute kernel just for a potential data type conversion.
-        compute_kernel = "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp";
+        compute_kernel = "ttnn/kernel/compute/eltwise_copy.cpp";
         compute_args[0] = (uint32_t)num_input_tiles;  // per_core_tile_cnt
     } else if (
         !use_pack_untilize || a.dtype() == DataType::UINT16 ||
         (input_cb_data_format == tt::DataFormat::Float32 && ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+        compute_kernel = "ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }

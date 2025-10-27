@@ -135,7 +135,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
 
         unary_reader_kernel_id = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reader_unary_sharded_blocks_interleaved_start_id.cpp",
+            "ttnn/operations/data_movement/sharded/device/kernels/dataflow/reader_unary_sharded_blocks_interleaved_start_id.cpp",
             all_cores,
             tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     } else {
@@ -144,7 +144,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
 
         unary_reader_kernel_id = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+            "ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
             "reader_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp",
             all_cores,
             tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
@@ -154,13 +154,13 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     std::vector<uint32_t> writer_compile_time_args = {out_cb_index};
     if (dst_is_dram) {
         if (input.layout() == Layout::TILE) {
-            writer_kernel = std::string("ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded_blocks_start_id.cpp");
+            writer_kernel = std::string("ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded_blocks_start_id.cpp");
         } else {
-            writer_kernel = std::string("ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded_stick_layout_start_id.cpp");
+            writer_kernel = std::string("ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded_stick_layout_start_id.cpp");
         }
         shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
     } else {
-        writer_kernel = std::string("ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp");
+        writer_kernel = std::string("ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp");
     }
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -172,7 +172,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     if (convert_df) {
         compute_kernel_id = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/compute/eltwise_copy.cpp",
+            "ttnn/operations/data_movement/sharded/device/kernels/compute/eltwise_copy.cpp",
             all_cores,
             tt::tt_metal::ComputeConfig{});
     }

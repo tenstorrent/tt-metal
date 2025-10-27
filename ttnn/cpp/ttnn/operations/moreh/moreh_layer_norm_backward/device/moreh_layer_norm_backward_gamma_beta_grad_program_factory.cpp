@@ -159,10 +159,10 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     }
 
     const auto reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
+        "ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
         "reader_moreh_layer_norm_backward_gamma_beta_grad.cpp";
     const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
+        "ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
         "writer_moreh_layer_norm_backward_gamma_beta_grad.cpp";
 
     const auto reader_kernels_id =
@@ -181,7 +181,7 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
         static_cast<uint32_t>(is_groupnorm)};
 
     const auto compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
+        "ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
         "moreh_layer_norm_backward_gamma_beta_grad_kernel.cpp";
 
     CreateComputeKernel(

@@ -324,7 +324,6 @@ class CMakeBuild(build_ext):
             "api/ttnn/tensor/enum_types.hpp",
         ]
         ttnn_cpp_patterns = [
-            "ttnn/deprecated/**/kernels/**/*",
             "ttnn/operations/**/kernels/**/*",
             "ttnn/operations/**/kernels_ng/**/*",
             "ttnn/operations/kernel_helper_functions/*",

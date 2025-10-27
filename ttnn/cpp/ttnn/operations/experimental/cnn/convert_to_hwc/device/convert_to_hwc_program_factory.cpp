@@ -164,19 +164,19 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
 
     auto writer_kernel_id0 = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/writer_convert_to_hwc.cpp",
+        "ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/writer_convert_to_hwc.cpp",
         l1_input_core_grid,
         tt::tt_metal::ReaderDataMovementConfig(writer_compile_time_args0));
 
     auto writer_kernel_id1 = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/writer_convert_to_hwc.cpp",
+        "ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/writer_convert_to_hwc.cpp",
         l1_input_core_grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args1));
 
     tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/convert_to_hwc.cpp",
+        "ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/convert_to_hwc.cpp",
         l1_input_core_grid,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,

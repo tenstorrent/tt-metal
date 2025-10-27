@@ -377,7 +377,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/ccl/all_to_all_dispatch/device/kernels/dataflow/reader_all_to_all_dispatch.cpp",
+        "ttnn/operations/ccl/all_to_all_dispatch/device/kernels/dataflow/reader_all_to_all_dispatch.cpp",
         sender_core_grid,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -400,7 +400,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     tt::tt_metal::KernelHandle binary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/ccl/all_to_all_dispatch/device/kernels/dataflow/writer_all_to_all_dispatch.cpp",
+        "ttnn/operations/ccl/all_to_all_dispatch/device/kernels/dataflow/writer_all_to_all_dispatch.cpp",
         sender_core_grid,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,

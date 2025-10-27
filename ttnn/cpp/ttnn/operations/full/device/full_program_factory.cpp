@@ -67,7 +67,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
 
     auto writer_id = CreateWriteKernel(
         program,
-        "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full.cpp",
+        "ttnn/operations/full/device/kernels/writer_full.cpp",
         all_cores,
         writer_compile_time_args,
         reader_defines);
@@ -88,7 +88,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
         // Create the reader kernel
         reader_id = CreateReadKernel(
             program,
-            "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full.cpp",
+            "ttnn/operations/full/device/kernels/writer_full.cpp",
             all_cores,
             reader_compile_time_args,
             reader_defines);

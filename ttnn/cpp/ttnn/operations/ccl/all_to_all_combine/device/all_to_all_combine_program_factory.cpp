@@ -202,7 +202,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
 
     KernelHandle ternary_reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/ccl/all_to_all_combine/device/kernels/dataflow/reader_all_to_all_combine.cpp",
+        "ttnn/operations/ccl/all_to_all_combine/device/kernels/dataflow/reader_all_to_all_combine.cpp",
         sender_core_grid,
         reader_config);
 
@@ -260,7 +260,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
 
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/ccl/all_to_all_combine/device/kernels/dataflow/writer_all_to_all_combine.cpp",
+        "ttnn/operations/ccl/all_to_all_combine/device/kernels/dataflow/writer_all_to_all_combine.cpp",
         sender_core_grid,
         writer_config);
 

@@ -108,10 +108,9 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
 
     KernelHandle kernel_id = CreateKernel(
         program,
-        tilized
-            ? "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_interleaved_with_overlap.cpp"
-            : "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/"
-              "move_stick_layout_interleaved_with_overlap.cpp",
+        tilized ? "ttnn/operations/data_movement/move/device/kernels/dataflow/move_interleaved_with_overlap.cpp"
+                : "ttnn/operations/data_movement/move/device/kernels/dataflow/"
+                  "move_stick_layout_interleaved_with_overlap.cpp",
         all_cores,
         DataMovementConfig{.compile_args = compile_time_args});
 
@@ -251,7 +250,7 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Ten
     std::vector<uint32_t> reader_compile_time_args = {src_cb_sharded, dst_cb_sharded};
     KernelHandle kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/reader_unary_local_l1_copy_backwards.cpp",
+        "ttnn/operations/data_movement/move/device/kernels/dataflow/reader_unary_local_l1_copy_backwards.cpp",
         shard_grid,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1, .compile_args = reader_compile_time_args});

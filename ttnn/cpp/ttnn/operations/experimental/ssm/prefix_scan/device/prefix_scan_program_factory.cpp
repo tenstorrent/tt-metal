@@ -118,19 +118,19 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ssm/prefix_scan/device/kernels/reader_ssm_prefix_scan.cpp",
+        "ttnn/operations/experimental/ssm/prefix_scan/device/kernels/reader_ssm_prefix_scan.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ssm/prefix_scan/device/kernels/writer_ssm_prefix_scan.cpp",
+        "ttnn/operations/experimental/ssm/prefix_scan/device/kernels/writer_ssm_prefix_scan.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ssm/prefix_scan/device/kernels/ssm_prefix_scan.cpp",
+        "ttnn/operations/experimental/ssm/prefix_scan/device/kernels/ssm_prefix_scan.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,

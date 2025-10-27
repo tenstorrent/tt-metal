@@ -121,13 +121,13 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/reader_fill_cache_interleaved.cpp",
+        "ttnn/operations/experimental/paged_cache/device/kernels/dataflow/reader_fill_cache_interleaved.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/writer_fill_cache_interleaved.cpp",
+        "ttnn/operations/experimental/paged_cache/device/kernels/dataflow/writer_fill_cache_interleaved.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 

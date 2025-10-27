@@ -579,7 +579,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                 }
                 auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
                     program,
-                    "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
+                    "ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
                     "minimal_default_reader.cpp",
                     {core},
                     tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args, reader_compute_defines));
@@ -676,7 +676,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                 }
                 auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
                     program,
-                    "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
+                    "ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
                     "minimal_default_writer.cpp",
                     {core},
                     tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
@@ -931,7 +931,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     }
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
+        "ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
         "llama_shapes_sharded_reader.cpp",
         sender_worker_core_range,
         reader_kernel_config);
@@ -961,7 +961,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     }
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
+        "ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
         "llama_shapes_sharded_writer.cpp",
         sender_worker_core_range,
         writer_kernel_config);

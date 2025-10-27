@@ -100,13 +100,13 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
 
     auto reader_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
+        "ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     auto writer_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -120,7 +120,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
 
     tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
+        "ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
         core_group_1,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity, .dst_full_sync_en = true, .compile_args = compute_args_group_1});
@@ -136,7 +136,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
 
         tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
+            "ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
             core_group_2,
             tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity, .dst_full_sync_en = true, .compile_args = compute_args_group_2});

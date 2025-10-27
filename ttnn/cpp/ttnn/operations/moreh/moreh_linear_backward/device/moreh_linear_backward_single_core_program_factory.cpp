@@ -86,10 +86,10 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     TensorAccessorArgs(bias_grad.buffer()).append_to(writer_compile_time_args);
 
     const auto reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/reader_moreh_bias_backward_hw.cpp";
+        "ttnn/operations/moreh/moreh_linear_backward/device/kernels/reader_moreh_bias_backward_hw.cpp";
 
     const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/writer_moreh_bias_backward.cpp";
+        "ttnn/operations/moreh/moreh_linear_backward/device/kernels/writer_moreh_bias_backward.cpp";
 
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
@@ -106,7 +106,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
     const auto compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/moreh_bias_backward_single_core_hw.cpp";
+        "ttnn/operations/moreh/moreh_linear_backward/device/kernels/moreh_bias_backward_single_core_hw.cpp";
 
     const auto compute_kernel_id = CreateComputeKernel(
         program,

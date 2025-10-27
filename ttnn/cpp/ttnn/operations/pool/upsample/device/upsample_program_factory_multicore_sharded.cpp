@@ -320,7 +320,7 @@ operation::ProgramWithCallbacks upsample_multi_core_sharded(
         static_cast<uint32_t>(config_tensor.logical_shape()[-1] / 4),
     };
     std::string writer_kernel_fname =
-        "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp";
+        "ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp";
     auto writer_kernel =
         CreateKernel(program, writer_kernel_fname, all_cores, WriterDataMovementConfig(writer_compile_time_args));
 
@@ -328,7 +328,7 @@ operation::ProgramWithCallbacks upsample_multi_core_sharded(
     reader_compile_time_args[2] = true;  // reader
 
     std::string reader_kernel_fname =
-        "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp";
+        "ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp";
     CreateKernel(program, reader_kernel_fname, all_cores, ReaderDataMovementConfig(reader_compile_time_args));
 
     // Capture config_buffer to cache this with the program

@@ -130,7 +130,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     }
     auto reader_kernel_id = CreateReadKernel(
         program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_kernels/reader_moreh_getitem.cpp",
+        "ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_kernels/reader_moreh_getitem.cpp",
         all_cores,
         reader_compile_time_args,
         reader_defines);
@@ -138,7 +138,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
     auto writer_kernel_id = CreateWriteKernel(
         program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_kernels/writer_moreh_getitem.cpp",
+        "ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_kernels/writer_moreh_getitem.cpp",
         all_cores,
         writer_compile_time_args,
         writer_defines);

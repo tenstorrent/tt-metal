@@ -99,19 +99,19 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
     // Reuse the reader from reduce since we want the same behavior
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ssm/hc_sum_reduce/device/kernels/reader_ssm_1d_sum_reduce.cpp",
+        "ttnn/operations/experimental/ssm/hc_sum_reduce/device/kernels/reader_ssm_1d_sum_reduce.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ssm/hc_sum_reduce/device/kernels/writer_ssm_1d_sum_reduce.cpp",
+        "ttnn/operations/experimental/ssm/hc_sum_reduce/device/kernels/writer_ssm_1d_sum_reduce.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ssm/hc_sum_reduce/device/kernels/ssm_1d_sum_reduce.cpp",
+        "ttnn/operations/experimental/ssm/hc_sum_reduce/device/kernels/ssm_1d_sum_reduce.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,

@@ -387,7 +387,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
 
     auto mm_kernel_in0_sender_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_dram_sharded.cpp",
+        "ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_dram_sharded.cpp",
         all_cores_in_rect_grid,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -397,7 +397,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_dram_sharded.cpp",
+        "ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_dram_sharded.cpp",
         all_cores_in_rect_grid,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -439,7 +439,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     // Create compute kernel
     auto mm_kernel = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
+        "ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
         // all_worker_cores,
         all_cores_in_rect_grid,
         tt_metal::ComputeConfig{

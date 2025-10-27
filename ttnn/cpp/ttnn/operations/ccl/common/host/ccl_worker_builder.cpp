@@ -879,7 +879,7 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
     datamovement_kernel_config.opt_level = tt::tt_metal::KernelBuildOptLevel::Os;
     auto sender_worker_reader_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_send_reader_two_input.cpp",
+        "ttnn/operations/ccl/common/kernels/ccl_send_reader_two_input.cpp",
         worker_core_range,
         datamovement_kernel_config);
 

@@ -53,7 +53,7 @@ operation::ProgramWithCallbacks fill_rm_single_core(
 
     tt::tt_metal::KernelHandle binary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/fill_rm/device/kernels/dataflow/fill_rm_interleaved.cpp",
+        "ttnn/operations/data_movement/fill_rm/device/kernels/dataflow/fill_rm_interleaved.cpp",
         core,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 

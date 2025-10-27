@@ -76,8 +76,7 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         split_work_to_cores_wt_core_range(all_core_range, num_rows);
 
-    std::string compute_kernel_name =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_w_impl_kernels/moreh_sum_w.cpp";
+    std::string compute_kernel_name = "ttnn/operations/moreh/moreh_sum/device/moreh_sum_w_impl_kernels/moreh_sum_w.cpp";
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -132,13 +131,13 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
     }
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_w_impl_kernels/reader_moreh_sum_w.cpp",
+        "ttnn/operations/moreh/moreh_sum/device/moreh_sum_w_impl_kernels/reader_moreh_sum_w.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_w_impl_kernels/writer_moreh_sum_w.cpp",
+        "ttnn/operations/moreh/moreh_sum/device/moreh_sum_w_impl_kernels/writer_moreh_sum_w.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 

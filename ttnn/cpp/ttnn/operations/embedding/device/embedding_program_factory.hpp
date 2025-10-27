@@ -232,7 +232,7 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_tilize.cpp",
+        "ttnn/operations/embedding/device/kernels/dataflow/embeddings_tilize.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
@@ -245,7 +245,7 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
         };
         tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize.cpp",
+            "ttnn/operations/data_movement/tilize/device/kernels/compute/tilize.cpp",
             core_group_1,
             tt::tt_metal::ComputeConfig{.compile_args = compute_args_1});
     }
@@ -259,7 +259,7 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
         };
         tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize.cpp",
+            "ttnn/operations/data_movement/tilize/device/kernels/compute/tilize.cpp",
             core_group_2,
             tt::tt_metal::ComputeConfig{.compile_args = compute_args_2});
     }
@@ -272,7 +272,7 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
         // Tilized writer
         writer_kernel_id = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+            "ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
             all_cores,
             tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }
@@ -506,7 +506,7 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings.cpp",
+        "ttnn/operations/embedding/device/kernels/dataflow/embeddings.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
@@ -518,7 +518,7 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
 
         writer_kernel_id = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
+            "ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
             all_cores,
             tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }
@@ -723,7 +723,7 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     }
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embedding_ind_tilized.cpp",
+        "ttnn/operations/embedding/device/kernels/dataflow/embedding_ind_tilized.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
@@ -733,7 +733,7 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     // Tilized writer
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
+        "ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 

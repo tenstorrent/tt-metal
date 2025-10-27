@@ -334,19 +334,19 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
 
     auto reader_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa_windowed/device/kernels/dataflow/reader_windowed.cpp",
+        "ttnn/operations/transformer/sdpa_windowed/device/kernels/dataflow/reader_windowed.cpp",
         core_grid,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
 
     auto writer_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa_windowed/device/kernels/dataflow/writer_windowed.cpp",
+        "ttnn/operations/transformer/sdpa_windowed/device/kernels/dataflow/writer_windowed.cpp",
         core_grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
 
     auto compute_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa_windowed/device/kernels/compute/sdpa_windowed.cpp",
+        "ttnn/operations/transformer/sdpa_windowed/device/kernels/compute/sdpa_windowed.cpp",
         core_grid,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,

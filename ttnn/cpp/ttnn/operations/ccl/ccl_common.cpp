@@ -626,13 +626,7 @@ tt::tt_metal::KernelHandle generate_edm_kernel(
     const tt::tt_metal::DataMovementProcessor risc_id,
     tt::tt_metal::NOC noc_id) {
     return generate_edm_kernel_impl(
-        program,
-        device,
-        edm_builder,
-        "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp",
-        eth_core,
-        risc_id,
-        noc_id);
+        program, device, edm_builder, "ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp", eth_core, risc_id, noc_id);
 }
 
 ccl::EriscDatamoverBuilder create_erisc_datamover_builder(

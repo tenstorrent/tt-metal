@@ -114,7 +114,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
 
     auto worker_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/device/kernels/sender_reader.cpp",
+        "ttnn/operations/experimental/ccl/send_recv_async/send_async/device/kernels/sender_reader.cpp",
         sender_core_coord,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
 
@@ -138,7 +138,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
 
     auto worker_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/device/kernels/sender_writer.cpp",
+        "ttnn/operations/experimental/ccl/send_recv_async/send_async/device/kernels/sender_writer.cpp",
         sender_core_coord,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
 

@@ -234,11 +234,9 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     }
 
     const auto reader_kernel_file =
-        use_large_algorithm
-            ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/reader_moreh_layer_norm_large.cpp"
-            : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/reader_moreh_layer_norm_small.cpp";
-    const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/writer_moreh_layer_norm.cpp";
+        use_large_algorithm ? "ttnn/operations/moreh/moreh_layer_norm/device/kernels/reader_moreh_layer_norm_large.cpp"
+                            : "ttnn/operations/moreh/moreh_layer_norm/device/kernels/reader_moreh_layer_norm_small.cpp";
+    const auto writer_kernel_file = "ttnn/operations/moreh/moreh_layer_norm/device/kernels/writer_moreh_layer_norm.cpp";
 
     const auto reader_kernels_id =
         CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
@@ -258,9 +256,8 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
         static_cast<uint32_t>(is_groupnorm)};
 
     const auto compute_kernel_file =
-        use_large_algorithm
-            ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_large_kernel.cpp"
-            : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_small_kernel.cpp";
+        use_large_algorithm ? "ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_large_kernel.cpp"
+                            : "ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_small_kernel.cpp";
 
     CreateComputeKernel(
         program,

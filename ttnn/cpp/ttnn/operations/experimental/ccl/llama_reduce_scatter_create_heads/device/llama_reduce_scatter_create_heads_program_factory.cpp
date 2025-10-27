@@ -651,7 +651,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_create_heads/device/kernels/dataflow/"
+        "ttnn/operations/experimental/ccl/llama_reduce_scatter_create_heads/device/kernels/dataflow/"
         "reader_llama_reduce_scatter.cpp",
         all_cores_grid,
         tt_metal::DataMovementConfig{
@@ -687,7 +687,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     auto writer_defines = reader_defines;
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_create_heads/device/kernels/dataflow/"
+        "ttnn/operations/experimental/ccl/llama_reduce_scatter_create_heads/device/kernels/dataflow/"
         "writer_llama_reduce_scatter.cpp",
         all_cores_grid,
         tt_metal::DataMovementConfig{
@@ -704,7 +704,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;
     const auto compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_create_heads/device/kernels/compute/"
+        "ttnn/operations/experimental/ccl/llama_reduce_scatter_create_heads/device/kernels/compute/"
         "reduction.cpp";
     const auto compute_kernel_id = tt_metal::CreateKernel(
         program,

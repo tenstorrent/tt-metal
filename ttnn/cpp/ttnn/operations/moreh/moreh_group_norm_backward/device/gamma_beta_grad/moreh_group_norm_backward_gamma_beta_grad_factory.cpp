@@ -131,10 +131,10 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const std::string reader_kernel_file(
-        "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm_backward/device/gamma_beta_grad/kernels/dataflow/"
+        "ttnn/operations/moreh/moreh_group_norm_backward/device/gamma_beta_grad/kernels/dataflow/"
         "reader_moreh_group_norm_backward_gamma_beta_grad.cpp");
     const std::string writer_kernel_file(
-        "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm_backward/device/gamma_beta_grad/kernels/dataflow/"
+        "ttnn/operations/moreh/moreh_group_norm_backward/device/gamma_beta_grad/kernels/dataflow/"
         "writer_moreh_group_norm_backward_gamma_beta_grad.cpp");
 
     std::vector<uint32_t> reader_compile_time_args{static_cast<uint32_t>(gamma_grad_has_value)};
@@ -160,7 +160,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
 
     const std::string compute_kernel_file(
-        "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
+        "ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
         "moreh_layer_norm_backward_gamma_beta_grad_kernel.cpp");
 
     const std::vector<uint32_t> compute_args_group_1{

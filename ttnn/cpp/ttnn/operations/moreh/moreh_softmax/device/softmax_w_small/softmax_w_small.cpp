@@ -79,7 +79,7 @@ MorehSoftmaxOperation::MorehSoftmaxWSmallFactory::create(
     TensorAccessorArgs(*input.buffer()).append_to(reader_ct_args);
     auto reader_kernel_id = CreateReadKernel(
         program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/reader_moreh_softmax_w.cpp",
+        "ttnn/operations/moreh/moreh_softmax/device/kernels/reader_moreh_softmax_w.cpp",
         all_cores,
         reader_ct_args,
         reader_defines);
@@ -87,7 +87,7 @@ MorehSoftmaxOperation::MorehSoftmaxWSmallFactory::create(
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
     auto writer_kernel_id = CreateWriteKernel(
         program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/writer_moreh_softmax_w.cpp",
+        "ttnn/operations/moreh/moreh_softmax/device/kernels/writer_moreh_softmax_w.cpp",
         all_cores,
         writer_ct_args,
         writer_defines);
@@ -109,7 +109,7 @@ MorehSoftmaxOperation::MorehSoftmaxWSmallFactory::create(
     // create compute kernel
     CreateComputeKernel(
         program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_w.cpp",
+        "ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_w.cpp",
         {
             {core_group_1, num_tiles_per_core_group_1, {num_tiles_per_core_group_1, Wt}},
             {core_group_2, num_tiles_per_core_group_2, {num_tiles_per_core_group_2, Wt}},

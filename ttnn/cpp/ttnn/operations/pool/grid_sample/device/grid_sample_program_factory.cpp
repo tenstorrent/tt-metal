@@ -215,8 +215,8 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     }
 
     const std::string reader_kernel_path =
-        is_sharded ? "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/dataflow/reader_grid_sample_sharded.cpp"
-                   : "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/dataflow/"
+        is_sharded ? "ttnn/operations/pool/grid_sample/device/kernels/dataflow/reader_grid_sample_sharded.cpp"
+                   : "ttnn/operations/pool/grid_sample/device/kernels/dataflow/"
                      "reader_grid_sample_interleaved_start_id.cpp";
 
     // Create kernels
@@ -296,7 +296,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
 
         return tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp",
+            "ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp",
             cores,
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
@@ -330,7 +330,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
 
         writer_kernel_id = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/dataflow/writer_grid_sample_interleaved.cpp",
+            "ttnn/operations/pool/grid_sample/device/kernels/dataflow/writer_grid_sample_interleaved.cpp",
             all_cores,
             tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }

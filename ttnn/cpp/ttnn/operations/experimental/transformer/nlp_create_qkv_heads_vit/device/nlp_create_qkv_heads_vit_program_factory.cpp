@@ -95,7 +95,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_vi
         std::vector<uint32_t> compute_args_core_group_1 = {num_blocks_per_core_group_1 * kv_num_tiles};
         tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/transpose_wh.cpp",
+            "ttnn/kernel/compute/transpose_wh.cpp",
             core_group_1,
             tt_metal::ComputeConfig{.compile_args = compute_args_core_group_1});
 
@@ -103,7 +103,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_vi
             std::vector<uint32_t> compute_args_core_group_2 = {num_blocks_per_core_group_2 * kv_num_tiles};
             tt_metal::CreateKernel(
                 program,
-                "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/transpose_wh.cpp",
+                "ttnn/kernel/compute/transpose_wh.cpp",
                 core_group_2,
                 tt_metal::ComputeConfig{.compile_args = compute_args_core_group_2});
         }
@@ -114,14 +114,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_vi
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_vit/device/kernels/dataflow/"
+        "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_vit/device/kernels/dataflow/"
         "reader_tm_tile_layout_nlp_create_qkv_heads.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_vit/device/kernels/dataflow/"
+        "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_vit/device/kernels/dataflow/"
         "writer_tm_tile_layout_nlp_create_qkv_heads.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));

@@ -528,10 +528,9 @@ process_mcast_in0_program_and_create_override_variables(
 
     auto mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id = tt_metal::CreateKernel(
         program,
-        in0_is_sharded
-            ? "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-              "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp"
-            : "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+        in0_is_sharded ? "ttnn/operations/matmul/device/kernels/dataflow/"
+                         "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp"
+                       : "ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
         in0_mcast_cores_with_work_and_in_receiver_grid,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -547,7 +546,7 @@ process_mcast_in0_program_and_create_override_variables(
             in0_sender_compile_time_args[1] = 1;  // core_in_in0_receiver_mcast_grid
             mm_kernel_in0_mcast_cores_without_work_and_in_receiver_grid_id = tt_metal::CreateKernel(
                 program,
-                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+                "ttnn/operations/matmul/device/kernels/dataflow/"
                 "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
                 in0_mcast_cores_without_work_and_in_receiver_grid,
                 tt_metal::DataMovementConfig{
@@ -561,7 +560,7 @@ process_mcast_in0_program_and_create_override_variables(
             in0_sender_compile_time_args[1] = 0;  // core_in_in0_receiver_mcast_grid
             mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid_id = tt_metal::CreateKernel(
                 program,
-                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+                "ttnn/operations/matmul/device/kernels/dataflow/"
                 "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
                 in0_mcast_cores_without_work_and_not_in_receiver_grid,
                 tt_metal::DataMovementConfig{
@@ -576,7 +575,7 @@ process_mcast_in0_program_and_create_override_variables(
     if (!in0_is_sharded and in0_mcast_receivers.num_cores() > 0) {
         mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
+            "ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
             in0_mcast_receivers,
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -586,7 +585,7 @@ process_mcast_in0_program_and_create_override_variables(
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+        "ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
         all_cores_with_work,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -634,7 +633,7 @@ process_mcast_in0_program_and_create_override_variables(
     // bool math_approx_mode = false;
     tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
+        "ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
         all_cores_with_work,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -1355,7 +1354,7 @@ process_mcast_in1_program_and_create_override_variables(
 
     auto mm_kernel_in0_sender_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+        "ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -1365,7 +1364,7 @@ process_mcast_in1_program_and_create_override_variables(
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+        "ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
         in1_mcast_sender,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -1377,7 +1376,7 @@ process_mcast_in1_program_and_create_override_variables(
     if (in1_mcast_receivers.num_cores() > 0) {
         mm_kernel_in1_receiver_writer_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+            "ttnn/operations/matmul/device/kernels/dataflow/"
             "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
             in1_mcast_receivers,
             tt_metal::DataMovementConfig{
@@ -1429,7 +1428,7 @@ process_mcast_in1_program_and_create_override_variables(
     // bool math_approx_mode = false;
     tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
+        "ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
         all_cores,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -2140,7 +2139,7 @@ process_gather_in0_program_and_create_override_variables(
     /* Create the kernels */
     auto mm_kernel_in0_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_ring_all_gather.cpp",
+        "ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_ring_all_gather.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -2150,7 +2149,7 @@ process_gather_in0_program_and_create_override_variables(
     // Each core needs to signal to all RS cores, need to get a count of how many cores are in all_cores
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_ring_all_gather.cpp",
+        "ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_ring_all_gather.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -2161,7 +2160,7 @@ process_gather_in0_program_and_create_override_variables(
 
     auto mm_kernel = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation_gathered.cpp",
+        "ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation_gathered.cpp",
         all_cores,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -3414,7 +3413,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
 
     auto mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+        "ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
         in0_mcast_sender_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -3426,7 +3425,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     if (in0_mcast_receivers.num_cores() > 0) {
         mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
+            "ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
             in0_mcast_receivers,
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -3436,7 +3435,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+        "ttnn/operations/matmul/device/kernels/dataflow/"
         "reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
         all_cores_with_work,
         tt_metal::DataMovementConfig{
@@ -3484,7 +3483,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     // bool math_approx_mode = false;
     tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
+        "ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
         all_cores_with_work,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,

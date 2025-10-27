@@ -82,14 +82,14 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
+        "ttnn/operations/reduction/generic/device/kernels/dataflow/"
         "reader_unary_reduce_universal_start_id.cpp",
         core,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_universal_start_id.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_universal_start_id.cpp",
         core,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -101,7 +101,7 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
 
     tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_hw.cpp",
+        "ttnn/operations/reduction/generic/device/kernels/compute/reduce_hw.cpp",
         core,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,

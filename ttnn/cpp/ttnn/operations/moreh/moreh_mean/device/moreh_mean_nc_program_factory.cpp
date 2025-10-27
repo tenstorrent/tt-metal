@@ -91,15 +91,15 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
     std::vector<uint32_t> writer_compile_time_args;
     TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
-    const auto reader_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/reader_moreh_mean_nc.cpp";
-    const auto writer_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/writer_moreh_mean_nc.cpp";
+    const auto reader_kernel_file = "ttnn/operations/moreh/moreh_mean/device/kernels/reader_moreh_mean_nc.cpp";
+    const auto writer_kernel_file = "ttnn/operations/moreh/moreh_mean/device/kernels/writer_moreh_mean_nc.cpp";
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto compute_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_nc.cpp";
+    const auto compute_kernel_file = "ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_nc.cpp";
     std::map<std::string, std::string> compute_defines;
     const std::vector<uint32_t> compute_args_group_1{units_per_core_group_1};
     const std::vector<uint32_t> compute_args_group_2{units_per_core_group_2};

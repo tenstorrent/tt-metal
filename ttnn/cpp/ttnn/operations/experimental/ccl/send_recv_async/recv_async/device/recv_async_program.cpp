@@ -127,7 +127,7 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
 
         writer_kernel = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_async/device/kernels/"
+            "ttnn/operations/experimental/ccl/send_recv_async/recv_async/device/kernels/"
             "receiver_inplace_writer.cpp",
             receiver_core_coord,
             tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
@@ -158,7 +158,7 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
         };
         reader_kernel = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_async/device/kernels/receiver_reader.cpp",
+            "ttnn/operations/experimental/ccl/send_recv_async/recv_async/device/kernels/receiver_reader.cpp",
             receiver_core_coord,
             tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
 
@@ -187,7 +187,7 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
 
         writer_kernel = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_async/device/kernels/receiver_writer.cpp",
+            "ttnn/operations/experimental/ccl/send_recv_async/recv_async/device/kernels/receiver_writer.cpp",
             receiver_core_coord,
             tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
 

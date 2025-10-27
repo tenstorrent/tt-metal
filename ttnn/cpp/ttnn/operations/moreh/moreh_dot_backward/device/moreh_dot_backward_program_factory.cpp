@@ -86,9 +86,9 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     TensorAccessorArgs(has_other_grad ? other_grad.value().buffer() : nullptr).append_to(writer_compile_time_args);
 
     const auto reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_dot_backward/device/kernels/reader_moreh_dot_backward.cpp";
+        "ttnn/operations/moreh/moreh_dot_backward/device/kernels/reader_moreh_dot_backward.cpp";
     const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_dot_backward/device/kernels/writer_moreh_dot_backward.cpp";
+        "ttnn/operations/moreh/moreh_dot_backward/device/kernels/writer_moreh_dot_backward.cpp";
 
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
@@ -96,8 +96,7 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     std::vector<uint32_t> compute_kernel_args = {};
     std::map<std::string, std::string> compute_defines;
 
-    const auto compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_dot_backward/device/kernels/moreh_dot_backward.cpp";
+    const auto compute_kernel_file = "ttnn/operations/moreh/moreh_dot_backward/device/kernels/moreh_dot_backward.cpp";
     const auto compute_kernel_id =
         CreateComputeKernel(program, compute_kernel_file, {core, core_num, compute_kernel_args}, compute_defines);
 

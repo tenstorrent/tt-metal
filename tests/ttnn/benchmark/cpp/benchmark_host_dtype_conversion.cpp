@@ -5,7 +5,7 @@
 #include <benchmark/benchmark.h>
 
 #include <ttnn/tensor/tensor.hpp>
-#include <ttnn/cpp/ttnn/operations/core/core.hpp>
+#include <ttnn/operations/core/core.hpp>
 #include "bfloat16.hpp"
 #include "constants.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"

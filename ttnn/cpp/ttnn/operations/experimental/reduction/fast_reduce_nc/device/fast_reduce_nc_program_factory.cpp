@@ -176,9 +176,9 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
     const auto reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reader_reduce_nc.cpp";
+        "ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reader_reduce_nc.cpp";
     const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/writer_reduce_nc.cpp";
+        "ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/writer_reduce_nc.cpp";
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program, reader_kernel_file, all_cores, tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
@@ -196,7 +196,7 @@ operation::ProgramWithCallbacks reduce_nc_factory(
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
     const auto compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc.cpp";
+        "ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc.cpp";
     tt_metal::CreateKernel(
         program,
         compute_kernel_file,

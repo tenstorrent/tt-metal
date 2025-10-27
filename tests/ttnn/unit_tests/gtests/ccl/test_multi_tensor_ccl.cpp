@@ -6,7 +6,7 @@
 
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "test_fabric_edm_common.hpp"

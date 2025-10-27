@@ -127,7 +127,7 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_create_index_tensor.cpp",
+        "ttnn/operations/reduction/topk/device/kernels/dataflow/reader_create_index_tensor.cpp",
         core,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -144,7 +144,7 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
     tt::tt_metal::TensorAccessorArgs(index_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::KernelHandle binary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_binary_interleaved.cpp",
+        "ttnn/operations/reduction/topk/device/kernels/dataflow/writer_binary_interleaved.cpp",
         core,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -174,7 +174,7 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
     };
     tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk.cpp",
+        "ttnn/operations/reduction/topk/device/kernels/compute/topk.cpp",
         core,
         tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = !uint16_output, .compile_args = compute_args});
 
@@ -395,10 +395,9 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_local_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(input_indices_buffer).append_to(reader_local_compile_time_args);
     std::string reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_create_index_local_topk.cpp";
+        "ttnn/operations/reduction/topk/device/kernels/dataflow/reader_create_index_local_topk.cpp";
     if (input_indices_tensor.has_value()) {
-        reader_kernel_path =
-            "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_read_index_local_topk.cpp";
+        reader_kernel_path = "ttnn/operations/reduction/topk/device/kernels/dataflow/reader_read_index_local_topk.cpp";
     }
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -422,7 +421,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
 
     tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_final_topk.cpp",
+        "ttnn/operations/reduction/topk/device/kernels/dataflow/reader_final_topk.cpp",
         final_cores_range_set,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -438,7 +437,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
     };
     tt::tt_metal::KernelHandle binary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_local_topk.cpp",
+        "ttnn/operations/reduction/topk/device/kernels/dataflow/writer_local_topk.cpp",
         local_cores_range_set,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -447,7 +446,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
     tt::tt_metal::TensorAccessorArgs(index_buffer).append_to(writer_compile_time_args_final);
     tt::tt_metal::KernelHandle binary_writer_final_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_final_topk.cpp",
+        "ttnn/operations/reduction/topk/device/kernels/dataflow/writer_final_topk.cpp",
         final_cores_range_set,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args_final));
 
@@ -469,7 +468,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
     };
     tt::tt_metal::KernelHandle topk_compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_local.cpp",
+        "ttnn/operations/reduction/topk/device/kernels/compute/topk_local.cpp",
         local_cores_range_set,
         tt::tt_metal::ComputeConfig{.compile_args = compute_args});
 
@@ -492,7 +491,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
 
     tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_final.cpp",
+        "ttnn/operations/reduction/topk/device/kernels/compute/topk_final.cpp",
         final_cores_range_set,
         tt::tt_metal::ComputeConfig{.compile_args = compute_args_final});
 

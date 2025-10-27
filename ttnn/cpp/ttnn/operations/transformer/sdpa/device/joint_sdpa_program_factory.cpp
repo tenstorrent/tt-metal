@@ -403,19 +403,19 @@ operation::ProgramWithCallbacks joint_sdpa(
 
     auto reader_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/joint_reader.cpp",
+        "ttnn/operations/transformer/sdpa/device/kernels/dataflow/joint_reader.cpp",
         core_grid,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
 
     auto writer_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/joint_writer.cpp",
+        "ttnn/operations/transformer/sdpa/device/kernels/dataflow/joint_writer.cpp",
         core_grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
 
     auto compute_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/joint_sdpa.cpp",
+        "ttnn/operations/transformer/sdpa/device/kernels/compute/joint_sdpa.cpp",
         core_grid,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,

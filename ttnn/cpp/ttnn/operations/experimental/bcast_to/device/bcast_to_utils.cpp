@@ -49,7 +49,7 @@ BcastToKernelConfig::BcastToKernelConfig(SubtileBroadcastType subtile_broadcast_
 }
 
 std::string get_kernel_file_path(KernelName kernel_name) {
-    constexpr std::string_view root = "ttnn/cpp/ttnn/operations/experimental/bcast_to/device/kernels";
+    constexpr std::string_view root = "ttnn/operations/experimental/bcast_to/device/kernels";
     constexpr std::string_view dataflow = "{}/dataflow/{}";
     constexpr std::string_view compute = "{}/compute/{}";
 

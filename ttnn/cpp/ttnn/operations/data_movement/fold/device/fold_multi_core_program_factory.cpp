@@ -71,14 +71,14 @@ Fold::MultiCore::cached_program_t fold_multi_core(
     // Set build optimization level to Os. O2 was slower.
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2s_row_major.cpp",
+        "ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2s_row_major.cpp",
         all_cores,
         WriterDataMovementConfig(compile_time_args, {}, {}, tt::tt_metal::KernelBuildOptLevel::Os));
 
     compile_time_args[12] = false;  // is_reader = false for writer
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2s_row_major.cpp",
+        "ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2s_row_major.cpp",
         all_cores,
         ReaderDataMovementConfig(compile_time_args, {}, {}, tt::tt_metal::KernelBuildOptLevel::Os));
 

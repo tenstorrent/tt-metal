@@ -315,18 +315,16 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     const auto use_welford_and_not_rms_norm = use_welford && !rms_norm;
 
-    auto reader_kernel_path = use_row_major_kernel
-                                  ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                    "reader_unary_interleaved_ln_rm_gb.cpp"
-                                  : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                    "reader_unary_interleaved_ln.cpp";
-    reader_kernel_path = large_tensor_needed
-                             ? (use_welford_and_not_rms_norm
-                                    ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                      "reader_unary_interleaved_ln_large_tensor_welford.cpp"
-                                    : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                      "reader_unary_interleaved_ln_large_tensor.cpp")
-                             : reader_kernel_path;
+    auto reader_kernel_path = use_row_major_kernel ? "ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                                     "reader_unary_interleaved_ln_rm_gb.cpp"
+                                                   : "ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                                     "reader_unary_interleaved_ln.cpp";
+    reader_kernel_path = large_tensor_needed ? (use_welford_and_not_rms_norm
+                                                    ? "ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                                      "reader_unary_interleaved_ln_large_tensor_welford.cpp"
+                                                    : "ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                                      "reader_unary_interleaved_ln_large_tensor.cpp")
+                                             : reader_kernel_path;
 
     auto reader_kernels_id = CreateKernel(
         program,
@@ -336,7 +334,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     auto writer_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+        "ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
         "writer_unary_interleaved_start_id_blocked.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
@@ -356,13 +354,13 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     auto compute_kernels_id = CreateKernel(
         program,
         large_tensor_needed and !use_row_major_kernel
-            ? (use_welford_and_not_rms_norm ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
+            ? (use_welford_and_not_rms_norm ? "ttnn/operations/normalization/layernorm/device/kernels/compute/"
                                               "layernorm_large_tensor_welford.cpp"
-                                            : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
+                                            : "ttnn/operations/normalization/layernorm/device/kernels/compute/"
                                               "layernorm_large_tensor.cpp")
             : (use_welford_and_not_rms_norm
-                   ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_welford.cpp"
-                   : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp"),
+                   ? "ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_welford.cpp"
+                   : "ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp"),
         all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -1106,25 +1104,25 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
     // reader kernel
     std::string sender_reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+        "ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
         "reader_mcast_sender_unary_sharded_ln.cpp";
     std::string receiver_reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+        "ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
         "reader_mcast_receiver_unary_sharded_ln.cpp";
 
     if (is_pre_all_gather) {
         sender_reader_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+            "ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
             "reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp";
         receiver_reader_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+            "ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
             "reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp";
     } else if (is_post_all_gather) {
         sender_reader_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+            "ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
             "reader_mcast_sender_unary_sharded_ln_post_allgather.cpp";
         receiver_reader_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+            "ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
             "reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp";
     }
 
@@ -1225,12 +1223,12 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     std::string writer_kernel;
     if (is_pre_all_gather) {
         writer_kernel =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+            "ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
             "writer_unary_sharded_ln_pre_all_gather.cpp";
     } else {
-        writer_kernel = use_row_major_kernel ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/"
+        writer_kernel = use_row_major_kernel ? "ttnn/operations/normalization/layernorm/device/kernels/"
                                                "dataflow/writer_unary_sharded_ln_rm_gb.cpp"
-                                             : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/"
+                                             : "ttnn/operations/normalization/layernorm/device/kernels/"
                                                "dataflow/writer_unary_sharded_ln.cpp";
     }
     auto writer_mcast_sender_kernels_id = CreateKernel(
@@ -1318,18 +1316,17 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     std::string compute_kernel_file;
     if (is_pre_all_gather) {
         compute_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
+            "ttnn/operations/normalization/layernorm/device/kernels/compute/"
             "layernorm_sharded_pre_allgather.cpp";
     } else if (is_post_all_gather) {
         compute_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
+            "ttnn/operations/normalization/layernorm/device/kernels/compute/"
             "layernorm_sharded_post_allgather.cpp";
     } else {
         compute_kernel_file =
-            use_welford
-                ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
-                  "layernorm_sharded_welford.cpp"
-                : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp";
+            use_welford ? "ttnn/operations/normalization/layernorm/device/kernels/compute/"
+                          "layernorm_sharded_welford.cpp"
+                        : "ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp";
     }
 
     KernelHandle compute_kernels_id = -1;

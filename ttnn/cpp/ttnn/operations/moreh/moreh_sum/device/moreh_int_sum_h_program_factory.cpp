@@ -105,9 +105,9 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
     std::vector<uint32_t> writer_compile_time_args = {};
     TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
     const auto reader_kernel_file{
-        "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/reader_moreh_int_sum_h.cpp"};
+        "ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/reader_moreh_int_sum_h.cpp"};
     const auto writer_kernel_file{
-        "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/writer_moreh_int_sum_h.cpp"};
+        "ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/writer_moreh_int_sum_h.cpp"};
     const auto reader_kernel_id{
         CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines)};
     const auto writer_kernel_id{CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args)};
@@ -125,7 +125,7 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
     const auto compute_kernel_file{
-        "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/moreh_int_sum_h.cpp"};
+        "ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/moreh_int_sum_h.cpp"};
     CreateComputeKernel(
         program,
         compute_kernel_file,

@@ -69,8 +69,8 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)CBIndex::c_16};
     TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
-    const auto reader_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/reader_moreh_dot.cpp";
-    const auto writer_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/writer_moreh_dot.cpp";
+    const auto reader_kernel_file = "ttnn/operations/moreh/moreh_dot/device/kernels/reader_moreh_dot.cpp";
+    const auto writer_kernel_file = "ttnn/operations/moreh/moreh_dot/device/kernels/writer_moreh_dot.cpp";
 
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
@@ -81,7 +81,7 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
     const uint32_t core_num = 1;
-    const auto compute_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/moreh_dot.cpp";
+    const auto compute_kernel_file = "ttnn/operations/moreh/moreh_dot/device/kernels/moreh_dot.cpp";
     const auto compute_kernel_id = CreateComputeKernel(
         program,
         compute_kernel_file,

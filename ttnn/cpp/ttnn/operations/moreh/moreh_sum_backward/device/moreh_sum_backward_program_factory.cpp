@@ -149,9 +149,9 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
     std::vector<uint32_t> writer_compile_time_args = {};
     TensorAccessorArgs(input_grad.buffer()).append_to(writer_compile_time_args);
     const auto reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_sum_backward/device/kernels/reader_moreh_sum_backward.cpp";
+        "ttnn/operations/moreh/moreh_sum_backward/device/kernels/reader_moreh_sum_backward.cpp";
     const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_sum_backward/device/kernels/writer_moreh_sum_backward.cpp";
+        "ttnn/operations/moreh/moreh_sum_backward/device/kernels/writer_moreh_sum_backward.cpp";
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
@@ -163,8 +163,7 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_sum_backward/device/kernels/moreh_sum_backward.cpp";
+    const auto compute_kernel_file = "ttnn/operations/moreh/moreh_sum_backward/device/kernels/moreh_sum_backward.cpp";
     CreateComputeKernel(
         program,
         compute_kernel_file,

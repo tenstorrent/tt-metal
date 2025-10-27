@@ -138,9 +138,6 @@ ttnn/**/kernels/ @tenstorrent/metalium-codeowners-large-changes # Removes the ow
 ttnn/core/tensor/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/metalium-codeowners-large-changes
 ttnn/**/CMakeLists.txt @tenstorrent/metalium-developers-ttnn-core @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 
-ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @tenstorrent/metalium-codeowners-large-changes
-ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @ayerofieiev-tt @razorback3 @dongjin-na @tenstorrent/metalium-codeowners-large-changes
-
 ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @nmauriceTT @jbbieniekTT @aczajkowskiTT @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/moreh*/**/CMakeLists.txt @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/ccl/ @cfjchu @omilyutin-tt @tt-aho @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes

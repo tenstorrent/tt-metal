@@ -93,7 +93,7 @@ ApplyDeviceDelayDeviceOperation::ApplyDeviceDelayMeshWorkload::create_at(
     auto subdevice_cores = corerange_to_cores(operation_attributes.worker_core_range_set);
     auto kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/debug/device/kernels/dataflow/device_delay_spin.cpp",
+        "ttnn/operations/debug/device/kernels/dataflow/device_delay_spin.cpp",
         subdevice_cores.at(0),
         DataMovementConfig{.compile_args = {operation_attributes.delays[mesh_coordinate[0]][mesh_coordinate[1]]}});
     log_info(tt::LogAlways, "Created delay program at mesh coordinate: {}", mesh_coordinate);

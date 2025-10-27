@@ -4,8 +4,8 @@
 #include "dprint_pages.h"
 #include "utils/bfloat16.h"
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
     constexpr uint32_t routing_weights_cb_id = get_compile_time_arg_val(0);

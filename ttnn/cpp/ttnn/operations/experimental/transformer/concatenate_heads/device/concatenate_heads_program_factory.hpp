@@ -81,13 +81,13 @@ inline tt::tt_metal::operation::ProgramWithCallbacks concatenate_heads_multi_cor
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/concatenate_heads/device/kernels/dataflow/"
+        "ttnn/operations/experimental/transformer/concatenate_heads/device/kernels/dataflow/"
         "reader_tm_tile_layout_concat_heads.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/concatenate_heads/device/kernels/dataflow/"
+        "ttnn/operations/experimental/transformer/concatenate_heads/device/kernels/dataflow/"
         "writer_tm_tile_layout_concat_heads.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));

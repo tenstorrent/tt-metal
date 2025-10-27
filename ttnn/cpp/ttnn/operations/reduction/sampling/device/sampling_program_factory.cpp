@@ -219,7 +219,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
     tt::tt_metal::TensorAccessorArgs(input_indices_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/dataflow/reader_values_indices_tensor.cpp",
+        "ttnn/operations/reduction/sampling/device/kernels/dataflow/reader_values_indices_tensor.cpp",
         core_grid,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -271,7 +271,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
             });
         tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/dataflow/writer_interleaved.cpp",
+            "ttnn/operations/reduction/sampling/device/kernels/dataflow/writer_interleaved.cpp",
             core,
             tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -304,7 +304,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
 
         tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/compute/sampling.cpp",
+            "ttnn/operations/reduction/sampling/device/kernels/compute/sampling.cpp",
             core,
             tt::tt_metal::ComputeConfig{.compile_args = compute_args});
 

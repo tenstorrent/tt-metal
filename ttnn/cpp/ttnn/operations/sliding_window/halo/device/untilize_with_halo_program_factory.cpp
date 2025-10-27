@@ -160,7 +160,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
             program, all_cores, cb_indices.untilize_out_cb_id1, out_df, untilize_out_cb_num_pages, out_tile_size);
 
         const std::string compute_kernel_name =
-            "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/compute/pack_untilize.cpp";
+            "ttnn/operations/sliding_window/halo/device/kernels/compute/pack_untilize.cpp";
         const std::vector<uint32_t> compute_ct_args = {
             cb_indices.src_cb_id,
             input_to_writer_cb_id0,
@@ -241,7 +241,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
 
     const uint32_t block_stride = 2;  // Skip every 2nd block because of split reader
     const std::string reader_kernel_name =
-        "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather.cpp";
+        "ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather.cpp";
     std::vector<uint32_t> common_reader_ct_args = {
         0,  // padding config cb
         0,  // gather config cb
@@ -482,10 +482,10 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
                 ntiles_per_block,
                 MAX_PACK_UNTILIZE_WIDTH);
             compute_ct_args = {input_nblocks_per_core, ntiles_per_block, cb_indices.src_cb_id, temp_cb_id};
-            compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+            compute_kernel = "ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
         } else {
             compute_ct_args = {input_nblocks_per_core, ntiles_per_block, cb_indices.src_cb_id, input_to_writer_cb_id};
-            compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp";
+            compute_kernel = "ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp";
         }
         CreateKernel(program, compute_kernel, all_cores, ComputeConfig{.compile_args = compute_ct_args});
     }
@@ -668,7 +668,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
 
     KernelHandle reader_kernel_id0 = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather_in_place.cpp",
+        "ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather_in_place.cpp",
         rectangular_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -679,7 +679,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     reader_ct_args[0] = false;  // secondary thread
     KernelHandle reader_kernel_id1 = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather_in_place.cpp",
+        "ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather_in_place.cpp",
         rectangular_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,

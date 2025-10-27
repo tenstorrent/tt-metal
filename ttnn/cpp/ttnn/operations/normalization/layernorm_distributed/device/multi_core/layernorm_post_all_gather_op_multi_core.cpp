@@ -349,14 +349,14 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         "Only row major gamma and beta are supported");
     auto reader_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
+        "ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
         "reader_unary_interleaved_ln_rm_gb_post_allgather.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     auto writer_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
+        "ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
         "writer_unary_interleaved_start_id_blocked.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
@@ -366,7 +366,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
 
     auto compute_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
+        "ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
         "layernorm_post_allgather.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{

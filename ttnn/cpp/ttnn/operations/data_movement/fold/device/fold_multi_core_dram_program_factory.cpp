@@ -113,14 +113,14 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     // Create reader kernel for DRAM to circular buffer data movement
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/reader_dram2cb_tiled.cpp",
+        "ttnn/operations/data_movement/fold/device/kernels/dataflow/reader_dram2cb_tiled.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // Create writer kernel for circular buffer to DRAM data movement
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2dram_for_tiled_input.cpp",
+        "ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2dram_for_tiled_input.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -140,10 +140,9 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     };
 
     bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;
-    std::string compute_kernel_name =
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp";
+    std::string compute_kernel_name = "ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp";
     if (tiles_per_channel_dim > MAX_PACK_UNTILIZE_WIDTH) {
-        compute_kernel_name = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+        compute_kernel_name = "ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
     }
 
     log_debug(tt::LogOp, "compute_kernel_name: {}", compute_kernel_name);
@@ -334,13 +333,13 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
     TensorAccessorArgs(*src0_buffer).append_to(compile_time_args);
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/reader_dram2cb_for_rm_input.cpp",
+        "ttnn/operations/data_movement/fold/device/kernels/dataflow/reader_dram2cb_for_rm_input.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(compile_time_args));
     // Create writer kernel
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2dram_for_rm_input.cpp",
+        "ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2dram_for_rm_input.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(compile_time_args));
 

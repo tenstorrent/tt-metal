@@ -702,33 +702,33 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     const tt::tt_metal::CBHandle cb_partials = get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).handle;
 
     std::string reader_kernel;
-    std::string compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize.cpp";
+    std::string compute_kernel = "ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize.cpp";
     std::string writer_mcast_sender_kernel =
-        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
+        "ttnn/operations/conv/conv2d/device/kernels/"
         "reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
     std::string writer_mcast_receiver_kernel =
-        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
+        "ttnn/operations/conv/conv2d/device/kernels/"
         "reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
 
     if (!is_conv_1d_depthwise_conv && block_sharded) {
         // Block sharded conv
         reader_kernel =
-            "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
+            "ttnn/operations/conv/conv2d/device/kernels/"
             "reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp";
         writer_mcast_sender_kernel =
-            "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
+            "ttnn/operations/conv/conv2d/device/kernels/"
             "writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
         writer_mcast_receiver_kernel =
-            "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
+            "ttnn/operations/conv/conv2d/device/kernels/"
             "writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
     } else if (is_conv_1d_depthwise_conv) {
         // 1D Depthwise Conv (height sharded)
-        compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/compute_depthwise_conv1d.cpp";
-        reader_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_depthwise_conv1d.cpp";
+        compute_kernel = "ttnn/operations/conv/conv2d/device/kernels/compute_depthwise_conv1d.cpp";
+        reader_kernel = "ttnn/operations/conv/conv2d/device/kernels/reader_depthwise_conv1d.cpp";
     } else {
         // Height sharded conv
         reader_kernel =
-            "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
+            "ttnn/operations/conv/conv2d/device/kernels/"
             "reader_conv_activations_padded_with_halo_3x3_weights_v2.cpp";
     }
 

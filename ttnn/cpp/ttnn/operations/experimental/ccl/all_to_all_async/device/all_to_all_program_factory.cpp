@@ -298,7 +298,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     }
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/kernels/"
+        "ttnn/operations/experimental/ccl/all_to_all_async/device/kernels/"
         "interleaved_all_to_all_reader.cpp",
         sender_worker_core_range,
         reader_kernel_config);
@@ -327,7 +327,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     }
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/kernels/"
+        "ttnn/operations/experimental/ccl/all_to_all_async/device/kernels/"
         "interleaved_all_to_all_writer.cpp",
         sender_worker_core_range,
         writer_kernel_config);
@@ -347,7 +347,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
 
     auto receiver_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/kernels/"
+        "ttnn/operations/experimental/ccl/all_to_all_async/device/kernels/"
         "interleaved_all_to_all_receiver_writer.cpp",
         receiver_worker_core_range,
         receiver_writer_kernel_config);
@@ -369,7 +369,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         .append_to(receiver_reader_kernel_config.compile_args);
     auto receiver_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/kernels/"
+        "ttnn/operations/experimental/ccl/all_to_all_async/device/kernels/"
         "interleaved_all_to_all_receiver_reader.cpp",
         receiver_worker_core_range,
         receiver_reader_kernel_config);

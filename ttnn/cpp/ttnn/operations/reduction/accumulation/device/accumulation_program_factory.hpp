@@ -32,10 +32,10 @@ struct AccumulationProgramFactory {
     };
 
     static constexpr std::array<const char*, 3> KERNEL_PATHS{
-        "ttnn/cpp/ttnn/operations/reduction/accumulation/device/kernels/dataflow/"
+        "ttnn/operations/reduction/accumulation/device/kernels/dataflow/"
         "accumulation_reader.cpp",
-        "ttnn/cpp/ttnn/operations/reduction/accumulation/device/kernels/compute/accumulation_compute.cpp",
-        "ttnn/cpp/ttnn/operations/reduction/accumulation/device/kernels/dataflow/"
+        "ttnn/operations/reduction/accumulation/device/kernels/compute/accumulation_compute.cpp",
+        "ttnn/operations/reduction/accumulation/device/kernels/dataflow/"
         "accumulation_writer.cpp"};
     struct shared_variables_t {
         KernelHandle accumulation_reader_kernel_id{};

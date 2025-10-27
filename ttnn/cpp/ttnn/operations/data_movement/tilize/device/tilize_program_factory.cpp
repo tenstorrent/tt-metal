@@ -102,7 +102,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/tilize/device/kernels/dataflow/"
         "reader_unary_stick_layout_split_rows_interleaved.cpp",
         core,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
@@ -110,7 +110,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
     // Tilized writer
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -120,10 +120,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
     };
 
     tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
-        core,
-        tt::tt_metal::ComputeConfig{.compile_args = compute_args});
+        program, "ttnn/kernel/compute/tilize.cpp", core, tt::tt_metal::ComputeConfig{.compile_args = compute_args});
 
     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_kernel_args);
 
@@ -282,7 +279,7 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/"
         "reader_unary_pad_multicore_both_dims.cpp",
         all_cores,
         ReaderDataMovementConfig(reader_compile_time_args));
@@ -293,7 +290,7 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id_wh.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id_wh.cpp",
         all_cores,
         WriterDataMovementConfig(writer_compile_time_args));
 
@@ -302,21 +299,21 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
     if (!core_range.empty()) {
         CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
+            "ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             core_range,
             ComputeConfig{.compile_args = {single_block_size, single_block_size, third_dim}});
     }
     if (has_cliff_col && has_cliff_row) {
         CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
+            "ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             cliff_col_row_core_range,
             ComputeConfig{.compile_args = {single_block_size_cliff_col, single_block_size_cliff_row, third_dim}});
     }
     if (has_cliff_row) {
         CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
+            "ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             cliff_row_core_range,
             ComputeConfig{.compile_args = {single_block_size, single_block_size_cliff_row, third_dim}});
     }
@@ -324,7 +321,7 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
     if (has_cliff_col) {
         CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
+            "ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             cliff_col_core_range,
             ComputeConfig{.compile_args = {single_block_size_cliff_col, single_block_size, third_dim}});
     }
@@ -484,7 +481,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/tilize/device/kernels/dataflow/"
         "reader_unary_stick_layout_split_rows_interleaved.cpp",
         all_cores,
         ReaderDataMovementConfig(reader_ct_args));
@@ -495,7 +492,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         WriterDataMovementConfig(writer_ct_args));
 
@@ -506,15 +503,12 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
 
     if (!core_range.ranges().empty()) {
         CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
-            core_range,
-            ComputeConfig{.compile_args = compute_args});
+            program, "ttnn/kernel/compute/tilize.cpp", core_range, ComputeConfig{.compile_args = compute_args});
     }
     if (!core_range_cliff.empty()) {
         CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
+            "ttnn/kernel/compute/tilize.cpp",
             core_range_cliff,
             ComputeConfig{.compile_args = compute_args_cliff});
     }
@@ -645,13 +639,13 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
+        "ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -660,7 +654,7 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
 
     tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
+        "ttnn/kernel/compute/tilize.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{.compile_args = compute_args});
 

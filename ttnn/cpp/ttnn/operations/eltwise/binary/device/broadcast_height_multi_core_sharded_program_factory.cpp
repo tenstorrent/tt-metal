@@ -135,7 +135,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
 
     KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/reader_bcast_h_sharded.cpp",
+        "ttnn/operations/data_movement/bcast/device/kernels/dataflow/reader_bcast_h_sharded.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -143,7 +143,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
     // const char* compute_name = bcast_op_utils::get_compute_name(BcastOpDim::H));
     auto bcast_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/bcast_h.cpp",
+        "ttnn/operations/eltwise/binary/device/kernels/compute/bcast_h.cpp",
         all_cores,
         tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines});
 

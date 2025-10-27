@@ -109,7 +109,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -123,7 +123,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
         unary_writer_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded_blocks_interleaved_start_id.cpp",
+            "ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded_blocks_interleaved_start_id.cpp",
             all_cores,
             tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     } else {
@@ -132,7 +132,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
         unary_writer_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+            "ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
             "writer_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp",
             all_cores,
             tt_metal::WriterDataMovementConfig(writer_compile_time_args));
@@ -142,7 +142,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
         tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp",
+            "ttnn/kernel/compute/eltwise_copy.cpp",
             all_cores,
             tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
     }

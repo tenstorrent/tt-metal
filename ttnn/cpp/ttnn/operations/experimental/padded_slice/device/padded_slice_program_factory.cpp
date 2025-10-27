@@ -320,7 +320,7 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
     tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args_vec);
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/padded_slice/device/kernels/dataflow/"
+        "ttnn/operations/experimental/padded_slice/device/kernels/dataflow/"
         "padded_slice_reader_rm_interleaved_start_id.cpp",
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args_vec));
@@ -332,14 +332,14 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
 
         unary_writer_kernel_id = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/experimental/padded_slice/device/kernels/dataflow/"
+            "ttnn/operations/experimental/padded_slice/device/kernels/dataflow/"
             "writer_unary_sharded_padded_rm.cpp",
             total_cores,
             tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec));
     } else {
         unary_writer_kernel_id = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
+            "ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
             total_cores,
             tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec));
     }
@@ -832,8 +832,7 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         1                       // block_size_height_ntiles
     };
 
-    const std::string compute_kernel =
-        "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/compute/pack_untilize.cpp";
+    const std::string compute_kernel = "ttnn/operations/sliding_window/halo/device/kernels/compute/pack_untilize.cpp";
 
     auto untilize_compute_kernel_id = CreateKernel(
         program, compute_kernel, total_cores, ComputeConfig{.fp32_dest_acc_en = false, .compile_args = compute_args});
@@ -851,14 +850,14 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
     tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args_vec);
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/padded_slice/device/kernels/dataflow/"
+        "ttnn/operations/experimental/padded_slice/device/kernels/dataflow/"
         "padded_slice_reader_tiled_interleaved_start_id.cpp",
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args_vec));
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/padded_slice/device/kernels/dataflow/"
+        "ttnn/operations/experimental/padded_slice/device/kernels/dataflow/"
         "writer_unary_sharded_padded_tiled.cpp",
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec));

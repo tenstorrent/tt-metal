@@ -171,7 +171,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         }
         auto reader_kernel_id = CreateReadKernel(
             program,
-            "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
+            "ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
             "reader_moreh_getitem_tilize_w.cpp",
             all_cores,
             reader_compile_time_args,
@@ -180,7 +180,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
         auto writer_kernel_id = CreateWriteKernel(
             program,
-            "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
+            "ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
             "writer_moreh_getitem_tilize_w.cpp",
             all_cores,
             writer_compile_time_args,
@@ -395,7 +395,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         }
         auto reader_kernel_id = CreateReadKernel(
             program,
-            "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
+            "ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
             "reader_moreh_getitem_tilize.cpp",
             all_cores,
             reader_compile_time_args,
@@ -404,7 +404,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
         auto writer_kernel_id = CreateWriteKernel(
             program,
-            "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
+            "ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
             "writer_moreh_getitem_tilize.cpp",
             all_cores,
             writer_compile_time_args,

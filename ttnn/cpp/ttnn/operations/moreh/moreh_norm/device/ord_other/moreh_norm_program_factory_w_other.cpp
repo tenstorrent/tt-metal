@@ -91,10 +91,10 @@ MorehNormOperation::ProgramFactoryWOther::cached_program_t MorehNormOperation::P
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const auto reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_w/kernels/"
+        "ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_w/kernels/"
         "reader_moreh_norm_w.cpp";
     const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_w/kernels/"
+        "ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_w/kernels/"
         "writer_moreh_norm_w.cpp";
 
     std::vector<uint32_t> reader_ct_args = {};
@@ -121,7 +121,7 @@ MorehNormOperation::ProgramFactoryWOther::cached_program_t MorehNormOperation::P
     }
 
     const auto compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_w/kernels/"
+        "ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_w/kernels/"
         "moreh_norm_w_kernel.cpp";
 
     const auto compute_kernels_id_1 = CreateComputeKernel(

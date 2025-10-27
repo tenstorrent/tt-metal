@@ -100,7 +100,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
     const KernelDescriptor::RuntimeArgs runtime_args_per_cores = {{runtime_args}};  // single-core
 
     KernelDescriptor kernel_descriptor = {
-        .kernel_source = "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved.cpp",
+        .kernel_source = "ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved.cpp",
         .core_ranges = core,
         .compile_time_args = compile_time_args,
         .runtime_args = runtime_args_per_cores,
@@ -212,7 +212,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
     }
 
     KernelDescriptor reader_kernel_descriptor = {
-        .kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
+        .kernel_source = "ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
         .core_ranges = all_cores,
         .compile_time_args = reader_ct_args,
         .runtime_args = reader_rt_args_per_core,
@@ -220,7 +220,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
         .config = tt::tt_metal::ReaderConfigDescriptor{},
     };
     KernelDescriptor compute_kernel_descriptor = {
-        .kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
+        .kernel_source = "ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
         .core_ranges = all_cores,
         .compile_time_args = compute_ct_args,
         .defines = defines_relu,
@@ -372,7 +372,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
 
     KernelDescriptor reader_kernel_descriptor = {
         .kernel_source =
-            "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp",
+            "ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp",
         .core_ranges = all_cores,
         .compile_time_args = reader_compile_time_args,
         .runtime_args = reader_rt_args_per_core,
@@ -380,8 +380,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
         .config = tt::tt_metal::ReaderConfigDescriptor{},
     };
     KernelDescriptor writer_kernel_descriptor = {
-        .kernel_source =
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        .kernel_source = "ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         .core_ranges = all_cores,
         .compile_time_args = writer_compile_time_args,
         .runtime_args = writer_rt_args_per_core,
@@ -389,7 +388,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
         .config = tt::tt_metal::WriterConfigDescriptor{},
     };
     KernelDescriptor compute_kernel_descriptor = {
-        .kernel_source = "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp",
+        .kernel_source = "ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp",
         .core_ranges = all_cores,
         .compile_time_args = {},
         .defines = defines_eltwise_add,
@@ -594,8 +593,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
         num_tiles_written += num_output_tiles_per_core;
     }
     tt::tt_metal::KernelDescriptor reader_kernel_descriptor = {
-        .kernel_source =
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
+        .kernel_source = "ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
         .core_ranges = all_device_cores_set,
         .compile_time_args = reader_compile_time_args,
         .runtime_args = reader_rt_args_per_core,
@@ -603,8 +601,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
         .config = tt::tt_metal::ReaderConfigDescriptor{},
     };
     tt::tt_metal::KernelDescriptor writer_kernel_descriptor = {
-        .kernel_source =
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        .kernel_source = "ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         .core_ranges = all_device_cores_set,
         .compile_time_args = writer_compile_time_args,
         .runtime_args = writer_rt_args_per_core,
@@ -627,7 +624,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
     };
     log_info(tt::LogTest, "core_group_1: {}, core_group_2: {}", core_group_1.ranges(), core_group_2.ranges());
     tt::tt_metal::KernelDescriptor compute_kernel_descriptor_1 = {
-        .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
+        .kernel_source = "ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
         .core_ranges = core_group_1,
         .compile_time_args = compute_ct_args_group_1,
         .defines = {},
@@ -636,7 +633,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
         .config = tt::tt_metal::ComputeConfigDescriptor{.dst_full_sync_en = true},
     };
     tt::tt_metal::KernelDescriptor compute_kernel_descriptor_2 = {
-        .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
+        .kernel_source = "ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
         .core_ranges = core_group_2,
         .compile_time_args = compute_ct_args_group_2,
         .defines = {},
@@ -729,8 +726,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
     const KernelDescriptor::RuntimeArgs writer_rt_args_per_core = {{writer_rt_args}};
 
     KernelDescriptor reader_kernel_descriptor = {
-        .kernel_source =
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+        .kernel_source = "ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         .core_ranges = device_cores,
         .compile_time_args = reader_compile_time_args,
         .runtime_args = reader_rt_args_per_core,
@@ -738,8 +734,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
         .config = tt::tt_metal::ReaderConfigDescriptor{},
     };
     KernelDescriptor writer_kernel_descriptor = {
-        .kernel_source =
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        .kernel_source = "ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         .core_ranges = device_cores,
         .compile_time_args = writer_compile_time_args,
         .runtime_args = writer_rt_args_per_core,

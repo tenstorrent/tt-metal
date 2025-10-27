@@ -11,7 +11,7 @@
 
 namespace ttnn::operations::unary::program {
 
-static const std::string compute_root = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/";
+static const std::string compute_root = "ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/";
 
 using namespace tt::constants;
 
@@ -103,13 +103,13 @@ TanhAccurateProgramFactory::cached_program_t TanhAccurateProgramFactory::create(
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -136,9 +136,9 @@ TanhAccurateProgramFactory::cached_program_t TanhAccurateProgramFactory::create(
         unary_defines["TANH_BF16"] = "1";
     }
 
-    auto path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanh_accurate.cpp";
+    auto path = "ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanh_accurate.cpp";
     if (ops_chain[0].type() == UnaryOpType::TANHSHRINK) {
-        path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanhshrink.cpp";
+        path = "ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanhshrink.cpp";
     }
 
     tt::tt_metal::CreateKernel(

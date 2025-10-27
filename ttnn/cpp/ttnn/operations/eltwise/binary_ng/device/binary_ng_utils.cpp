@@ -92,8 +92,8 @@ std::string BinaryNgKernelConfig::bcast_input_str() const {
 }
 
 std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu) {
-    constexpr std::string_view root = "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels";
-    constexpr std::string_view root_ng = "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng";
+    constexpr std::string_view root = "ttnn/operations/eltwise/binary_ng/device/kernels";
+    constexpr std::string_view root_ng = "ttnn/operations/eltwise/binary_ng/device/kernels_ng";
     constexpr std::string_view dataflow = "{}/dataflow/{}";
     constexpr std::string_view compute = "{}/compute/{}";
 

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "compute_kernel_api.h"
-#include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {

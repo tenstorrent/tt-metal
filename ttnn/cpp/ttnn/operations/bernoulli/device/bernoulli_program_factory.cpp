@@ -64,7 +64,7 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
             .set_page_size(intermed1_cb_id, out_dtype_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed1_config);
 
-    const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/bernoulli/device/kernels/";
+    const std::string kernels_dir_path = "ttnn/operations/bernoulli/device/kernels/";
     std::vector<uint32_t> reader_compile_time_args{in_cb_id};
     TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
     const std::string reader_file_path = kernels_dir_path + "reader_bernoulli.cpp";

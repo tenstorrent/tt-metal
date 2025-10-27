@@ -113,7 +113,7 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/embedding_backward/device/kernels/dataflow/reader_embedding_backward.cpp",
+        "ttnn/operations/embedding_backward/device/kernels/dataflow/reader_embedding_backward.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -128,7 +128,7 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
 
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/embedding_backward/device/kernels/compute/embedding_backward.cpp",
+        "ttnn/operations/embedding_backward/device/kernels/compute/embedding_backward.cpp",
         all_cores,
         tt_metal::ComputeConfig{.compile_args = {max_tiles_per_core, input_height_tiles}});
 

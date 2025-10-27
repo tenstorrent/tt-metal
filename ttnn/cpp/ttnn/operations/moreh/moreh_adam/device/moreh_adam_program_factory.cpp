@@ -112,10 +112,10 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     }
 
     const auto reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/"
+        "ttnn/operations/moreh/moreh_adam/device/kernels/"
         "reader_moreh_adam.cpp";
     const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/"
+        "ttnn/operations/moreh/moreh_adam/device/kernels/"
         "writer_moreh_adam.cpp";
 
     std::map<std::string, std::string> data_movement_defines{};
@@ -145,7 +145,7 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     const std::vector<uint32_t> compute_args_group_1{num_tiles_per_core_group_1};
 
     const auto compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/"
+        "ttnn/operations/moreh/moreh_adam/device/kernels/"
         "moreh_adam.cpp";
 
     auto compute_kernel_1_id = CreateComputeKernel(

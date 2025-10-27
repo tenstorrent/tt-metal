@@ -103,14 +103,14 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
 
     auto reader_kernel_id = CreateReadKernel(
         program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/"
+        "ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/"
         "reader_moreh_nll_loss_step2_2d.cpp",
         all_cores,
         reader_compile_time_args,
         reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
         program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/"
+        "ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/"
         "writer_moreh_nll_loss_step2_2d.cpp",
         all_cores,
         writer_compile_time_args,
@@ -118,7 +118,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
 
     const auto compute_kernel_ids = CreateComputeKernel(
         program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/"
+        "ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/"
         "moreh_nll_loss_step2_kernel.cpp",
         {
             {core_group_1, units_per_core_group_1, {units_per_core_group_1}},
@@ -277,14 +277,14 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
 
     auto reader_kernel_id = CreateReadKernel(
         program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/"
+        "ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/"
         "reader_moreh_nll_loss_step2_3d.cpp",
         all_cores,
         reader_compile_time_args,
         reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
         program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/"
+        "ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/"
         "writer_moreh_nll_loss_step2_3d.cpp",
         all_cores,
         writer_compile_time_args,
@@ -292,7 +292,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
 
     const auto compute_kernel_ids = CreateComputeKernel(
         program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/"
+        "ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/"
         "moreh_nll_loss_step2_kernel.cpp",
         {
             {core_group_1, units_per_core_group_1, {units_per_core_group_1}},
@@ -464,14 +464,14 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
 
     auto reader_kernel_id = CreateReadKernel(
         program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/"
+        "ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/"
         "reader_moreh_nll_loss_step2_4d.cpp",
         all_cores,
         reader_compile_time_args,
         reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
         program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/"
+        "ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/"
         "writer_moreh_nll_loss_step2_4d.cpp",
         all_cores,
         writer_compile_time_args,
@@ -479,7 +479,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
 
     const auto compute_kernel_ids = CreateComputeKernel(
         program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/"
+        "ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/"
         "moreh_nll_loss_step2_kernel.cpp",
         {
             {core_group_1, units_per_core_group_1, {units_per_core_group_1}},

@@ -194,7 +194,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     }
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/"
+        "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/"
         "worker_reader.cpp",
         sender_worker_core_range,
         reader_kernel_config);
@@ -218,7 +218,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     }
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/"
+        "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/"
         "worker_writer.cpp",
         sender_worker_core_range,
         writer_kernel_config);
@@ -239,7 +239,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     };
     auto worker_receiver_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/"
+        "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/"
         "worker_receiver.cpp",
         intermediate_tensor_cores,
         receiver_kernel_config);

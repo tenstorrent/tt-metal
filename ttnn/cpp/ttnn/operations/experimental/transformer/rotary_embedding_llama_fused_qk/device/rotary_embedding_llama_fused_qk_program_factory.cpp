@@ -179,10 +179,10 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
         cos_interm_cb_index,
         sin_interm_cb_index,
     };
-    const std::string compute_kernel_path = row_major_QK ? "ttnn/cpp/ttnn/operations/experimental/transformer/"
+    const std::string compute_kernel_path = row_major_QK ? "ttnn/operations/experimental/transformer/"
                                                            "rotary_embedding_llama_fused_qk/device/kernels/compute/"
                                                            "rotary_embedding_llama_sharded_row_major.cpp"
-                                                         : "ttnn/cpp/ttnn/operations/experimental/transformer/"
+                                                         : "ttnn/operations/experimental/transformer/"
                                                            "rotary_embedding_llama_fused_qk/device/kernels/compute/"
                                                            "rotary_embedding_llama_sharded.cpp";
     auto rotary_embedding_kernel_id = tt_metal::CreateKernel(

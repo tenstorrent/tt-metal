@@ -434,19 +434,19 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
     auto reader_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp",
+        "ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp",
         core_grid,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
 
     auto writer_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/writer_interleaved.cpp",
+        "ttnn/operations/transformer/sdpa/device/kernels/dataflow/writer_interleaved.cpp",
         core_grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
 
     auto compute_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa.cpp",
+        "ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa.cpp",
         core_grid,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,

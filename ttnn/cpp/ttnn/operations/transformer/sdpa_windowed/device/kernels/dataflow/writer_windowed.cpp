@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
-#include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
 #include "accessor/tensor_accessor.h"
 
 void kernel_main() {

@@ -81,12 +81,12 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_dims_rm_interleaved.cpp",
+        "ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_dims_rm_interleaved.cpp",
         cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
     KernelHandle writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_dims_rm_interleaved.cpp",
+        "ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_dims_rm_interleaved.cpp",
         cores,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
     uint32_t padded_row_diff_size_nbytes = padded_row_size_nbytes - unpadded_row_size_nbytes;
@@ -264,13 +264,13 @@ operation::ProgramWithCallbacks pad_tile(
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+        "ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         core,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_unary_pad_dims_interleaved.cpp",
+        "ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_unary_pad_dims_interleaved.cpp",
         core,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -531,12 +531,12 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_dims_rm_interleaved.cpp",
+        "ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_dims_rm_interleaved.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
     KernelHandle writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_dims_rm_interleaved.cpp",
+        "ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_dims_rm_interleaved.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
     // int32_t padded_row_diff_size_nbytes = padded_row_size_nbytes - unpadded_row_size_nbytes;
@@ -885,12 +885,12 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_dims_rm_interleaved_v2.cpp",
+        "ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_dims_rm_interleaved_v2.cpp",
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
     KernelHandle writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_dims_rm_interleaved_v2.cpp",
+        "ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_dims_rm_interleaved_v2.cpp",
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
@@ -1285,13 +1285,13 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_dims_rm_sharded.cpp",
+        "ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_dims_rm_sharded.cpp",
         all_cores_padded,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
     KernelHandle writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_dims_rm_sharded.cpp",
+        "ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_dims_rm_sharded.cpp",
         all_cores_padded,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
@@ -1444,13 +1444,13 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_dims_rm_sharded_stickwise.cpp",
+        "ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_dims_rm_sharded_stickwise.cpp",
         all_cores_padded,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
     KernelHandle writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_dims_rm_sharded_stickwise.cpp",
+        "ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_dims_rm_sharded_stickwise.cpp",
         all_cores_padded,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
@@ -1560,12 +1560,12 @@ operation::ProgramWithCallbacks pad_tile_multicore(
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_tiled.cpp",
+        "ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_tiled.cpp",
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
     KernelHandle writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_tiled.cpp",
+        "ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_tiled.cpp",
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 

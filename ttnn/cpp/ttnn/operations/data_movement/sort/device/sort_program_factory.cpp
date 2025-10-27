@@ -160,7 +160,7 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
     TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*index_buffer).append_to(reader_compile_time_args);
     const std::string reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_single_core.cpp";
+        "ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_single_core.cpp";
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program, reader_kernel_path, core_range, tt::tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
     SetRuntimeArgs(
@@ -182,7 +182,7 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
         static_cast<uint32_t>(is_32_bit_data)};
     TensorAccessorArgs(*value_buffer).append_to(writer_compile_time_args);
     const std::string writer_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_single_row_single_core.cpp";
+        "ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_single_row_single_core.cpp";
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program, writer_kernel_path, core_range, tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
     SetRuntimeArgs(
@@ -203,7 +203,7 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
         static_cast<uint32_t>(attributes.stable),
         synchronization_cb_index};
     const std::string compute_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_single_row_single_core.cpp";
+        "ttnn/operations/data_movement/sort/device/kernels/compute/sort_single_row_single_core.cpp";
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,
@@ -545,7 +545,7 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
     TensorAccessorArgs(*index_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*physical_core_lookup_table_tensor_buffer).append_to(reader_compile_time_args);
     const std::string reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_cross_core_data_exchange.cpp";
+        "ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_cross_core_data_exchange.cpp";
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program, reader_kernel_path, core_range, tt::tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
     SetRuntimeArgs(
@@ -569,7 +569,7 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
         static_cast<uint32_t>(is_32_bit_data)};
     TensorAccessorArgs(*value_buffer).append_to(writer_compile_time_args);
     const std::string writer_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_cross_core_data_exchange.cpp";
+        "ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_cross_core_data_exchange.cpp";
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program, writer_kernel_path, core_range, tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
     SetRuntimeArgs(program, writer_kernel_id, core_range, {value_buffer->address()});
@@ -595,7 +595,7 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
         packer_unpacker_sync_cb_index,
     };
     const std::string compute_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_cross_core_data_exchange.cpp";
+        "ttnn/operations/data_movement/sort/device/kernels/compute/sort_cross_core_data_exchange.cpp";
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,
@@ -847,7 +847,7 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
     TensorAccessorArgs(*value_buffer).append_to(coordinator_compile_time_args);
     TensorAccessorArgs(*index_buffer).append_to(coordinator_compile_time_args);
     const std::string coordinator_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/coordinator_single_row_multi_core.cpp";
+        "ttnn/operations/data_movement/sort/device/kernels/dataflow/coordinator_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle coordinator_kernel_id = tt::tt_metal::CreateKernel(
         program,
         coordinator_kernel_path,
@@ -880,7 +880,7 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
     TensorAccessorArgs(*value_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*index_buffer).append_to(reader_compile_time_args);
     const std::string reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_multi_core.cpp";
+        "ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program, reader_kernel_path, core_range, tt::tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
     SetRuntimeArgs(
@@ -906,7 +906,7 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
     TensorAccessorArgs(*value_buffer).append_to(writer_compile_time_args);
     TensorAccessorArgs(*index_buffer).append_to(writer_compile_time_args);
     const std::string writer_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_single_row_multi_core.cpp";
+        "ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program, writer_kernel_path, core_range, tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
     SetRuntimeArgs(
@@ -936,7 +936,7 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
         static_cast<uint32_t>(attributes.stable),
         log2Wt};
     const std::string compute_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_single_row_multi_core.cpp";
+        "ttnn/operations/data_movement/sort/device/kernels/compute/sort_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,

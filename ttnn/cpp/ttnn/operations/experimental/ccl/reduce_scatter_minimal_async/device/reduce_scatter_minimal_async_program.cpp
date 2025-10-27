@@ -634,7 +634,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 }
                 auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
                     program,
-                    "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
+                    "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
                     "ring_reduce_scatter_minimal_async_reader.cpp",
                     {core},
                     tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args, reader_compute_defines));
@@ -721,7 +721,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 }
                 auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
                     program,
-                    "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
+                    "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
                     "ring_reduce_scatter_minimal_async_writer.cpp",
                     {core},
                     tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
@@ -762,7 +762,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
 
                 auto sender_reduce_kernel_id = tt::tt_metal::CreateKernel(
                     program,
-                    "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
+                    "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
                     "ring_reduction.cpp",
                     {core},
                     sender_reduce_kernel_config);
@@ -1315,7 +1315,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                 }
                 auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
                     program,
-                    "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
+                    "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
                     "line_reduce_scatter_minimal_async_reader.cpp",
                     {core},
                     tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args, reader_compute_defines));
@@ -1408,7 +1408,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                 }
                 auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
                     program,
-                    "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
+                    "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
                     "line_reduce_scatter_minimal_async_writer.cpp",
                     {core},
                     tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
@@ -1455,7 +1455,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                 };
                 auto reduce_kernel_id = tt::tt_metal::CreateKernel(
                     program,
-                    "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
+                    "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
                     "line_reduction.cpp",
                     {core},
                     sender_reduce_kernel_config);

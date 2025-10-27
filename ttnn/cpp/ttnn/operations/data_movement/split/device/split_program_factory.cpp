@@ -171,14 +171,14 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/split/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/split/device/kernels/dataflow/"
         "reader_tm_tile_layout_split_two_chunks.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/split/device/kernels/dataflow/"
+        "ttnn/operations/data_movement/split/device/kernels/dataflow/"
         "writer_tm_tile_layout_split_two_chunks.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));

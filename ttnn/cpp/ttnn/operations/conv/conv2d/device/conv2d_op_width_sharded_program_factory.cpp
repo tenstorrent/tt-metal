@@ -305,11 +305,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
 
     uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / (input_num_cores * per_core_num_blocks_act_w);
 
-    std::string compute_kernel_path = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize.cpp";
+    std::string compute_kernel_path = "ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize.cpp";
     std::string activation_kernel_path =
-        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp";
-    std::string weights_kernel_path =
-        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/weights_reader_width_sharded.cpp";
+        "ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp";
+    std::string weights_kernel_path = "ttnn/operations/conv/conv2d/device/kernels/weights_reader_width_sharded.cpp";
 
     bool tilize_in0 = false;
 

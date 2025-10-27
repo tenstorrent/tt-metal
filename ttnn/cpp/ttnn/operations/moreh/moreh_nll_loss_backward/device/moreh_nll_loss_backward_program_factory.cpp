@@ -96,13 +96,13 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     }
 
     const auto reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
+        "ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
         "reader_moreh_nll_loss_backward_2d.cpp";
     const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
+        "ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
         "writer_moreh_nll_loss_backward.cpp";
     const auto compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
+        "ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
         "moreh_nll_loss_backward_kernel.cpp";
 
     auto reader_kernel_id =
@@ -267,13 +267,13 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     }
 
     const auto reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
+        "ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
         "reader_moreh_nll_loss_backward_3d.cpp";
     const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
+        "ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
         "writer_moreh_nll_loss_backward.cpp";
     const auto compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
+        "ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
         "moreh_nll_loss_backward_kernel.cpp";
 
     auto reader_kernel_id =
@@ -441,13 +441,13 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     }
 
     const auto reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
+        "ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
         "reader_moreh_nll_loss_backward_4d.cpp";
     const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
+        "ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
         "writer_moreh_nll_loss_backward.cpp";
     const auto compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
+        "ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
         "moreh_nll_loss_backward_kernel.cpp";
 
     auto reader_kernel_id =

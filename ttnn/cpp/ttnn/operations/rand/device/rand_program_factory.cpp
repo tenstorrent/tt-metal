@@ -56,7 +56,7 @@ RandDeviceOperation::ProgramFactory::cached_program_t RandDeviceOperation::Progr
             .set_page_size(dst_cb_id, dtype_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/rand/device/kernels/";
+    const std::string kernels_dir_path = "ttnn/operations/rand/device/kernels/";
     std::vector<uint32_t> writer_compile_time_args{intermed_cb_id, dst_cb_id};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
     const std::string writer_file_path = kernels_dir_path + "writer_uniform.cpp";
