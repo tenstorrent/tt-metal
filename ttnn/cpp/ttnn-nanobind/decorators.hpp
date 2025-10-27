@@ -60,6 +60,7 @@ template <typename F>
 constexpr auto resolve_composite_operation_call_method(F func) {
     using traits = function_traits<F>;
 
+    // Create a new lambda that has the same signature but calls the original function
     return []<typename TSelf, typename... TArgs>(F func, arg_traits<TSelf, TArgs...>) {
         return [func](TSelf self, TArgs... args) ->
                typename traits::return_t { return func(self, static_cast<decltype(args)&&>(args)...); };
@@ -115,6 +116,7 @@ template <
 void def_call_operator(py_operation_t& py_operation, const nanobind_overload_t<function_t, py_args_t...>& overload) {
     std::apply(
         [&py_operation, &overload](auto... args) {
+            // Use composite-specific resolution that preserves the custom lambda logic
             py_operation.def("__call__", resolve_composite_operation_call_method(overload.function), args...);
         },
         overload.args.value);
