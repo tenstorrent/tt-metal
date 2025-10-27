@@ -108,13 +108,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     switch (op_type) {
         case UnaryOpType::FILL:
             if (input_dtype == DataType::INT32) {
-                op_init_and_name = {
-                    "fill_tile_init();",
-                    fmt::format(
-                        "fill_tile_int({}, {}u);", idst, std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
+                op_init_and_name = {"fill_tile_init();", fmt::format("fill_tile_int({}, {}u);", idst, (uint)params[0])};
             } else if (input_dtype == DataType::UINT32) {
-                op_init_and_name = {
-                    "fill_tile_init();", fmt::format("fill_tile_int({}, {}u);", idst, (uint)param0_raw)};
+                // TODO: Use uint32_t tile API here once implemented
+                op_init_and_name = {"fill_tile_init();", fmt::format("fill_tile_int({}, {}u);", idst, (uint)params[0])};
             } else {
                 // Note: bit casted to int float is used to properly pass nan/+-inf
                 op_init_and_name = {
@@ -340,7 +337,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 op_init_and_name = {
-                    "unary_ne_tile_init();", fmt::format("unary_ne_tile_int32({}, {}u);", idst, (uint)params[0])};
+                    "unary_ne_tile_init();",
+                    fmt::format("unary_ne_tile_int32({}, {}u);", idst, std::bit_cast<uint32_t>(param0_raw))};
             } else {
                 op_init_and_name = {
                     "unary_ne_tile_init();",
@@ -352,7 +350,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 op_init_and_name = {
-                    "unary_eq_tile_init();", fmt::format("unary_eq_tile_int32({}, {}u);", idst, (uint)params[0])};
+                    "unary_eq_tile_init();",
+                    fmt::format("unary_eq_tile_int32({}, {}u);", idst, std::bit_cast<uint32_t>(param0_raw))};
             } else {
                 op_init_and_name = {
                     "unary_eq_tile_init();",
@@ -364,7 +363,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 op_init_and_name = {
-                    "unary_gt_tile_init();", fmt::format("unary_gt_tile_int32({}, {});", idst, params[0])};
+                    "unary_gt_tile_init();",
+                    fmt::format("unary_gt_tile_int32({}, {});", idst, std::bit_cast<uint32_t>(param0_raw))};
             } else {
                 op_init_and_name = {
                     "unary_gt_tile_init();",
@@ -376,7 +376,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 op_init_and_name = {
-                    "unary_lt_tile_init();", fmt::format("unary_lt_tile_int32({}, {});", idst, params[0])};
+                    "unary_lt_tile_init();",
+                    fmt::format("unary_lt_tile_int32({}, {});", idst, std::bit_cast<uint32_t>(param0_raw))};
             } else {
                 op_init_and_name = {
                     "unary_lt_tile_init();",
@@ -388,7 +389,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 op_init_and_name = {
-                    "unary_ge_tile_init();", fmt::format("unary_ge_tile_int32({}, {});", idst, params[0])};
+                    "unary_ge_tile_init();",
+                    fmt::format("unary_ge_tile_int32({}, {});", idst, std::bit_cast<uint32_t>(param0_raw))};
             } else {
                 op_init_and_name = {
                     "unary_ge_tile_init();",
@@ -400,7 +402,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 op_init_and_name = {
-                    "unary_le_tile_init();", fmt::format("unary_le_tile_int32({}, {});", idst, params[0])};
+                    "unary_le_tile_init();",
+                    fmt::format("unary_le_tile_int32({}, {});", idst, std::bit_cast<uint32_t>(param0_raw))};
             } else {
                 op_init_and_name = {
                     "unary_le_tile_init();",
@@ -438,7 +441,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::MAXIMUM:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
-            if (input_dtype == DataType::INT32) {
+            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 op_init_and_name = {
                     "unary_max_tile_init();", fmt::format("unary_max_int32_tile({}, {}u);", idst, (uint)params[0])};
             } else {
@@ -450,7 +453,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::MINIMUM:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
-            if (input_dtype == DataType::INT32) {
+            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 op_init_and_name = {
                     "unary_min_tile_init();", fmt::format("unary_min_int32_tile({}, {}u);", idst, (uint)params[0])};
             } else {
