@@ -119,7 +119,7 @@ def test_ttnn_semseg(device, model_location_generator):
         "Semantic",
         torch_out,
         ttnn_out_tt,
-        to_channel_first=False,
+        to_channel_first=True,
         output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
         exp_pcc=0.970,
     )

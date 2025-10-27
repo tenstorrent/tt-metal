@@ -6,7 +6,6 @@ import ttnn
 from loguru import logger
 
 from models.experimental.panoptic_deeplab.tt.tt_aspp import TtASPP
-from models.experimental.panoptic_deeplab.tt.tt_upsample import BilinearUpsampleMatmulTTNN as TtBilinearUpsample
 from models.tt_cnn.tt.builder import TtConv2d
 from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 from models.common.lightweightmodule import LightweightModule
@@ -243,7 +242,8 @@ class TtDeepLabV3PlusHead(LightweightModule):
                 batch_size=y_batch,
                 scale_factor=(scale_h, scale_w),
                 # mode="bilinear",
-                mode="nearest",  # accuracy changes are negligible, so we use nearest for all to save memory
+                # slice_strategy=ChannelSliceStrategyConfiguration(num_slices=4),
+                mode="nearest",
                 slice_strategy=None,
             )
             upsample_layer = TtUpsample(upsample_config, self.device)
@@ -378,17 +378,10 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
 
         # Final upsample - use builder API
         # Store scale factor for dynamic upsample creation during forward pass
-        self.final_upsample = TtBilinearUpsample(
-            device,
-            input_batch=1,
-            input_channels=32,  # true value is 19; this is padded somewhere
-            input_height=128,
-            input_width=256,
-            scale=common_stride,
-            input_channels_first=False,
-            output_channels_first=True,
+        self.final_upsample_scale = (
+            common_stride if isinstance(common_stride, tuple) else (common_stride, common_stride)
         )
-
+        self.final_upsample_mode = "nearest"
         logger.debug("TtPanopticDeepLabSemSegHead initialization complete")
 
     def forward(self, features: Dict[str, ttnn.Tensor]) -> Tuple[ttnn.Tensor, Dict]:
@@ -429,14 +422,22 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         # Convert to ROW_MAJOR for upsample
         y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
 
+        # Calculate scale factors
+        # Head convolutions use stride=1 (no downsampling), so use base scale factor
+        scale_h = self.final_upsample_scale[0]
+        scale_w = self.final_upsample_scale[1]
+        logger.debug(
+            f"Upsampling from [{current_h}, {current_w}] with scale_factor=[{scale_h}, {scale_w}] to [{current_h * scale_h}, {current_w * scale_w}]"
+        )
+
         # Check allocation before final upsample
         if not y.is_allocated():
             logger.warning(f"Final upsample: input y is NOT allocated before upsample!")
         else:
             logger.debug(f"Final upsample: input y is allocated (shape={y.shape}, dtype={y.dtype}, layout={y.layout})")
 
-        # Matmul based upsample
-        y = self.final_upsample(y)
+        # Upsample directly
+        y = ttnn.upsample(y, scale_factor=(scale_h, scale_w), mode=self.final_upsample_mode)
 
         # Check allocation after final upsample
         if not y.is_allocated():
