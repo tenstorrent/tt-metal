@@ -57,6 +57,8 @@ class TTSampling(LightweightModule):
     ):
         super().__init__()
         self.mesh_device = mesh_device
+        # Multi-step reduction is supported only on single device
+        self.multi_step_reduction = list(mesh_device.shape) == [1, 1]
         self.tt_ccl = tt_ccl
         self.vocab_size = args.vocab_size
         self.padded_vocab_size = getattr(args, "padded_vocab_size", None)
@@ -120,7 +122,8 @@ class TTSampling(LightweightModule):
     def _create_indices_tensors(self):
         """Create the indices tensors needed for distributed top-k operations."""
         # Create indices tensor for device offsets
-        num_devices_in_mesh = max(self.cluster_shape[0], self.cluster_shape[1])
+        # For multi-step reduction, we use reduce over 2 steps in a single device
+        num_devices_in_mesh = 2 if self.multi_step_reduction else max(self.cluster_shape[0], self.cluster_shape[1])
         indices_device_offsets = torch.ones(
             1, 1, self.max_batch_size, self.max_top_k * num_devices_in_mesh, dtype=torch.int64
         )
@@ -235,52 +238,79 @@ class TTSampling(LightweightModule):
         # Convert to bfloat16 for top-k operations (typecast is no-op if already bfloat16)
         x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
 
-        # Perform local top-k on each device
-        topk_values, topk_indices = ttnn.topk(
-            x_bf16,
-            k=self.max_top_k,
-            dim=-1,
-            sub_core_grids=self.sub_core_grid_topk,
-            indices_tensor=self.tt_indices_tensor,
-        )
+        if self.multi_step_reduction:
+            x_bf16_list = ttnn.split(x_bf16, x_bf16.shape[-1] // 2, dim=3)
+            indices_tensor_list = ttnn.split(self.tt_indices_tensor, self.tt_indices_tensor.shape[-1] // 2, dim=3)
+            topk_values_list = []
+            topk_indices_list = []
 
-        # Gather top-k values across all devices
-        topk_values_gathered = self._perform_all_gather(
-            topk_values,
-            dim=3,
-            cluster_axis=0,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            num_links=self.num_gather_links,
-            buffer_key="SAMPLING_VALUES",
-        )
+            for i in range(len(x_bf16_list)):
+                topk_values, topk_indices = ttnn.topk(
+                    x_bf16_list[i],
+                    k=self.max_top_k,
+                    dim=-1,
+                    sub_core_grids=self.sub_core_grid_topk,
+                    indices_tensor=indices_tensor_list[i],
+                )
+                topk_values_list.append(topk_values)
+                topk_indices_list.append(topk_indices)
+                x_bf16_list[i].deallocate()
+                indices_tensor_list[i].deallocate()
 
-        ttnn.deallocate(topk_values)
+            topk_values_gathered_bf16_interleaved = ttnn.concat(topk_values_list, dim=3)
+            topk_indices_gathered = ttnn.concat(topk_indices_list, dim=3)
 
-        # Convert gathered values to appropriate format
-        if self.sampling_memory_config != ttnn.DRAM_MEMORY_CONFIG:
-            topk_values_gathered_bf16 = ttnn.to_memory_config(
-                topk_values_gathered,
-                memory_config=self.sampling_memory_config,
-                dtype=ttnn.bfloat16,
-            )
-            topk_values_gathered_bf16_interleaved = ttnn.to_memory_config(
-                topk_values_gathered_bf16, memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
-            ttnn.deallocate(topk_values_gathered_bf16)
+            for i in range(len(topk_indices_list)):
+                ttnn.deallocate(topk_values_list[i])
+                ttnn.deallocate(topk_indices_list[i])
+
         else:
-            topk_values_gathered_bf16_interleaved = topk_values_gathered
+            # Perform local top-k on each device
+            topk_values, topk_indices = ttnn.topk(
+                x_bf16,
+                k=self.max_top_k,
+                dim=-1,
+                sub_core_grids=self.sub_core_grid_topk,
+                indices_tensor=self.tt_indices_tensor,
+            )
 
-        # Gather top-k indices across all devices
-        topk_indices_gathered = self._perform_all_gather(
-            topk_indices,
-            dim=3,
-            cluster_axis=0,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            num_links=self.num_gather_links,
-            buffer_key="SAMPLING_INDICES",
-            dtype=ttnn.uint16,
-        )
-        ttnn.deallocate(topk_indices)
+            # Gather top-k values across all devices
+            topk_values_gathered = self._perform_all_gather(
+                topk_values,
+                dim=3,
+                cluster_axis=0,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                num_links=self.num_gather_links,
+                buffer_key="SAMPLING_VALUES",
+            )
+
+            ttnn.deallocate(topk_values)
+
+            # Convert gathered values to appropriate format
+            if self.sampling_memory_config != ttnn.DRAM_MEMORY_CONFIG:
+                topk_values_gathered_bf16 = ttnn.to_memory_config(
+                    topk_values_gathered,
+                    memory_config=self.sampling_memory_config,
+                    dtype=ttnn.bfloat16,
+                )
+                topk_values_gathered_bf16_interleaved = ttnn.to_memory_config(
+                    topk_values_gathered_bf16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+                ttnn.deallocate(topk_values_gathered_bf16)
+            else:
+                topk_values_gathered_bf16_interleaved = topk_values_gathered
+
+            # Gather top-k indices across all devices
+            topk_indices_gathered = self._perform_all_gather(
+                topk_indices,
+                dim=3,
+                cluster_axis=0,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                num_links=self.num_gather_links,
+                buffer_key="SAMPLING_INDICES",
+                dtype=ttnn.uint16,
+            )
+            ttnn.deallocate(topk_indices)
 
         # Convert indices to appropriate data types
         # TODO: Create issue for direct uint16->int32 typecast support (Issue #XXXXX)

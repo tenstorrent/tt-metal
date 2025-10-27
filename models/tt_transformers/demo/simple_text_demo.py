@@ -862,18 +862,20 @@ def test_demo_text(
         user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
 
         # Use device sampling for all cases when supported
-        # https://github.com/tenstorrent/tt-metal/issues/31134
-        # On-device sampling is not supported on N150/P150 currently
+
         device_sampling_params = (
             SamplingParams(
                 temperature=sampling_params["temperature"],
                 top_k=sampling_params["top_k"],
                 top_p=sampling_params["top_p"],
             )
-            if model_args[0].vocab_size // num_devices <= 64 * 1024
-            and os.environ.get("MESH_DEVICE") not in ["N150", "P150"]
+            if model[0]._supports_on_device_sampling
             else None
         )
+        if device_sampling_params is None and isinstance(sampling_params["temperature"], List):
+            # host sampling only supports single sample param for all users in a batch
+            sampling_params["temperature"] = sampling_params["temperature"][0]
+            sampling_params["top_p"] = sampling_params["top_p"][0]
 
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] for b in range(global_batch_size)])

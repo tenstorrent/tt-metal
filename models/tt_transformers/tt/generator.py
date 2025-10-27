@@ -253,10 +253,10 @@ class Generator:
         read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
     ):
-        # TODO: Create issue for N150/P150 sampling support (Issue #XXXXX)
+        # https://github.com/tenstorrent/tt-metal/issues/31134
         # Use on-device sampling when sampling params are provided
-        if self.mesh_device.shape == (1, 1):
-            assert sampling_params is None, "Sampling on device is not supported on N150 and P150"
+        if not self.model[0]._supports_on_device_sampling:
+            assert sampling_params is None, "Sampling on device is not supported on Blackhole devices"
         sampling_on_device = sampling_params is not None
 
         B = tokens.shape[0]

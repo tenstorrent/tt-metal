@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 from tqdm import tqdm
 
@@ -132,10 +134,11 @@ class Transformer(LightweightModule):
 
         # Initialize on-device sampling if supported
         # https://github.com/tenstorrent/tt-metal/issues/31134
-        # N150 and P150 do not support on-device sampling currently
+        # Blackhole devices do not support on-device sampling currently
         # Sampling on device is supported only if each device has maximum logits size of 64*1024
+        sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
         self._supports_on_device_sampling = (
-            self.args.vocab_size // self.args.num_devices <= 64 * 1024 and self.mesh_device.shape != (1, 1)
+            self.args.vocab_size // sampling_splits <= 64 * 1024 and "P" not in os.environ.get("MESH_DEVICE")
         )
         if self._supports_on_device_sampling:
             self.tt_sampling = TTSampling(mesh_device=mesh_device, tt_ccl=self.tt_ccl, args=args)
@@ -438,7 +441,7 @@ class Transformer(LightweightModule):
 
         if sampling_on_device and self.tt_sampling is not None:
             # Perform on-device sampling using TTSampling
-            tt_toks = self.tt_sampling(tt_logits, tt_out_tok=x)
+            tt_toks = self.tt_sampling(tt_logits, seed=42, tt_out_tok=x)
             # Update device tensors for the next iteration
             self._increment_decode_positions_device(current_pos, rot_mat_idxs)
             return tt_toks
