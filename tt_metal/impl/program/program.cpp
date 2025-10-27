@@ -423,7 +423,7 @@ KernelGroup::KernelGroup(
     const CoreRangeSet& new_ranges,
     const dev_msgs::Factory& dev_msgs_factory) :
     programmable_core_type_index(programmable_core_type_index),
-    core_ranges(CoreRangeSet()),
+
     kernel_ids(std::move(kernel_ids)),
     launch_msg(dev_msgs_factory.create<dev_msgs::launch_msg_t>()),
     go_msg(dev_msgs_factory.create<dev_msgs::go_msg_t>()) {
@@ -520,18 +520,12 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         const auto& handle_to_kernel = kernels_[programmable_core_type_index];
         for (const auto& [id, kernel] : handle_to_kernel) {
             for (auto core : kernel->logical_cores()) {
-                if (core.x > grid_extent_[programmable_core_type_index].x) {
-                    grid_extent_[programmable_core_type_index].x = core.x;
-                }
-                if (core.y > grid_extent_[programmable_core_type_index].y) {
-                    grid_extent_[programmable_core_type_index].y = core.y;
-                }
-                if (core.x < base.x) {
-                    base.x = core.x;
-                }
-                if (core.y < base.y) {
-                    base.y = core.y;
-                }
+                grid_extent_[programmable_core_type_index].x =
+                    std::max(core.x, grid_extent_[programmable_core_type_index].x);
+                grid_extent_[programmable_core_type_index].y =
+                    std::max(core.y, grid_extent_[programmable_core_type_index].y);
+                base.x = std::min(core.x, base.x);
+                base.y = std::min(core.y, base.y);
             }
         }
         grid_extent_[programmable_core_type_index].x++;
@@ -970,7 +964,7 @@ void detail::ProgramImpl::set_remote_circular_buffer_init(const std::shared_ptr<
         TT_FATAL(
             kernel_defines.find(str) == kernel_defines.end(), "{} is a reserved define and can't be manually set", str);
     }
-    std::string align_code = "";
+    std::string align_code;
     std::unordered_set<CBHandle> initialized_cbs;
     std::unordered_set<uint8_t> remote_cb_indices;
     for (auto logical_cr : kernel->logical_coreranges()) {
