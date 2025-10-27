@@ -16,6 +16,10 @@ void MAIN {
     compute_kernel_hw_startup(src_cb_id, out_cb_id);
     untilize_init(src_cb_id);
 
+    DPRINT << "per_core_block_cnt: " << per_core_block_cnt << ENDL();
+    DPRINT << "per_core_block_tile_cnt: " << per_core_block_tile_cnt << ENDL();
+    DPRINT << "src_cb_id: " << src_cb_id << ", out_cb_id: " << out_cb_id << ENDL();
+
     for (uint32_t b = 0; b < per_core_block_cnt; ++b) {
         cb_wait_front(src_cb_id, per_core_block_tile_cnt);
         cb_reserve_back(out_cb_id, per_core_block_tile_cnt);

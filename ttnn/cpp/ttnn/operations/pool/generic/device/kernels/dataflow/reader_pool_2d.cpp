@@ -6,7 +6,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG_PRINT 0
+#define ENABLE_DEBUG_PRINT 1
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -361,6 +361,9 @@ void kernel_main() {
     }
 
     const uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
+    // if (reader_id == 0) {
+    //     tt::data_movement::common::print_bf16_pages(get_write_ptr(in_shard_cb_id), 512, 32);
+    // }
     uint32_t in_idx_l1_read_base_addr = 0;
     if constexpr (return_indices) {
         in_idx_l1_read_base_addr = get_read_ptr(in_shard_idx_cb_id);

@@ -24,8 +24,10 @@ void MAIN {
 
     compute_kernel_hw_startup(src_cb_id, out_cb_id0);
     if constexpr (use_pack_untilize) {
+        DPRINT << "Using pack_untilize kernel" << ENDL();
         pack_untilize_init<tiles_per_row>(src_cb_id, out_cb_id0);
     } else {
+        DPRINT << "Using untilize kernel" << ENDL();
         untilize_init(src_cb_id);
     }
 

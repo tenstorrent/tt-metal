@@ -83,6 +83,7 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
         // TODO: `input_tensor` is const qualified, but Tensor::deallocate() is not.
         // Find a nicer way to do this.
         input_tensor.mesh_buffer()->deallocate();
+        printf("buffer deallocated\n");
     }
 
     std::array<uint32_t, 2> shard_shape = {
@@ -102,6 +103,8 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
 
 operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     const std::vector<Tensor>& inputs, std::vector<Tensor>& outputs) const {
+    printf("Halo Device Operation - create_program\n");
+
     const auto& input_tensor = inputs.at(0);
     auto& output_tensor = outputs.at(0);
     auto device = input_tensor.device();
@@ -286,6 +289,8 @@ Tensor halo_op(
     uint32_t max_out_nsticks_per_core =
         HaloDeviceOperation::sliding_window_max_out_nsticks_per_core.at(sliding_window_hash);
     uint32_t in_nsticks_per_core = input_tensor.memory_config().shard_spec()->shape[0];
+    printf("in_nsticks_per_core: %u\n", in_nsticks_per_core);
+    printf("max_out_nsticks_per_core: %u\n", max_out_nsticks_per_core);
     ParallelConfig p_config;
     p_config.grid = input_tensor.shard_spec().value().grid;
     p_config.shard_scheme = input_tensor.memory_config().memory_layout();

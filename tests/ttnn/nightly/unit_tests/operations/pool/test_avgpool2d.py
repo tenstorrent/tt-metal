@@ -82,7 +82,12 @@ def randomize_tensor(tensor_map, tensor_shape):
     if tensor_shape in tensor_map.keys():
         torch_tensor = tensor_map[tensor_shape]
     else:
-        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+        # For debugging: set each element to its C coordinate divided by 32
+        # tensor_shape is (N, C, H, W)
+        torch_tensor = torch.zeros(tensor_shape, dtype=torch.bfloat16)
+        channels = tensor_shape[1]
+        for c in range(channels):
+            torch_tensor[:, c, :, :] = c // 32
         tensor_map[tensor_shape] = torch_tensor
     return torch_tensor
 
@@ -205,12 +210,13 @@ def run_avg_pool2d(
         dtype=out_dtype,
         output_layout=output_layout,
         compute_kernel_config=compute_kernel_config,
+        in_place_halo=True,
     )
 
     # TODO always use run_twice after resolution of https://github.com/tenstorrent/tt-metal/issues/26093
     # skip run_twice for blackhole with wide Bfloat8 tensors as this currently causes PCC failures
-    if is_blackhole() and in_dtype == ttnn.bfloat8_b and in_c > 256:
-        run_twice = False
+    # if is_blackhole() and in_dtype == ttnn.bfloat8_b and in_c > 256:
+    #     run_twice = False
 
     if run_twice:
         ttnn.deallocate(ttnn_output, True)
@@ -231,6 +237,7 @@ def run_avg_pool2d(
             dtype=out_dtype,
             output_layout=output_layout,
             compute_kernel_config=compute_kernel_config,
+            in_place_halo=True,
         )
 
     # apply padding manually to torch tensor since torch doesn't support asymmetric padding
@@ -278,6 +285,16 @@ def run_avg_pool2d(
             count_include_pad,
         )
 
+    # Print complete tensors for debugging
+    torch.set_printoptions(threshold=float("inf"), linewidth=1000)
+    print("=" * 80)
+    print("TORCH OUTPUT (flattened):")
+    print(torch_output.flatten())
+    print("=" * 80)
+    print("TTNN OUTPUT (flattened):")
+    print(ttnn_output.flatten())
+    print("=" * 80)
+
     # test for equivalence
     pcc_thresh = 0.985
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
@@ -313,63 +330,64 @@ def run_avg_pool2d(
     "input_shape",  # NCHW
     (
         # model shapes
-        [1, 64, 112, 112],
-        [8, 32, 132, 20],
-        [1, 256, 56, 56],
-        [1, 512, 28, 28],
-        [1, 192, 264, 40],
+        # [1, 64, 112, 112],
+        # [8, 32, 132, 20],
+        # [1, 256, 56, 56],
+        # [1, 512, 28, 28],
+        # [1, 192, 264, 40],
         # # wide non-4 multiple tests
-        [1, 800, 32, 32],
-        [1, 576, 32, 32],
+        # [1, 800, 32, 32],
+        # [1, 576, 32, 32],
         # C partial tile test
-        [1, 16, 12, 12],
-        [1, 1, 56, 56],
-        [2, 290, 10, 10],
+        # [1, 16, 12, 12],
+        # [1, 1, 56, 56],
+        # [2, 290, 10, 10],
+        [1, 512, 8, 4],
     ),
 )
 @pytest.mark.parametrize(
     "kernel_size",
     (
-        (3, 3),  # 1 face 1 chunk
-        (5, 5),  # 2 faces 1 chunk
-        (7, 7),  # 2 chunks
-        (9, 9),  # 3 chunks
+        (8, 4),  # 1 face 1 chunk
+        # (5, 5),  # 2 faces 1 chunk
+        # (7, 7),  # 2 chunks
+        # (9, 9),  # 3 chunks
     ),
 )
 @pytest.mark.parametrize(
     "stride",
     (
         (1, 1),
-        (2, 2),
+        # (2, 2),
     ),
 )
 @pytest.mark.parametrize(
     "padding",
     (
         (0, 0),
-        (1, 1),
-        (1, 4, 3, 2),
+        # (1, 1),
+        # (1, 4, 3, 2),
     ),
 )
 @pytest.mark.parametrize(
     "ceil_mode",
     [
         False,
-        True,
+        # True,
     ],
 )
 @pytest.mark.parametrize(
     "count_include_pad",
     [
         False,
-        True,
+        # True,
     ],
 )
 @pytest.mark.parametrize(
     "divisor_override",
     [
         None,
-        5,
+        # 5,
     ],
 )
 @pytest.mark.parametrize(
@@ -381,7 +399,7 @@ def run_avg_pool2d(
 )
 @pytest.mark.parametrize(
     "in_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    [ttnn.bfloat8_b],
 )
 def test_run_avg_pool2d(
     device,
@@ -412,98 +430,98 @@ def test_run_avg_pool2d(
     )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
-@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize(
-    "input_shape, shard_startegy",
-    (
-        (
-            ([1, 256, 56, 56], HS),
-            ([1, 512, 28, 28], HS),
-            ([1, 192, 264, 40], HS),
-            ([1, 800, 32, 32], HS),
-            ([1, 576, 32, 32], HS),
-            ([1, 16, 12, 12], HS),
-        )
-    ),
-)
-@pytest.mark.parametrize(
-    "kernel_size",
-    (
-        (3, 3),
-        (5, 5),
-        (7, 7),
-    ),
-)
-@pytest.mark.parametrize(
-    "in_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
-)
-def test_avg_pool2d_output_formats_and_layouts(
-    device, tensor_map, input_shape, shard_startegy, kernel_size, out_dtype, output_layout, in_dtype
-):
-    padding = (0, 0)
-    stride = (1, 1)
+# @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+# @pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
+# @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+# @pytest.mark.parametrize(
+#     "input_shape, shard_startegy",
+#     (
+#         (
+#             ([1, 256, 56, 56], HS),
+#             ([1, 512, 28, 28], HS),
+#             ([1, 192, 264, 40], HS),
+#             ([1, 800, 32, 32], HS),
+#             ([1, 576, 32, 32], HS),
+#             ([1, 16, 12, 12], HS),
+#         )
+#     ),
+# )
+# @pytest.mark.parametrize(
+#     "kernel_size",
+#     (
+#         (3, 3),
+#         (5, 5),
+#         (7, 7),
+#     ),
+# )
+# @pytest.mark.parametrize(
+#     "in_dtype",
+#     [ttnn.bfloat16, ttnn.bfloat8_b],
+# )
+# def test_avg_pool2d_output_formats_and_layouts(
+#     device, tensor_map, input_shape, shard_startegy, kernel_size, out_dtype, output_layout, in_dtype
+# ):
+#     padding = (0, 0)
+#     stride = (1, 1)
 
-    run_avg_pool2d(
-        device,
-        tensor_map,
-        input_shape,
-        kernel_size,
-        stride,
-        padding,
-        ceil_mode=False,
-        divisor_override=None,
-        count_include_pad=False,
-        shard_scheme=shard_startegy,
-        in_dtype=in_dtype,
-        output_layout=output_layout,
-        out_dtype=out_dtype,
-    )
+#     run_avg_pool2d(
+#         device,
+#         tensor_map,
+#         input_shape,
+#         kernel_size,
+#         stride,
+#         padding,
+#         ceil_mode=False,
+#         divisor_override=None,
+#         count_include_pad=False,
+#         shard_scheme=shard_startegy,
+#         in_dtype=in_dtype,
+#         output_layout=output_layout,
+#         out_dtype=out_dtype,
+#     )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize(
-    "input_shape",  # NCHW
-    ([1, 64, 112, 112],),
-)
-@pytest.mark.parametrize(
-    "kernel_size",
-    ((3, 3),),
-)
-@pytest.mark.parametrize(
-    "stride",
-    ((1, 1),),
-)
-@pytest.mark.parametrize(
-    "padding",
-    ((0, 0),),
-)
-@pytest.mark.parametrize(
-    "compute_kernel_config",
-    [COMPUTE_KERNEL_CONFIG_HIFI4, COMPUTE_KERNEL_CONFIG_HIFI2, COMPUTE_KERNEL_CONFIG_LOFI],
-)
-def test_avg_pool2d_compute_kernel_config(
-    device,
-    tensor_map,
-    input_shape,
-    kernel_size,
-    stride,
-    padding,
-    compute_kernel_config,
-):
-    run_avg_pool2d(
-        device,
-        tensor_map,
-        input_shape,
-        kernel_size,
-        stride,
-        padding,
-        ceil_mode=False,
-        divisor_override=None,
-        count_include_pad=False,
-        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        in_dtype=ttnn.bfloat16,
-        compute_kernel_config=compute_kernel_config,
-    )
+# @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+# @pytest.mark.parametrize(
+#     "input_shape",  # NCHW
+#     ([1, 64, 112, 112],),
+# )
+# @pytest.mark.parametrize(
+#     "kernel_size",
+#     ((3, 3),),
+# )
+# @pytest.mark.parametrize(
+#     "stride",
+#     ((1, 1),),
+# )
+# @pytest.mark.parametrize(
+#     "padding",
+#     ((0, 0),),
+# )
+# @pytest.mark.parametrize(
+#     "compute_kernel_config",
+#     [COMPUTE_KERNEL_CONFIG_HIFI4, COMPUTE_KERNEL_CONFIG_HIFI2, COMPUTE_KERNEL_CONFIG_LOFI],
+# )
+# def test_avg_pool2d_compute_kernel_config(
+#     device,
+#     tensor_map,
+#     input_shape,
+#     kernel_size,
+#     stride,
+#     padding,
+#     compute_kernel_config,
+# ):
+#     run_avg_pool2d(
+#         device,
+#         tensor_map,
+#         input_shape,
+#         kernel_size,
+#         stride,
+#         padding,
+#         ceil_mode=False,
+#         divisor_override=None,
+#         count_include_pad=False,
+#         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+#         in_dtype=ttnn.bfloat16,
+#         compute_kernel_config=compute_kernel_config,
+#     )

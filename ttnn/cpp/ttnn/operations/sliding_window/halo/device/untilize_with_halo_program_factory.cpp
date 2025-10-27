@@ -452,6 +452,8 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     uint32_t temp_cb_id = 0;
     uint32_t input_to_writer_cb_id = cb_indices.src_cb_id;
     if (!skip_untilize) {
+        printf("untilize kernel creation\n");
+
         cb_indices.untilize_out_cb_id = cb_indices.get_next_cb_id();
         input_to_writer_cb_id = cb_indices.untilize_out_cb_id;
         // output of untilize from compute kernel goes into this CB
@@ -483,9 +485,11 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
                 MAX_PACK_UNTILIZE_WIDTH);
             compute_ct_args = {input_nblocks_per_core, ntiles_per_block, cb_indices.src_cb_id, temp_cb_id};
             compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+            printf("Using slow untilize kernel for wide tensor\n");
         } else {
             compute_ct_args = {input_nblocks_per_core, ntiles_per_block, cb_indices.src_cb_id, input_to_writer_cb_id};
             compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp";
+            printf("Using fast untilize kernel\n");
         }
         CreateKernel(program, compute_kernel, all_cores, ComputeConfig{.compile_args = compute_ct_args});
     }

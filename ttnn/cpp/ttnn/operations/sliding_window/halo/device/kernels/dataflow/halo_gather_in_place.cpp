@@ -9,7 +9,7 @@
 #include "compile_time_args.h"
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG 0
+#define ENABLE_DEBUG 1
 
 #if ENABLE_DEBUG
 #include "debug/dprint_pages.h"
@@ -39,6 +39,8 @@ void copy_sticks_async_to_temp(
     const uint32_t in_base_l1_addr,
     const uint32_t temp_base_l1_addr,
     const uint32_t out_base_l1_addr) {
+    DPRINT << "copy_sticks_async_to_temp called" << ENDL();
+
     uint32_t i = 0;
     uint32_t length = config_data[2];
     uint32_t remote_entry_count = 0;
@@ -49,6 +51,7 @@ void copy_sticks_async_to_temp(
     const uint64_t base_addr_temp = get_noc_addr(my_noc_x, my_noc_y, temp_base_l1_addr);
     uint64_t dst_addr_temp = base_addr_temp;
     while (length) {
+        DPRINT << "copy_sticks_async_to_temp loop length: " << length << ENDL();
         const uint16_t noc_x = noc_orient_x ? my_noc_x : config_data[i + 0];
         const uint16_t noc_y = noc_orient_y ? my_noc_y : config_data[i + 1];
         const uint64_t base_addr_final = get_noc_addr(noc_x, noc_y, out_base_l1_addr);
@@ -157,6 +160,13 @@ void copy_sticks_async_local(
     const uint32_t in_base_l1_addr,
     const uint32_t out_base_l1_addr,
     const uint32_t in_out_buffer_start_delta) {
+    if (main_thread) {
+        DPRINT << "copy_sticks_async_local called" << ENDL();
+        DPRINT << "stick_nbytes: " << stick_nbytes << ", input_aligned_page_size: " << input_aligned_page_size
+               << ENDL();
+        tt::data_movement::common::print_bf16_pages(in_base_l1_addr, 512, 32);
+    }
+
     uint32_t i = 0;
     uint32_t length = config_data[2];
 
@@ -168,6 +178,12 @@ void copy_sticks_async_local(
             const uint16_t src_local_idx = config_data[i + j + 0];
             const uint16_t dst_local_idx = config_data[i + j + 1];
             const uint16_t nsticks = config_data[i + j + 2];
+
+            if (main_thread) {
+                DPRINT << "copy_sticks_async_local copying " << nsticks << " sticks from local idx " << src_local_idx
+                       << " to local idx " << dst_local_idx << ENDL();
+            }
+
             const uint32_t size = nsticks * stick_nbytes;
             const uint32_t dst_offset = dst_local_idx * stick_nbytes;
             const uint32_t src_offset = src_local_idx * input_aligned_page_size;
@@ -333,6 +349,8 @@ void kernel_main() {
 
         noc_async_read_barrier();
 #endif
+        DPRINT << "halo_gather_in_place kernel using L1 src buffer" << ENDL();
+        DPRINT << "in_npages: " << in_npages << ENDL();
         cb_reserve_back(src_cb_id, in_npages);
         cb_push_back(src_cb_id, in_npages);
     }
