@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,8 +10,8 @@ from loguru import logger
 
 import ttnn
 from models.demos.yolov4.common import load_torch_model
-from models.demos.yolov4.tt.downsample2 import Down2
-from models.demos.yolov4.tt.model_preprocessing import create_ds2_model_parameters
+from models.demos.yolov4.tt.downsample5 import Down5
+from models.demos.yolov4.tt.model_preprocessing import create_ds5_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -23,25 +23,23 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_down2(device, reset_seeds, model_location_generator, resolution):
+def test_down5(device, reset_seeds, model_location_generator, resolution):
     torch.manual_seed(0)
 
-    torch_model = load_torch_model(model_location_generator, module="down2")
+    torch_model = load_torch_model(model_location_generator, module="down5")
     if resolution == (320, 320):
-        torch_input = torch.randn((1, 64, 160, 160), dtype=torch.float)
+        torch_input = torch.randn((1, 512, 20, 20), dtype=torch.float)
     elif resolution == (640, 640):
-        torch_input = torch.randn((1, 64, 320, 320), dtype=torch.float)
+        torch_input = torch.randn((1, 512, 40, 40), dtype=torch.float)
     else:
-        raise ValueError(f"Unsupported resolution {resolution}")
+        raise ValueError(f"Unsupported resolution: {resolution}")
     ref = torch_model(torch_input)
 
-    parameters = create_ds2_model_parameters(torch_model, torch_input, resolution, device)
-
-    ttnn_model = Down2(device, parameters, parameters.conv_args)
+    parameters = create_ds5_model_parameters(torch_model, torch_input, resolution, device)
 
     torch_input = torch_input.permute(0, 2, 3, 1)
     ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16)
-
+    ttnn_model = Down5(device, parameters, parameters.conv_args)
     result_ttnn = ttnn_model(ttnn_input)
 
     start_time = time.time()
@@ -52,4 +50,4 @@ def test_down2(device, reset_seeds, model_location_generator, resolution):
     result = ttnn.to_torch(result_ttnn)
     result = result.permute(0, 3, 1, 2)
     result = result.reshape(ref.shape)
-    assert_with_pcc(result, ref, 0.99)
+    assert_with_pcc(result, ref, 0.89)  # PCC 0.89 - The PCC will improve once #3612 is resolved.

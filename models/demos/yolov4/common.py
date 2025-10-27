@@ -9,6 +9,7 @@ import numpy as np
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.yolov4.reference.downsample1 import DownSample1
 from models.demos.yolov4.reference.downsample2 import DownSample2
 from models.demos.yolov4.reference.downsample3 import DownSample3
@@ -24,6 +25,7 @@ YOLOV4_CONFS_PCC = 0.9
 YOLOV4_BOXES_PCC_BLACKHOLE = 0.96
 
 YOLOV4_L1_SMALL_SIZE = 10960
+YOLOV4_L1_SMALL_SIZE_BH = 16384
 
 
 def load_image(image_path, resolution):
@@ -52,11 +54,15 @@ def load_torch_model(model_location_generator, module=None):
         model_path = model_location_generator("vision-models/yolov4", model_subdir="", download_if_ci_v2=True)
 
     if model_path == "models":
-        if not os.path.exists("models/demos/yolov4/tests/pcc/yolov4.pth"):  # check if yolov4.th is availble
+        if is_blackhole():
+            model_path = "models/demos/blackhole/yolov4"
+        else:
+            model_path = "models/demos/wormhole/yolov4"
+        if not os.path.exists(model_path + "/tests/pcc/yolov4.pth"):  # check if yolov4.th is availble
             os.system(
-                "models/demos/yolov4/tests/pcc/yolov4_weights_download.sh"
+                model_path + "/tests/pcc/yolov4_weights_download.sh"
             )  # execute the yolov4_weights_download.sh file
-        weights_pth = "models/demos/yolov4/tests/pcc/yolov4.pth"
+        weights_pth = model_path + "/tests/pcc/yolov4.pth"
     else:
         weights_pth = os.path.join(model_path, "yolov4.pth")
 

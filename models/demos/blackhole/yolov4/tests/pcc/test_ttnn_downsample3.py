@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.yolov4.common import load_torch_model
+from models.demos.yolov4.common import YOLOV4_L1_SMALL_SIZE_BH, load_torch_model
 from models.demos.yolov4.tt.downsample3 import Down3
 from models.demos.yolov4.tt.model_preprocessing import create_ds3_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -22,7 +22,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         (640, 640),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV4_L1_SMALL_SIZE_BH}], indirect=True)
 def test_down3(device, reset_seeds, model_location_generator, resolution):
     torch.manual_seed(0)
 

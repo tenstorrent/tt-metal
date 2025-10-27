@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -19,7 +19,9 @@ def test_perf_device_bare_metal_yolov4(batch_size, model_name, expected_perf):
     num_iterations = 1
     margin = 0.04
 
-    command = f"pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[1-pretrained_weight_false-0]"
+    command = (
+        f"pytest models/demos/wormhole/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[1-pretrained_weight_false-0]"
+    )
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 

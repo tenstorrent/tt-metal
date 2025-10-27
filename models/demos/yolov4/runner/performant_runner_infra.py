@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import divup, is_wormhole_b0
+from models.common.utility_functions import divup, is_blackhole, is_wormhole_b0
 from models.demos.yolov4.common import (
     YOLOV4_BOXES_PCC,
     YOLOV4_CONFS_PCC,
@@ -78,7 +78,7 @@ class YOLOv4PerformanceRunnerInfra:
         self.output_tensor = self.ttnn_yolov4_model(self.input_tensor)
 
     def _setup_l1_sharded_input(self, device, torch_input_tensor=None):
-        if is_wormhole_b0():
+        if is_wormhole_b0() or is_blackhole():
             core_grid = ttnn.CoreGrid(y=8, x=8)
         else:
             exit("Unsupported device")

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,13 +6,13 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.yolov4.common import load_torch_model
+from models.demos.yolov4.common import YOLOV4_L1_SMALL_SIZE_BH, load_torch_model
 from models.demos.yolov4.tt.model_preprocessing import create_neck_model_parameters
 from models.demos.yolov4.tt.neck import TtNeck
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV4_L1_SMALL_SIZE_BH}], indirect=True)
 @pytest.mark.parametrize(
     "resolution",
     [
