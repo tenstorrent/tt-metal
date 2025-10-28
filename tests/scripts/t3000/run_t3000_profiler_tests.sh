@@ -73,6 +73,36 @@ run_async_tracing_T3000_test() {
     fi
 }
 
+run_async_tracing_mid_run_dump_T3000_test() {
+    #Some tests here do not skip grayskull
+    if [ "$ARCH_NAME" == "wormhole_b0" ]; then
+        remove_default_log_locations
+        mkdir -p $PROFILER_ARTIFACTS_DIR
+
+        python -m tracy -v -r -p --cpp-post-process --dump-device-data-mid-run -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0] | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+
+        if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
+        then
+            echo "No verification as test was skipped"
+            return
+        fi
+
+        midRunDumpRunDate=$(ls $PROFILER_OUTPUT_DIR/)
+        mv $PROFILER_ARTIFACTS_DIR/.logs/cpp_ops_device_perf_report.csv $PROFILER_OUTPUT_DIR/$midRunDumpRunDate/cpp_ops_device_perf_report.csv
+
+        python -m tracy -v -r -p --cpp-post-process -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]
+
+        nonMidRunDumpRunDate=$(ls $PROFILER_OUTPUT_DIR/ | grep -v $midRunDumpRunDate)
+        mv $PROFILER_ARTIFACTS_DIR/.logs/cpp_ops_device_perf_report.csv $PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/cpp_ops_device_perf_report.csv
+
+        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py $PROFILER_OUTPUT_DIR/$midRunDumpRunDate/ops_perf_results_$midRunDumpRunDate.csv $PROFILER_OUTPUT_DIR/$midRunDumpRunDate/cpp_ops_device_perf_report.csv
+        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py $PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/ops_perf_results_$nonMidRunDumpRunDate.csv $PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/cpp_ops_device_perf_report.csv
+
+        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --only-compare-op-ids $PROFILER_OUTPUT_DIR/$midRunDumpRunDate/ops_perf_results_$midRunDumpRunDate.csv $PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/cpp_ops_device_perf_report.csv
+        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --only-compare-op-ids $PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/ops_perf_results_$nonMidRunDumpRunDate.csv $PROFILER_OUTPUT_DIR/$midRunDumpRunDate/cpp_ops_device_perf_report.csv
+    fi
+}
+
 run_ccl_T3000_test() {
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
@@ -98,6 +128,8 @@ run_profiling_test() {
     run_ccl_T3000_test
 
     run_async_tracing_T3000_test
+
+    run_async_tracing_mid_run_dump_T3000_test
 
     run_mid_run_data_dump
 
