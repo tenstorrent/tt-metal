@@ -12,6 +12,7 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/unary/tanh_accurate/tanh_accurate.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 
 namespace ttnn::operations::unary {
 
@@ -493,28 +494,31 @@ Tensor Rad2Deg::invoke(
         std::nullopt);
 }
 
-template <typename T>
 Tensor Where::invoke(
     const Tensor& condition,
-    const T& value_true,
-    const T& value_false,
+    const ScalarVariant& value_true,
+    const ScalarVariant& value_false,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     Tensor input = condition;
-    if ((condition.dtype() == DataType::INT32 || condition.dtype() == DataType::UINT32) && (std::is_same_v<T, float>)) {
+    // Check if we have any float scalars
+    bool has_float_scalar = std::holds_alternative<float>(value_true) || std::holds_alternative<float>(value_false);
+
+    // Convert input tensor to float32 only if input is INT32/UINT32 and scalars are float
+    if ((condition.dtype() == DataType::INT32 || condition.dtype() == DataType::UINT32) && has_float_scalar) {
         input = ttnn::typecast(condition, DataType::FLOAT32);
     }
     UnaryOpType op_type = UnaryOpType::WHERE_TSS;
-    return detail::unary_impl(
-        input, {EltwiseUnaryWithParam{op_type, {value_true, value_false}}}, memory_config, optional_output_tensor);
-}
+    auto param = std::visit(
+        [op_type](const auto& val_true, const auto& val_false) {
+            using T = std::decay_t<decltype(val_true)>;
+            return EltwiseUnaryWithParam{op_type, std::vector<T>{val_true, val_false}};
+        },
+        value_true,
+        value_false);
 
-template Tensor Where::invoke<float>(
-    const Tensor&, const float&, const float&, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
-template Tensor Where::invoke<int32_t>(
-    const Tensor&, const int32_t&, const int32_t&, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
-template Tensor Where::invoke<uint32_t>(
-    const Tensor&, const uint32_t&, const uint32_t&, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+    return detail::unary_impl(input, {param}, memory_config, optional_output_tensor);
+}
 
 template <UnaryOpType unary_op_type, typename T>
 Tensor ExecuteUnaryWithIntegerParameter<unary_op_type, T>::invoke(
