@@ -253,10 +253,11 @@ class Generator:
         read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
     ):
-        # https://github.com/tenstorrent/tt-metal/issues/31134
-        # Use on-device sampling when sampling params are provided
-        if not self.model[0]._supports_on_device_sampling:
-            assert sampling_params is None, "Sampling on device is not supported on Blackhole devices"
+
+        assert (
+            sampling_params is None or sampling_params.temperature == 0
+        ), "Currently only supporting greedy decoding (temperature=0) on device"
+        argmax_on_device = sampling_params is not None and sampling_params.temperature == 0
         sampling_on_device = sampling_params is not None
 
         B = tokens.shape[0]
