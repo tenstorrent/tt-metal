@@ -234,22 +234,23 @@ public:
     std::unordered_map<CoreCoord, uint32_t> core_workload_;        // map core -> num_configs
     std::unordered_map<CoreCoord, CoreResources> core_resources_;  // map core -> its memory allocator
 
-    // Credit allocation for senders on this device
-    std::optional<DynamicMemoryRegion> credit_allocator_;
+    // Credit allocation: per-sender-core (needed for multi-link scenarios)
+    std::unordered_map<CoreCoord, DynamicMemoryRegion> credit_allocators_;
 
     // Collect remaining pristine cores from all pools (for mux allocation)
     std::vector<CoreCoord> collect_remaining_pristine_cores() const;
 
-    // Initialize credit allocator (lazy)
-    void initialize_credit_allocator(const SenderMemoryMap& sender_memory_map);
+    // Initialize credit allocator for a specific sender core (lazy)
+    void initialize_credit_allocator(const CoreCoord& sender_core, const SenderMemoryMap& sender_memory_map);
 
-    // Allocate credit chunk from this device's L1 credit region
+    // Allocate credit chunk from a specific sender core's L1 credit region
     // Returns the base address of the allocated chunk
     // Throws if allocation would exceed region bounds
-    uint32_t allocate_credit_chunk(uint32_t num_receivers, const SenderMemoryMap& sender_memory_map);
+    uint32_t allocate_credit_chunk(
+        const CoreCoord& sender_core, uint32_t num_receivers, const SenderMemoryMap& sender_memory_map);
 
-    // Reset credit allocator
-    void reset_credit_allocator();
+    // Reset credit allocators
+    void reset_credit_allocators();
 
 private:
     void reserve_core_internal(const CoreCoord& core, CoreType core_type, uint32_t partition_id = 0);
@@ -386,39 +387,51 @@ inline void TestDeviceResources::refill_pool(CorePool& pool) {
     pool.add_cores(new_cores);
 }
 
-inline void TestDeviceResources::initialize_credit_allocator(const SenderMemoryMap& sender_memory_map) {
-    if (!credit_allocator_.has_value()) {
-        credit_allocator_.emplace(
-            sender_memory_map.get_credit_addresses_base(),
-            sender_memory_map.get_credit_addresses_size(),
-            SenderMemoryMap::CREDIT_ADDRESS_STRIDE);
+inline void TestDeviceResources::initialize_credit_allocator(
+    const CoreCoord& sender_core, const SenderMemoryMap& sender_memory_map) {
+    auto it = credit_allocators_.find(sender_core);
+    if (it == credit_allocators_.end()) {
+        credit_allocators_.emplace(
+            sender_core,
+            DynamicMemoryRegion(
+                sender_memory_map.get_credit_addresses_base(),
+                sender_memory_map.get_credit_addresses_size(),
+                SenderMemoryMap::CREDIT_ADDRESS_STRIDE));
+
+        log_debug(
+            tt::LogTest, "Device {}: Initialized credit allocator for sender core {}", node_id_, sender_core.str());
     }
 }
 
 inline uint32_t TestDeviceResources::allocate_credit_chunk(
-    uint32_t num_receivers, const SenderMemoryMap& sender_memory_map) {
-    // Lazy initialization
-    if (!credit_allocator_.has_value()) {
-        initialize_credit_allocator(sender_memory_map);
+    const CoreCoord& sender_core, uint32_t num_receivers, const SenderMemoryMap& sender_memory_map) {
+    // Lazy initialization per sender core
+    auto it = credit_allocators_.find(sender_core);
+    if (it == credit_allocators_.end()) {
+        initialize_credit_allocator(sender_core, sender_memory_map);
+        it = credit_allocators_.find(sender_core);
     }
 
-    // Allocate from the per-device allocator
-    uint32_t chunk_base = credit_allocator_->allocate_chunk(num_receivers);
+    // Allocate from this sender core's allocator
+    uint32_t chunk_base = it->second.allocate_chunk(num_receivers);
 
     log_debug(
         tt::LogTest,
-        "Device {} allocated credit chunk: base={:#x}, num_receivers={}",
+        "Device {} sender core {} allocated credit chunk: base={:#x}, num_receivers={}",
         node_id_,
+        sender_core.str(),
         chunk_base,
         num_receivers);
 
     return chunk_base;
 }
 
-inline void TestDeviceResources::reset_credit_allocator() {
-    if (credit_allocator_.has_value()) {
-        credit_allocator_->reset();
-        log_debug(tt::LogTest, "Reset credit allocator for device {}", node_id_);
+inline void TestDeviceResources::reset_credit_allocators() {
+    for (auto& [core, allocator] : credit_allocators_) {
+        allocator.reset();
+    }
+    if (!credit_allocators_.empty()) {
+        log_debug(tt::LogTest, "Reset {} credit allocators for device {}", credit_allocators_.size(), node_id_);
     }
 }
 
@@ -1239,10 +1252,10 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
             }
 
             if (enable_flow_control_) {
-                // Allocate credit chunk from sender device's L1
+                // Allocate credit chunk from sender core's L1
                 auto& sender_device_resources = get_or_create_device_resources(sender.device);
-                uint32_t credit_chunk_base =
-                    sender_device_resources.allocate_credit_chunk(num_receivers_for_credits, sender_memory_map_);
+                uint32_t credit_chunk_base = sender_device_resources.allocate_credit_chunk(
+                    sender.core.value(), num_receivers_for_credits, sender_memory_map_);
 
                 // Calculate credit configuration using simple policy
                 uint32_t buffer_capacity_bytes = policies_.default_payload_chunk_size;
@@ -1265,7 +1278,7 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
 inline void GlobalAllocator::reset() {
     // Reset credit allocators before clearing device resources
     for (auto& [node_id, device_resources_ptr] : all_device_resources_) {
-        device_resources_ptr->reset_credit_allocator();
+        device_resources_ptr->reset_credit_allocators();
     }
 
     all_device_resources_.clear();
