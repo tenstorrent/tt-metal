@@ -2,17 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from transformers.models.gpt_oss.modeling_gpt_oss import GptOssRotaryEmbedding
 
 import ttnn
 from models.demos.gpt_oss.config import MeshConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
-from models.tt_transformers.tt.common import copy_host_to_device
+from models.tt_transformers.tt.common import copy_host_to_device, gather_cos_sin, precompute_freqs
 
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
-from .rope import ApplyRotaryPosEmb
+from .rope import get_rot_transformation_mat
 
 
 class Model:
@@ -61,9 +60,59 @@ class Model:
         # Use MeshConfig for clean parallelization
         self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
 
-        # Initialize rope embeddings for generator compatibility
-        self.rope_embeddings = GptOssRotaryEmbedding(hf_config)
-        self.apply_rope = ApplyRotaryPosEmb(hf_config)
+        # Precompute RoPE frequencies (Meta format for ttnn.experimental.rotary_embedding_llama)
+        max_seq_len = getattr(hf_config, "max_position_embeddings", 131072)
+        self.cos_cached, self.sin_cached = precompute_freqs(
+            dim=hf_config.head_dim,
+            end=max_seq_len * 2,
+            theta=getattr(hf_config, "rope_theta", 10000.0),
+            scale_factor=None,
+            orig_context_len=131072,
+        )
+
+        # Create transformation matrices for ttnn.experimental.rotary_embedding_llama
+        # Match tt-transformers RotarySetup (rope.py lines 415-456)
+        self.head_dim = hf_config.head_dim
+
+        # Decode: HEIGHT_SHARDED transformation matrix (repeated across batch)
+        # Note: tt-transformers uses TILE_SIZE for decode, but we'll use head_dim for consistency
+        grid_size = mesh_device.compute_with_storage_grid_size()
+        batch_grid = ttnn.num_cores_to_corerangeset(1, grid_size, row_wise=True)  # batch=1 for decode
+
+        decode_trans_mat_torch = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE)
+        decode_trans_mat_torch = decode_trans_mat_torch.repeat(1, 1, 1, 1)  # [1, 1, 1, TILE_SIZE, TILE_SIZE]
+
+        trans_mat_mem_config = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
+            core_grid=batch_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        self.transformation_mats = {
+            "decode": ttnn.from_torch(
+                decode_trans_mat_torch,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=trans_mat_mem_config,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device,
+                    dims=(None, None),
+                    mesh_shape=list(mesh_device.shape),
+                ),
+            ),
+            "prefill": ttnn.from_torch(
+                get_rot_transformation_mat(dhead=self.head_dim),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+            ),
+        }
+
         embedding_weight = substate(state_dict, "model.embed_tokens")["weight"]
         embedding_weight = embedding_weight.unsqueeze(0).unsqueeze(0)
         self.embedding_weight = ttnn.as_tensor(
@@ -86,6 +135,7 @@ class Model:
                 paged_attention_config=paged_attention_config,
                 mesh_config=self.mesh_config,
                 create_kv_cache=create_kv_cache,
+                transformation_mats=self.transformation_mats,
             )
             for layer_idx in range(hf_config.num_hidden_layers)
         ]
@@ -107,7 +157,6 @@ class Model:
 
         # Initialize attention masks and rope embeddings storage for decode
         self._current_rope_mats = self._create_rope_embeddings(0, self.mesh_device)
-        self.device_decode_sliding_mask = True
 
     @classmethod
     def create_transformer_compatible(
@@ -176,22 +225,49 @@ class Model:
         return hidden_states
 
     def _create_rope_embeddings(self, seq_len_or_pos, device):
-        """Create rope embeddings for sequence length or specific position"""
-        if isinstance(seq_len_or_pos, int) and seq_len_or_pos > 1:
-            # Sequence mode - create for full sequence
-            position_ids = torch.arange(seq_len_or_pos).unsqueeze(0)
-        else:
-            # Position mode - create for specific position
+        """
+        Create rope embeddings for sequence length or specific position using Meta format.
+        Returns [cos, sin] to match tt-transformers interface.
+
+        For decode mode (single position), cos/sin are HEIGHT_SHARDED to match Q/K/V from nlp_create_qkv_heads_decode.
+        For prefill mode (sequence), cos/sin are interleaved.
+        """
+        is_decode = not (isinstance(seq_len_or_pos, int) and seq_len_or_pos > 1)
+
+        if is_decode:
+            # Decode mode - create for specific position
             pos_val = seq_len_or_pos.item() if hasattr(seq_len_or_pos, "item") else seq_len_or_pos
-            position_ids = torch.tensor([pos_val]).unsqueeze(0)
+            position_ids = torch.tensor([pos_val])
+        else:
+            # Prefill mode - create for full sequence
+            position_ids = torch.arange(seq_len_or_pos)
 
-        rope_temp_tensor = torch.randn(1)
-        cos, sin = self.rope_embeddings(rope_temp_tensor, position_ids)
+        # Use gather_cos_sin to get cos/sin in Meta format (pairwise duplicated)
+        cos, sin = gather_cos_sin(position_ids, self.cos_cached, self.sin_cached)
+        # gather_cos_sin returns [1, 1, len(position_ids), head_dim]
 
-        tt_cos = ttnn.from_torch(cos.unsqueeze(-2), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        tt_sin = ttnn.from_torch(sin.unsqueeze(-2), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        tt_cos = ttnn.from_torch(cos, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        tt_sin = ttnn.from_torch(sin, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
-        return (self.apply_rope, tt_cos, tt_sin)
+        if is_decode:
+            # For decode mode, convert to HEIGHT_SHARDED to match Q/K/V from nlp_create_qkv_heads_decode
+            # This matches tt-transformers RotarySetup.get_rot_mats behavior (rope.py lines 525-534)
+            # gather_cos_sin already returns shape [1, 1, 1, head_dim] which is correct for decode
+            grid_size = device.compute_with_storage_grid_size()
+            batch_grid = ttnn.num_cores_to_corerangeset(1, grid_size, row_wise=True)  # batch=1 for decode
+
+            mem_config = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, self.head_dim),
+                core_grid=batch_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            tt_cos = ttnn.interleaved_to_sharded(tt_cos, mem_config)
+            tt_sin = ttnn.interleaved_to_sharded(tt_sin, mem_config)
+
+        return [tt_cos, tt_sin]
 
     def ttnn_decode_forward(
         self, tokens, current_pos, rot_mat_idxs=None, page_table=None, kv_cache=None, argmax_on_device=False
@@ -301,7 +377,6 @@ class Model:
         """
         host_inputs = self.prepare_decode_inputs_host(tokens, current_pos, page_table)
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
-        self.update_attention_masks(current_pos)
         # Return 4 values to match tt_transformers interface:
         # tokens, current_pos, rope_idxs, page_table
         return (
@@ -342,13 +417,6 @@ class Model:
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         return tokens, current_pos_tt, rope_idxs, page_table
-
-    def update_attention_masks(self, current_pos):
-        """Update sliding window attention mask and RoPE position for decode mode"""
-        # Update RoPE for the new position
-        updated_current_rope_mats = self._create_rope_embeddings(current_pos, None)
-        ttnn.copy_host_to_device_tensor(updated_current_rope_mats[1], self._current_rope_mats[1])
-        ttnn.copy_host_to_device_tensor(updated_current_rope_mats[2], self._current_rope_mats[2])
 
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
         """Prepare inputs for prefill mode"""

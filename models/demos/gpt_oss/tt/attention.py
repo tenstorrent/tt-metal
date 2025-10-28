@@ -25,6 +25,7 @@ class Attention:
         paged_attention_config=None,
         mesh_config=None,
         create_kv_cache=True,
+        transformation_mats=None,
     ):
         self.layer_idx = layer_idx
         self.use_sliding_window = self.layer_idx % 2 == 0
@@ -45,86 +46,87 @@ class Attention:
         self.hidden_size = hf_config.hidden_size
         self.ccl_manager = ccl_manager
         self.mesh_device = mesh_device
+        self.transformation_mats = transformation_mats
 
-        # Extract projection weights and biases from state dict
-        q_proj = substate(state_dict, "q_proj")["weight"].transpose(-1, -2)
-        q_proj_bias = substate(state_dict, "q_proj")["bias"]
-
-        k_proj = substate(state_dict, "k_proj")["weight"].transpose(-1, -2)
-        k_proj_bias = substate(state_dict, "k_proj")["bias"]
-
-        v_proj = substate(state_dict, "v_proj")["weight"].transpose(-1, -2)
-        v_proj_bias = substate(state_dict, "v_proj")["bias"]
+        # Extract projection weights from state dict
+        q_proj_weight = substate(state_dict, "q_proj")["weight"]  # [num_heads * head_dim, hidden_size]
+        k_proj_weight = substate(state_dict, "k_proj")["weight"]  # [num_kv_heads * head_dim, hidden_size]
+        v_proj_weight = substate(state_dict, "v_proj")["weight"]  # [num_kv_heads * head_dim, hidden_size]
 
         o_proj = substate(state_dict, "o_proj")["weight"].transpose(-1, -2)
         o_proj_bias = substate(state_dict, "o_proj")["bias"]
 
-        sinks = state_dict["sinks"].reshape(1, hf_config.num_attention_heads, 1, 1)
-        decode_sinks = torch.nn.functional.pad(
-            sinks.view(-1, 1), (0, ttnn.TILE_SIZE - sinks.shape[-1]), "constant", value=0.0
-        )
-        decode_sinks /= self.scaling
+        # Create fused QKV weight like tt-transformers
+        # Split Q, K, V across devices, then concatenate per device
+        qkv_list = []
+        for i in range(self.mesh_config.tp):
+            # Chunk weights across tensor parallel dimension
+            wq_selected = torch.chunk(q_proj_weight, self.mesh_config.tp, dim=0)[i]
+            wk_selected = torch.chunk(k_proj_weight, self.mesh_config.tp, dim=0)[i]
+            wv_selected = torch.chunk(v_proj_weight, self.mesh_config.tp, dim=0)[i]
+
+            # Transpose for matmul: [hidden_size, local_dim]
+            wq = wq_selected.transpose(-2, -1)
+            wk = wk_selected.transpose(-2, -1)
+            wv = wv_selected.transpose(-2, -1)
+
+            # Concatenate Q, K, V: [hidden_size, local_q_dim + local_k_dim + local_v_dim]
+            qkv = torch.cat([wq, wk, wv], dim=-1)
+            qkv_list.append(qkv)
+
+        # Concatenate across devices: [hidden_size, total_qkv_dim]
+        qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)  # [1, 1, hidden_size, total_qkv_dim]
 
         # Clean mesh mapping using MeshConfig
         col_mesh_mapper = self.mesh_config.column_parallel(mesh_device)
         row_mesh_mapper = self.mesh_config.row_parallel(mesh_device)
 
-        self.q_proj = ttnn.as_tensor(
-            q_proj,
+        # Match tt-transformers: use ShardTensor2dMesh for wqkv (attention.py line 240-242)
+        # dims=(2, 3) shards along the last two dimensions of the 4D tensor
+        self.wqkv = ttnn.as_tensor(
+            qkv_cat,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
             mesh_mapper=col_mesh_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, "q_proj"),
+            # cache_file_name=get_cache_file_name(tensor_cache_path, "wqkv_fused_new"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.q_proj_bias = ttnn.as_tensor(
-            q_proj_bias,
+        print(f"[TTNN] wqkv shape={self.wqkv.shape}")
+
+        # Handle biases - create fused QKV bias
+        q_proj_bias = substate(state_dict, "q_proj")["bias"]
+        k_proj_bias = substate(state_dict, "k_proj")["bias"]
+        v_proj_bias = substate(state_dict, "v_proj")["bias"]
+
+        qkv_bias_list = []
+        for i in range(self.mesh_config.tp):
+            print("q_proj_bias shape", q_proj_bias.shape)
+            q_bias_selected = torch.chunk(q_proj_bias, self.mesh_config.tp, dim=0)[i]
+            k_bias_selected = torch.chunk(k_proj_bias, self.mesh_config.tp, dim=0)[i]
+            v_bias_selected = torch.chunk(v_proj_bias, self.mesh_config.tp, dim=0)[i]
+            qkv_bias = torch.cat([q_bias_selected, k_bias_selected, v_bias_selected], dim=-1)
+            qkv_bias_list.append(qkv_bias)
+
+        qkv_bias_cat = torch.cat(qkv_bias_list, dim=-1)  # [total_qkv_dim]
+        print(f"[TTNN] qkv_bias_cat shape={qkv_bias_cat.shape}")
+        # Match tt-transformers: use ShardTensorToMesh for bias (attention.py line 173)
+        self.wqkv_bias = ttnn.as_tensor(
+            qkv_bias_cat,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,  # tt-transformers uses bfloat16 for bias
             mesh_mapper=col_mesh_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, "q_proj_bias"),
+            # cache_file_name=get_cache_file_name(tensor_cache_path, "wqkv_bias_fused_new"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        self.k_proj = ttnn.as_tensor(
-            k_proj,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
-            mesh_mapper=col_mesh_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, "k_proj"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # Attention sinks (gpt_oss specific feature)
+        sinks = state_dict["sinks"].reshape(1, hf_config.num_attention_heads, 1, 1)
+        decode_sinks = torch.nn.functional.pad(
+            sinks.view(-1, 1), (0, ttnn.TILE_SIZE - sinks.shape[-1]), "constant", value=0.0
         )
-        self.k_proj_bias = ttnn.as_tensor(
-            k_proj_bias,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
-            mesh_mapper=col_mesh_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, "k_proj_bias"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        self.v_proj = ttnn.as_tensor(
-            v_proj,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
-            mesh_mapper=col_mesh_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, "v_proj"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        self.v_proj_bias = ttnn.as_tensor(
-            v_proj_bias,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
-            mesh_mapper=col_mesh_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, "v_proj_bias"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        decode_sinks /= self.scaling
 
         if self.mesh_config.tp > 1:
             o_proj_bias = torch.cat([o_proj_bias] + [torch.zeros_like(o_proj_bias)] * (self.mesh_config.tp - 1), dim=-1)
@@ -242,26 +244,55 @@ class Attention:
 
     def __call__(self, x: ttnn.Tensor, mask, rope_mats, position_idx=None, page_table=None, kv_cache=None):
         batch_size, seq_len, hidden_size = x.shape
-        tt_q = ttnn.matmul(x, self.q_proj)
-        tt_q = ttnn.add(tt_q, self.q_proj_bias, output_tensor=tt_q)
-        tt_q = ttnn.reshape(tt_q, [1, seq_len * batch_size, -1, self.head_dim])
 
-        tt_k = ttnn.matmul(x, self.k_proj)
-        tt_k = ttnn.add(tt_k, self.k_proj_bias, output_tensor=tt_k)
-        tt_k = ttnn.reshape(tt_k, [1, seq_len * batch_size, -1, self.head_dim])
+        # Determine if we're in decode or prefill mode
+        is_decode_mode = batch_size * seq_len == 1
+        mode = "decode" if is_decode_mode else "prefill"
 
-        tt_v = ttnn.matmul(x, self.v_proj)
-        tt_v = ttnn.add(tt_v, self.v_proj_bias, output_tensor=tt_v)
-        tt_v = ttnn.reshape(tt_v, [1, seq_len * batch_size, -1, self.head_dim])
+        # QKV projection: single matmul + bias
+        xqkv_fused = ttnn.matmul(x, self.wqkv)
+        xqkv_fused = ttnn.add(xqkv_fused, self.wqkv_bias, output_tensor=xqkv_fused)
 
-        apply_rope, tt_cos, tt_sin = rope_mats
-        tt_q_rope = apply_rope(tt_q, tt_cos, tt_sin)
-        tt_q.deallocate(True)
-        tt_q = tt_q_rope
-        tt_k_rope = apply_rope(tt_k, tt_cos, tt_sin)
-        tt_k.deallocate(True)
-        tt_k = tt_k_rope
-        if batch_size * seq_len == 1:
+        if is_decode_mode:
+            # Decode mode: Use nlp_create_qkv_heads_decode for efficient head creation
+            # Creates heads with HEIGHT_SHARDED output for efficient RoPE
+            tt_q, tt_k, tt_v = ttnn.experimental.nlp_create_qkv_heads_decode(
+                xqkv_fused,
+                num_heads=self.num_local_heads,
+                num_kv_heads=self.num_local_kv_heads,
+                memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+            )
+
+        else:
+            # Prefill mode: Use nlp_create_qkv_heads for efficient head creation
+            tt_q, tt_k, tt_v = ttnn.experimental.nlp_create_qkv_heads(
+                xqkv_fused,
+                num_heads=self.num_local_heads,
+                num_kv_heads=self.num_local_kv_heads,
+                transpose_k_heads=False,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            # Output shapes: Q [1, num_local_heads, seq_len, head_dim], K/V [1, num_local_kv_heads, seq_len, head_dim]
+
+        ttnn.deallocate(xqkv_fused)
+
+        # Debug: Check Q/K/V after head creation
+
+        # Apply RoPE using ttnn.experimental.rotary_embedding_llama (matches tt-transformers)
+
+        tt_q = ttnn.experimental.rotary_embedding_llama(
+            tt_q, rope_mats[0], rope_mats[1], self.transformation_mats[mode], is_decode_mode=is_decode_mode
+        )
+        tt_k = ttnn.experimental.rotary_embedding_llama(
+            tt_k, rope_mats[0], rope_mats[1], self.transformation_mats[mode], is_decode_mode=is_decode_mode
+        )
+
+        # After RoPE in decode mode, convert back to interleaved for KV cache update
+        if is_decode_mode:
+            tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
+            tt_k = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
+
+        if is_decode_mode:
             # Use external kv_cache if provided (like tt-transformers), otherwise use internal cache
             if kv_cache:
                 k_cache, v_cache = kv_cache[0], kv_cache[1]
@@ -333,10 +364,10 @@ class Attention:
                 k_cache, v_cache = self.kv_cache
 
             # Transpose and cast tensors for cache compatibility
-            tt_k = ttnn.transpose(tt_k, 1, 2)
+            # After nlp_create_qkv_heads: K/V are [1, num_local_kv_heads, seq_len, head_dim]
+            # Cache expects: [batch, num_kv_heads, seq_len, head_dim]
             tt_k = ttnn.typecast(tt_k, k_cache.dtype)
 
-            tt_v = ttnn.transpose(tt_v, 1, 2)
             tt_v = ttnn.typecast(tt_v, v_cache.dtype)
 
             # Use paged fill cache when page_table is available (like tt-transformers)
@@ -364,16 +395,15 @@ class Attention:
                 )
 
             # Transpose tensors back for SDPA computation
-            tt_k_transposed = ttnn.transpose(tt_k, 1, 2)
-            tt_k.deallocate(True)
-            tt_k = tt_k_transposed
-            tt_v_transposed = ttnn.transpose(tt_v, 1, 2)
-            tt_v.deallocate(True)
-            tt_v = tt_v_transposed
 
-            tt_q = ttnn.reshape(tt_q, [batch_size * seq_len, -1, self.num_local_heads, self.head_dim])
-            tt_k = ttnn.reshape(tt_k, [batch_size * seq_len, -1, self.head_dim])
-            tt_v = ttnn.reshape(tt_v, [batch_size * seq_len, -1, self.head_dim])
+            # Reshape for custom SDPA: Q [seq_len, num_kv_heads, Q/K ratio, head_dim], K/V [seq_len, num_kv_heads, head_dim]
+            # Q: [1, num_local_heads, seq_len, head_dim] -> transpose -> [1, seq_len, num_local_heads, head_dim]
+            tt_q = ttnn.transpose(tt_q, 1, 2)  # [1, seq_len, num_local_heads, head_dim]
+            tt_q = ttnn.reshape(
+                tt_q, [seq_len, self.num_local_kv_heads, self.num_local_heads // self.num_local_kv_heads, self.head_dim]
+            )
+            tt_k = ttnn.reshape(tt_k, [seq_len, self.num_local_kv_heads, self.head_dim])
+            tt_v = ttnn.reshape(tt_v, [seq_len, self.num_local_kv_heads, self.head_dim])
 
             tt_sdpa_out, _ = tt_sdpa(
                 tt_q,
