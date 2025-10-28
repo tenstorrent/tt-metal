@@ -21,6 +21,7 @@ uint32_t math_sync_tile_dst_index = 0;
 static constexpr uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 
 static_assert(CT_DIM * RT_DIM <= MAX_TILES_DEST, "CT_DIM * RT_DIM must be less than or equal to MAX_TILES_DEST");
+static_assert(RT_DIM * CT_DIM * KT_DIM == TILE_CNT, "RT_DIM * CT_DIM * KT_DIM must be equal to TILE_CNT");
 
 #ifdef LLK_TRISC_UNPACK
 
