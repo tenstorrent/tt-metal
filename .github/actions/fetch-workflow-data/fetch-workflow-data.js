@@ -345,6 +345,48 @@ async function run() {
         core.warning(`[TEST MODE] Failed to restore logs artifact: ${e.message}`);
       }
 
+      // Additionally fetch the last success timestamps artifact from the same run, if present
+      try {
+        const owner = github.context.repo.owner;
+        const repo = github.context.repo.repo;
+        const lastSuccessArtifact = artifacts.find(a => a && a.name === 'last-success-timestamps');
+        const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
+        let lastSuccessPath = path.join(workspace, 'last-success-timestamps.json');
+        if (lastSuccessArtifact) {
+          const timestampsZipPath = path.join(tmpDir, `${lastSuccessArtifact.name}.zip`);
+          const respTimestamps = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: lastSuccessArtifact.id, archive_format: 'zip' });
+          fs.writeFileSync(timestampsZipPath, Buffer.from(respTimestamps.data));
+          const extractTimestampsDir = path.join(tmpDir, `${lastSuccessArtifact.name}-extract`);
+          if (!fs.existsSync(extractTimestampsDir)) fs.mkdirSync(extractTimestampsDir, { recursive: true });
+          execFileSync('unzip', ['-o', timestampsZipPath, '-d', extractTimestampsDir], { stdio: 'ignore' });
+          // Find last-success-timestamps.json
+          const stack3 = [extractTimestampsDir];
+          let foundTimestampsPath;
+          while (stack3.length && !foundTimestampsPath) {
+            const dir = stack3.pop();
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const ent of entries) {
+              const p = path.join(dir, ent.name);
+              if (ent.isDirectory()) stack3.push(p);
+              else if (ent.isFile() && ent.name === 'last-success-timestamps.json') { foundTimestampsPath = p; break; }
+            }
+          }
+          if (foundTimestampsPath) {
+            fs.cpSync(foundTimestampsPath, lastSuccessPath, { recursive: false });
+            core.info(`[TEST MODE] Restored last success timestamps to ${lastSuccessPath}`);
+          } else {
+            core.info('[TEST MODE] No last-success-timestamps.json found; creating empty object');
+            if (!fs.existsSync(lastSuccessPath)) fs.writeFileSync(lastSuccessPath, JSON.stringify({}));
+          }
+        } else {
+          core.info('[TEST MODE] No last-success-timestamps artifact found in selected run; creating empty object');
+          if (!fs.existsSync(lastSuccessPath)) fs.writeFileSync(lastSuccessPath, JSON.stringify({}));
+        }
+        core.setOutput('last-success-timestamps-path', lastSuccessPath);
+      } catch (e) {
+        core.warning(`[TEST MODE] Failed to restore last success timestamps artifact: ${e.message}`);
+      }
+
       // Exit early
       return;
     }
@@ -394,14 +436,116 @@ async function run() {
     // Save grouped runs to artifact file
     fs.writeFileSync(outputPath, JSON.stringify(Array.from(grouped.entries())));
 
+    // For each workflow, find the last successful run (even if outside the window)
+    // This is used to calculate "days since last success" for failing workflows
+    const lastSuccessTimestamps = new Map();
+    const owner = github.context.repo.owner;
+    const repo = github.context.repo.repo;
+
+    for (const [name, runs] of grouped.entries()) {
+      try {
+        // Check if latest run on main is failing
+        const mainRuns = runs
+          .filter(r => r.head_branch === branch)
+          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+        const latestRun = mainRuns[0];
+        if (!latestRun || latestRun.conclusion === 'success') {
+          // Workflow is passing, store the success timestamp
+          if (latestRun && latestRun.conclusion === 'success') {
+            lastSuccessTimestamps.set(name, {
+              timestamp: latestRun.created_at,
+              sha: latestRun.head_sha,
+              run_id: latestRun.id,
+              in_window: true
+            });
+          }
+          continue;
+        }
+
+        // Workflow is currently failing - check if we already have a success in our window
+        const successInWindow = mainRuns.find(r => r.conclusion === 'success');
+        if (successInWindow) {
+          // We already have the info, no API call needed
+          lastSuccessTimestamps.set(name, {
+            timestamp: successInWindow.created_at,
+            sha: successInWindow.head_sha,
+            run_id: successInWindow.id,
+            in_window: true
+          });
+          continue;
+        }
+
+        // Workflow is failing and no success in window - make targeted API call to search all history
+        const workflowPath = runs[0]?.path;
+        if (!workflowPath) continue;
+
+        core.info(`Searching for last success in full history for failing workflow: ${name}`);
+
+        // Search through workflow history to find the last successful run
+        let foundSuccess = false;
+        const maxPagesToSearch = 10; // Limit search to up to 1000 most recent runs to avoid excessive API calls
+
+        for (let page = 1; page <= maxPagesToSearch; page++) {
+          const { data } = await octokit.rest.actions.listWorkflowRuns({
+            owner,
+            repo,
+            workflow_id: workflowPath,
+            branch,
+            status: 'completed',
+            per_page: 100,
+            page
+          });
+
+          if (!data.workflow_runs || data.workflow_runs.length === 0) {
+            break; // No more runs to check
+          }
+
+          // Find first successful run on this page
+          const successRun = data.workflow_runs.find(r => r.conclusion === 'success');
+          if (successRun) {
+            lastSuccessTimestamps.set(name, {
+              timestamp: successRun.created_at,
+              sha: successRun.head_sha,
+              run_id: successRun.id,
+              in_window: false
+            });
+            core.info(`Found last success for ${name}: ${successRun.created_at}`);
+            foundSuccess = true;
+            break;
+          }
+
+          // If we got fewer runs than requested, we've reached the end
+          if (data.workflow_runs.length < 100) {
+            break;
+          }
+        }
+
+        if (!foundSuccess) {
+          // Never succeeded in searchable history
+          core.info(`No successful run found in history for ${name} (never succeeded or very old)`);
+          lastSuccessTimestamps.set(name, { never_succeeded: true });
+        }
+
+        // Small delay to avoid rate limiting
+        await delay(500);
+      } catch (e) {
+        core.warning(`Failed to fetch last success timestamp for ${name}: ${e.message}`);
+      }
+    }
+
+    // Save the last success timestamps index
+    const lastSuccessPath = path.join(outputDir, 'last-success-timestamps.json');
+    fs.writeFileSync(lastSuccessPath, JSON.stringify(Object.fromEntries(lastSuccessTimestamps)));
+    core.setOutput('last-success-timestamps-path', lastSuccessPath);
+    core.info(`Saved last success timestamps for ${lastSuccessTimestamps.size} workflows to ${lastSuccessPath}`);
+
     // Download logs for the latest failing run per workflow and build an index
     // Constraint: Only fetch logs when the latest run for that workflow (on target branch)
     // is failing (i.e., conclusion neither success nor skipped/cancelled).
     // The logs will be extracted under a dedicated directory so downstream steps
     // can parse them without performing network calls again.
     // Separate gtest logs from other logs (non-gtest failures with no annotations)
-    const owner = github.context.repo.owner;
-    const repo = github.context.repo.repo;
     const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
     const gtestLogsRoot = path.join(workspace, 'logs', 'gtest');
     const otherLogsRoot = path.join(workspace, 'logs', 'other');

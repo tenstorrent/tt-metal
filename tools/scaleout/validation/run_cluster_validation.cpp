@@ -151,8 +151,9 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
             driver,
             context.get_distributed_context_ptr(),
             &context.hal(),
-            context.rtoptions().get_mock_enabled(),
-            run_discovery);
+            context.rtoptions(),
+            run_discovery
+        );
         log_output_rank0("Physical Discovery Complete");
         log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
         return physical_system_descriptor;
@@ -263,7 +264,7 @@ int main(int argc, char* argv[]) {
         reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
         links_reset = true;
         num_retrains++;
-        physical_system_descriptor.run_discovery(true);
+        physical_system_descriptor.run_discovery(true, true);
         missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
     }
 

@@ -153,7 +153,6 @@ class RunTimeOptions {
     bool validate_kernel_binaries = false;
     unsigned num_hw_cqs = 1;
 
-    bool fd_fabric_en = false;
     bool using_slow_dispatch = false;
 
     bool enable_dispatch_data_collection = false;
@@ -209,7 +208,7 @@ class RunTimeOptions {
     bool enable_fabric_telemetry = false;
 
     // Mock cluster initialization using a provided cluster descriptor
-    std::string mock_cluster_desc_path = "";
+    std::string mock_cluster_desc_path;
 
     // Consolidated target device selection
     TargetDevice runtime_target_device_ = TargetDevice::Silicon;
