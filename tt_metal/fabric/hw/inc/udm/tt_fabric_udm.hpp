@@ -13,6 +13,14 @@
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include <type_traits>
+#include "tt_fabric_udm_impl.hpp"
+
+// Forward declarations for fabric connection management
+namespace tt::tt_fabric {
+class WorkerToFabricEdmSender;
+}
+
+namespace tt::tt_fabric::udm {
 
 /**
  * @brief Number of Data Mover (DM) processors for fabric operations
@@ -165,73 +173,6 @@ inline __attribute__((always_inline)) void fabric_full_sync() {
     while (!fabric_nonposted_atomics_flushed());
 }
 
-// Forward declarations for fabric connection management
-namespace tt::tt_fabric {
-class WorkerToFabricEdmSender;
-}
-
-// Helper template for static_assert
-template <typename T>
-inline constexpr bool always_false_v = false;
-
-/**
- * @brief Helper function to set unicast routing based on packet header type
- *
- * This function provides a unified interface for setting up fabric unicast routing
- * across different packet header types (UDMHybridMeshPacketHeader, UDMLowLatencyPacketHeader).
- * It automatically selects the appropriate routing API based on the packet header type.
- *
- * @tparam PACKET_HEADER_TYPE The type of packet header (auto-deduced)
- * @param packet_header Pointer to the packet header
- * @param dst_dev_id Destination device ID
- * @param dst_mesh_id Destination mesh ID
- * @param trid Transaction ID for UDM operations
- */
-template <typename PACKET_HEADER_TYPE>
-FORCE_INLINE void udm_fabric_set_unicast_route(
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id, uint16_t trid) {
-    uint16_t my_noc_xy = my_x[edm_to_local_chip_noc] | my_y[edm_to_local_chip_noc] << 8;
-
-    // Create udm_fields struct with the necessary fields
-    tt::tt_fabric::udm_fields udm = {my_noc_xy, proc_type, trid};
-
-    if constexpr (std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::UDMHybridMeshPacketHeader>) {
-        fabric_set_unicast_route(packet_header, udm, dst_dev_id, dst_mesh_id);
-    } else if constexpr (std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::UDMLowLatencyPacketHeader>) {
-        fabric_set_unicast_route(packet_header, udm, dst_dev_id);
-    } else {
-        static_assert(always_false_v<PACKET_HEADER_TYPE>, "Unsupported PACKET_HEADER_TYPE for fabric routing");
-    }
-}
-
-/**
- * @brief Get or create a singleton fabric connection for the current worker
- *
- * This function manages a static connection instance that persists across calls.
- * The connection is initialized on first use and reused for subsequent operations.
- *
- * @return Reference to the fabric connection
- */
-inline tt::tt_fabric::WorkerToFabricEdmSender& get_fabric_connection() {
-    static tt::tt_fabric::WorkerToFabricEdmSender* connection = nullptr;
-    static bool initialized = false;
-
-    if (!initialized) {
-        // Build connection from runtime args on first use
-        // This assumes the runtime args are set up properly by the host
-        // TODO: instead of using rt args, use the reserved L1 region for get the correct ETH channel, and semaphore
-        // addresses.
-        size_t rt_args_idx = 0;
-        static tt::tt_fabric::WorkerToFabricEdmSender conn;
-        conn = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-        conn.open();
-        connection = &conn;
-        initialized = true;
-    }
-
-    return *connection;
-}
-
 /**
  * @brief Write data to a remote location through the fabric (similar to ncrisc_noc_fast_write)
  *
@@ -268,7 +209,7 @@ inline __attribute__((always_inline)) void fabric_fast_write(
 
     } else {
         packet_header->to_noc_unicast_write(NocUnicastCommandHeader{dest_addr}, len_bytes);
-        udm_fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id, trid);
+        fabric_write_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id, trid);
     }
 
     connection.wait_for_empty_write_slot();
@@ -282,3 +223,5 @@ inline __attribute__((always_inline)) void fabric_fast_write(
     // Return packet header to pool
     PacketHeaderPool::release_header(reinterpret_cast<volatile tt_l1_ptr uint8_t*>(packet_header));
 }
+
+}  // namespace tt::tt_fabric::udm
