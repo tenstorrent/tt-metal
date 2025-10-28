@@ -51,6 +51,9 @@ def random_torch_tensor(dtype, shape):
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 100000}], indirect=True)
 def test_permute(device, shape, perm, dtype, layout, in_mem_config, out_mem_config):
+    """
+    Original op variants used by OFT model
+    """
     skip_if_not_20_cores(device)
 
     torch.manual_seed(2005)
@@ -81,6 +84,95 @@ def test_permute(device, shape, perm, dtype, layout, in_mem_config, out_mem_conf
     # ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
     # ttnn.release_trace(device, trace_id)
     # ttnn.synchronize_device(device)
+
+
+@pytest.mark.parametrize(
+    "shape, perm, dtype, layout, in_mem_config, out_mem_config",
+    [
+        ([1, 48, 160, 256], [2, 1, 0, 3], ttnn.uint32, RM, DRAM, DRAM),
+        ([160, 48, 1, 256], [2, 1, 0, 3], ttnn.uint32, RM, DRAM, DRAM),
+        ([1, 24, 80, 256], [2, 1, 0, 3], ttnn.uint32, RM, DRAM, DRAM),
+        ([80, 24, 1, 256], [2, 1, 0, 3], ttnn.uint32, RM, DRAM, DRAM),
+        ([1, 12, 40, 256], [2, 1, 0, 3], ttnn.uint32, RM, DRAM, DRAM),
+        ([40, 12, 1, 256], [2, 1, 0, 3], ttnn.uint32, RM, DRAM, DRAM),
+        ([1, 1, 25281, 9], [0, 3, 1, 2], ttnn.bfloat16, RM, DRAM, L1),
+        ([1, 3, 159, 160], [0, 2, 3, 1], ttnn.bfloat16, RM, L1, L1),
+        ([1, 1, 159, 160], [0, 2, 3, 1], ttnn.bfloat16, RM, L1, L1),
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 100000}], indirect=True)
+def test_permute_rm(device, shape, perm, dtype, layout, in_mem_config, out_mem_config):
+    """
+    If inputs were originally in row-major
+    """
+    skip_if_not_20_cores(device)
+
+    torch.manual_seed(2005)
+    torch_input_tensor = random_torch_tensor(dtype, shape)
+    torch_output_tensor = torch.permute(torch_input_tensor, perm)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=layout, dtype=dtype, device=device, memory_config=in_mem_config
+    )
+    output_tensor = ttnn.permute(input_tensor, perm, memory_config=out_mem_config)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "shape, perm, dtype, layout, in_mem_config, out_mem_config",
+    [
+        ([1, 48, 160, 256], [2, 1, 0, 3], ttnn.uint32, TILE, DRAM, DRAM),
+        ([160, 48, 1, 256], [2, 1, 0, 3], ttnn.uint32, TILE, DRAM, DRAM),
+        ([1, 24, 80, 256], [2, 1, 0, 3], ttnn.uint32, TILE, DRAM, DRAM),
+        ([80, 24, 1, 256], [2, 1, 0, 3], ttnn.uint32, TILE, DRAM, DRAM),
+        ([1, 12, 40, 256], [2, 1, 0, 3], ttnn.uint32, TILE, DRAM, DRAM),
+        ([40, 12, 1, 256], [2, 1, 0, 3], ttnn.uint32, TILE, DRAM, DRAM),
+        ([1, 1, 25281, 9], [0, 3, 1, 2], ttnn.bfloat16, RM, DRAM, L1),
+        ([1, 3, 159, 160], [0, 2, 3, 1], ttnn.bfloat16, TILE, L1, L1),
+        ([1, 1, 159, 160], [0, 2, 3, 1], ttnn.bfloat16, TILE, L1, L1),
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 100000}], indirect=True)
+def test_permute_to_rm(device, shape, perm, dtype, layout, in_mem_config, out_mem_config):
+    """
+    Convert to row-major (untilize -> permute -> tilize)
+    """
+    skip_if_not_20_cores(device)
+
+    torch.manual_seed(2005)
+    torch_input_tensor = random_torch_tensor(dtype, shape)
+    torch_output_tensor = torch.permute(torch_input_tensor, perm)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=layout, dtype=dtype, device=device, memory_config=in_mem_config
+    )
+    if layout == TILE:
+        unpadded_shape = input_tensor.shape
+        input_tensor = ttnn.untilize_with_unpadding(
+            input_tensor,
+            output_tensor_end=(
+                unpadded_shape[0] - 1,
+                unpadded_shape[1] - 1,
+                unpadded_shape[2] - 1,
+                unpadded_shape[3] - 1,
+            ),
+        )
+    output_tensor = ttnn.permute(input_tensor, perm, memory_config=out_mem_config)
+    if layout == TILE:
+        unpadded_shape = output_tensor.padded_shape
+        padded_shape = [
+            unpadded_shape[0],
+            unpadded_shape[1],
+            ttnn.core.roundup(unpadded_shape[2], ttnn.TILE_SIZE),
+            ttnn.core.roundup(unpadded_shape[3], ttnn.TILE_SIZE),
+        ]
+        output_tensor = ttnn.tilize_with_val_padding(output_tensor, padded_shape, 0.0)
+        # output_tensor = ttnn.tilize_with_zero_padding(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
