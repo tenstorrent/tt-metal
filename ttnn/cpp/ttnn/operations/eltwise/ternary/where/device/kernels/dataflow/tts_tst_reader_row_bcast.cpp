@@ -96,13 +96,13 @@ void kernel_main() {
 #if !SRC_SHARDED_A
                             cb_reserve_back(cb_id_src, onetile);
                             uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
-                            noc_async_read_tile(tile_offset + tw, src, l1_write_addr_src);
+                            noc_async_read_page(tile_offset + tw, src, l1_write_addr_src);
 #endif
 #if !SRC_SHARDED_B
                             // read a tile from src_b (TTS: true tensor, TST: false tensor)
                             cb_reserve_back(cb_id_src_b, onetile);
                             uint32_t l1_write_addr_b = get_write_ptr(cb_id_src_b);
-                            noc_async_read_tile(tile_offset_b + tw, src_b, l1_write_addr_b);
+                            noc_async_read_page(tile_offset_b + tw, src_b, l1_write_addr_b);
 #endif
 #if !SRC_SHARDED_A || !SRC_SHARDED_B
                             noc_async_read_barrier();
