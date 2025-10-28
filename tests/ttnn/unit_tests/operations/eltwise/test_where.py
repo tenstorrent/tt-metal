@@ -776,3 +776,28 @@ def test_ttnn_where_preallocated(a_shape, b_shape, c_shape, scalar, variant, con
     ttnn.where(ttnn_C, ttnn_T, ttnn_F, output_tensor=ttnn_out)
     result = ttnn.to_torch(ttnn_out)
     assert torch_equal_nan(result, golden)
+
+
+@pytest.mark.parametrize(
+    "memory_config",
+    [ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG, ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG],
+)
+def test_add_error(memory_config, device):
+    # Create input tensors with specified shapes
+    input_shape = [1, 1, 1, 1024]
+    bias_shape = [1, 1024]
+
+    # Create random tensors
+    torch_input = torch.randn(*input_shape, dtype=torch.bfloat16)
+    torch_bias = torch.randn(*bias_shape, dtype=torch.bfloat16)
+
+    # Convert to TTNN tensors with tile layout
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT)
+    ttnn_bias = ttnn.from_torch(torch_bias, device=device, layout=ttnn.TILE_LAYOUT)
+
+    # Perform the add operation with the specified memory config
+    ttnn_result = ttnn.add(ttnn_input, ttnn_bias, memory_config=memory_config, use_legacy=False)
+
+    torch_result = torch.add(torch_input, torch_bias)
+
+    assert assert_with_ulp(ttnn_result, torch_result, 1)

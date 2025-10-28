@@ -340,8 +340,12 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
             auto padded_output_shape = tensor_b->tensor_spec().tensor_layout().compute_padded_shape(output_shape);
             output_shard_spec = adjust_to_shape(*input_b_shard_spec, tensor_b->padded_shape(), padded_output_shape);
         } else {
-            TT_FATAL(shard_spec.has_value(), "Sharded memory config specified but no shard spec available");
-            output_shard_spec = *shard_spec;
+            // No shard spec available from any source - generate one automatically
+            // based on the memory layout type and worker grid
+            auto padded_output_shape = input_tensor_a.tensor_spec().tensor_layout().compute_padded_shape(output_shape);
+            auto auto_shard_shape =
+                compute_auto_shard_shape(padded_output_shape, attributes.worker_grid, memory_layout, Layout::TILE);
+            output_shard_spec = ShardSpec(attributes.worker_grid, auto_shard_shape);
         }
 
         return TensorSpec(

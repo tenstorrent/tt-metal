@@ -104,4 +104,11 @@ struct AllShardSpecs {
 tt::tt_metal::ShardSpec adjust_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);
 
+// Helper functions for automatic shard spec generation
+std::array<uint32_t, 2> compute_auto_shard_shape(
+    const ttnn::Shape& logical_shape,
+    const tt::tt_metal::CoreRangeSet& core_grid,
+    const tt::tt_metal::TensorMemoryLayout& memory_layout,
+    const tt::tt_metal::Layout& layout);
+
 }  // namespace ttnn::operations::binary_ng
