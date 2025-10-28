@@ -11,6 +11,8 @@
 #include "ttnn/operations/core/core.hpp"
 
 #include "layernorm_distributed_types.hpp"
+#include "layernorm_distributed_types.hpp"
+#include "layernorm/device/layernorm_types.hpp"
 
 namespace ttnn::operations::normalization {
 
@@ -27,8 +29,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_pre_allgather_welford_mu
     Tensor& output,
     LayerNormDistributedType norm_type,
     DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<bool> use_2d_core_grid = std::nullopt,
-    const bool use_welford = false);
+    std::optional<bool> use_2d_core_grid = std::nullopt);
 
 struct LayerNormPreAllGather {
     LayerNormDistributedType norm_type;

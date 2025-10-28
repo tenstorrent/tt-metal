@@ -51,8 +51,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_welford_multi_core(
     Tensor& output,
     LayerNormDistributedType norm_type,
     DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<bool> use_2d_core_grid,
-    const bool use_welford) {
+    std::optional<bool> use_2d_core_grid) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const bool is_rmsnorm = norm_type == LayerNormDistributedType::RMSNORM;
     const auto& shape = a.padded_shape();
@@ -63,7 +62,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_welford_multi_core(
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
 
     const uint32_t Wt = W / TILE_WIDTH;
-    const uint32_t Ht = H / TILE_HEIGHT;
+    program_config.legacy_reduction, program_config.legacy_rsqrt, const uint32_t Ht = H / TILE_HEIGHT;
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
     //////////////////////////////////////////////////////////////////////////
