@@ -27,6 +27,9 @@ SDXL_L1_SMALL_SIZE = 30000
 SDXL_TRACE_REGION_SIZE = 34000000
 SDXL_CI_WEIGHTS_PATH = "/mnt/MLPerf/tt_dnn-models/hf_home"
 SDXL_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_1D
+MAX_SEQUENCE_LENGTH = 77
+TEXT_ENCODER_2_PROJECTION_DIM = 1280
+CONCATENATED_TEXT_EMBEDINGS_SIZE = 2048  # text_encoder_1_hidden_size + text_encoder_2_hidden_size (768 + 1280)
 
 
 def create_tt_clip_text_encoders(pipeline, ttnn_device):
