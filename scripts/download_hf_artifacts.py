@@ -32,14 +32,6 @@ UPSTREAM_MODELS = [
     "meta-llama/Llama-3.3-70B-Instruct",
 ]
 
-PYTHON_MODELS = [
-    "meta-llama/Llama-3.1-8B-Instruct",
-    "meta-llama/Llama-3.2-1B-Instruct",
-    "meta-llama/Llama-3.2-3B-Instruct",
-    "meta-llama/Llama-3.2-11B-Vision-Instruct",
-    "mistralai/Mistral-7B-Instruct-v0.3",
-]
-
 SINGLE_CARD_MODELS = [
     "CompVis/stable-diffusion-v1-4",
     "distil-whisper/distil-large-v3",
@@ -111,7 +103,6 @@ ARGUMENT_TO_MODELS = {
     "bh": BH_MODELS,
     "tg": TG_MODELS,
     "upstream": UPSTREAM_MODELS,
-    "python": PYTHON_MODELS,
     "single": SINGLE_CARD_MODELS,
     "t3k": T3K_MODELS,
     "other": OTHER_MODELS,
@@ -190,7 +181,6 @@ def get_parser():
     parser.add_argument("--bh", action="store_true", help="download BlackHole models")
     parser.add_argument("--tg", action="store_true", help="download TG models")
     parser.add_argument("--upstream", action="store_true", help="download Upstream models")
-    parser.add_argument("--python", action="store_true", help="download Python models")
     parser.add_argument("--single", action="store_true", help="download Single Card models")
     parser.add_argument("--t3k", action="store_true", help="download T3000 models")
     parser.add_argument("--other", action="store_true", help="download T3000 models")
