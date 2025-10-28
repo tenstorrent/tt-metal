@@ -546,7 +546,7 @@ parameters = {
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.
 # If you defined a device_mesh_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
-    input_shape,
+    input_shape={"self": [1, 1, 32, 32], "other": [1, 1, 32, 32]},
     input_a_dtype=ttnn.bfloat16,
     input_b_dtype=ttnn.bfloat16,
     input_a_layout=ttnn.TILE_LAYOUT,

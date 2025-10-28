@@ -326,22 +326,22 @@ class MasterConfigLoader:
         Args:
             operation_name: Name of the operation (e.g., 'sigmoid_accurate', 'add')
             suite_name: Name of the test suite (default: 'model_traced')
-            all_cases: If False (default), returns exact traced configs (N tests).
+            all_cases: If False (default), returns unique input configs (N tests, deduplicated).
                       If True, returns all combinations as Cartesian product (N×M×... tests).
 
         Returns:
             Dictionary with all necessary parameters ready to add to test parameters
 
         Example (Unary):
-            # Default: Run exact 30 traced configs
+            # Default: Run unique input configs (deduplicated, one test per unique input)
             loader = MasterConfigLoader()
-            model_traced_params = loader.get_suite_parameters("sigmoid_accurate")
+            model_traced_params = loader.get_suite_parameters("sigmoid_accurate")  # 30 configs (30 unique inputs)
 
-            # Or: Run all combinations (30 shapes × dtypes × layouts × memory_configs)
-            model_traced_params = loader.get_suite_parameters("sigmoid_accurate", all_cases=True)
+            # Run all combinations (Cartesian product of all parameters)
+            model_traced_params = loader.get_suite_parameters("sigmoid_accurate", all_cases=True)  # Many tests
 
         Example (Binary):
-            # Default: Run exact 6 traced configs for add (paired inputs)
+            # Default: Run unique input pair configs (deduplicated)
             model_traced_params = loader.get_suite_parameters("add")
 
             # Or: Run all combinations
@@ -371,12 +371,15 @@ class MasterConfigLoader:
             # Detect if this is a binary operation
             is_binary = self._is_binary_operation(configs)
 
+            # By default, deduplicate inputs unless running all_cases (Cartesian product)
+            deduplicate_inputs = not all_cases
+
             if is_binary:
                 print(f"🔧 Detected binary operation: {operation_name}")
-                return self._get_binary_suite_parameters(operation_name, configs, all_cases)
+                return self._get_binary_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
             else:
                 print(f"🔧 Detected unary operation: {operation_name}")
-                return self._get_unary_suite_parameters(operation_name, configs, all_cases)
+                return self._get_unary_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
 
         except Exception as e:
             print(f"❌ Error loading configurations for {operation_name}: {e}")
@@ -385,7 +388,9 @@ class MasterConfigLoader:
             traceback.print_exc()
             return {"traced_config_name": []}
 
-    def _get_unary_suite_parameters(self, operation_name: str, configs: List, all_cases: bool) -> Dict:
+    def _get_unary_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
         """
         Get parameters for unary operations (single tensor input).
         """
@@ -393,6 +398,7 @@ class MasterConfigLoader:
         # This ensures we get N exact configs, not a Cartesian product
         paired_configs = []
         failed_configs = 0
+        seen_input_signatures = set() if deduplicate_inputs else None
 
         for config_idx, config in enumerate(configs):
             try:
@@ -417,6 +423,17 @@ class MasterConfigLoader:
                     parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
 
                     if parsed_dtype and parsed_layout and parsed_mem_config:
+                        # If deduplicating, check if we've seen this input before
+                        if deduplicate_inputs:
+                            import hashlib
+
+                            input_sig = hashlib.md5(
+                                str((tensor_config.shape, parsed_dtype, parsed_layout, parsed_mem_config)).encode()
+                            ).hexdigest()
+                            if input_sig in seen_input_signatures:
+                                continue  # Skip this config, we already have one with this input
+                            seen_input_signatures.add(input_sig)
+
                         paired_configs.append(
                             {
                                 "shape": tensor_config.shape,
@@ -440,30 +457,51 @@ class MasterConfigLoader:
 
             if all_cases:
                 # Return separate lists for Cartesian product
-                # Extract unique values for each parameter type
-                shapes = []
+                # Extract UNIQUE values for each parameter type
+                unique_shapes = []
+                seen_shapes = set()
                 dtypes = set()
                 layouts = set()
-                memory_configs = []
-                output_memory_configs = []
+                unique_memory_configs = []
+                seen_mem_configs = set()
+                unique_output_memory_configs = []
+                seen_output_mem_configs = set()
 
                 for cfg in paired_configs:
-                    shapes.append(cfg["shape"])
+                    # Track unique shapes
+                    shape_tuple = tuple(cfg["shape"])
+                    if shape_tuple not in seen_shapes:
+                        unique_shapes.append(cfg["shape"])
+                        seen_shapes.add(shape_tuple)
+
                     dtypes.add(cfg["dtype"])
                     layouts.add(cfg["layout"])
-                    memory_configs.append(cfg["memory_config"])
-                    output_memory_configs.append(cfg["output_memory_config"])
+
+                    # Track unique memory configs (using str representation as key)
+                    mem_config_str = str(cfg["memory_config"])
+                    if mem_config_str not in seen_mem_configs:
+                        unique_memory_configs.append(cfg["memory_config"])
+                        seen_mem_configs.add(mem_config_str)
+
+                    output_mem_config_str = str(cfg["output_memory_config"])
+                    if output_mem_config_str not in seen_output_mem_configs:
+                        unique_output_memory_configs.append(cfg["output_memory_config"])
+                        seen_output_mem_configs.add(output_mem_config_str)
 
                 result = {
-                    "input_shape": shapes,
+                    "input_shape": unique_shapes,
                     "input_a_dtype": list(dtypes),
                     "input_a_layout": list(layouts),
-                    "input_a_memory_config": memory_configs,
-                    "output_memory_config": output_memory_configs,
+                    "input_a_memory_config": unique_memory_configs,
+                    "output_memory_config": unique_output_memory_configs,
                 }
 
                 total_tests = (
-                    len(shapes) * len(dtypes) * len(layouts) * len(memory_configs) * len(output_memory_configs)
+                    len(unique_shapes)
+                    * len(dtypes)
+                    * len(layouts)
+                    * len(unique_memory_configs)
+                    * len(unique_output_memory_configs)
                 )
                 print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
                 print(f"   📊 all_cases=True: Will generate ~{total_tests} test vectors (Cartesian product)")
@@ -478,7 +516,8 @@ class MasterConfigLoader:
                 }
 
                 print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
-                print(f"   📊 Will generate {len(paired_configs)} test vectors (exact traced configs)")
+                dedup_msg = " (unique inputs)" if deduplicate_inputs else " (all input/output pairs)"
+                print(f"   📊 Will generate {len(paired_configs)} test vectors{dedup_msg}")
                 if failed_configs > 0:
                     print(f"⚠️ Failed to parse {failed_configs} configurations")
 
@@ -490,7 +529,9 @@ class MasterConfigLoader:
                 "traced_config": [],
             }
 
-    def _get_binary_suite_parameters(self, operation_name: str, configs: List, all_cases: bool) -> Dict:
+    def _get_binary_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
         """
         Get parameters for binary operations (two tensor inputs).
         Handles operations like add, multiply, etc. that take two tensors.
@@ -566,27 +607,40 @@ class MasterConfigLoader:
 
             if all_cases:
                 # Return separate lists for Cartesian product
-                shapes_a = []
-                shapes_b = []
+                # Extract UNIQUE values for each parameter type
+                unique_shapes_a = []
+                unique_shapes_b = []
+                seen_shape_pairs = set()
                 dtypes_a = set()
                 dtypes_b = set()
                 layouts_a = set()
                 layouts_b = set()
-                memory_configs_a = []
-                memory_configs_b = []
+                unique_memory_configs_a = []
+                unique_memory_configs_b = []
+                seen_mem_config_pairs = set()
 
                 for cfg in paired_configs:
-                    shapes_a.append(cfg["shape_a"])
-                    shapes_b.append(cfg["shape_b"])
+                    # Track unique shape pairs
+                    shape_pair = (tuple(cfg["shape_a"]), tuple(cfg["shape_b"]))
+                    if shape_pair not in seen_shape_pairs:
+                        unique_shapes_a.append(cfg["shape_a"])
+                        unique_shapes_b.append(cfg["shape_b"])
+                        seen_shape_pairs.add(shape_pair)
+
                     dtypes_a.add(cfg["dtype_a"])
                     dtypes_b.add(cfg["dtype_b"])
                     layouts_a.add(cfg["layout_a"])
                     layouts_b.add(cfg["layout_b"])
-                    memory_configs_a.append(cfg["memory_config_a"])
-                    memory_configs_b.append(cfg["memory_config_b"])
+
+                    # Track unique memory config pairs
+                    mem_config_pair = (str(cfg["memory_config_a"]), str(cfg["memory_config_b"]))
+                    if mem_config_pair not in seen_mem_config_pairs:
+                        unique_memory_configs_a.append(cfg["memory_config_a"])
+                        unique_memory_configs_b.append(cfg["memory_config_b"])
+                        seen_mem_config_pairs.add(mem_config_pair)
 
                 # For binary operations, input_shape is a dict with "self" and "other"
-                input_shapes = [{"self": sa, "other": sb} for sa, sb in zip(shapes_a, shapes_b)]
+                input_shapes = [{"self": sa, "other": sb} for sa, sb in zip(unique_shapes_a, unique_shapes_b)]
 
                 result = {
                     "input_shape": input_shapes,
@@ -594,8 +648,8 @@ class MasterConfigLoader:
                     "input_b_dtype": list(dtypes_b),
                     "input_a_layout": list(layouts_a),
                     "input_b_layout": list(layouts_b),
-                    "input_a_memory_config": memory_configs_a,
-                    "input_b_memory_config": memory_configs_b,
+                    "input_a_memory_config": unique_memory_configs_a,
+                    "input_b_memory_config": unique_memory_configs_b,
                 }
 
                 total_tests = (
@@ -604,8 +658,8 @@ class MasterConfigLoader:
                     * len(dtypes_b)
                     * len(layouts_a)
                     * len(layouts_b)
-                    * len(memory_configs_a)
-                    * len(memory_configs_b)
+                    * len(unique_memory_configs_a)
+                    * len(unique_memory_configs_b)
                 )
                 print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
                 print(f"   📊 all_cases=True: Will generate ~{total_tests} test vectors (Cartesian product)")
@@ -620,7 +674,8 @@ class MasterConfigLoader:
                 }
 
                 print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
-                print(f"   📊 Will generate {len(paired_configs)} test vectors (exact traced configs)")
+                dedup_msg = " (unique input pairs)" if deduplicate_inputs else " (all input/output pairs)"
+                print(f"   📊 Will generate {len(paired_configs)} test vectors{dedup_msg}")
                 if failed_configs > 0:
                     print(f"⚠️ Failed to parse {failed_configs} configurations")
 
