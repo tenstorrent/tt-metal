@@ -79,12 +79,23 @@ def create_sliding_window_mask_prefill(b, nh, seq_len, sliding_window, is_causal
 
 
 def run_test_sdpa_tt(
-    device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_high_precision_compute=False, rmse_threshold=None
+    device,
+    b,
+    nh,
+    nkv,
+    s,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    dtype,
+    use_high_precision_compute=False,
+    rmse_threshold=None,
+    core_grid=None,
 ):
     torch.manual_seed(1234)
 
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        compute_with_storage_grid_size=core_grid or device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=True,
@@ -123,14 +134,14 @@ def run_test_sdpa_tt(
     V_repeated = torch.cat([V[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)  # b, nh, d, S
     gt = torch.nn.functional.scaled_dot_product_attention(Q, K_repeated, V_repeated, is_causal=True)
 
-    out_pass, out_pcc = comp_pcc(gt, tt_back, 0.994)
-    logger.debug(f"python vs pytorch: {out_pcc}")
-    rmse = torch.sqrt(((gt - tt_back) ** 2).mean()).item()
-    logger.debug(f"rmse: {rmse}")
-    if rmse_threshold is not None:
-        assert rmse < rmse_threshold
-    else:
-        assert out_pass
+    all_pass = True
+    for n in range(nh):
+        out_pass, out_pcc = comp_pcc(gt[:, n : n + 1, :, :], tt_back[:, n : n + 1, :, :], 0.994)
+        logger.debug(f"python vs pytorch head {n}: {out_pcc}")
+        rmse = torch.sqrt(((gt[:, n : n + 1, :, :] - tt_back[:, n : n + 1, :, :]) ** 2).mean()).item()
+        logger.debug(f"rmse head {n}: {rmse}")
+        all_pass = all_pass and out_pass and rmse < rmse_threshold
+    assert all_pass
 
 
 def run_sdpa_noncausal(
