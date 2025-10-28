@@ -204,7 +204,11 @@ jobs:
             OVERRIDE_TT_CONFIG=()
           fi
 
-          echo "Override config: ${OVERRIDE_TT_CONFIG[@]}"
+          if [ -n "${{ matrix.test-group.additional-args }}" ]; then
+            ADDITIONAL_ARGS=(${{ matrix.test-group.additional-args }})
+          else
+            ADDITIONAL_ARGS=()
+          fi
 
           export MESH_DEVICE=${{ matrix.test-group.mesh-device }}
           export TT_LLAMA_TEXT_VER=${{ matrix.test-group.tt-llama-text-ver }}
@@ -224,11 +228,13 @@ jobs:
           # Build the VLLM server arguments array
           declare -a VLLM_SERVER_ARGS
           VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
-          VLLM_SERVER_ARGS+=("${{ matrix.test-group.additional-args }}")
+          VLLM_SERVER_ARGS+=("${ADDITIONAL_ARGS[@]}")
           VLLM_SERVER_ARGS+=("${OVERRIDE_TT_CONFIG[@]}")
           if [[ "${USE_V1}" == "true" ]]; then
             VLLM_SERVER_ARGS+=("--num_scheduler_steps" "1")
           fi
+
+          echo "vLLM server args: ${VLLM_SERVER_ARGS[@]}"
 
           python3 vllm/examples/server_example_tt.py "${VLLM_SERVER_ARGS[@]}" > "${FILE_SERVER_LOG}" 2>&1 &
 
@@ -344,7 +350,7 @@ jobs:
           fi
 
       - name: Show server log
-        if: ${{ failure() }}
+        if: always()
         continue-on-error: true
         run: |
           cat "${FILE_SERVER_LOG}"
