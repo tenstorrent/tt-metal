@@ -36,23 +36,34 @@ auto wrap_increment(T val) -> T {
     }
 }
 
-enum class InitState : uint16_t {
+struct State {
     // Unknown initial state
-    UNKNOWN = 0,
-    // Indicates that this is written directly from host
-    ETH_INIT_FROM_HOST,
+    static constexpr uint32_t Unknown = 0x0;
+    // Indicates that this core was written directly from host
+    static constexpr uint32_t EthInitFromHost = 0x00010000;
     // Write kernel to local ethernet cores and wait for ack
-    ETH_INIT_LOCAL,
+    static constexpr uint32_t EthInitLocal = 0x00020000;
     // Wait for ack from connected ethernet core
-    ETH_HANDSHAKE_NEIGHBOUR,
+    static constexpr uint32_t EthHandshakeNeighbour = 0x00030000;
     // Write primary kernel to connected ethernet core and wait for ack
-    ETH_INIT_NEIGHBOUR,
+    static constexpr uint32_t EthInitNeighbour = 0x00040000;
     // Wait for ack from local ethernet cores
-    ETH_HANDSHAKE_LOCAL,
+    static constexpr uint32_t EthHandshakeLocal = 0x00050000;
     // Ready for traffic
-    READY,
+    static constexpr uint32_t Ready = 0x1F1F0000;
     // Terminated
-    TERMINATED,
+    static constexpr uint32_t Terminated = 0xDEAD0000;
+    // Initialization Error
+    static constexpr uint32_t InitError = 0xE0E0E0E0;
+
+    // Mask the state value to get the heartbeat portion
+    static constexpr uint32_t HeartbeatMask = 0x0000FFFF;
+    // Mask the state value to get the state portion
+    static constexpr uint32_t StateMask = 0xFFFF0000;
+};
+
+struct BinaryWritten {
+    static constexpr uint32_t Written = 0x8A8A8A8A;
 };
 
 struct FabricLiteConfig {
@@ -77,7 +88,7 @@ struct FabricLiteConfig {
     // Becomes 1 when the neighbour is ready
     volatile uint32_t neighbour_handshake = 0;
 
-    unsigned char padding2[14]{};
+    unsigned char padding2[10]{};
 
     // This is the local primary core
     volatile uint16_t is_primary = false;
@@ -89,9 +100,9 @@ struct FabricLiteConfig {
     // This is on the MMIO
     volatile uint16_t is_mmio = false;
 
-    volatile InitState initial_state = InitState::UNKNOWN;
+    volatile uint32_t initial_state = State::Unknown;
 
-    volatile InitState current_state = InitState::UNKNOWN;
+    volatile uint32_t current_state = State::Unknown;
 
     // Set to 1 to enable routing
     volatile uint32_t routing_enabled = 1;
@@ -157,20 +168,29 @@ struct HostToFabricLiteInterface {
 
 struct FabricLiteMemoryMap {
     lite_fabric::FabricLiteConfig config;
+    // Values below preserved through initializations
     tt::tt_fabric::EDMChannelWorkerLocationInfo sender_location_info;
     uint32_t sender_flow_control_semaphore{};
     unsigned char padding0[12]{};
     uint32_t sender_connection_live_semaphore{};
     unsigned char padding1[12]{};
     uint32_t worker_semaphore{};
-    unsigned char padding2[92]{};
+    unsigned char padding2[12]{};
+    // This is set to 1 the first time lite fabric is initialized. Subsuquent inits will check if this value is set.
+    // If it's set then re-init is not required and the kernel can go directly into the while loop to service channels.
+    uint32_t binary_written{};
+    uint32_t version_major{};
+    uint32_t version_minor{};
+    uint32_t version_patch{};
+    bool on_mmio_chip{};
+    unsigned char padding3[63]{};
     unsigned char sender_channel_buffer[lite_fabric::SENDER_NUM_BUFFERS_ARRAY[0] * lite_fabric::CHANNEL_BUFFER_SIZE]{};
-    unsigned char padding3[192]{};
+    unsigned char padding4[192]{};
     unsigned char
         receiver_channel_buffer[lite_fabric::RECEIVER_NUM_BUFFERS_ARRAY[0] * lite_fabric::CHANNEL_BUFFER_SIZE]{};
     // L1 address of the service_lite_fabric function
     uint32_t service_lite_fabric_addr{};
-    unsigned char padding4[12]{};
+    unsigned char padding5[12]{};
     // Must be last because it has members that are only stored on the host
     HostToFabricLiteInterface<lite_fabric::SENDER_NUM_BUFFERS_ARRAY[0], lite_fabric::CHANNEL_BUFFER_SIZE>
         host_interface;

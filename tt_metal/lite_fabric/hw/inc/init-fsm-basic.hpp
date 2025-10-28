@@ -33,6 +33,14 @@ void wait_val(uint32_t addr, uint32_t val) {
     } while (reinterpret_cast<volatile uint32_t*>(addr)[0] != val);
 }
 
+// Run on connected DM1. Binary must be written to device before this is called.
+void run_connected_dm1() {
+    ConnectedRisc1Interface::assert_connected_dm1_reset();
+    ConnectedRisc1Interface::set_pc(LITE_FABRIC_TEXT_START);
+    ConnectedRisc1Interface::deassert_connected_dm1_reset();
+}
+
+// Full routing and binary init
 void routing_init(volatile lite_fabric::FabricLiteConfig* config_struct) {
     invalidate_l1_cache();
     // This value should not be used. It comes from metal.
@@ -56,26 +64,23 @@ void routing_init(volatile lite_fabric::FabricLiteConfig* config_struct) {
             sizeof(lite_fabric::FabricLiteConfig) >> 4);
     };
 
-    auto original_init_state = config_struct->initial_state;
     bool is_mmio = config_struct->is_mmio;
-    bool is_primary = config_struct->is_mmio;
-    while (config_struct->current_state != lite_fabric::InitState::READY) {
+    bool is_primary = config_struct->is_primary;
+
+    while ((config_struct->current_state & lite_fabric::State::StateMask) != lite_fabric::State::Ready) {
         invalidate_l1_cache();
 
-        switch (config_struct->current_state) {
-            case lite_fabric::InitState::UNKNOWN: {
-                do {
-                    invalidate_l1_cache();
-                } while (config_struct->current_state == lite_fabric::InitState::UNKNOWN);
+        switch (config_struct->current_state & lite_fabric::State::StateMask) {
+            case lite_fabric::State::Unknown: {
                 break;
             }
-            case lite_fabric::InitState::ETH_INIT_FROM_HOST: {
+            case lite_fabric::State::EthInitFromHost: {
                 break;
             }
-            case lite_fabric::InitState::ETH_INIT_LOCAL: {
+            case lite_fabric::State::EthInitLocal: {
                 break;
             }
-            case lite_fabric::InitState::ETH_HANDSHAKE_NEIGHBOUR: {
+            case lite_fabric::State::EthHandshakeNeighbour: {
                 auto handshake_addr = (uintptr_t)&config_struct->neighbour_handshake;
                 auto local_handshake_addr = (uintptr_t)&config_struct->primary_local_handshake;
 
@@ -99,17 +104,23 @@ void routing_init(volatile lite_fabric::FabricLiteConfig* config_struct) {
                     config_struct->primary_local_handshake = 3;
                     internal_::eth_send_packet(0, local_handshake_addr >> 4, handshake_addr >> 4, 1);
                 }
-                config_struct->current_state = lite_fabric::InitState::READY;
+                config_struct->current_state = lite_fabric::State::Ready;
                 break;
             }
-            case lite_fabric::InitState::ETH_INIT_NEIGHBOUR: {
-                ASSERT(is_primary);
-                ASSERT(is_mmio);
+            case lite_fabric::State::EthInitNeighbour: {
+                // This state should only be entered by the primary MMIO core
+                if (!is_primary || !is_mmio) {
+                    ASSERT(false);
+                    config_struct->current_state = lite_fabric::State::InitError;
+                    while (true) {
+                        invalidate_l1_cache();
+                    };
+                }
                 config_struct->is_primary = false;
                 config_struct->is_mmio = false;
                 config_struct->routing_enabled = 1;
-                config_struct->current_state = lite_fabric::InitState::ETH_HANDSHAKE_NEIGHBOUR;
-                config_struct->initial_state = lite_fabric::InitState::ETH_HANDSHAKE_NEIGHBOUR;
+                config_struct->current_state = lite_fabric::State::EthHandshakeNeighbour;
+                config_struct->initial_state = lite_fabric::State::EthHandshakeNeighbour;
                 ConnectedRisc1Interface::assert_connected_dm1_reset();
                 ConnectedRisc1Interface::set_pc(LITE_FABRIC_TEXT_START);
                 eth_send_config();
@@ -117,12 +128,14 @@ void routing_init(volatile lite_fabric::FabricLiteConfig* config_struct) {
                 ConnectedRisc1Interface::deassert_connected_dm1_reset();
                 break;
             }
-            case lite_fabric::InitState::ETH_HANDSHAKE_LOCAL: {
+            case lite_fabric::State::EthHandshakeLocal: {
                 break;
             }
             default: {
                 ASSERT(false);
+                config_struct->current_state = lite_fabric::State::InitError;
                 while (true) {
+                    invalidate_l1_cache();
                 };
             }
         }

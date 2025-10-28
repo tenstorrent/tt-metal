@@ -46,9 +46,9 @@ void SetPC(tt::Cluster& cluster, tt_cxy_pair virtual_core, uint32_t pc_addr, uin
 
 void SetPC(tt::Cluster& cluster, const SystemDescriptor& desc, uint32_t pc_addr, uint32_t pc_val);
 
-void WaitForState(tt::Cluster& cluster, tt_cxy_pair virtual_core, uint32_t addr, lite_fabric::InitState state);
+void WaitForState(tt::Cluster& cluster, tt_cxy_pair virtual_core, uint32_t addr, uint32_t state);
 
-void WaitForState(tt::Cluster& cluster, const SystemDescriptor& desc, uint32_t addr, lite_fabric::InitState state);
+void WaitForState(tt::Cluster& cluster, const SystemDescriptor& desc, uint32_t addr, uint32_t state);
 
 void LaunchLiteFabric(
     tt::Cluster& cluster,
@@ -69,5 +69,7 @@ void ResumeLiteFabric(
     tt::Cluster& cluster, const tt::tt_metal::Hal& hal, const SystemDescriptor& desc, HOST_INTERFACE& host_interface);
 
 void TerminateLiteFabric(tt::Cluster& cluster, const SystemDescriptor& desc);
+
+bool BinaryWritten(tt::Cluster& cluster, tt_cxy_pair virtual_core);
 
 }  // namespace lite_fabric
