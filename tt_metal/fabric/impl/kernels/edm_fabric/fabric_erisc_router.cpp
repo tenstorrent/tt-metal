@@ -2889,13 +2889,17 @@ void kernel_main() {
         // just the fabric bringup phase. These calls are also located earlier for the
         // single erisc mode
         if constexpr (!FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
-            if (has_downstream_edm_vc0_buffer_connection) {
-                for (size_t edm_index = 0; edm_index < NUM_USED_RECEIVER_CHANNELS_VC0; edm_index++) {
+            uint32_t has_downstream_edm = has_downstream_edm_vc0_buffer_connection & 0xF;
+            uint32_t edm_index = 0;
+            while (has_downstream_edm) {
+                if (has_downstream_edm & 0x1) {
                     downstream_edm_noc_interfaces_vc0[edm_index]
                         .template setup_edm_noc_cmd_buf<
                             tt::tt_fabric::edm_to_downstream_noc,
                             tt::tt_fabric::forward_and_local_write_noc_vc>();
                 }
+                edm_index++;
+                has_downstream_edm >>= 1;
             }
             if constexpr (enable_deadlock_avoidance) {
                 if (has_downstream_edm_vc1_buffer_connection) {
