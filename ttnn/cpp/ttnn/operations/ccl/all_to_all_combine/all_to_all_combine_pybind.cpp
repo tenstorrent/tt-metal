@@ -33,7 +33,7 @@ void py_bind_all_to_all_combine(py::module& module) {
             T = total number of tokens = B * S
 
             Args:
-                input_tensor (ttnn.Tensor): the input tensor containing the tokens to combine. The tensor is expected to be [E, B, S, H] ([E/D[A], B, S, H] per device) where each row is a token. The tensor is expected to be in Row Major, Interleaved format. It is duplicated on the non-cluster axis.
+                input_tensor (ttnn.Tensor): the input tensor containing the tokens to combine. The tensor is expected to be [E, B, S, H] ([E/D, B, S, H] per device) where each row is a token. The tensor is expected to be in Row Major, Interleaved format. It is duplicated on the non-cluster axis.
                 expert_metadata_tensor (ttnn.Tensor): the expert metadata tensor containing the ranking of the experts for each token. The tensor is expected to be [D, B, S, K] ([1, B, S, K] per device) where each value in the row is the expert index inside the mapping table. The tensor is expected to be in Row Major, Interleaved format. It is duplicated on the non-cluster axis.
                 expert_mapping_tensor (ttnn.Tensor): the one-hot encoded expert to device mapping tensor containing the location of the experts among each device and each mesh. The tensor is expected to be [D, 1, E, D] ([1, 1, E, D] per device) where each value in the row is 1 if the expert is on the device, 0 otherwise. The tensor is expected to be in Row Major, Interleaved format. This tensor is expected to be the same across all devices.
 
