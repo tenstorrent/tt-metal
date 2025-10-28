@@ -156,7 +156,7 @@ ttnn::Tensor bound_matmul(
     }
 
     if (parameters.user_fused_activation.has_value() && !has_user_grid) {
-        const ttnn::operations::unary::EltwiseUnaryWithParam activation = parameters.user_fused_activation.value();
+        const UnaryWithParam& activation = parameters.user_fused_activation.value();
 
         output_tensor = ttnn::operations::unary::Unary_chain::invoke(
             output_tensor, {activation}, parameters.output_mem_config, optional_output_tensor);
