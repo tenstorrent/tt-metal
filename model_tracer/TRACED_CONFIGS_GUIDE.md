@@ -188,7 +188,7 @@ tt-metal/
 
 ## Complete Example
 
-See `/home/ubuntu/tt-metal/tests/sweep_framework/sweeps/eltwise/unary/sigmoid_accurate/sigmoid_accurate.py` for a full working example.
+See `tests/sweep_framework/sweeps/eltwise/unary/sigmoid_accurate/sigmoid_accurate.py` for a full working example.
 
 ---
 

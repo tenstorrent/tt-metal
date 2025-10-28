@@ -13,8 +13,8 @@ Usage:
     python generic_ops_tracer.py <test_path> [output_dir]
 
 Examples:
-    python generic_ops_tracer.py /home/ubuntu/tt-metal/models/demos/wormhole/distilbert/demo/demo.py::test_demo
-    python generic_ops_tracer.py /home/ubuntu/tt-metal/models/demos/wormhole/resnet50/demo/demo.py::test_demo_sample
+    python generic_ops_tracer.py models/demos/wormhole/distilbert/demo/demo.py::test_demo
+    python generic_ops_tracer.py models/demos/wormhole/resnet50/demo/demo.py::test_demo_sample
 """
 
 import sys
@@ -24,6 +24,35 @@ import json
 import tempfile
 import argparse
 from datetime import datetime
+
+
+# Get the base directory from PYTHONPATH if set, otherwise use current working directory
+def get_base_dir():
+    """Get the tt-metal base directory from PYTHONPATH or current working directory"""
+    pythonpath = os.environ.get("PYTHONPATH", "")
+    if pythonpath:
+        # PYTHONPATH might contain multiple paths separated by ':'
+        paths = pythonpath.split(":")
+        for path in paths:
+            # Look for tt-metal directory
+            if "tt-metal" in path:
+                # Extract the tt-metal base directory
+                if path.endswith("tt-metal"):
+                    return path
+                # Handle cases like /home/ubuntu/tt-metal/python_env/lib/python3.X/site-packages
+                parts = path.split("tt-metal")
+                if parts:
+                    return parts[0] + "tt-metal"
+    # Fallback: assume we're running from within tt-metal and find it
+    current_dir = os.getcwd()
+    if "tt-metal" in current_dir:
+        parts = current_dir.split("tt-metal")
+        return parts[0] + "tt-metal"
+    # Last resort: use current directory
+    return current_dir
+
+
+BASE_DIR = get_base_dir()
 
 
 def create_tracing_plugin(output_dir):
@@ -46,6 +75,8 @@ from ttnn.graph_tracer_utils import GraphTracerUtils
 import json
 import os
 from datetime import datetime
+
+BASE_DIR_PLACEHOLDER = "BASE_DIR_VALUE"
 
 class OperationsTracingPlugin:
     def __init__(self):
@@ -87,7 +118,7 @@ class OperationsTracingPlugin:
     def load_valid_operations(self):
         """Load valid operations from Allops.txt"""
         valid_ops = set()
-        allops_file = "/home/ubuntu/tt-metal/tests/sweep_framework/Allops.txt"
+        allops_file = os.path.join(BASE_DIR_PLACEHOLDER, "tests/sweep_framework/Allops.txt")
 
         try:
             with open(allops_file, 'r') as f:
@@ -500,11 +531,13 @@ def pytest_configure(config):
 '''
 
     # Write plugin to tt-metal directory
-    plugin_file = "/home/ubuntu/tt-metal/conftest_tracer.py"
+    plugin_file = os.path.join(BASE_DIR, "conftest_tracer.py")
     os.makedirs(output_dir, exist_ok=True)
 
     with open(plugin_file, "w") as f:
-        f.write(plugin_content.replace("OUTPUT_DIR_PLACEHOLDER", output_dir))
+        content = plugin_content.replace("OUTPUT_DIR_PLACEHOLDER", output_dir)
+        content = content.replace("BASE_DIR_VALUE", BASE_DIR)
+        f.write(content)
 
     return plugin_file
 
@@ -527,10 +560,10 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False):
 
     # Run pytest from tt-metal directory with our plugin
     # Use the same python executable that's running this script
-    python_cmd = "/home/ubuntu/tt-metal/python_env/bin/python"
+    python_cmd = os.path.join(BASE_DIR, "python_env/bin/python")
     result = subprocess.run(
         [python_cmd, "-m", "pytest", test_path, "-v", "-s", "--tb=short", "-p", "conftest_tracer"],
-        cwd="/home/ubuntu/tt-metal",
+        cwd=BASE_DIR,
         capture_output=True,
         text=True,
     )
@@ -573,7 +606,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python model_tracer/generic_ops_tracer.py /home/ubuntu/tt-metal/models/demos/wormhole/distilbert/demo/demo.py::test_demo
+  python model_tracer/generic_ops_tracer.py models/demos/wormhole/distilbert/demo/demo.py::test_demo
   python model_tracer/generic_ops_tracer.py /path/to/test.py::test_function --store
   python model_tracer/generic_ops_tracer.py /path/to/test.py::test_function --output-dir ./my_traces --store
         """,
@@ -689,7 +722,7 @@ Examples:
             if "result" in locals() and "plugin_file" in result:
                 plugin_file = result["plugin_file"]
             else:
-                plugin_file = "/home/ubuntu/tt-metal/conftest_tracer.py"
+                plugin_file = os.path.join(BASE_DIR, "conftest_tracer.py")
 
             if os.path.exists(plugin_file):
                 os.unlink(plugin_file)

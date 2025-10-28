@@ -8764,6 +8764,276 @@
           {
             "arg4": "[ unsupported type , std::reference_wrapper<ttnn::TileReshapeMapMode const>]"
           }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 359 (char 358)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 32],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT16\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"shape\":\"{1, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[1, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                1,
+                1,
+                1,
+                32
+              ]
+            }
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 359 (char 358)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 96],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT16\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":2,\"y\":0}],\"shape\":\"{1, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[1, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":2,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                1,
+                1,
+                1,
+                96
+              ]
+            }
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 360 (char 359)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 144],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT16\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":4,\"y\":0}],\"shape\":\"{1, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[1, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":4,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                1,
+                1,
+                1,
+                144
+              ]
+            }
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 360 (char 359)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 240],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT16\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":0}],\"shape\":\"{1, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[1, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                1,
+                1,
+                1,
+                240
+              ]
+            }
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting property name enclosed in double quotes: line 1 column 346 (char 345)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 480],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT16\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":0}], [{\"x\":0,\"y\":1} - {\"x\":6,\"y\":1}]},\"shape\":\"{1, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[1, 32],\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":0}], [{\"x\":0,\"y\":1} - {\"x\":6,\"y\":1}]},\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                1,
+                1,
+                1,
+                480
+              ]
+            }
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 361 (char 360)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 196, 80],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT16\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":2,\"y\":0}],\"shape\":\"{196, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[196, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":2,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                1,
+                1,
+                196,
+                80
+              ]
+            }
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting property name enclosed in double quotes: line 1 column 348 (char 347)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 196, 480],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT16\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":0}], [{\"x\":0,\"y\":1} - {\"x\":6,\"y\":1}]},\"shape\":\"{196, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[196, 32],\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":0}], [{\"x\":0,\"y\":1} - {\"x\":6,\"y\":1}]},\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                1,
+                1,
+                196,
+                480
+              ]
+            }
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 362 (char 361)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 196, 112],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT16\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":3,\"y\":0}],\"shape\":\"{196, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[196, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":3,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                1,
+                1,
+                196,
+                112
+              ]
+            }
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting property name enclosed in double quotes: line 1 column 346 (char 345)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 672],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT16\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":1}], [{\"x\":0,\"y\":2} - {\"x\":4,\"y\":2}]},\"shape\":\"{1, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[1, 32],\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":1}], [{\"x\":0,\"y\":2} - {\"x\":4,\"y\":2}]},\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                1,
+                1,
+                1,
+                672
+              ]
+            }
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting property name enclosed in double quotes: line 1 column 348 (char 347)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 196, 672],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT16\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":1}], [{\"x\":0,\"y\":2} - {\"x\":4,\"y\":2}]},\"shape\":\"{196, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[196, 32],\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":1}], [{\"x\":0,\"y\":2} - {\"x\":4,\"y\":2}]},\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                1,
+                1,
+                196,
+                672
+              ]
+            }
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting property name enclosed in double quotes: line 1 column 347 (char 346)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 49, 672],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT16\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":1}], [{\"x\":0,\"y\":2} - {\"x\":4,\"y\":2}]},\"shape\":\"{49, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[49, 32],\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":1}], [{\"x\":0,\"y\":2} - {\"x\":4,\"y\":2}]},\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                1,
+                1,
+                49,
+                672
+              ]
+            }
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 361 (char 360)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 49, 192],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT16\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":5,\"y\":0}],\"shape\":\"{49, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[49, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":5,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                1,
+                1,
+                49,
+                192
+              ]
+            }
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting property name enclosed in double quotes: line 1 column 347 (char 346)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 1152],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT16\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":3}], [{\"x\":0,\"y\":4} - {\"x\":3,\"y\":4}]},\"shape\":\"{1, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[1, 32],\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":3}], [{\"x\":0,\"y\":4} - {\"x\":3,\"y\":4}]},\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                1,
+                1,
+                1,
+                1152
+              ]
+            }
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting property name enclosed in double quotes: line 1 column 348 (char 347)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 49, 1152],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT16\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":3}], [{\"x\":0,\"y\":4} - {\"x\":3,\"y\":4}]},\"shape\":\"{49, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[49, 32],\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":3}], [{\"x\":0,\"y\":4} - {\"x\":3,\"y\":4}]},\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                1,
+                1,
+                49,
+                1152
+              ]
+            }
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting property name enclosed in double quotes: line 1 column 347 (char 346)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 49, 320],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT16\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":0}], [{\"x\":0,\"y\":1} - {\"x\":1,\"y\":1}]},\"shape\":\"{49, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[49, 32],\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":0}], [{\"x\":0,\"y\":1} - {\"x\":1,\"y\":1}]},\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                1,
+                1,
+                49,
+                320
+              ]
+            }
+          }
         ]
       ]
     },
@@ -16352,6 +16622,516 @@
           {
             "arg2": "nullopt"
           }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 365 (char 364)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 12544, 32],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::HEIGHT_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":6}],\"shape\":\"{224, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[224, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":6}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 359 (char 358)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 8],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"shape\":\"{32, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 360 (char 359)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 32],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::BLOCK_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"shape\":\"{32, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::GRID_2D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 365 (char 364)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 12544, 96],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::HEIGHT_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":6}],\"shape\":\"{224, 96}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[224, 96],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":6}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting property name enclosed in double quotes: line 1 column 350 (char 349)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 3136, 96],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::HEIGHT_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":5}], [{\"x\":0,\"y\":6} - {\"x\":0,\"y\":6}]},\"shape\":\"{64, 96}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[64, 96],\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":5}], [{\"x\":0,\"y\":6} - {\"x\":0,\"y\":6}]},\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 359 (char 358)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 4],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"shape\":\"{32, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 360 (char 359)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 96],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::BLOCK_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"shape\":\"{32, 96}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 96],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::GRID_2D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting property name enclosed in double quotes: line 1 column 351 (char 350)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 3136, 144],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::HEIGHT_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":5}], [{\"x\":0,\"y\":6} - {\"x\":0,\"y\":6}]},\"shape\":\"{64, 160}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[64, 160],\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":5}], [{\"x\":0,\"y\":6} - {\"x\":0,\"y\":6}]},\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 359 (char 358)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 6],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"shape\":\"{32, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 361 (char 360)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 144],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::BLOCK_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"shape\":\"{32, 160}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 160],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::GRID_2D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 363 (char 362)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 784, 144],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::BLOCK_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":4,\"y\":6}],\"shape\":\"{128, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[128, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":4,\"y\":6}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::GRID_2D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting property name enclosed in double quotes: line 1 column 350 (char 349)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 784, 240],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::HEIGHT_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":2}], [{\"x\":0,\"y\":3} - {\"x\":0,\"y\":3}]},\"shape\":\"{32, 256}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 256],\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":2}], [{\"x\":0,\"y\":3} - {\"x\":0,\"y\":3}]},\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 363 (char 362)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 784, 240],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::BLOCK_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":6}],\"shape\":\"{128, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[128, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":6}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::GRID_2D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 360 (char 359)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 10],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"shape\":\"{32, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 361 (char 360)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 240],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::BLOCK_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"shape\":\"{32, 256}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 256],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::GRID_2D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 363 (char 362)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 196, 240],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::BLOCK_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":6}],\"shape\":\"{32, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":6}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::GRID_2D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 364 (char 363)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 196, 480],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::HEIGHT_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":6,\"y\":0}],\"shape\":\"{32, 480}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 480],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":6,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 363 (char 362)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 196, 480],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::BLOCK_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":6}],\"shape\":\"{32, 64}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 64],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":6}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::GRID_2D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 360 (char 359)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 20],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"shape\":\"{32, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 361 (char 360)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 480],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::BLOCK_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"shape\":\"{32, 480}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 480],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::GRID_2D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting property name enclosed in double quotes: line 1 column 349 (char 348)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 196, 480],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":0}], [{\"x\":0,\"y\":1} - {\"x\":6,\"y\":1}]},\"shape\":\"{224, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[224, 32],\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":0}], [{\"x\":0,\"y\":1} - {\"x\":6,\"y\":1}]},\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting property name enclosed in double quotes: line 1 column 349 (char 348)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 196, 672],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":1}], [{\"x\":0,\"y\":2} - {\"x\":4,\"y\":2}]},\"shape\":\"{224, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[224, 32],\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":1}], [{\"x\":0,\"y\":2} - {\"x\":4,\"y\":2}]},\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 363 (char 362)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 196, 672],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::BLOCK_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":6,\"y\":6}],\"shape\":\"{32, 96}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 96],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":6,\"y\":6}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::GRID_2D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 360 (char 359)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 28],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"shape\":\"{32, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 361 (char 360)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 672],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::BLOCK_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"shape\":\"{32, 672}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 672],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::GRID_2D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 362 (char 361)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 49, 672],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::BLOCK_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":6,\"y\":1}],\"shape\":\"{32, 96}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 96],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":6,\"y\":1}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::GRID_2D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting property name enclosed in double quotes: line 1 column 349 (char 348)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 49, 1152],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":3}], [{\"x\":0,\"y\":4} - {\"x\":3,\"y\":4}]},\"shape\":\"{64, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[64, 32],\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":3}], [{\"x\":0,\"y\":4} - {\"x\":3,\"y\":4}]},\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 360 (char 359)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 48],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":1,\"y\":0}],\"shape\":\"{32, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":1,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 362 (char 361)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 1152],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::BLOCK_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":1,\"y\":0}],\"shape\":\"{32, 576}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 576],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":1,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::GRID_2D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 363 (char 362)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 49, 1280],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":4}],\"shape\":\"{64, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[64, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":4}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": "1"
+          },
+          {
+            "arg2": "nullopt"
+          },
+          {
+            "arg3": "nullopt"
+          }
         ]
       ]
     },
@@ -22433,6 +23213,486 @@
           {
             "arg3": "1"
           }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 360 (char 359)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 32],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"shape\":\"{32, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":0,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                0,
+                0,
+                0,
+                31
+              ]
+            }
+          },
+          {
+            "arg2": {
+              "MemoryConfig": {
+                "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
+                "buffer_type": "BufferType::L1",
+                "shard_spec": "std::nullopt",
+                "nd_shard_spec": "std::nullopt",
+                "created_with_nd_shard_spec": 0
+              }
+            }
+          },
+          {
+            "arg3": "1"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 360 (char 359)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 96],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":2,\"y\":0}],\"shape\":\"{32, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":2,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                0,
+                0,
+                0,
+                95
+              ]
+            }
+          },
+          {
+            "arg2": {
+              "MemoryConfig": {
+                "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
+                "buffer_type": "BufferType::L1",
+                "shard_spec": "std::nullopt",
+                "nd_shard_spec": "std::nullopt",
+                "created_with_nd_shard_spec": 0
+              }
+            }
+          },
+          {
+            "arg3": "1"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 360 (char 359)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 144],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT16\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":4,\"y\":0}],\"shape\":\"{32, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":4,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                0,
+                0,
+                0,
+                143
+              ]
+            }
+          },
+          {
+            "arg2": {
+              "MemoryConfig": {
+                "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
+                "buffer_type": "BufferType::L1",
+                "shard_spec": "std::nullopt",
+                "nd_shard_spec": "std::nullopt",
+                "created_with_nd_shard_spec": 0
+              }
+            }
+          },
+          {
+            "arg3": "1"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 360 (char 359)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 240],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT16\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":0}],\"shape\":\"{32, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                0,
+                0,
+                0,
+                239
+              ]
+            }
+          },
+          {
+            "arg2": {
+              "MemoryConfig": {
+                "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
+                "buffer_type": "BufferType::L1",
+                "shard_spec": "std::nullopt",
+                "nd_shard_spec": "std::nullopt",
+                "created_with_nd_shard_spec": 0
+              }
+            }
+          },
+          {
+            "arg3": "1"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting property name enclosed in double quotes: line 1 column 346 (char 345)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 480],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT16\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":0}], [{\"x\":0,\"y\":1} - {\"x\":6,\"y\":1}]},\"shape\":\"{32, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 32],\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":0}], [{\"x\":0,\"y\":1} - {\"x\":6,\"y\":1}]},\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                0,
+                0,
+                0,
+                479
+              ]
+            }
+          },
+          {
+            "arg2": {
+              "MemoryConfig": {
+                "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
+                "buffer_type": "BufferType::L1",
+                "shard_spec": "std::nullopt",
+                "nd_shard_spec": "std::nullopt",
+                "created_with_nd_shard_spec": 0
+              }
+            }
+          },
+          {
+            "arg3": "1"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 362 (char 361)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 196, 80],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":2,\"y\":0}],\"shape\":\"{224, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[224, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":2,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                0,
+                0,
+                195,
+                79
+              ]
+            }
+          },
+          {
+            "arg2": {
+              "MemoryConfig": {
+                "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
+                "buffer_type": "BufferType::L1",
+                "shard_spec": "std::nullopt",
+                "nd_shard_spec": "std::nullopt",
+                "created_with_nd_shard_spec": 0
+              }
+            }
+          },
+          {
+            "arg3": "1"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting property name enclosed in double quotes: line 1 column 349 (char 348)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 196, 480],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":0}], [{\"x\":0,\"y\":1} - {\"x\":6,\"y\":1}]},\"shape\":\"{224, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[224, 32],\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":0}], [{\"x\":0,\"y\":1} - {\"x\":6,\"y\":1}]},\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[224, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                0,
+                0,
+                195,
+                479
+              ]
+            }
+          },
+          {
+            "arg2": {
+              "MemoryConfig": {
+                "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
+                "buffer_type": "BufferType::L1",
+                "shard_spec": "std::nullopt",
+                "nd_shard_spec": "std::nullopt",
+                "created_with_nd_shard_spec": 0
+              }
+            }
+          },
+          {
+            "arg3": "1"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 363 (char 362)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 196, 112],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":3,\"y\":0}],\"shape\":\"{224, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[224, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":3,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                0,
+                0,
+                195,
+                111
+              ]
+            }
+          },
+          {
+            "arg2": {
+              "MemoryConfig": {
+                "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
+                "buffer_type": "BufferType::L1",
+                "shard_spec": "std::nullopt",
+                "nd_shard_spec": "std::nullopt",
+                "created_with_nd_shard_spec": 0
+              }
+            }
+          },
+          {
+            "arg3": "1"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting property name enclosed in double quotes: line 1 column 346 (char 345)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 672],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT16\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":1}], [{\"x\":0,\"y\":2} - {\"x\":4,\"y\":2}]},\"shape\":\"{32, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 32],\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":1}], [{\"x\":0,\"y\":2} - {\"x\":4,\"y\":2}]},\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                0,
+                0,
+                0,
+                671
+              ]
+            }
+          },
+          {
+            "arg2": {
+              "MemoryConfig": {
+                "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
+                "buffer_type": "BufferType::L1",
+                "shard_spec": "std::nullopt",
+                "nd_shard_spec": "std::nullopt",
+                "created_with_nd_shard_spec": 0
+              }
+            }
+          },
+          {
+            "arg3": "1"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting property name enclosed in double quotes: line 1 column 349 (char 348)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 196, 672],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":1}], [{\"x\":0,\"y\":2} - {\"x\":4,\"y\":2}]},\"shape\":\"{224, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[224, 32],\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":1}], [{\"x\":0,\"y\":2} - {\"x\":4,\"y\":2}]},\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[224, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                0,
+                0,
+                195,
+                671
+              ]
+            }
+          },
+          {
+            "arg2": {
+              "MemoryConfig": {
+                "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
+                "buffer_type": "BufferType::L1",
+                "shard_spec": "std::nullopt",
+                "nd_shard_spec": "std::nullopt",
+                "created_with_nd_shard_spec": 0
+              }
+            }
+          },
+          {
+            "arg3": "1"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting property name enclosed in double quotes: line 1 column 348 (char 347)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 49, 672],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":1}], [{\"x\":0,\"y\":2} - {\"x\":4,\"y\":2}]},\"shape\":\"{64, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[64, 32],\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":1}], [{\"x\":0,\"y\":2} - {\"x\":4,\"y\":2}]},\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[64, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                0,
+                0,
+                48,
+                671
+              ]
+            }
+          },
+          {
+            "arg2": {
+              "MemoryConfig": {
+                "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
+                "buffer_type": "BufferType::L1",
+                "shard_spec": "std::nullopt",
+                "nd_shard_spec": "std::nullopt",
+                "created_with_nd_shard_spec": 0
+              }
+            }
+          },
+          {
+            "arg3": "1"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting ',' delimiter: line 1 column 362 (char 361)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 49, 192],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":[{\"x\":0,\"y\":0} - {\"x\":5,\"y\":0}],\"shape\":\"{64, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[64, 32],\"grid\":[{\"x\":0,\"y\":0} - {\"x\":5,\"y\":0}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                0,
+                0,
+                48,
+                191
+              ]
+            }
+          },
+          {
+            "arg2": {
+              "MemoryConfig": {
+                "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
+                "buffer_type": "BufferType::L1",
+                "shard_spec": "std::nullopt",
+                "nd_shard_spec": "std::nullopt",
+                "created_with_nd_shard_spec": 0
+              }
+            }
+          },
+          {
+            "arg3": "1"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting property name enclosed in double quotes: line 1 column 347 (char 346)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 1, 1152],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT16\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":3}], [{\"x\":0,\"y\":4} - {\"x\":3,\"y\":4}]},\"shape\":\"{32, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[32, 32],\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":3}], [{\"x\":0,\"y\":4} - {\"x\":3,\"y\":4}]},\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                0,
+                0,
+                0,
+                1151
+              ]
+            }
+          },
+          {
+            "arg2": {
+              "MemoryConfig": {
+                "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
+                "buffer_type": "BufferType::L1",
+                "shard_spec": "std::nullopt",
+                "nd_shard_spec": "std::nullopt",
+                "created_with_nd_shard_spec": 0
+              }
+            }
+          },
+          {
+            "arg3": "1"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting property name enclosed in double quotes: line 1 column 349 (char 348)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 49, 1152],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":3}], [{\"x\":0,\"y\":4} - {\"x\":3,\"y\":4}]},\"shape\":\"{64, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[64, 32],\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":3}], [{\"x\":0,\"y\":4} - {\"x\":3,\"y\":4}]},\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[64, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                0,
+                0,
+                48,
+                1151
+              ]
+            }
+          },
+          {
+            "arg2": {
+              "MemoryConfig": {
+                "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
+                "buffer_type": "BufferType::L1",
+                "shard_spec": "std::nullopt",
+                "nd_shard_spec": "std::nullopt",
+                "created_with_nd_shard_spec": 0
+              }
+            }
+          },
+          {
+            "arg3": "1"
+          }
+        ],
+        [
+          {
+            "UnparsedElement": {
+              "error": "Expecting property name enclosed in double quotes: line 1 column 348 (char 347)",
+              "element_info": "{\"arg0\": {\"Tensor\":{\"storage\":{},\"tensor_spec\":{\"logical_shape\":[1, 1, 49, 320],\"tensor_layout\":{\"dtype\":\"DataType::BFLOAT8_B\",\"page_config\":{\"config\":{\"tile\":{\"tile_shape\":\"{32, 32}\",\"face_shape\":\"{16, 16}\",\"num_faces\":4}}},\"memory_config\":{\"memory_layout\":\"TensorMemoryLayout::WIDTH_SHARDED\",\"buffer_type\":\"BufferType::L1\",\"shard_spec\":{\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":0}], [{\"x\":0,\"y\":1} - {\"x\":1,\"y\":1}]},\"shape\":\"{64, 32}\",\"orientation\":\"ShardOrientation::ROW_MAJOR\"},\"nd_shard_spec\":{\"shard_shape\":[64, 32],\"grid\":{[{\"x\":0,\"y\":0} - {\"x\":7,\"y\":0}], [{\"x\":0,\"y\":1} - {\"x\":1,\"y\":1}]},\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},\"created_with_nd_shard_spec\":0},\"alignment\":[32, 32]}}}}}"
+            }
+          },
+          {
+            "arg1": {
+              "Shape": [
+                0,
+                0,
+                48,
+                319
+              ]
+            }
+          },
+          {
+            "arg2": {
+              "MemoryConfig": {
+                "memory_layout": "TensorMemoryLayout::WIDTH_SHARDED",
+                "buffer_type": "BufferType::L1",
+                "shard_spec": "std::nullopt",
+                "nd_shard_spec": "std::nullopt",
+                "created_with_nd_shard_spec": 0
+              }
+            }
+          },
+          {
+            "arg3": "1"
+          }
         ]
       ]
     },
@@ -23246,25 +24506,25 @@
     "models": [
       "test_efficientnetb0_model[device_params0]"
     ],
-    "total_operations": 776,
+    "total_operations": 1552,
     "unique_operations": 16,
-    "total_configurations": 386,
-    "last_updated": "2025-10-15 09:54:14",
+    "total_configurations": 446,
+    "last_updated": "2025-10-28 04:16:13",
     "operation_types": {
       "ttnn::pad": 68,
       "ttnn::permute": 1,
       "ttnn::transpose": 2,
-      "ttnn::reshape": 119,
+      "ttnn::reshape": 134,
       "ttnn::conv2d": 45,
       "ttnn::swish": 1,
       "ttnn::silu": 1,
-      "ttnn::sigmoid_accurate": 30,
+      "ttnn::sigmoid_accurate": 60,
       "ttnn::multiply": 33,
       "ttnn::sharded_to_interleaved": 17,
       "ttnn::global_avg_pool2d": 11,
       "ttnn::untilize": 15,
       "ttnn::linear": 19,
-      "ttnn::untilize_with_unpadding": 9,
+      "ttnn::untilize_with_unpadding": 24,
       "ttnn::tilize_with_val_padding": 9,
       "ttnn::add": 6
     }
