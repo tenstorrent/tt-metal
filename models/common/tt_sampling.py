@@ -313,17 +313,10 @@ class TTSampling(LightweightModule):
             ttnn.deallocate(topk_indices)
 
         # Convert indices to appropriate data types
-        # TODO: Create issue for direct uint16->int32 typecast support (Issue #XXXXX)
-        # Currently requires intermediate uint32 step: uint16 -> uint32 -> int32
-        # Skipping uint32 intermediate step does not work due to typecast limitations
-        topk_indices_gathered_uint32 = ttnn.typecast(
-            topk_indices_gathered, dtype=ttnn.uint32, sub_core_grids=self.sub_core_grids
-        )
-        topk_indices_gathered_int32 = ttnn.typecast(
-            topk_indices_gathered_uint32, dtype=ttnn.int32, sub_core_grids=self.sub_core_grids
-        )
 
-        ttnn.deallocate(topk_indices_gathered_uint32)
+        topk_indices_gathered_int32 = ttnn.typecast(
+            topk_indices_gathered, dtype=ttnn.int32, sub_core_grids=self.sub_core_grids
+        )
 
         if self.sampling_memory_config != ttnn.DRAM_MEMORY_CONFIG:
             topk_indices_gathered_int32_sharded = ttnn.to_memory_config(
