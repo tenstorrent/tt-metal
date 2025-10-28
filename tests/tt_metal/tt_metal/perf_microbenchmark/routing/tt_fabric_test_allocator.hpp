@@ -130,10 +130,15 @@ private:
 struct CorePool {
     CorePool(const CoreAllocationConfig& policy) : policy(policy) {}
 
-    std::vector<CoreCoord> get_available_cores(const std::unordered_map<CoreCoord, uint32_t>& core_workload) const {
+    std::vector<CoreCoord> get_available_cores(
+        const std::unordered_map<CoreCoord, uint32_t>& core_workload, uint32_t partition_id = 0) const {
         std::vector<CoreCoord> available;
-        available.reserve(active_pool.size());
-        for (const auto& core : active_pool) {
+
+        // Use partition-local cores if partitioned
+        const auto& cores_to_check = (num_partitions > 1) ? partition_cores.at(partition_id) : active_pool;
+
+        available.reserve(cores_to_check.size());
+        for (const auto& core : cores_to_check) {
             auto it = core_workload.find(core);
             if (it == core_workload.end() || it->second < policy.max_configs_per_core) {
                 available.push_back(core);
@@ -142,11 +147,63 @@ struct CorePool {
         return available;
     }
 
+    void initialize_with_cores(std::vector<CoreCoord> cores, uint32_t num_partitions = 1);
+    void add_cores(const std::vector<CoreCoord>& new_cores);
+
     const CoreAllocationConfig& policy;
     std::vector<CoreCoord> active_pool;
     size_t next_pool_idx = 0;
     bool initialized = false;
+
+    // Partition support
+    uint32_t num_partitions = 1;
+    std::unordered_map<CoreCoord, uint32_t> core_to_partition;
+    std::unordered_map<uint32_t, std::vector<CoreCoord>> partition_cores;
+    uint32_t next_partition_id = 0;
+    std::unordered_map<uint32_t, size_t> next_pool_idx_per_partition;
 };
+
+// CorePool method implementations
+inline void CorePool::initialize_with_cores(std::vector<CoreCoord> cores, uint32_t num_partitions) {
+    TT_FATAL(!initialized, "Cannot re-initialize CorePool");
+
+    // Sanity check - need at least 1 core per partition
+    TT_FATAL(
+        cores.size() >= num_partitions,
+        "Cannot partition {} cores into {} partitions - need at least 1 core per partition",
+        cores.size(),
+        num_partitions);
+
+    this->num_partitions = num_partitions;
+    this->next_partition_id = 0;
+
+    // Initialize per-partition tracking
+    for (uint32_t p = 0; p < num_partitions; p++) {
+        next_pool_idx_per_partition[p] = 0;
+    }
+
+    // Delegate to add_cores for partition assignment
+    add_cores(cores);
+
+    initialized = true;
+}
+
+inline void CorePool::add_cores(const std::vector<CoreCoord>& new_cores) {
+    if (new_cores.empty()) {
+        return;
+    }
+
+    active_pool.insert(active_pool.end(), new_cores.begin(), new_cores.end());
+    std::sort(active_pool.begin(), active_pool.end());
+
+    // Assign partitions and update both maps
+    for (const auto& core : new_cores) {
+        uint32_t pid = next_partition_id;
+        core_to_partition[core] = pid;
+        partition_cores[pid].push_back(core);
+        next_partition_id = (next_partition_id + 1) % num_partitions;
+    }
+}
 
 class TestDeviceResources {
 public:
@@ -160,10 +217,11 @@ public:
         const BaseMemoryRegion& payload_region,
         const BaseMemoryRegion& atomic_region);
 
-    void initialize_receiver_pool();
+    void initialize_receiver_pool(uint32_t num_partitions = 1);
     CoreCoord reserve_sync_core();
     CoreCoord reserve_sender_core(const std::optional<CoreCoord>& specified_core);
-    CoreCoord reserve_receiver_core(const std::optional<CoreCoord>& specified_core);
+    CoreCoord reserve_receiver_core(
+        const std::optional<CoreCoord>& specified_core, uint32_t partition_id = 0, uint32_t num_partitions = 1);
     CoreResources& get_or_create_core_resources(const CoreCoord& core, CoreType core_type);
 
     const FabricNodeId node_id_;
@@ -194,8 +252,9 @@ public:
     void reset_credit_allocator();
 
 private:
-    void reserve_core_internal(const CoreCoord& core, CoreType core_type);
-    CoreCoord find_next_available_core(CorePool& pool);
+    void reserve_core_internal(const CoreCoord& core, CoreType core_type, uint32_t partition_id = 0);
+    void assign_core_to_partition(CorePool& pool, const CoreCoord& core, uint32_t partition_id);
+    CoreCoord find_next_available_core(CorePool& pool, uint32_t partition_id = 0);
     CoreCoord find_next_available_sync_core(CorePool& pool);
     void refill_pool(CorePool& pool);
 };
@@ -228,14 +287,21 @@ inline TestDeviceResources::TestDeviceResources(
     std::sort(pristine_cores_.begin(), pristine_cores_.end());
 }
 
-inline void TestDeviceResources::initialize_receiver_pool() {
+inline void TestDeviceResources::initialize_receiver_pool(uint32_t num_partitions) {
     CorePool& receiver_pool = core_pools_[RECEIVER_TYPE_IDX];
     if (!receiver_pool.initialized) {
         // All cores not used for senders are available for receivers.
-        receiver_pool.active_pool = pristine_cores_;
-        std::sort(receiver_pool.active_pool.begin(), receiver_pool.active_pool.end());
+        receiver_pool.initialize_with_cores(std::move(pristine_cores_), num_partitions);
         pristine_cores_.clear();
-        receiver_pool.initialized = true;
+
+        if (num_partitions > 1) {
+            log_debug(
+                tt::LogTest,
+                "Device {}: Initialized receiver pool with {} cores, {} partitions",
+                node_id_,
+                receiver_pool.active_pool.size(),
+                num_partitions);
+        }
     }
 }
 
@@ -268,19 +334,22 @@ inline CoreCoord TestDeviceResources::reserve_sender_core(const std::optional<Co
     return core;
 }
 
-inline CoreCoord TestDeviceResources::reserve_receiver_core(const std::optional<CoreCoord>& specified_core) {
+inline CoreCoord TestDeviceResources::reserve_receiver_core(
+    const std::optional<CoreCoord>& specified_core, uint32_t partition_id, uint32_t num_partitions) {
+    // Lazy init with correct partition count
     if (!core_pools_[RECEIVER_TYPE_IDX].initialized) {
-        initialize_receiver_pool();
+        initialize_receiver_pool(num_partitions);
     }
 
+    CoreCoord core;
     if (specified_core.has_value()) {
-        reserve_core_internal(specified_core.value(), CoreType::RECEIVER);
-        return specified_core.value();
+        core = specified_core.value();
+    } else {
+        core = find_next_available_core(core_pools_[RECEIVER_TYPE_IDX], partition_id);
     }
 
-    CorePool& pool = core_pools_[RECEIVER_TYPE_IDX];
-    CoreCoord core = find_next_available_core(pool);
-    reserve_core_internal(core, CoreType::RECEIVER);
+    // reserve_core_internal handles ALL partition logic
+    reserve_core_internal(core, CoreType::RECEIVER, partition_id);
     return core;
 }
 
@@ -298,25 +367,23 @@ inline CoreResources& TestDeviceResources::get_or_create_core_resources(const Co
 }
 
 inline void TestDeviceResources::refill_pool(CorePool& pool) {
-    uint32_t refill_count;
-    if (pool.active_pool.empty()) {
-        refill_count = pool.policy.initial_pool_size;
-    } else {
-        refill_count = pool.policy.pool_refill_size;
-    }
+    uint32_t refill_count = pool.active_pool.empty() ? pool.policy.initial_pool_size : pool.policy.pool_refill_size;
+
+    std::vector<CoreCoord> new_cores;
 
     for (uint32_t i = 0; i < refill_count; ++i) {
         if (pristine_cores_.empty()) {
-            // This is not an error if we are just refilling. But if the pool is empty, it is.
             if (pool.active_pool.empty()) {
                 TT_THROW("No more pristine cores available to create a new active pool.");
             }
             break;
         }
-        pool.active_pool.push_back(pristine_cores_.back());
+        new_cores.push_back(pristine_cores_.back());
         pristine_cores_.pop_back();
     }
-    std::sort(pool.active_pool.begin(), pool.active_pool.end());
+
+    // Use CorePool::add_cores to handle partition assignment
+    pool.add_cores(new_cores);
 }
 
 inline void TestDeviceResources::initialize_credit_allocator(const SenderMemoryMap& sender_memory_map) {
@@ -396,45 +463,82 @@ inline CoreCoord TestDeviceResources::find_next_available_sync_core(CorePool& po
     return core;
 }
 
-inline CoreCoord TestDeviceResources::find_next_available_core(CorePool& pool) {
-    while (true) {
-        // Search the current pool for an available core.
-        for (size_t i = 0; i < pool.active_pool.size(); ++i) {
-            size_t idx_to_check = (pool.next_pool_idx + i) % pool.active_pool.size();
-            const CoreCoord& core = pool.active_pool[idx_to_check];
-            auto it = core_workload_.find(core);
+inline CoreCoord TestDeviceResources::find_next_available_core(CorePool& pool, uint32_t partition_id) {
+    // Use per-partition tracking
+    size_t& next_idx = pool.next_pool_idx_per_partition[partition_id];
+    const auto& partition_cores = pool.partition_cores[partition_id];
 
+    while (true) {
+        // Search partition-local cores
+        for (size_t i = 0; i < partition_cores.size(); ++i) {
+            size_t idx_to_check = (next_idx + i) % partition_cores.size();
+            const CoreCoord& core = partition_cores[idx_to_check];
+
+            // Check availability
+            auto it = core_workload_.find(core);
             if (it == core_workload_.end() || it->second < pool.policy.max_configs_per_core) {
-                // Found an available core. Update index for next search and return.
+                // Found available core. Update index based on policy
                 if (pool.policy.policy == CoreAllocationPolicy::ExhaustFirst) {
-                    // For ExhaustFirst, keep pointing to this core until it's full.
                     if (it == core_workload_.end() || (it->second + 1) < pool.policy.max_configs_per_core) {
-                        pool.next_pool_idx = idx_to_check;
+                        next_idx = idx_to_check;
                     } else {
-                        // Core will be full after this allocation, so move to the next.
-                        pool.next_pool_idx = (idx_to_check + 1) % pool.active_pool.size();
+                        next_idx = (idx_to_check + 1) % partition_cores.size();
                     }
                 } else {  // RoundRobin
-                    pool.next_pool_idx = (idx_to_check + 1) % pool.active_pool.size();
+                    next_idx = (idx_to_check + 1) % partition_cores.size();
                 }
                 return core;
             }
         }
 
-        // If we are here, the pool is exhausted. Try to refill it.
+        // Pool exhausted, try to refill
         size_t old_pool_size = pool.active_pool.size();
         refill_pool(pool);
 
-        // If the pool size didn't change after refill, we're out of cores for good.
         if (pool.active_pool.size() == old_pool_size) {
             TT_THROW("No available core found and the pool could not be refilled. All cores are at max workload.");
         }
-        // Point the search to the start of the newly added cores to avoid re-scanning the exhausted ones.
-        pool.next_pool_idx = old_pool_size;
+
+        // Reset to start of partition (refill already updated partition_cores)
+        next_idx = 0;
     }
 }
 
-inline void TestDeviceResources::reserve_core_internal(const CoreCoord& core, CoreType core_type) {
+inline void TestDeviceResources::assign_core_to_partition(
+    CorePool& pool, const CoreCoord& core, uint32_t partition_id) {
+    auto partition_it = pool.core_to_partition.find(core);
+
+    if (partition_it != pool.core_to_partition.end()) {
+        // Core already in pool
+        if (partition_it->second == partition_id) {
+            return;  // Already in correct partition, nothing to do
+        }
+
+        // Move from old partition to new partition
+        uint32_t old_partition = partition_it->second;
+
+        // Remove from old partition's vector
+        auto& old_partition_cores = pool.partition_cores[old_partition];
+        old_partition_cores.erase(
+            std::remove(old_partition_cores.begin(), old_partition_cores.end(), core), old_partition_cores.end());
+
+        log_debug(
+            tt::LogTest,
+            "Device {}: Moving core {} from partition {} to partition {}",
+            node_id_,
+            core.str(),
+            old_partition,
+            partition_id);
+    }
+
+    // Add to new partition (works for both move and fresh assignment)
+    pool.core_to_partition[core] = partition_id;
+    pool.partition_cores[partition_id].push_back(core);
+    std::sort(pool.partition_cores[partition_id].begin(), pool.partition_cores[partition_id].end());
+}
+
+inline void TestDeviceResources::reserve_core_internal(
+    const CoreCoord& core, CoreType core_type, uint32_t partition_id) {
     CorePool& pool = core_pools_[static_cast<size_t>(core_type)];
     CorePool& other_pool =
         core_pools_[static_cast<size_t>(core_type == CoreType::SENDER ? CoreType::RECEIVER : CoreType::SENDER)];
@@ -451,6 +555,25 @@ inline void TestDeviceResources::reserve_core_internal(const CoreCoord& core, Co
             (core_type == CoreType::SENDER ? "RECEIVER" : "SENDER"));
     }
 
+    // Check partition conflict (only for RECEIVER with partitions)
+    if (core_type == CoreType::RECEIVER && pool.num_partitions > 1) {
+        auto partition_it = pool.core_to_partition.find(core);
+        if (partition_it != pool.core_to_partition.end() && partition_it->second != partition_id) {
+            // Core is in different partition - check if it's active
+            auto workload_it = core_workload_.find(core);
+            if (workload_it != core_workload_.end() && workload_it->second > 0) {
+                TT_THROW(
+                    "Cannot reserve core {} on device {} for partition {}: "
+                    "core is already in use by partition {} with {} configs",
+                    core.str(),
+                    node_id_,
+                    partition_id,
+                    partition_it->second,
+                    workload_it->second);
+            }
+        }
+    }
+
     // If core is pristine, it must be added to the active pool first.
     auto pristine_it = std::find(pristine_cores_.begin(), pristine_cores_.end(), core);
     if (pristine_it != pristine_cores_.end()) {
@@ -458,6 +581,11 @@ inline void TestDeviceResources::reserve_core_internal(const CoreCoord& core, Co
         // Put it in the active pool so it's not "lost" from tracking.
         pool.active_pool.push_back(core);
         std::sort(pool.active_pool.begin(), pool.active_pool.end());
+    }
+
+    // Assign/move to correct partition (only for RECEIVER with partitions)
+    if (core_type == CoreType::RECEIVER && pool.num_partitions > 1) {
+        assign_core_to_partition(pool, core, partition_id);
     }
 
     if (core_workload_[core] >= pool.policy.max_configs_per_core) {
@@ -883,7 +1011,11 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
 
     // PASS 1: Reserve all specified sender cores first. This establishes the pool of
     // cores that are *not* available for receivers.
+    uint32_t receiver_partitions = 1;  // Compute number of link partitions needed
     for (const auto& sender : test_config.senders) {
+        if (enable_flow_control_) {
+            receiver_partitions = std::max(receiver_partitions, sender.link_id + 1);
+        }
         if (sender.core.has_value()) {
             auto& device_resources = get_or_create_device_resources(sender.device);
             device_resources.reserve_sender_core(sender.core);
@@ -910,7 +1042,7 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                  dest.atomic_inc_address.has_value())) {
                 // Fully specified, just book-keep.
                 auto& device_resources = get_or_create_device_resources(dest.device.value());
-                device_resources.reserve_receiver_core(dest.core);
+                device_resources.reserve_receiver_core(dest.core, sender.link_id, receiver_partitions);
                 // We assume the pre-specified address is valid.
                 continue;
             }
@@ -939,10 +1071,11 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
 
                     const auto& receiver_pool = device_resources.core_pools_[RECEIVER_TYPE_IDX];
                     if (!receiver_pool.initialized) {
-                        device_resources.initialize_receiver_pool();
+                        device_resources.initialize_receiver_pool(receiver_partitions);
                     }
 
-                    const auto available_cores = receiver_pool.get_available_cores(device_resources.core_workload_);
+                    const auto available_cores =
+                        receiver_pool.get_available_cores(device_resources.core_workload_, sender.link_id);
                     for (const auto& core : available_cores) {
                         core_counts[core]++;
                         auto& core_resources = device_resources.get_or_create_core_resources(core, CoreType::RECEIVER);
@@ -1043,7 +1176,7 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                 // Reserve resources on all destination devices
                 for (const auto& node_id : dst_node_ids) {
                     auto& device_resources = get_or_create_device_resources(node_id);
-                    device_resources.reserve_receiver_core(dest.core);
+                    device_resources.reserve_receiver_core(dest.core, sender.link_id, receiver_partitions);
                     auto& core_resources =
                         device_resources.get_or_create_core_resources(dest.core.value(), CoreType::RECEIVER);
                     // Reserve payload chunk if needed
@@ -1060,10 +1193,16 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
             } else if (dest.device.has_value()) {  // process dest devices directly
                 auto& device_resources = get_or_create_device_resources(dest.device.value());
 
+                // Lazy init if needed
+                if (!device_resources.core_pools_[RECEIVER_TYPE_IDX].initialized) {
+                    device_resources.initialize_receiver_pool(receiver_partitions);
+                }
+
                 if (!dest.core.has_value()) {
-                    dest.core = device_resources.reserve_receiver_core(std::nullopt);
+                    dest.core =
+                        device_resources.reserve_receiver_core(std::nullopt, sender.link_id, receiver_partitions);
                 } else {
-                    device_resources.reserve_receiver_core(dest.core);
+                    device_resources.reserve_receiver_core(dest.core, sender.link_id, receiver_partitions);
                 }
 
                 auto& core_resources =
