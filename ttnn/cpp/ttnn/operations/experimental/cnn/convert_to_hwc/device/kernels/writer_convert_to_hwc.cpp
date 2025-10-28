@@ -61,28 +61,37 @@ void kernel_main() {
     constexpr uint32_t dram_write_stride_bytes = get_compile_time_arg_val(12);
     constexpr uint32_t dram_read_stride_bytes = get_compile_time_arg_val(13);
     constexpr uint32_t input_sticks_per_core = get_compile_time_arg_val(14);
+    constexpr uint32_t input_block_size_sticks_per_core = get_compile_time_arg_val(15);
+    constexpr uint32_t input_num_blocks = get_compile_time_arg_val(16);
 
     constexpr uint32_t channel_size = channels * element_size_bytes;
 
     const uint32_t dram_base_read_addr = is_input_in_dram ? get_arg_val<uint32_t>(0) : get_read_ptr(cb_full_input);
     const uint32_t num_segments = get_arg_val<uint32_t>(1);
-    tt_l1_ptr uint32_t* args = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
-    uint32_t args_idx = 0;
-    for (uint32_t i = 0; i < num_segments; ++i) {
-        uint32_t copy_size = args[args_idx++];
-        uint32_t write_offset = args[args_idx++];
-        uint32_t bank_id = args[args_idx++];  // only used if source is in DRAM
-        uint32_t read_offset = args[args_idx++];
-        copy_segment<dram_read_stride_bytes, dram_write_stride_bytes, input_sticks_per_core, is_input_in_dram>(
-            copy_size, get_write_ptr(cb_in), write_offset, bank_id, dram_base_read_addr, read_offset);
-    }
-    noc_async_read_barrier();
 
-    // One writer must wait until the other has pushed to avoid a race that will trigger a hang
-    if constexpr (should_wait) {
-        cb_wait_front(cb_in, input_sticks_per_core);
+    for (uint32_t block_id = 0; block_id < input_num_blocks; block_id++) {  // TODO: wrap the entire program
+        tt_l1_ptr uint32_t* args = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
+        uint32_t args_idx = 0;
+        for (uint32_t i = 0; i < num_segments; ++i) {
+            uint32_t copy_size = args[args_idx++];
+            uint32_t write_offset = args[args_idx++];
+            uint32_t bank_id = args[args_idx++];  // only used if source is in DRAM
+            uint32_t read_offset = args[args_idx++];
+            copy_segment<
+                dram_read_stride_bytes,
+                dram_write_stride_bytes,
+                input_block_size_sticks_per_core,
+                is_input_in_dram>(
+                copy_size, get_write_ptr(cb_in), write_offset, bank_id, dram_base_read_addr, read_offset);
+        }
+        noc_async_read_barrier();
+
+        // One writer must wait until the other has pushed to avoid a race that will trigger a hang
+        if constexpr (should_wait) {
+            cb_wait_front(cb_in, input_block_size_sticks_per_core);
+        }
+        cb_push_back(cb_in, input_block_size_sticks_per_core);
     }
-    cb_push_back(cb_in, input_sticks_per_core);
 
     constexpr uint32_t tile_size_stick_bytes = TILE_SIZE * element_size_bytes;
 

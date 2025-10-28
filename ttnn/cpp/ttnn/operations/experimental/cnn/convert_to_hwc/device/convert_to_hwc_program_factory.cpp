@@ -186,11 +186,18 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     // Split DRAM read across each kernel along tensor height since this is the best way to split work evenly
     const uint32_t total_num_sticks_kernel_0 = l1_input_shard_height / 2;
     const uint32_t total_num_sticks_kernel_1 = l1_input_shard_height - total_num_sticks_kernel_0;
+
+    const uint32_t batch_size = 1;  // TODO: get this from the right place
+    const uint32_t num_sticks_block_size_kernel_0 = total_num_sticks_kernel_0 / batch_size;
+    const uint32_t num_sticks_block_size_kernel_1 = total_num_sticks_kernel_1 / batch_size;
+
     log_info(
         tt::LogType::LogAlways,
-        "convert_to_hwc: Kernel work split - kernel0_sticks={}, kernel1_sticks={}",
+        "convert_to_hwc: Kernel work split - kernel0_sticks={} (block_size={}), kernel1_sticks={} (block_size={})",
         total_num_sticks_kernel_0,
-        total_num_sticks_kernel_1);
+        num_sticks_block_size_kernel_0,
+        total_num_sticks_kernel_1,
+        num_sticks_block_size_kernel_1);
 
     std::vector<uint32_t> writer_compile_time_args0 = {
         cb_full_input_id,
@@ -207,7 +214,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         true,
         dram_write_stride_bytes,
         dram_read_stride_bytes,
-        total_num_sticks_kernel_0};
+        total_num_sticks_kernel_0,
+        num_sticks_block_size_kernel_0,
+        batch_size};
     log_info(tt::LogType::LogAlways, "convert_to_hwc: writer_compile_time_args0 = {}", writer_compile_time_args0);
 
     std::vector<uint32_t> writer_compile_time_args1 = {
@@ -225,7 +234,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         false,
         dram_write_stride_bytes,
         dram_read_stride_bytes,
-        total_num_sticks_kernel_1};
+        total_num_sticks_kernel_1,
+        num_sticks_block_size_kernel_1,
+        batch_size};
     log_info(tt::LogType::LogAlways, "convert_to_hwc: writer_compile_time_args1 = {}", writer_compile_time_args1);
 
     std::vector<uint32_t> compute_compile_time_args = {
@@ -277,6 +288,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
                              dram_write_stride_bytes](
                                 tt::tt_metal::Program& program, const Tensor& a, const Tensor& output) {
         log_info(tt::LogType::LogAlways, "convert_to_hwc: Setting runtime args, is_input_in_dram={}", is_input_in_dram);
+
         for (uint32_t core_idx = 0; core_idx < l1_input_cores.size(); core_idx++) {
             const auto& args_for_all_segments = runtime_args_for_each_core[core_idx];
             std::vector<uint32_t> runtime_args_0 = {remote_address, args_for_all_segments.size()};
