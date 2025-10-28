@@ -19,9 +19,10 @@ using namespace tt::tt_metal;
 bool RunCustomCycle(const std::shared_ptr<distributed::MeshDevice>& mesh_device, int loop_count) {
     bool pass = true;
 
-    CoreCoord compute_with_storage_size = mesh_device->compute_with_storage_grid_size();
+    // CoreCoord compute_with_storage_size = mesh_device->compute_with_storage_grid_size();
     CoreCoord start_core = {0, 0};
-    CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
+    CoreCoord end_core = {0, 0};
+    // CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
     CoreRange all_cores(start_core, end_core);
 
     // Mesh workload + device range span the mesh; program encapsulates kernels

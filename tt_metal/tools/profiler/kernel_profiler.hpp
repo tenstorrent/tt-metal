@@ -91,6 +91,99 @@ constexpr uint32_t Hash16_CT(const char (&s)[N]) {
 
 enum class DoingDispatch { DISPATCH, DISPATCH_META, NOT_DISPATCH };
 
+enum class DebugTimestampEventSize : uint32_t {
+    Bits128 = 0b000,
+    Bits64 = 0b001,
+    Bits32 = 0b010,
+    Bits96 = 0b100,
+};
+
+inline __attribute__((always_inline)) uint32_t debug_timestamper_header(uint32_t token, DebugTimestampEventSize size) {
+    constexpr uint32_t kTokenMask = (1u << 29) - 1;  // 29-bit payload
+    uint32_t header = (token & kTokenMask) << 3;
+    header |= static_cast<uint32_t>(size) & 0x7;
+    return header;
+}
+
+inline __attribute__((always_inline)) void debug_timestamper_append(uint32_t token, DebugTimestampEventSize size) {
+#if defined(RISCV_DEBUG_REG_TIMESTAMP)
+    volatile tt_reg_ptr uint32_t* timestamp_reg =
+        reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_TIMESTAMP);
+    timestamp_reg[0] = debug_timestamper_header(token, size);
+#else
+    (void)token;
+    (void)size;
+#endif
+}
+
+inline __attribute__((always_inline)) void debug_timestamper_flush(DebugTimestampEventSize size) {
+#if defined(RISCV_DEBUG_REG_TIMESTAMP)
+    uint32_t command;
+    switch (size) {
+        case DebugTimestampEventSize::Bits64:
+            command = 0b011;  // FLUSH_64b
+            break;
+        case DebugTimestampEventSize::Bits96:
+            command = 0b111;  // FLUSH_96b
+            break;
+        default: return;  // No flush command for 32b/128b events
+    }
+    volatile tt_reg_ptr uint32_t* timestamp_reg =
+        reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_TIMESTAMP);
+    timestamp_reg[0] = command;
+#else
+    (void)size;
+#endif
+}
+
+inline __attribute__((always_inline)) uint32_t debug_timestamper_status() {
+#if defined(RISCV_DEBUG_REG_TIMESTAMP_STATUS)
+    volatile tt_reg_ptr uint32_t* status_reg =
+        reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_TIMESTAMP_STATUS);
+    return status_reg[0];
+#else
+    return 0;
+#endif
+}
+
+inline __attribute__((always_inline)) void debug_timestamper_configure(
+    uint32_t buf0_start_word,
+    uint32_t buf0_end_word,
+    uint32_t buf1_start_word,
+    uint32_t buf1_end_word,
+    bool enable_buf0,
+    bool enable_buf1,
+    bool reset_streams = true) {
+#if defined(RISCV_DEBUG_REG_TIMESTAMP)
+    volatile tt_reg_ptr uint32_t* timestamp_reg =
+        reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_TIMESTAMP);
+    timestamp_reg[3] = buf0_start_word;  // +12
+    timestamp_reg[4] = buf0_end_word;    // +16
+    timestamp_reg[5] = buf1_start_word;  // +20
+    timestamp_reg[6] = buf1_end_word;    // +24
+
+    uint32_t control = 0;
+    if (enable_buf0) {
+        control |= 0x1;
+    }
+    if (enable_buf1) {
+        control |= 0x2;
+    }
+    if (reset_streams) {
+        control |= (1u << 31);
+    }
+    timestamp_reg[1] = control;  // +4
+#else
+    (void)buf0_start_word;
+    (void)buf0_end_word;
+    (void)buf1_start_word;
+    (void)buf1_end_word;
+    (void)enable_buf0;
+    (void)enable_buf1;
+    (void)reset_streams;
+#endif
+}
+
 __attribute__((noinline)) void init_profiler(
     uint16_t briscKernelID = 0, uint16_t ncriscKernelID = 0, uint16_t triscsKernelID = 0) {
     wIndex = CUSTOM_MARKERS;

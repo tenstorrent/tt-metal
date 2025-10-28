@@ -1182,6 +1182,13 @@ void DeviceProfiler::readRiscProfilerResults(
         return;
     }
 
+    std::vector<uint32_t> l1_data_buffer =
+        tt::tt_metal::MetalContext::instance().get_cluster().read_core(device_id, worker_core, 0x8000, 16);
+    for (int i = 0; i < l1_data_buffer.size(); i = i + 2) {
+        fmt::print("{} ", l1_data_buffer[i] | (l1_data_buffer[i + 1] << 16));
+    }
+    fmt::print("\n");
+
     const std::vector<uint32_t>& control_buffer = core_control_buffers.at(worker_core);
 
     const std::vector<uint32_t>& data_buffer =
