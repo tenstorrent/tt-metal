@@ -739,6 +739,37 @@ static_assert(sizeof(MeshPacketHeader) == 48, "sizeof(MeshPacketHeader) is not e
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
 #else
 
+// Check if UDM_MODE is defined
+#ifdef UDM_MODE
+
+#if (                                                                \
+    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_LINE)) != 0) || \
+    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_RING)) != 0))
+// 1D routing with UDM
+#if ((ROUTING_MODE & ROUTING_MODE_LOW_LATENCY)) != 0
+#define PACKET_HEADER_TYPE tt::tt_fabric::UDMLowLatencyPacketHeader
+#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
+#else
+static_assert(false, "UDM mode requires LOW_LATENCY routing for 1D fabric");
+#endif
+
+#elif (                                                              \
+    ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_MESH)) != 0) || \
+    ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_TORUS)) != 0))
+// 2D routing with UDM
+#if (ROUTING_MODE & ROUTING_MODE_LOW_LATENCY) != 0
+#define PACKET_HEADER_TYPE tt::tt_fabric::UDMHybridMeshPacketHeader
+#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFieldsV2
+#else
+static_assert(false, "UDM mode requires LOW_LATENCY routing for 2D fabric");
+#endif
+
+#else
+static_assert(false, "non supported ROUTING_MODE with UDM: " TOSTRING(ROUTING_MODE));
+#endif
+
+#else  // UDM_MODE not defined - use default non-UDM headers
+
 #if (                                                                \
     ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_LINE)) != 0) || \
     ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_RING)) != 0))
@@ -771,6 +802,9 @@ static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");
 #else
 static_assert(false, "non supported ROUTING_MODE: " TOSTRING(ROUTING_MODE));
 #endif
+
+#endif  // UDM_MODE
+
 #endif  // ROUTING_MODE
 
 }  // namespace tt::tt_fabric
