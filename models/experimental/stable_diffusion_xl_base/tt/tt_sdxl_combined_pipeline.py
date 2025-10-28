@@ -79,10 +79,6 @@ class TtSDXLCombinedPipeline:
         logger.info("Combined pipeline initialized successfully")
 
     def _auto_compile_if_needed(self):
-        """
-        Automatically compile all pipelines on first generate() call.
-        Handles all the boilerplate: encoder compilation, dummy tensor allocation, image processing compilation.
-        """
         if self._compiled:
             return
 
@@ -129,42 +125,7 @@ class TtSDXLCombinedPipeline:
         logger.info("Pipeline compilation complete!")
         logger.info("=" * 80)
 
-    def compile_text_encoding(self):
-        """Compile text encoders on the base pipeline only. (Optional - auto-called by generate())"""
-        logger.info("Compiling text encoders...")
-        self.base_pipeline.compile_text_encoding()
-
-    def compile_image_processing(self):
-        """Compile image processing for both base and refiner pipelines. (Optional - auto-called by generate())"""
-        logger.info("Compiling base pipeline image processing...")
-        self.base_pipeline.compile_image_processing()
-
-        if self.config.use_refiner:
-            logger.info("Compiling refiner pipeline image processing...")
-            self.refiner_pipeline.compile_image_processing()
-
-    def encode_prompts(self, prompts, negative_prompts, prompt_2=None, negative_prompt_2=None):
-        """
-        Encode prompts using base pipeline's text encoders.
-        Returns encoded prompt embeddings and text embeddings.
-        """
-        return self.base_pipeline.encode_prompts(
-            prompts=prompts,
-            negative_prompts=negative_prompts,
-            prompt_2=prompt_2,
-            negative_prompt_2=negative_prompt_2,
-        )
-
     def _calculate_timestep_split(self, num_inference_steps):
-        """
-        Calculate the timestep split index based on denoising_split.
-
-        Args:
-            num_inference_steps: Total number of inference steps
-
-        Returns:
-            split_idx: Index where base ends and refiner begins
-        """
         split_idx = int(num_inference_steps * self.config.denoising_split)
 
         # Ensure at least 1 step for each pipeline if both are active
@@ -183,35 +144,39 @@ class TtSDXLCombinedPipeline:
         fixed_seed_for_batch=False,
         timesteps=None,
         sigmas=None,
+        num_inference_steps=None,
+        guidance_scale=None,
+        crop_coords_top_left=None,
+        guidance_rescale=None,
     ):
-        """
-        Generate images using base and refiner pipelines.
-
-        This method handles everything automatically:
-        - First call: Compiles encoders and image processing (with warmup)
-        - Subsequent calls: Uses compiled pipelines directly
-
-        Args:
-            prompts: List of prompts or single prompt string
-            negative_prompts: List of negative prompts or single negative prompt string
-            prompt_2: Optional second prompt(s) for SDXL
-            negative_prompt_2: Optional second negative prompt(s)
-            start_latent_seed: Seed for latent initialization
-            fixed_seed_for_batch: Whether to use the same seed for entire batch
-            timesteps: Custom timesteps (optional)
-            sigmas: Custom sigmas (optional)
-
-        Returns:
-            Generated images as torch tensors
-        """
-        # Auto-compile on first call (handles all setup)
         self._auto_compile_if_needed()
+
+        # Apply runtime parameters if provided and different from config
+        if num_inference_steps is not None and num_inference_steps != self.config.base_config.num_inference_steps:
+            self.base_pipeline.set_num_inference_steps(num_inference_steps)
+            if self.config.use_refiner:
+                self.refiner_pipeline.set_num_inference_steps(num_inference_steps)
+
+        if guidance_scale is not None and guidance_scale != self.config.base_config.guidance_scale:
+            self.base_pipeline.set_guidance_scale(guidance_scale)
+            if self.config.use_refiner:
+                self.refiner_pipeline.set_guidance_scale(guidance_scale)
+
+        if crop_coords_top_left is not None and crop_coords_top_left != self.config.base_config.crop_coords_top_left:
+            self.base_pipeline.set_crop_coords_top_left(crop_coords_top_left)
+            if self.config.use_refiner:
+                self.refiner_pipeline.set_crop_coords_top_left(crop_coords_top_left)
+
+        if guidance_rescale is not None and guidance_rescale != self.config.base_config.guidance_rescale:
+            self.base_pipeline.set_guidance_rescale(guidance_rescale)
+            if self.config.use_refiner:
+                self.refiner_pipeline.set_guidance_rescale(guidance_rescale)
 
         profiler.start("combined_generation")
 
         # 1. Encode prompts using base pipeline
         logger.info("Encoding prompts...")
-        all_prompt_embeds_torch, torch_add_text_embeds = self.encode_prompts(
+        all_prompt_embeds_torch, torch_add_text_embeds = self.base_pipeline.encode_prompts(
             prompts=prompts,
             negative_prompts=negative_prompts,
             prompt_2=prompt_2,
@@ -230,7 +195,9 @@ class TtSDXLCombinedPipeline:
         )
 
         # 3. Calculate timestep split
-        num_inference_steps = self.config.base_config.num_inference_steps
+        num_inference_steps = (
+            num_inference_steps if num_inference_steps is not None else self.config.base_config.num_inference_steps
+        )
         split_idx = self._calculate_timestep_split(num_inference_steps)
 
         logger.info(
@@ -292,35 +259,3 @@ class TtSDXLCombinedPipeline:
         logger.info("Combined generation completed")
 
         return images
-
-    def set_num_inference_steps(self, num_inference_steps: int):
-        """Set the number of inference steps for both pipelines."""
-        self.config.base_config.num_inference_steps = num_inference_steps
-        self.config.refiner_config.num_inference_steps = num_inference_steps
-        self.base_pipeline.set_num_inference_steps(num_inference_steps)
-        if self.config.use_refiner:
-            self.refiner_pipeline.set_num_inference_steps(num_inference_steps)
-
-    def set_denoising_split(self, denoising_split: float):
-        """Set the denoising split ratio between base and refiner."""
-        assert 0.0 <= denoising_split <= 1.0, f"denoising_split must be in [0.0, 1.0], got {denoising_split}"
-        self.config.denoising_split = denoising_split
-        logger.info(f"Denoising split updated to {denoising_split}")
-
-    def set_guidance_scale(self, guidance_scale: float):
-        """Set the guidance scale for both pipelines."""
-        self.base_pipeline.set_guidance_scale(guidance_scale)
-        if self.config.use_refiner:
-            self.refiner_pipeline.set_guidance_scale(guidance_scale)
-
-    def set_guidance_rescale(self, guidance_rescale: float):
-        """Set the guidance rescale for both pipelines."""
-        self.base_pipeline.set_guidance_rescale(guidance_rescale)
-        if self.config.use_refiner:
-            self.refiner_pipeline.set_guidance_rescale(guidance_rescale)
-
-    def set_crop_coords_top_left(self, crop_coords_top_left: tuple):
-        """Set the crop coordinates for both pipelines."""
-        self.base_pipeline.set_crop_coords_top_left(crop_coords_top_left)
-        if self.config.use_refiner:
-            self.refiner_pipeline.set_crop_coords_top_left(crop_coords_top_left)
