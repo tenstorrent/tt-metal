@@ -156,7 +156,7 @@ inline void object_init(volatile lite_fabric::FabricLiteMemoryMap* mem_map) {
 }
 
 inline void data_init() {
-    // wzerorange(__ldm_bss_start, __ldm_bss_end);
+    wzerorange(__ldm_bss_start, __ldm_bss_end);
 }
 
 inline void teardown(volatile lite_fabric::FabricLiteMemoryMap* mem_map) {
