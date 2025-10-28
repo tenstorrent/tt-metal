@@ -48,7 +48,6 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/cluster.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
-#include "fabric_host_utils.hpp"
 #include "tt_metal/fabric/serialization/router_port_directions.hpp"
 #include "tt_stl/small_vector.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
