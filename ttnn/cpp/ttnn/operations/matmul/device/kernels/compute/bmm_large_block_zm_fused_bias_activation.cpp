@@ -144,9 +144,10 @@ void MAIN {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
             bool is_batch_valid;
-            UNPACK(is_batch_valid = (bool)mailbox_read_full(0);)  // 0 is BRISC ThreadID, no enum for that.
-            MATH(is_batch_valid = (bool)mailbox_read_full(0);)    // 0 is BRISC ThreadID, no enum for that.
-            PACK(is_batch_valid = (bool)mailbox_read_full(0);)    // 0 is BRISC ThreadID, no enum for that.
+            // 0 is BRISC ThreadID, no enum for that. Issue #27979 will address this.
+            UNPACK(is_batch_valid = (bool)mailbox_read_full(0);)
+            MATH(is_batch_valid = (bool)mailbox_read_full(0);)
+            PACK(is_batch_valid = (bool)mailbox_read_full(0);)
             if (!is_batch_valid) {
                 continue;
             }

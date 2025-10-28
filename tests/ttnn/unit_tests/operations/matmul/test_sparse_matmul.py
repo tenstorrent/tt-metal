@@ -34,7 +34,7 @@ def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_batches, tile_h, t
 
     # Mark some as 0 to test the sparsity
     sparsity[(sparsity == 0)] = 0.1  # First make sure there are no zeros
-    number_of_zeros = random.randint(0, sparsity.numel() - 1)
+    number_of_zeros = torch.randint(0, sparsity.numel(), ()).item()
     zero_indices = torch.randperm(sparsity.numel())[:number_of_zeros]
     sparsity.view(-1)[zero_indices] = 0.0
 
@@ -220,7 +220,7 @@ def test_batched_sparse_matmul_with_nnz(device, mkn, num_experts, tile_h, tile_w
 
     # Mark some as 0 to test the sparsity
     sparsity[(sparsity == 0)] = 0.1  # First make sure there are no zeros
-    number_of_zeros = random.randint(0, sparsity.numel() - 1)
+    number_of_zeros = torch.randint(0, sparsity.numel(), ()).item()
     zero_indices = torch.randperm(sparsity.numel())[:number_of_zeros]
     sparsity.view(-1)[zero_indices] = 0.0
 
@@ -315,7 +315,7 @@ def test_sparse_matmul_inputA_with_nnz(device, mkn, num_experts, num_batches, ti
 
     # Mark some as 0 to test the sparsity
     sparsity[(sparsity == 0)] = 0.1  # First make sure there are no zeros
-    number_of_zeros = random.randint(0, sparsity.numel() - 1)
+    number_of_zeros = torch.randint(0, sparsity.numel(), ()).item()
     zero_indices = torch.randperm(sparsity.numel())[:number_of_zeros]
     sparsity.view(-1)[zero_indices] = 0.0
 

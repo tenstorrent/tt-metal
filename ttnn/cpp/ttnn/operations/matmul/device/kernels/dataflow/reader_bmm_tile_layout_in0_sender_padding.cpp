@@ -169,6 +169,7 @@ void kernel_main() {
                     noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, VALID);
 #endif  // SKIP_MCAST
         // We need to pass the value to compute cores regardless of the value of is_batch_valid
+        // TODO: Issue #27979 to move this to functions that encapsulate the mailbox addresses.
                     (reinterpret_cast<volatile uint32_t tt_reg_ptr*>(0xFFEC1000))[0] = (uint32_t)is_batch_valid;
                     (reinterpret_cast<volatile uint32_t tt_reg_ptr*>(0xFFEC2000))[0] = (uint32_t)is_batch_valid;
                     (reinterpret_cast<volatile uint32_t tt_reg_ptr*>(0xFFEC3000))[0] = (uint32_t)is_batch_valid;
