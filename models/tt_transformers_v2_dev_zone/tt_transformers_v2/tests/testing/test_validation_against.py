@@ -7,7 +7,9 @@ import pytest
 import torch
 from tt_transformers_v2.src.testing import (
     Metric,
+    MetricSpec,
     clear_validation_results,
+    compute_pcc_host,
     device_validate_against,
     enable_validation,
     get_validation_registry,
@@ -297,6 +299,38 @@ def test_validation_checkpoint_from_torch(ttnn_mesh_device: ttnn.MeshDevice):
 
 
 # ============================================================================
+# Example 5: Validating with MetricSpec
+# ============================================================================
+
+
+@host_validate_against(
+    reference_fn=torch.matmul,
+    metric_tolerances={
+        "pcc_host": MetricSpec(tolerance=0.99, higher_is_better=True, compute_function=compute_pcc_host),
+    },
+)
+def ttnn_matmul_metric_spec(a, b):
+    return ttnn.matmul(a, b)
+
+
+def test_validation_matmul_metric_spec(ttnn_mesh_device: ttnn.MeshDevice):
+    registry = get_validation_registry()
+    before = len(registry.results)
+
+    m, n, k = 8, 10, 6
+    a = torch.randn(1, m, k, dtype=torch.bfloat16)
+    b = torch.randn(1, k, n, dtype=torch.bfloat16)
+
+    a_tt = ttnn.from_torch(a.unsqueeze(0), device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    b_tt = ttnn.from_torch(b.unsqueeze(0), device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    _ = ttnn_matmul_metric_spec(a_tt, b_tt)
+
+    assert len(registry.results) == before + 1
+    assert registry.results[-1].passed
+
+
+# ============================================================================
 # Additional test functions
 # ============================================================================
 
@@ -352,7 +386,7 @@ def _print_validation_report_after_module(request):
     registry = get_validation_registry()
     reporter = request.config.pluginmanager.get_plugin("terminalreporter")
     reporter.write_line("Printing validation report after yield")
-    registry.print_report()
+    registry.print_report(verbose=True)
 
 
 @pytest.fixture(scope="module", autouse=True)

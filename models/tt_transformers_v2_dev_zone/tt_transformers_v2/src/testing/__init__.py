@@ -8,6 +8,7 @@ from .metrics import (
     comp_allclose,
     compute_max_abs_error,
     compute_mean_abs_error,
+    compute_pcc_host,
     compute_pcc,
 )
 from .validate_against import (
@@ -19,6 +20,7 @@ from .validate_against import (
     enable_validation,
     get_validation_registry,
     host_validate_against,
+    MetricSpec,
 )
 
 __all__ = [
@@ -31,10 +33,12 @@ __all__ = [
     "ValidationResult",
     "ValidationRegistry",
     "Metric",
+    "MetricSpec",
     # Metrics
     "compute_max_abs_error",
     "compute_mean_abs_error",
     "compute_pcc",
+    "compute_pcc_host",
     "comp_allclose",
     "DEFAULT_METRICS",
     # Auto compose

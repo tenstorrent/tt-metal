@@ -260,14 +260,14 @@ class Metric(str, Enum):
     PCC = "pcc"
 
 
-@dataclass(frozen=True)
+@dataclass
 class MetricSpec:
     """Metric specification: name, tolerance, direction, and compute function."""
 
-    name: str
     tolerance: float
     higher_is_better: bool
     compute_function: Callable[[Any, Any], float]
+    name: str = field(default="")
 
 
 # Registry of built-in metrics with defaults. Tolerances here are sensible
@@ -322,11 +322,20 @@ def _prepare_metric_config(metric_tolerances_input):
     logs_local: List[str] = []
     tol_map: Dict[str, float] = {}
 
-    for raw_key, spec in (metric_tolerances_input or {}).items():
+    if not isinstance(metric_tolerances_input, dict):
+        logs_local.append(f"metric_tolerances_input must be a dict, got {type(metric_tolerances_input)}")
+        metric_tolerances_input = dict()
+
+    if not metric_tolerances_input:
+        logs_local.append("no metric tolerances provided")
+        metric_tolerances_input = dict()
+
+    for raw_key, spec in metric_tolerances_input.items():
         name = _normalize_key(raw_key)
         if isinstance(spec, MetricSpec):
             tol_map[name] = float(spec.tolerance)
             metrics_map[name] = spec.compute_function
+            spec.name = name if spec.name == "" else spec.name
             if spec.higher_is_better:
                 hib.add(name)
             else:
