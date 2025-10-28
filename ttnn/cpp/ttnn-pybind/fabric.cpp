@@ -40,13 +40,23 @@ void py_bind_fabric_api(py::module& module) {
         .value("DISABLED", tt::tt_fabric::FabricTensixConfig::DISABLED)
         .value("MUX", tt::tt_fabric::FabricTensixConfig::MUX);
 
+    py::enum_<tt::tt_fabric::FabricUDMMode>(module, "FabricUDMMode", R"(
+        Specifies the Unified Datamovement mode for configuring fabric with different parameters.
+        Values:
+            DISABLED: UDM mode is disabled (default).
+            ENABLED: UDM mode is enabled.
+        )")
+        .value("DISABLED", tt::tt_fabric::FabricUDMMode::DISABLED)
+        .value("ENABLED", tt::tt_fabric::FabricUDMMode::ENABLED);
+
     module.def(
         "set_fabric_config",
         &tt::tt_fabric::SetFabricConfig,
         py::arg("config"),
         py::arg("reliability_mode") = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
         py::arg("num_planes") = std::nullopt,
-        py::arg("fabric_tensix_config") = tt::tt_fabric::FabricTensixConfig::DISABLED);
+        py::arg("fabric_tensix_config") = tt::tt_fabric::FabricTensixConfig::DISABLED,
+        py::arg("fabric_udm_mode") = tt::tt_fabric::FabricUDMMode::DISABLED);
 }
 
 }  // namespace ttnn::fabric

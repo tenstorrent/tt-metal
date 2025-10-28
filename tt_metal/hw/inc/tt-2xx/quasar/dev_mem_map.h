@@ -112,8 +112,14 @@
 #define MEM_NOC_COUNTER_L1_SIZE (5 * 2 * 2 * MEM_NOC_COUNTER_SIZE)
 #define MEM_NOC_COUNTER_BASE (MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC2_FIRMWARE_SIZE)
 
+// Fabric transaction counters (similar to NoC counters)
+// 3 barrier types × 8 DMs × 4 bytes = 160 bytes (Quasar has 8 DMs)
+#define MEM_FABRIC_COUNTER_SIZE 4
+#define MEM_FABRIC_COUNTER_L1_SIZE (3 * 8 * MEM_FABRIC_COUNTER_SIZE + 16)  // Add 16 bytes padding for alignment
+#define MEM_FABRIC_COUNTER_BASE (MEM_NOC_COUNTER_BASE + MEM_NOC_COUNTER_L1_SIZE)
+
 // Tensix routing table for fabric networking
-#define MEM_TENSIX_ROUTING_TABLE_BASE (MEM_NOC_COUNTER_BASE + MEM_NOC_COUNTER_L1_SIZE)
+#define MEM_TENSIX_ROUTING_TABLE_BASE (MEM_FABRIC_COUNTER_BASE + MEM_FABRIC_COUNTER_L1_SIZE)
 #define MEM_ROUTING_TABLE_SIZE 496
 
 #define ROUTING_PATH_SIZE_1D 64
@@ -134,7 +140,7 @@
 #define MEM_TENSIX_FABRIC_OFFSET_OF_ALIGNED_INFO 400  // offsetof(tensix_fabric_connections_l1_info_t, read_write)
 
 // Packet header pool sizing constants
-#define PACKET_HEADER_MAX_SIZE 64
+#define PACKET_HEADER_MAX_SIZE 80
 #define NUM_PACKET_HEADERS \
     (6 * 2 * MaxDMProcessorsPerCoreType)  // (EAST, WEST, NORTH, SOUTH, UP, DOWN) * convention * (DM0, DM1)
 

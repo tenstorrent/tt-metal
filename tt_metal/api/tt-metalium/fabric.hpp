@@ -120,7 +120,8 @@ void SetFabricConfig(
     FabricConfig fabric_config,
     FabricReliabilityMode reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
     std::optional<uint8_t> num_routing_planes = std::nullopt,
-    FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED);
+    FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
+    FabricUDMMode fabric_udm_mode = FabricUDMMode::DISABLED);
 
 FabricConfig GetFabricConfig();
 

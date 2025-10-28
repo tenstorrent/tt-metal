@@ -31,6 +31,12 @@ enum class FabricTensixConfig : uint32_t {
     MUX = 1,       // using mux kernel as tensix extension
 };
 
+// Unidfied Datamovement knob for configuring fabric with different parameters
+enum class FabricUDMMode : uint32_t {
+    DISABLED = 0,
+    ENABLED = 1,
+};
+
 enum class FabricReliabilityMode : uint32_t {
 
     // When fabric is initialized, user expects live links/devices to exactly match the mesh graph descriptor.

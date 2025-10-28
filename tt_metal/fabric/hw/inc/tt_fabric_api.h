@@ -19,6 +19,13 @@ using namespace tt::tt_fabric;
 
 namespace tt::tt_fabric {
 
+// Struct to encapsulate UDM-related fields
+struct udm_fields {
+    uint16_t src_noc_xy;
+    uint8_t risc_id;
+    uint16_t trid;
+};
+
 inline eth_chan_directions get_next_hop_router_direction(uint32_t dst_mesh_id, uint32_t dst_dev_id) {
     tt_l1_ptr tensix_routing_l1_info_t* routing_table =
         reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
@@ -338,4 +345,48 @@ bool fabric_set_unicast_route(volatile tt_l1_ptr LowLatencyPacketHeader* packet_
         }
     }
 }
+
+// Overload for UDMHybridMeshPacketHeader
+inline bool fabric_set_unicast_route(
+    volatile tt_l1_ptr UDMHybridMeshPacketHeader* packet_header,
+    udm_fields& udm,
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id) {
+    tt_l1_ptr tensix_routing_l1_info_t* routing_table =
+        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+
+    // First call the original API by casting to base type
+    bool result = fabric_set_unicast_route(
+        static_cast<volatile tt_l1_ptr HybridMeshPacketHeader*>(packet_header), dst_dev_id, dst_mesh_id);
+
+    // Set UDM control fields for write operations using routing table info
+    packet_header->udm_control.write.src_chip_id = routing_table->my_device_id;
+    packet_header->udm_control.write.src_mesh_id = routing_table->my_mesh_id;
+    packet_header->udm_control.write.src_noc_xy = udm.src_noc_xy;
+    packet_header->udm_control.write.risc_id = udm.risc_id;
+    packet_header->udm_control.write.transaction_id = udm.trid;
+    return result;
+}
+
+// Overload for UDMLowLatencyPacketHeader with UDM fields
+inline bool fabric_set_unicast_route(
+    volatile tt_l1_ptr UDMLowLatencyPacketHeader* packet_header, udm_fields& udm, uint16_t dst_dev_id) {
+    tt_l1_ptr tensix_routing_l1_info_t* routing_table =
+        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+
+    // First call the original API by casting to base type
+    // Use the template parameters to call the correct overload
+    bool result =
+        fabric_set_unicast_route(static_cast<volatile tt_l1_ptr LowLatencyPacketHeader*>(packet_header), dst_dev_id);
+
+    // Set UDM control fields for write operations using routing table info
+    packet_header->udm_control.write.src_chip_id = routing_table->my_device_id;
+    packet_header->udm_control.write.src_mesh_id = routing_table->my_mesh_id;
+    packet_header->udm_control.write.src_noc_xy = udm.src_noc_xy;
+    packet_header->udm_control.write.risc_id = udm.risc_id;
+    packet_header->udm_control.write.transaction_id = udm.trid;
+
+    return result;
+}
+
 }  // namespace tt::tt_fabric
