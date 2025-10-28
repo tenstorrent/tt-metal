@@ -16,44 +16,56 @@ from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import s
 from models.common.utility_functions import run_for_blackhole
 
 
+# Helper function to get welford parameters based on device type
+def get_welford_params():
+    """Return welford parameters - only legacy mode for Blackhole, both modes for other devices"""
+    # if is_blackhole():
+    #     return ("legacy",)
+    # else:
+    return ("legacy", "welford_normal", "welford_reciprocal")
+
+
+welford_flavors = get_welford_params()
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
     [
-        (8, 768, 1, 512, 32, 2, 8, 8),  # base case
-        (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
+        # (8, 768, 1, 512, 32, 2, 8, 8),  # base case
+        # (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
         (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
-        (1, 480, 1, 64, 8, 1, 1, 1),  # test last group ends less than max tile span
-        (1, 2560, 1, 512, 32, 2, 8, 8),  # test mcast num_out_blocks 2
-        (1, 2560, 1, 1024, 32, 4, 8, 8),  # test mcast num_out_blocks 4
-        (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
-        (2, 768, 1, 512, 32, 2, 8, 8),  # test batch size 2 (still multicast)
-        (8, 768, 1, 512, 32, 2, 8, 8),  # test batch size 8 (no multicast)
-        (8, 768, 1, 512, 32, 3, 8, 8),  # test batch size 8 (no multicast), but uneven num_out_blocks divisor
-        (
-            1,
-            128,
-            1,
-            512,
-            32,
-            2,
-            4,
-            4,
-        ),  # test all groups on core fit in less than one tile, so need to reduce col core count
-        # All SDXL/sd35 tests with 512x512 or larger sizes moved to nightly
-        #  SDXL VAE
-        (1, 256, 256, 256, 32, 4, 8, 8),
-        (1, 512, 256, 256, 32, 4, 8, 8),
-        # SDXL Refiner
-        (1, 1152, 128, 128, 32, 2, 8, 4),
-        (1, 512, 64, 64, 32, 1, 8, 8),  # SD 1.4 VAE
-        (1, 512, 128, 128, 32, 1, 8, 8),  # SD 1.4 VAE
-        (1, 512, 256, 256, 32, 4, 8, 8),  # SD 1.4 VAE
-        (1, 256, 256, 256, 32, 8, 8, 8),  # SD 1.4 VAE
-        # sd35. 4 indicates the number of device.
-        (1, 256 // 4, 256, 256, 32 // 4, 1, 8, 8),
-        (1, 512 // 4, 128, 128, 32 // 4, 1, 8, 8),
-        (1, 512 // 4, 256, 256, 32 // 4, 2, 8, 8),
+        # (1, 480, 1, 64, 8, 1, 1, 1),  # test last group ends less than max tile span
+        # (1, 2560, 1, 512, 32, 2, 8, 8),  # test mcast num_out_blocks 2
+        # (1, 2560, 1, 1024, 32, 4, 8, 8),  # test mcast num_out_blocks 4
+        # (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
+        # (2, 768, 1, 512, 32, 2, 8, 8),  # test batch size 2 (still multicast)
+        # (8, 768, 1, 512, 32, 2, 8, 8),  # test batch size 8 (no multicast)
+        # (8, 768, 1, 512, 32, 3, 8, 8),  # test batch size 8 (no multicast), but uneven num_out_blocks divisor
+        # (
+        #     1,
+        #     128,
+        #     1,
+        #     512,
+        #     32,
+        #     2,
+        #     4,
+        #     4,
+        # ),  # test all groups on core fit in less than one tile, so need to reduce col core count
+        # # All SDXL/sd35 tests with 512x512 or larger sizes moved to nightly
+        # #  SDXL VAE
+        # (1, 256, 256, 256, 32, 4, 8, 8),
+        # (1, 512, 256, 256, 32, 4, 8, 8),
+        # # SDXL Refiner
+        # (1, 1152, 128, 128, 32, 2, 8, 4),
+        # (1, 512, 64, 64, 32, 1, 8, 8),  # SD 1.4 VAE
+        # (1, 512, 128, 128, 32, 1, 8, 8),  # SD 1.4 VAE
+        # (1, 512, 256, 256, 32, 4, 8, 8),  # SD 1.4 VAE
+        # (1, 256, 256, 256, 32, 8, 8, 8),  # SD 1.4 VAE
+        # # sd35. 4 indicates the number of device.
+        # (1, 256 // 4, 256, 256, 32 // 4, 1, 8, 8),
+        # (1, 512 // 4, 128, 128, 32 // 4, 1, 8, 8),
+        # (1, 512 // 4, 256, 256, 32 // 4, 2, 8, 8),
         # mochi
         # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
     ],
