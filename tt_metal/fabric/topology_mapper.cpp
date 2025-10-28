@@ -440,6 +440,33 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
             phys_deg[j] = phys_adj_idx[j].size();
         }
 
+        // Emit initial stats for debugging
+        auto emit_degree_hist = [&](const std::vector<size_t>& degs) {
+            std::map<size_t, size_t> hist;
+            for (auto d : degs) {
+                hist[d]++;
+            }
+            std::string s = "{";
+            bool first = true;
+            for (const auto& [d, c] : hist) {
+                if (!first) {
+                    s += ", ";
+                }
+                first = false;
+                s += std::to_string(d) + ":" + std::to_string(c);
+            }
+            s += "}";
+            return s;
+        };
+        log_info(
+            tt::LogFabric,
+            "TopologyMapper mapping start (mesh={}): n_log={}, n_phys={}, log_deg_hist={}, phys_deg_hist={}",
+            mesh_id.get(),
+            n_log,
+            n_phys,
+            emit_degree_hist(log_deg),
+            emit_degree_hist(phys_deg));
+
         // Candidate restrictions for logical indices pinned by ASIC position (tray, location).
         // If entry is empty, no restriction; otherwise, only listed physical indices are allowed.
         std::vector<std::vector<size_t>> restricted_phys_indices_for_logical(n_log);
@@ -499,12 +526,151 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
 
         // Degrees already computed above
 
+        // Fast path: if logical graph is a single path (two endpoints with degree 1; all others degree <=2),
+        // map it using a linear path-extension DFS over the physical graph to avoid heavy general search.
+        auto try_fast_path_for_logical_chain = [&]() -> bool {
+            std::vector<size_t> endpoints;
+            for (size_t i = 0; i < n_log; ++i) {
+                if (log_deg[i] == 1) {
+                    endpoints.push_back(i);
+                }
+                if (log_deg[i] > 2) {
+                    return false;
+                }
+            }
+            if (endpoints.size() != 2) {
+                return false;
+            }
+
+            // Build ordered logical path indices from one endpoint
+            std::vector<size_t> log_order;
+            log_order.reserve(n_log);
+            std::vector<bool> seen(n_log, false);
+            size_t curr = endpoints[0];
+            size_t prev = n_log;  // sentinel
+            for (size_t k = 0; k < n_log; ++k) {
+                log_order.push_back(curr);
+                seen[curr] = true;
+                size_t next_candidate = n_log;
+                for (size_t nb : log_adj_idx[curr]) {
+                    if (nb != prev && !seen[nb]) {
+                        next_candidate = nb;
+                        break;
+                    }
+                }
+                prev = curr;
+                curr = next_candidate;
+                if (k + 1 < n_log && curr == n_log) {
+                    return false;  // disconnected
+                }
+            }
+
+            // Reachability check helper to prevent dead-ends
+            auto reachable_unused_count = [&](size_t start_phys) -> size_t {
+                std::vector<char> vis(n_phys, 0);
+                std::vector<size_t> q;
+                q.reserve(n_phys);
+                if (used[start_phys]) {
+                    return 0;
+                }
+                q.push_back(start_phys);
+                vis[start_phys] = 1;
+                size_t qi = 0;
+                size_t cnt = 0;
+                while (qi < q.size()) {
+                    size_t u = q[qi++];
+                    cnt++;
+                    for (size_t v : phys_adj_idx[u]) {
+                        if (!vis[v] && !used[v]) {
+                            vis[v] = 1;
+                            q.push_back(v);
+                        }
+                    }
+                }
+                return cnt;
+            };
+
+            std::function<bool(size_t, size_t)> place = [&](size_t idx_in_path, size_t prev_phys) -> bool {
+                if (idx_in_path == n_log) {
+                    return true;
+                }
+                size_t li = log_order[idx_in_path];
+                if (idx_in_path == 0) {
+                    // Symmetry break: iterate physical starts in deterministic order
+                    for (size_t pj = 0; pj < n_phys; ++pj) {
+                        if (used[pj]) {
+                            continue;
+                        }
+                        if (phys_deg[pj] < log_deg[li]) {
+                            continue;
+                        }
+                        used[pj] = true;
+                        mapping[li] = static_cast<int>(pj);
+                        bool ok = place(idx_in_path + 1, pj);
+                        if (ok) {
+                            return true;
+                        }
+                        mapping[li] = -1;
+                        used[pj] = false;
+                    }
+                    return false;
+                } else {
+                    // Next must be an unused neighbor of prev_phys
+                    // Early capacity check: remaining logicals must fit in reachable component from some neighbor
+                    size_t remain = n_log - idx_in_path;
+                    for (size_t pj : phys_adj_idx[prev_phys]) {
+                        if (used[pj]) {
+                            continue;
+                        }
+                        if (phys_deg[pj] < log_deg[li]) {
+                            continue;
+                        }
+                        // Reachability pruning
+                        size_t reach = reachable_unused_count(pj);
+                        if (reach < remain) {
+                            continue;
+                        }
+                        used[pj] = true;
+                        mapping[li] = static_cast<int>(pj);
+                        if (place(idx_in_path + 1, pj)) {
+                            return true;
+                        }
+                        mapping[li] = -1;
+                        used[pj] = false;
+                    }
+                    return false;
+                }
+            };
+
+            bool ok = place(0, n_phys);
+            if (ok) {
+                log_info(tt::LogFabric, "Fast-path path-graph mapping succeeded for mesh {}", mesh_id.get());
+            } else {
+                log_debug(tt::LogFabric, "Fast-path path-graph mapping failed; falling back to general DFS");
+            }
+            return ok;
+        };
+
+        if (try_fast_path_for_logical_chain()) {
+            // mapping already populated; build maps
+            for (size_t i = 0; i < n_log; ++i) {
+                TT_FATAL(mapping[i] >= 0, "Internal error: fast-path produced incomplete mapping");
+                FabricNodeId fn = log_nodes[i];
+                tt::tt_metal::AsicID asic = phys_nodes[static_cast<size_t>(mapping[i])];
+                fabric_node_id_to_asic_id_.emplace(fn, asic);
+                asic_id_to_fabric_node_id_.emplace(asic, fn);
+            }
+            continue;  // next mesh
+        }
+
         // We'll select the next logical node dynamically: pick the unmapped node
-        // with the most already-mapped neighbors (most-constraining), tie-break by MRV.
+        // with the most already-mapped neighbors (most-constraining). Tie-break by MRV.
+        // Additional tie-break: when no neighbors are mapped yet, prefer lower-degree (endpoints first)
         auto select_next_logical = [&](const std::vector<int>& mapping_ref, const std::vector<bool>& used_ref) {
             size_t best_li = n_log;
             size_t best_mapped_neigh = 0;
             size_t best_cand_count = (std::numeric_limits<size_t>::max)();
+            size_t best_log_deg = (std::numeric_limits<size_t>::max)();
 
             for (size_t li = 0; li < n_log; ++li) {
                 if (mapping_ref[li] != -1) {
@@ -540,10 +706,13 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
                     }
                 }
                 if (best_li == n_log || mapped_neigh_count > best_mapped_neigh ||
-                    (mapped_neigh_count == best_mapped_neigh && cand_count < best_cand_count)) {
+                    (mapped_neigh_count == best_mapped_neigh &&
+                     ((best_mapped_neigh == 0 && log_deg[li] < best_log_deg) ||
+                      (best_mapped_neigh != 0 && cand_count < best_cand_count)))) {
                     best_li = li;
                     best_mapped_neigh = mapped_neigh_count;
                     best_cand_count = cand_count;
+                    best_log_deg = log_deg[li];
                 }
             }
             return best_li;
@@ -566,9 +735,32 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
             return h;
         };
 
+        // Debug counters and timing for visibility into search behavior
+        std::size_t dfs_calls = 0;
+        auto dfs_start = std::chrono::steady_clock::now();
+
         std::function<bool(size_t)> dfs = [&](size_t pos) -> bool {
             if (pos == n_log) {
                 return true;
+            }
+
+            // Periodic progress logging to help diagnose search blow-ups
+            dfs_calls++;
+            if ((dfs_calls & ((1u << 18) - 1)) == 0) {  // every ~262k calls
+                std::size_t assigned = 0;
+                for (auto v : mapping) {
+                    assigned += (v != -1);
+                }
+                auto now = std::chrono::steady_clock::now();
+                auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - dfs_start).count();
+                log_info(
+                    tt::LogFabric,
+                    "TopologyMapper DFS progress: calls={}, assigned={}/{}, failed_states={}, elapsed_ms={}",
+                    dfs_calls,
+                    assigned,
+                    n_log,
+                    failed_states.size(),
+                    ms);
             }
 
             std::uint64_t key = hash_state(pos);
@@ -617,7 +809,35 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
                 return a < b;
             });
 
+            // Periodic selection summary
+            if ((dfs_calls & ((1u << 16) - 1)) == 0) {
+                size_t mapped_neigh_count = 0;
+                for (size_t v : log_adj_idx[li]) {
+                    if (mapping[v] != -1) {
+                        mapped_neigh_count++;
+                    }
+                }
+                log_info(
+                    tt::LogFabric,
+                    "DFS select li={}, log_deg={}, mapped_neigh={}, candidates={}",
+                    li,
+                    log_deg[li],
+                    mapped_neigh_count,
+                    candidates.size());
+            }
+
             for (size_t j : candidates) {
+                // Debug: occasionally emit candidate summary for selected logical index
+                if ((dfs_calls & ((1u << 18) - 1)) == 1) {
+                    log_debug(
+                        tt::LogFabric,
+                        "DFS step: li={}, log_deg={}, candidate_phys_idx=j={}, phys_deg[j]={}, cand_count={}",
+                        li,
+                        log_deg[li],
+                        j,
+                        phys_deg[j],
+                        candidates.size());
+                }
                 // Local consistency: enforce that logical edges are present physically (allow extra phys edges)
                 bool ok = true;
                 for (size_t lk = 0; lk < n_log; ++lk) {
@@ -634,6 +854,9 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
                     }
                 }
                 if (!ok) {
+                    if ((dfs_calls & ((1u << 17) - 1)) == 0) {
+                        log_debug(tt::LogFabric, "Prune: local consistency failed for li={}, phys_j={}", li, j);
+                    }
                     continue;
                 }
 
@@ -653,6 +876,16 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
                     }
                 }
                 if (unused_phys_neighbors.size() < unassigned_neighbors.size()) {
+                    if ((dfs_calls & ((1u << 17) - 1)) == 0) {
+                        log_debug(
+                            tt::LogFabric,
+                            "Prune: capacity check failed li={}, phys_j={}, unused_phys_neighbors={}, "
+                            "unassigned_neighbors={}",
+                            li,
+                            j,
+                            unused_phys_neighbors.size(),
+                            unassigned_neighbors.size());
+                    }
                     continue;  // not enough capacity to satisfy pending logical edges
                 }
                 // For each future logical neighbor v, verify there exists at least one viable unused physical neighbor
@@ -685,6 +918,14 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
                     }
                     if (!has_candidate) {
                         ok = false;
+                        if ((dfs_calls & ((1u << 17) - 1)) == 0) {
+                            log_debug(
+                                tt::LogFabric,
+                                "Prune: future neighbor viability failed for li={}, neighbor_v={}, trying phys_j={}",
+                                li,
+                                v,
+                                j);
+                        }
                         break;
                     }
                 }
@@ -694,11 +935,23 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
 
                 used[j] = true;
                 mapping[li] = static_cast<int>(j);
+                if ((dfs_calls & ((1u << 16) - 1)) == 0) {
+                    log_info(
+                        tt::LogFabric,
+                        "Assign: li={} -> phys_j={}, log_deg={}, phys_deg={}",
+                        li,
+                        j,
+                        log_deg[li],
+                        phys_deg[j]);
+                }
                 if (dfs(pos + 1)) {
                     return true;
                 }
                 mapping[li] = -1;
                 used[j] = false;
+                if ((dfs_calls & ((1u << 16) - 1)) == 0) {
+                    log_debug(tt::LogFabric, "Backtrack: li={} from phys_j={}", li, j);
+                }
             }
 
             failed_states.insert(key);
