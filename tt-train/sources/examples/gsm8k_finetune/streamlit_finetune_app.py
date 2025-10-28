@@ -10,15 +10,12 @@ Real-time monitoring and control interface for LLM fine-tuning.
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import time
 import os
 import re
 from datetime import datetime
-from pathlib import Path
 import yaml
 import subprocess
-import signal
 import json
 
 device_mesh_shapes = {

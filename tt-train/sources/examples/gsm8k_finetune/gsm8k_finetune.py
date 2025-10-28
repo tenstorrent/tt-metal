@@ -10,24 +10,22 @@ Fine-tunes a Llama model on the GSM8K math word problems dataset using TT-Metal.
 
 import os
 import sys
-from time import time
 import datasets
-from dataclasses import dataclass
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer
 from huggingface_hub import hf_hub_download
 from matplotlib import pyplot as plt
 from tqdm import tqdm
-from typing import List, Tuple, Dict, Optional
+from typing import Optional
 
 # Add TT-Metal path
 sys.path.append(f"{os.environ['TT_METAL_HOME']}/tt-train/sources/ttml")
 import ttml
-from ttml.common.config import get_config, TransformerConfig, TrainingConfig, SchedulerConfig, DeviceConfig
+from ttml.common.config import get_config, TrainingConfig, SchedulerConfig, DeviceConfig
 from ttml.common.model_factory import TransformerModelFactory
-from ttml.common.utils import set_seed, round_up_to_tile, create_optimizer, initialize_device
+from ttml.common.utils import round_up_to_tile, create_optimizer, initialize_device
 from ttml.common.data import build_causal_mask
 
 import tt_serialization  # noqa: F401
@@ -77,7 +75,6 @@ class OptimParamSetter:
         self._warned_beta1 = False
 
     def set_lr(self, lr: float):
-        ok = False
         self.optim.set_lr(float(lr))
 
     def set_beta1(self, beta1: float):
