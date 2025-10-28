@@ -35,26 +35,30 @@ class RegNet(nn.Module):
 
 
 class Stage(nn.Module):
-    """
-    RegNet stage
-    """
-
-    def __init__(self, config, stage_name, image_architecture="resnet34"):
+    def __init__(self, config, stage_name="layer1", image_architecture="regnety_032"):
         super().__init__()
         self.config = config
         self.stage_name = stage_name
-
         self.image_encoder = RegNet(
             architecture=image_architecture, normalize=True, out_features=self.config.perception_output_features
         )
-        self.s = getattr(self.image_encoder.features, stage_name)
+
+        # You don’t prune or delete features outside layer1
+        # just use layer1 in forward
 
     def forward(self, image):
-        """
-        Args:
-            image: Image Input
-        """
+        # Dynamically access the stage layer based on stage_name
+        stage_layer = getattr(self.image_encoder.features, self.stage_name)
+        # x = stage_layer.b1.conv1(image)
+        # x = stage_layer.b1.conv2(x)
+        # x = stage_layer.b1.se(x)
+        # x = stage_layer.b1.conv3(x)
+        # import pdb; pdb.set_trace()
+        x = stage_layer(image)
+        return x
 
-        image_features = self.s(image)
-
-        return image_features
+    # def forward_c3(self, x):
+    #     # Dynamically access the stage layer based on stage_name
+    #     stage_layer = getattr(self.image_encoder.features, self.stage_name)
+    #     x = stage_layer.b1.conv3(x)
+    #     return x
