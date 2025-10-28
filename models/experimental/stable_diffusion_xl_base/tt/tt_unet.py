@@ -33,7 +33,6 @@ class TtUNet2DConditionModel(LightweightModule):
         module_path,
         model_config,
         debug_mode=False,
-        is_refiner=False,
     ):
         super().__init__()
 
@@ -46,7 +45,7 @@ class TtUNet2DConditionModel(LightweightModule):
         self.groups = 1
         self.debug_mode = debug_mode
 
-        print(f"channels in conv_in: {state_dict['conv_in.weight'].shape[0]}")
+        is_refiner = state_dict["conv_in.weight"].shape[0] == 384
         self.time_proj = TtTimesteps(device, state_dict["conv_in.weight"].shape[0], True, 0, 1)
         self.add_time_proj = TtTimesteps(device, 256, True, 0, 1)
 
@@ -60,6 +59,8 @@ class TtUNet2DConditionModel(LightweightModule):
 
         self.down_blocks = []
         self.up_blocks = []
+
+        # TODO: find a way to figure out block structure from state_dict automatically
         if is_refiner:
             self.down_blocks.append(
                 TtDownBlock2D(

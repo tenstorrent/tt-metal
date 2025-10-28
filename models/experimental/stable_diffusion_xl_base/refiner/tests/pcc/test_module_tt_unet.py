@@ -105,7 +105,6 @@ def run_refiner_unet_model(
         "unet",
         model_config=model_config,
         debug_mode=debug_mode,
-        is_refiner=True,
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_timestep_tensor = torch_random(timestep_shape, -0.1, 0.1, dtype=torch.float32)

@@ -48,6 +48,7 @@ class TtResnetBlock2D(LightweightModule):
         self.norm_core_grid_2 = ttnn.CoreGrid(y=8, x=8)
         self.norm_groups = 32
         self.norm_eps = 1e-5
+        self.is_first_resnet_block = "resnets.0" in module_path and "up_blocks" not in module_path
 
         # loading weights
         norm_weights_1 = state_dict[f"{module_path}.norm1.weight"]
@@ -343,7 +344,8 @@ class TtResnetBlock2D(LightweightModule):
                 or (self.conv3_program_config is None)
                 else hidden_states.memory_config(),
             )
-            ttnn.deallocate(input_tensor_pre_conv)
+            if not self.is_first_resnet_block:
+                ttnn.deallocate(input_tensor_pre_conv)
             if input_tensor.memory_config() != hidden_states.memory_config():
                 input_tensor = ttnn.to_memory_config(input_tensor, memory_config=hidden_states.memory_config())
         else:
