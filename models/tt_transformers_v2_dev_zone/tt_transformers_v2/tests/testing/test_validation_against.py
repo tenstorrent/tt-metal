@@ -306,7 +306,7 @@ def test_validation_checkpoint_from_torch(ttnn_mesh_device: ttnn.MeshDevice):
 @host_validate_against(
     reference_fn=torch.matmul,
     metric_tolerances={
-        "pcc_host": MetricSpec(tolerance=0.99, higher_is_better=True, compute_function=compute_pcc_host),
+        "pcc_host": MetricSpec(tolerance=0.99, higher_is_better=True, compute_fn=compute_pcc_host),
     },
 )
 def ttnn_matmul_metric_spec(a, b):

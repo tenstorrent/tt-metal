@@ -266,7 +266,7 @@ class MetricSpec:
 
     tolerance: float
     higher_is_better: bool
-    compute_function: Callable[[Any, Any], float]
+    compute_fn: Callable[[Any, Any], float]
     name: str = field(default="")
 
 
@@ -277,19 +277,19 @@ METRIC_SPECS: Dict[Metric, MetricSpec] = {
         name=Metric.MAX_ABS_ERROR.value,
         tolerance=0.0,
         higher_is_better=False,
-        compute_function=DEFAULT_METRICS[Metric.MAX_ABS_ERROR.value],
+        compute_fn=DEFAULT_METRICS[Metric.MAX_ABS_ERROR.value],
     ),
     Metric.MEAN_ABS_ERROR: MetricSpec(
         name=Metric.MEAN_ABS_ERROR.value,
         tolerance=0.0,
         higher_is_better=False,
-        compute_function=DEFAULT_METRICS[Metric.MEAN_ABS_ERROR.value],
+        compute_fn=DEFAULT_METRICS[Metric.MEAN_ABS_ERROR.value],
     ),
     Metric.PCC: MetricSpec(
         name=Metric.PCC.value,
         tolerance=0.0,
         higher_is_better=True,
-        compute_function=DEFAULT_METRICS[Metric.PCC.value],
+        compute_fn=DEFAULT_METRICS[Metric.PCC.value],
     ),
 }
 
@@ -334,7 +334,7 @@ def _prepare_metric_config(metric_tolerances_input):
         name = _normalize_key(raw_key)
         if isinstance(spec, MetricSpec):
             tol_map[name] = float(spec.tolerance)
-            metrics_map[name] = spec.compute_function
+            metrics_map[name] = spec.compute_fn
             spec.name = name if spec.name == "" else spec.name
             if spec.higher_is_better:
                 hib.add(name)
