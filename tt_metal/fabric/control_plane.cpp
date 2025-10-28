@@ -457,9 +457,11 @@ void ControlPlane::init_control_plane(
     } else {
         std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
 
-        if (cluster.is_ubb_galaxy()) {
+        // Pin for single host galaxy system to fix issues
+        if (cluster.is_ubb_galaxy() && *distributed_context->size() == 1) {
             fixed_asic_position_pinnings.push_back({AsicPosition{1, 1}, FabricNodeId(MeshId{0}, 0)});
             fixed_asic_position_pinnings.push_back({AsicPosition{1, 5}, FabricNodeId(MeshId{0}, 1)});
+            fixed_asic_position_pinnings.push_back({AsicPosition{1, 2}, FabricNodeId(MeshId{0}, 4)});
         }
 
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
