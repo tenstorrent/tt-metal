@@ -57,6 +57,23 @@ void kernel_main() {
         act_split_reader_write_done_semaphore_addr_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_write_done_semaphore_addr);
     }
+#ifdef SPLIT_READER
+    constexpr bool enable_split_reader = true;
+#else
+    constexpr bool enable_split_reader = false;
+#endif
+
+    const uint32_t act_mcast_reserve_done_semaphore_addr =
+        enable_split_reader ? get_semaphore(get_compile_time_arg_val(33)) : 0;
+    const uint32_t act_mcast_receiver_second_semaphore_addr =
+        enable_split_reader ? get_semaphore(get_compile_time_arg_val(34)) : 0;
+
+    volatile tt_l1_ptr uint32_t* act_mcast_reserve_done_semaphore_addr_ptr =
+        enable_split_reader ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_mcast_reserve_done_semaphore_addr)
+                            : nullptr;
+    volatile tt_l1_ptr uint32_t* act_mcast_receiver_second_semaphore_addr_ptr =
+        enable_split_reader ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_mcast_receiver_second_semaphore_addr)
+                            : nullptr;
 
     if constexpr (needs_act_block_zero_out) {
         zero_out_tiles<cb_id_act_row_major_bfloat16>();
@@ -72,6 +89,12 @@ void kernel_main() {
     const bool is_receiver_core = get_arg_val<uint32_t>(i++) > 0;
     const bool is_sender_core = get_arg_val<uint32_t>(i++) > 0;
     uint32_t dram_config_reader_index = get_arg_val<uint32_t>(i++);
+
+    DPRINT << "act_mcast_dest_noc_start_x: " << act_mcast_dest_noc_start_x
+           << ", act_mcast_dest_noc_start_y: " << act_mcast_dest_noc_start_y
+           << ", act_mcast_dest_noc_end_x: " << act_mcast_dest_noc_end_x
+           << ", act_mcast_dest_noc_end_y: " << act_mcast_dest_noc_end_y
+           << ", act_mcast_sender_id: " << act_mcast_sender_id << ENDL();
 
     tt_l1_ptr uint32_t* act_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
@@ -172,13 +195,23 @@ void kernel_main() {
                     noc_semaphore_set(act_mcast_sender_semaphore_addr_ptr, 0);
 
                     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
+#ifdef SPLIT_READER
+                    noc_semaphore_set(act_mcast_receiver_second_semaphore_addr_ptr, INVALID);
+#endif
                     // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
                     cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
-
+#ifdef SPLIT_READER
+                    noc_semaphore_set(act_mcast_reserve_done_semaphore_addr_ptr, VALID);
+#endif
                     // Now we have the block in the CB address, we can mcast to dests!
                     uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
 
                     uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
+
+                    DPRINT << "tilized_act_start_address: " << tilized_act_start_address
+                           << ", base_act_address: " << get_write_ptr(cb_id_act)
+                           << ", act_multicast_data_addr: " << act_multicast_data_addr
+                           << ", act_multicast_noc_addr: " << act_multicast_noc_addr << ENDL();
                     if (is_receiver_core) {
                         if constexpr (act_mcast_num_cores) {
                             // num_dests will source, since we are copying to a different local CB as well
@@ -235,7 +268,9 @@ void kernel_main() {
                     // MCAST RECEIVER: receive entire tilized input from sender core
                     // Set act semaphore value to INVALID
                     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
-
+#ifdef SPLIT_READER
+                    noc_semaphore_set(act_mcast_receiver_second_semaphore_addr_ptr, INVALID);
+#endif
                     // Atomic increment source core counter
                     uint64_t act_mcast_sender_semaphore_noc_addr;
                     if constexpr (transpose_mcast) {
@@ -253,6 +288,9 @@ void kernel_main() {
 
                     // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
                     noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+#ifdef SPLIT_READER
+                    noc_semaphore_wait(act_mcast_receiver_second_semaphore_addr_ptr, VALID);
+#endif
                 }
                 cb_push_back(cb_id_act, act_block_num_tiles);
             }  // act_w_num_outer
