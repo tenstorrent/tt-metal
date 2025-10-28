@@ -465,7 +465,12 @@
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.scaled_dot_product_attention_decode.html">ttnn.transformer.scaled_dot_product_attention_decode</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#ccl">CCL</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#ccl">CCL</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.all_gather.html">ttnn.all_gather</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.reduce_scatter.html">ttnn.reduce_scatter</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.all_reduce.html">ttnn.all_reduce</a></li>
+</ul>
+</li>
 <li class="toctree-l3"><a class="reference internal" href="#embedding">Embedding</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.embedding.html">ttnn.embedding</a></li>
 </ul>
@@ -2136,6 +2141,18 @@
 </h3>
 <table class="autosummary longtable docutils align-default">
 <tbody>
+<tr class="row-odd">
+<td><p><a class="reference internal" href="api/ttnn.all_gather.html#ttnn.all_gather" title="ttnn.all_gather"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.all_gather</span></code></a></p></td>
+<td><p>ttnn.Tensor, dim: int, cluster_axis: Optional[int] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None, memory_config: Optional[ttnn.MemoryConfig] = None, output_tensor: Optional[ttnn.Tensor] = None, num_links: Optional[int] = None, topology: Optional[ttnn.Topology] = None) -&gt; ttnn.Tensor</p></td>
+</tr>
+<tr class="row-even">
+<td><p><a class="reference internal" href="api/ttnn.reduce_scatter.html#ttnn.reduce_scatter" title="ttnn.reduce_scatter"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.reduce_scatter</span></code></a></p></td>
+<td><p>ttnn.Tensor, dim: int, cluster_axis: Optional[int] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None, memory_config: Optional[ttnn.MemoryConfig] = None, output_tensor: Optional[ttnn.Tensor] = None, num_links: Optional[int] = None, topology: Optional[ttnn.Topology] = None) -&gt; ttnn.Tensor</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><a class="reference internal" href="api/ttnn.all_reduce.html#ttnn.all_reduce" title="ttnn.all_reduce"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.all_reduce</span></code></a></p></td>
+<td><p>ttnn.Tensor, cluster_axis: Optional[int] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None, memory_config: Optional[ttnn.MemoryConfig] = None, num_links: Optional[int] = None, topology: Optional[ttnn.Topology] = None) -&gt; ttnn.Tensor</p></td>
+</tr>
 </tbody>
 </table>
 </section>

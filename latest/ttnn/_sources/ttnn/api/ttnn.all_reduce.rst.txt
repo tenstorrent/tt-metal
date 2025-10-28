@@ -1,0 +1,8 @@
+﻿ttnn.all\_reduce
+================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.all_reduce:
+
+.. autodata:: ttnn.all_reduce

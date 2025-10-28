@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ttnn.transformer.scaled_dot_product_attention_decode &mdash; TT-NN  documentation</title>
+  <title>ttnn.all_gather &mdash; TT-NN  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.transformer.scaled_dot_product_attention_decode.html" />
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.all_gather.html" />
   <!--[if lt IE 9]>
     <script src="../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -24,8 +24,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.all_gather" href="ttnn.all_gather.html" />
-    <link rel="prev" title="ttnn.transformer.scaled_dot_product_attention" href="ttnn.transformer.scaled_dot_product_attention.html" /> 
+    <link rel="next" title="ttnn.reduce_scatter" href="ttnn.reduce_scatter.html" />
+    <link rel="prev" title="ttnn.transformer.scaled_dot_product_attention_decode" href="ttnn.transformer.scaled_dot_product_attention_decode.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -74,17 +74,13 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#normalization">Normalization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#normalization-program-configs">Normalization Program Configs</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#moreh-operations">Moreh Operations</a></li>
-<li class="toctree-l3 current"><a class="reference internal" href="../api.html#transformer">Transformer</a><ul class="current">
-<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.split_query_key_value_and_split_heads.html">ttnn.transformer.split_query_key_value_and_split_heads</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.concatenate_heads.html">ttnn.transformer.concatenate_heads</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.attention_softmax.html">ttnn.transformer.attention_softmax</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.attention_softmax_.html">ttnn.transformer.attention_softmax_</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.experimental.rotary_embedding.html">ttnn.experimental.rotary_embedding</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.scaled_dot_product_attention.html">ttnn.transformer.scaled_dot_product_attention</a></li>
-<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.transformer.scaled_dot_product_attention_decode</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
+<li class="toctree-l3 current"><a class="reference internal" href="../api.html#ccl">CCL</a><ul class="current">
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.all_gather</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.reduce_scatter.html">ttnn.reduce_scatter</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.all_reduce.html">ttnn.all_reduce</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#convolution">Convolution</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pooling">Pooling</a></li>
@@ -125,9 +121,9 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.transformer.scaled_dot_product_attention_decode</li>
+      <li class="breadcrumb-item active">ttnn.all_gather</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.transformer.scaled_dot_product_attention_decode.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/ttnn/api/ttnn.all_gather.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -135,50 +131,70 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="ttnn-transformer-scaled-dot-product-attention-decode">
-<h1>ttnn.transformer.scaled_dot_product_attention_decode<a class="headerlink" href="#ttnn-transformer-scaled-dot-product-attention-decode" title="Permalink to this heading"></a>
+  <section id="ttnn-all-gather">
+<h1>ttnn.all_gather<a class="headerlink" href="#ttnn-all-gather" title="Permalink to this heading"></a>
 </h1>
 <span class="target" id="id1"></span><dl class="py data">
-<dt class="sig sig-object py" id="ttnn.transformer.scaled_dot_product_attention_decode">
-<span class="sig-prename descclassname"><span class="pre">ttnn.transformer.</span></span><span class="sig-name descname"><span class="pre">scaled_dot_product_attention_decode</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.transformer.scaled_dot_product_attention_decode',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.transformer.scaled_dot_product_attention_decode_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=None,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.transformer.scaled_dot_product_attention_decode" title="Permalink to this definition"></a>
+<dt class="sig sig-object py" id="ttnn.all_gather">
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">all_gather</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.all_gather',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.ccl.all_gather_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=None,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.all_gather" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>A version of scaled dot product attention specifically for decode.
-The implementation is Flash-Decode and it currently only supports MQA on decoding single token.</p>
-<p>Accepts a <cite>SDPAMultiCoreProgramConfig</cite> which specifies the grid size and chunk tiles in the K/V/Mask sequence lengths (Q chunk tiles is not used). The op parallelizes over <cite>b</cite> and K/V/Mask’s <cite>s</cite> dimension.</p>
+<p>ttnn.Tensor, dim: int, cluster_axis: Optional[int] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None, memory_config: Optional[ttnn.MemoryConfig] = None, output_tensor: Optional[ttnn.Tensor] = None, num_links: Optional[int] = None, topology: Optional[ttnn.Topology] = None) -&gt; ttnn.Tensor</p>
+<blockquote>
+<div>
+<p>All-gather operation across devices along a selected dimension and optional cluster axis. If cluster axis is specified then we gather across the cluster axis. All-gather is a collective operation that gathers data from all devices into a new output tensor, concatenated along the specified <cite>dim</cite>. When cluster_axis is specified, each of the non-cluster_axis dimensions are performing independent all-gathers along the devices on the cluster axis. When the layout is row-major or we have tile padding on the gather dim, we use the composite all-gather implementation that falls back to all-broadcast.</p>
+<dl class="simple">
+<dt>Args:</dt>
+<dd>
+<p>input_tensor (ttnn.Tensor): Input tensor to be gathered.
+dim (int): Dimension along which to gather.</p>
+</dd>
+<dt>Keyword Args:</dt>
+<dd>
+<p>cluster_axis (int, optional): The axis on the mesh device to gather across. Defaults to <cite>None</cite>.
+subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores.
+memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
+output_tensor (ttnn.Tensor, optional): Preallocated output tensor.
+num_links (int, optional): The number of links to use for the all-gather operation. Defaults to <cite>None</cite>, for which the number of links is determined automatically.
+topology (ttnn.Topology, optional): Fabric topology. Defaults to <cite>None</cite>.</p>
+</dd>
+</dl>
+</div>
+</blockquote>
 <dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<ul class="simple">
-<li><p><strong>input_tensor_q</strong> (<em>ttnn.Tensor</em>) – the input tensor [1 x b x nh x dh]</p></li>
-<li><p><strong>input_tensor_k</strong> (<em>ttnn.Tensor</em>) – the input tensor [b x nkv x   s x dh]</p></li>
-<li><p><strong>input_tensor_v</strong> (<em>ttnn.Tensor</em>) – the input tensor [b x nkv x   s x dh]</p></li>
-</ul>
-</dd>
-<dt class="field-even">Keyword Arguments<span class="colon">:</span>
-</dt>
-<dd class="field-even">
-<ul class="simple">
-<li><p><strong>is_causal</strong> (<em>bool</em>) – whether the attention is is_causal. Defaults to <cite>True</cite>.</p></li>
-<li><p><strong>attn_mask</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – the input tensor [b x 1 x s x s]. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>cur_pos</strong> (<em>List</em><em> of </em><em>int</em><em>, </em><em>optional</em>) – list of integers of length b. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>cur_pos_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – [b] tensor of integers of length b. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>scale</strong> (<em>float</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>program_config</strong> (<em>SDPAProgramConfig</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>sliding_window_size</strong> (<em>int</em><em>, </em><em>optional</em>) – The size of sliding window for sliding window attention. Defaults to <cite>None</cite>.</p></li>
-</ul>
-</dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – the output tensor [1 x b x pnh x dh].</p>
+<p></p>
+<p><em>ttnn.Tensor</em> – The gathered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] * num_devices, where num_devices is the number of devices along the <cite>cluster_axis</cite> if specified, else the total number of devices along the mesh.</p>
+<dl>
+<dt>Example:</dt>
+<dd>
+<div class="doctest highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">full_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">256</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">mesh_device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_mesh_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">MeshShape</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">8</span><span class="p">))</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">ttnn_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
+<span class="go">                full_tensor,</span>
+<span class="go">                dtype=input_dtype,</span>
+<span class="go">                device=mesh_device,</span>
+<span class="go">                layout=layout,</span>
+<span class="go">                memory_config=mem_config,</span>
+<span class="go">                mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">all_gather</span><span class="p">(</span><span class="n">ttnn_tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+<span class="go">[8, 1, 32, 256]</span>
+</pre></div>
+</div>
 </dd>
 </dl>
-<p>“Accepts a <cite>SDPAMultiCoreProgramConfig</cite> which specifies the grid size and chunk tiles in the K/V/Mask sequence lengths (Q chunk tiles is not used). The op parallelizes over <cite>b</cite> and K/V/Mask’s <cite>s</cite> dimension.”
-“If a position is given as (-1), compute for the corresponding index in the batch is skipped.”</p>
+
+</dd>
+<dt class="field-even">Type<span class="colon">:</span>
+</dt>
+<dd class="field-even">
+<p>all_gather(input_tensor</p>
+</dd>
+</dl>
 </dd>
 </dl>
 
@@ -189,8 +205,8 @@ The implementation is Flash-Decode and it currently only supports MQA on decodin
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.transformer.scaled_dot_product_attention.html" class="btn btn-neutral float-left" title="ttnn.transformer.scaled_dot_product_attention" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.all_gather.html" class="btn btn-neutral float-right" title="ttnn.all_gather" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.transformer.scaled_dot_product_attention_decode.html" class="btn btn-neutral float-left" title="ttnn.transformer.scaled_dot_product_attention_decode" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.reduce_scatter.html" class="btn btn-neutral float-right" title="ttnn.reduce_scatter" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
