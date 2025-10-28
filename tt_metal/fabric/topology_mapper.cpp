@@ -445,7 +445,7 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
         std::vector<std::vector<size_t>> restricted_phys_indices_for_logical(n_log);
         if (!fixed_asic_position_pinnings_.empty()) {
             // Validate uniqueness of pins for this mesh and apply
-            std::unordered_set<FabricNodeId> pinned_fabric_nodes;
+            std::unordered_map<FabricNodeId, AsicPosition> first_pinnings;
 
             for (const auto& [pos, fabric_node] : fixed_asic_position_pinnings_) {
                 if (fabric_node.mesh_id != mesh_id) {
@@ -458,12 +458,18 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
                     fabric_node,
                     mesh_id.get());
 
-                if (!pinned_fabric_nodes.insert(fabric_node).second) {
+                auto [it, inserted] = first_pinnings.try_emplace(fabric_node, pos);
+                if (!inserted) {
+                    const auto& prev_pos = it->second;
                     TT_THROW(
-                        "Fabric node {} in mesh {} is pinned more than once. Ensure each fabric node is pinned at most "
-                        "once.",
+                        "Fabric node {} in mesh {} is pinned to multiple ASIC positions: (tray {}, loc {}) and (tray "
+                        "{}, loc {})",
                         fabric_node,
-                        mesh_id.get());
+                        mesh_id.get(),
+                        *prev_pos.first,
+                        *prev_pos.second,
+                        *pos.first,
+                        *pos.second);
                 }
 
                 // Find matching physical indices in this mesh for the pinned ASIC position (across any host)
@@ -487,8 +493,6 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
                 }
 
                 size_t li = log_to_idx.at(fabric_node);
-                std::sort(matches.begin(), matches.end());
-                matches.erase(std::unique(matches.begin(), matches.end()), matches.end());
                 restricted_phys_indices_for_logical[li] = std::move(matches);
             }
         }

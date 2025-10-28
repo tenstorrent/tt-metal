@@ -457,7 +457,18 @@ void ControlPlane::init_control_plane(
     } else {
         std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
 
-        // Pin for single host galaxy system to fix issues
+        // Pin start or mesh to match the Galaxy Topology so that external QSFP links align with corner of fabric mesh
+        // node ids This is for defining the cross over date line for Torus AllGather Galaxy Performance optimization in
+        // fabric pins the top left corner and ensures boundary is aligned with device boundary
+
+        // * * o o < Pinned corners marked with *
+        // * o o o
+        // o o o o
+        // o o o o
+        // o o o o
+        // o o o o
+        // o o o o
+        // o o o o
         if (cluster.is_ubb_galaxy() && *distributed_context->size() == 1) {
             fixed_asic_position_pinnings.push_back({AsicPosition{1, 1}, FabricNodeId(MeshId{0}, 0)});
             fixed_asic_position_pinnings.push_back({AsicPosition{1, 5}, FabricNodeId(MeshId{0}, 1)});
