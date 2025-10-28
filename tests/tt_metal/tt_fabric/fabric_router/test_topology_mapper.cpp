@@ -316,4 +316,72 @@ TEST_F(TopologyMapperTest, T3kMultiMeshTest) {
     auto topology_mapper = TopologyMapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding);
 }
 
+TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnGalaxyMesh) {
+    const std::filesystem::path galaxy_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.yaml";
+
+    auto mesh_graph = MeshGraph(galaxy_mesh_graph_desc_path.string());
+
+    // Local mesh binding for single-host
+    LocalMeshBinding local_mesh_binding;
+    if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{0};
+    } else {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{1};
+    }
+
+    // Choose a real ASIC on this host and pin its (tray, location) to logical node (mesh 0, chip 0)
+    const auto my_host = physical_system_descriptor_->my_host_name();
+    auto pinned_asic = AsicPosition{1, 1};
+
+    std::vector<std::pair<AsicPosition, FabricNodeId>> pins = {
+        {pinned_asic, FabricNodeId(MeshId{0}, 0)},
+    };
+
+    TopologyMapper topology_mapper_with_pins(mesh_graph, *physical_system_descriptor_, local_mesh_binding, pins);
+
+    tt::tt_metal::AsicID mapped_asic;
+    for (const auto& asics : physical_system_descriptor_->get_asics_connected_to_host(my_host)) {
+        auto tray = physical_system_descriptor_->get_tray_id(asics);
+        auto loc = physical_system_descriptor_->get_asic_location(asics);
+        if (tray == pinned_asic.first && loc == pinned_asic.second) {
+            mapped_asic = topology_mapper_with_pins.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 0));
+            break;
+        }
+    }
+
+    // Verify that the mapping for FabricNodeId(0,0) resolves to the pinned ASIC
+    auto mapped_asic_for_node0 = topology_mapper_with_pins.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 0));
+    EXPECT_EQ(mapped_asic_for_node0, mapped_asic);
+}
+
+TEST_F(TopologyMapperTest, PinningThrowsOnMissingAsicPositionGalaxyMesh) {
+    const std::filesystem::path galaxy_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.yaml";
+
+    auto mesh_graph = MeshGraph(galaxy_mesh_graph_desc_path.string());
+
+    LocalMeshBinding local_mesh_binding;
+    if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{0};
+    } else {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{1};
+    }
+
+    // Use an ASIC position that does not exist in this environment
+    std::vector<std::pair<AsicPosition, FabricNodeId>> pins_missing = {
+        {AsicPosition{tt::tt_metal::TrayID{999999u}, tt::tt_metal::ASICLocation{999999u}}, FabricNodeId(MeshId{0}, 0)},
+    };
+
+    // Expect a throw due to missing ASIC position in the local mesh physical topology
+    EXPECT_THROW(
+        TopologyMapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding, pins_missing), std::exception);
+}
+
 }  // namespace tt::tt_fabric

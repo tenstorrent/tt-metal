@@ -191,6 +191,8 @@ public:
     std::string my_host_name() const;
     uint32_t get_rank_for_hostname(const std::string& host_name) const;
     bool is_cross_host_eth_link(AsicID asic_id, uint8_t chan_id) const;
+    // Return the PCIe bus_id for a given ASIC
+    uint16_t get_bus_id_for_asic(AsicID asic_id) const;
 
     // Generic Getters
     const PhysicalConnectivityGraph& get_system_graph() const { return system_graph_; }
