@@ -150,7 +150,6 @@ public:
     uint32_t get_num_eth_ports_per_direction() const;
 
 private:
-    bool backwards_compatible_;
 
     // Descriptor fast lookup
     std::unique_ptr<const proto::MeshGraphDescriptor> proto_;
