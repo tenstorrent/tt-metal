@@ -441,7 +441,7 @@ class Transformer(LightweightModule):
 
         if sampling_on_device and self.tt_sampling is not None:
             # Perform on-device sampling using TTSampling
-            tt_toks = self.tt_sampling(tt_logits, seed=42, tt_out_tok=x)
+            tt_toks = self.tt_sampling(tt_logits, seed=0, tt_out_tok=x)
             # Update device tensors for the next iteration
             self._increment_decode_positions_device(current_pos, rot_mat_idxs)
             return tt_toks

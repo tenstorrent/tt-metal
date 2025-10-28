@@ -402,7 +402,7 @@ def format_sampling_params(sampling_params):
     TOP_P_MIN = 0.0
     # TOP_P_MAX is 0.99 instead of 1.0 to ensure numerical stability in cumulative probability calculations
     # A value of 1.0 can cause floating point precision issues when comparing cumulative probabilities
-    TOP_P_MAX = 0.99
+    TOP_P_MAX = 1.0
 
     for i, (top_p, temp) in enumerate(zip(sampling_params.top_p, sampling_params.temperature)):
         # Clamp top-p
