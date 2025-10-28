@@ -48,7 +48,7 @@ void py_bind_all_to_all_combine(py::module& module) {
                 output_shard_dim (int, optional): The dimension to shard the output tokens along. Defaults to `1`, which is the batch dimension.
 
             Returns:
-                ttnn.Tensor: The combined tokens tensor. The tensor is expected to be [K, B/D, S, H] per device if output_shard_dim is 1, or [K, B, S/D, H] per device if output_shard_dim is 2. The tensor is unique per-device, such that the global shape is [K, B, S, H] when gathered along the output_shard_dim dimension. The tensor is expected to be in Row Major, Interleaved format. This tensor is sparse, so that if a token was not dispatched to any experts along the device's cluster axis, the row is populated with zeros.
+                ttnn.Tensor: The combined tokens tensor. The tensor is expected to be [K, B/D, S, H] per device if output_shard_dim is 1, or [K, B, S/D, H] per device if output_shard_dim is 2. The tensor is unique per-device, such that the global shape is [K, B, S, H] when gathered along the output_shard_dim dimension. The tensor is expected to be in Row Major, Interleaved format. This tensor is sparse, such that if a token was not dispatched to any experts along the device's cluster axis, the row is populated with zeros.
 
             Example:
 
