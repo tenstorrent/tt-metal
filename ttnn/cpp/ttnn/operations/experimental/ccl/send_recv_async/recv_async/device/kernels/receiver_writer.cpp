@@ -9,23 +9,22 @@
 #include "tt_metal/hw/inc/accessor/tensor_accessor.h"
 
 ///////////////////////////////////////////////////
-// COMPILE TIME ARGS
+// COMPILE TIME ARGS (constant across cores)
 ///////////////////////////////////////////////////
 constexpr uint32_t scratch_buffer_cb_id = get_compile_time_arg_val(0);
-constexpr uint32_t num_pages = get_compile_time_arg_val(1);
-constexpr uint32_t page_size = get_compile_time_arg_val(2);
-constexpr uint32_t output_args_cta_idx = 3;
+constexpr uint32_t page_size = get_compile_time_arg_val(1);
+constexpr uint32_t output_args_cta_idx = 2;
 constexpr uint32_t output_args_crta_idx = 0;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
-    // ARGS
+    // RUNTIME ARGS (vary per core)
     ///////////////////////////////////////////////////
-
-    // Setup Fabric Headers and Connections
+    DPRINT << "start receiver writer\n";
     size_t rt_args_idx = 0;
     uint32_t output_base_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t start_page_index = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t start_page_index = get_arg_val<uint32_t>(rt_args_idx++);  // page start offset for this core
+    uint32_t num_pages = get_arg_val<uint32_t>(rt_args_idx++);         // pages for this core
 
     auto output_addr_gen_args = TensorAccessorArgs<output_args_cta_idx, output_args_crta_idx>();
     auto output_addr_gen = TensorAccessor(output_addr_gen_args, output_base_addr, page_size);
@@ -39,4 +38,5 @@ void kernel_main() {
         cb_pop_front(scratch_buffer_cb_id, 1);
     }
     noc_async_write_barrier();
+    DPRINT << "end receiver writer\n";
 }

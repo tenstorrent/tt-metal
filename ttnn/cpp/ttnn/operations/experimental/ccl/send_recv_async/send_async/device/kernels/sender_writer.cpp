@@ -9,22 +9,17 @@
 #include "socket_api.h"
 
 ///////////////////////////////////////////////////
-// COMPILE TIME ARGS
+// COMPILE TIME ARGS (constant across cores)
 ///////////////////////////////////////////////////
 constexpr uint32_t data_cb_id = get_compile_time_arg_val(0);
 constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(1);
-constexpr uint32_t num_pages = get_compile_time_arg_val(2);
-constexpr uint32_t socket_block_size = get_compile_time_arg_val(3);  // This is assumed to be aligned
-constexpr uint32_t socket_page_size = get_compile_time_arg_val(4);
-constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(5);
-// Used when there are multiple pages per packet
-constexpr uint32_t num_whole_packets = get_compile_time_arg_val(6);
-constexpr uint32_t num_pages_remainder = get_compile_time_arg_val(7);
-// Used when there are multiple packets per page
-constexpr uint32_t num_whole_packets_per_page = get_compile_time_arg_val(8);
-constexpr uint32_t aligned_partial_packet_size = get_compile_time_arg_val(9);
-constexpr uint32_t whole_packet_size = get_compile_time_arg_val(10);
-constexpr bool is_dram = get_compile_time_arg_val(11);
+constexpr uint32_t socket_block_size = get_compile_time_arg_val(2);  // This is assumed to be aligned
+constexpr uint32_t socket_page_size = get_compile_time_arg_val(3);
+constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(4);
+constexpr uint32_t num_whole_packets_per_page = get_compile_time_arg_val(5);
+constexpr uint32_t aligned_partial_packet_size = get_compile_time_arg_val(6);
+constexpr uint32_t whole_packet_size = get_compile_time_arg_val(7);
+constexpr bool is_dram = get_compile_time_arg_val(8);
 
 template <uint32_t packet_size, uint32_t cb_id, bool is_dram>
 FORCE_INLINE void write_data_to_remote_core(
@@ -43,12 +38,16 @@ FORCE_INLINE void write_data_to_remote_core(
 
 void kernel_main() {
     ///////////////////////////////////////////////////
-    // ARGS
+    // RUNTIME ARGS (vary per core)
     ///////////////////////////////////////////////////
-    // Setup Fabric Headers and Connections
+    DPRINT << "start sender writer\n";
     size_t rt_args_idx = 0;
     uint32_t socket_config_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t bank_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t num_pages = get_arg_val<uint32_t>(rt_args_idx++);            // pages for this core
+    uint32_t page_start_offset = get_arg_val<uint32_t>(rt_args_idx++);    // page start offset for this core
+    uint32_t num_whole_packets = get_arg_val<uint32_t>(rt_args_idx++);    // whole packets for this core
+    uint32_t num_pages_remainder = get_arg_val<uint32_t>(rt_args_idx++);  // remainder pages for this core
 
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
@@ -74,24 +73,37 @@ void kernel_main() {
     uint64_t receiver_noc_coord_addr =
         get_noc_addr_from_bank_id<is_dram>(bank_id, 0, tt::tt_fabric::connection_interface::edm_fabric_write_noc_index);
 
+    // Calculate the base memory offset for this core based on its page start offset
+    uint64_t core_memory_offset = page_start_offset * socket_page_size;
+
     if constexpr (num_pages_per_packet > 0) {
         constexpr uint32_t full_packet_size = num_pages_per_packet * socket_page_size;
-        constexpr uint32_t remainder_packet_size = num_pages_remainder * socket_page_size;
+        const uint32_t remainder_packet_size = num_pages_remainder * socket_page_size;
 
         for (uint32_t i = 0; i < num_whole_packets; ++i) {
             socket_reserve_pages(sender_socket, 1);
-            uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr;
+            uint64_t dst_addr = receiver_noc_coord_addr + core_memory_offset + sender_socket.write_ptr;
             write_data_to_remote_core<full_packet_size, data_cb_id, is_dram>(
                 fabric_connection, dst_addr, data_packet_header_addr);
             socket_push_pages(sender_socket, 1);
             fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
         }
 
-        if constexpr (num_pages_remainder > 0) {
+        if (num_pages_remainder > 0) {
             socket_reserve_pages(sender_socket, 1);
-            uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr;
-            write_data_to_remote_core<remainder_packet_size, data_cb_id, is_dram>(
-                fabric_connection, dst_addr, data_packet_header_addr);
+            uint64_t dst_addr = receiver_noc_coord_addr + core_memory_offset + sender_socket.write_ptr;
+            // For remainder packet, we need to handle variable size at runtime
+            // This is more complex and may require a different approach
+            // For now, let's handle this case by reading the exact remainder size
+            cb_wait_front(data_cb_id, 1);
+            auto l1_read_addr = get_read_ptr(data_cb_id);
+            data_packet_header_addr->to_noc_unicast_write(NocUnicastCommandHeader{dst_addr}, remainder_packet_size);
+            fabric_connection.wait_for_empty_write_slot();
+            fabric_connection.send_payload_without_header_non_blocking_from_address(
+                l1_read_addr, remainder_packet_size);
+            fabric_connection.send_payload_flush_blocking_from_address(
+                (uint32_t)data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+            cb_pop_front(data_cb_id, 1);
             socket_push_pages(sender_socket, 1);
             fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
         }
@@ -101,7 +113,7 @@ void kernel_main() {
     else {
         for (uint32_t i = 0; i < num_pages; ++i) {
             socket_reserve_pages(sender_socket, 1);
-            uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr;
+            uint64_t dst_addr = receiver_noc_coord_addr + core_memory_offset + sender_socket.write_ptr;
             for (uint32_t j = 0; j < num_whole_packets_per_page; ++j) {
                 write_data_to_remote_core<whole_packet_size, data_cb_id, is_dram>(
                     fabric_connection, dst_addr, data_packet_header_addr);
@@ -117,4 +129,5 @@ void kernel_main() {
     }
     update_socket_config(sender_socket);
     fabric_connection.close();
+    DPRINT << "end sender writer\n";
 }
