@@ -1089,30 +1089,39 @@ std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return 
 
 std::unique_ptr<PinnedMemory> MeshDevice::pin_memory(
     const MeshCoordinateRangeSet& coordinate_range_set, HostBuffer& host_buffer, bool map_to_noc) {
-    // Extract all coordinates from the range set
-    std::vector<MeshCoordinate> coordinates = coordinate_range_set.coords();
+    if (map_to_noc and memory_pinning_params_.can_map_to_noc) {
+        // Extract all coordinates from the range set
+        std::vector<MeshCoordinate> coordinates = coordinate_range_set.coords();
 
-    // Convert coordinates to devices
-    std::vector<IDevice*> devices;
-    devices.reserve(coordinates.size());
+        // Convert coordinates to devices
+        std::vector<IDevice*> devices;
+        devices.reserve(coordinates.size());
 
-    for (const auto& coord : coordinates) {
-        if (view_->contains(coord)) {
-            if (auto device = view_->get_device(coord)) {
-                devices.push_back(device);
+        for (const auto& coord : coordinates) {
+            if (view_->contains(coord)) {
+                if (auto device = view_->get_device(coord)) {
+                    devices.push_back(device);
+                }
             }
         }
+
+        if (devices.empty()) {
+            throw std::invalid_argument("No valid devices found in the specified coordinate range set");
+        }
+
+        auto bytes = host_buffer.view_bytes();
+        void* host_ptr = static_cast<void*>(bytes.data());
+        size_t buffer_size = bytes.size();
+
+        return std::unique_ptr<PinnedMemory>(new PinnedMemory(devices, host_ptr, buffer_size, map_to_noc));
+    } else {
+        log_debug(
+            tt::LogMetal,
+            "Memory pinning without NOC mapping is not supported on MeshDevice ({}, {})",
+            map_to_noc,
+            memory_pinning_params_.can_map_to_noc);
+        return nullptr;
     }
-
-    if (devices.empty()) {
-        throw std::invalid_argument("No valid devices found in the specified coordinate range set");
-    }
-
-    auto bytes = host_buffer.view_bytes();
-    void* host_ptr = static_cast<void*>(bytes.data());
-    size_t buffer_size = bytes.size();
-
-    return std::unique_ptr<PinnedMemory>(new PinnedMemory(devices, host_ptr, buffer_size, map_to_noc));
 }
 
 MeshDevice::MemoryPinningParameters MeshDevice::get_memory_pinning_parameters() const { return memory_pinning_params_; }

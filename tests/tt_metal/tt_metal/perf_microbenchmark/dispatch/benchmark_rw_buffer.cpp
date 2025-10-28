@@ -134,20 +134,6 @@ static void BM_read_pinned_memory(benchmark::State& state, std::shared_ptr<MeshD
     auto buffer_type = BUFFER_TYPES[state.range(2)];
     [[maybe_unused]] auto device_id = state.range(3);
 
-    fmt::println(
-        stderr,
-        "Running ReadPinnedMemory Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: {}",
-        page_size,
-        transfer_size,
-        buffer_type == BufferType::DRAM ? "DRAM" : "L1",
-        device_id);
-    fmt::println(
-        "Running ReadPinnedMemory Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: {}",
-        page_size,
-        transfer_size,
-        buffer_type == BufferType::DRAM ? "DRAM" : "L1",
-        device_id);
-
     log_debug(
         LogTest,
         "Running ReadPinnedMemory Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: {}",
@@ -155,6 +141,12 @@ static void BM_read_pinned_memory(benchmark::State& state, std::shared_ptr<MeshD
         transfer_size,
         buffer_type == BufferType::DRAM ? "DRAM" : "L1",
         device_id);
+
+    // Check if memory pinning with NOC mapping is supported
+    if (!mesh_device->get_memory_pinning_parameters().can_map_to_noc) {
+        state.SkipWithError("Memory pinning with NOC mapping is not supported on this device");
+        return;
+    }
 
     auto device_buffer = MeshBuffer::create(
         ReplicatedBufferConfig{transfer_size},
@@ -183,10 +175,73 @@ static void BM_read_pinned_memory(benchmark::State& state, std::shared_ptr<MeshD
         .pinned_memory = pinned_mem,
         .region = BufferRegion(0, static_cast<std::size_t>(transfer_size)),
     };
-    fmt::println(stderr, "Before enqueue read shards");
 
     for (auto _ : state) {
-        mesh_device->mesh_command_queue().enqueue_read_shards({read_transfer}, device_buffer, /*blocking=*/true);
+        bool blocking = true;
+        mesh_device->mesh_command_queue().enqueue_read_shards({read_transfer}, device_buffer, blocking);
+    }
+
+    state.SetBytesProcessed(transfer_size * state.iterations());
+}
+
+static void BM_write_pinned_memory(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_device) {
+    auto page_size = state.range(0);
+    auto transfer_size = state.range(1);
+    auto buffer_type = BUFFER_TYPES[state.range(2)];
+    [[maybe_unused]] auto device_id = state.range(3);
+
+    log_debug(
+        LogTest,
+        "Running WritePinnedMemory Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: {}",
+        page_size,
+        transfer_size,
+        buffer_type == BufferType::DRAM ? "DRAM" : "L1",
+        device_id);
+
+    // Check if memory pinning with NOC mapping is supported
+    if (!mesh_device->get_memory_pinning_parameters().can_map_to_noc) {
+        state.SkipWithError("Memory pinning with NOC mapping is not supported on this device");
+        return;
+    }
+
+    auto device_buffer = MeshBuffer::create(
+        ReplicatedBufferConfig{transfer_size},
+        DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type},
+        mesh_device.get());
+
+    // Allocate destination host buffer with 16-byte alignment
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    constexpr int device_read_align{32};
+    TT_ASSERT(
+        device_read_align == hal.get_read_alignment(HalMemType::HOST),
+        "Source vector alignment must be equal to PCIE read alignment: {}",
+        hal.get_read_alignment(HalMemType::HOST));
+    auto src_storage = std::make_shared<std::vector<uint8_t, tt::stl::aligned_allocator<uint8_t, device_read_align>>>(
+        static_cast<std::size_t>(transfer_size));
+    auto aligned_ptr = reinterpret_cast<void*>(src_storage->data());
+
+    // Create HostBuffer on top of aligned memory
+    HostBuffer host_buffer(
+        tt::stl::Span<std::uint8_t>(src_storage->data(), static_cast<std::size_t>(transfer_size)),
+        MemoryPin(src_storage));
+
+    // Pin the aligned host memory region for the shard
+    auto coord = MeshCoordinate(0, 0);
+    auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
+    auto pinned_unique = mesh_device->pin_memory(coordinate_range_set, host_buffer, /*map_to_noc=*/true);
+    std::shared_ptr<PinnedMemory> pinned_mem = std::move(pinned_unique);
+
+    // Prepare the read transfer using pinned memory
+    MeshCommandQueue::ShardDataTransfer write_transfer = {
+        .shard_coord = coord,
+        .host_data = aligned_ptr,
+        .pinned_memory = pinned_mem,
+        .region = BufferRegion(0, static_cast<std::size_t>(transfer_size)),
+    };
+
+    for (auto _ : state) {
+        bool blocking = true;
+        mesh_device->mesh_command_queue().enqueue_write_shards(device_buffer, {write_transfer}, blocking);
     }
 
     state.SetBytesProcessed(transfer_size * state.iterations());
@@ -234,6 +289,14 @@ int main(int argc, char** argv) {
             ->ComputeStatistics("max", compute_max);
 
         benchmark::RegisterBenchmark("ReadPinnedMemory", BM_read_pinned_memory, device)
+            ->ArgsProduct(benchmark_args)
+            ->UseRealTime()
+            ->Repetitions(num_test_repetitions)
+            ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
+            ->ComputeStatistics("min", compute_min)
+            ->ComputeStatistics("max", compute_max);
+
+        benchmark::RegisterBenchmark("WritePinnedMemory", BM_write_pinned_memory, device)
             ->ArgsProduct(benchmark_args)
             ->UseRealTime()
             ->Repetitions(num_test_repetitions)

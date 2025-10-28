@@ -875,11 +875,6 @@ void write_to_device_buffer(
                 TT_FATAL(!pcie_cores.empty(), "No PCIE core found on MMIO device {}", mmio_device_id);
                 pinned_src_noc_xy =
                     MetalContext::instance().hal().noc_xy_encoding(pcie_cores.front().x, pcie_cores.front().y);
-                std::cout << "write_to_device_buffer: src addr:0x" << std::hex << (uintptr_t)src_ptr
-                          << ", pinned_size:0x" << pinned_size << ", pinned_host_base:0x" << (uintptr_t)pinned_host_base
-                          << ", src_offset_base:0x" << src_offset_base << ", pinned_noc_base:0x" << pinned_noc_base
-                          << ", pcie_base:0x" << pcie_base << ", pinned_src_addr_lo:0x" << pinned_src_addr_lo
-                          << ", noc_xy:0x" << pinned_src_noc_xy << std::dec << std::endl;
                 use_pinned_transfer = true;
             }
         }
