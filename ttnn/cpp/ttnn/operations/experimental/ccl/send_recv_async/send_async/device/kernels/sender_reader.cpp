@@ -8,29 +8,28 @@
 #include "tt_metal/hw/inc/accessor/tensor_accessor.h"
 
 ///////////////////////////////////////////////////
-// COMPILE TIME ARGS
+// COMPILE TIME ARGS (constant across cores)
 ///////////////////////////////////////////////////
 constexpr uint32_t cb0_id = get_compile_time_arg_val(0);
-constexpr uint32_t num_pages = get_compile_time_arg_val(1);
-constexpr uint32_t input_page_size = get_compile_time_arg_val(2);
-constexpr uint32_t socket_page_size = get_compile_time_arg_val(3);
-constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(4);
-// Used when there are multiple pages per packet
-constexpr uint32_t num_whole_packets = get_compile_time_arg_val(5);
-constexpr uint32_t num_pages_remainder = get_compile_time_arg_val(6);
-// Used when there are multiple packets per page
-constexpr uint32_t num_whole_packets_per_page = get_compile_time_arg_val(7);
-constexpr uint32_t partial_packet_size = get_compile_time_arg_val(8);
-constexpr uint32_t whole_packet_size = get_compile_time_arg_val(9);
-constexpr uint32_t input_args_cta_idx = 10;
+constexpr uint32_t input_page_size = get_compile_time_arg_val(1);
+constexpr uint32_t socket_page_size = get_compile_time_arg_val(2);
+constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(3);
+constexpr uint32_t num_whole_packets_per_page = get_compile_time_arg_val(4);
+constexpr uint32_t partial_packet_size = get_compile_time_arg_val(5);
+constexpr uint32_t whole_packet_size = get_compile_time_arg_val(6);
+constexpr uint32_t input_args_cta_idx = 7;
 constexpr uint32_t input_args_crta_idx = 0;
 
 void kernel_main() {
+    DPRINT << "start sender reader\n";
     ///////////////////////////////////////////////////
-    // ARGS
+    // RUNTIME ARGS (vary per core)
     ///////////////////////////////////////////////////
-
     uint32_t input_base_addr = get_arg_val<uint32_t>(0);
+    uint32_t num_pages = get_arg_val<uint32_t>(1);            // pages for this core
+    uint32_t page_start_offset = get_arg_val<uint32_t>(2);    // starting page offset for this core
+    uint32_t num_whole_packets = get_arg_val<uint32_t>(3);    // whole packets for this core
+    uint32_t num_pages_remainder = get_arg_val<uint32_t>(4);  // remainder pages for this core
 
     auto input_addr_gen_args = TensorAccessorArgs<input_args_cta_idx, input_args_crta_idx>();
     auto input_addr_gen = TensorAccessor(input_addr_gen_args, input_base_addr, input_page_size);
@@ -38,7 +37,8 @@ void kernel_main() {
     // TODO #24995: Instead of page by page transfers, we can transfer bank by bank
 
     // Small pages. We pack multiple pages into a single packet.
-    uint32_t page_index = 0;
+    // Start from the page offset assigned to this core
+    uint32_t page_index = page_start_offset;
     if constexpr (num_pages_per_packet > 0) {
         for (uint32_t i = 0; i < num_whole_packets; ++i) {
             cb_reserve_back(cb0_id, 1);
@@ -53,7 +53,7 @@ void kernel_main() {
             cb_push_back(cb0_id, 1);
         }
 
-        if constexpr (num_pages_remainder > 0) {
+        if (num_pages_remainder > 0) {
             cb_reserve_back(cb0_id, 1);
             auto l1_write_addr = get_write_ptr(cb0_id);
             for (uint32_t j = 0; j < num_pages_remainder; ++j) {
@@ -90,4 +90,5 @@ void kernel_main() {
             page_index++;
         }
     }
+    DPRINT << "end sender reader\n";
 }

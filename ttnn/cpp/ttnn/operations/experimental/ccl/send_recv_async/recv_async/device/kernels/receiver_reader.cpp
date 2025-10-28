@@ -10,44 +10,25 @@
 #include "tt_metal/hw/inc/accessor/tensor_accessor.h"
 
 ///////////////////////////////////////////////////
-// COMPILE TIME ARGS
+// COMPILE TIME ARGS (constant across cores)
 ///////////////////////////////////////////////////
 constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(0);
 constexpr uint32_t scratch_buffer_cb_id = get_compile_time_arg_val(1);
 constexpr uint32_t socket_block_size = get_compile_time_arg_val(2);  // This is assumed to be aligned
 constexpr uint32_t socket_page_size = get_compile_time_arg_val(3);
-constexpr uint32_t num_blocks = get_compile_time_arg_val(4);
-constexpr uint32_t num_pages_per_block = get_compile_time_arg_val(5);
-constexpr uint32_t block_remainder_pages = get_compile_time_arg_val(6);
-constexpr bool is_dram = get_compile_time_arg_val(7);
-
-template <uint32_t num_pages_per_block, uint32_t page_size, uint32_t cb_id, bool is_dram>
-FORCE_INLINE void read_data_from_remote_core(
-    SocketReceiverInterface& receiver_socket,
-    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
-    uint32_t bank_id,
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr) {
-    constexpr uint32_t block_size = num_pages_per_block * page_size;
-    socket_wait_for_pages(receiver_socket, 1);
-    cb_reserve_back(cb_id, num_pages_per_block);
-    auto remote_read_addr = get_noc_addr_from_bank_id<is_dram>(bank_id, receiver_socket.read_ptr);
-    auto l1_write_addr = get_write_ptr(cb_id);
-    noc_async_read<block_size>(remote_read_addr, l1_write_addr, block_size);
-    noc_async_read_barrier();
-    cb_push_back(cb_id, num_pages_per_block);
-    socket_pop_pages(receiver_socket, 1);
-    fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
-}
+constexpr bool is_dram = get_compile_time_arg_val(4);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
-    // ARGS
+    // RUNTIME ARGS (vary per core)
     ///////////////////////////////////////////////////
-
-    // Setup Fabric Headers and Connections
+    DPRINT << "start receiver reader\n";
     size_t rt_args_idx = 0;
     uint32_t socket_config_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t bank_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t num_blocks = get_arg_val<uint32_t>(rt_args_idx++);             // blocks for this core
+    uint32_t num_pages_per_block = get_arg_val<uint32_t>(rt_args_idx++);    // pages per block
+    uint32_t block_remainder_pages = get_arg_val<uint32_t>(rt_args_idx++);  // remainder pages for this core
 
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
@@ -63,14 +44,34 @@ void kernel_main() {
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(socket_config_addr);
     set_receiver_socket_page_size(receiver_socket, socket_block_size);
 
+    // Handle all blocks with runtime size
     for (uint32_t i = 0; i < num_blocks; ++i) {
-        read_data_from_remote_core<num_pages_per_block, socket_page_size, scratch_buffer_cb_id, is_dram>(
-            receiver_socket, fabric_connection, bank_id, socket_packet_header_addr);
+        socket_wait_for_pages(receiver_socket, 1);
+        cb_reserve_back(scratch_buffer_cb_id, num_pages_per_block);
+        auto remote_read_addr = get_noc_addr_from_bank_id<is_dram>(bank_id, receiver_socket.read_ptr);
+        auto l1_write_addr = get_write_ptr(scratch_buffer_cb_id);
+        uint32_t block_size = num_pages_per_block * socket_page_size;
+        noc_async_read(remote_read_addr, l1_write_addr, block_size);
+        noc_async_read_barrier();
+        cb_push_back(scratch_buffer_cb_id, num_pages_per_block);
+        socket_pop_pages(receiver_socket, 1);
+        fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
     }
+
+    // Handle remainder block if there are remaining pages
     if (block_remainder_pages > 0) {
-        read_data_from_remote_core<block_remainder_pages, socket_page_size, scratch_buffer_cb_id, is_dram>(
-            receiver_socket, fabric_connection, bank_id, socket_packet_header_addr);
+        socket_wait_for_pages(receiver_socket, 1);
+        cb_reserve_back(scratch_buffer_cb_id, block_remainder_pages);
+        auto remote_read_addr = get_noc_addr_from_bank_id<is_dram>(bank_id, receiver_socket.read_ptr);
+        auto l1_write_addr = get_write_ptr(scratch_buffer_cb_id);
+        uint32_t remainder_size = block_remainder_pages * socket_page_size;
+        noc_async_read(remote_read_addr, l1_write_addr, remainder_size);
+        noc_async_read_barrier();
+        cb_push_back(scratch_buffer_cb_id, block_remainder_pages);
+        socket_pop_pages(receiver_socket, 1);
+        fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
     }
     update_socket_config(receiver_socket);
     fabric_connection.close();
+    DPRINT << "end receiver reader\n";
 }
