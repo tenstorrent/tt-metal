@@ -564,24 +564,30 @@ ALWI void topk_tile_init() { MATH((llk_math_eltwise_unary_sfpu_topk_init<true>()
  *
  * Only a reduction of 9 rows is supported at this time.
  *
- * | Argument        | Description                                                              | Type     | Valid Range                                           | Required |
- * |-----------------|--------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register containing the data to be reduced  | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | idst_idx        | The index of the tile in DST register containing the indices of the data | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | num_rows        | The number of rows to use for the MaxPool operation                      | uint32_t | {9}                                                   | True     |
+ * | Argument        | Description                                                              | Type       | Valid Range                                           | Required |
+ * |-----------------|--------------------------------------------------------------------------|------------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register containing the data to be reduced  | uint32_t   | Must be less than the size of the DST register buffer | True     |
+ * | idst_idx        | The index of the tile in DST register containing the indices of the data | uint32_t   | Must be less than the size of the DST register buffer | True     |
+ * | num_rows        | The number of rows to use for the MaxPool operation                      | uint32_t   | {9}                                                   | True     |
+ * | layout          | The data layout of the data in DST                                       | DataLayout | TILE or ROW_MAJOR                                     | False    |
+ * | ITERATIONS      | The number of iterations to perform (unused)                             | int        | 1 to 8                                                | False    |
  */
 // clang-format on
-template <int num_rows = 9>
+template <int num_rows = 9, ckernel::DataLayout layout = ckernel::DataLayout::TILE, int ITERATIONS = 8>
 ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx) {
     // support for num_rows != 9 is tracked here: https://github.com/tenstorrent/tt-metal/issues/17202
-    static_assert(num_rows == 9, "num_rows must be one of: {9}");
-    MATH((llk_math_eltwise_binary_sfpu_max_pool_with_indices<true, DST_ACCUM_MODE, num_rows>(idst, idst_idx)));
+    static_assert(num_rows <= 9, "num_rows must be <= 9");
+    MATH((llk_math_eltwise_binary_sfpu_max_pool_with_indices<true, DST_ACCUM_MODE, num_rows, ITERATIONS, layout>(
+        idst, idst_idx)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void max_reduce_with_indices_init() { MATH((llk_math_eltwise_binary_sfpu_max_pool_with_indices_init<true>())); }
+template <ckernel::DataLayout layout = ckernel::DataLayout::TILE>
+ALWI void max_reduce_with_indices_init() {
+    MATH((llk_math_eltwise_binary_sfpu_max_pool_with_indices_init<true, layout>()));
+}
 
 /**
  * Pauses the cores so that the debug interface can be used to inspect the value of the registers.
