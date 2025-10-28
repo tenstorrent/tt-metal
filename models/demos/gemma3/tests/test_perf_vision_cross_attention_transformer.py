@@ -57,7 +57,8 @@ def test_perf_gemma_vision(mesh_device, batch_size, nr_forward_iterations):
 
     model_name = get_model_name()
 
-    targets = load_targets(TARGETS_JSON_FILENAME, device_type=determine_device_name(mesh_device), model_name=model_name)
+    # ! TEMP - put this back
+    # targets = load_targets(TARGETS_JSON_FILENAME, device_type=determine_device_name(mesh_device), model_name=model_name)
 
     if SAVE_NEW_PERF_TARGETS:
         helper_write_to_json(
@@ -79,6 +80,11 @@ def helper_write_to_json(device_type, measurements, output_filename, model_name)
 
     with open(output_filename, "r") as f:
         file_dict = json.load(f)
+
+    if file_dict.get(model_name) is None:
+        file_dict[model_name] = dict()
+    if file_dict[model_name].get(device_type) is None:
+        file_dict[model_name][device_type] = dict()
 
     file_dict[model_name][device_type] = {"model_forward_inference": measurements}
 
