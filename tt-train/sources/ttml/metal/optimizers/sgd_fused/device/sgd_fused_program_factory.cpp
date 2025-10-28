@@ -100,17 +100,17 @@ void assign_per_core_runtime_args(
     uint32_t num_tiles_per_core_group_2,
     const tt::tt_metal::CoreRangeSet& core_group_1,
     const tt::tt_metal::CoreRangeSet& core_group_2) {
-    bfloat16 bfloat_lr = bfloat16::truncate(lr);
+    bfloat16 bfloat_lr = bfloat16(lr);
     uint32_t packed_lr = pack_two_bfloat16_into_uint32({bfloat_lr, bfloat_lr});
 
-    bfloat16 bfloat_momentum = bfloat16::truncate(momentum);
+    bfloat16 bfloat_momentum = bfloat16(momentum);
     uint32_t packed_momentum = pack_two_bfloat16_into_uint32({bfloat_momentum, bfloat_momentum});
 
-    bfloat16 bfloat_one_minus_dampening = bfloat16::truncate(1.0f - dampening);
+    bfloat16 bfloat_one_minus_dampening = bfloat16(1.0f - dampening);
     uint32_t packed_one_minus_dampening =
         pack_two_bfloat16_into_uint32({bfloat_one_minus_dampening, bfloat_one_minus_dampening});
 
-    bfloat16 bfloat_weight_decay = bfloat16::truncate(weight_decay);
+    bfloat16 bfloat_weight_decay = bfloat16(weight_decay);
     uint32_t packed_weight_decay = pack_two_bfloat16_into_uint32({bfloat_weight_decay, bfloat_weight_decay});
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
@@ -206,7 +206,7 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     TT_FATAL(output_data_format == tt::DataFormat::Float16_b, "Output data format must be Float16_b");
 
     uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
-    uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
+    [[maybe_unused]] uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
 
     auto padded_tensor_shape = param.padded_shape();
     auto padded_tensor_volume = param.physical_volume();
@@ -270,7 +270,7 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
         num_input_tiles);
 
     [[maybe_unused]] auto cb_bcast_lr = create_circular_buffer(
-        program, all_cores, kBcastLrCbIndex, tt::DataFormat::Float32, float32_single_tile_size_bytes, 1U);
+        program, all_cores, kBcastLrCbIndex, tt::DataFormat::Float16_b, bfloat16_single_tile_size_bytes, 1U);
 
     [[maybe_unused]] auto cb_bcast_momentum = create_circular_buffer(
         program, all_cores, kBcastMomentumCbIndex, tt::DataFormat::Float16_b, bfloat16_single_tile_size_bytes, 1U);
@@ -428,17 +428,17 @@ void SGDFusedProgramFactory::override_runtime_arguments(
         core_group_2.ranges().empty() ? compute_group_1_runtime_args
                                       : GetRuntimeArgs(program, sgd_fused_compute_kernel_group_2_id);
 
-    bfloat16 bfloat_lr = bfloat16::truncate(lr);
+    bfloat16 bfloat_lr = bfloat16(lr);
     uint32_t packed_lr = pack_two_bfloat16_into_uint32({bfloat_lr, bfloat_lr});
 
-    bfloat16 bfloat_momentum = bfloat16::truncate(momentum);
+    bfloat16 bfloat_momentum = bfloat16(momentum);
     uint32_t packed_momentum = pack_two_bfloat16_into_uint32({bfloat_momentum, bfloat_momentum});
 
-    bfloat16 bfloat_one_minus_dampening = bfloat16::truncate(1.0f - dampening);
+    bfloat16 bfloat_one_minus_dampening = bfloat16(1.0f - dampening);
     uint32_t packed_one_minus_dampening =
         pack_two_bfloat16_into_uint32({bfloat_one_minus_dampening, bfloat_one_minus_dampening});
 
-    bfloat16 bfloat_weight_decay = bfloat16::truncate(weight_decay);
+    bfloat16 bfloat_weight_decay = bfloat16(weight_decay);
     uint32_t packed_weight_decay = pack_two_bfloat16_into_uint32({bfloat_weight_decay, bfloat_weight_decay});
 
     for (uint32_t i = 0; i < num_cores; i++) {
