@@ -6,10 +6,10 @@ import pytest
 import torch
 import ttnn
 
-from ...utils.check import assert_quality
-from ...models.vae import vae_sd35
-from ...parallel.manager import CCLManager
-from ...parallel.config import vae_all_gather, VAEParallelConfig, ParallelFactor
+from ....utils.check import assert_quality
+from ....models.vae import vae_sd35
+from ....parallel.manager import CCLManager
+from ....parallel.config import vae_all_gather, VAEParallelConfig, ParallelFactor
 from time import time
 from loguru import logger
 
@@ -328,6 +328,12 @@ def vae_device_config(func):
     return func
 
 
+def skip_invalid_submesh_shape(mesh_device: ttnn.Device, submesh_shape: tuple[int, int]):
+    mesh_device_shape = tuple(mesh_device.shape)
+    if submesh_shape[0] > mesh_device_shape[0] or submesh_shape[1] > mesh_device_shape[1]:
+        pytest.skip("submesh shape is larger than parent mesh shape, skipping")
+
+
 @vae_device_config
 @pytest.mark.parametrize(
     (
@@ -351,6 +357,7 @@ def test_sd35_vae_resnet_block(
     out_channels: int,
     groups: int,
 ) -> None:
+    skip_invalid_submesh_shape(mesh_device, submesh_shape)
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     torch_model = ResnetBlock2D(in_channels=in_channels, out_channels=out_channels, groups=groups)
     torch_model.eval()
@@ -404,6 +411,8 @@ def test_sd35_vae_up_decoder_block(
     num_groups: int,
     add_upsample: bool,
 ) -> None:
+    skip_invalid_submesh_shape(mesh_device, submesh_shape)
+
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     torch_model = UpDecoderBlock2D(
         in_channels=in_channels,
@@ -461,6 +470,7 @@ def test_sd35_vae_attention(
     num_groups: int,
     num_heads: int,
 ):
+    skip_invalid_submesh_shape(mesh_device, submesh_shape)
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     torch_model = Attention(
         query_dim=in_channels, heads=num_heads, dim_head=in_channels // num_heads, norm_num_groups=num_groups
@@ -513,6 +523,7 @@ def test_sd35_vae_unet_mid_block2d(
     num_groups: int,
     num_heads: int,
 ):
+    skip_invalid_submesh_shape(mesh_device, submesh_shape)
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     torch_model = UNetMidBlock2D(
         in_channels=in_channels, resnet_groups=num_groups, attention_head_dim=in_channels // num_heads
@@ -576,6 +587,7 @@ def test_sd35_vae_vae_decoder(
     norm_num_groups: int,
     block_out_channels: list[int] | tuple[int, ...],
 ):
+    skip_invalid_submesh_shape(mesh_device, submesh_shape)
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     torch_model = VaeDecoder(
         block_out_channels=block_out_channels,
