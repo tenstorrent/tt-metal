@@ -30,7 +30,8 @@ constexpr T POLYVAL7(T coef6, T coef5, T coef4, T coef3, T coef2, T coef1, T coe
  * coef[0] + coef[1]*x + coef[2]*x^2 + ... + coef[N-1]*x^(N-1)
  *
  * @tparam N The degree of the polynomial plus one (number of coefficients)
- * @tparam T The numeric type for coefficients and evaluation point (e.g., float, double, int)
+ * @tparam T The numeric type for evaluation point (e.g., sfpi::vFloat)
+ * @tparam U The numeric type for coefficients (e.g., float, double, int)
  *
  * @note This implementation is constexpr-compatible and can be evaluated at compile time.
          Make sure to mark coefficients array as constexpr to leverage compile-time evaluation,
@@ -40,7 +41,7 @@ constexpr T POLYVAL7(T coef6, T coef5, T coef4, T coef3, T coef2, T coef1, T coe
  *
  * @see https://en.wikipedia.org/wiki/Horner%27s_method
  */
-template <int N, typename T>
+template <int N, typename T, typename U>
 struct PolynomialEvaluator
 {
     /**
@@ -54,12 +55,12 @@ struct PolynomialEvaluator
      * @pre N should be positive for meaningful results
      *
      */
-    static constexpr T eval(const T* coefficients, T val)
+    static constexpr T eval(const U* coefficients, T val)
     {
-        T result = (N <= 0) ? T {0} : coefficients[N - 1];
+        T result = (N <= 0) ? T {0} : T {coefficients[N - 1]};
         for (int i = N - 2; i >= 0; --i)
         {
-            result = result * val + coefficients[i];
+            result = result * val + T {coefficients[i]};
         }
         return result;
     }
