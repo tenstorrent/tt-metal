@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/device.hpp"
+#include <tt-metalium/experimental/pinned_memory.hpp>
 
 namespace tt::tt_metal::tensor_impl {
 void clear_pinned_memories_cache();
@@ -29,7 +30,7 @@ void disable_and_clear_program_cache(IDevice& device) { device.disable_and_clear
 
 void close_device(MeshDevice& device) {
     fmt::println(stderr, "Clearing pinned memories cache");
-    tt::tt_metal::tensor_impl::clear_pinned_memories_cache();
+    tt::tt_metal::experimental::clear_pinned_memories_cache();
     device.close();
 }
 

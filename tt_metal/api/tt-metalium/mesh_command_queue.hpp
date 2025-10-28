@@ -83,7 +83,7 @@ public:
         MeshCoordinate shard_coord;
         void* host_data = nullptr;
         std::shared_ptr<PinnedMemory> pinned_memory = nullptr;
-        std::optional<BufferRegion> region;
+        std::optional<BufferRegion> region = std::nullopt;
     };
 
     // MeshBuffer Write APIs
@@ -92,9 +92,13 @@ public:
         const void* host_data,
         const MeshCoordinateRange& device_range,
         bool blocking,
-        std::optional<BufferRegion> region = std::nullopt) = 0;
+        std::optional<BufferRegion> region = std::nullopt,
+        std::shared_ptr<tt_metal::PinnedMemory> pinned_memory = nullptr) = 0;
     virtual void enqueue_write_mesh_buffer(
-        const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) = 0;
+        const std::shared_ptr<MeshBuffer>& buffer,
+        const void* host_data,
+        bool blocking,
+        std::shared_ptr<tt_metal::PinnedMemory> pinned_memory = nullptr) = 0;
     virtual void enqueue_write_shards(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         const std::vector<ShardDataTransfer>& shard_data_transfers,
