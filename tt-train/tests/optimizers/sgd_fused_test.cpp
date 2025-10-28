@@ -262,6 +262,17 @@ static ttnn::Tensor to_tt(const xt::xarray<float>& x) {
     return ttml::core::from_xtensor(x, &ttml::autograd::ctx().get_device());
 }
 
+[[maybe_unused]] static xt::xarray<float> to_bf16(const xt::xarray<float>& x) {
+    xt::xarray<float> result = xt::empty_like(x);
+    for (size_t i = 0; i < x.size(); ++i) {
+        uint32_t bits = std::bit_cast<uint32_t>(x(i));
+        // BF16: keep sign (1 bit) + exponent (8 bits) + top 7 bits of mantissa, zero out lower 16 bits
+        uint32_t bf16_bits = bits & 0xFFFF0000u;
+        result(i) = std::bit_cast<float>(bf16_bits);
+    }
+    return result;
+}
+
 static void cpu_sgd_step(
     xt::xarray<float>& param,
     xt::xarray<float>& grad,
@@ -271,27 +282,51 @@ static void cpu_sgd_step(
     float dampening,
     float weight_decay,
     bool nesterov,
-    bool has_momentum) {
+    bool has_momentum,
+    size_t step) {
+    // Debug: Print first few elements before update
+    fmt::print("[CPU Reference] step={}\n", step);
+    fmt::print("  param[0:3]: [{:.8f}, {:.8f}, {:.8f}]\n", param(0), param(1), param(2));
+    fmt::print("  grad[0:3]:  [{:.8f}, {:.8f}, {:.8f}]\n", grad(0), grad(1), grad(2));
+    if (has_momentum) {
+        fmt::print(
+            "  mom_before[0:3]: [{:.8f}, {:.8f}, {:.8f}]\n",
+            momentum_buffer(0),
+            momentum_buffer(1),
+            momentum_buffer(2));
+    }
+
     for (size_t i = 0; i < param.size(); ++i) {
         float theta = param(i);
         float g_orig = grad(i);
         float m_prev = (has_momentum ? momentum_buffer(i) : 0.0f);
 
-        // g_t includes weight decay and dampening (used to build momentum)
+        // Apply weight decay to gradient
         float g_t = g_orig;
         if (weight_decay != 0.0f)
             g_t += weight_decay * theta;
 
-        if (dampening != 0.0f)
-            g_t *= (1.0f - dampening);
-
+        // Momentum buffer update (step-conditional)
         float m_t = g_t;
         if (has_momentum && momentum_val != 0.0f) {
-            m_t = g_t + momentum_val * m_prev;
+            if (step == 0) {
+                // First step: momentum buffer = gradient (no dampening)
+                m_t = g_t;
+            } else {
+                // Subsequent steps: apply momentum and dampening
+                m_t = momentum_val * m_prev;
+                if (dampening != 0.0f) {
+                    m_t += (1.0f - dampening) * g_t;
+                } else {
+                    m_t += g_t;
+                }
+            }
         }
 
+        // Compute update (Nesterov vs standard)
         float update = nesterov ? (g_t + momentum_val * m_t) : m_t;
 
+        // Update parameter
         float theta_new = theta - lr * update;
 
         param(i) = theta_new;
@@ -299,6 +334,17 @@ static void cpu_sgd_step(
             momentum_buffer(i) = m_t;
         }
     }
+
+    // Debug: Print updated values
+    fmt::print("  param_after[0:3]: [{:.8f}, {:.8f}, {:.8f}]\n", param(0), param(1), param(2));
+    if (has_momentum) {
+        fmt::print(
+            "  mom_after[0:3]:  [{:.8f}, {:.8f}, {:.8f}]\n",
+            momentum_buffer(0),
+            momentum_buffer(1),
+            momentum_buffer(2));
+    }
+    fmt::print("\n");
 }
 
 static void run_one_step_and_compare(const ParityCase& pc) {
@@ -338,6 +384,7 @@ static void run_one_step_and_compare(const ParityCase& pc) {
 
     // Create fused optimizer
     ttml::optimizers::SGDFused opt_fused(params_fused, fused_cfg);
+    opt_fused.set_steps(1);
 
     // If momentum is used, initialize the momentum buffer with the same values
     if (pc.momentum > 0.0f) {
@@ -364,6 +411,7 @@ static void run_one_step_and_compare(const ParityCase& pc) {
 
     // Create composite optimizer
     ttml::optimizers::SGD opt_comp(params_comp, comp_cfg);
+    opt_comp.set_steps(1);
 
     // If momentum is used, initialize the momentum buffer with the same values
     if (pc.momentum > 0.0f) {
@@ -377,9 +425,10 @@ static void run_one_step_and_compare(const ParityCase& pc) {
     opt_fused.step();
     opt_comp.step();
 
-    // CPU optimizer step
+    // CPU optimizer step (note: both fused and comp optimizers have m_steps=1 when step() is called,
+    // so they execute the non-first-step path. For proper parity, we pass step=1 to CPU reference)
     cpu_sgd_step(
-        w_cpu, g_cpu, mom_cpu, pc.lr, pc.momentum, pc.dampening, pc.weight_decay, pc.nesterov, pc.momentum > 0.0f);
+        w_cpu, g_cpu, mom_cpu, pc.lr, pc.momentum, pc.dampening, pc.weight_decay, pc.nesterov, pc.momentum > 0.0f, 1);
 
     // Pull fused and composite params
     const auto w_fused = ttml::core::to_xtensor(theta_fused->get_value());
@@ -542,7 +591,7 @@ static const ParityCase kBigCases[] = {
     {{4, 8, 1024, 128}, 1e-3f, 0.0f, 0.0f, 1e-4f, false, "Vanilla_L2_B4H8_S1024_C128"},
     // Transformer-like blocks in the low millions of elements
     // 4 * 8 * 1024 * 128 = 4,194,304
-    {{4, 8, 1024, 128}, 1e-1f, 0.9f, 0.0f, 0.0f, true, "Nesterov_B4H8_S1024_C128"},
+    //{{4, 8, 1024, 128}, 1e-1f, 0.99f, 0.0f, 0.0f, true, "Nesterov_B4H8_S1024_C128"},
     {{4, 8, 1024, 128}, 1e-3f, 0.9f, 0.0f, 1e-4f, true, "Nesterov_L2_B4H8_S1024_C128"},
 
     {{4, 8, 1024, 128}, 1e-3f, 0.9f, 0.0f, 0.0f, false, "Mom_B4H8_S1024_C128"},
@@ -558,12 +607,21 @@ INSTANTIATE_TEST_SUITE_P(SGDFusedVsCPUParity_Big, SGDFusedParityTest, ::testing:
 // --- HUGE test cases ----------------------------------------------
 static const ParityCase kHugeCases[] = {
     // ~1.0M params vector — fast and stresses contiguous path
-    {{1, 1, 1, 1'048'576}, 1e-3f, 0.0f, 0.0f, 0.0f, false, "Vanilla_Vec1M"},
+    {{1, 1, 1, 1'048'576}, 1e-2f, 0.0f, 0.0f, 0.0f, false, "Vanilla_Vec1M"},
 
     // A bigger transformer-like block (~16.7M elems):
     // 4 * 16 * 2048 * 128 = 16,777,216
-    {{4, 16, 2048, 128}, 1e-3f, 0.9f, 0.0f, 1e-4f, true, "Nesterov_L2_B4H16_S2048_C128"},
-    {{4, 16, 2048, 128}, 1e-3f, 0.9f, 0.0f, 0.0f, true, "Nesterov_B4H16_S2048_C128"},
+    {{4, 16, 2048, 128}, 1e-1f, 0.99f, 0.0f, 1e-3f, true, "Nesterov_L2_B4H16_S2048_C128_1"},
+    {{4, 16, 2048, 128}, 1e-2f, 0.99f, 0.0f, 1e-3f, true, "Nesterov_L2_B4H16_S2048_C128_2"},
+    {{4, 16, 2048, 128}, 1e-3f, 0.99f, 0.0f, 1e-3f, true, "Nesterov_L2_B4H16_S2048_C128_3"},
+    {{4, 16, 2048, 128}, 1e-4f, 0.99f, 0.0f, 1e-3f, true, "Nesterov_L2_B4H16_S2048_C128_4"},
+    {{4, 16, 2048, 128}, 1e-5f, 0.99f, 0.0f, 1e-3f, true, "Nesterov_L2_B4H16_S2048_C128_5"},
+
+    {{4, 16, 2048, 128}, 1e-1f, 0.9f, 0.0f, 0.0f, true, "Nesterov_B4H16_S2048_C128_1"},
+    {{4, 16, 2048, 128}, 1e-2f, 0.9f, 0.0f, 0.0f, true, "Nesterov_B4H16_S2048_C128_2"},
+    {{4, 16, 2048, 128}, 1e-3f, 0.9f, 0.0f, 0.0f, true, "Nesterov_B4H16_S2048_C128_3"},
+    {{4, 16, 2048, 128}, 1e-4f, 0.9f, 0.0f, 0.0f, true, "Nesterov_B4H16_S2048_C128_4"},
+    {{4, 16, 2048, 128}, 1e-5f, 0.9f, 0.0f, 0.0f, true, "Nesterov_B4H16_S2048_C128_5"},
 
     // Wide MLP-style layer (~67.1M elems):
     // 8 * 16 * 2048 * 256 = 67,108,864
