@@ -19,16 +19,23 @@ from models.tt_transformers.tests.test_utils import (
 from tools.tracy.process_model_log import get_latest_ops_log_filename
 
 
+# This pytest flag is necessary to ensure that we do NOT open the device in the main process for device perf tests that run
+# the test inside a subprocess since UMD does not allow multiple subprocesses opening the device at the same time.
+@pytest.mark.no_reset_default_device
 @pytest.mark.timeout(600)
+@pytest.mark.parametrize("batch_size", [1, 32])
+@pytest.mark.parametrize("data_parallel", [1, 2, 4, 8])
+@pytest.mark.parametrize("num_layers", [10])
+@pytest.mark.parametrize("max_seq_len", [1024])
 @pytest.mark.parametrize(
-    "num_layers, num_head_ops, num_tail_ops, tail_start_index, batch_size, data_parallel, max_seq_len, max_generated_tokens, mode",
+    "num_head_ops, num_tail_ops, tail_start_index, max_generated_tokens, mode, num_runs, is_tp",
     [
-        (3, 3, 14, None, 1, 1, 1024, 0, "prefill"),
-        (3, 3, 14, None, 1, 2, 1024, 0, "prefill"),
-        (3, 3, 14, None, 1, 1, 1024, 2, "decode"),
-        (3, 3, 14, None, 1, 2, 1024, 2, "decode"),
+        (4, 14, None, 0, "prefill", 2, True),
+        (4, 21, None, 0, "prefill", 2, False),
+        (15, 18, None, 2, "decode", 4, True),
+        (15, 24, None, 2, "decode", 4, False),
     ],
-    ids=["llama3.1-8b-TP-prefill", "llama3.1-8b-DP2-prefill", "llama3.1-8b-TP-decode", "llama3.1-8b-DP2-decode"],
+    ids=["llama3.1-8b-prefill-tp", "llama3.1-8b-prefill-dp", "llama3.1-8b-decode-tp", "llama3.1-8b-decode-dp"],
 )
 def test_device_perf_one_iter(
     num_layers,
@@ -40,10 +47,11 @@ def test_device_perf_one_iter(
     max_seq_len,
     max_generated_tokens,
     mode,
+    num_runs,
+    is_tp,
 ):
-    breakpoint()
+    assert is_tp == (data_parallel == 1), "is_tp must be True if data_parallel is 1"
     cmd = f"pytest models/tt_transformers/demo/simple_text_demo.py -k performance-device-perf --num_layers {num_layers} --data_parallel {data_parallel} --max_seq_len {max_seq_len} --max_generated_tokens {max_generated_tokens} --paged_attention 1  --batch_size {batch_size} --mode {mode}"
-
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     device_analysis_types = ["device_kernel_duration", "device_kernel_first_to_last_start"]
     subdir = "ttt-device-perf-default"
@@ -95,7 +103,7 @@ def test_device_perf_one_iter(
         num_head_ops=num_head_ops,
         num_tail_ops=num_tail_ops,
         mode=mode,
-        num_runs=4,
+        num_runs=num_runs,
         num_layers=num_layers,
         tail_start_index=tail_start_index,
     )
@@ -139,20 +147,20 @@ def test_device_perf_one_iter(
         ) = process_measurements(df_model_tail_trace, 1)
 
     # Print measurements
-    print_dict(kernel_agg_first_layer_compile, "kernel_agg_first_layer_compile")
-    print_dict(kernel_agg_first_layer_trace, "kernel_agg_first_layer_trace")
+    print_dict(kernel_agg_first_layer_compile, "KERNEL AVERAGE DURATION FOR FIRST LAYER COMPILE")
+    print_dict(kernel_agg_first_layer_trace, "KERNEL AVERAGE DURATION FOR FIRST LAYER TRACE")
 
     if num_layers > 1:
-        print_dict(kernel_agg_mid_layers_compile, "kernel_agg_mid_layers_compile")
-        print_dict(kernel_agg_mid_layers_trace, "kernel_agg_mid_layers_trace")
-        print_dict(dispatch_agg_mid_layers_trace, "dispatch_agg_mid_layers_trace")
-        print_dict(firstlast_agg_mid_layers_trace, "first_last_agg_mid_layers_trace")
+        print_dict(kernel_agg_mid_layers_compile, "KERNEL AVERAGE DURATION FOR MID LAYERS COMPILE")
+        print_dict(kernel_agg_mid_layers_trace, "KERNEL AVERAGE DURATION FOR MID LAYERS TRACE")
+        print_dict(dispatch_agg_mid_layers_trace, "DISPATCH AVERAGE DURATION FOR MID LAYERS TRACE")
+        print_dict(firstlast_agg_mid_layers_trace, "FIRST TO LAST AVERAGE START TIME FOR MID LAYERS TRACE")
 
     if tail_start_index is not None:
-        print_dict(kernel_agg_model_tail_compile, "kernel_agg_model_tail_compile")
-        print_dict(kernel_agg_model_tail_trace, "kernel_agg_model_tail_trace")
-        print_dict(dispatch_agg_model_tail_trace, "dispatch_agg_model_tail_trace")
-        print_dict(firstlast_agg_model_tail_trace, "first_last_agg_model_tail_trace")
+        print_dict(kernel_agg_model_tail_compile, "KERNEL AVERAGE DURATION FOR MODEL TAIL COMPILE")
+        print_dict(kernel_agg_model_tail_trace, "KERNEL AVERAGE DURATION FOR MODEL TAIL TRACE")
+        print_dict(dispatch_agg_model_tail_trace, "DISPATCH AVERAGE DURATION FOR MODEL TAIL TRACE")
+        print_dict(firstlast_agg_model_tail_trace, "FIRST TO LAST AVERAGE START TIME FOR MODEL TAIL TRACE")
 
     # Prefer trace for collectives, compile for others
     def is_collective(op_code: str) -> bool:

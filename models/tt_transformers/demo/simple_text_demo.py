@@ -618,6 +618,8 @@ def prepare_generator_args(
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
         ),
         (  # ci-eval-32 - 32 users with 3 repeat batches and shifting prompts
             "models/tt_transformers/demo/sample_prompts/eval_repeat_prompts_batch32.json",  # input_prompts
@@ -635,6 +637,8 @@ def prepare_generator_args(
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
         ),
         (  # device-perf-default - Measures device performance of a single user over 500 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -1149,15 +1153,17 @@ def test_demo_text(
     avg_time_to_first_token = total_inference_prefill_time / global_batch_size
 
     # Average decode time per batch iteration
-    avg_decode_iteration_time = total_inference_decode_time / (num_tokens_generated_decode[0] - 1) if iteration > 1 else 0
+    avg_decode_iteration_time = (
+        total_inference_decode_time / (num_tokens_generated_decode[0] - 1) if iteration > 1 else 0
+    )
 
     prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * global_batch_size if mode != "decode" else 0
     decode_tok_s_user = (
-        (num_tokens_generated_decode[0] - 1) / total_inference_decode_time if mode != "prefill" else 0
+        (num_tokens_generated_decode[0] - 1) / total_inference_decode_time if mode != "prefill" and iteration > 1 else 0
     )  # Remove the compile time
     decode_tok_s = (
         ((num_tokens_generated_decode[0] - 1) / total_inference_decode_time * global_batch_size)
-        if mode != "prefill"
+        if mode != "prefill" and iteration > 1
         else 0
     )  # Remove the compile time
 

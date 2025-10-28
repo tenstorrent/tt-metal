@@ -286,8 +286,8 @@ def split_compile_and_trace(
 
     # Model tail ops (e.g. lmhead/sampling): [tail_start_index:]
     if tail_start_index is not None:
-        df_model_tail_compilation = df_model_compilation[tail_start_index:]
-        df_model_tail_trace = df_model_trace[tail_start_index:]
+        df_model_tail_compilation = df_model_compilation[op_end_index:]
+        df_model_tail_trace = df_model_trace[op_end_index:]
     else:
         df_model_tail_compilation = None
         df_model_tail_trace = None
