@@ -51,7 +51,7 @@ jobs:
             { name: "yolov11m", runner-label: "N150", performance: false, cmd: run_yolov11m_func, owner_id: U04B9QAMM4N, civ2-compatible: true}, # Dimitri Gnidash
             { name: "yolov9c", runner-label: "N150", performance: false, cmd: run_yolov9c_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
             { name: "mobilenetv2", runner-label: "N150", performance: false, cmd: run_mobilenetv2_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
-            # { name: "yolov8s_world", runner-label: "N150", performance: false, cmd: run_yolov8s_world_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
+            { name: "yolov8s_world", runner-label: "N150", performance: false, cmd: run_yolov8s_world_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
             { name: "ufld_v2", runner-label: "N150", performance: false, cmd: run_ufld_v2_func, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
             { name: "swin_s", runner-label: "N150", performance: false, cmd: run_swin_s_demo, owner_id: U088413NP0Q, civ2-compatible: true}, # Ashai Reddy Ginuga (HariniMohan0102)
             { name: "vanilla_unet", runner-label: "N150", performance: false, cmd: run_vanilla_unet_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (keerthana-r-mcw)
