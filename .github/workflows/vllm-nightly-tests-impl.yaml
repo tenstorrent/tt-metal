@@ -127,9 +127,10 @@ jobs:
             runner-label: config-t3000,
             arch: arch-wormhole_b0,
             mesh-device: T3K,
-            override-tt-config: "{\"fabric_config\": \"FABRIC_1D\", \"l1_small_size\": 768}",
+            override-tt-config: "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"worker_l1_size\": 1344544, \"trace_region_size\": 21448704, \"l1_small_size\": 24576}",
             tt-llama-text-ver: tt_transformers,
-            multimodal: false, # Disabled until the error seen in https://github.com/tenstorrent/tt-metal/actions/runs/18021096729/job/51279632451 is fixed
+            multimodal: true,
+            use-vllm-v1: true,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08BH66EXAL, # Radoica Draskic
           },
@@ -154,7 +155,7 @@ jobs:
         FILE_SERVER_PID: "./server.pid"
         FILE_SERVER_LOG: "./output/vllm_server.log"
         FILE_BENCHMARK_LOG: "./output/vllm_benchmark.log"
-        FILE_MULTIMODAL_BENCHMARK_LOG: "./output/vllm_multimodal_benchmark.log"
+        FILE_MULTIMODAL_TEST_LOG: "./output/vllm_multimodal_test.log"
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -198,12 +199,16 @@ jobs:
         timeout-minutes: 1
         run: |
           if [ -n "${{ matrix.test-group.override-tt-config }}" ]; then
-            export OVERRIDE_TT_CONFIG=(--override-tt-config "$(printf "%s" '${{ matrix.test-group.override-tt-config }}')")
+            OVERRIDE_TT_CONFIG=(--override-tt-config "$(printf "%s" '${{ matrix.test-group.override-tt-config }}')")
           else
-            export OVERRIDE_TT_CONFIG=()
+            OVERRIDE_TT_CONFIG=()
           fi
 
-          echo "Override config: ${OVERRIDE_TT_CONFIG[@]}"
+          if [ -n "${{ matrix.test-group.additional-args }}" ]; then
+            ADDITIONAL_ARGS=(${{ matrix.test-group.additional-args }})
+          else
+            ADDITIONAL_ARGS=()
+          fi
 
           export MESH_DEVICE=${{ matrix.test-group.mesh-device }}
           export TT_LLAMA_TEXT_VER=${{ matrix.test-group.tt-llama-text-ver }}
@@ -215,12 +220,23 @@ jobs:
 
           # vLLM environment variables
           export VLLM_RPC_TIMEOUT=300000
+          USE_V1="${{ matrix.test-group.use-vllm-v1 }}"
+          if [[ "${USE_V1}" == "true" ]]; then
+            export VLLM_USE_V1=1
+          fi
 
-          python3 vllm/examples/server_example_tt.py \
-            --model ${{ matrix.test-group.model }} \
-            ${{ matrix.test-group.additional-args }} \
-            "${OVERRIDE_TT_CONFIG[@]}" \
-            > "${FILE_SERVER_LOG}" 2>&1 &
+          # Build the VLLM server arguments array
+          declare -a VLLM_SERVER_ARGS
+          VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
+          VLLM_SERVER_ARGS+=("${ADDITIONAL_ARGS[@]}")
+          VLLM_SERVER_ARGS+=("${OVERRIDE_TT_CONFIG[@]}")
+          if [[ "${USE_V1}" == "true" ]]; then
+            VLLM_SERVER_ARGS+=("--num_scheduler_steps" "1")
+          fi
+
+          echo "vLLM server args: ${VLLM_SERVER_ARGS[@]}"
+
+          python3 vllm/examples/server_example_tt.py "${VLLM_SERVER_ARGS[@]}" > "${FILE_SERVER_LOG}" 2>&1 &
 
           # Store server's pid for cleanup
           echo $! > ${FILE_SERVER_PID}
@@ -249,13 +265,13 @@ jobs:
       - name: 📐 Run benchmark
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         run: |
-          python3 vllm/benchmarks/benchmark_serving.py \
+          vllm bench serve \
             --backend vllm \
             --model ${{ matrix.test-group.model }} \
             --dataset-name random \
-            --num-prompts 32 \
             --random-input-len 100 \
             --random-output-len 100 \
+            --num-prompts 32 \
             --ignore-eos \
             --percentile-metrics ttft,tpot,itl,e2el \
             --save-result \
@@ -271,34 +287,46 @@ jobs:
             exit 1
           fi
 
-      - name: 🖼️ Run multimodal benchmark
+      - name: 🖼️ Run multimodal test
         if: ${{ matrix.test-group.multimodal }}
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         run: |
-          echo "Using: $(pip list | grep datasets)"
-          unset HF_HUB_OFFLINE # Disable offline mode to allow downloading the dataset
+          curl http://localhost:8000/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "X-User-ID: vllm_test" \
+            -d '{
+              "model": "${{ matrix.test-group.model }}",
+              "messages": [
+                {
+                  "role": "user",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Describe this image in 50 words."
+                    },
+                    {
+                      "type": "image_url",
+                      "image_url": {
+                        "url": "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/cats.jpeg"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "max_tokens": 512,
+              "temperature": 0.0,
+              "top_p": 0.9,
+              "top_k": 10,
+              "repetition_penalty": 1.0,
+              "stream": false,
+              "ignore_eos": false
+          }' \
+          2>&1 | tee ${FILE_MULTIMODAL_TEST_LOG}
 
-          python3 vllm/benchmarks/benchmark_serving.py \
-            --backend openai-chat \
-            --endpoint /v1/chat/completions \
-            --model ${{ matrix.test-group.model }} \
-            --dataset-name hf \
-            --dataset-path lmarena-ai/vision-arena-bench-v0.1 \
-            --no-stream \
-            --num-prompts 32 \
-            --random-input-len 100 \
-            --random-output-len 100 \
-            --ignore-eos \
-            --percentile-metrics ttft,tpot,itl,e2el \
-            --save-result \
-            --result-filename output/vllm_result.json \
-            2>&1 | tee ${FILE_MULTIMODAL_BENCHMARK_LOG}
-
-          # If the backend fails, the benchmark will still complete successfully but with all-zero results.
-          # It will contain a warning message, though
-          warning_message="All requests failed"
-          if grep -q "$warning_message" "${FILE_MULTIMODAL_BENCHMARK_LOG}"; then
-            echo "❌ All requests failed"
+          # If the test fails, the response will not contain the expected word
+          keyword="cat"
+          if ! grep -q -i "$keyword" "${FILE_MULTIMODAL_TEST_LOG}"; then
+            echo "❌ The keyword \"$keyword\" not found in the response"
             echo "Check out the server log in a step below."
             exit 1
           fi
@@ -322,7 +350,7 @@ jobs:
           fi
 
       - name: Show server log
-        if: ${{ failure() }}
+        if: always()
         continue-on-error: true
         run: |
           cat "${FILE_SERVER_LOG}"
