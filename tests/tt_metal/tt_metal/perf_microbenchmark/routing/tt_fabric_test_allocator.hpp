@@ -932,9 +932,8 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
     // cores that are *not* available for receivers.
     uint32_t receiver_partitions = 1;  // Compute number of link partitions needed
     for (const auto& sender : test_config.senders) {
-        if (enable_flow_control_) {
-            receiver_partitions = std::max(receiver_partitions, sender.link_id + 1);
-        }
+        receiver_partitions = std::max(receiver_partitions, sender.link_id + 1);
+
         if (sender.core.has_value()) {
             auto& device_resources = get_or_create_device_resources(sender.device);
             device_resources.reserve_sender_core(sender.core);
