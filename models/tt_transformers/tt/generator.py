@@ -176,6 +176,14 @@ class Generator:
             return False
         return True
 
+    def model_supports_trace(self):
+        """
+        This function is used to determine if trace should be enabled for the model.
+        """
+        if "mixtral" in self.model_args[0].model_name.lower():
+            return False
+        return True
+
     # Note: This function is called by vLLM
     def prefill_forward_text(
         self,
@@ -192,6 +200,8 @@ class Generator:
         else:
             # Only paged attention is supported for prefill
             enable_trace = False
+
+        enable_trace = enable_trace and self.model_supports_trace()
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
