@@ -129,7 +129,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ema_multi_core(
         get_compute_kernel_config_args(a.device()->arch(), compute_kernel_config);
     CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/accumulation/ema/kernels/compute/ema_compute.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/accumulation/ema/kernels/compute/ema_sfpi.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
