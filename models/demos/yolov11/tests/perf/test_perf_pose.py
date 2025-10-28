@@ -36,7 +36,7 @@ def test_perf_device_bare_metal_yolov11_pose(batch_size, expected_perf):
     expected_perf = expected_perf if is_wormhole_b0() else 0
 
     # Run the PCC test to measure performance
-    command = f"pytest models/demos/yolov11/tests/pcc/test_ttnn_yolov11_pose_model.py::test_yolov11_pose_model"
+    command = f"run_yolov11_pose_test.py"
 
     # Columns to extract from device profiling
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
