@@ -1,5 +1,7 @@
 #!/bin/bash
 
+TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache
+
 set -eo pipefail
 
 run_python_model_tests_grayskull() {
@@ -62,13 +64,15 @@ run_python_model_tests_wormhole_b0() {
 
     # Run all Llama3 tests for 8B, 1B, and 3B weights - dummy weights with tight PCC check
     for hf_model in  "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-        HF_MODEL=$hf_model pytest models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
+        tt_cache=$TT_CACHE_HOME/$hf_model
+        HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
         echo "LOG_METAL: Llama3 tests for $hf_model completed"
     done
 
     # Mistral-7B-v0.3
     mistral_weights=mistralai/Mistral-7B-Instruct-v0.3
-    HF_MODEL=$mistral_weights pytest models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
+    tt_cache_mistral=$TT_CACHE_HOME/$mistral_weights
+    HF_MODEL=$mistral_weights TT_CACHE_PATH=$tt_cache_mistral pytest models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
 }
 
 run_python_model_tests_slow_runtime_mode_wormhole_b0() {
@@ -89,7 +93,8 @@ run_python_model_tests_blackhole() {
     llama8b=meta-llama/Llama-3.1-8B-Instruct
     # Run all Llama3 tests for 8B - dummy weights with tight PCC check
     for hf_model in "$llama8b"; do
-        HF_MODEL=$hf_model pytest models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
+        tt_cache=$TT_CACHE_HOME/$hf_model
+        HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
         echo "LOG_METAL: Llama3 tests for $hf_model completed"
     done
 
