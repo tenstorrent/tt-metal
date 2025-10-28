@@ -198,7 +198,7 @@ AsicTopology validate_connectivity(const InputArgs& input_args, PhysicalSystemDe
 tt::tt_metal::AsicTopology build_reset_topology(
     const InputArgs& input_args,
     PhysicalSystemDescriptor& physical_system_descriptor) {
-    
+
     TT_FATAL(
         input_args.reset_host.has_value(),
         "For link reset, --reset_host must be specified");
@@ -249,7 +249,7 @@ tt::tt_metal::AsicTopology build_reset_topology(
     }
 
     tt::tt_metal::AsicTopology asic_topology;
-    
+
     tt::tt_metal::EthConnection src_to_dst_conn;
     src_to_dst_conn.src_chan = src_channel;
     src_to_dst_conn.dst_chan = dst_channel;
@@ -298,20 +298,20 @@ void print_usage_info() {
 
 void perform_link_reset(const InputArgs& input_args, PhysicalSystemDescriptor& physical_system_descriptor) {
     log_output_rank0("Operating in reset mode for specific link");
-    
+
     TT_FATAL(
         !input_args.gsd_path.has_value(),
         "Reset mode requires live physical discovery. Please do not use --global-descriptor-path with reset mode.");
-    
+
     bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
     TT_FATAL(
         link_retrain_supported,
         "Link reset is only supported on WORMHOLE_B0 architecture");
-    
+
     AsicTopology reset_topology = build_reset_topology(input_args, physical_system_descriptor);
-    
+
     reset_ethernet_links(physical_system_descriptor, reset_topology);
-    
+
     log_output_rank0("Link reset completed. Please run the validation tool again to verify the link.");
 }
 
@@ -349,11 +349,11 @@ int main(int argc, char* argv[]) {
     // Create physical system descriptor and discover the system
     auto physical_system_descriptor = generate_physical_system_descriptor(input_args);
 
-    bool is_reset_mode = input_args.reset_host.has_value() || 
-                         input_args.reset_tray_id.has_value() || 
-                         input_args.reset_asic_location.has_value() || 
+    bool is_reset_mode = input_args.reset_host.has_value() ||
+                         input_args.reset_tray_id.has_value() ||
+                         input_args.reset_asic_location.has_value() ||
                          input_args.reset_channel.has_value();
-    
+
     if (is_reset_mode) {
         perform_link_reset(input_args, physical_system_descriptor);
         return 0;

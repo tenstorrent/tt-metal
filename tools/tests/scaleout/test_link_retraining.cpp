@@ -117,7 +117,7 @@ TEST(DirectedRetraining, ExitNodeRetraining) {
         auto exit_nodes = fixture.physical_system_descriptor.get_connecting_exit_nodes(
             fixture.physical_system_descriptor.my_host_name(), host);
         log_info(tt::LogTest, "Taking {} exit node links down on host {}", exit_nodes.size(), host);
-        
+
         for (const auto& exit_node : exit_nodes) {
             auto chip_id = fixture.asic_id_to_chip_id.at(*exit_node.src_exit_node);
             auto coord = get_eth_core_coord(fixture.cluster, chip_id, exit_node.eth_conn.src_chan);
@@ -135,14 +135,14 @@ TEST(DirectedRetraining, ExitNodeRetraining) {
         }
         auto exit_nodes = fixture.physical_system_descriptor.get_connecting_exit_nodes(
             fixture.physical_system_descriptor.my_host_name(), host);
-        
+
         for (const auto& exit_node : exit_nodes) {
             auto chip_id = fixture.asic_id_to_chip_id.at(*exit_node.src_exit_node);
             auto coord = get_eth_core_coord(fixture.cluster, chip_id, exit_node.eth_conn.src_chan);
             EXPECT_EQ(get_link_training_status(fixture.cluster, chip_id, coord), 1);
         }
     }
-    
+
     fixture.distributed_context->barrier();
     fixture.physical_system_descriptor.run_discovery(true);
 }
