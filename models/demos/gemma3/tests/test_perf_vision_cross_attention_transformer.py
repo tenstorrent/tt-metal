@@ -57,7 +57,8 @@ def test_perf_gemma_vision(mesh_device, batch_size, nr_forward_iterations):
 
     model_name = get_model_name()
 
-    targets = load_targets(TARGETS_JSON_FILENAME, device_type=determine_device_name(mesh_device), model_name=model_name)
+    # ! TEMP - put this back
+    # targets = load_targets(TARGETS_JSON_FILENAME, device_type=determine_device_name(mesh_device), model_name=model_name)
 
     if SAVE_NEW_PERF_TARGETS:
         helper_write_to_json(
