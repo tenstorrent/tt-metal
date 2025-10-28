@@ -1690,29 +1690,39 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
     return fence;
 }
 
+// We require that all data for a single fetch is available before processing commands. We can't use a normal
+// CBReaderWithReleasePolicy because that always releases pages when advancing between blocks,
+// which would cause problems if the data spans multiple blocks.
+CBReaderWithManualRelease<
+    my_upstream_cb_sem_id,
+    cmddat_q_log_page_size,
+    cmddat_q_blocks,
+    cmddat_q_pages_per_block,
+    cmddat_q_base>
+    h_cmddat_q_reader;
+
 // Used in prefetch_d downstream of a CQ_PREFETCH_CMD_RELAY_LINEAR_H command.
 // Since the size of the data is less that the size of the cmddat_q, we let the caller return pages to the upstream all
 // at once.
 template <typename RelayInlineState>
 inline void relay_raw_data_to_downstream(
-    uint32_t& fence, uint32_t& data_ptr, uint32_t length, uint32_t& local_downstream_data_ptr, uint8_t extra_pages) {
+    uint32_t& data_ptr, uint32_t length, uint32_t& local_downstream_data_ptr, uint8_t extra_pages) {
     ASSERT(length < (cmddat_q_end - cmddat_q_base));
-    // Stream data to downstream as it arrives. Acquire upstream pages incrementally.
+    // Stream data to downstream as it arrives. Acquire upstream pages incrementally using h_cmddat_q_reader.
     uint32_t remaining = length;
 
     while (remaining > 0) {
         // Ensure at least one upstream page is available
-        if (data_ptr == fence) {
-            get_cb_page<cmddat_q_base, cmddat_q_blocks, cmddat_q_log_page_size, my_upstream_cb_sem_id>(
-                data_ptr, fence, block_next_start_addr, rd_block_idx, upstream_total_acquired_page_count);
+        if (data_ptr == h_cmddat_q_reader.cb_fence) {
+            h_cmddat_q_reader.get_cb_page(data_ptr);
         }
 
         // Compute contiguous bytes available to read now without wrapping
         uint32_t contiguous_until_wrap = cmddat_q_end - data_ptr;
         uint32_t contiguous_until_fence;
-        if (data_ptr < fence) {
-            contiguous_until_fence = fence - data_ptr;
-        } else if (data_ptr > fence) {
+        if (data_ptr < h_cmddat_q_reader.cb_fence) {
+            contiguous_until_fence = h_cmddat_q_reader.cb_fence - data_ptr;
+        } else if (data_ptr > h_cmddat_q_reader.cb_fence) {
             // Fence wrapped but data_ptr has not; only read until end-of-buffer
             contiguous_until_fence = contiguous_until_wrap;
         } else {
@@ -1768,14 +1778,13 @@ inline void relay_raw_data_to_downstream(
 // This grabs whole (possibly sets of if multiple in a page) commands.
 // In the case raw_copy is set in the header, that data will be copied to the downstream, and this function will loop
 // until commands are received.
-inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr, uint32_t& downstream_data_ptr) {
+inline uint32_t relay_cb_get_cmds(uint32_t& data_ptr, uint32_t& downstream_data_ptr) {
     while (true) {
         // DPRINT << "get_commands: " << data_ptr << " " << fence << " " << cmddat_q_base << " " << cmddat_q_end <<
         // ENDL();
-        if (data_ptr == fence) {
+        if (data_ptr == h_cmddat_q_reader.cb_fence) {
             // Ensure header is present
-            get_cb_page<cmddat_q_base, cmddat_q_blocks, cmddat_q_log_page_size, my_upstream_cb_sem_id>(
-                data_ptr, fence, block_next_start_addr, rd_block_idx, upstream_total_acquired_page_count);
+            h_cmddat_q_reader.get_cb_page(data_ptr);
         }
 
         volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* cmd_ptr =
@@ -1785,7 +1794,6 @@ inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr, uint32_t&
         if (cmd_ptr->header.raw_copy) {
             data_ptr += sizeof(CQPrefetchHToPrefetchDHeader);
             relay_raw_data_to_downstream<DispatchRelayInlineState>(
-                fence,
                 data_ptr,
                 length - sizeof(CQPrefetchHToPrefetchDHeader),
                 downstream_data_ptr,
@@ -1795,16 +1803,15 @@ inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr, uint32_t&
             uint32_t pages_to_free = (length + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
             relay_client.release_pages<my_noc_index, upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
         } else {
-            uint32_t pages_ready = (fence - data_ptr) >> cmddat_q_log_page_size;
+            // Ensure the entire command payload is present before returning
+            uint32_t pages_ready = (h_cmddat_q_reader.cb_fence - data_ptr) >> cmddat_q_log_page_size;
             uint32_t pages_needed = (length + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
             int32_t pages_pending = pages_needed - pages_ready;
             int32_t npages = 0;
 
-            // Ensure the entire command payload is present before returning
             uint32_t dummy_data_ptr = data_ptr;
             while (npages < pages_pending) {
-                npages += get_cb_page<cmddat_q_base, cmddat_q_blocks, cmddat_q_log_page_size, my_upstream_cb_sem_id>(
-                    dummy_data_ptr, fence, block_next_start_addr, rd_block_idx, upstream_total_acquired_page_count);
+                npages += h_cmddat_q_reader.get_cb_page(dummy_data_ptr);
                 IDLE_ERISC_RETURN(length - sizeof(CQPrefetchHToPrefetchDHeader));
             }
 
@@ -1872,14 +1879,9 @@ void kernel_main_h() {
 void kernel_main_d() {
     PrefetchExecBufState exec_buf_state;
 
-    for (uint32_t i = 0; i < cmddat_q_blocks; i++) {
-        uint32_t next_block = i + 1;
-        uint32_t offset = next_block * cmddat_q_pages_per_block * cmddat_q_page_size;
-        block_next_start_addr[i] = cmddat_q_base + offset;
-    }
-
+    h_cmddat_q_reader.init();
     uint32_t cmd_ptr = cmddat_q_base;
-    uint32_t fence = cmddat_q_base;
+    uint32_t& fence = h_cmddat_q_reader.cb_fence;
 
     bool done = false;
     uint32_t heartbeat = 0;
@@ -1919,7 +1921,7 @@ void kernel_main_d() {
     while (!done) {
         // cmds come in packed batches based on HostQ reads in prefetch_h
         // once a packed batch ends, we need to jump to the next page
-        uint32_t length = relay_cb_get_cmds(fence, cmd_ptr, downstream_data_ptr);
+        uint32_t length = relay_cb_get_cmds(cmd_ptr, downstream_data_ptr);
 
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
 
