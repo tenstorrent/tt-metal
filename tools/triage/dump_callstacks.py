@@ -337,7 +337,7 @@ def dump_callstacks(
                 pc=None,
                 kernel_callstack_with_message=KernelCallstackWithMessage(callstack=[], message="Core is in reset"),
             )
-        if "erisc" in risc_name and not force_active_eth:
+        if location in location._device.active_eth_block_locations and not force_active_eth:
             callstack_with_message = get_callstack(
                 location, risc_name, dispatcher_core_data, elfs_cache, full_callstack=False
             )
