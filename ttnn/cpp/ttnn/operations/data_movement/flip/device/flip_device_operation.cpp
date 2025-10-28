@@ -7,6 +7,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/data_movement/flip/device/flip_device_operation.hpp"
 
+using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 
 FlipDeviceOperation::program_factory_t FlipDeviceOperation::select_program_factory(
