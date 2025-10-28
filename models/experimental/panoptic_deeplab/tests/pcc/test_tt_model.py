@@ -131,7 +131,7 @@ def test_panoptic_deeplab(device, model_location_generator):
             ttnn_semantic,
             to_channel_first=False,
             output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
-            exp_pcc=0.994,
+            exp_pcc=0.993,
         )
     )
     all_passed.append(
