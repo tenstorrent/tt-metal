@@ -13,7 +13,7 @@
 
 #include <cstdint>
 #include <stddef.h>
-#include "blackhole/eth_chan_noc_mapping.h"
+#include "eth_chan_noc_mapping.h"
 #include "dataflow_api_addrgen.h"
 #include "ethernet/dataflow_api.h"
 #include "dataflow_api.h"

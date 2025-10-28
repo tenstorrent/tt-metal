@@ -152,23 +152,12 @@ void BlackholeLiteFabricHal::wait_for_state(tt_cxy_pair virtual_core, lite_fabri
 
 std::vector<std::filesystem::path> BlackholeLiteFabricHal::build_includes(const std::filesystem::path& root_dir) {
     return {
-        root_dir,
-        root_dir.parent_path(),
-        root_dir / "tt_metal",
-        root_dir / "tt_metal/include",
-        root_dir / "tt_metal/hw/inc",
-        root_dir / "tt_metal/hw/inc/ethernet",
-        root_dir / "tt_metal/hostdevcommon/api",
-        root_dir / "tt_metal/hw/inc/debug",
-        root_dir / "tt_metal/hw/inc/tt-1xx/",
         root_dir / "tt_metal/hw/inc/tt-1xx/blackhole",
         root_dir / "tt_metal/hw/inc/tt-1xx/blackhole/blackhole_defines",
         root_dir / "tt_metal/hw/inc/tt-1xx/blackhole/noc",
         root_dir / "tt_metal/hw/ckernels/blackhole/metal/common",
         root_dir / "tt_metal/hw/ckernels/blackhole/metal/llk_io",
         root_dir / "tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc",
-        root_dir / "tt_metal/api/",
-        root_dir / "tt_metal/api/tt-metalium/",
         root_dir / "tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib",
         root_dir / "tt_metal/lite_fabric/hw/inc"};  // For memory configuration headers
 }

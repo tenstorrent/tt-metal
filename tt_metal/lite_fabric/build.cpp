@@ -79,7 +79,22 @@ int CompileFabricLite(
 
     const std::filesystem::path lite_fabric_src = root_dir / "tt_metal/lite_fabric/hw/src/lite_fabric.cpp";
 
-    auto includes = lite_fabric_hal->build_includes(root_dir);
+    std::vector<std::filesystem::path> includes = {
+        root_dir,
+        root_dir.parent_path(),
+        root_dir / "tt_metal",
+        root_dir / "tt_metal/include",
+        root_dir / "tt_metal/hw/inc",
+        root_dir / "tt_metal/hw/inc/ethernet",
+        root_dir / "tt_metal/hostdevcommon/api",
+        root_dir / "tt_metal/hw/inc/debug",
+        root_dir / "tt_metal/hw/inc/tt-1xx/",
+        root_dir / "tt_metal/api/",
+        root_dir / "tt_metal/api/tt-metalium/",
+    };
+    auto hal_includes = lite_fabric_hal->build_includes(root_dir);
+    includes.insert(includes.end(), hal_includes.begin(), hal_includes.end());
+
     auto defines = lite_fabric_hal->build_defines();
     defines.insert(defines.end(), extra_defines.begin(), extra_defines.end());
 
