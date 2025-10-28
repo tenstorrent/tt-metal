@@ -2,6 +2,44 @@ name: "(Single-card) Model perf tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      model:
+        description: 'Select model to test'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - falcon7b
+          - mamba
+          - functional_unet
+          - stable_diffusion
+          - yolov10x
+          - sentence_bert
+          - resnet50
+          - yolov11
+          - yolov11m
+          - bert_tiny
+          - yolov4
+          - yolov7
+          - distilbert
+          - segformer
+          - metal_BERT_large_11
+          - yolov8s_world
+          - yolov8s
+          - yolov6l
+          - mobilenetv2
+          - vgg_unet
+          - yolov9c
+          - vanilla_unet
+          - yolov8x
+          - swin_v2
+          - swin_s
+          - yolov5x
+          - vovnet
+          - yolov12x
+          - ufld_v2
+          - efficientnetb0
   schedule:
     - cron: "0 2,7,10,14,17,20,23 * * *"
   workflow_call:
@@ -23,3 +61,4 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model: ${{ inputs.model || 'all' }}
