@@ -6,26 +6,28 @@
 #include <compute_kernel_api/common.h>
 #include <compute_kernel_api/tile_move_copy.h>
 #include <compute_kernel_api/eltwise_binary.h>
-#include <compute_kernel_api/reduce.h>
+#include <compute_kernel_api/matmul.h>
 
-template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
-inline void reduce_tile_to_cb(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t size) {
+inline void reduce_tile_to_cb(uint32_t icb0, uint32_t icb_ones, uint32_t ocb, uint32_t size) {
     constexpr uint32_t onetile = 1;
     constexpr int dst0 = 0;
 
     cb_reserve_back(ocb, onetile);
 
     tile_regs_acquire();
-    cb_wait_front(icb1, onetile);
+    cb_wait_front(icb_ones, onetile);
 
-    reduce_init<reduce_type, reduce_dim>(ocb, icb0, icb1);
+    // Initialize matmul - will accumulate across all tiles
+    mm_init(icb0, icb_ones, ocb, /*transpose*/ 0);
+
     for (uint32_t x = 0; x < size; ++x) {
         cb_wait_front(icb0, x + 1);  // must be a cumulative wait for correctness
 
-        constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
-        reduce_tile<reduce_type, reduce_dim>(icb0, icb1, x, bcast_scaler0, dst0);
+        // Multiply tile x with ones vector and accumulate to dst0
+        // false = no transpose, enables accumulation behavior
+        matmul_tiles(icb0, icb_ones, x, 0, dst0, false);
     }
-    reduce_uninit();
+
     tile_regs_commit();
 
     tile_regs_wait();
@@ -111,7 +113,7 @@ void MAIN {
     constexpr uint32_t mul_cb_id = get_compile_time_arg_val(3);             // y * grad
     constexpr uint32_t sum_reduce_cb_id = get_compile_time_arg_val(4);      // sum(y * grad)
     constexpr uint32_t grad_minus_sum_cb_id = get_compile_time_arg_val(5);  // grad - sum(y * grad)
-    constexpr uint32_t scaler_cb_id = get_compile_time_arg_val(6);          // scaler for reduction (1.0)
+    constexpr uint32_t ones_cb_id = get_compile_time_arg_val(6);            // ones vector for matmul reduction
     constexpr uint32_t num_tiles_per_row = get_compile_time_arg_val(7);
 
     // Runtime args
@@ -133,8 +135,8 @@ void MAIN {
             elementwise_multiply(y_cb_id, grad_cb_id, mul_cb_id, w, w);
         }
 
-        // Step 2: Reduce sum(y * grad) across the row using scaler CB
-        reduce_tile_to_cb(mul_cb_id, scaler_cb_id, sum_reduce_cb_id, width_in_tiles);
+        // Step 2: Reduce sum(y * grad) across the row using matmul with ones vector
+        reduce_tile_to_cb(mul_cb_id, ones_cb_id, sum_reduce_cb_id, width_in_tiles);
         cb_pop_front(mul_cb_id, width_in_tiles);
 
         // Step 3: For each tile in the row, compute final result: y * (grad - sum(y * grad))
