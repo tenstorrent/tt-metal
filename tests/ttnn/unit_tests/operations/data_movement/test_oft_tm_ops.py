@@ -24,6 +24,14 @@ def skip_if_not_20_cores(device):
         )
 
 
+def skip_if_20_cores(device):
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x == 5 and compute_grid.y == 4:
+        pytest.skip(
+            f"This test is intended to run on the full core grid. Core grid [{compute_grid.x},{compute_grid.y}] must be max."
+        )
+
+
 def random_torch_tensor(dtype, shape):
     if dtype == ttnn.int32:
         return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
@@ -89,40 +97,6 @@ def test_permute(device, shape, perm, dtype, layout, in_mem_config, out_mem_conf
 @pytest.mark.parametrize(
     "shape, perm, dtype, layout, in_mem_config, out_mem_config",
     [
-        ([1, 48, 160, 256], [2, 1, 0, 3], ttnn.uint32, RM, DRAM, DRAM),
-        ([160, 48, 1, 256], [2, 1, 0, 3], ttnn.uint32, RM, DRAM, DRAM),
-        ([1, 24, 80, 256], [2, 1, 0, 3], ttnn.uint32, RM, DRAM, DRAM),
-        ([80, 24, 1, 256], [2, 1, 0, 3], ttnn.uint32, RM, DRAM, DRAM),
-        ([1, 12, 40, 256], [2, 1, 0, 3], ttnn.uint32, RM, DRAM, DRAM),
-        ([40, 12, 1, 256], [2, 1, 0, 3], ttnn.uint32, RM, DRAM, DRAM),
-        ([1, 1, 25281, 9], [0, 3, 1, 2], ttnn.bfloat16, RM, DRAM, L1),
-        ([1, 3, 159, 160], [0, 2, 3, 1], ttnn.bfloat16, RM, L1, L1),
-        ([1, 1, 159, 160], [0, 2, 3, 1], ttnn.bfloat16, RM, L1, L1),
-    ],
-)
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 100000}], indirect=True)
-def test_permute_rm(device, shape, perm, dtype, layout, in_mem_config, out_mem_config):
-    """
-    If inputs were originally in row-major
-    """
-    skip_if_not_20_cores(device)
-
-    torch.manual_seed(2005)
-    torch_input_tensor = random_torch_tensor(dtype, shape)
-    torch_output_tensor = torch.permute(torch_input_tensor, perm)
-
-    input_tensor = ttnn.from_torch(
-        torch_input_tensor, layout=layout, dtype=dtype, device=device, memory_config=in_mem_config
-    )
-    output_tensor = ttnn.permute(input_tensor, perm, memory_config=out_mem_config)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_equal(torch_output_tensor, output_tensor)
-
-
-@pytest.mark.parametrize(
-    "shape, perm, dtype, layout, in_mem_config, out_mem_config",
-    [
         ([1, 48, 160, 256], [2, 1, 0, 3], ttnn.uint32, TILE, DRAM, DRAM),
         ([160, 48, 1, 256], [2, 1, 0, 3], ttnn.uint32, TILE, DRAM, DRAM),
         ([1, 24, 80, 256], [2, 1, 0, 3], ttnn.uint32, TILE, DRAM, DRAM),
@@ -176,9 +150,43 @@ def test_permute_to_rm(device, shape, perm, dtype, layout, in_mem_config, out_me
 
 
 @pytest.mark.parametrize(
+    "shape, perm, dtype, layout, in_mem_config, out_mem_config",
+    [
+        ([1, 48, 160, 256], [2, 1, 0, 3], ttnn.uint32, RM, DRAM, DRAM),
+        ([160, 48, 1, 256], [2, 1, 0, 3], ttnn.uint32, RM, DRAM, DRAM),
+        ([1, 24, 80, 256], [2, 1, 0, 3], ttnn.uint32, RM, DRAM, DRAM),
+        ([80, 24, 1, 256], [2, 1, 0, 3], ttnn.uint32, RM, DRAM, DRAM),
+        ([1, 12, 40, 256], [2, 1, 0, 3], ttnn.uint32, RM, DRAM, DRAM),
+        ([40, 12, 1, 256], [2, 1, 0, 3], ttnn.uint32, RM, DRAM, DRAM),
+        ([1, 1, 25281, 9], [0, 3, 1, 2], ttnn.bfloat16, RM, DRAM, L1),
+        ([1, 3, 159, 160], [0, 2, 3, 1], ttnn.bfloat16, RM, L1, L1),
+        ([1, 1, 159, 160], [0, 2, 3, 1], ttnn.bfloat16, RM, L1, L1),
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 100000}], indirect=True)
+def test_permute_rm(device, shape, perm, dtype, layout, in_mem_config, out_mem_config):
+    """
+    If inputs were originally in row-major
+    """
+    skip_if_not_20_cores(device)
+
+    torch.manual_seed(2005)
+    torch_input_tensor = random_torch_tensor(dtype, shape)
+    torch_output_tensor = torch.permute(torch_input_tensor, perm)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=layout, dtype=dtype, device=device, memory_config=in_mem_config
+    )
+    output_tensor = ttnn.permute(input_tensor, perm, memory_config=out_mem_config)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
     "shape, perm, dtype, layout",
     [
-        ([1, 49, 160, 256], [2, 1, 0, 3], ttnn.uint32, TILE),  # row invariant
+        ([1, 49, 160, 256], [2, 1, 0, 3], ttnn.uint32, RM),  # row invariant
         # ([160, 48, 1, 256], [2, 1, 0, 3], ttnn.uint32, TILE),
         # ([1, 24, 80, 256], [2, 1, 0, 3], ttnn.uint32, TILE),
         # ([80, 24, 1, 256], [2, 1, 0, 3], ttnn.uint32, TILE),
@@ -191,7 +199,12 @@ def test_permute_to_rm(device, shape, perm, dtype, layout, in_mem_config, out_me
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 100000}], indirect=True)
 def test_permute_dramsharded(device, shape, perm, dtype, layout):
-    skip_if_not_20_cores(device)
+    """
+    Row-major and DRAM sharded.
+    This is experimental, currently not functional (nor performant).
+    Don't restrict core grid, since the op will place cores close to DRAM banks.
+    """
+    skip_if_20_cores(device)
 
     dram_cores = device.dram_grid_size().x  # WH has 12 dram cores, P150 has 8, P100 has 7
     dram_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_cores - 1, 0))})
