@@ -11,7 +11,7 @@ build-backend = "scikit_build_core.build"
 minimum-version = "0.4"
 #build-dir = "build/{wheel_tag}"
 build-dir = "build"
-wheel.packages = ["sources/ttml"]
+wheel.packages = ["sources/ttml/ttml"]
 
 [tool.scikit-build.install]
 # Use CMake install components for packaging

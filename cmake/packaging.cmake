@@ -164,7 +164,14 @@ cpack_add_component(
 cpack_add_component(ttnn-validation GROUP nn-validation)
 
 cpack_add_component_group(ttml)
-cpack_add_component(ttml DEPENDS metalium GROUP ttml DESCRIPTION "TT-Train runtime library")
+cpack_add_component(
+    ttml
+    DEPENDS
+        nn
+        metalium
+    GROUP ttml
+    DESCRIPTION "TT-Train runtime library"
+)
 cpack_add_component(ttml-runtime GROUP ttml)
 
 include(CPack)
