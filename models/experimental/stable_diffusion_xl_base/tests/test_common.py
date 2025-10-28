@@ -485,8 +485,6 @@ def prepare_image_latents(
 ):
     # 4, 5, 8
     assert image is not None, "Image is not provided"
-    assert image.shape[1] == 3, "Image is not 3 channels"
-    assert add_noise is True, "Add noise should be True"
     assert torch_pipeline.vae_scale_factor == 8, "Vae scale factor should be 8"
     assert latents is None, "Latents are not supported for inpainting pipeline atm"
 
@@ -500,46 +498,53 @@ def prepare_image_latents(
     cpu_device = torch.device("cpu")
     image = image.to(device=cpu_device, dtype=dtype)
 
-    if tt_pipeline.pipeline_config.vae_on_device:
-        image_latents = [latent.sample() for latent in tt_pipeline.tt_vae.encode(image).latent_dist]
-        image_latents = torch.cat(image_latents, dim=0)
+    if image.shape[1] == 4:
+        image_latents = image
     else:
-        image_latents = [
-            torch_pipeline.vae.encode(img).latent_dist.sample() for img in torch.chunk(image, chunks=batch_size, dim=0)
-        ]
-        image_latents = torch.cat(image_latents, dim=0)
-    image_latents = tt_pipeline.torch_pipeline.vae.config.scaling_factor * image_latents
+        if tt_pipeline.pipeline_config.vae_on_device:
+            image_latents = [latent.sample() for latent in tt_pipeline.tt_vae.encode(image).latent_dist]
+            image_latents = torch.cat(image_latents, dim=0)
+        else:
+            image_latents = [
+                torch_pipeline.vae.encode(img).latent_dist.sample()
+                for img in torch.chunk(image, chunks=batch_size, dim=0)
+            ]
+            image_latents = torch.cat(image_latents, dim=0)
+        image_latents = tt_pipeline.torch_pipeline.vae.config.scaling_factor * image_latents
     image_latents = image_latents.repeat(batch_size // image_latents.shape[0], 1, 1, 1)
 
-    torch_noise = torch.randn(shape, generator=None, device=cpu_device, dtype=dtype)
-    torch_noise = torch_noise.repeat(batch_size // torch_noise.shape[0], 1, 1, 1)
-    if is_strength_max:
-        return torch_noise * tt_pipeline.tt_scheduler.init_noise_sigma
+    if add_noise:
+        torch_noise = torch.randn(shape, generator=None, device=cpu_device, dtype=dtype)
+        torch_noise = torch_noise.repeat(batch_size // torch_noise.shape[0], 1, 1, 1)
+        if is_strength_max:
+            return torch_noise * tt_pipeline.tt_scheduler.init_noise_sigma
 
-    tt_noise = ttnn.from_torch(
-        torch_noise,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=tt_pipeline.ttnn_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            tt_pipeline.ttnn_device, list(tt_pipeline.ttnn_device.shape), dims=(None, 0)
-        ),
-    )
-    tt_image_latents = ttnn.from_torch(
-        image_latents,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=tt_pipeline.ttnn_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            tt_pipeline.ttnn_device, list(tt_pipeline.ttnn_device.shape), dims=(None, 0)
-        ),
-    )
-    latents = tt_pipeline.tt_scheduler.add_noise(tt_image_latents, tt_noise)
+        tt_noise = ttnn.from_torch(
+            torch_noise,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=tt_pipeline.ttnn_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                tt_pipeline.ttnn_device, list(tt_pipeline.ttnn_device.shape), dims=(None, 0)
+            ),
+        )
+        tt_image_latents = ttnn.from_torch(
+            image_latents,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=tt_pipeline.ttnn_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                tt_pipeline.ttnn_device, list(tt_pipeline.ttnn_device.shape), dims=(None, 0)
+            ),
+        )
+        latents = tt_pipeline.tt_scheduler.add_noise(tt_image_latents, tt_noise)
 
-    return ttnn.to_torch(
-        latents,
-        mesh_composer=ttnn.ConcatMeshToTensor(tt_pipeline.ttnn_device, dim=0),
-    )[:batch_size, ...]
+        return ttnn.to_torch(
+            latents,
+            mesh_composer=ttnn.ConcatMeshToTensor(tt_pipeline.ttnn_device, dim=0),
+        )[:batch_size, ...]
+    else:
+        return image_latents
 
 
 # adapted from sdxl inpaint pipeline: diffusers/pipelines/stable_diffusion_xl/pipeline_stable_diffusion_xl_inpaint.py
@@ -601,7 +606,7 @@ def prepare_mask_latents_inpainting(
 
 
 # Adapted from sdxl inpaint/img2img pipelines: diffusers/pipelines/stable_diffusion_xl/pipeline_stable_diffusion_xl_inpaint.py
-def get_timesteps(tt_scheduler, num_inference_steps, strength, denoising_start=None, torch_pipeline=None):
+def get_timesteps(tt_scheduler, num_inference_steps, strength, denoising_start=None):
     # This code path is only working if denoising_start is None, else more logic is needed
     # Denoising start is used in conjuction with SDXL Refiner pipeline.
     if denoising_start is None:
@@ -617,13 +622,11 @@ def get_timesteps(tt_scheduler, num_inference_steps, strength, denoising_start=N
         # Strength is irrelevant if we directly request a timestep to start at;
         # that is, strength is determined by the denoising_start instead.
         discrete_timestep_cutoff = int(
-            round(
-                torch_pipeline.scheduler.config.num_train_timesteps
-                - (denoising_start * torch_pipeline.scheduler.config.num_train_timesteps)
-            )
+            round(tt_scheduler.num_train_timesteps - (denoising_start * tt_scheduler.num_train_timesteps))
         )
 
-        num_inference_steps = (tt_scheduler.timesteps < discrete_timestep_cutoff).sum().item()
+        torch_timesteps = torch.tensor([ttnn.to_torch(t) for t in tt_scheduler.timesteps])
+        num_inference_steps = (torch_timesteps < discrete_timestep_cutoff).sum().item()
         if tt_scheduler.order == 2 and num_inference_steps % 2 == 0:
             # if the scheduler is a 2nd order scheduler we might have to do +1
             # because `num_inference_steps` might be even given that every timestep

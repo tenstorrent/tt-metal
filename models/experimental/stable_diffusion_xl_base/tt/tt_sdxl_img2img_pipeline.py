@@ -56,7 +56,6 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
             self.num_inference_steps,
             self.pipeline_config.strength,
             denoising_start,
-            self.torch_pipeline,
         )
 
         if self.num_inference_steps < 1:
