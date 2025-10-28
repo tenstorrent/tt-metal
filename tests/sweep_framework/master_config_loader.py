@@ -12,9 +12,40 @@ from the master JSON file and convert them into sweep test parameters.
 
 import json
 import re
+import os
+import sys
 import ttnn
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
+from pathlib import Path
+
+# Get the base directory dynamically - import from model_tracer
+try:
+    # Try direct import (if model_tracer is in PYTHONPATH or same parent)
+    sys.path.insert(0, str(Path(__file__).parent.parent / "model_tracer"))
+    from generic_ops_tracer import get_base_dir
+except ImportError:
+    # Fallback: define inline if generic_ops_tracer not found
+    def get_base_dir():
+        """Get the tt-metal base directory from PYTHONPATH or current working directory"""
+        pythonpath = os.environ.get("PYTHONPATH", "")
+        if pythonpath:
+            paths = pythonpath.split(":")
+            for path in paths:
+                if "tt-metal" in path:
+                    if path.endswith("tt-metal"):
+                        return path
+                    parts = path.split("tt-metal")
+                    if parts:
+                        return parts[0] + "tt-metal"
+        current_dir = os.getcwd()
+        if "tt-metal" in current_dir:
+            parts = current_dir.split("tt-metal")
+            return parts[0] + "tt-metal"
+        return current_dir
+
+
+BASE_DIR = get_base_dir()
 
 
 @dataclass
@@ -30,9 +61,9 @@ class TensorConfig:
 class MasterConfigLoader:
     """Loads and converts master JSON configurations to sweep test parameters"""
 
-    def __init__(
-        self, master_file_path: str = "/home/ubuntu/tt-metal/model_tracer/traced_operations/ttnn_operations_master.json"
-    ):
+    def __init__(self, master_file_path: str = None):
+        if master_file_path is None:
+            master_file_path = os.path.join(BASE_DIR, "model_tracer/traced_operations/ttnn_operations_master.json")
         self.master_file_path = master_file_path
         self.master_data = None
         self.traced_configs_cache = {}  # Cache configs by operation name

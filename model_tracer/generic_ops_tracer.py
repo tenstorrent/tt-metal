@@ -26,7 +26,6 @@ import argparse
 from datetime import datetime
 
 
-# Get the base directory from PYTHONPATH if set, otherwise use current working directory
 def get_base_dir():
     """Get the tt-metal base directory from PYTHONPATH or current working directory"""
     pythonpath = os.environ.get("PYTHONPATH", "")

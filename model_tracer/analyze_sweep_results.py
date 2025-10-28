@@ -19,32 +19,16 @@ from typing import Dict, List, Any, Optional
 from collections import defaultdict
 import argparse
 
+# Get the base directory dynamically
+try:
+    from generic_ops_tracer import get_base_dir
+except ImportError:
+    # Fallback if running from different directory
+    import sys
+    from pathlib import Path
 
-# Get the base directory from PYTHONPATH if set, otherwise use current working directory
-def get_base_dir():
-    """Get the tt-metal base directory from PYTHONPATH or current working directory"""
-    pythonpath = os.environ.get("PYTHONPATH", "")
-    if pythonpath:
-        # PYTHONPATH might contain multiple paths separated by ':'
-        paths = pythonpath.split(":")
-        for path in paths:
-            # Look for tt-metal directory
-            if "tt-metal" in path:
-                # Extract the tt-metal base directory
-                if path.endswith("tt-metal"):
-                    return path
-                # Handle cases like /home/ubuntu/tt-metal/python_env/lib/python3.X/site-packages
-                parts = path.split("tt-metal")
-                if parts:
-                    return parts[0] + "tt-metal"
-    # Fallback: assume we're running from within tt-metal and find it
-    current_dir = os.getcwd()
-    if "tt-metal" in current_dir:
-        parts = current_dir.split("tt-metal")
-        return parts[0] + "tt-metal"
-    # Last resort: use current directory
-    return current_dir
-
+    sys.path.insert(0, str(Path(__file__).parent))
+    from generic_ops_tracer import get_base_dir
 
 BASE_DIR = get_base_dir()
 
