@@ -56,7 +56,9 @@ public:
 
     void add_dispatch_wait_with_prefetch_stall(uint32_t flags, uint32_t address, uint32_t stream, uint32_t count);
 
-    void add_prefetch_relay_linear(uint32_t noc_xy_addr, DeviceAddr lengthB, uint32_t addr);
+    void add_prefetch_relay_linear(uint32_t noc_xy_addr, DeviceAddr lengthB, uint64_t addr);
+
+    void add_prefetch_relay_linear_h(uint32_t noc_xy_addr, DeviceAddr lengthB, uint64_t addr);
 
     void add_prefetch_relay_paged(
         uint8_t is_dram,
@@ -93,8 +95,8 @@ public:
     void add_dispatch_write_linear_h(
         uint8_t num_mcast_dests,
         uint32_t noc_xy_addr,
-        uint32_t addr,
-        uint32_t data_sizeB,
+        uint64_t addr,
+        uint64_t data_sizeB,
         const void* data = nullptr,
         uint32_t write_offset_index = 0);
 

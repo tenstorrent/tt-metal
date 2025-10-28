@@ -156,13 +156,34 @@ void DeviceCommand<hugepage_write>::add_dispatch_wait_with_prefetch_stall(
 }
 
 template <bool hugepage_write>
-void DeviceCommand<hugepage_write>::add_prefetch_relay_linear(uint32_t noc_xy_addr, DeviceAddr lengthB, uint32_t addr) {
+void DeviceCommand<hugepage_write>::add_prefetch_relay_linear(uint32_t noc_xy_addr, DeviceAddr lengthB, uint64_t addr) {
     uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmdLarge), this->pcie_alignment);
     auto initialize_relay_linear_cmd = [&](CQPrefetchCmdLarge* relay_linear_cmd) {
         relay_linear_cmd->base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR;
         relay_linear_cmd->relay_linear.noc_xy_addr = noc_xy_addr;
         relay_linear_cmd->relay_linear.length = lengthB;
         relay_linear_cmd->relay_linear.addr = addr;
+    };
+    CQPrefetchCmdLarge* relay_linear_cmd_dst = this->reserve_space<CQPrefetchCmdLarge*>(increment_sizeB);
+
+    if constexpr (hugepage_write) {
+        alignas(MEMCPY_ALIGNMENT) CQPrefetchCmdLarge relay_linear_cmd{};
+        initialize_relay_linear_cmd(&relay_linear_cmd);
+        this->memcpy(relay_linear_cmd_dst, &relay_linear_cmd, sizeof(CQPrefetchCmdLarge));
+    } else {
+        initialize_relay_linear_cmd(relay_linear_cmd_dst);
+    }
+}
+
+template <bool hugepage_write>
+void DeviceCommand<hugepage_write>::add_prefetch_relay_linear_h(
+    uint32_t noc_xy_addr, DeviceAddr lengthB, uint64_t addr) {
+    uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmdLarge), this->pcie_alignment);
+    auto initialize_relay_linear_cmd = [&](CQPrefetchCmdLarge* relay_linear_cmd) {
+        relay_linear_cmd->base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR_H;
+        relay_linear_cmd->relay_linear_h.noc_xy_addr = noc_xy_addr;
+        relay_linear_cmd->relay_linear_h.length = lengthB;
+        relay_linear_cmd->relay_linear_h.addr = addr;
     };
     CQPrefetchCmdLarge* relay_linear_cmd_dst = this->reserve_space<CQPrefetchCmdLarge*>(increment_sizeB);
 
@@ -361,8 +382,8 @@ template <bool flush_prefetch, bool inline_data>
 void DeviceCommand<hugepage_write>::add_dispatch_write_linear_h(
     uint8_t num_mcast_dests,
     uint32_t noc_xy_addr,
-    uint32_t addr,
-    uint32_t data_sizeB,
+    uint64_t addr,
+    uint64_t data_sizeB,
     const void* data,
     uint32_t write_offset_index) {
     uint32_t payload_sizeB = sizeof(CQDispatchCmdLarge) + (flush_prefetch ? data_sizeB : 0);
@@ -398,7 +419,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_linear_h(
 
 // Explicit template instantiations for add_dispatch_write_linear_h
 template void DeviceCommand<true>::add_dispatch_write_linear_h<false, false>(
-    uint8_t, uint32_t, uint32_t, uint32_t, const void*, uint32_t);
+    uint8_t, uint32_t, uint64_t, uint64_t, const void*, uint32_t);
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(

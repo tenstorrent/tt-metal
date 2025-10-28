@@ -505,14 +505,15 @@ void process_write_linear(
     uint64_t dst_addr = cmd->write_linear.addr + write_offset[write_offset_index];
     uint64_t length = cmd->write_linear.length;
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmdLarge);
-    // DPRINT << "process_write_linear noc_xy:0x" << HEX() << dst_noc << ", write_offset:" << write_offset_index << ",
-    // dst_addr:0x" << dst_addr << ", length:0x" << length << ", data_ptr:0x" << data_ptr << DEC() << ENDL();
+    // DPRINT << "process_write_linear noc_xy:0x" << HEX() << dst_noc << ", write_offset:" << write_offset_index
+    // << ", dst_addr:0x" << dst_addr<< ", length:0x" << length << ", data_ptr:0x" << data_ptr << DEC() << ENDL();
+#if !defined(FABRIC_RELAY)
     if (multicast) {
         cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, true>(0, dst_noc, dst_addr);
     } else {
         cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, false>(0, dst_noc, dst_addr);
     }
-
+#endif
     while (length != 0) {
         // More data needs to be written, but we've exhausted the CB. Acquire more pages.
         if (cb_fence == data_ptr) {
@@ -550,12 +551,15 @@ void process_write_linear(
         // Transfer size is min(remaining_length, data_available_in_cb)
         uint32_t available_data = cb_fence - data_ptr;
         uint32_t xfer_size = length > available_data ? available_data : length;
-
+#if defined(FABRIC_RELAY)
+        noc_async_write(data_ptr, ((uint64_t)dst_noc << 32) | dst_addr, xfer_size);
+#else
         cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size, num_mcast_dests);
         // Increment counters based on the number of packets that were written
         uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE);
         noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;
         noc_nonposted_writes_acked[noc_index] += num_mcast_dests * num_noc_packets_written;
+#endif
         length -= xfer_size;
         data_ptr += xfer_size;
         dst_addr += xfer_size;
@@ -579,7 +583,7 @@ void process_write_paged(uint32_t& block_noc_writes_to_clear, uint32_t block_nex
     uint32_t page_size = cmd->write_paged.page_size;
     uint32_t pages = cmd->write_paged.pages;
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);
-    uint32_t write_length = pages * page_size;
+    uint64_t write_length = (uint64_t)pages * page_size;
     auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec<is_dram>(), base_addr, page_size);
     uint32_t dst_addr_offset = 0;  // Offset into page.
 
@@ -1422,6 +1426,8 @@ void kernel_main() {
     bool done = false;
     uint32_t heartbeat = 0;
     while (!done) {
+        // DPRINT << "[dispatch_" << is_h_variant << is_d_variant << "] top: cmd_ptr:0x" << HEX() << cmd_ptr << ",
+        // fence:0x" << cb_fence << ENDL();
         if (cmd_ptr == cb_fence) {
             if constexpr (is_h_variant && !is_d_variant) {
                 get_cb_page_and_release_pages_remote<
@@ -1467,6 +1473,8 @@ void kernel_main() {
 
         // Move to next page
         cmd_ptr = round_up_pow2(cmd_ptr, dispatch_cb_page_size);
+        // DPRINT << "[dispatch_" << is_h_variant << is_d_variant << "] bottom: cmd_ptr:0x" << HEX() << cmd_ptr << ",
+        // fence:0x" << cb_fence << ENDL();
     }
 
     // Release any held pages from the previous block

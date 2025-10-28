@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <cstdint>
 #include <unistd.h>
@@ -78,12 +79,12 @@ void PinnedMemoryImpl::initialize_from_devices(
     auto& cluster = MetalContext::instance().get_cluster();
 
     // Collect all devices and their associated MMIO devices, deduplicating MMIO devices
-    std::unordered_map<chip_id_t, chip_id_t> device_to_mmio_map;
-    std::unordered_set<chip_id_t> unique_mmio_devices;
+    std::unordered_map<ChipId, ChipId> device_to_mmio_map;
+    std::unordered_set<ChipId> unique_mmio_devices;
 
     for (IDevice* device : devices) {
-        chip_id_t device_id = device->id();
-        chip_id_t mmio_device_id = cluster.get_associated_mmio_device(device_id);
+        ChipId device_id = device->id();
+        ChipId mmio_device_id = cluster.get_associated_mmio_device(device_id);
         device_to_mmio_map[device_id] = mmio_device_id;
         unique_mmio_devices.insert(mmio_device_id);
     }
@@ -102,9 +103,9 @@ void PinnedMemoryImpl::initialize_from_devices(
     void* aligned_host_ptr = reinterpret_cast<void*>(aligned_base_addr);
 
     // Create one buffer per unique MMIO device, all mapping the same aligned host memory
-    std::unordered_map<chip_id_t, std::unique_ptr<tt::umd::SysmemBuffer>> mmio_buffers;
+    std::unordered_map<ChipId, std::unique_ptr<tt::umd::SysmemBuffer>> mmio_buffers;
 
-    for (chip_id_t mmio_device_id : unique_mmio_devices) {
+    for (ChipId mmio_device_id : unique_mmio_devices) {
         auto buffer = cluster.map_sysmem_buffer(mmio_device_id, aligned_host_ptr, mapped_size, map_to_noc);
 
         if (!buffer) {
@@ -118,13 +119,13 @@ void PinnedMemoryImpl::initialize_from_devices(
     device_to_mmio_map_ = std::move(device_to_mmio_map);
 }
 
-tt::umd::SysmemBuffer& PinnedMemoryImpl::get_buffer(chip_id_t device_id) {
+tt::umd::SysmemBuffer& PinnedMemoryImpl::get_buffer(ChipId device_id) {
     auto mmio_it = device_to_mmio_map_.find(device_id);
     if (mmio_it == device_to_mmio_map_.end()) {
         throw std::invalid_argument("Device " + std::to_string(device_id) + " not found in PinnedMemory");
     }
 
-    chip_id_t mmio_device_id = mmio_it->second;
+    ChipId mmio_device_id = mmio_it->second;
     auto buffer_it = device_buffers_.find(mmio_device_id);
     if (buffer_it == device_buffers_.end()) {
         throw std::invalid_argument(
@@ -133,13 +134,13 @@ tt::umd::SysmemBuffer& PinnedMemoryImpl::get_buffer(chip_id_t device_id) {
     return *buffer_it->second;
 }
 
-const tt::umd::SysmemBuffer& PinnedMemoryImpl::get_buffer(chip_id_t device_id) const {
+const tt::umd::SysmemBuffer& PinnedMemoryImpl::get_buffer(ChipId device_id) const {
     auto mmio_it = device_to_mmio_map_.find(device_id);
     if (mmio_it == device_to_mmio_map_.end()) {
         throw std::invalid_argument("Device " + std::to_string(device_id) + " not found in PinnedMemory");
     }
 
-    chip_id_t mmio_device_id = mmio_it->second;
+    ChipId mmio_device_id = mmio_it->second;
     auto buffer_it = device_buffers_.find(mmio_device_id);
     if (buffer_it == device_buffers_.end()) {
         throw std::invalid_argument(
@@ -166,17 +167,17 @@ const void* PinnedMemoryImpl::get_host_ptr() const {
     return static_cast<const void*>(base + host_offset_);
 }
 
-uint64_t PinnedMemoryImpl::get_device_addr(chip_id_t device_id) const {
+uint64_t PinnedMemoryImpl::get_device_addr(ChipId device_id) const {
     return get_buffer(device_id).get_device_io_addr() + static_cast<uint64_t>(host_offset_);
 }
 
-std::optional<PinnedMemory::NocAddr> PinnedMemoryImpl::get_noc_addr(chip_id_t device_id) const {
+std::optional<PinnedMemory::NocAddr> PinnedMemoryImpl::get_noc_addr(ChipId device_id) const {
     auto mmio_it = device_to_mmio_map_.find(device_id);
     if (mmio_it == device_to_mmio_map_.end()) {
         return std::nullopt;
     }
 
-    chip_id_t mmio_device_id = mmio_it->second;
+    ChipId mmio_device_id = mmio_it->second;
     auto buffer_it = device_buffers_.find(mmio_device_id);
     if (buffer_it == device_buffers_.end()) {
         return std::nullopt;
@@ -192,8 +193,8 @@ std::optional<PinnedMemory::NocAddr> PinnedMemoryImpl::get_noc_addr(chip_id_t de
     return PinnedMemory::NocAddr{noc_addr_opt.value() + static_cast<uint64_t>(host_offset_), mmio_device_id};
 }
 
-std::vector<chip_id_t> PinnedMemoryImpl::get_device_ids() const {
-    std::vector<chip_id_t> device_ids;
+std::vector<ChipId> PinnedMemoryImpl::get_device_ids() const {
+    std::vector<ChipId> device_ids;
     device_ids.reserve(device_to_mmio_map_.size());
 
     for (const auto& pair : device_to_mmio_map_) {
@@ -204,11 +205,11 @@ std::vector<chip_id_t> PinnedMemoryImpl::get_device_ids() const {
     return device_ids;
 }
 
-bool PinnedMemoryImpl::has_device(chip_id_t device_id) const {
+bool PinnedMemoryImpl::has_device(ChipId device_id) const {
     return device_to_mmio_map_.find(device_id) != device_to_mmio_map_.end();
 }
 
-bool PinnedMemoryImpl::usable_from_noc(chip_id_t device_id) const {
+bool PinnedMemoryImpl::usable_from_noc(ChipId device_id) const {
     // Check if mapped to NOC and device is its own MMIO device (i.e., MMIO-capable)
     auto mmio_it = device_to_mmio_map_.find(device_id);
     if (mmio_it == device_to_mmio_map_.end()) {
@@ -254,6 +255,69 @@ void* PinnedMemoryImpl::lock() {
 
 void PinnedMemoryImpl::unlock() {}
 
+/* Pinned memory cache manager */
+class PinnedMemoryManager {
+public:
+    std::lock_guard<std::mutex> lock_() { return std::lock_guard<std::mutex>(mutex_); }
+    void clear_cache() {
+        lock_();
+        pinned_memories_cache_.clear();
+    }
+    void cache_pin(PinnedMemoryWrapper&& pinned_memory_wrapper) {
+        lock_();
+        pinned_memories_cache_.emplace_back(std::move(pinned_memory_wrapper));
+    }
+    void uncache_pin(const PinnedMemoryWrapper& pinned_memory_wrapper) {
+        lock_();
+        auto it = std::find_if(
+            pinned_memories_cache_.begin(),
+            pinned_memories_cache_.end(),
+            [&](const PinnedMemoryWrapper& cached_wrapper) {
+                return cached_wrapper.device_range == pinned_memory_wrapper.device_range &&
+                       cached_wrapper.pinned_memory == pinned_memory_wrapper.pinned_memory;
+            });
+
+        if (it != pinned_memories_cache_.end()) {
+            pinned_memories_cache_.erase(it);
+        }
+    }
+
+    template <typename Predicate>
+    std::shared_ptr<PinnedMemory> find_matching_pin(Predicate pred) {
+        lock_();
+        auto it = std::find_if(pinned_memories_cache_.begin(), pinned_memories_cache_.end(), pred);
+        if (it != pinned_memories_cache_.end()) {
+            return it->pinned_memory;
+        }
+        return nullptr;
+    }
+
+private:
+    std::deque<PinnedMemoryWrapper> pinned_memories_cache_;
+    std::mutex mutex_;
+};
+
+// A cache for all memory pins actively in use
+PinnedMemoryManager pinned_memory_manager;
+
+void clear_pinned_memories_cache() { pinned_memory_manager.clear_cache(); }
+
+void add_pin_to_cache(PinnedMemoryWrapper&& pinned_memory_wrapper) {
+    pinned_memory_manager.cache_pin(std::move(pinned_memory_wrapper));
+}
+
+void remove_pin_from_cache(const PinnedMemoryWrapper& pinned_memory_wrapper) {
+    pinned_memory_manager.uncache_pin(pinned_memory_wrapper);
+}
+
+template <typename Predicate>
+std::shared_ptr<PinnedMemory> find_matching_pin_in_cache(Predicate pred) {
+    return pinned_memory_manager.find_matching_pin(pred);
+}
+// Explicit instantiation for std::function predicate type
+template std::shared_ptr<PinnedMemory> find_matching_pin_in_cache<std::function<bool(const PinnedMemoryWrapper&)>>(
+    std::function<bool(const PinnedMemoryWrapper&)>);
+
 // PinnedMemory pimpl wrapper implementation
 PinnedMemory::PinnedMemory(
     const std::vector<IDevice*>& devices, void* host_buffer, size_t buffer_size, bool map_to_noc) :
@@ -264,29 +328,27 @@ PinnedMemory::~PinnedMemory() = default;
 PinnedMemory::PinnedMemory(PinnedMemory&& other) noexcept = default;
 PinnedMemory& PinnedMemory::operator=(PinnedMemory&& other) noexcept = default;
 
-tt::umd::SysmemBuffer& PinnedMemory::get_buffer(chip_id_t device_id) { return pImpl->get_buffer(device_id); }
+tt::umd::SysmemBuffer& PinnedMemory::get_buffer(ChipId device_id) { return pImpl->get_buffer(device_id); }
 
-const tt::umd::SysmemBuffer& PinnedMemory::get_buffer(chip_id_t device_id) const {
-    return pImpl->get_buffer(device_id);
-}
+const tt::umd::SysmemBuffer& PinnedMemory::get_buffer(ChipId device_id) const { return pImpl->get_buffer(device_id); }
 
 void* PinnedMemory::get_host_ptr() { return pImpl->get_host_ptr(); }
 
 const void* PinnedMemory::get_host_ptr() const { return pImpl->get_host_ptr(); }
 
-uint64_t PinnedMemory::get_device_addr(chip_id_t device_id) const { return pImpl->get_device_addr(device_id); }
+uint64_t PinnedMemory::get_device_addr(ChipId device_id) const { return pImpl->get_device_addr(device_id); }
 
-std::optional<PinnedMemory::NocAddr> PinnedMemory::get_noc_addr(chip_id_t device_id) const {
+std::optional<PinnedMemory::NocAddr> PinnedMemory::get_noc_addr(ChipId device_id) const {
     return pImpl->get_noc_addr(device_id);
 }
 
 size_t PinnedMemory::get_buffer_size() const { return pImpl->get_buffer_size(); }
 
-std::vector<chip_id_t> PinnedMemory::get_device_ids() const { return pImpl->get_device_ids(); }
+std::vector<ChipId> PinnedMemory::get_device_ids() const { return pImpl->get_device_ids(); }
 
-bool PinnedMemory::has_device(chip_id_t device_id) const { return pImpl->has_device(device_id); }
+bool PinnedMemory::has_device(ChipId device_id) const { return pImpl->has_device(device_id); }
 
-bool PinnedMemory::usable_from_noc(chip_id_t device_id) const { return pImpl->usable_from_noc(device_id); }
+bool PinnedMemory::usable_from_noc(ChipId device_id) const { return pImpl->usable_from_noc(device_id); }
 
 void PinnedMemory::add_barrier_event(const distributed::MeshEvent& event) { pImpl->add_barrier_event(event); }
 

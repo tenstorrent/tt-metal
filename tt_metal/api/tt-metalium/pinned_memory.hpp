@@ -11,7 +11,8 @@
 #include <utility>
 #include <vector>
 
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace tt::umd {
 class SysmemBuffer;
@@ -38,7 +39,7 @@ class PinnedMemory {
 public:
     struct NocAddr {
         uint64_t addr;
-        chip_id_t device_id;
+        ChipId device_id;
     };
 
     ~PinnedMemory();
@@ -56,8 +57,8 @@ public:
      * @param device_id The device ID to get the buffer for
      * @return Reference to the SysmemBuffer
      */
-    tt::umd::SysmemBuffer& get_buffer(chip_id_t device_id);
-    const tt::umd::SysmemBuffer& get_buffer(chip_id_t device_id) const;
+    tt::umd::SysmemBuffer& get_buffer(ChipId device_id);
+    const tt::umd::SysmemBuffer& get_buffer(ChipId device_id) const;
 
     /**
      * @brief Get host pointer to the shared pinned memory
@@ -71,14 +72,14 @@ public:
      * @param device_id The device ID to get the device address for
      * @return Device address of the buffer
      */
-    uint64_t get_device_addr(chip_id_t device_id) const;
+    uint64_t get_device_addr(ChipId device_id) const;
 
     /**
      * @brief Get NOC address and the chip where it's usable from
      * @param device_id The device ID to get the NOC address for
      * @return Optional pair of (NOC address, MMIO chip ID) if buffer is mapped to NOC, nullopt otherwise
      */
-    std::optional<NocAddr> get_noc_addr(chip_id_t device_id) const;
+    std::optional<NocAddr> get_noc_addr(ChipId device_id) const;
 
     /**
      * @brief Get the buffer size.
@@ -90,21 +91,21 @@ public:
      * @brief Get all device IDs managed by this PinnedMemory
      * @return Vector of device IDs
      */
-    std::vector<chip_id_t> get_device_ids() const;
+    std::vector<ChipId> get_device_ids() const;
 
     /**
      * @brief Check if a device ID is managed by this PinnedMemory
      * @param device_id The device ID to check
      * @return True if the device is managed, false otherwise
      */
-    bool has_device(chip_id_t device_id) const;
+    bool has_device(ChipId device_id) const;
 
     /**
      * @brief Check if the pinned memory is usable from NOC for a specific device
      * @param device_id The device ID to check
      * @return True if the device can access the buffer via NOC (i.e., map_to_noc is true and device is MMIO-capable)
      */
-    bool usable_from_noc(chip_id_t device_id) const;
+    bool usable_from_noc(ChipId device_id) const;
 
     /**
      * @brief Add a barrier event that must complete before memory can be locked
@@ -148,5 +149,19 @@ private:
 
     std::unique_ptr<PinnedMemoryImpl> pImpl;
 };
+
+struct PinnedMemoryWrapper {
+    distributed::MeshCoordinateRangeSet device_range;
+    std::shared_ptr<PinnedMemory> pinned_memory;
+};
+
+void clear_pinned_memories_cache();
+
+void add_pin_to_cache(PinnedMemoryWrapper&& pinned_memory_wrapper);
+
+void remove_pin_from_cache(const PinnedMemoryWrapper& pinned_memory_wrapper);
+
+template <typename Predicate>
+std::shared_ptr<PinnedMemory> find_matching_pin_in_cache(Predicate pred);
 
 }  // namespace tt::tt_metal

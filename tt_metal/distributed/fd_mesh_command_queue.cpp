@@ -49,6 +49,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
+#include <tt-metalium/pinned_memory.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -520,7 +521,8 @@ void FDMeshCommandQueue::write_shard_to_device(
     const MeshCoordinate& device_coord,
     const void* src,
     const std::optional<BufferRegion>& region,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    std::shared_ptr<PinnedMemory> pinned_memory) {
     if (!mesh_device_->is_local(device_coord)) {
         return;
     }
@@ -537,7 +539,13 @@ void FDMeshCommandQueue::write_shard_to_device(
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
     buffer_dispatch::write_to_device_buffer(
-        src, *shard_view, id_, expected_num_workers_completed_, this->dispatch_core_type(), sub_device_ids);
+        src,
+        *shard_view,
+        id_,
+        expected_num_workers_completed_,
+        this->dispatch_core_type(),
+        sub_device_ids,
+        pinned_memory);
 }
 
 void FDMeshCommandQueue::read_shard_from_device(
