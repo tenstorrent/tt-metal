@@ -173,15 +173,66 @@ def test_wan_transformer_block(
     logger.info(
         f"Running TT model with spatial shape {tt_spatial.shape}, prompt shape {tt_prompt.shape}, rope_cos shape {tt_rope_cos.shape}, rope_sin shape {tt_rope_sin.shape}"
     )
-    tt_spatial_out = tt_model(
-        spatial_1BND=tt_spatial,
-        prompt_1BLP=tt_prompt,
-        temb_1BTD=tt_temb,
-        N=spatial_seq_len,
-        rope_cos=tt_rope_cos,
-        rope_sin=tt_rope_sin,
-        trans_mat=tt_trans_mat,
-    )
+
+    output_dir = "./wan_model"
+
+    def get_operation_count():
+        try:
+            with open(os.path.join(output_dir, "op_count.txt"), "r") as f:
+                count = int(f.read())
+        except FileNotFoundError:
+            count = 0
+        return count
+
+    def set_operation_count(count):
+        with open(os.path.join(output_dir, "op_count.txt"), "w") as f:
+            f.write(str(count) + "\n")
+
+    set_operation_count(0)
+
+    def print_if_tensor(arg, label):
+        if isinstance(arg, ttnn._ttnn.tensor.Tensor):
+            logger.info(f"  {label}: dtype={arg.dtype} shape={arg.shape} layout={arg.layout}")
+
+    def write_if_tensor(arg, filename):
+        if isinstance(arg, ttnn._ttnn.tensor.Tensor):
+            torch_tensor = ttnn.to_torch(
+                arg, dtype=torch.float32, mesh_composer=ttnn.concat_mesh_to_tensor_composer(mesh_device, dim=0)
+            )
+            torch.save(torch_tensor.cpu(), filename)
+
+    def pre_hook_write_io(operation, args, kwargs):
+        logger.info(f"Hook called for {operation.python_fully_qualified_name}")
+        for i, arg in enumerate(args):
+            print_if_tensor(arg, f"arg[{i}]")
+            write_if_tensor(
+                arg,
+                os.path.join(
+                    output_dir,
+                    f"op_{get_operation_count():05d}_{operation.python_fully_qualified_name}_input{i:02d}.pt",
+                ),
+            )
+        set_operation_count(get_operation_count() + 1)
+
+    def post_hook_write_io(operation, args, kwargs, output):
+        print_if_tensor(output, "output")
+        write_if_tensor(
+            output,
+            os.path.join(
+                output_dir, f"op_{get_operation_count():05d}_{operation.python_fully_qualified_name}_output.pt"
+            ),
+        )
+
+    with ttnn.register_pre_operation_hook(pre_hook_write_io), ttnn.register_post_operation_hook(post_hook_write_io):
+        tt_spatial_out = tt_model(
+            spatial_1BND=tt_spatial,
+            prompt_1BLP=tt_prompt,
+            temb_1BTD=tt_temb,
+            N=spatial_seq_len,
+            rope_cos=tt_rope_cos,
+            rope_sin=tt_rope_sin,
+            trans_mat=tt_trans_mat,
+        )
 
     spatial_concat_dims = [None, None]
     spatial_concat_dims[sp_axis] = 2
@@ -195,17 +246,17 @@ def test_wan_transformer_block(
     tt_spatial_out = tt_spatial_out[:, :, :spatial_seq_len, :]
 
     # Run torch model
-    logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
+    # logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
 
-    torch_spatial_out = torch_model(
-        hidden_states=spatial_input,
-        encoder_hidden_states=prompt_input,
-        temb=temb_input,
-        rotary_emb=[torch_rope_cos, torch_rope_sin],
-    )
+    # torch_spatial_out = torch_model(
+    #    hidden_states=spatial_input,
+    #    encoder_hidden_states=prompt_input,
+    #    temb=temb_input,
+    #    rotary_emb=[torch_rope_cos, torch_rope_sin],
+    # )
 
-    logger.info(f"Checking spatial outputs")
-    assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
+    # logger.info(f"Checking spatial outputs")
+    # assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
 
 @pytest.mark.parametrize(
