@@ -16,16 +16,15 @@ using namespace ckernel;
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_S
  * @tparam BUF_DESC_ID: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 0 - 16
- * @tparam IS_FP32_DEST_EN: Set to True to enable using Math destination Register in Float32 mode
+ * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32b mode
  */
-template <uint32_t UNP_SEL, uint32_t BUF_DESC_ID, bool IS_FP32_DEST_EN>
+template <uint32_t UNP_SEL, uint32_t BUF_DESC_ID, bool IS_32b_DEST_EN>
 inline void _llk_unpack_tilize_mop_config_()
 {
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_DEST),
         "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B/UNP_DEST");
     static_assert((BUF_DESC_ID < 16 && BUF_DESC_ID >= 0), "BUF_DESC_ID should be between 0-16 for unpackers");
-    static_assert(!(IS_FP32_DEST_EN && UNP_SEL == p_unpacr::UNP_B), "If IS_FP32_DEST_EN then UNP_SEL should be UNP_A or UNP_DEST");
 
     constexpr uint32_t MOP_OUTER_LOOP = 1;
     constexpr uint32_t MOP_INNER_LOOP = 1;
@@ -35,9 +34,13 @@ inline void _llk_unpack_tilize_mop_config_()
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_tile_instrn);
 
     // FP32 datacopy uses ELWADD, which requires datavalid from both SrcA and SrcB, so need to add SrcB datavalid
-    if constexpr (IS_FP32_DEST_EN && UNP_SEL == p_unpacr::UNP_A)
+    if constexpr (IS_32b_DEST_EN && UNP_SEL == p_unpacr::UNP_A)
     { // TODO pgardner: I dont think ill need this for float32 dest
         temp.set_end_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_B, 1 /*Dvalid*/, 0, 0, 0 /*clear to 0*/, 0 /*clear to 0*/));
+    }
+    else if constexpr (IS_32b_DEST_EN && UNP_SEL == p_unpacr::UNP_B)
+    {
+        temp.set_end_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_A, 1 /*Dvalid*/, 0, 0, 0 /*clear to 0*/, 0 /*clear to 0*/));
     }
 
     temp.program_bank0_sw_cntl(instrn_buffer);
@@ -49,11 +52,11 @@ inline void _llk_unpack_tilize_mop_config_()
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
  * @tparam BUF_DESC_ID: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 0 - 16
- * @tparam IS_FP32_DEST_EN: Set to True to enable using Math destination Register in Float32 mode
+ * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32b mode
  * @tparam FULL_CT_DIM: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet
  * @tparam C_DIM_FACES: number of faces in c_dim = number of tiles in c_dim * faces in c_dim per tile
  */
-template <uint32_t UNP_SEL, uint32_t BUF_DESC_ID, bool IS_FP32_DEST_EN, uint32_t FULL_CT_DIM, uint32_t C_DIM_FACES>
+template <uint32_t UNP_SEL, uint32_t BUF_DESC_ID, bool IS_32b_DEST_EN, uint32_t FULL_CT_DIM, uint32_t C_DIM_FACES>
 inline void _llk_unpack_tilize_init_()
 {
     if constexpr (UNP_SEL == p_unpacr::UNP_A)
@@ -72,7 +75,7 @@ inline void _llk_unpack_tilize_init_()
         cfg_rmw(THCON_UNPACKER1_REG1_UNPACK_STRIDE_VAL_SOURCE_RMW, 0);
         cfg_rmw(THCON_UNPACKER1_REG2_UNPACK_STRIDE_OFFSET_0_RMW, FULL_CT_DIM * C_DIM_FACES); // how much to stride to go to next row within the same tile
     }
-    _llk_unpack_tilize_mop_config_<UNP_SEL, BUF_DESC_ID, IS_FP32_DEST_EN>();
+    _llk_unpack_tilize_mop_config_<UNP_SEL, BUF_DESC_ID, IS_32b_DEST_EN>();
 }
 
 /**
@@ -104,17 +107,16 @@ inline void _llk_unpack_tilize_(const uint l1_tile_idx)
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
  * @tparam BUF_DESC_ID: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 0 - 16
- * @tparam IS_FP32_DEST_EN: Set to True to enable using Math destination Register in Float32 mode
+ * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32b mode
  * @param c_dim_face: number of faces in c_dim = number of tiles in c_dim * faces in c_dim per tile
  */
-template <uint32_t UNP_SEL, uint32_t BUF_DESC_ID, bool IS_FP32_DEST_EN, uint32_t FULL_CT_DIM, uint32_t C_DIM_FACES>
+template <uint32_t UNP_SEL, uint32_t BUF_DESC_ID, bool IS_32b_DEST_EN, uint32_t FULL_CT_DIM, uint32_t C_DIM_FACES>
 inline void _llk_unpack_tilize_strided_mop_config_()
 {
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_DEST),
         "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B/UNP_DEST");
     static_assert((BUF_DESC_ID < 16 && BUF_DESC_ID >= 0), "BUF_DESC_ID should be between 0-16 for unpackers");
-    static_assert(!(IS_FP32_DEST_EN && UNP_SEL == p_unpacr::UNP_B), "If IS_FP32_DEST_EN then UNP_SEL should be UNP_A");
 
     constexpr uint32_t MOP_OUTER_LOOP = 1;
     constexpr uint32_t MOP_INNER_LOOP = 1;
@@ -138,11 +140,11 @@ inline void _llk_unpack_tilize_strided_mop_config_()
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
  * @tparam BUF_DESC_ID: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 0 - 16
- * @tparam IS_FP32_DEST_EN: Set to True to enable using Math destination Register in Float32 mode
+ * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32b mode
  * @tparam FULL_CT_DIM: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet
  * @tparam C_DIM_FACES: number of faces in c_dim = number of tiles in c_dim * faces in c_dim per tile
  */
-template <uint32_t UNP_SEL, uint32_t BUF_DESC_ID, bool IS_FP32_DEST_EN, uint32_t FULL_CT_DIM, uint32_t C_DIM_FACES>
+template <uint32_t UNP_SEL, uint32_t BUF_DESC_ID, bool IS_32b_DEST_EN, uint32_t FULL_CT_DIM, uint32_t C_DIM_FACES>
 inline void _llk_unpack_tilize_strided_init_()
 {
     if constexpr (UNP_SEL == p_unpacr::UNP_A)
@@ -155,8 +157,8 @@ inline void _llk_unpack_tilize_strided_init_()
         cfg_rmw(THCON_UNPACKER1_REG1_UNPACK_STRIDE_VAL_SOURCE_RMW, 0);
         cfg_rmw(THCON_UNPACKER1_REG2_UNPACK_STRIDE_OFFSET_0_RMW, FULL_CT_DIM * C_DIM_FACES);
     }
-    _llk_unpack_tilize_strided_mop_config_<UNP_SEL, BUF_DESC_ID, IS_FP32_DEST_EN, FULL_CT_DIM, C_DIM_FACES>(); // TODO: This throws a compile time error for UPK
-                                                                                                               // but not PCK - why?
+    _llk_unpack_tilize_strided_mop_config_<UNP_SEL, BUF_DESC_ID, IS_32b_DEST_EN, FULL_CT_DIM, C_DIM_FACES>(); // TODO: This throws a compile time error for UPK
+                                                                                                              // but not PCK - why?
 }
 
 /**
@@ -164,11 +166,12 @@ inline void _llk_unpack_tilize_strided_init_()
  * @tparam UNP_SEL: Selects which unpacker resource to use,
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
  * @tparam FULL_CT_DIM: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet
+ * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32b mode
  * @tparam C_DIM_FACES: number of faces in c_dim = number of tiles in c_dim * faces in c_dim per tile
  * @param tile_shape: xyz dimensions of the tile
  * @param l1_tile_idx: c_dim index of tile in L1
  */
-template <uint32_t UNP_SEL, uint32_t FULL_CT_DIM, bool IS_FP32_DEST_EN, uint32_t C_DIM_FACES>
+template <uint32_t UNP_SEL, uint32_t FULL_CT_DIM, bool IS_32b_DEST_EN, uint32_t C_DIM_FACES>
 inline void _llk_unpack_tilize_strided_(const TileShape& tile_shape, const uint l1_tile_idx)
 {
     const uint32_t f1_row_idx =
@@ -195,9 +198,13 @@ inline void _llk_unpack_tilize_strided_(const TileShape& tile_shape, const uint 
         // Face 3
         TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, l1_tile_idx * C_DIM_FACES + C_DIM_FACES * tile_shape.face_r_dim * FULL_CT_DIM + 1);
     }
-    if constexpr (IS_FP32_DEST_EN)
+    if constexpr (UNP_SEL == p_unpacr::UNP_A && IS_32b_DEST_EN)
     { // TODO pgardner: I dont think ill need this for float32 dest
         TTI_UNPACR_NOP(p_unpacr::UNP_B, 1 /*Dvalid*/, 0, 0, 0 /*clear to 0*/, 0 /*clear to 0*/);
+    }
+    else if constexpr (UNP_SEL == p_unpacr::UNP_B && IS_32b_DEST_EN)
+    {
+        TTI_UNPACR_NOP(p_unpacr::UNP_A, 1 /*Dvalid*/, 0, 0, 0 /*clear to 0*/, 0 /*clear to 0*/);
     }
 
     if constexpr (UNP_SEL == p_unpacr::UNP_A)
@@ -221,17 +228,17 @@ inline void _llk_unpack_tilize_strided_(const TileShape& tile_shape, const uint 
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
  * @tparam BUF_DESC_ID: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 0 - 16
- * @tparam IS_FP32_DEST_EN: Set to True to enable using Math destination Register in Float32 mode
+ * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32b mode
  * @tparam ROWS_READ: number of rows read by one UNPACR0_STRIDE call
  */
-template <uint32_t UNP_SEL, uint32_t BUF_DESC_ID, bool IS_FP32_DEST_EN, uint32_t FULL_CT_DIM, uint32_t ROWS_READ>
+template <uint32_t UNP_SEL, uint32_t BUF_DESC_ID, bool IS_32b_DEST_EN, uint32_t FULL_CT_DIM, uint32_t ROWS_READ>
 inline void _llk_unpack_tilize_strided_mop_config_small_faces_()
 {
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_DEST),
         "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B/UNP_DEST");
     static_assert((BUF_DESC_ID < 16 && BUF_DESC_ID >= 0), "BUF_DESC_ID should be between 0-16 for unpackers");
-    static_assert(!(IS_FP32_DEST_EN && UNP_SEL != p_unpacr::UNP_A), "If IS_FP32_DEST_EN then UNP_SEL should be UNP_A");
+    static_assert(!(IS_32b_DEST_EN && UNP_SEL != p_unpacr::UNP_A), "If IS_32b_DEST_EN then UNP_SEL should be UNP_A");
 
     constexpr uint32_t MOP_OUTER_LOOP = 1;
     constexpr uint32_t MOP_INNER_LOOP = FULL_CT_DIM;
@@ -243,9 +250,13 @@ inline void _llk_unpack_tilize_strided_mop_config_small_faces_()
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_face0_instrn, unpack_face1_instrn);
 
     // FP32 datacopy uses ELWADD, which requires datavalid from both SrcA and SrcB, so need to add SrcB datavalid
-    if constexpr (IS_FP32_DEST_EN)
+    if constexpr (UNP_SEL == p_unpacr::UNP_A && IS_32b_DEST_EN)
     {
         temp.set_end_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_B, 1 /*Dvalid*/, 0, 0, 0 /*clear to 0*/, 0 /*clear to 0*/));
+    }
+    else if constexpr (UNP_SEL == p_unpacr::UNP_B && IS_32b_DEST_EN)
+    {
+        temp.set_end_op(TT_OP_UNPACR_NOP(p_unpacr::UNP_A, 1 /*Dvalid*/, 0, 0, 0 /*clear to 0*/, 0 /*clear to 0*/));
     }
 
     temp.program_bank0_sw_cntl(instrn_buffer);
@@ -257,17 +268,17 @@ inline void _llk_unpack_tilize_strided_mop_config_small_faces_()
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
  * @tparam BUF_DESC_ID: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 0 - 16
- * @tparam IS_FP32_DEST_EN: Set to True to enable using Math destination Register in Float32 mode
+ * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32b mode
  * @tparam FULL_CT_DIM: Number of tiles in a row of the input tensor. Input tensor is row-major format. R_DIM not implemented yet
  * @tparam ROWS_READ: number of rows read by one UNPACR0_STRIDE call
  * @tparam C_DIM_FACES: number of faces in c_dim = number of tiles in c_dim * faces in c_dim per tile
  */
-template <uint32_t UNP_SEL, uint32_t BUF_DESC_ID, bool IS_FP32_DEST_EN, uint32_t FULL_CT_DIM, uint32_t ROWS_READ, uint32_t C_DIM_FACES>
+template <uint32_t UNP_SEL, uint32_t BUF_DESC_ID, bool IS_32b_DEST_EN, uint32_t FULL_CT_DIM, uint32_t ROWS_READ, uint32_t C_DIM_FACES>
 inline void _llk_unpack_tilize_strided_init_small_faces_()
 {
     cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_STRIDE_VAL_SOURCE_RMW, 0);
     cfg_rmw(THCON_UNPACKER0_REG2_UNPACK_STRIDE_OFFSET_0_RMW, FULL_CT_DIM * C_DIM_FACES);
-    _llk_unpack_tilize_strided_mop_config_small_faces_<UNP_SEL, BUF_DESC_ID, IS_FP32_DEST_EN, FULL_CT_DIM, ROWS_READ>();
+    _llk_unpack_tilize_strided_mop_config_small_faces_<UNP_SEL, BUF_DESC_ID, IS_32b_DEST_EN, FULL_CT_DIM, ROWS_READ>();
 }
 
 /**

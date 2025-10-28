@@ -22,7 +22,7 @@ inline void _eltwise_unary_sfpu_configure_addrmod_()
         .srcb = {.incr = 0},
         .dest = {.incr = 0},
     }
-        .set(ADDR_MOD_7);
+        .set(ADDR_MOD_7, csr_read<CSR::TRISC_ID>());
 }
 
 /**
@@ -41,6 +41,17 @@ inline void _llk_math_eltwise_unary_sfpu_start_(const uint tile_index)
 inline void _llk_math_eltwise_unary_sfpu_done_()
 {
     _reset_counters_<p_setrwc::SET_D>();
+}
+
+/**
+ * @brief Clear SrcS valids
+ * @tparam SRCS_RD_DONE: Whether the source reg S read is done
+ * @tparam SRCS_WR_DONE: Whether the source reg S write is done
+ */
+template <bool SRCS_RD_DONE, bool SRCS_WR_DONE>
+inline void _llk_math_eltwise_unary_sfpu_srcs_clear_vlds_()
+{
+    TTI_SFPNOP(SRCS_WR_DONE, SRCS_RD_DONE, 0);
 }
 
 /**

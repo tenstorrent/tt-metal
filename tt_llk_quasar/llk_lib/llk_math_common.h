@@ -108,6 +108,11 @@ inline void _llk_math_upk_to_dest_hw_configure_()
     alu_config.f.ALU_ACC_CTRL_Fp32_enabled      = EN_FP32_MATH_FORMAT;
     alu_config.f.ALU_ACC_CTRL_SFPU_Fp32_enabled = EN_FP32_MATH_FORMAT;
     alu_config.f.ALU_ACC_CTRL_INT8_math_enabled = EN_INT32_MATH_FORMAT;
+
+    for (uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
+    {
+        cfg[ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32 + i] = alu_config.val[i];
+    }
 }
 
 /**
@@ -125,7 +130,8 @@ inline void _llk_math_set_dvalid_()
 
 /**
  * All the following functions are added to enable Math <-> Pack synchronization
- * on destination register due to dest dvalid issue:
+ * on destination register due to dest dvalid issue.
+ *
  * The following functions should be removed once the above issue is resolved
  */
 template <DstSync DST>

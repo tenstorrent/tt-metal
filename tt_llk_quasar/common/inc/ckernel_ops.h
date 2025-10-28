@@ -14,49 +14,41 @@
     ((((x) >> 30) & 0x3) |  \
      (((x) & 0x3FFFFFFF) << 2)) // Put top 2 bits, which are currently never 'b11 to bottom, indicating to Risc that they are not risc instructions
 
-#define TT_OP_ADDGPR(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
-    TT_OP(0x58, (((OpBisConst) << 23) + ((ResultRegIndex) << 12) + ((OpBRegIndex) << 6) + ((OpARegIndex) << 0)))
-#define TT_ADDGPR(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
-    ckernel::instrn_buffer[0] = TT_OP_ADDGPR(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex)
-#define TTI_ADDGPR(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_ADDGPR(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex)))
-#define TT_OP_ATCAS(MemHierSel, SwapVal, CmpVal, Sel32b, DataRegIndex, AddrRegIndex) \
-    TT_OP(0x64, (((MemHierSel) << 23) + ((SwapVal) << 18) + ((CmpVal) << 14) + ((Sel32b) << 12) + ((DataRegIndex) << 6) + ((AddrRegIndex) << 0)))
-#define TT_ATCAS(MemHierSel, SwapVal, CmpVal, Sel32b, DataRegIndex, AddrRegIndex) \
-    ckernel::instrn_buffer[0] = TT_OP_ATCAS(MemHierSel, SwapVal, CmpVal, Sel32b, DataRegIndex, AddrRegIndex)
-#define TTI_ATCAS(MemHierSel, SwapVal, CmpVal, Sel32b, DataRegIndex, AddrRegIndex) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_ATCAS(MemHierSel, SwapVal, CmpVal, Sel32b, DataRegIndex, AddrRegIndex)))
-#define TT_OP_ATGETM(mutex_index) TT_OP(0xa0, (((mutex_index) << 0)))
-#define TT_ATGETM(mutex_index)    ckernel::instrn_buffer[0] = TT_OP_ATGETM(mutex_index)
-#define TTI_ATGETM(mutex_index)   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_ATGETM(mutex_index)))
-#define TT_OP_ATINCGET(MemHierSel, WrapVal, Sel32b, DataRegIndex, AddrRegIndex) \
-    TT_OP(0x61, (((MemHierSel) << 23) + ((WrapVal) << 14) + ((Sel32b) << 12) + ((DataRegIndex) << 6) + ((AddrRegIndex) << 0)))
-#define TT_ATINCGET(MemHierSel, WrapVal, Sel32b, DataRegIndex, AddrRegIndex) \
-    ckernel::instrn_buffer[0] = TT_OP_ATINCGET(MemHierSel, WrapVal, Sel32b, DataRegIndex, AddrRegIndex)
-#define TTI_ATINCGET(MemHierSel, WrapVal, Sel32b, DataRegIndex, AddrRegIndex) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_ATINCGET(MemHierSel, WrapVal, Sel32b, DataRegIndex, AddrRegIndex)))
-#define TT_OP_ATINCGETPTR(MemHierSel, NoIncr, IncrVal, WrapVal, Sel32b, DataRegIndex, AddrRegIndex) \
-    TT_OP(                                                                                          \
-        0x62,                                                                                       \
-        (((MemHierSel) << 23) + ((NoIncr) << 22) + ((IncrVal) << 18) + ((WrapVal) << 14) + ((Sel32b) << 12) + ((DataRegIndex) << 6) + ((AddrRegIndex) << 0)))
-#define TT_ATINCGETPTR(MemHierSel, NoIncr, IncrVal, WrapVal, Sel32b, DataRegIndex, AddrRegIndex) \
-    ckernel::instrn_buffer[0] = TT_OP_ATINCGETPTR(MemHierSel, NoIncr, IncrVal, WrapVal, Sel32b, DataRegIndex, AddrRegIndex)
-#define TTI_ATINCGETPTR(MemHierSel, NoIncr, IncrVal, WrapVal, Sel32b, DataRegIndex, AddrRegIndex) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_ATINCGETPTR(MemHierSel, NoIncr, IncrVal, WrapVal, Sel32b, DataRegIndex, AddrRegIndex)))
-#define TT_OP_ATRELM(mutex_index) TT_OP(0xa1, (((mutex_index) << 0)))
-#define TT_ATRELM(mutex_index)    ckernel::instrn_buffer[0] = TT_OP_ATRELM(mutex_index)
-#define TTI_ATRELM(mutex_index)   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_ATRELM(mutex_index)))
-#define TT_OP_ATSWAP(MemHierSel, SwapMask, DataRegIndex, AddrRegIndex) \
-    TT_OP(0x63, (((MemHierSel) << 23) + ((SwapMask) << 14) + ((DataRegIndex) << 6) + ((AddrRegIndex) << 0)))
-#define TT_ATSWAP(MemHierSel, SwapMask, DataRegIndex, AddrRegIndex) ckernel::instrn_buffer[0] = TT_OP_ATSWAP(MemHierSel, SwapMask, DataRegIndex, AddrRegIndex)
-#define TTI_ATSWAP(MemHierSel, SwapMask, DataRegIndex, AddrRegIndex) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_ATSWAP(MemHierSel, SwapMask, DataRegIndex, AddrRegIndex)))
-#define TT_OP_BITWOPGPR(OpBisConst, OpSel, ResultRegIndex, OpBRegIndex, OpARegIndex) \
-    TT_OP(0x5b, (((OpBisConst) << 23) + ((OpSel) << 18) + ((ResultRegIndex) << 12) + ((OpBRegIndex) << 6) + ((OpARegIndex) << 0)))
-#define TT_BITWOPGPR(OpBisConst, OpSel, ResultRegIndex, OpBRegIndex, OpARegIndex) \
-    ckernel::instrn_buffer[0] = TT_OP_BITWOPGPR(OpBisConst, OpSel, ResultRegIndex, OpBRegIndex, OpARegIndex)
-#define TTI_BITWOPGPR(OpBisConst, OpSel, ResultRegIndex, OpBRegIndex, OpARegIndex) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_BITWOPGPR(OpBisConst, OpSel, ResultRegIndex, OpBRegIndex, OpARegIndex)))
+#define TT_OP_ADDGPR(OpB_is_Const, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index) \
+    TT_OP(0x58, (((OpB_is_Const) << 23) + ((Result_GPR_Index) << 12) + ((OpB_GPR_Index) << 6) + ((OpA_GPR_Index) << 0)))
+#define TT_ADDGPR(OpB_is_Const, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index) \
+    ckernel::instrn_buffer[0] = TT_OP_ADDGPR(OpB_is_Const, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index)
+#define TTI_ADDGPR(OpB_is_Const, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index) \
+    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_ADDGPR(OpB_is_Const, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index)))
+#define TT_OP_ATCAS(SwapVal, CmpVal, Sel32b, Addr_GPR_Index) TT_OP(0x64, (((SwapVal) << 18) + ((CmpVal) << 14) + ((Sel32b) << 12) + ((Addr_GPR_Index) << 0)))
+#define TT_ATCAS(SwapVal, CmpVal, Sel32b, Addr_GPR_Index)    ckernel::instrn_buffer[0] = TT_OP_ATCAS(SwapVal, CmpVal, Sel32b, Addr_GPR_Index)
+#define TTI_ATCAS(SwapVal, CmpVal, Sel32b, Addr_GPR_Index)   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_ATCAS(SwapVal, CmpVal, Sel32b, Addr_GPR_Index)))
+#define TT_OP_ATGETM(mutex_index)                            TT_OP(0xa0, (((mutex_index) << 0)))
+#define TT_ATGETM(mutex_index)                               ckernel::instrn_buffer[0] = TT_OP_ATGETM(mutex_index)
+#define TTI_ATGETM(mutex_index)                              INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_ATGETM(mutex_index)))
+#define TT_OP_ATINCGET(WrapVal, Sel32b, Data_GPR_Index, Addr_GPR_Index) \
+    TT_OP(0x61, (((WrapVal) << 14) + ((Sel32b) << 12) + ((Data_GPR_Index) << 6) + ((Addr_GPR_Index) << 0)))
+#define TT_ATINCGET(WrapVal, Sel32b, Data_GPR_Index, Addr_GPR_Index) ckernel::instrn_buffer[0] = TT_OP_ATINCGET(WrapVal, Sel32b, Data_GPR_Index, Addr_GPR_Index)
+#define TTI_ATINCGET(WrapVal, Sel32b, Data_GPR_Index, Addr_GPR_Index) \
+    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_ATINCGET(WrapVal, Sel32b, Data_GPR_Index, Addr_GPR_Index)))
+#define TT_OP_ATINCGETPTR(NoIncr, IncrVal, WrapVal, Sel32b, Data_GPR_Index, Addr_GPR_Index) \
+    TT_OP(0x62, (((NoIncr) << 22) + ((IncrVal) << 18) + ((WrapVal) << 14) + ((Sel32b) << 12) + ((Data_GPR_Index) << 6) + ((Addr_GPR_Index) << 0)))
+#define TT_ATINCGETPTR(NoIncr, IncrVal, WrapVal, Sel32b, Data_GPR_Index, Addr_GPR_Index) \
+    ckernel::instrn_buffer[0] = TT_OP_ATINCGETPTR(NoIncr, IncrVal, WrapVal, Sel32b, Data_GPR_Index, Addr_GPR_Index)
+#define TTI_ATINCGETPTR(NoIncr, IncrVal, WrapVal, Sel32b, Data_GPR_Index, Addr_GPR_Index) \
+    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_ATINCGETPTR(NoIncr, IncrVal, WrapVal, Sel32b, Data_GPR_Index, Addr_GPR_Index)))
+#define TT_OP_ATRELM(mutex_index)                              TT_OP(0xa1, (((mutex_index) << 0)))
+#define TT_ATRELM(mutex_index)                                 ckernel::instrn_buffer[0] = TT_OP_ATRELM(mutex_index)
+#define TTI_ATRELM(mutex_index)                                INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_ATRELM(mutex_index)))
+#define TT_OP_ATSWAP(SwapMask, Data_GPR_Index, Addr_GPR_Index) TT_OP(0x63, (((SwapMask) << 14) + ((Data_GPR_Index) << 6) + ((Addr_GPR_Index) << 0)))
+#define TT_ATSWAP(SwapMask, Data_GPR_Index, Addr_GPR_Index)    ckernel::instrn_buffer[0] = TT_OP_ATSWAP(SwapMask, Data_GPR_Index, Addr_GPR_Index)
+#define TTI_ATSWAP(SwapMask, Data_GPR_Index, Addr_GPR_Index)   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_ATSWAP(SwapMask, Data_GPR_Index, Addr_GPR_Index)))
+#define TT_OP_BITWOPGPR(OpB_is_Const, OpSel, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index) \
+    TT_OP(0x5b, (((OpB_is_Const) << 23) + ((OpSel) << 18) + ((Result_GPR_Index) << 12) + ((OpB_GPR_Index) << 6) + ((OpA_GPR_Index) << 0)))
+#define TT_BITWOPGPR(OpB_is_Const, OpSel, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index) \
+    ckernel::instrn_buffer[0] = TT_OP_BITWOPGPR(OpB_is_Const, OpSel, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index)
+#define TTI_BITWOPGPR(OpB_is_Const, OpSel, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index) \
+    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_BITWOPGPR(OpB_is_Const, OpSel, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index)))
 #define TT_OP_CFGSHIFTMASK(CfgRegAddr, disable_mask_on_old_val, operation, mask_width, right_cshift_amt, scratch_sel)                       \
     TT_OP(                                                                                                                                  \
         0xba,                                                                                                                               \
@@ -89,12 +81,12 @@
     ckernel::instrn_buffer[0] = TT_OP_CLEARDVALID(cleardvalid, cleardvalid_S, dest_dvalid_reset, dest_dvalid_client_bank_reset, dest_pulse_last, reset)
 #define TTI_CLEARDVALID(cleardvalid, cleardvalid_S, dest_dvalid_reset, dest_dvalid_client_bank_reset, dest_pulse_last, reset) \
     INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_CLEARDVALID(cleardvalid, cleardvalid_S, dest_dvalid_reset, dest_dvalid_client_bank_reset, dest_pulse_last, reset)))
-#define TT_OP_CMPGPR(OpBisConst, OpSel, ResultRegIndex, OpBRegIndex, OpARegIndex) \
-    TT_OP(0x5d, (((OpBisConst) << 23) + ((OpSel) << 18) + ((ResultRegIndex) << 12) + ((OpBRegIndex) << 6) + ((OpARegIndex) << 0)))
-#define TT_CMPGPR(OpBisConst, OpSel, ResultRegIndex, OpBRegIndex, OpARegIndex) \
-    ckernel::instrn_buffer[0] = TT_OP_CMPGPR(OpBisConst, OpSel, ResultRegIndex, OpBRegIndex, OpARegIndex)
-#define TTI_CMPGPR(OpBisConst, OpSel, ResultRegIndex, OpBRegIndex, OpARegIndex) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_CMPGPR(OpBisConst, OpSel, ResultRegIndex, OpBRegIndex, OpARegIndex)))
+#define TT_OP_CMPGPR(OpB_is_Const, OpSel, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index) \
+    TT_OP(0x5d, (((OpB_is_Const) << 23) + ((OpSel) << 18) + ((Result_GPR_Index) << 12) + ((OpB_GPR_Index) << 6) + ((OpA_GPR_Index) << 0)))
+#define TT_CMPGPR(OpB_is_Const, OpSel, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index) \
+    ckernel::instrn_buffer[0] = TT_OP_CMPGPR(OpB_is_Const, OpSel, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index)
+#define TTI_CMPGPR(OpB_is_Const, OpSel, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index) \
+    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_CMPGPR(OpB_is_Const, OpSel, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index)))
 #define TT_OP_COMMIT_SHADOW(force_commit) TT_OP(0x41, (((force_commit) << 0)))
 #define TT_COMMIT_SHADOW(force_commit)    ckernel::instrn_buffer[0] = TT_OP_COMMIT_SHADOW(force_commit)
 #define TTI_COMMIT_SHADOW(force_commit)   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_COMMIT_SHADOW(force_commit)))
@@ -108,7 +100,7 @@
 #define TTI_ELWADD(clear_dvalid, dest_accum_en, instr_mod19, addr_mode, dst) \
     INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_ELWADD(clear_dvalid, dest_accum_en, instr_mod19, addr_mode, dst)))
 #define TT_OP_ELWADDDI(clear_dvalid, ins_mod, srcb_addr, srca_addr, addr_mode, dst) \
-    TT_OP(0x31, (((clear_dvalid) << 22) + ((ins_mod) << 18) + ((srcb_addr) << 14) + ((srca_addr) << 10) + ((addr_mode) << 8) + ((dst) << 0)))
+    TT_OP(0x31, (((clear_dvalid) << 22) + ((ins_mod) << 19) + ((srcb_addr) << 15) + ((srca_addr) << 11) + ((addr_mode) << 8) + ((dst) << 0)))
 #define TT_ELWADDDI(clear_dvalid, ins_mod, srcb_addr, srca_addr, addr_mode, dst) \
     ckernel::instrn_buffer[0] = TT_OP_ELWADDDI(clear_dvalid, ins_mod, srcb_addr, srca_addr, addr_mode, dst)
 #define TTI_ELWADDDI(clear_dvalid, ins_mod, srcb_addr, srca_addr, addr_mode, dst) \
@@ -120,7 +112,7 @@
 #define TTI_ELWMUL(clear_dvalid, dest_accum_en, instr_mod19, addr_mode, dst) \
     INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_ELWMUL(clear_dvalid, dest_accum_en, instr_mod19, addr_mode, dst)))
 #define TT_OP_ELWMULDI(clear_dvalid, ins_mod, srcb_addr, srca_addr, addr_mode, dst) \
-    TT_OP(0x3a, (((clear_dvalid) << 22) + ((ins_mod) << 18) + ((srcb_addr) << 14) + ((srca_addr) << 10) + ((addr_mode) << 8) + ((dst) << 0)))
+    TT_OP(0x3a, (((clear_dvalid) << 22) + ((ins_mod) << 19) + ((srcb_addr) << 15) + ((srca_addr) << 11) + ((addr_mode) << 8) + ((dst) << 0)))
 #define TT_ELWMULDI(clear_dvalid, ins_mod, srcb_addr, srca_addr, addr_mode, dst) \
     ckernel::instrn_buffer[0] = TT_OP_ELWMULDI(clear_dvalid, ins_mod, srcb_addr, srca_addr, addr_mode, dst)
 #define TTI_ELWMULDI(clear_dvalid, ins_mod, srcb_addr, srca_addr, addr_mode, dst) \
@@ -132,23 +124,23 @@
 #define TTI_ELWSUB(clear_dvalid, dest_accum_en, instr_mod19, addr_mode, dst) \
     INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_ELWSUB(clear_dvalid, dest_accum_en, instr_mod19, addr_mode, dst)))
 #define TT_OP_ELWSUBDI(clear_dvalid, ins_mod, srcb_addr, srca_addr, addr_mode, dst) \
-    TT_OP(0x32, (((clear_dvalid) << 22) + ((ins_mod) << 18) + ((srcb_addr) << 14) + ((srca_addr) << 10) + ((addr_mode) << 8) + ((dst) << 0)))
+    TT_OP(0x32, (((clear_dvalid) << 22) + ((ins_mod) << 19) + ((srcb_addr) << 15) + ((srca_addr) << 11) + ((addr_mode) << 8) + ((dst) << 0)))
 #define TT_ELWSUBDI(clear_dvalid, ins_mod, srcb_addr, srca_addr, addr_mode, dst) \
     ckernel::instrn_buffer[0] = TT_OP_ELWSUBDI(clear_dvalid, ins_mod, srcb_addr, srca_addr, addr_mode, dst)
 #define TTI_ELWSUBDI(clear_dvalid, ins_mod, srcb_addr, srca_addr, addr_mode, dst) \
     INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_ELWSUBDI(clear_dvalid, ins_mod, srcb_addr, srca_addr, addr_mode, dst)))
-#define TT_OP_GAPOOL(clear_dvalid, instr_mod19, pool_addr_mode, max_pool_index_en, dst) \
-    TT_OP(0x34, (((clear_dvalid) << 22) + ((instr_mod19) << 19) + ((pool_addr_mode) << 15) + ((max_pool_index_en) << 14) + ((dst) << 0)))
-#define TT_GAPOOL(clear_dvalid, instr_mod19, pool_addr_mode, max_pool_index_en, dst) \
-    ckernel::instrn_buffer[0] = TT_OP_GAPOOL(clear_dvalid, instr_mod19, pool_addr_mode, max_pool_index_en, dst)
-#define TTI_GAPOOL(clear_dvalid, instr_mod19, pool_addr_mode, max_pool_index_en, dst) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_GAPOOL(clear_dvalid, instr_mod19, pool_addr_mode, max_pool_index_en, dst)))
-#define TT_OP_GMPOOL(clear_dvalid, instr_mod19, pool_addr_mode, max_pool_index_en, dst) \
-    TT_OP(0x33, (((clear_dvalid) << 22) + ((instr_mod19) << 19) + ((pool_addr_mode) << 15) + ((max_pool_index_en) << 14) + ((dst) << 0)))
-#define TT_GMPOOL(clear_dvalid, instr_mod19, pool_addr_mode, max_pool_index_en, dst) \
-    ckernel::instrn_buffer[0] = TT_OP_GMPOOL(clear_dvalid, instr_mod19, pool_addr_mode, max_pool_index_en, dst)
-#define TTI_GMPOOL(clear_dvalid, instr_mod19, pool_addr_mode, max_pool_index_en, dst) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_GMPOOL(clear_dvalid, instr_mod19, pool_addr_mode, max_pool_index_en, dst)))
+#define TT_OP_GAPOOL(clear_dvalid, instr_mod19, pool_addr_mode, rsvd, dst) \
+    TT_OP(0x34, (((clear_dvalid) << 22) + ((instr_mod19) << 19) + ((pool_addr_mode) << 15) + ((rsvd) << 14) + ((dst) << 0)))
+#define TT_GAPOOL(clear_dvalid, instr_mod19, pool_addr_mode, rsvd, dst) \
+    ckernel::instrn_buffer[0] = TT_OP_GAPOOL(clear_dvalid, instr_mod19, pool_addr_mode, rsvd, dst)
+#define TTI_GAPOOL(clear_dvalid, instr_mod19, pool_addr_mode, rsvd, dst) \
+    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_GAPOOL(clear_dvalid, instr_mod19, pool_addr_mode, rsvd, dst)))
+#define TT_OP_GMPOOL(clear_dvalid, instr_mod19, pool_addr_mode, rsvd, dst) \
+    TT_OP(0x33, (((clear_dvalid) << 22) + ((instr_mod19) << 19) + ((pool_addr_mode) << 15) + ((rsvd) << 14) + ((dst) << 0)))
+#define TT_GMPOOL(clear_dvalid, instr_mod19, pool_addr_mode, rsvd, dst) \
+    ckernel::instrn_buffer[0] = TT_OP_GMPOOL(clear_dvalid, instr_mod19, pool_addr_mode, rsvd, dst)
+#define TTI_GMPOOL(clear_dvalid, instr_mod19, pool_addr_mode, rsvd, dst) \
+    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_GMPOOL(clear_dvalid, instr_mod19, pool_addr_mode, rsvd, dst)))
 #define TT_OP_HALT                                                           TT_OP(0x23, 0)
 #define TT_HALT                                                              ckernel::instrn_buffer[0] = TT_OP_HALT
 #define TTI_HALT                                                             INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_HALT))
@@ -165,15 +157,15 @@
     ckernel::instrn_buffer[0] = TT_OP_INC_SRC_TILE_FACE_ROW_IDX(Tile_Face_Row_Sel, EngineSel, Value)
 #define TTI_INC_SRC_TILE_FACE_ROW_IDX(Tile_Face_Row_Sel, EngineSel, Value) \
     INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_INC_SRC_TILE_FACE_ROW_IDX(Tile_Face_Row_Sel, EngineSel, Value)))
-#define TT_OP_LOADIND(SizeSel, OffsetIndex, AutoIncSpec, DataRegIndex, AddrRegIndex) \
-    TT_OP(0x49, (((SizeSel) << 22) + ((OffsetIndex) << 14) + ((AutoIncSpec) << 12) + ((DataRegIndex) << 6) + ((AddrRegIndex) << 0)))
-#define TT_LOADIND(SizeSel, OffsetIndex, AutoIncSpec, DataRegIndex, AddrRegIndex) \
-    ckernel::instrn_buffer[0] = TT_OP_LOADIND(SizeSel, OffsetIndex, AutoIncSpec, DataRegIndex, AddrRegIndex)
-#define TTI_LOADIND(SizeSel, OffsetIndex, AutoIncSpec, DataRegIndex, AddrRegIndex) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_LOADIND(SizeSel, OffsetIndex, AutoIncSpec, DataRegIndex, AddrRegIndex)))
-#define TT_OP_LOADREG(TdmaDataRegIndex, RegAddr) TT_OP(0x68, (((TdmaDataRegIndex) << 18) + ((RegAddr) << 0)))
-#define TT_LOADREG(TdmaDataRegIndex, RegAddr)    ckernel::instrn_buffer[0] = TT_OP_LOADREG(TdmaDataRegIndex, RegAddr)
-#define TTI_LOADREG(TdmaDataRegIndex, RegAddr)   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_LOADREG(TdmaDataRegIndex, RegAddr)))
+#define TT_OP_LOADIND(SizeSel, OffsetIndex, AutoIncSpec, Data_GPR_Index, Addr_GPR_Index) \
+    TT_OP(0x49, (((SizeSel) << 22) + ((OffsetIndex) << 14) + ((AutoIncSpec) << 12) + ((Data_GPR_Index) << 6) + ((Addr_GPR_Index) << 0)))
+#define TT_LOADIND(SizeSel, OffsetIndex, AutoIncSpec, Data_GPR_Index, Addr_GPR_Index) \
+    ckernel::instrn_buffer[0] = TT_OP_LOADIND(SizeSel, OffsetIndex, AutoIncSpec, Data_GPR_Index, Addr_GPR_Index)
+#define TTI_LOADIND(SizeSel, OffsetIndex, AutoIncSpec, Data_GPR_Index, Addr_GPR_Index) \
+    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_LOADIND(SizeSel, OffsetIndex, AutoIncSpec, Data_GPR_Index, Addr_GPR_Index)))
+#define TT_OP_LOADREG(Data_GPR_Index, RegAddr) TT_OP(0x68, (((Data_GPR_Index) << 18) + ((RegAddr) << 0)))
+#define TT_LOADREG(Data_GPR_Index, RegAddr)    ckernel::instrn_buffer[0] = TT_OP_LOADREG(Data_GPR_Index, RegAddr)
+#define TTI_LOADREG(Data_GPR_Index, RegAddr)   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_LOADREG(Data_GPR_Index, RegAddr)))
 #define TT_OP_MOP(mop_type, done, loop_count, zmask_lo8_or_loop_count) \
     TT_OP(0x01, (((mop_type) << 23) + ((done) << 22) + ((loop_count) << 15) + ((zmask_lo8_or_loop_count) << 0)))
 #define TT_MOP(mop_type, done, loop_count, zmask_lo8_or_loop_count) ckernel::instrn_buffer[0] = TT_OP_MOP(mop_type, done, loop_count, zmask_lo8_or_loop_count)
@@ -216,18 +208,18 @@
     ckernel::instrn_buffer[0] = TT_OP_MOVDBGB2D(dest_32b_lo, src, addr_mode, transfer_sz, bcast_datum0, dst)
 #define TTI_MOVDBGB2D(dest_32b_lo, src, addr_mode, transfer_sz, bcast_datum0, dst) \
     INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_MOVDBGB2D(dest_32b_lo, src, addr_mode, transfer_sz, bcast_datum0, dst)))
-#define TT_OP_MULGPR(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
-    TT_OP(0x5a, (((OpBisConst) << 23) + ((ResultRegIndex) << 12) + ((OpBRegIndex) << 6) + ((OpARegIndex) << 0)))
-#define TT_MULGPR(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
-    ckernel::instrn_buffer[0] = TT_OP_MULGPR(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex)
-#define TTI_MULGPR(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_MULGPR(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex)))
+#define TT_OP_MULGPR(OpB_is_Const, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index) \
+    TT_OP(0x5a, (((OpB_is_Const) << 23) + ((Result_GPR_Index) << 12) + ((OpB_GPR_Index) << 6) + ((OpA_GPR_Index) << 0)))
+#define TT_MULGPR(OpB_is_Const, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index) \
+    ckernel::instrn_buffer[0] = TT_OP_MULGPR(OpB_is_Const, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index)
+#define TTI_MULGPR(OpB_is_Const, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index) \
+    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_MULGPR(OpB_is_Const, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index)))
 #define TT_OP_MVMUL(clear_dvalid, instr_mod19, addr_mode, dst) \
     TT_OP(0x26, (((clear_dvalid) << 22) + ((instr_mod19) << 19) + ((addr_mode) << 14) + ((dst) << 0)))
 #define TT_MVMUL(clear_dvalid, instr_mod19, addr_mode, dst)  ckernel::instrn_buffer[0] = TT_OP_MVMUL(clear_dvalid, instr_mod19, addr_mode, dst)
 #define TTI_MVMUL(clear_dvalid, instr_mod19, addr_mode, dst) INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_MVMUL(clear_dvalid, instr_mod19, addr_mode, dst)))
 #define TT_OP_MVMULDI(clear_dvalid, ins_mod, srcb_addr, srca_addr, addr_mode, dst) \
-    TT_OP(0x25, (((clear_dvalid) << 22) + ((ins_mod) << 18) + ((srcb_addr) << 14) + ((srca_addr) << 10) + ((addr_mode) << 8) + ((dst) << 0)))
+    TT_OP(0x25, (((clear_dvalid) << 22) + ((ins_mod) << 19) + ((srcb_addr) << 15) + ((srca_addr) << 11) + ((addr_mode) << 8) + ((dst) << 0)))
 #define TT_MVMULDI(clear_dvalid, ins_mod, srcb_addr, srca_addr, addr_mode, dst) \
     ckernel::instrn_buffer[0] = TT_OP_MVMULDI(clear_dvalid, ins_mod, srcb_addr, srca_addr, addr_mode, dst)
 #define TTI_MVMULDI(clear_dvalid, ins_mod, srcb_addr, srca_addr, addr_mode, dst) \
@@ -478,17 +470,17 @@
         Buffer_Descriptor_Table_Sel,                     \
         PackerSel,                                       \
         ClrDatValid)))
-#define TT_OP_PACR_UNTILIZE(Row_Cnt_Enc, Cntr_Reset_mask, Dst_Z_Cntr_inc, Src_Z_Cntr_inc, Packer_Sel, Buffer_Descriptor_Table_Sel, ClrDatValid) \
-    TT_OP(                                                                                                                                      \
-        0x42,                                                                                                                                   \
-        (((Row_Cnt_Enc) << 14) + ((Cntr_Reset_mask) << 12) + ((Dst_Z_Cntr_inc) << 10) + ((Src_Z_Cntr_inc) << 8) + ((Packer_Sel) << 7) +         \
+#define TT_OP_PACR_UNTILIZE(Reserved, Cntr_Reset_mask, Dst_Z_Cntr_inc, Src_Z_Cntr_inc, Packer_Sel, Buffer_Descriptor_Table_Sel, ClrDatValid) \
+    TT_OP(                                                                                                                                   \
+        0x42,                                                                                                                                \
+        (((Reserved) << 14) + ((Cntr_Reset_mask) << 12) + ((Dst_Z_Cntr_inc) << 10) + ((Src_Z_Cntr_inc) << 8) + ((Packer_Sel) << 7) +         \
          ((Buffer_Descriptor_Table_Sel) << 2) + ((ClrDatValid) << 1)))
-#define TT_PACR_UNTILIZE(Row_Cnt_Enc, Cntr_Reset_mask, Dst_Z_Cntr_inc, Src_Z_Cntr_inc, Packer_Sel, Buffer_Descriptor_Table_Sel, ClrDatValid) \
-    ckernel::instrn_buffer[0] =                                                                                                              \
-        TT_OP_PACR_UNTILIZE(Row_Cnt_Enc, Cntr_Reset_mask, Dst_Z_Cntr_inc, Src_Z_Cntr_inc, Packer_Sel, Buffer_Descriptor_Table_Sel, ClrDatValid)
-#define TTI_PACR_UNTILIZE(Row_Cnt_Enc, Cntr_Reset_mask, Dst_Z_Cntr_inc, Src_Z_Cntr_inc, Packer_Sel, Buffer_Descriptor_Table_Sel, ClrDatValid) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(                                                                                                        \
-        TT_OP_PACR_UNTILIZE(Row_Cnt_Enc, Cntr_Reset_mask, Dst_Z_Cntr_inc, Src_Z_Cntr_inc, Packer_Sel, Buffer_Descriptor_Table_Sel, ClrDatValid)))
+#define TT_PACR_UNTILIZE(Reserved, Cntr_Reset_mask, Dst_Z_Cntr_inc, Src_Z_Cntr_inc, Packer_Sel, Buffer_Descriptor_Table_Sel, ClrDatValid) \
+    ckernel::instrn_buffer[0] =                                                                                                           \
+        TT_OP_PACR_UNTILIZE(Reserved, Cntr_Reset_mask, Dst_Z_Cntr_inc, Src_Z_Cntr_inc, Packer_Sel, Buffer_Descriptor_Table_Sel, ClrDatValid)
+#define TTI_PACR_UNTILIZE(Reserved, Cntr_Reset_mask, Dst_Z_Cntr_inc, Src_Z_Cntr_inc, Packer_Sel, Buffer_Descriptor_Table_Sel, ClrDatValid) \
+    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(                                                                                                     \
+        TT_OP_PACR_UNTILIZE(Reserved, Cntr_Reset_mask, Dst_Z_Cntr_inc, Src_Z_Cntr_inc, Packer_Sel, Buffer_Descriptor_Table_Sel, ClrDatValid)))
 #define TT_OP_POP_TILES(unpacker_rd_done_wait_mask, num_tiles, buffer_sel) \
     TT_OP(0x3e, (((unpacker_rd_done_wait_mask) << 15) + ((num_tiles) << 5) + ((buffer_sel) << 0)))
 #define TT_POP_TILES(unpacker_rd_done_wait_mask, num_tiles, buffer_sel) \
@@ -582,18 +574,15 @@
 #define TT_SEMWAIT(stall_res, wait_sem_cond, sem_bank_sel, sem_sel) ckernel::instrn_buffer[0] = TT_OP_SEMWAIT(stall_res, wait_sem_cond, sem_bank_sel, sem_sel)
 #define TTI_SEMWAIT(stall_res, wait_sem_cond, sem_bank_sel, sem_sel) \
     INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SEMWAIT(stall_res, wait_sem_cond, sem_bank_sel, sem_sel)))
-#define TT_OP_SETASHRMV(reg_mask2) TT_OP(0x1c, (((reg_mask2) << 0)))
-#define TT_SETASHRMV(reg_mask2)    ckernel::instrn_buffer[0] = TT_OP_SETASHRMV(reg_mask2)
-#define TTI_SETASHRMV(reg_mask2)   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SETASHRMV(reg_mask2)))
-#define TT_OP_SETDVALID(setvalid)  TT_OP(0x57, (((setvalid) << 0)))
-#define TT_SETDVALID(setvalid)     ckernel::instrn_buffer[0] = TT_OP_SETDVALID(setvalid)
-#define TTI_SETDVALID(setvalid)    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SETDVALID(setvalid)))
-#define TT_OP_SETGPR(Payload_SigSelSize, Payload_SigSel, SetSignalsMode, RegIndex16b) \
-    TT_OP(0x45, (((Payload_SigSelSize) << 22) + ((Payload_SigSel) << 8) + ((SetSignalsMode) << 7) + ((RegIndex16b) << 0)))
-#define TT_SETGPR(Payload_SigSelSize, Payload_SigSel, SetSignalsMode, RegIndex16b) \
-    ckernel::instrn_buffer[0] = TT_OP_SETGPR(Payload_SigSelSize, Payload_SigSel, SetSignalsMode, RegIndex16b)
-#define TTI_SETGPR(Payload_SigSelSize, Payload_SigSel, SetSignalsMode, RegIndex16b) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SETGPR(Payload_SigSelSize, Payload_SigSel, SetSignalsMode, RegIndex16b)))
+#define TT_OP_SETDVALID(setvalid) TT_OP(0x57, (((setvalid) << 0)))
+#define TT_SETDVALID(setvalid)    ckernel::instrn_buffer[0] = TT_OP_SETDVALID(setvalid)
+#define TTI_SETDVALID(setvalid)   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SETDVALID(setvalid)))
+#define TT_OP_SETGPR(Payload_SigSelSize, Payload_SigSel, SetSignalsMode, GPR_Index16b) \
+    TT_OP(0x45, (((Payload_SigSelSize) << 22) + ((Payload_SigSel) << 8) + ((SetSignalsMode) << 7) + ((GPR_Index16b) << 0)))
+#define TT_SETGPR(Payload_SigSelSize, Payload_SigSel, SetSignalsMode, GPR_Index16b) \
+    ckernel::instrn_buffer[0] = TT_OP_SETGPR(Payload_SigSelSize, Payload_SigSel, SetSignalsMode, GPR_Index16b)
+#define TTI_SETGPR(Payload_SigSelSize, Payload_SigSel, SetSignalsMode, GPR_Index16b) \
+    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SETGPR(Payload_SigSelSize, Payload_SigSel, SetSignalsMode, GPR_Index16b)))
 #define TT_OP_SETRWC(clear_ab_vld, rwc_cr, rwc_val, BitMask)                 TT_OP(0x37, (((clear_ab_vld) << 22) + ((rwc_cr) << 18) + ((rwc_val) << 6) + ((BitMask) << 0)))
 #define TT_SETRWC(clear_ab_vld, rwc_cr, rwc_val, BitMask)                    ckernel::instrn_buffer[0] = TT_OP_SETRWC(clear_ab_vld, rwc_cr, rwc_val, BitMask)
 #define TTI_SETRWC(clear_ab_vld, rwc_cr, rwc_val, BitMask)                   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SETRWC(clear_ab_vld, rwc_cr, rwc_val, BitMask)))
@@ -607,51 +596,42 @@
     ckernel::instrn_buffer[0] = TT_OP_SET_SRC_TILE_FACE_ROW_IDX(Tile_Face_Row_Sel, EngineSel, Value)
 #define TTI_SET_SRC_TILE_FACE_ROW_IDX(Tile_Face_Row_Sel, EngineSel, Value) \
     INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SET_SRC_TILE_FACE_ROW_IDX(Tile_Face_Row_Sel, EngineSel, Value)))
-#define TT_OP_SFPABS(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_OP(0x7d, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPABS(imm12_math, lreg_c, lreg_dest, instr_mod1)    ckernel::instrn_buffer[0] = TT_OP_SFPABS(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPABS(imm12_math, lreg_c, lreg_dest, instr_mod1)   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPABS(imm12_math, lreg_c, lreg_dest, instr_mod1)))
-#define TT_OP_SFPADD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    TT_OP(0x85, (((lreg_src_a) << 16) + ((lreg_src_b) << 12) + ((lreg_src_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPADD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    ckernel::instrn_buffer[0] = TT_OP_SFPADD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)
-#define TTI_SFPADD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPADD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)))
-#define TT_OP_SFPADDI(imm16_math, lreg_dest, instr_mod1)        TT_OP(0x75, (((imm16_math) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPADDI(imm16_math, lreg_dest, instr_mod1)           ckernel::instrn_buffer[0] = TT_OP_SFPADDI(imm16_math, lreg_dest, instr_mod1)
-#define TTI_SFPADDI(imm16_math, lreg_dest, instr_mod1)          INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPADDI(imm16_math, lreg_dest, instr_mod1)))
-#define TT_OP_SFPAND(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_OP(0x7e, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPAND(imm12_math, lreg_c, lreg_dest, instr_mod1)    ckernel::instrn_buffer[0] = TT_OP_SFPAND(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPAND(imm12_math, lreg_c, lreg_dest, instr_mod1)   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPAND(imm12_math, lreg_c, lreg_dest, instr_mod1)))
-#define TT_OP_SFPARECIP(imm12_math, lreg_c, lreg_dest, instr_mod1) \
-    TT_OP(0x99, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPARECIP(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPARECIP(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPARECIP(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPARECIP(imm12_math, lreg_c, lreg_dest, instr_mod1)))
-#define TT_OP_SFPCAST(lreg_src_c, lreg_dest, instr_mod1)         TT_OP(0x90, (((lreg_src_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPCAST(lreg_src_c, lreg_dest, instr_mod1)            ckernel::instrn_buffer[0] = TT_OP_SFPCAST(lreg_src_c, lreg_dest, instr_mod1)
-#define TTI_SFPCAST(lreg_src_c, lreg_dest, instr_mod1)           INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPCAST(lreg_src_c, lreg_dest, instr_mod1)))
-#define TT_OP_SFPCOMPC(imm12_math, lreg_c, lreg_dest, instr_mod1) \
-    TT_OP(0x8b, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPCOMPC(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPCOMPC(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPCOMPC(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPCOMPC(imm12_math, lreg_c, lreg_dest, instr_mod1)))
-#define TT_OP_SFPCONFIG(imm16_math, config_dest, instr_mod1)    TT_OP(0x91, (((imm16_math) << 8) + ((config_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPCONFIG(imm16_math, config_dest, instr_mod1)       ckernel::instrn_buffer[0] = TT_OP_SFPCONFIG(imm16_math, config_dest, instr_mod1)
-#define TTI_SFPCONFIG(imm16_math, config_dest, instr_mod1)      INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPCONFIG(imm16_math, config_dest, instr_mod1)))
+#define TT_OP_SFPABS(lreg_c, lreg_dest, instr_mod1) TT_OP(0x7d, (((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
+#define TT_SFPABS(lreg_c, lreg_dest, instr_mod1)    ckernel::instrn_buffer[0] = TT_OP_SFPABS(lreg_c, lreg_dest, instr_mod1)
+#define TTI_SFPABS(lreg_c, lreg_dest, instr_mod1)   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPABS(lreg_c, lreg_dest, instr_mod1)))
+#define TT_OP_SFPADD(lreg_a, lreg_b, lreg_c, lreg_dest, instr_mod1) \
+    TT_OP(0x85, (((lreg_a) << 16) + ((lreg_b) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
+#define TT_SFPADD(lreg_a, lreg_b, lreg_c, lreg_dest, instr_mod1) ckernel::instrn_buffer[0] = TT_OP_SFPADD(lreg_a, lreg_b, lreg_c, lreg_dest, instr_mod1)
+#define TTI_SFPADD(lreg_a, lreg_b, lreg_c, lreg_dest, instr_mod1) \
+    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPADD(lreg_a, lreg_b, lreg_c, lreg_dest, instr_mod1)))
+#define TT_OP_SFPADDI(imm16_math, lreg_dest, instr_mod1)     TT_OP(0x75, (((imm16_math) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
+#define TT_SFPADDI(imm16_math, lreg_dest, instr_mod1)        ckernel::instrn_buffer[0] = TT_OP_SFPADDI(imm16_math, lreg_dest, instr_mod1)
+#define TTI_SFPADDI(imm16_math, lreg_dest, instr_mod1)       INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPADDI(imm16_math, lreg_dest, instr_mod1)))
+#define TT_OP_SFPAND(lreg_c, lreg_dest)                      TT_OP(0x7e, (((lreg_c) << 8) + ((lreg_dest) << 4)))
+#define TT_SFPAND(lreg_c, lreg_dest)                         ckernel::instrn_buffer[0] = TT_OP_SFPAND(lreg_c, lreg_dest)
+#define TTI_SFPAND(lreg_c, lreg_dest)                        INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPAND(lreg_c, lreg_dest)))
+#define TT_OP_SFPCAST(lreg_c, lreg_dest, instr_mod1)         TT_OP(0x90, (((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
+#define TT_SFPCAST(lreg_c, lreg_dest, instr_mod1)            ckernel::instrn_buffer[0] = TT_OP_SFPCAST(lreg_c, lreg_dest, instr_mod1)
+#define TTI_SFPCAST(lreg_c, lreg_dest, instr_mod1)           INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPCAST(lreg_c, lreg_dest, instr_mod1)))
+#define TT_OP_SFPCOMPC                                       TT_OP(0x8b, 0)
+#define TT_SFPCOMPC                                          ckernel::instrn_buffer[0] = TT_OP_SFPCOMPC
+#define TTI_SFPCOMPC                                         INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPCOMPC))
+#define TT_OP_SFPCONFIG(imm16_math, config_dest, instr_mod1) TT_OP(0x91, (((imm16_math) << 8) + ((config_dest) << 4) + ((instr_mod1) << 0)))
+#define TT_SFPCONFIG(imm16_math, config_dest, instr_mod1)    ckernel::instrn_buffer[0] = TT_OP_SFPCONFIG(imm16_math, config_dest, instr_mod1)
+#define TTI_SFPCONFIG(imm16_math, config_dest, instr_mod1)   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPCONFIG(imm16_math, config_dest, instr_mod1)))
 #define TT_OP_SFPDIVP2(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     TT_OP(0x76, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPDIVP2(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPDIVP2(imm12_math, lreg_c, lreg_dest, instr_mod1)
 #define TTI_SFPDIVP2(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPDIVP2(imm12_math, lreg_c, lreg_dest, instr_mod1)))
-#define TT_OP_SFPENCC(imm12_math, lreg_c, lreg_dest, instr_mod1) \
-    TT_OP(0x8a, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPENCC(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPENCC(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPENCC(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPENCC(imm12_math, lreg_c, lreg_dest, instr_mod1)))
-#define TT_OP_SFPEXEXP(imm12_math, lreg_c, lreg_dest, instr_mod1) \
-    TT_OP(0x77, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPEXEXP(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPEXEXP(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPEXEXP(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPEXEXP(imm12_math, lreg_c, lreg_dest, instr_mod1)))
-#define TT_OP_SFPEXMAN(imm12_math, lreg_c, lreg_dest, instr_mod1) \
-    TT_OP(0x78, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPEXMAN(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPEXMAN(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPEXMAN(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPEXMAN(imm12_math, lreg_c, lreg_dest, instr_mod1)))
+#define TT_OP_SFPENCC(imm12_math, instr_mod1)                   TT_OP(0x8a, (((imm12_math) << 12) + ((instr_mod1) << 0)))
+#define TT_SFPENCC(imm12_math, instr_mod1)                      ckernel::instrn_buffer[0] = TT_OP_SFPENCC(imm12_math, instr_mod1)
+#define TTI_SFPENCC(imm12_math, instr_mod1)                     INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPENCC(imm12_math, instr_mod1)))
+#define TT_OP_SFPEXEXP(lreg_c, lreg_dest, instr_mod1)           TT_OP(0x77, (((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
+#define TT_SFPEXEXP(lreg_c, lreg_dest, instr_mod1)              ckernel::instrn_buffer[0] = TT_OP_SFPEXEXP(lreg_c, lreg_dest, instr_mod1)
+#define TTI_SFPEXEXP(lreg_c, lreg_dest, instr_mod1)             INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPEXEXP(lreg_c, lreg_dest, instr_mod1)))
+#define TT_OP_SFPEXMAN(lreg_c, lreg_dest, instr_mod1)           TT_OP(0x78, (((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
+#define TT_SFPEXMAN(lreg_c, lreg_dest, instr_mod1)              ckernel::instrn_buffer[0] = TT_OP_SFPEXMAN(lreg_c, lreg_dest, instr_mod1)
+#define TTI_SFPEXMAN(lreg_c, lreg_dest, instr_mod1)             INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPEXMAN(lreg_c, lreg_dest, instr_mod1)))
 #define TT_OP_SFPGT(imm12_math, lreg_c, lreg_dest, instr_mod1)  TT_OP(0x97, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPGT(imm12_math, lreg_c, lreg_dest, instr_mod1)     ckernel::instrn_buffer[0] = TT_OP_SFPGT(imm12_math, lreg_c, lreg_dest, instr_mod1)
 #define TTI_SFPGT(imm12_math, lreg_c, lreg_dest, instr_mod1)    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPGT(imm12_math, lreg_c, lreg_dest, instr_mod1)))
@@ -671,66 +651,64 @@
 #define TT_OP_SFPLOADI(lreg_ind, instr_mod0, imm16) TT_OP(0x71, (((lreg_ind) << 20) + ((instr_mod0) << 16) + ((imm16) << 0)))
 #define TT_SFPLOADI(lreg_ind, instr_mod0, imm16)    ckernel::instrn_buffer[0] = TT_OP_SFPLOADI(lreg_ind, instr_mod0, imm16)
 #define TTI_SFPLOADI(lreg_ind, instr_mod0, imm16)   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPLOADI(lreg_ind, instr_mod0, imm16)))
-#define TT_OP_SFPLOADMACRO(lreg_ind, instr_mod0, sfpu_addr_mode, done, dest_reg_addr) \
-    TT_OP(0x93, (((lreg_ind) << 20) + ((instr_mod0) << 16) + ((sfpu_addr_mode) << 13) + ((done) << 11) + ((dest_reg_addr) << 0)))
-#define TT_SFPLOADMACRO(lreg_ind, instr_mod0, sfpu_addr_mode, done, dest_reg_addr) \
-    ckernel::instrn_buffer[0] = TT_OP_SFPLOADMACRO(lreg_ind, instr_mod0, sfpu_addr_mode, done, dest_reg_addr)
-#define TTI_SFPLOADMACRO(lreg_ind, instr_mod0, sfpu_addr_mode, done, dest_reg_addr) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPLOADMACRO(lreg_ind, instr_mod0, sfpu_addr_mode, done, dest_reg_addr)))
-#define TT_OP_SFPLUT(lreg_ind, instr_mod0, dest_reg_addr)      TT_OP(0x73, (((lreg_ind) << 20) + ((instr_mod0) << 16) + ((dest_reg_addr) << 0)))
-#define TT_SFPLUT(lreg_ind, instr_mod0, dest_reg_addr)         ckernel::instrn_buffer[0] = TT_OP_SFPLUT(lreg_ind, instr_mod0, dest_reg_addr)
-#define TTI_SFPLUT(lreg_ind, instr_mod0, dest_reg_addr)        INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPLUT(lreg_ind, instr_mod0, dest_reg_addr)))
-#define TT_OP_SFPLUTFP32(lreg_dest, instr_mod1)                TT_OP(0x95, (((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPLUTFP32(lreg_dest, instr_mod1)                   ckernel::instrn_buffer[0] = TT_OP_SFPLUTFP32(lreg_dest, instr_mod1)
-#define TTI_SFPLUTFP32(lreg_dest, instr_mod1)                  INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPLUTFP32(lreg_dest, instr_mod1)))
-#define TT_OP_SFPLZ(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_OP(0x81, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPLZ(imm12_math, lreg_c, lreg_dest, instr_mod1)    ckernel::instrn_buffer[0] = TT_OP_SFPLZ(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPLZ(imm12_math, lreg_c, lreg_dest, instr_mod1)   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPLZ(imm12_math, lreg_c, lreg_dest, instr_mod1)))
-#define TT_OP_SFPMAD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    TT_OP(0x84, (((lreg_src_a) << 16) + ((lreg_src_b) << 12) + ((lreg_src_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPMAD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    ckernel::instrn_buffer[0] = TT_OP_SFPMAD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)
-#define TTI_SFPMAD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPMAD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)))
-#define TT_OP_SFPMOV(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_OP(0x7c, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPMOV(imm12_math, lreg_c, lreg_dest, instr_mod1)    ckernel::instrn_buffer[0] = TT_OP_SFPMOV(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPMOV(imm12_math, lreg_c, lreg_dest, instr_mod1)   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPMOV(imm12_math, lreg_c, lreg_dest, instr_mod1)))
-#define TT_OP_SFPMUL(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    TT_OP(0x86, (((lreg_src_a) << 16) + ((lreg_src_b) << 12) + ((lreg_src_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPMUL(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    ckernel::instrn_buffer[0] = TT_OP_SFPMUL(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)
-#define TTI_SFPMUL(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPMUL(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)))
-#define TT_OP_SFPMUL24(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    TT_OP(0x98, (((lreg_src_a) << 16) + ((lreg_src_b) << 12) + ((lreg_src_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPMUL24(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    ckernel::instrn_buffer[0] = TT_OP_SFPMUL24(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)
-#define TTI_SFPMUL24(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPMUL24(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)))
-#define TT_OP_SFPMULI(imm16_math, lreg_dest, instr_mod1)        TT_OP(0x74, (((imm16_math) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPMULI(imm16_math, lreg_dest, instr_mod1)           ckernel::instrn_buffer[0] = TT_OP_SFPMULI(imm16_math, lreg_dest, instr_mod1)
-#define TTI_SFPMULI(imm16_math, lreg_dest, instr_mod1)          INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPMULI(imm16_math, lreg_dest, instr_mod1)))
-#define TT_OP_SFPNOP(srcs_wr_done, srcs_rd_done, dest_done)     TT_OP(0x8f, (((srcs_wr_done) << 2) + ((srcs_rd_done) << 1) + ((dest_done) << 0)))
-#define TT_SFPNOP(srcs_wr_done, srcs_rd_done, dest_done)        ckernel::instrn_buffer[0] = TT_OP_SFPNOP(srcs_wr_done, srcs_rd_done, dest_done)
-#define TTI_SFPNOP(srcs_wr_done, srcs_rd_done, dest_done)       INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPNOP(srcs_wr_done, srcs_rd_done, dest_done)))
-#define TT_OP_SFPNOT(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_OP(0x80, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPNOT(imm12_math, lreg_c, lreg_dest, instr_mod1)    ckernel::instrn_buffer[0] = TT_OP_SFPNOT(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPNOT(imm12_math, lreg_c, lreg_dest, instr_mod1)   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPNOT(imm12_math, lreg_c, lreg_dest, instr_mod1)))
-#define TT_OP_SFPOR(imm12_math, lreg_c, lreg_dest, instr_mod1)  TT_OP(0x7f, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPOR(imm12_math, lreg_c, lreg_dest, instr_mod1)     ckernel::instrn_buffer[0] = TT_OP_SFPOR(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPOR(imm12_math, lreg_c, lreg_dest, instr_mod1)    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPOR(imm12_math, lreg_c, lreg_dest, instr_mod1)))
-#define TT_OP_SFPPOPC(imm12_math, lreg_c, lreg_dest, instr_mod1) \
-    TT_OP(0x88, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPPOPC(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPPOPC(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPPOPC(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPPOPC(imm12_math, lreg_c, lreg_dest, instr_mod1)))
-#define TT_OP_SFPPUSHC(imm12_math, lreg_c, lreg_dest, instr_mod1) \
-    TT_OP(0x87, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPPUSHC(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPPUSHC(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPPUSHC(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPPUSHC(imm12_math, lreg_c, lreg_dest, instr_mod1)))
-#define TT_OP_SFPSETCC(imm12_math, lreg_c, lreg_dest, instr_mod1) \
-    TT_OP(0x7b, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPSETCC(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPSETCC(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPSETCC(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPSETCC(imm12_math, lreg_c, lreg_dest, instr_mod1)))
+#define TT_OP_SFPLOADMACRO(seq_id, lreg_ind_lo, instr_mod0, sfpu_addr_mode, done, dest_reg_addr, lreg_ind_hi)                                   \
+    TT_OP(                                                                                                                                      \
+        0x93,                                                                                                                                   \
+        (((seq_id) << 22) + ((lreg_ind_lo) << 20) + ((instr_mod0) << 16) + ((sfpu_addr_mode) << 13) + ((done) << 11) + ((dest_reg_addr) << 1) + \
+         ((lreg_ind_hi) << 0)))
+#define TT_SFPLOADMACRO(seq_id, lreg_ind_lo, instr_mod0, sfpu_addr_mode, done, dest_reg_addr, lreg_ind_hi) \
+    ckernel::instrn_buffer[0] = TT_OP_SFPLOADMACRO(seq_id, lreg_ind_lo, instr_mod0, sfpu_addr_mode, done, dest_reg_addr, lreg_ind_hi)
+#define TTI_SFPLOADMACRO(seq_id, lreg_ind_lo, instr_mod0, sfpu_addr_mode, done, dest_reg_addr, lreg_ind_hi) \
+    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPLOADMACRO(seq_id, lreg_ind_lo, instr_mod0, sfpu_addr_mode, done, dest_reg_addr, lreg_ind_hi)))
+#define TT_OP_SFPLUT(lreg_ind, instr_mod0)         TT_OP(0x73, (((lreg_ind) << 20) + ((instr_mod0) << 16)))
+#define TT_SFPLUT(lreg_ind, instr_mod0)            ckernel::instrn_buffer[0] = TT_OP_SFPLUT(lreg_ind, instr_mod0)
+#define TTI_SFPLUT(lreg_ind, instr_mod0)           INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPLUT(lreg_ind, instr_mod0)))
+#define TT_OP_SFPLUTFP32(lreg_dest, instr_mod1)    TT_OP(0x95, (((lreg_dest) << 4) + ((instr_mod1) << 0)))
+#define TT_SFPLUTFP32(lreg_dest, instr_mod1)       ckernel::instrn_buffer[0] = TT_OP_SFPLUTFP32(lreg_dest, instr_mod1)
+#define TTI_SFPLUTFP32(lreg_dest, instr_mod1)      INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPLUTFP32(lreg_dest, instr_mod1)))
+#define TT_OP_SFPLZ(lreg_c, lreg_dest, instr_mod1) TT_OP(0x81, (((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
+#define TT_SFPLZ(lreg_c, lreg_dest, instr_mod1)    ckernel::instrn_buffer[0] = TT_OP_SFPLZ(lreg_c, lreg_dest, instr_mod1)
+#define TTI_SFPLZ(lreg_c, lreg_dest, instr_mod1)   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPLZ(lreg_c, lreg_dest, instr_mod1)))
+#define TT_OP_SFPMAD(lreg_a, lreg_b, lreg_c, lreg_dest, instr_mod1) \
+    TT_OP(0x84, (((lreg_a) << 16) + ((lreg_b) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
+#define TT_SFPMAD(lreg_a, lreg_b, lreg_c, lreg_dest, instr_mod1) ckernel::instrn_buffer[0] = TT_OP_SFPMAD(lreg_a, lreg_b, lreg_c, lreg_dest, instr_mod1)
+#define TTI_SFPMAD(lreg_a, lreg_b, lreg_c, lreg_dest, instr_mod1) \
+    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPMAD(lreg_a, lreg_b, lreg_c, lreg_dest, instr_mod1)))
+#define TT_OP_SFPMOV(lreg_c, lreg_dest, instr_mod1) TT_OP(0x7c, (((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
+#define TT_SFPMOV(lreg_c, lreg_dest, instr_mod1)    ckernel::instrn_buffer[0] = TT_OP_SFPMOV(lreg_c, lreg_dest, instr_mod1)
+#define TTI_SFPMOV(lreg_c, lreg_dest, instr_mod1)   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPMOV(lreg_c, lreg_dest, instr_mod1)))
+#define TT_OP_SFPMUL(lreg_a, lreg_b, lreg_c, lreg_dest, instr_mod1) \
+    TT_OP(0x86, (((lreg_a) << 16) + ((lreg_b) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
+#define TT_SFPMUL(lreg_a, lreg_b, lreg_c, lreg_dest, instr_mod1) ckernel::instrn_buffer[0] = TT_OP_SFPMUL(lreg_a, lreg_b, lreg_c, lreg_dest, instr_mod1)
+#define TTI_SFPMUL(lreg_a, lreg_b, lreg_c, lreg_dest, instr_mod1) \
+    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPMUL(lreg_a, lreg_b, lreg_c, lreg_dest, instr_mod1)))
+#define TT_OP_SFPMUL24(lreg_a, lreg_b, lreg_dest, instr_mod1) TT_OP(0x98, (((lreg_a) << 16) + ((lreg_b) << 12) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
+#define TT_SFPMUL24(lreg_a, lreg_b, lreg_dest, instr_mod1)    ckernel::instrn_buffer[0] = TT_OP_SFPMUL24(lreg_a, lreg_b, lreg_dest, instr_mod1)
+#define TTI_SFPMUL24(lreg_a, lreg_b, lreg_dest, instr_mod1)   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPMUL24(lreg_a, lreg_b, lreg_dest, instr_mod1)))
+#define TT_OP_SFPMULI(imm16_math, lreg_dest, instr_mod1)      TT_OP(0x74, (((imm16_math) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
+#define TT_SFPMULI(imm16_math, lreg_dest, instr_mod1)         ckernel::instrn_buffer[0] = TT_OP_SFPMULI(imm16_math, lreg_dest, instr_mod1)
+#define TTI_SFPMULI(imm16_math, lreg_dest, instr_mod1)        INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPMULI(imm16_math, lreg_dest, instr_mod1)))
+#define TT_OP_SFPNONLINEAR(lreg_c, lreg_dest, instr_mod1)     TT_OP(0x99, (((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
+#define TT_SFPNONLINEAR(lreg_c, lreg_dest, instr_mod1)        ckernel::instrn_buffer[0] = TT_OP_SFPNONLINEAR(lreg_c, lreg_dest, instr_mod1)
+#define TTI_SFPNONLINEAR(lreg_c, lreg_dest, instr_mod1)       INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPNONLINEAR(lreg_c, lreg_dest, instr_mod1)))
+#define TT_OP_SFPNOP(srcs_wr_done, srcs_rd_done, dest_done)   TT_OP(0x8f, (((srcs_wr_done) << 2) + ((srcs_rd_done) << 1) + ((dest_done) << 0)))
+#define TT_SFPNOP(srcs_wr_done, srcs_rd_done, dest_done)      ckernel::instrn_buffer[0] = TT_OP_SFPNOP(srcs_wr_done, srcs_rd_done, dest_done)
+#define TTI_SFPNOP(srcs_wr_done, srcs_rd_done, dest_done)     INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPNOP(srcs_wr_done, srcs_rd_done, dest_done)))
+#define TT_OP_SFPNOT(lreg_c, lreg_dest)                       TT_OP(0x80, (((lreg_c) << 8) + ((lreg_dest) << 4)))
+#define TT_SFPNOT(lreg_c, lreg_dest)                          ckernel::instrn_buffer[0] = TT_OP_SFPNOT(lreg_c, lreg_dest)
+#define TTI_SFPNOT(lreg_c, lreg_dest)                         INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPNOT(lreg_c, lreg_dest)))
+#define TT_OP_SFPOR(lreg_c, lreg_dest)                        TT_OP(0x7f, (((lreg_c) << 8) + ((lreg_dest) << 4)))
+#define TT_SFPOR(lreg_c, lreg_dest)                           ckernel::instrn_buffer[0] = TT_OP_SFPOR(lreg_c, lreg_dest)
+#define TTI_SFPOR(lreg_c, lreg_dest)                          INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPOR(lreg_c, lreg_dest)))
+#define TT_OP_SFPPOPC(instr_mod1)                             TT_OP(0x88, (((instr_mod1) << 0)))
+#define TT_SFPPOPC(instr_mod1)                                ckernel::instrn_buffer[0] = TT_OP_SFPPOPC(instr_mod1)
+#define TTI_SFPPOPC(instr_mod1)                               INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPPOPC(instr_mod1)))
+#define TT_OP_SFPPUSHC(instr_mod1)                            TT_OP(0x87, (((instr_mod1) << 0)))
+#define TT_SFPPUSHC(instr_mod1)                               ckernel::instrn_buffer[0] = TT_OP_SFPPUSHC(instr_mod1)
+#define TTI_SFPPUSHC(instr_mod1)                              INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPPUSHC(instr_mod1)))
+#define TT_OP_SFPSETCC(imm12_math, lreg_c, instr_mod1)        TT_OP(0x7b, (((imm12_math) << 12) + ((lreg_c) << 8) + ((instr_mod1) << 0)))
+#define TT_SFPSETCC(imm12_math, lreg_c, instr_mod1)           ckernel::instrn_buffer[0] = TT_OP_SFPSETCC(imm12_math, lreg_c, instr_mod1)
+#define TTI_SFPSETCC(imm12_math, lreg_c, instr_mod1)          INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPSETCC(imm12_math, lreg_c, instr_mod1)))
 #define TT_OP_SFPSETEXP(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     TT_OP(0x82, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPSETEXP(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPSETEXP(imm12_math, lreg_c, lreg_dest, instr_mod1)
@@ -747,44 +725,38 @@
     TT_OP(0x7a, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPSHFT(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPSHFT(imm12_math, lreg_c, lreg_dest, instr_mod1)
 #define TTI_SFPSHFT(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPSHFT(imm12_math, lreg_c, lreg_dest, instr_mod1)))
-#define TT_OP_SFPSHFT2(imm12_math, lreg_src_c, lreg_dest, instr_mod1) \
-    TT_OP(0x94, (((imm12_math) << 12) + ((lreg_src_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPSHFT2(imm12_math, lreg_src_c, lreg_dest, instr_mod1) ckernel::instrn_buffer[0] = TT_OP_SFPSHFT2(imm12_math, lreg_src_c, lreg_dest, instr_mod1)
-#define TTI_SFPSHFT2(imm12_math, lreg_src_c, lreg_dest, instr_mod1) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPSHFT2(imm12_math, lreg_src_c, lreg_dest, instr_mod1)))
+#define TT_OP_SFPSHFT2(imm12_math, lreg_c, lreg_dest, instr_mod1) \
+    TT_OP(0x94, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
+#define TT_SFPSHFT2(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPSHFT2(imm12_math, lreg_c, lreg_dest, instr_mod1)
+#define TTI_SFPSHFT2(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPSHFT2(imm12_math, lreg_c, lreg_dest, instr_mod1)))
 #define TT_OP_SFPSTORE(lreg_ind, instr_mod0, sfpu_addr_mode, done, dest_reg_addr) \
     TT_OP(0x72, (((lreg_ind) << 20) + ((instr_mod0) << 16) + ((sfpu_addr_mode) << 13) + ((done) << 11) + ((dest_reg_addr) << 0)))
 #define TT_SFPSTORE(lreg_ind, instr_mod0, sfpu_addr_mode, done, dest_reg_addr) \
     ckernel::instrn_buffer[0] = TT_OP_SFPSTORE(lreg_ind, instr_mod0, sfpu_addr_mode, done, dest_reg_addr)
 #define TTI_SFPSTORE(lreg_ind, instr_mod0, sfpu_addr_mode, done, dest_reg_addr) \
     INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPSTORE(lreg_ind, instr_mod0, sfpu_addr_mode, done, dest_reg_addr)))
-#define TT_OP_SFPSWAP(imm12_math, lreg_src_c, lreg_dest, instr_mod1) \
-    TT_OP(0x92, (((imm12_math) << 12) + ((lreg_src_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPSWAP(imm12_math, lreg_src_c, lreg_dest, instr_mod1) ckernel::instrn_buffer[0] = TT_OP_SFPSWAP(imm12_math, lreg_src_c, lreg_dest, instr_mod1)
-#define TTI_SFPSWAP(imm12_math, lreg_src_c, lreg_dest, instr_mod1) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPSWAP(imm12_math, lreg_src_c, lreg_dest, instr_mod1)))
-#define TT_OP_SFPTRANSP(imm12_math, lreg_c, lreg_dest, instr_mod1) \
-    TT_OP(0x8c, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPTRANSP(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPTRANSP(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPTRANSP(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPTRANSP(imm12_math, lreg_c, lreg_dest, instr_mod1)))
-#define TT_OP_SFPXOR(imm12_math, lreg_c, lreg_dest, instr_mod1)  TT_OP(0x8d, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFPXOR(imm12_math, lreg_c, lreg_dest, instr_mod1)     ckernel::instrn_buffer[0] = TT_OP_SFPXOR(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPXOR(imm12_math, lreg_c, lreg_dest, instr_mod1)    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPXOR(imm12_math, lreg_c, lreg_dest, instr_mod1)))
-#define TT_OP_SFP_STOCH_RND(rnd_mode, imm8_math, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    TT_OP(0x8e, (((rnd_mode) << 21) + ((imm8_math) << 16) + ((lreg_src_b) << 12) + ((lreg_src_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_SFP_STOCH_RND(rnd_mode, imm8_math, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    ckernel::instrn_buffer[0] = TT_OP_SFP_STOCH_RND(rnd_mode, imm8_math, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)
-#define TTI_SFP_STOCH_RND(rnd_mode, imm8_math, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFP_STOCH_RND(rnd_mode, imm8_math, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)))
-#define TT_OP_SHIFTGPR(OpBisConst, OpSel, ResultRegIndex, OpBRegIndex, OpARegIndex) \
-    TT_OP(0x5c, (((OpBisConst) << 23) + ((OpSel) << 18) + ((ResultRegIndex) << 12) + ((OpBRegIndex) << 6) + ((OpARegIndex) << 0)))
-#define TT_SHIFTGPR(OpBisConst, OpSel, ResultRegIndex, OpBRegIndex, OpARegIndex) \
-    ckernel::instrn_buffer[0] = TT_OP_SHIFTGPR(OpBisConst, OpSel, ResultRegIndex, OpBRegIndex, OpARegIndex)
-#define TTI_SHIFTGPR(OpBisConst, OpSel, ResultRegIndex, OpBRegIndex, OpARegIndex) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SHIFTGPR(OpBisConst, OpSel, ResultRegIndex, OpBRegIndex, OpARegIndex)))
-#define TT_OP_SHIFTXA(log2_amount2, shift_mode)        TT_OP(0x17, (((log2_amount2) << 2) + ((shift_mode) << 0)))
-#define TT_SHIFTXA(log2_amount2, shift_mode)           ckernel::instrn_buffer[0] = TT_OP_SHIFTXA(log2_amount2, shift_mode)
-#define TTI_SHIFTXA(log2_amount2, shift_mode)          INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SHIFTXA(log2_amount2, shift_mode)))
+#define TT_OP_SFPSWAP(imm12_math, lreg_c, lreg_dest, instr_mod1) \
+    TT_OP(0x92, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
+#define TT_SFPSWAP(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPSWAP(imm12_math, lreg_c, lreg_dest, instr_mod1)
+#define TTI_SFPSWAP(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPSWAP(imm12_math, lreg_c, lreg_dest, instr_mod1)))
+#define TT_OP_SFPTRANSP                                        TT_OP(0x8c, 0)
+#define TT_SFPTRANSP                                           ckernel::instrn_buffer[0] = TT_OP_SFPTRANSP
+#define TTI_SFPTRANSP                                          INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPTRANSP))
+#define TT_OP_SFPXOR(lreg_c, lreg_dest)                        TT_OP(0x8d, (((lreg_c) << 8) + ((lreg_dest) << 4)))
+#define TT_SFPXOR(lreg_c, lreg_dest)                           ckernel::instrn_buffer[0] = TT_OP_SFPXOR(lreg_c, lreg_dest)
+#define TTI_SFPXOR(lreg_c, lreg_dest)                          INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFPXOR(lreg_c, lreg_dest)))
+#define TT_OP_SFP_STOCH_RND(rnd_mode, imm8_math, lreg_b, lreg_c, lreg_dest, instr_mod1) \
+    TT_OP(0x8e, (((rnd_mode) << 21) + ((imm8_math) << 16) + ((lreg_b) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
+#define TT_SFP_STOCH_RND(rnd_mode, imm8_math, lreg_b, lreg_c, lreg_dest, instr_mod1) \
+    ckernel::instrn_buffer[0] = TT_OP_SFP_STOCH_RND(rnd_mode, imm8_math, lreg_b, lreg_c, lreg_dest, instr_mod1)
+#define TTI_SFP_STOCH_RND(rnd_mode, imm8_math, lreg_b, lreg_c, lreg_dest, instr_mod1) \
+    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SFP_STOCH_RND(rnd_mode, imm8_math, lreg_b, lreg_c, lreg_dest, instr_mod1)))
+#define TT_OP_SHIFTGPR(OpB_is_Const, OpSel, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index) \
+    TT_OP(0x5c, (((OpB_is_Const) << 23) + ((OpSel) << 18) + ((Result_GPR_Index) << 12) + ((OpB_GPR_Index) << 6) + ((OpA_GPR_Index) << 0)))
+#define TT_SHIFTGPR(OpB_is_Const, OpSel, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index) \
+    ckernel::instrn_buffer[0] = TT_OP_SHIFTGPR(OpB_is_Const, OpSel, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index)
+#define TTI_SHIFTGPR(OpB_is_Const, OpSel, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index) \
+    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SHIFTGPR(OpB_is_Const, OpSel, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index)))
 #define TT_OP_SHIFTXB(addr_mode, rot_shift, shift_row) TT_OP(0x18, (((addr_mode) << 14) + ((rot_shift) << 10) + ((shift_row) << 0)))
 #define TT_SHIFTXB(addr_mode, rot_shift, shift_row)    ckernel::instrn_buffer[0] = TT_OP_SHIFTXB(addr_mode, rot_shift, shift_row)
 #define TTI_SHIFTXB(addr_mode, rot_shift, shift_row)   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SHIFTXB(addr_mode, rot_shift, shift_row)))
@@ -794,21 +766,21 @@
     ckernel::instrn_buffer[0] = TT_OP_STALLWAIT(stall_res, wait_res_idx_2, wait_res_idx_1, wait_res_idx_0)
 #define TTI_STALLWAIT(stall_res, wait_res_idx_2, wait_res_idx_1, wait_res_idx_0) \
     INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_STALLWAIT(stall_res, wait_res_idx_2, wait_res_idx_1, wait_res_idx_0)))
-#define TT_OP_STOREIND(SizeSel, MemSel, OffsetIndex, AutoIncSpec, DataRegIndex, AddrRegIndex) \
-    TT_OP(0x66, (((SizeSel) << 22) + ((MemSel) << 21) + ((OffsetIndex) << 14) + ((AutoIncSpec) << 12) + ((DataRegIndex) << 6) + ((AddrRegIndex) << 0)))
-#define TT_STOREIND(SizeSel, MemSel, OffsetIndex, AutoIncSpec, DataRegIndex, AddrRegIndex) \
-    ckernel::instrn_buffer[0] = TT_OP_STOREIND(SizeSel, MemSel, OffsetIndex, AutoIncSpec, DataRegIndex, AddrRegIndex)
-#define TTI_STOREIND(SizeSel, MemSel, OffsetIndex, AutoIncSpec, DataRegIndex, AddrRegIndex) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_STOREIND(SizeSel, MemSel, OffsetIndex, AutoIncSpec, DataRegIndex, AddrRegIndex)))
-#define TT_OP_STOREREG(TdmaDataRegIndex, RegAddr) TT_OP(0x67, (((TdmaDataRegIndex) << 18) + ((RegAddr) << 0)))
-#define TT_STOREREG(TdmaDataRegIndex, RegAddr)    ckernel::instrn_buffer[0] = TT_OP_STOREREG(TdmaDataRegIndex, RegAddr)
-#define TTI_STOREREG(TdmaDataRegIndex, RegAddr)   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_STOREREG(TdmaDataRegIndex, RegAddr)))
-#define TT_OP_SUBGPR(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
-    TT_OP(0x59, (((OpBisConst) << 23) + ((ResultRegIndex) << 12) + ((OpBRegIndex) << 6) + ((OpARegIndex) << 0)))
-#define TT_SUBGPR(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
-    ckernel::instrn_buffer[0] = TT_OP_SUBGPR(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex)
-#define TTI_SUBGPR(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SUBGPR(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex)))
+#define TT_OP_STOREIND(SizeSel, MemSel, OffsetIndex, AutoIncSpec, Data_GPR_Index, Addr_GPR_Index) \
+    TT_OP(0x66, (((SizeSel) << 22) + ((MemSel) << 21) + ((OffsetIndex) << 14) + ((AutoIncSpec) << 12) + ((Data_GPR_Index) << 6) + ((Addr_GPR_Index) << 0)))
+#define TT_STOREIND(SizeSel, MemSel, OffsetIndex, AutoIncSpec, Data_GPR_Index, Addr_GPR_Index) \
+    ckernel::instrn_buffer[0] = TT_OP_STOREIND(SizeSel, MemSel, OffsetIndex, AutoIncSpec, Data_GPR_Index, Addr_GPR_Index)
+#define TTI_STOREIND(SizeSel, MemSel, OffsetIndex, AutoIncSpec, Data_GPR_Index, Addr_GPR_Index) \
+    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_STOREIND(SizeSel, MemSel, OffsetIndex, AutoIncSpec, Data_GPR_Index, Addr_GPR_Index)))
+#define TT_OP_STOREREG(Data_GPR_Index, RegAddr) TT_OP(0x67, (((Data_GPR_Index) << 18) + ((RegAddr) << 0)))
+#define TT_STOREREG(Data_GPR_Index, RegAddr)    ckernel::instrn_buffer[0] = TT_OP_STOREREG(Data_GPR_Index, RegAddr)
+#define TTI_STOREREG(Data_GPR_Index, RegAddr)   INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_STOREREG(Data_GPR_Index, RegAddr)))
+#define TT_OP_SUBGPR(OpB_is_Const, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index) \
+    TT_OP(0x59, (((OpB_is_Const) << 23) + ((Result_GPR_Index) << 12) + ((OpB_GPR_Index) << 6) + ((OpA_GPR_Index) << 0)))
+#define TT_SUBGPR(OpB_is_Const, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index) \
+    ckernel::instrn_buffer[0] = TT_OP_SUBGPR(OpB_is_Const, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index)
+#define TTI_SUBGPR(OpB_is_Const, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index) \
+    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_SUBGPR(OpB_is_Const, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index)))
 #define TT_OP_UNPACR0_FACE(Dst_Face_Idx, Src_Face_Idx, Dst_Tile_Offset_Idx_Inc, Src_Tile_Offset_Idx_Inc, Buffer_Descriptor_Table_Sel, SetDatValid) \
     TT_OP(                                                                                                                                         \
         0x47,                                                                                                                                      \
@@ -1256,14 +1228,12 @@
     ckernel::instrn_buffer[0] = TT_OP_UNPACR_DEST_TILE_INC(Dst_Tile_Idx_Inc, Src_Tile_Idx_Inc, Buffer_Descriptor_Table_Sel, SetDatValid)
 #define TTI_UNPACR_DEST_TILE_INC(Dst_Tile_Idx_Inc, Src_Tile_Idx_Inc, Buffer_Descriptor_Table_Sel, SetDatValid) \
     INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_UNPACR_DEST_TILE_INC(Dst_Tile_Idx_Inc, Src_Tile_Idx_Inc, Buffer_Descriptor_Table_Sel, SetDatValid)))
-#define TT_OP_UNPACR_NOP(Unpacker_Select, Set_Dvalid, Stall_Clr_Cntrl, Bank_Clr_Ctrl, Src_ClrVal_Ctrl, Nop_type) \
-    TT_OP(                                                                                                       \
-        0x43,                                                                                                    \
-        (((Unpacker_Select) << 8) + ((Set_Dvalid) << 7) + ((Stall_Clr_Cntrl) << 5) + ((Bank_Clr_Ctrl) << 4) + ((Src_ClrVal_Ctrl) << 2) + ((Nop_type) << 0)))
-#define TT_UNPACR_NOP(Unpacker_Select, Set_Dvalid, Stall_Clr_Cntrl, Bank_Clr_Ctrl, Src_ClrVal_Ctrl, Nop_type) \
-    ckernel::instrn_buffer[0] = TT_OP_UNPACR_NOP(Unpacker_Select, Set_Dvalid, Stall_Clr_Cntrl, Bank_Clr_Ctrl, Src_ClrVal_Ctrl, Nop_type)
-#define TTI_UNPACR_NOP(Unpacker_Select, Set_Dvalid, Stall_Clr_Cntrl, Bank_Clr_Ctrl, Src_ClrVal_Ctrl, Nop_type) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_UNPACR_NOP(Unpacker_Select, Set_Dvalid, Stall_Clr_Cntrl, Bank_Clr_Ctrl, Src_ClrVal_Ctrl, Nop_type)))
+#define TT_OP_UNPACR_NOP(Unpacker_Select, Set_Dvalid, Stall_Cntrl, Bank_Clr_Ctrl, Src_ClrVal_Ctrl, Nop_type) \
+    TT_OP(0x43, (((Unpacker_Select) << 8) + ((Set_Dvalid) << 7) + ((Stall_Cntrl) << 5) + ((Bank_Clr_Ctrl) << 4) + ((Src_ClrVal_Ctrl) << 2) + ((Nop_type) << 0)))
+#define TT_UNPACR_NOP(Unpacker_Select, Set_Dvalid, Stall_Cntrl, Bank_Clr_Ctrl, Src_ClrVal_Ctrl, Nop_type) \
+    ckernel::instrn_buffer[0] = TT_OP_UNPACR_NOP(Unpacker_Select, Set_Dvalid, Stall_Cntrl, Bank_Clr_Ctrl, Src_ClrVal_Ctrl, Nop_type)
+#define TTI_UNPACR_NOP(Unpacker_Select, Set_Dvalid, Stall_Cntrl, Bank_Clr_Ctrl, Src_ClrVal_Ctrl, Nop_type) \
+    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_UNPACR_NOP(Unpacker_Select, Set_Dvalid, Stall_Cntrl, Bank_Clr_Ctrl, Src_ClrVal_Ctrl, Nop_type)))
 #define TT_OP_UNPACR_TILE_MISC(Unpack_Type, Row_Bcast_Row_Idx, Tile_Idx_Inc, Dst_Tile_Idx, Src_Tile_Idx, Buffer_Descriptor_Table_Sel, SetDatValid) \
     TT_OP(                                                                                                                                         \
         0xbf,                                                                                                                                      \
@@ -1275,17 +1245,17 @@
 #define TTI_UNPACR_TILE_MISC(Unpack_Type, Row_Bcast_Row_Idx, Tile_Idx_Inc, Dst_Tile_Idx, Src_Tile_Idx, Buffer_Descriptor_Table_Sel, SetDatValid) \
     INSTRUCTION_WORD(TRISC_OP_SWIZZLE(                                                                                                           \
         TT_OP_UNPACR_TILE_MISC(Unpack_Type, Row_Bcast_Row_Idx, Tile_Idx_Inc, Dst_Tile_Idx, Src_Tile_Idx, Buffer_Descriptor_Table_Sel, SetDatValid)))
-#define TT_OP_UNPACR_TILIZE(Row_Cnt_Enc, Cntr_Reset_mask, Dst_Z_Cntr_inc, Src_Z_Cntr_inc, Unpack_Sel, Buffer_Descriptor_Table_Sel, SetDatValid) \
-    TT_OP(                                                                                                                                      \
-        0xbe,                                                                                                                                   \
-        (((Row_Cnt_Enc) << 15) + ((Cntr_Reset_mask) << 13) + ((Dst_Z_Cntr_inc) << 11) + ((Src_Z_Cntr_inc) << 9) + ((Unpack_Sel) << 7) +         \
+#define TT_OP_UNPACR_TILIZE(Reserved, Cntr_Reset_mask, Dst_Z_Cntr_inc, Src_Z_Cntr_inc, Unpack_Sel, Buffer_Descriptor_Table_Sel, SetDatValid) \
+    TT_OP(                                                                                                                                   \
+        0xbe,                                                                                                                                \
+        (((Reserved) << 15) + ((Cntr_Reset_mask) << 13) + ((Dst_Z_Cntr_inc) << 11) + ((Src_Z_Cntr_inc) << 9) + ((Unpack_Sel) << 7) +         \
          ((Buffer_Descriptor_Table_Sel) << 2) + ((SetDatValid) << 1)))
-#define TT_UNPACR_TILIZE(Row_Cnt_Enc, Cntr_Reset_mask, Dst_Z_Cntr_inc, Src_Z_Cntr_inc, Unpack_Sel, Buffer_Descriptor_Table_Sel, SetDatValid) \
-    ckernel::instrn_buffer[0] =                                                                                                              \
-        TT_OP_UNPACR_TILIZE(Row_Cnt_Enc, Cntr_Reset_mask, Dst_Z_Cntr_inc, Src_Z_Cntr_inc, Unpack_Sel, Buffer_Descriptor_Table_Sel, SetDatValid)
-#define TTI_UNPACR_TILIZE(Row_Cnt_Enc, Cntr_Reset_mask, Dst_Z_Cntr_inc, Src_Z_Cntr_inc, Unpack_Sel, Buffer_Descriptor_Table_Sel, SetDatValid) \
-    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(                                                                                                        \
-        TT_OP_UNPACR_TILIZE(Row_Cnt_Enc, Cntr_Reset_mask, Dst_Z_Cntr_inc, Src_Z_Cntr_inc, Unpack_Sel, Buffer_Descriptor_Table_Sel, SetDatValid)))
+#define TT_UNPACR_TILIZE(Reserved, Cntr_Reset_mask, Dst_Z_Cntr_inc, Src_Z_Cntr_inc, Unpack_Sel, Buffer_Descriptor_Table_Sel, SetDatValid) \
+    ckernel::instrn_buffer[0] =                                                                                                           \
+        TT_OP_UNPACR_TILIZE(Reserved, Cntr_Reset_mask, Dst_Z_Cntr_inc, Src_Z_Cntr_inc, Unpack_Sel, Buffer_Descriptor_Table_Sel, SetDatValid)
+#define TTI_UNPACR_TILIZE(Reserved, Cntr_Reset_mask, Dst_Z_Cntr_inc, Src_Z_Cntr_inc, Unpack_Sel, Buffer_Descriptor_Table_Sel, SetDatValid) \
+    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(                                                                                                     \
+        TT_OP_UNPACR_TILIZE(Reserved, Cntr_Reset_mask, Dst_Z_Cntr_inc, Src_Z_Cntr_inc, Unpack_Sel, Buffer_Descriptor_Table_Sel, SetDatValid)))
 #define TT_OP_WAIT_FREE(stall_res, num_tiles, buffer_sel)  TT_OP(0xab, (((stall_res) << 15) + ((num_tiles) << 5) + ((buffer_sel) << 0)))
 #define TT_WAIT_FREE(stall_res, num_tiles, buffer_sel)     ckernel::instrn_buffer[0] = TT_OP_WAIT_FREE(stall_res, num_tiles, buffer_sel)
 #define TTI_WAIT_FREE(stall_res, num_tiles, buffer_sel)    INSTRUCTION_WORD(TRISC_OP_SWIZZLE(TT_OP_WAIT_FREE(stall_res, num_tiles, buffer_sel)))

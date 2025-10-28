@@ -55,7 +55,8 @@ enum class SfpuType : uint32_t
     relumin,
     relumax,
     stochround,
-    typecast
+    typecast,
+    add
 };
 
 enum class DstSync : uint8_t

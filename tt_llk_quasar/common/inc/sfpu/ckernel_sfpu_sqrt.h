@@ -19,7 +19,7 @@ inline void _calculate_sqrt_sfp_rows_()
     // SFPARECIP, approx version of sqrt
     if constexpr (APPROXIMATION_MODE)
     {
-        TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfparecip::SQRT_MODE); // Read value from lreg[0], approximate sqrt, load back into lreg[1]
+        TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpnonlinear::SQRT_MODE); // Read value from lreg[0], approximate sqrt, load back into lreg[1]
     }
 
     // Store from lreg[1] into dest register

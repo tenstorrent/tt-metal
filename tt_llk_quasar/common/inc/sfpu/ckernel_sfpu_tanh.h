@@ -19,7 +19,7 @@ inline void _calculate_tanh_sfp_rows_()
     // SFPARECIP, approx version of reciprocal
     if constexpr (APPROXIMATION_MODE)
     {
-        TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfparecip::TANH_MODE); // Read value from lreg[0], approximate recip, load back into lreg[1]
+        TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpnonlinear::TANH_MODE); // Read value from lreg[0], approximate recip, load back into lreg[1]
     }
 
     // Store from lreg[1] into dest register
