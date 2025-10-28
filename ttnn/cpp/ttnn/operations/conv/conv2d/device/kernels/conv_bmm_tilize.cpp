@@ -210,6 +210,8 @@ void MAIN {
     constexpr uint32_t tilized_cb_row_offset = get_compile_time_arg_val(37);
     constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(38);
     constexpr bool split_reader_cb_shared = get_compile_time_arg_val(39) == 1;
+    constexpr uint32_t tilized_cb_second_reader_id = get_compile_time_arg_val(40);
+
 
     constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;
@@ -225,7 +227,7 @@ void MAIN {
     constexpr uint32_t mm_in0_cb_id = height_sharded ? tilized_in0_cb_id : in0_cb_id;
 
     constexpr uint32_t in0_num_subblocks_read_last =
-        (split_reader && !split_reader_cb_shared) ? reader_num_h_subblocks / 2 : 0;
+        (split_reader) ? reader_num_h_subblocks / 2 : 0;
     constexpr uint32_t in0_num_subblocks_read = reader_num_h_subblocks - in0_num_subblocks_read_last;
 
     // if activation reuse is enabled, we need to update read pointers of the act buffers
@@ -281,13 +283,21 @@ void MAIN {
                             pack_reconfig_data_format(curr_matmul_out_cb, tilized_in0_cb_id);
                             pack_reconfig_l1_acc(0);
                         }
-                        tilize_in<true, !split_reader || split_reader_cb_shared>(
+                        // tilize_in<true, !split_reader || split_reader_cb_shared>(
+                        //     in0_pretilize_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
+
+                        // if constexpr (split_reader && !split_reader_cb_shared) {
+                        //     tilize_in<false, true>(
+                        //         in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last,
+                        //         tilized_in0_cb_id);
+                        // }
+                        tilize_in<true, false>(
                             in0_pretilize_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
 
-                        if constexpr (split_reader && !split_reader_cb_shared) {
-                            tilize_in<false, true>(
-                                in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
-                        }
+                        // TODO SECOND tilized_in0_cb
+                        tilize_in<false, true>(
+                            in0_pretilize_cb_id, in0_block_w, in0_num_subblocks_read_last, tilized_cb_second_reader_id);
+
                         mm_block_init_short_with_both_dt(
                             in0_cb_id,
                             in1_cb_id,

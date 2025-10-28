@@ -58,6 +58,23 @@ void kernel_main() {
         act_split_reader_write_done_semaphore_addr_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_write_done_semaphore_addr);
     }
+#ifdef SPLIT_READER
+    constexpr bool enable_split_reader = true;
+#else
+    constexpr bool enable_split_reader = false;
+#endif
+
+    const uint32_t act_mcast_reserve_done_semaphore_addr =
+        enable_split_reader ? get_semaphore(get_compile_time_arg_val(33)) : 0;
+    const uint32_t act_mcast_receiver_second_semaphore_addr =
+        enable_split_reader ? get_semaphore(get_compile_time_arg_val(34)) : 0;
+
+    volatile tt_l1_ptr uint32_t* act_mcast_reserve_done_semaphore_addr_ptr =
+        enable_split_reader ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_mcast_reserve_done_semaphore_addr)
+                            : nullptr;
+    volatile tt_l1_ptr uint32_t* act_mcast_receiver_second_semaphore_addr_ptr =
+        enable_split_reader ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_mcast_receiver_second_semaphore_addr)
+                            : nullptr;
 
     if constexpr (needs_act_block_zero_out) {
         zero_out_tiles<cb_id_act_row_major_bfloat16>();
@@ -73,6 +90,12 @@ void kernel_main() {
     const bool is_receiver_core = get_arg_val<uint32_t>(i++) > 0;
     const bool is_sender_core = get_arg_val<uint32_t>(i++) > 0;
     uint32_t dram_config_reader_index = get_arg_val<uint32_t>(i++);
+
+    DPRINT << "act_mcast_dest_noc_start_x: " << act_mcast_dest_noc_start_x
+           << ", act_mcast_dest_noc_start_y: " << act_mcast_dest_noc_start_y
+           << ", act_mcast_dest_noc_end_x: " << act_mcast_dest_noc_end_x
+           << ", act_mcast_dest_noc_end_y: " << act_mcast_dest_noc_end_y
+           << ", act_mcast_sender_id: " << act_mcast_sender_id << ENDL();
 
     tt_l1_ptr uint32_t* act_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
@@ -120,7 +143,7 @@ void kernel_main() {
     constexpr uint32_t stride_h_bytes = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
     constexpr bool sliced_inner_dim = window_outer > 1;
-
+    constexpr uint32_t img2col_tiles = (split_reader_cb_shared) ? act_block_num_tiles : act_block_num_tiles_read;
     // Reset reader_idx to finish act_block_h_datums
     uint32_t reader_idx = 0;
     uint32_t start_reader_idx = 0;
@@ -128,7 +151,7 @@ void kernel_main() {
         uint32_t reader_offset = act_l1_read_addr;
         for (uint32_t outer = 0; outer < window_outer; outer++) {
             reader_idx = start_reader_idx;
-            cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles_read);
+            cb_reserve_back(cb_id_act_row_major_bfloat16, img2col_tiles);
             if (is_sender_core) {
                 uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
                 if constexpr (split_reader_cb_shared) {
@@ -152,11 +175,12 @@ void kernel_main() {
                     reader_idx,
                     act_l1_read_addr,
                     stride_h_bytes);
+
                 if constexpr (split_reader_cb_shared) {
                     wait_write_done(act_split_reader_write_done_semaphore_addr_ptr);
                 }
             }
-            cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles_read);
+            cb_push_back(cb_id_act_row_major_bfloat16, img2col_tiles);
 
 #ifndef SKIP_MCAST
             // Round robin self-mcast and receive tilized act matrix in cb_id_act
@@ -164,6 +188,9 @@ void kernel_main() {
             for (uint32_t act_w_outer_i = 0; act_w_outer_i < act_w_num_outer; act_w_outer_i++) {
                 cb_reserve_back(cb_id_act, act_block_num_tiles);
                 if (act_w_outer_i == act_mcast_sender_id) {
+#ifdef SPLIT_READER
+                    noc_semaphore_set(act_mcast_reserve_done_semaphore_addr_ptr, VALID);
+#endif
                     // MCAST SENDER: send entire tilized input to other cores in column
                     // wait until all act mcast destinations have atomically incremented the act semaphore_addr
                     // (i.e. its value should be act_mcast_num_dests), then reset the semaphore_addr value back to
@@ -173,13 +200,16 @@ void kernel_main() {
                     noc_semaphore_set(act_mcast_sender_semaphore_addr_ptr, 0);
 
                     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
+#ifdef SPLIT_READER
+                    noc_semaphore_set(act_mcast_receiver_second_semaphore_addr_ptr, INVALID);
+#endif
                     // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
-                    cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
-
+                    cb_wait_front(tilized_in0_cb_id, act_block_num_tiles_read);
                     // Now we have the block in the CB address, we can mcast to dests!
                     uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
 
                     uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
+
                     if (is_receiver_core) {
                         if constexpr (act_mcast_num_cores) {
                             // num_dests will source, since we are copying to a different local CB as well
@@ -225,6 +255,9 @@ void kernel_main() {
                                 act_mcast_receiver_semaphore_noc_addr,
                                 act_mcast_num_cores + 1);
                             noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+#ifdef SPLIT_READER
+                            noc_semaphore_wait(act_mcast_receiver_second_semaphore_addr_ptr, VALID);
+#endif
                         }
                     } else {
                         noc_semaphore_set_multicast(
@@ -236,7 +269,9 @@ void kernel_main() {
                     // MCAST RECEIVER: receive entire tilized input from sender core
                     // Set act semaphore value to INVALID
                     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
-
+#ifdef SPLIT_READER
+                    noc_semaphore_set(act_mcast_receiver_second_semaphore_addr_ptr, INVALID);
+#endif
                     // Atomic increment source core counter
                     uint64_t act_mcast_sender_semaphore_noc_addr;
                     if constexpr (transpose_mcast) {
@@ -251,14 +286,16 @@ void kernel_main() {
                             act_mcast_sender_semaphore_addr);
                     }
                     noc_semaphore_inc(act_mcast_sender_semaphore_noc_addr, 1);
-
                     // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
                     noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+#ifdef SPLIT_READER
+                    noc_semaphore_wait(act_mcast_receiver_second_semaphore_addr_ptr, VALID);
+#endif
                 }
                 cb_push_back(cb_id_act, act_block_num_tiles);
             }  // act_w_num_outer
 
-            cb_pop_front(tilized_in0_cb_id, act_block_num_tiles);
+            cb_pop_front(tilized_in0_cb_id, act_block_num_tiles_read);
 #endif
         }
         start_reader_idx = reader_idx;

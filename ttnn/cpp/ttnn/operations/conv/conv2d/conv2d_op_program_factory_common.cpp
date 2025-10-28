@@ -95,7 +95,10 @@ std::vector<CBInfo> get_cb_info(
 
     const uint32_t per_core_out_matrix_height_ntiles = pconfig.per_core_out_matrix_height_ntile;
     const uint32_t per_core_out_matrix_width_ntiles = pconfig.per_core_out_matrix_width_ntile;
-    const uint32_t tilized_act_block_num_tiles = block_config.act_block_h_ntiles * block_config.act_block_w_ntiles;
+    const uint32_t tilized_act_block_num_tiles_last =
+        (block_config.act_block_h_ntiles / 2) * block_config.act_block_w_ntiles;
+    const uint32_t tilized_act_block_num_tiles =
+        block_config.act_block_h_ntiles * block_config.act_block_w_ntiles - tilized_act_block_num_tiles_last;
     uint32_t act_block_num_tiles, act_block_split_num_tiles = 0;
     const uint32_t padded_in_channels = weights_shape[2] / (kernel_size[0] * kernel_size[1]);
     const uint32_t num_blocks_act_h = per_core_out_matrix_height_ntiles / block_config.act_block_h_ntiles;
@@ -252,6 +255,12 @@ std::vector<CBInfo> get_cb_info(
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::ACT_TILIZED,
         .num_pages = tilized_act_block_num_tiles,
+        .page_size = output_tile_size,
+        .data_format = output_df});
+
+    cb_info.emplace_back(CBInfo{
+        .name = Conv2dCb::ACT_TILIZED_SECOND,
+        .num_pages = tilized_act_block_num_tiles_last,
         .page_size = output_tile_size,
         .data_format = output_df});
 
