@@ -177,13 +177,18 @@ def test_decoder_inference(
         )[positions]
 
         # Reference model
-        attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)
-        attn_mask_torch = torch.triu(attn_mask, diagonal=1)
+        attn_mask = torch.triu(torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min), diagonal=1)
+        if model_args.sliding_window > 0 and (
+            hasattr(reference_model, "attention_type") and reference_model.attention_type == "sliding_attention"
+        ):
+            attn_mask += torch.tril(
+                torch.full((max_seq_len, max_seq_len), -float("inf")), diagonal=-model_args.sliding_window
+            )
         ref_output = reference_model(
             pt_decode_input,
             positions[0],
             freqs_cis_i,
-            mask=attn_mask_torch,
+            mask=attn_mask,
         )
         # Run TT model
         tt_out = tt_model(

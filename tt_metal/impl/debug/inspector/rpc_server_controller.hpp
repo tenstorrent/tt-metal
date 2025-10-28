@@ -34,10 +34,10 @@ private:
     std::condition_variable server_start_cv;
     std::mutex server_start_mutex;
     std::atomic<bool> server_start_finished{false};
-    std::string server_start_error_message{};
+    std::string server_start_error_message;
 
     // temp data used in background thread as initialization
-    std::string address{};
+    std::string address;
 
     void run_server();
 };
