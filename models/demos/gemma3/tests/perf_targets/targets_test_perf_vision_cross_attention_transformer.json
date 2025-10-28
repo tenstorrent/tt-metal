@@ -13,6 +13,9 @@
         },
         "N300": {
             "model_forward_inference": 0.5581898666666666
+        },
+        "T3K": {
+            "model_forward_inference": 0.538701
         }
     }
 }
