@@ -36,7 +36,7 @@ struct Pool2D {
     };
 
     struct tensor_args_t {
-        const std::vector<Tensor>& input_tensors_;
+        const Tensor& input_tensor_;
     };
 
     using spec_return_value_t = TensorSpec;
@@ -48,7 +48,6 @@ struct Pool2D {
             tt::tt_metal::KernelHandle reader1_kernel{};
             tt::tt_metal::KernelHandle compute_kernel{};
             tt::tt_metal::CBHandle raw_in_cb{};
-            tt::tt_metal::CBHandle raw_in_idx_cb{};
             tt::tt_metal::CBHandle out_cb{};
             tt::tt_metal::CBHandle out_idx_cb{};
             uint32_t ncores{};
@@ -81,7 +80,7 @@ struct Pool2D {
         const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const std::vector<Tensor>& input_tensors,
+        const Tensor& input_tensor,
         const sliding_window::SlidingWindowConfig& sliding_window_config,
         Pool2DType pool_type,
         DataType output_dtype,
