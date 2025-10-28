@@ -145,7 +145,7 @@ inline std::ostream& operator<<(std::ostream& os, const MultiPoolChannelAllocato
                 pos += 5;  // Move past '\n' and the inserted spaces
             }
             os << "    " << allocator_str << "\n";
-        } else if (auto* remote_allocator = dynamic_cast<FabricRemoteChannelsAllocator*>(pool.get())) {
+        } else if ([[maybe_unused]] auto* remote_allocator = dynamic_cast<FabricRemoteChannelsAllocator*>(pool.get())) {
             // For remote allocator, we'll just print basic info since we haven't implemented its operator<<
             os << "    FabricRemoteChannelsAllocator (operator<< not yet implemented)\n";
         } else {
