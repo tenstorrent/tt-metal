@@ -85,7 +85,7 @@ private:
     bool is_2D_routing_enabled_ = false;
     bool is_dynamic_routing_enabled_ = false;
 
-    std::unordered_map<MeshId, bool> wrap_around_mesh_{};
+    std::unordered_map<MeshId, bool> wrap_around_mesh_;
 
     size_t packet_header_size_bytes_ = 0;
     size_t max_payload_size_bytes_ = 0;
