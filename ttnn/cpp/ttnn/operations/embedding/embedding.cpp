@@ -53,7 +53,8 @@ ttnn::Tensor EmbeddingOperation::invoke(
         } else if (weight_arg.layout() == ttnn::TILE_LAYOUT) {
             fused_tilized = true;
         } else {
-            TT_FATAL(!dtype.has_value(), "Can only typecast output embeddings when producing TILE_LAYOUT output");
+            bool typecast_needed = dtype.has_value() && (dtype.value() != weight.dtype());
+            TT_FATAL(!typecast_needed, "Can only typecast output embeddings when producing TILE_LAYOUT output");
         }
     }
 
