@@ -114,6 +114,7 @@ enum class HighLevelTrafficPattern {
     FullRing,
     HalfRing,
     AllDevicesUniformPattern,
+    SequentialAllToAll,
 };
 
 struct TestFabricSetup {
