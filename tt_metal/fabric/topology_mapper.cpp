@@ -442,9 +442,9 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
             phys_deg[j] = phys_adj_idx[j].size();
         }
 
-        // forced mapping for logical indices that are pinned by ASIC position (tray, location)
-        std::vector<int> forced_phys_index_for_logical(n_log, -1);
-        const auto my_host = physical_system_descriptor_.my_host_name();
+        // Candidate restrictions for logical indices pinned by ASIC position (tray, location).
+        // If entry is empty, no restriction; otherwise, only listed physical indices are allowed.
+        std::vector<std::vector<size_t>> restricted_phys_indices_for_logical(n_log);
         if (!fixed_asic_position_pinnings_.empty()) {
             // Validate uniqueness of pins for this mesh and apply
             std::unordered_set<FabricNodeId> pinned_fabric_nodes;
@@ -468,13 +468,10 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
                         mesh_id.get());
                 }
 
-                // Find matching physical indices on this host for the pinned ASIC position
+                // Find matching physical indices in this mesh for the pinned ASIC position (across any host)
                 std::vector<size_t> matches;
                 for (size_t j = 0; j < n_phys; ++j) {
                     auto asic = phys_nodes[j];
-                    if (physical_system_descriptor_.get_host_name_for_asic(asic) != my_host) {
-                        continue;
-                    }
                     auto tray = physical_system_descriptor_.get_tray_id(asic);
                     auto loc = physical_system_descriptor_.get_asic_location(asic);
                     if (tray == pos.first && loc == pos.second) {
@@ -484,96 +481,17 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
 
                 if (matches.empty()) {
                     TT_THROW(
-                        "Pinned ASIC position (tray {}, loc {}) not found among LOCAL physical ASICs on host '{}' for "
-                        "mesh {}.",
+                        "Pinned ASIC position (tray {}, loc {}) not found among physical ASICs participating in mesh "
+                        "{}.",
                         *pos.first,
                         *pos.second,
-                        my_host,
                         mesh_id.get());
-                }
-                if (matches.size() != 1) {
-                    std::vector<std::string> asic_strs;
-                    asic_strs.reserve(matches.size());
-                    for (auto pj : matches) {
-                        asic_strs.push_back(fmt::format("{}", phys_nodes[pj]));
-                    }
-                    std::string joined;
-                    for (size_t i = 0; i < asic_strs.size(); ++i) {
-                        if (i) {
-                            joined += ", ";
-                        }
-                        joined += asic_strs[i];
-                    }
-                    TT_THROW(
-                        "Pinned ASIC position (tray {}, loc {}) maps to multiple ASICs in mesh {}: {}. Cannot "
-                        "disambiguate.",
-                        *pos.first,
-                        *pos.second,
-                        mesh_id.get(),
-                        joined);
                 }
 
                 size_t li = log_to_idx.at(fabric_node);
-                size_t pj = matches.front();
-
-                // Degree feasibility early-check
-                if (phys_deg[pj] < log_deg[li]) {
-                    TT_THROW(
-                        "Pinned mapping infeasible: fabric node {} (degree {}) pinned to ASIC {} (degree {}) in mesh "
-                        "{}.",
-                        fabric_node,
-                        log_deg[li],
-                        phys_nodes[pj],
-                        phys_deg[pj],
-                        mesh_id.get());
-                }
-
-                forced_phys_index_for_logical[li] = static_cast<int>(pj);
-            }
-
-            // Apply pinned assignments, checking conflicts
-            for (size_t li = 0; li < n_log; ++li) {
-                if (forced_phys_index_for_logical[li] != -1) {
-                    size_t pj = static_cast<size_t>(forced_phys_index_for_logical[li]);
-                    if (used[pj] && mapping[li] != static_cast<int>(pj)) {
-                        TT_THROW(
-                            "Conflicting pinnings: physical ASIC {} is pinned for multiple fabric nodes within mesh "
-                            "{}.",
-                            phys_nodes[pj],
-                            mesh_id.get());
-                    }
-                    mapping[li] = static_cast<int>(pj);
-                    used[pj] = true;
-                }
-            }
-
-            // Validate that all pinned logical neighbors are physically connected
-            for (size_t li = 0; li < n_log; ++li) {
-                if (mapping[li] == -1) {
-                    continue;
-                }
-                for (size_t lk = 0; lk < n_log; ++lk) {
-                    if (li == lk || mapping[lk] == -1) {
-                        continue;
-                    }
-                    bool log_connected = std::binary_search(log_adj_idx[li].begin(), log_adj_idx[li].end(), lk);
-                    if (!log_connected) {
-                        continue;
-                    }
-                    size_t pj = static_cast<size_t>(mapping[li]);
-                    size_t pk = static_cast<size_t>(mapping[lk]);
-                    bool phys_connected = std::binary_search(phys_adj_idx[pj].begin(), phys_adj_idx[pj].end(), pk);
-                    if (!phys_connected) {
-                        auto fn_a = log_nodes[li];
-                        auto fn_b = log_nodes[lk];
-                        TT_THROW(
-                            "Pinned nodes break topology: logical edge {}<->{} requires physical adjacency in mesh {}, "
-                            "which does not exist.",
-                            fn_a,
-                            fn_b,
-                            mesh_id.get());
-                    }
-                }
+                std::sort(matches.begin(), matches.end());
+                matches.erase(std::unique(matches.begin(), matches.end()), matches.end());
+                restricted_phys_indices_for_logical[li] = std::move(matches);
             }
         }
 
@@ -666,16 +584,17 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
             std::vector<size_t> candidates;
             candidates.reserve(n_phys);
 
-            // If this logical node is forced to a specific physical index, restrict candidates
-            if (forced_phys_index_for_logical[li] != -1) {
-                size_t j = static_cast<size_t>(forced_phys_index_for_logical[li]);
-                if (!used[j] && phys_deg[j] >= log_deg[li]) {
-                    candidates.push_back(j);
-                } else {
+            // If this logical node has restricted candidates from pinning, use those; otherwise try all viable anchors
+            if (!restricted_phys_indices_for_logical[li].empty()) {
+                for (size_t j : restricted_phys_indices_for_logical[li]) {
+                    if (j < n_phys && !used[j] && phys_deg[j] >= log_deg[li]) {
+                        candidates.push_back(j);
+                    }
+                }
+                if (candidates.empty()) {
                     return false;
                 }
             } else {
-                // Try all viable anchors; rely on consistency + forward checking to prune
                 for (size_t j = 0; j < n_phys; ++j) {
                     if (used[j] || phys_deg[j] < log_deg[li]) {
                         continue;

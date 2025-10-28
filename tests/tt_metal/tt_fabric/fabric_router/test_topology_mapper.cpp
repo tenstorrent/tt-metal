@@ -375,13 +375,6 @@ TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_2pins)
         local_mesh_binding.host_rank = MeshHostRankId{1};
     }
 
-    const auto my_host = physical_system_descriptor_->my_host_name();
-    for (const auto& asics : physical_system_descriptor_->get_asics_connected_to_host(my_host)) {
-        auto tray = physical_system_descriptor_->get_tray_id(asics);
-        auto loc = physical_system_descriptor_->get_asic_location(asics);
-        log_critical(tt::LogFabric, "Asic: {}, Tray: {}, Loc: {}", asics, tray, loc);
-    }
-
     // Choose a real ASIC on this host and pin its (tray, location) to logical node (mesh 0, chip 0)
     auto pinned_asic = AsicPosition{1, 1};
     auto pinned_asic2 = AsicPosition{1, 2};
@@ -395,6 +388,7 @@ TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_2pins)
 
     tt::tt_metal::AsicID mapped_asic;
     tt::tt_metal::AsicID mapped_asic2;
+    const auto my_host = physical_system_descriptor_->my_host_name();
     for (const auto& asics : physical_system_descriptor_->get_asics_connected_to_host(my_host)) {
         auto tray = physical_system_descriptor_->get_tray_id(asics);
         auto loc = physical_system_descriptor_->get_asic_location(asics);
