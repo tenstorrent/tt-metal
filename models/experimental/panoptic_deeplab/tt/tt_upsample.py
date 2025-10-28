@@ -194,3 +194,73 @@ class BilinearUpsampleMatmulTTNN(LightweightModule):
             Y_final = ttnn.to_layout(Y_final, ttnn.TILE_LAYOUT)
             logger.debug(f"{Y_final.shape=}")
             return Y_final  # (B, H_out, W_out, C)
+
+
+class BilinearUpsampleHeightSlicedTTNN(LightweightModule):
+    """
+    TTNN Bilinear upsampling using upsample op.
+    Slice height / 2.
+    """
+
+    def __init__(
+        self,
+        device,
+        input_batch,
+        input_channels,
+        input_height,
+        input_width,
+        scale=4,
+        # input_channels_first=False,
+        # output_channels_first=None,
+        compute_kernel_config=None,
+    ):
+        self.device = device
+        self.N = input_batch
+        self.C = input_channels
+        self.H = input_height
+        self.W = input_width
+        self.scale = scale
+
+        self.H_out = self.H * self.scale
+        self.W_out = self.W * self.scale
+
+        if compute_kernel_config is not None:
+            self.compute_kernel_config = compute_kernel_config
+        else:
+            self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
+            logger.info(f"Compute kernel config not provided, using default. {self.compute_kernel_config=}.")
+
+        self.slices_spec = [
+            ([0, 0, 0, 0], [1, input_height // 2, input_width, input_channels]),
+            ([0, input_height // 2, 0, 0], [1, input_height, input_width, input_channels]),
+        ]
+
+    def forward(self, img_ttnn):
+        assert len(self.slices_spec) == 2, "Currently only supports 2 slices."
+        img_slices = []
+
+        for slice_spec in self.slices_spec:
+            start_indices, end_indices = slice_spec
+            logger.warning(f"{start_indices=}, {end_indices=}")
+            img_slice = ttnn.slice(img_ttnn, start_indices, end_indices, [1, 1, 1, 1])
+
+            # Upsample slice
+            img_slice = ttnn.upsample(
+                img_slice,
+                scale_factor=(self.scale, self.scale),
+                mode="bilinear",
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            img_slice = ttnn.to_memory_config(img_slice, ttnn.DRAM_MEMORY_CONFIG)
+
+            img_slices.append(img_slice)
+
+        output_tensor = ttnn.concat([img_slices[0], img_slices[1]], dim=1)
+        ttnn.deallocate(img_slices[0])
+        ttnn.deallocate(img_slices[1])
+        return output_tensor

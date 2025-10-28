@@ -332,3 +332,82 @@ def test_panoptic_upsample_dram(
     logger.info(pcc_message)
     allclose = torch.allclose(output_tensor, torch_result, atol=1e-1, rtol=1e-1)
     assert allclose
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 256}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, num_channels, height, width, scale_h, scale_w",
+    ((1, 32, 128, 256, 4, 4),),
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("math_approx_mode", [True])
+# @pytest.mark.parametrize("mode", ["bilinear", "nearest"])
+@pytest.mark.parametrize("mode", ["bilinear"])
+def test_panoptic_upsample_dram(
+    device, batch_size, num_channels, height, width, scale_h, scale_w, math_fidelity, math_approx_mode, mode
+):
+    # Test bilinear upsampling with panoptic model shapes on DRAM interleaved tensors
+
+    torch.manual_seed(0)
+
+    input_shape = [batch_size, num_channels, height, width]
+    # mode = "bilinear"
+
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input.permute(0, 2, 3, 1),
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+    )
+
+    scale_factor = (scale_h, scale_w)
+    torch_upsample = nn.Upsample(
+        scale_factor=scale_factor, mode=mode, align_corners=False if mode == "bilinear" else None
+    )
+    torch_result = torch_upsample(torch_input)
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=math_fidelity,
+        math_approx_mode=math_approx_mode,
+        fp32_dest_acc_en=False,
+    )
+
+    # Step 1: Split the tensor along dimension 1 (height dimension)
+    # Split 1x128x256x32 into two 1x64x256x32 tensors
+    tensor1 = ttnn.slice(tt_input, [0, 0, 0, 0], [1, 64, 256, 32], [1, 1, 1, 1])
+    tensor2 = ttnn.slice(tt_input, [0, 64, 0, 0], [1, 128, 256, 32], [1, 1, 1, 1])
+
+    # Step 2: Prepare tensors for upsampling
+    # Convert to ROW_MAJOR_LAYOUT as required by ttnn.upsample
+    tensor1_rm = ttnn.to_layout(tensor1, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tensor2_rm = ttnn.to_layout(tensor2, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    # Step 3: Upsample both tensors with scale factor 4
+    # ttnn.upsample expects (B, H, W, C) format and scale tuple (scale_h, scale_w)
+    upsampled1 = ttnn.upsample(
+        tensor1_rm, (4, 4), mode="bilinear", compute_kernel_config=compute_kernel_config
+    )  # 1x64x256x32 -> 1x256x1024x32
+    upsampled1 = ttnn.to_memory_config(upsampled1, ttnn.DRAM_MEMORY_CONFIG)
+
+    upsampled2 = ttnn.upsample(
+        tensor2_rm, (4, 4), mode="bilinear", compute_kernel_config=compute_kernel_config
+    )  # 1x64x256x32 -> 1x256x1024x32
+    upsampled2 = ttnn.to_memory_config(upsampled2, ttnn.DRAM_MEMORY_CONFIG)
+
+    # Step 4: Concatenate along dimension 1 (height)
+    # Concat two 1x256x1024x32 tensors to get 1x512x1024x32
+    # result = ttnn.concat([upsampled1, upsampled2], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    output_tensor = ttnn.concat([upsampled1, upsampled2], dim=1)
+
+    # output_tensor = ttnn.upsample(tt_input, scale_factor, mode=mode, compute_kernel_config=compute_kernel_config)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    torch_result = torch_result.permute(0, 2, 3, 1)
+    pcc_passed, pcc_message = assert_with_pcc(torch_result, output_tensor, pcc=0.999)
+    logger.info(pcc_message)
+    allclose = torch.allclose(output_tensor, torch_result, atol=1e-1, rtol=1e-1)
+    assert allclose

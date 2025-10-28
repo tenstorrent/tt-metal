@@ -378,10 +378,22 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
 
         # Final upsample - use builder API
         # Store scale factor for dynamic upsample creation during forward pass
-        self.final_upsample_scale = (
-            common_stride if isinstance(common_stride, tuple) else (common_stride, common_stride)
+        # self.final_upsample_scale = (
+        # common_stride if isinstance(common_stride, tuple) else (common_stride, common_stride)
+        # )
+        # self.final_upsample_mode = "nearest"
+        from .tt_upsample import BilinearUpsampleHeightSlicedTTNN
+
+        self.final_upsample = BilinearUpsampleHeightSlicedTTNN(
+            device=device,
+            input_batch=1,
+            input_channels=32,
+            input_height=512 // 4,
+            input_width=1024 // 4,
+            scale=4,
+            compute_kernel_config=None,
         )
-        self.final_upsample_mode = "nearest"
+
         logger.debug("TtPanopticDeepLabSemSegHead initialization complete")
 
     def forward(self, features: Dict[str, ttnn.Tensor]) -> Tuple[ttnn.Tensor, Dict]:
@@ -424,11 +436,11 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
 
         # Calculate scale factors
         # Head convolutions use stride=1 (no downsampling), so use base scale factor
-        scale_h = self.final_upsample_scale[0]
-        scale_w = self.final_upsample_scale[1]
-        logger.debug(
-            f"Upsampling from [{current_h}, {current_w}] with scale_factor=[{scale_h}, {scale_w}] to [{current_h * scale_h}, {current_w * scale_w}]"
-        )
+        # scale_h = self.final_upsample_scale[0]
+        # scale_w = self.final_upsample_scale[1]
+        # logger.debug(
+        # f"Upsampling from [{current_h}, {current_w}] with scale_factor=[{scale_h}, {scale_w}] to [{current_h * scale_h}, {current_w * scale_w}]"
+        # )
 
         # Check allocation before final upsample
         if not y.is_allocated():
@@ -437,7 +449,8 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
             logger.debug(f"Final upsample: input y is allocated (shape={y.shape}, dtype={y.dtype}, layout={y.layout})")
 
         # Upsample directly
-        y = ttnn.upsample(y, scale_factor=(scale_h, scale_w), mode=self.final_upsample_mode)
+        # y = ttnn.upsample(y, scale_factor=(scale_h, scale_w), mode=self.final_upsample_mode)
+        y = self.final_upsample(y)
 
         # Check allocation after final upsample
         if not y.is_allocated():
