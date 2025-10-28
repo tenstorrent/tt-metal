@@ -72,7 +72,8 @@ for DIR in "${HF_MODELS[@]}"; do
     # Set HF_MODEL environment variable and run the Python script
     HF_MODEL="$DIR" python3 "${SCRIPT_DIR}/generate_reference_outputs.py" \
         --total_length "$TOTAL_LENGTH" \
-        --output_file "$OUTPUT_FILE"
+        --output_file "$OUTPUT_FILE" \
+        --model "$DIR"
 done
 
 echo "All reference outputs have been generated!"
