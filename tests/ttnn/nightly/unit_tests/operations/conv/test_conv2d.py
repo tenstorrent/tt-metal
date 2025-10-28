@@ -88,7 +88,7 @@ def run_conv(
     output_dtype,
     weights_dtype,
     batch_size,
-    output_channels,
+    output_channels,  # this is total output channels accross all devices
     input_channels,
     input_height,
     input_width,
@@ -132,7 +132,16 @@ def run_conv(
     config_tensors_in_dram=False,
     custom_pcc=None,
     force_split_reader=None,
+    tp_factor=1,
+    concat_with_ag=False,
+    worker_sub_device_id=None,
+    sub_device_stall_group=None,
+    ccl_semaphore_handles=None,
+    barrier_semaphore_handles=None,
+    persistent_output_buffers=None,
 ):
+    if tp_factor != 1:
+        assert has_bias == False, "Bias is not supported for multi-chip tests with tp_factor != 1"
     if isinstance(device, ttnn.MeshDevice) and len(device.get_device_ids()) > 1:
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when running on multiple devices"
         assert (
@@ -142,7 +151,11 @@ def run_conv(
             output_mesh_composer is not None
         ), "Expected mesh composer for output tensor when running on multiple devices"
         num_devices = len(device.get_device_ids())
-        total_batch_size = num_devices * batch_size  # Batch size across all devices
+        total_batch_size = batch_size  # Batch size across all devices
+        if tp_factor == 1:
+            total_batch_size = (
+                num_devices * batch_size
+            )  # in case of tp_factor > 1, we are not replicating input tensor accross devices
         logger.info(f"Using {num_devices} devices for this test")
     else:
         total_batch_size = batch_size
@@ -278,11 +291,14 @@ def run_conv(
     if not use_dram_slicing:
         slice_config = ttnn.Conv2dL1FullSliceConfig
 
+    out_channels_per_device = output_channels // tp_factor
+    print(f"out_channels_per_device: {out_channels_per_device}")
+
     [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
-        out_channels=output_channels,
+        out_channels=out_channels_per_device,
         device=device,
         bias_tensor=tt_bias_tensor,
         kernel_size=(filter_height, filter_width),
@@ -307,7 +323,7 @@ def run_conv(
             input_tensor=tt_input_tensor,
             weight_tensor=d_w,
             in_channels=input_channels,
-            out_channels=output_channels,
+            out_channels=out_channels_per_device,
             device=device,
             bias_tensor=d_b,
             kernel_size=(filter_height, filter_width),
@@ -327,11 +343,26 @@ def run_conv(
             slice_config=slice_config,
         )
 
+    if tp_factor > 1 and concat_with_ag:
+        tt_output_tensor_on_device = ttnn.to_memory_config(tt_output_tensor_on_device, ttnn.DRAM_MEMORY_CONFIG)
+        tt_output_tensor_on_device = ttnn.experimental.all_gather_async(
+            tt_output_tensor_on_device,
+            dim=3,
+            multi_device_global_semaphore=ccl_semaphore_handles[0],
+            barrier_semaphore=barrier_semaphore_handles[0],
+            persistent_output_buffer=persistent_output_buffers[0],
+            subdevice_id=worker_sub_device_id,
+        )
+        ttnn.synchronize_device(device, sub_device_ids=sub_device_stall_group)
+
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     out = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
+
+    print("out shape is", out.shape)
     # out is in row major layout and NHWC shape
     # NHWC to NCHW
     out = out.reshape(total_batch_size, out_height, out_width, out.shape[-1])
+    # this also applies to the case where tp_factor > 1, as the tensor will have num-devices * output_channels channels, which are the replicated for each device, so we just get one
     out = out[:, :, :, :output_channels]
 
     ref = torch.permute(ref, (0, 2, 3, 1))
@@ -5196,4 +5227,150 @@ def test_conv_block_sharding(
         in_place=False,
         force_split_reader=force_split_reader,
         enable_act_double_buffer=act_double_buffer,
+    )
+
+
+def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
+    # create global semaphore handles
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2)]
+    return ccl_semaphore_handles
+
+@pytest.mark.parametrize(
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, act_db, w_db, tp_factor, concat_with_ag",
+    (
+        # 1024x1024 resolution
+
+        # UNet
+        # kernel 3x3
+        #(1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True, 1, False),
+        #(1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True, 2, False),
+        (1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True, 2, True),
+    ),
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_conv2d_multichip(
+    mesh_device,
+    torch_tensor_map,
+    batch,
+    input_channels,
+    output_channels,
+    input_height,
+    input_width,
+    weights_dtype,
+    output_dtype,
+    groups,
+    kernel,
+    stride,
+    padding,
+    dilation,
+    shard_layout,
+    act_block_h_override,
+    act_block_w_div,
+    deallocate_activation,
+    math_fidelity,
+    fp32_accum,
+    packer_l1_acc,
+    act_db,
+    w_db,
+    tp_factor,
+    concat_with_ag,
+):
+
+    # Skip all on N300
+
+    if concat_with_ag:
+        assert tp_factor == 2, "Concat with AG is only supported for tp_factor == 2"
+
+    config_override = {}
+    config_override["act_block_h"] = act_block_h_override
+    config_override["act_block_w_div"] = act_block_w_div
+
+    if tp_factor == 1:
+        input_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+        weight_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+        output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    else:
+        input_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+        weight_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+        output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=-1)
+
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+    )
+    worker_sub_device = ttnn.SubDevice(
+        [
+            ccl_sub_device_crs,
+        ]
+    )
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    sub_device_stall_group = [worker_sub_device_id]
+
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
+    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+
+    # create global semaphore handles
+    ccl_semaphore_handles = [
+        create_global_semaphores(mesh_device, 2, ccl_sub_device_crs, 0) for _ in range(1)
+    ]
+
+    barrier_semaphore_handles = [
+        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(1)
+    ]
+
+    ag_output_shape = [1, 1, 1024, 1280]
+    persistent_output_buffers = [
+                ttnn.from_torch(
+                    torch.zeros(ag_output_shape),
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=output_dtype,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+            ]
+
+
+    run_conv(
+        device=mesh_device,
+        torch_tensor_map=torch_tensor_map,
+        math_fidelity=math_fidelity,
+        output_dtype=output_dtype,
+        weights_dtype=weights_dtype,
+        batch_size=batch,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=kernel[0],
+        filter_width=kernel[1],
+        stride_h=stride[0],
+        stride_w=stride[1],
+        padding=padding,
+        config_override=config_override,
+        dilation_h=dilation[0],
+        dilation_w=dilation[1],
+        fp32_accum=fp32_accum,
+        packer_l1_acc=packer_l1_acc,
+        output_layout=ttnn.TILE_LAYOUT,
+        deallocate_activation=deallocate_activation,
+        groups=groups,
+        has_bias=False,
+        shard_layout=shard_layout,
+        auto_shard=True if shard_layout is None else False,
+        memory_config=None,
+        input_mesh_mapper=input_mesh_mapper,
+        weight_mesh_mapper=weight_mesh_mapper,
+        output_mesh_composer=output_mesh_composer,
+        input_layout=ttnn.TILE_LAYOUT if output_dtype == ttnn.bfloat8_b else None,
+        enable_act_double_buffer=act_db,
+        enable_weights_double_buffer=w_db,
+        tp_factor=tp_factor,
+        concat_with_ag=concat_with_ag,
+        worker_sub_device_id=worker_sub_device_id,
+        sub_device_stall_group=sub_device_stall_group,
+        ccl_semaphore_handles=ccl_semaphore_handles,
+        barrier_semaphore_handles=barrier_semaphore_handles,
+        persistent_output_buffers=persistent_output_buffers,
     )
