@@ -19,7 +19,7 @@ from models.demos.deepseek_v3.utils.run_config import WeightConfig
 
 # Constants
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
-MAX_BATCH_SIZE = 32
+USERS_PER_ROW = 32
 SEQ_LEN_CHUNK_SIZE = 1024  # NOTE: should be 512 for blackhole (in case of future bring-up)
 TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
 
@@ -572,9 +572,18 @@ def get_state_dicts(
     return torch.stack(tensors, dim=concat_dim)
 
 
-def sub_state_dict(state_dict: dict[str, torch.Tensor], prefix: str):
+def sub_state_dict(state_dict: dict[str, torch.Tensor], prefix: str, num_layers: int | None = None):
     """Get a subset of the state dict with a given prefix."""
-    return {k[len(prefix) :]: v for k, v in state_dict.items() if k.startswith(prefix)}
+    if num_layers is None:
+        return {k[len(prefix) :]: v for k, v in state_dict.items() if k.startswith(prefix)}
+    else:
+        return {
+            k[len(prefix) :]: v
+            for k, v in state_dict.items()
+            if k.startswith(prefix)
+            for layer_idx_str in ["".join(itertools.takewhile(str.isdigit, k.removeprefix("model.layers.")))]
+            if not layer_idx_str or int(layer_idx_str) < num_layers
+        }
 
 
 def sub_state_dicts(
@@ -828,6 +837,7 @@ def get_weight_config(
     mesh_device: ttnn.Device,
     force_recalculate: bool,
 ):
+    weight_cache_path = weight_cache_path / f"{hf_config.num_hidden_layers}_layers"
     config_path = weight_cache_path / "config.json"
     weight_path = weight_cache_path / "weights"
     for _ in range(1):
@@ -841,6 +851,7 @@ def get_weight_config(
         logger.info(f"Using weights cached at {weight_cache_path}")
         return weight_config
 
+    logger.info(f"Caching weights at {weight_cache_path}")
     weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
     json.dump(weight_config, config_path.open("w"), cls=WeightConfigEncoder)
     return weight_config

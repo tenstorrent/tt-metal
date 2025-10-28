@@ -19,6 +19,7 @@ Tensor AdaptiveAvgPool2DOp::invoke(
     std::array<uint32_t, 2> output_size,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     bool in_place_halo,
     bool deallocate_input,
     bool reallocate_output) {
@@ -44,6 +45,7 @@ Tensor AdaptiveAvgPool2DOp::invoke(
         std::nullopt,  // divisor_override
         memory_config,
         applied_shard_scheme,
+        compute_kernel_config,
         in_place_halo,
         deallocate_input,
         reallocate_output);
@@ -88,8 +90,8 @@ Tensor AdaptiveMaxPool2DOp::invoke(
         false /*return_indices*/);
 
     // Since return_indices=false, the result variant should always contain a Tensor
-    TT_FATAL(std::holds_alternative<Tensor>(result), "Expected Tensor result when return_indices is false");
-    return std::get<Tensor>(result);
+    TT_FATAL(result.size() == 1, "Expected Tensor result when return_indices is false");
+    return result.at(0);
 }
 
 }  // namespace operations::experimental::adaptive_pool

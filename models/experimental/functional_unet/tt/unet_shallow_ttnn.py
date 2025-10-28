@@ -234,6 +234,7 @@ class UNetConv2D:
             weight_tensor=self.weight,
             bias_tensor=self.bias,
             compute_config=self.compute_config,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
             return_output_dim=False,
             return_weights_and_bias=True,
             **self.get_conv2d_kwargs(),

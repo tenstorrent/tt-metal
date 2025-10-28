@@ -17,12 +17,17 @@ inputs:
     description: 'Enable watcher'
     default: false
     type: boolean
+  fetch-depth:
+    description: 'Fetch depth for git'
+    default: 1
+    type: integer
 runs:
   using: "composite"
   steps:
     - name: 🧬 Checkout Repository
       uses: actions/checkout@v4
       with:
+        fetch-depth: ${{ inputs.fetch-depth }}
         submodules: recursive
         path: ${{ inputs.path }}
 
@@ -43,7 +48,7 @@ runs:
     - name: 📂 Extract Build Files
       if: ${{ inputs.build-artifact-name != '' }}
       working-directory: ${{ inputs.path }}
-      run: tar -xf ttm_any.tar
+      run: tar --zstd -xf ttm_any.tar.zst
       shell: bash
 
     - name: 🧪 Download Python Wheel

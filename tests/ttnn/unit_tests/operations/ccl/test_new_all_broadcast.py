@@ -71,7 +71,12 @@ def run_all_broadcast_impl(
     output_shard_grid=None,
     tensor_mem_layout=None,
     cluster_axis=None,
+    mesh_mapper_config=None,
 ):
+    if mesh_mapper_config is None:
+        mesh_mapper_config = ttnn.MeshMapperConfig(
+            [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)], ttnn.MeshShape(1, num_devices)
+        )
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
 
@@ -168,9 +173,7 @@ def run_all_broadcast_impl(
             memory_config=input_mem_config,
             mesh_mapper=ttnn.create_mesh_mapper(
                 mesh_device,
-                ttnn.MeshMapperConfig(
-                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)], ttnn.MeshShape(1, num_devices)
-                ),
+                mesh_mapper_config,
             ),
         )
 
@@ -240,6 +243,9 @@ def run_all_broadcast_impl(
         (8, 1, [256, 3328], ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
         (4, 1, [1, 69, 4000], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
         (8, 1, [10, 8320], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        (2, 1, [11, 10, 32784], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        (4, 1, [1, 2, 16300], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        (4, 1, [2, 2, 2, 16, 16], ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
 )
 @pytest.mark.parametrize(
@@ -387,6 +393,15 @@ def test_all_broadcast_trace(
             None,
             None,
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        (
+            4,
+            [1, 1, 32, 32768],
+            (32, 1024),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))}),
+            None,
+            None,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ),
     ],
 )

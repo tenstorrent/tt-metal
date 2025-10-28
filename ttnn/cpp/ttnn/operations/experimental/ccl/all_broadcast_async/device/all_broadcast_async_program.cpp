@@ -93,9 +93,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     }
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tilized ? tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes() : 4096;
+    DataType dtype = input_tensor.dtype();
+    const uint32_t fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const uint32_t MAX_PACKET_SIZE_BYTES =
+        dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
+    const size_t packet_size_bytes =
+        tilized ? tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes() : MAX_PACKET_SIZE_BYTES;
     size_t max_packet_size = packet_size_bytes;
-    uint32_t num_packets_per_row = std::ceil(static_cast<double>(row_size) / max_packet_size);
     uint32_t l1_scratch_cb_page_size_bytes = input_tensor.buffer()->aligned_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages = 3 * num_pages_per_packet;  // tripple buffering
@@ -106,10 +110,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
 
     uint32_t buffer_page_size = page_size;
+    uint32_t num_packets_per_page =
+        static_cast<uint32_t>(std::ceil(static_cast<double>(buffer_page_size) / max_packet_size));
     if (!tilized) {
         if (num_width_shards > 1) {
             buffer_page_size = input_tensor.memory_config().shard_spec()->shape[1] * input_tensor.element_size();
         }
+
         uint32_t num_rows_per_packet = (max_packet_size / buffer_page_size >= 2) ? 2 : 1;
         cb_src0_config =
             tt::tt_metal::CircularBufferConfig(3 * buffer_page_size * num_rows_per_packet, {{src0_cb_index, df}})
@@ -126,6 +133,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         src0_cb_index,                               // cb0_id
         num_pages_per_packet,                        // packet_size_in_pages
         input_tensor.buffer()->aligned_page_size(),  // tensor0_page_size
+        true,                                        // is_sender
     };
 
     if (!tilized) {
@@ -134,6 +142,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             buffer_page_size,                                   // page_size
             row_size,                                           // row_size
             (max_packet_size / buffer_page_size >= 2) ? 2 : 1,  // num_rows_per_packet
+            num_packets_per_page,                               // num_packets_per_page
+            max_packet_size,
+            true,  // is_sender
         };
     }
 
@@ -143,6 +154,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         input_tensor.buffer()->aligned_page_size(),  // tensor0_page_size
         num_targets_forward,                         // num_targets_forward_direction
         num_targets_backward,                        // num_targets_backward_direction
+        true,                                        // is_sender
     };
 
     if (!tilized) {
@@ -152,9 +164,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             row_size,
             max_packet_size,
             (max_packet_size / buffer_page_size >= 2) ? 2 : 1,  // num_rows_per_packet
-            num_packets_per_row,                                // num_packets_per_row
+            num_packets_per_page,                               // num_packets_per_row
             num_targets_forward,                                // num_targets_forward_direction
             num_targets_backward,                               // num_targets_backward_direction
+            true,                                               // is_sender
         };
     }
     std::vector<uint32_t> mcast_forward_args(2, 0);
@@ -180,20 +193,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     }
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        tilized ? "ttnn/cpp/ttnn/operations/experimental/ccl/all_broadcast_async/device/kernels/"
-                  "all_broadcast_tile_reader.cpp"
-                : "ttnn/cpp/ttnn/operations/experimental/ccl/all_broadcast_async/device/kernels/"
-                  "all_broadcast_rm_reader.cpp",
+        tilized ? "ttnn/cpp/ttnn/operations/ccl/broadcast/device/kernels/broadcast_tile_reader.cpp"
+                : "ttnn/cpp/ttnn/operations/ccl/broadcast/device/kernels/broadcast_rm_reader.cpp",
         sender_worker_core_range,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args, kernel_defines));
 
     // Writer
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        tilized ? "ttnn/cpp/ttnn/operations/experimental/ccl/all_broadcast_async/device/kernels/"
-                  "all_broadcast_tile_writer.cpp"
-                : "ttnn/cpp/ttnn/operations/experimental/ccl/all_broadcast_async/device/kernels/"
-                  "all_broadcast_rm_writer.cpp",
+        tilized ? "ttnn/cpp/ttnn/operations/ccl/broadcast/device/kernels/broadcast_tile_writer.cpp"
+                : "ttnn/cpp/ttnn/operations/ccl/broadcast/device/kernels/broadcast_rm_writer.cpp",
         sender_worker_core_range,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_args, kernel_defines));
 
@@ -216,8 +225,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             base_pages_per_worker = num_rows / num_links;
         }
         uint32_t remainder = input_tensor_num_pages % num_links;
-        uint32_t input_tile_id_start = link * base_pages_per_worker + std::min(link, remainder);
-        uint32_t input_tile_id_end = (link + 1) * base_pages_per_worker + std::min(link + 1, remainder);
+        uint32_t input_tile_id_start = (link * base_pages_per_worker) + std::min(link, remainder);
+        uint32_t input_tile_id_end = ((link + 1) * base_pages_per_worker) + std::min(link + 1, remainder);
         std::vector<uint32_t> reader_rt_args = {
             input_tensor.buffer()->address(),        // tensor_address0
             input_tile_id_start * num_width_shards,  // tile_id_start

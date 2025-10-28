@@ -385,7 +385,7 @@ void RunTestOnCore(
     }
 
     log_info(LogTest, "Expected error: {}", expected);
-    std::string exception = "";
+    std::string exception;
     do {
         exception = MetalContext::instance().watcher_server()->exception_message();
     } while (exception.empty());
@@ -431,7 +431,7 @@ void RunTestIEth(
 void CheckHostSanitization(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     auto device = mesh_device->get_devices()[0];
     // Try reading from a core that doesn't exist
-    constexpr CoreCoord core = {16, 16};
+    constexpr CoreCoord core = {99, 99};
     uint64_t addr = 0;
     uint32_t sz_bytes = 4;
     try {

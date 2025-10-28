@@ -7,7 +7,7 @@ on:
         description: 'Timeout for workflows in minutes'
         required: false
         type: number
-        default: 240
+        default: 720
       draft:
         description: 'Create PR as draft'
         required: false
@@ -24,7 +24,7 @@ on:
         description: 'Timeout for workflows in minutes'
         required: false
         type: number
-        default: 240
+        default: 720
       draft:
         description: 'Create PR as draft'
         required: false
@@ -41,7 +41,7 @@ on:
 env:
   BRANCH_NAME: llk-submodule-uplift
   SUBMODULE_PATH: tt_metal/third_party/tt_llk
-  WORKFLOW_TIMEOUT: 240
+  WORKFLOW_TIMEOUT: 720
   MAX_RETRIES: 3
 
 permissions:
@@ -165,6 +165,10 @@ jobs:
 
           # Create rich PR body
           cat > ../../../pr_body.md << EOF
+          ╔═════════════════════════════════════════════════╗
+          ║    THIS IS AN AUTOMATED PULL REQUEST CREATED    ║
+          ║              BY THE LLK UPLIFT BOT              ║
+          ╚═════════════════════════════════════════════════╝
           ## 📋 Summary
           This PR updates the LLK submodule to the latest version from the main branch.
 
@@ -276,7 +280,7 @@ jobs:
                     gh pr comment "$PR_NUMBER" --body "✅ **$DISPLAY_NAME** passed: [View run]($run_url)" --repo "${{ github.repository }}"
                     return 0
                   else
-                    gh pr comment "$PR_NUMBER" --body "❌ **$DISPLAY_NAME** failed (attempt $((retries + 1))): [View run]($run_url)" --repo "${{ github.repository }}"
+                    gh pr comment "$PR_NUMBER" --body "❌ **$DISPLAY_NAME** failed (attempt $((retries + 1))): [View run]($run_url/attempts/$((retries + 1)))" --repo "${{ github.repository }}"
                     break
                   fi
                 fi
@@ -582,3 +586,11 @@ jobs:
 
           echo "✅ Updated PR body with test status"
           echo "✅ PR #$PR_NUMBER ready for review"
+
+      - name: Auto-approve by codeowners
+        if: success()
+        run: |
+          echo "🚀 Triggering auto-approval"
+          gh workflow run "code-analysis.yaml" \
+            --ref "Aswinmcw/approve_llk_uplift" \
+            --repo "${{ github.repository }}"

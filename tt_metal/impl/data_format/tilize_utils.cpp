@@ -34,7 +34,7 @@ std::uint32_t TensAddr::numel() const {
 int TensAddr::offs(int n, int c, int h, int w) {
     TT_ASSERT(
         std::uint32_t(n) < sh[0] && std::uint32_t(c) < sh[1] && std::uint32_t(h) < sh[2] && std::uint32_t(w) < sh[3]);
-    return w + sh[3] * h + sh[2] * sh[3] * c + sh[1] * sh[2] * sh[3] * n;
+    return w + (sh[3] * h) + (sh[2] * sh[3] * c) + (sh[1] * sh[2] * sh[3] * n);
 }
 
 std::uint32_t round_up_to_mul16(std::uint32_t val) { return ((val & 15) == 0) ? val : (val | 15) + 1; }
@@ -69,8 +69,8 @@ std::vector<T> convert_layout_row_major_to_tile_swizzled(
         for (size_t hs = 0; hs < H; hs += tile_H) {
             for (size_t ws = 0; ws < W; ws += tile_W) {
                 for (size_t ht = 0; ht < tile_H; ht++) {
-                    size_t src_idx = b * H * W + (hs + ht) * W + ws;
-                    size_t dst_idx = b * H * W + hs * W + (ws * tile_H) + (ht * tile_W);
+                    size_t src_idx = (b * H * W) + ((hs + ht) * W) + ws;
+                    size_t dst_idx = (b * H * W) + (hs * W) + (ws * tile_H) + (ht * tile_W);
                     std::memcpy(&tilized_result[dst_idx], &in_row_major[src_idx], tile_W * sizeof(T));
                 }
             }
@@ -108,8 +108,8 @@ std::vector<T> convert_layout_tile_swizzled_to_row_major(
             for (size_t ws = 0; ws < W; ws += tile_W) {
                 for (size_t ht = 0; ht < tile_H; ht++) {
                     // Note: the only difference with tilize_row_major - switched src and dst indices
-                    size_t src_idx = b * H * W + hs * W + (ws * tile_H) + (ht * tile_W);
-                    size_t dst_idx = b * H * W + (hs + ht) * W + ws;
+                    size_t src_idx = (b * H * W) + (hs * W) + (ws * tile_H) + (ht * tile_W);
+                    size_t dst_idx = (b * H * W) + ((hs + ht) * W) + ws;
                     std::memcpy(&result[dst_idx], &in_tile_swizzled[src_idx], tile_W * sizeof(T));
                 }
             }
@@ -160,17 +160,18 @@ std::vector<T> convert_layout_tile_swizzled_to_tile_nfaces(
                     for (size_t row = 0; row < face_W; row++) {
                         for (size_t col = 0; col < face_H; col++) {
                             size_t src_index =
-                                tile_offset + face_y * (face_H * tile_W) + face_x * face_W + row * tile_W + col;
-                            size_t dst_index = tile_offset + face_y_dst * (face_H * tile_W) + face_x_dst * face_HW +
-                                               col * face_W + row;
+                                tile_offset + (face_y * (face_H * tile_W)) + (face_x * face_W) + (row * tile_W) + col;
+                            size_t dst_index = tile_offset + (face_y_dst * (face_H * tile_W)) + (face_x_dst * face_HW) +
+                                               (col * face_W) + row;
                             result[dst_index] = in_tile_swizzled[src_index];
                         }
                     }
                 } else {
                     for (size_t row = 0; row < face_H; row++) {
-                        size_t src_index = tile_offset + face_y * (face_H * tile_W) + face_x * face_W + row * tile_W;
+                        size_t src_index =
+                            tile_offset + (face_y * (face_H * tile_W)) + (face_x * face_W) + (row * tile_W);
                         size_t dst_index =
-                            tile_offset + face_y_dst * (face_H * tile_W) + face_x_dst * face_HW + row * face_W;
+                            tile_offset + (face_y_dst * (face_H * tile_W)) + (face_x_dst * face_HW) + (row * face_W);
                         std::memcpy(&result[dst_index], &in_tile_swizzled[src_index], face_W * sizeof(T));
                     }
                 }
@@ -221,10 +222,10 @@ std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
                     // Note: coalescted reads, strided writes
                     for (size_t row = 0; row < face_H; row++) {
                         for (size_t col = 0; col < face_W; col++) {
-                            size_t src_idx =
-                                tile_start + face_y_src * (face_H * tile_W) + face_x_src * face_HW + row * face_W + col;
+                            size_t src_idx = tile_start + (face_y_src * (face_H * tile_W)) + (face_x_src * face_HW) +
+                                             (row * face_W) + col;
                             size_t dst_idx =
-                                tile_start + face_y * (face_H * tile_W) + face_x * face_W + col * tile_W + row;
+                                tile_start + (face_y * (face_H * tile_W)) + (face_x * face_W) + (col * tile_W) + row;
                             result[dst_idx] = in_tile_nfaces[src_idx];
                         }
                     }
@@ -239,10 +240,10 @@ std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
                     } else {
                         src_face_start = tile_start + face_x * (face_H * tile_W) + face_y * face_HW;
                     }
-                    size_t dst_face_start = tile_start + face_y * (face_H * tile_W) + face_x * face_W;
+                    size_t dst_face_start = tile_start + (face_y * (face_H * tile_W)) + (face_x * face_W);
                     for (size_t row = 0; row < face_H; row++) {
-                        size_t src_idx = src_face_start + row * face_W;
-                        size_t dst_idx = dst_face_start + row * tile_W;
+                        size_t src_idx = src_face_start + (row * face_W);
+                        size_t dst_idx = dst_face_start + (row * tile_W);
                         std::memcpy(&result[dst_idx], &in_tile_nfaces[src_idx], face_W * sizeof(T));
                     }
                 }
@@ -286,7 +287,7 @@ std::vector<T> convert_layout_row_major_to_tile_nfaces(
 
     auto write_face = [&](size_t face_idx, size_t face_height, size_t face_width, size_t stride) {
         size_t offset = tilized_input.size();
-        tilized_input.resize(offset + face_height * face_width);
+        tilized_input.resize(offset + (face_height * face_width));
         T* dst = tilized_input.data() + offset;
         const T* src = in_row_major.data() + face_idx;
         if (!transpose_face) {
@@ -298,7 +299,7 @@ std::vector<T> convert_layout_row_major_to_tile_nfaces(
         } else {
             for (size_t row = 0; row < face_height; row++) {
                 for (size_t col = 0; col < face_width; col++) {
-                    dst[col * face_height + row] = src[row * stride + col];
+                    dst[(col * face_height) + row] = src[(row * stride) + col];
                 }
             }
         }
@@ -313,14 +314,14 @@ std::vector<T> convert_layout_row_major_to_tile_nfaces(
                 if (!transpose_face_order) {
                     for (size_t face_h_index = 0; face_h_index < tile_H / face_H; face_h_index++) {
                         for (size_t face_w_index = 0; face_w_index < tile_W / face_W; face_w_index++) {
-                            size_t src_idx = row_tile_start + face_w_index * face_W + face_h_index * face_H * W;
+                            size_t src_idx = row_tile_start + (face_w_index * face_W) + (face_h_index * face_H * W);
                             write_face(src_idx, face_H, face_W, W);
                         }
                     }
                 } else {
                     for (size_t face_w_index = 0; face_w_index < tile_W / face_W; face_w_index++) {
                         for (size_t face_h_index = 0; face_h_index < tile_H / face_H; face_h_index++) {
-                            size_t src_idx = row_tile_start + face_w_index * face_W + face_h_index * face_H * W;
+                            size_t src_idx = row_tile_start + (face_w_index * face_W) + (face_h_index * face_H * W);
                             write_face(src_idx, face_H, face_W, W);
                         }
                     }
@@ -373,8 +374,8 @@ std::vector<T> convert_layout_tile_nfaces_to_row_major(
         [&](std::vector<T>& out_data, tt::stl::Span<const T> in_data, size_t in_face_start, size_t out_face_start) {
             if (!transpose_face) {
                 for (size_t row = 0; row < face_H; row++) {
-                    size_t src_idx = in_face_start + row * face_W;
-                    size_t dst_idx = out_face_start + row * tile_W * tile_cols;
+                    size_t src_idx = in_face_start + (row * face_W);
+                    size_t dst_idx = out_face_start + (row * tile_W * tile_cols);
                     if (dst_idx + face_W > out_data.size()) {
                         std::cout << "dst_idx: " << dst_idx << " out_data.size(): " << out_data.size() << std::endl;
                     }
@@ -386,8 +387,8 @@ std::vector<T> convert_layout_tile_nfaces_to_row_major(
             } else {
                 for (size_t row = 0; row < face_H; row++) {
                     for (size_t col = 0; col < face_W; col++) {
-                        size_t src_idx = in_face_start + row * face_W + col;
-                        size_t dst_idx = out_face_start + col * face_H * col_faces * tile_cols + row;
+                        size_t src_idx = in_face_start + (row * face_W) + col;
+                        size_t dst_idx = out_face_start + (col * face_H * col_faces * tile_cols) + row;
 
                         out_data[dst_idx] = in_data[src_idx];
                     }
@@ -401,19 +402,19 @@ std::vector<T> convert_layout_tile_nfaces_to_row_major(
             for (size_t tile_col = 0; tile_col < tile_cols; tile_col++) {
                 size_t in_tile_start = batch_start + (tile_row * tile_H * W) + (tile_col * tile_H * tile_W);
                 size_t out_tile_start = transpose_face ? batch_start + (tile_row * tile_W * tile_H * tile_cols) +
-                                                             tile_col * face_H * col_faces
-                                                       : batch_start + (tile_row * tile_H * W) + tile_col * tile_W;
+                                                             (tile_col * face_H * col_faces)
+                                                       : batch_start + (tile_row * tile_H * W) + (tile_col * tile_W);
 
                 for (size_t face_h_idx = 0; face_h_idx < row_faces; face_h_idx++) {
                     for (size_t face_w_idx = 0; face_w_idx < col_faces; face_w_idx++) {
                         size_t in_face_start =
-                            in_tile_start + face_h_idx * face_H * tile_W + face_w_idx * face_H * face_W;
+                            in_tile_start + (face_h_idx * face_H * tile_W) + (face_w_idx * face_H * face_W);
 
                         auto face_h_idx_dst = transpose_face_order ? face_w_idx : face_h_idx;
                         auto face_w_idx_dst = transpose_face_order ? face_h_idx : face_w_idx;
                         size_t out_face_start =
-                            transpose_face ? out_tile_start + face_h_idx_dst * face_H * W + face_w_idx_dst * face_H
-                                           : out_tile_start + face_h_idx_dst * face_H * W + face_w_idx_dst * face_W;
+                            transpose_face ? out_tile_start + (face_h_idx_dst * face_H * W) + (face_w_idx_dst * face_H)
+                                           : out_tile_start + (face_h_idx_dst * face_H * W) + (face_w_idx_dst * face_W);
                         write_face(output, in_nfaces, in_face_start, out_face_start);
                     }
                 }
@@ -435,7 +436,6 @@ std::vector<T> convert_layout(
     std::optional<PhysicalSize> face_shape,
     const bool transpose_within_face,
     const bool transpose_of_faces) {
-    ZoneScoped;
     if (inp.size() == 0) {
         return std::vector<T>();
     }
@@ -487,7 +487,6 @@ std::vector<T> convert_layout(
     std::optional<PhysicalSize> face_shape,
     const bool transpose_within_face,
     const bool transpose_of_faces) {
-    ZoneScoped;
     TT_ASSERT(shape.size() >= 2, "Shape size {} must be at least rank 2!", shape.size());
     size_t H = shape[shape.size() - 2];
     size_t W = shape[shape.size() - 1];

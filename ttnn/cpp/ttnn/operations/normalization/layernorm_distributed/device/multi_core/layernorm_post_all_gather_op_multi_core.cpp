@@ -57,7 +57,8 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     LayerNormDistributedType norm_type,
     float eps,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<bool> use_2d_core_grid) {
+    std::optional<bool> use_2d_core_grid,
+    LayerNormDistributedDefaultProgramConfig program_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBHandle;
     using tt::tt_metal::CircularBuffer;
@@ -338,10 +339,6 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         reader_defines["FUSE_BETA"] = "1";
     }
 
-    if (is_rmsnorm) {
-        compute_defines["RMSNORM"] = "1";
-    }
-
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
                                 (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
     TT_FATAL(
@@ -361,20 +358,29 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
+    bool float32_reduction = fp32_dest_acc_en && !program_config.legacy_reduction;
     std::vector<uint32_t> compute_args = {
-        tiles_per_core_y, block_size, stats_tiles_cols, gamma.has_value(), beta.has_value(), fp32_dest_acc_en};
+        tiles_per_core_y,
+        block_size,
+        stats_tiles_cols,
+        gamma.has_value(),
+        beta.has_value(),
+        fp32_dest_acc_en,
+        float32_reduction ? 1 : 0,
+        program_config.legacy_rsqrt ? 1 : 0};
 
-    auto compute_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
-        "layernorm_post_allgather.cpp",
-        all_cores,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_args,
-            .defines = compute_defines});
+    auto compute_kernel_file =
+        is_rmsnorm ? "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/"
+                     "rmsnorm_post_allgather.cpp"
+                   : "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
+                     "layernorm_post_allgather.cpp";
+    auto compute_config = tt::tt_metal::ComputeConfig{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .math_approx_mode = math_approx_mode,
+        .compile_args = compute_args,
+        .defines = compute_defines};
+    auto compute_kernels_id = CreateKernel(program, compute_kernel_file, all_cores, compute_config);
 
     // Create circular buffers
     // c_in0 -> a
@@ -494,7 +500,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
             for (uint32_t y = 0; y < cores_y; ++y) {
                 CoreCoord core = {x, y};
 
-                uint32_t tile_offset = x * Wt + y * tiles_per_core_y;
+                uint32_t tile_offset = (x * Wt) + (y * tiles_per_core_y);
                 uint32_t stats_offset = x * stats_tiles_cols;
 
                 log_debug(

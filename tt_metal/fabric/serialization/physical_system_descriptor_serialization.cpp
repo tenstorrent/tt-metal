@@ -5,6 +5,10 @@
 #include "physical_system_descriptor_serialization.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "protobuf/physical_system_descriptor.pb.h"
+#include <tt-metalium/fabric_types.hpp>
+#include <tt_metal/llrt/tt_target_device.hpp>
+
+#include <umd/device/cluster.hpp>
 
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
@@ -187,12 +191,20 @@ void physical_system_descriptor_to_proto(
             exit_node_connection_to_proto(exit_conn, proto_table->add_exit_connections());
         }
     }
+
+    // Set mock cluster flag
+    proto_desc->set_mock_cluster(descriptor.is_using_mock_cluster());
 }
 
 // Convert protobuf to PhysicalSystemDescriptor
 std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
     const tt::fabric::proto::PhysicalSystemDescriptor& proto_desc) {
-    auto descriptor = std::make_unique<PhysicalSystemDescriptor>(false);  // Don't run discovery
+    auto descriptor = std::make_unique<PhysicalSystemDescriptor>(
+        PhysicalSystemDescriptor::null_cluster,
+        nullptr,
+        nullptr,
+        proto_desc.mock_cluster() ? TargetDevice::Mock : TargetDevice::Silicon,
+        false);  // Don't run discovery
 
     // Convert system graph
     auto& system_graph = descriptor->get_system_graph();
@@ -296,4 +308,20 @@ PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_bytes(const
     return std::move(*proto_to_physical_system_descriptor(proto_desc));
 }
 
+PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_text_proto_file(
+    const std::string& text_proto_file) {
+    std::ifstream gsd_file(text_proto_file);
+    if (!gsd_file.is_open()) {
+        throw std::runtime_error("Failed to open file for reading: " + text_proto_file);
+    }
+
+    std::string text_proto((std::istreambuf_iterator<char>(gsd_file)), std::istreambuf_iterator<char>());
+    gsd_file.close();
+    tt::fabric::proto::PhysicalSystemDescriptor physical_system_descriptor;
+    if (!google::protobuf::TextFormat::ParseFromString(text_proto, &physical_system_descriptor)) {
+        throw std::runtime_error("Failed to parse PhysicalSystemDescriptor from text proto file: " + text_proto_file);
+    }
+
+    return std::move(*proto_to_physical_system_descriptor(physical_system_descriptor));
+}
 }  // namespace tt::tt_metal

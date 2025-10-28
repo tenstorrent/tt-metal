@@ -13,7 +13,6 @@
 #include <vector>
 
 #include "allocator_algorithm.hpp"
-#include "allocator_types.hpp"
 #include "hal_types.hpp"
 
 namespace tt {

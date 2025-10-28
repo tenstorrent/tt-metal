@@ -26,6 +26,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list_opt.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocator_state.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/bank_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/l1_banking_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program.cpp
@@ -59,8 +60,8 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/relay_mux.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/util/dispatch_settings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_server.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/data.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/inspector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/logger.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/rpc_server_controller.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/noc_logging.cpp
@@ -183,7 +184,7 @@ target_include_directories(impl SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatb
 target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast PRIVATE -DKJ_NO_EXCEPTIONS=0)
 
 # Generate Inspector RPC stub file
-set(INSPECTOR_RPC_STUB_FILE ${PROJECT_SOURCE_DIR}/scripts/debugging_scripts/inspector_capnp.pyi)
+set(INSPECTOR_RPC_STUB_FILE ${PROJECT_SOURCE_DIR}/tools/triage/inspector_capnp.pyi)
 add_custom_command(
     OUTPUT
         ${INSPECTOR_RPC_STUB_FILE}

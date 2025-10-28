@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device/padded_slice_op.hpp"
+#include <array>
+#include <cstdint>
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn/run_operation.hpp"
 #include "ttnn/common/constants.hpp"
@@ -64,9 +66,11 @@ ttnn::Tensor PaddedSliceOperation::invoke(
         }
         return ret_input_tensor;
     });
-
+    std::array<uint32_t, 2> shard_shape = memory_config.shard_spec().value().shape;
+    bool no_pad = (shard_shape[1] == input_tensor.padded_shape()[3]);
+    bool rm_input = input_tensor.layout() == Layout::ROW_MAJOR;
     // No-op check
-    if (no_step && starts_zero && ends_max) {
+    if (no_step && starts_zero && ends_max && no_pad && rm_input) {
         return ret_adjustment(input_tensor);
     }
 

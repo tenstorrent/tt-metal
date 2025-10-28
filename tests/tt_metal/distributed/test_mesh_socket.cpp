@@ -58,7 +58,7 @@ static ParsedSenderPage parse_sender_page(
     parsed.bytes_acked.resize(parsed.md.num_downstreams);
     for (uint32_t i = 0; i < parsed.md.num_downstreams; ++i) {
         uint32_t v = 0;
-        auto bytes_acked_addr = page_base + ack_base + i * ack_stride;
+        auto bytes_acked_addr = page_base + ack_base + (i * ack_stride);
         EXPECT_EQ(0, reinterpret_cast<std::uintptr_t>(bytes_acked_addr) % l1_alignment);
         std::memcpy(&v, bytes_acked_addr, sizeof(uint32_t));
         parsed.bytes_acked[i] = v;
@@ -66,11 +66,11 @@ static ParsedSenderPage parse_sender_page(
 
     // copy each of the encodings
     const uint32_t enc_stride = tt::align(sizeof(sender_downstream_encoding), l1_alignment);
-    const uint32_t enc_base = ack_base + max_num_downstreams * ack_stride;
+    const uint32_t enc_base = ack_base + (max_num_downstreams * ack_stride);
     parsed.encodings.resize(parsed.md.num_downstreams);
     for (uint32_t i = 0; i < parsed.md.num_downstreams; ++i) {
         sender_downstream_encoding enc{};
-        auto encoding_addr = page_base + enc_base + i * enc_stride;
+        auto encoding_addr = page_base + enc_base + (i * enc_stride);
         EXPECT_EQ(0, reinterpret_cast<std::uintptr_t>(encoding_addr) % l1_alignment);
         std::memcpy(&enc, encoding_addr, sizeof(sender_downstream_encoding));
         parsed.encodings[i] = enc;
@@ -945,8 +945,8 @@ std::shared_ptr<Program> create_sender_program(
     std::size_t page_size,
     std::size_t data_size,
     const CoreCoord& sender_logical_coord,
-    chip_id_t sender_physical_device_id,
-    chip_id_t recv_physical_device_id,
+    ChipId sender_physical_device_id,
+    ChipId recv_physical_device_id,
     uint32_t sender_link_idx) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
@@ -993,9 +993,9 @@ std::shared_ptr<Program> create_split_reduce_program(
     const CoreCoord& recv_logical_coord_0,
     const CoreCoord& recv_logical_coord_1,
     const CoreCoord& reduce_logical_coord,
-    chip_id_t sender0_physical_device_id,
-    chip_id_t sender1_physical_device_id,
-    chip_id_t recv_physical_device_id,
+    ChipId sender0_physical_device_id,
+    ChipId sender1_physical_device_id,
+    ChipId recv_physical_device_id,
     uint32_t sender0_link_idx,
     uint32_t sender1_link_idx) {
     auto config0_cb_index = tt::CBIndex::c_1;
@@ -1138,10 +1138,10 @@ std::shared_ptr<Program> create_reduce_program(
     std::size_t page_size,
     std::size_t data_size,
     const CoreCoord& reduce_logical_coord,
-    chip_id_t sender0_physical_device_id,
-    chip_id_t sender1_physical_device_id,
-    chip_id_t reducer_physical_device_id,
-    chip_id_t recv_physical_device_id,
+    ChipId sender0_physical_device_id,
+    ChipId sender1_physical_device_id,
+    ChipId reducer_physical_device_id,
+    ChipId recv_physical_device_id,
     uint32_t sender0_link_idx,
     uint32_t sender1_link_idx,
     uint32_t recv_link_idx) {
@@ -1227,8 +1227,8 @@ std::shared_ptr<Program> create_recv_program(
     std::size_t data_size,
     const CoreCoord& recv_logical_coord,
     const CoreCoord& output_logical_coord,
-    chip_id_t sender_physical_device_id,
-    chip_id_t recv_physical_device_id,
+    ChipId sender_physical_device_id,
+    ChipId recv_physical_device_id,
     uint32_t recv_link_idx) {
     // Used to setup fabric connections
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -1871,7 +1871,7 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
         auto sender_idx = sender_core_to_core_id.at(sender.core_coord);
         auto recv_idx = recv_core_to_core_id.at(recv.core_coord);
 
-        const uint8_t* page_ptr = sender_config_bytes.data() + sender_idx * sender_page_size;
+        const uint8_t* page_ptr = sender_config_bytes.data() + (sender_idx * sender_page_size);
         ParsedSenderPage sender_page = parse_sender_page(page_ptr, l1_alignment, max_num_downstreams);
         const auto& recv_config = recv_configs[recv_idx];
 
@@ -1895,8 +1895,8 @@ TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(0, 0));
     auto md1 = mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(1, 0));
-    std::unordered_map<MeshCoordinate, chip_id_t> sender_device_coord_to_id;
-    std::unordered_map<MeshCoordinate, chip_id_t> receiver_device_coord_to_id;
+    std::unordered_map<MeshCoordinate, ChipId> sender_device_coord_to_id;
+    std::unordered_map<MeshCoordinate, ChipId> receiver_device_coord_to_id;
 
     for (const auto& coord : MeshCoordinateRange(md0->shape())) {
         sender_device_coord_to_id[coord] = md0->get_device(coord)->id();
@@ -2000,7 +2000,7 @@ TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
         auto receiver_device_id = receiver_device_coord_to_id[recv_device_coord];
 
         const auto& sender_bytes = sender_bytes_per_dev_coord[sender_device_coord];
-        const uint8_t* page_ptr = sender_bytes.data() + sender_idx * sender_page_size;
+        const uint8_t* page_ptr = sender_bytes.data() + (sender_idx * sender_page_size);
         ParsedSenderPage sender_page = parse_sender_page(page_ptr, l1_alignment, max_num_downstreams);
         const auto& recv_config = recv_configs_per_dev_coord[recv_device_coord][recv_idx];
 
@@ -2337,7 +2337,7 @@ TEST(SocketSerializationTest, PeerDesc) {
             sender_logical_coords.push_back(CoreCoord(x, y));
             recv_logical_coords.push_back(CoreCoord(x, y));
             sender_chip_ids.push_back(core_idx % 4);
-            recv_chip_ids.push_back(4 + core_idx % 4);
+            recv_chip_ids.push_back(4 + (core_idx % 4));
             sender_device_coords.push_back(MeshCoordinate(0, core_idx % 4));
             recv_device_coords.push_back(MeshCoordinate(1, core_idx % 4));
             core_idx++;

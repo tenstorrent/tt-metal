@@ -537,8 +537,9 @@ Unlike OpenCL's command queue which optionally supports out-of-order execution, 
 ```c++
 // Wait for the current tail operation on queue 0 to complete
 // before proceeding on command queue 1
-auto event = EnqueueRecordEvent(device->command_queue(0));
-EnqueueWaitForEvent(device->command_queue(1), event);
+auto event = std::make_shared<Event>();
+device->command_queue(0).enqueue_record_event(event);
+device->command_queue(1).enqueue_wait_for_event(event);
 ```
 
 ### SPMD in Metalium

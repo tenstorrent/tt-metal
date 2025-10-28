@@ -1,0 +1,24 @@
+{
+    "gemma-3-4b-it": {
+        "T3K": {
+            "model_forward_inference": 0.5988920000000001
+        },
+        "N150": {
+            "model_forward_inference": 0.7977291428571428
+        },
+        "N300": {
+            "model_forward_inference": 0.5401455714285713
+        }
+    },
+    "gemma-3-27b-it": {
+        "T3K": {
+            "model_forward_inference": 0.5716122666666666
+        },
+        "N150": {
+            "model_forward_inference": 0.8444842666666666
+        },
+        "N300": {
+            "model_forward_inference": 0.5853735333333333
+        }
+    }
+}

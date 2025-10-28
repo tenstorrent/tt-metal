@@ -7,7 +7,7 @@
 #include <climits>
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC)
+    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
 #include "risc_common.h"
 #include "dataflow_api_addrgen.h"
 #include "accessor/tensor_accessor.h"
@@ -101,7 +101,8 @@ __attribute__((noinline)) void init_profiler(
         sums[i] = 0;
     }
 
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_BRISC)
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC) || \
+    defined(COMPILE_FOR_BRISC)
     uint32_t runCounter = profiler_control_buffer[RUN_COUNTER];
     profiler_control_buffer[PROFILER_DONE] = 0;
 
@@ -194,42 +195,65 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
 }
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC)
+    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
 
-#if (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES))
-
-// Saves several NoC register states that may be setup by dispatch kernels and restores them
-// when the NocDestinationStateSaver is destroyed
-struct NocDestinationStateSaver {
+// Saves several NoC register states restores them
+// when the NocRegisterStateSave is destroyed
+struct NocRegisterStateSave {
     uint32_t noc_ctrl_state;
     uint32_t noc_ret_addr_coord_state;
+    uint32_t noc_targ_addr_lo_state;
+    uint32_t noc_ret_addr_lo_state;
+    uint32_t noc_at_len_be_state;
+    uint32_t noc_targ_addr_coordinate_state;
+    uint32_t noc_targ_addr_mid_state;
+    uint32_t noc_packet_tag_state;
+    uint32_t noc_at_data_state;
+
 #ifdef ARCH_BLACKHOLE
     uint32_t noc_ret_addr_mid_state;
 #endif
 
-    inline __attribute__((always_inline)) NocDestinationStateSaver() {
+    inline __attribute__((always_inline)) NocRegisterStateSave() {
         noc_ctrl_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_CTRL);
+
+        // https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/NoC/MemoryMap.md#noc_ctrl
+        constexpr uint32_t reserved_bit_mask = ((1u << 27) - (1u << 18)) | (1u << 31);
+        noc_ctrl_state &= ~reserved_bit_mask;
+
         noc_ret_addr_coord_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_COORDINATE);
+        noc_targ_addr_lo_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_TARG_ADDR_LO);
+        noc_ret_addr_lo_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_LO);
+        noc_at_len_be_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_AT_LEN_BE);
+        noc_targ_addr_coordinate_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_TARG_ADDR_COORDINATE);
+        noc_targ_addr_mid_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_TARG_ADDR_MID);
+
+        noc_packet_tag_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_PACKET_TAG);
+        // reset the counter to zero before the push
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_PACKET_TAG, 0);
+
+        noc_at_data_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_AT_DATA);
 #ifdef ARCH_BLACKHOLE
         noc_ret_addr_mid_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_MID);
 #endif
     }
 
-    inline __attribute__((always_inline)) ~NocDestinationStateSaver() {
+    inline __attribute__((always_inline)) ~NocRegisterStateSave() {
         while (!noc_cmd_buf_ready(noc_index, write_cmd_buf));
         NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_CTRL, noc_ctrl_state);
         NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_COORDINATE, noc_ret_addr_coord_state);
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_TARG_ADDR_LO, noc_targ_addr_lo_state);
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_LO, noc_ret_addr_lo_state);
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_AT_LEN_BE, noc_at_len_be_state);
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_TARG_ADDR_COORDINATE, noc_targ_addr_coordinate_state);
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_TARG_ADDR_MID, noc_targ_addr_mid_state);
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_PACKET_TAG, noc_packet_tag_state);
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_AT_DATA, noc_at_data_state);
 #ifdef ARCH_BLACKHOLE
         NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_MID, noc_ret_addr_mid_state);
 #endif
     }
 };
-
-#else
-
-struct NocDestinationStateSaver {};
-
-#endif
 
 inline void __attribute__((always_inline)) profiler_noc_async_write_posted(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
@@ -251,7 +275,8 @@ void profiler_noc_async_flush_posted_write(uint8_t noc = noc_index) {
 
 __attribute__((noinline)) void finish_profiler() {
     risc_finished_profiling();
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_BRISC)
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC) || \
+    defined(COMPILE_FOR_BRISC)
     if (profiler_control_buffer[PROFILER_DONE] == 1) {
         return;
     }
@@ -265,9 +290,14 @@ __attribute__((noinline)) void finish_profiler() {
     uint32_t pageSize =
         PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * profiler_core_count_per_dram;
 
-    NocDestinationStateSaver noc_state;
+    NocRegisterStateSave noc_state;
     for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
+#if defined(COMPILE_FOR_IDLE_ERISC)
         profiler_data_buffer[riscID].data[ID_LH] = ((core_flat_id & 0xFF) << 3) | riscID;
+#else
+        profiler_data_buffer[riscID].data[ID_LH] =
+            ((traceCount & 0xFFFF) << 11) | ((core_flat_id & 0xFF) << 3) | riscID;
+#endif
         int hostIndex = riscID;
         int deviceIndex = kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER + riscID;
         if (profiler_control_buffer[deviceIndex]) {
@@ -323,7 +353,7 @@ __attribute__((noinline)) void finish_profiler() {
 __attribute__((noinline)) void quick_push() {
 #if (                                                                                          \
     defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC))
+    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC))
 
     // tt-metal/issues/22578 - forbid quick_push if any cmd buffer has NOC_CMD_VC_LINKED bit set
     auto linked_bit_is_set = [](const uint32_t reg_val) { return reg_val & NOC_CMD_VC_LINKED; };
@@ -346,7 +376,12 @@ __attribute__((noinline)) void quick_push() {
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
 
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_IDLE_ERISC)
     profiler_data_buffer[myRiscID].data[ID_LH] = ((core_flat_id & 0xFF) << 3) | myRiscID;
+#else
+    profiler_data_buffer[myRiscID].data[ID_LH] =
+        ((traceCount & 0xFFFF) << 11) | ((core_flat_id & 0xFF) << 3) | myRiscID;
+#endif
 
     uint32_t dram_offset = (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
                                PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
@@ -366,7 +401,7 @@ __attribute__((noinline)) void quick_push() {
     uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] + wIndex;
 
     if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
-        NocDestinationStateSaver noc_state;
+        NocRegisterStateSave noc_state;
         profiler_noc_async_write_posted(
             reinterpret_cast<uint32_t>(profiler_data_buffer[myRiscID].data),
             dram_bank_dst_noc_addr,
@@ -393,7 +428,7 @@ __attribute__((noinline)) void quick_push() {
 void quick_push_if_linked(uint32_t cmd_buf, bool linked) {
 #if (                                                                                          \
     defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC))
+    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC))
     if (!linked) {
         return;
     }
@@ -532,7 +567,13 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
     }
 }
 
-__attribute__((noinline)) void trace_init() {
+inline __attribute__((always_inline)) void increment_trace_count() {
+    if constexpr (!TRACE_ON_TENSIX) {
+        traceCount++;
+    }
+}
+
+__attribute__((noinline)) void trace_only_init() {
     if constexpr (TRACE_ON_TENSIX) {
         if (traceCount > 0) {
             quick_push();
@@ -624,12 +665,22 @@ __attribute__((noinline)) void trace_init() {
         kernel_profiler::set_host_counter(counter);    \
     }
 
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_AERISC)
+#define DeviceProfilerInit()                          \
+    if constexpr (kernel_profiler::TRACE_ON_TENSIX) { \
+        kernel_profiler::init_profiler();             \
+    }                                                 \
+    kernel_profiler::traceCount = 0;
+#else
 #define DeviceProfilerInit()                          \
     if constexpr (kernel_profiler::TRACE_ON_TENSIX) { \
         kernel_profiler::init_profiler();             \
     }
+#endif
 
-#define DeviceTraceProfilerInit() kernel_profiler::trace_init();
+#define DeviceTraceOnlyProfilerInit() kernel_profiler::trace_only_init();
+
+#define DeviceIncrementTraceCount() kernel_profiler::increment_trace_count();
 
 #else
 
@@ -645,7 +696,7 @@ __attribute__((noinline)) void trace_init() {
 
 #define DeviceZoneScopedSumN2(name)
 
-#define DeviceTraceProfilerInit()
+#define DeviceTraceOnlyProfilerInit()
 
 #define DeviceZoneSetCounter(counter)
 
@@ -654,6 +705,8 @@ __attribute__((noinline)) void trace_init() {
 #define DeviceRecordEvent(event_id)
 
 #define DeviceProfilerInit()
+
+#define DeviceIncrementTraceCount()
 
 // null macros when noc tracing is disabled
 #define RECORD_NOC_EVENT_WITH_ADDR(type, noc_addr, num_bytes, vc)

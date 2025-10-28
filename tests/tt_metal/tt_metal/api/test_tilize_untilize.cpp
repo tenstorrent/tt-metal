@@ -42,7 +42,7 @@ std::vector<T> untilize_nchw(
                     T val = in[linear];
                     auto w = wt + ws;
                     auto h = ht + hs;
-                    auto offs = w + h * W;  // + batch_index * H * W;
+                    auto offs = w + (h * W);  // + batch_index * H * W;
                     result[offs] = val;
                     linear++;
                 }
@@ -78,7 +78,7 @@ std::vector<T> tilize_nchw(
                 for (auto wt = 0; wt < tile_W; wt++) {
                     auto w = wt + ws;
                     auto h = ht + hs;
-                    auto in_offs = w + h * W;
+                    auto in_offs = w + (h * W);
                     auto val = in_rowmajor[in_offs];
                     tilized_result[out_index] = val;
                     out_index++;
@@ -119,7 +119,7 @@ std::vector<T> convert_to_tile_layout(
 
         if (transpose_face) {
             for (int col = 0; col < tile_W; col++) {
-                int index = tile_idx * tile_HW + col;
+                int index = (tile_idx * tile_HW) + col;
                 for (int row = 0; row < tile_H; row++) {
                     if (row < face_H and col < face_W) {
                         top_left.push_back(data[index]);
@@ -203,10 +203,10 @@ std::vector<T> convert_to_flat_layout(
         if (transpose_face) {
             if (num_faces_row >= 1 && num_faces_col <= 1) {  // 32x16
                 for (int face_y = 0; face_y < num_faces_row; face_y++) {
-                    int start = tile_start + face_y * (face_H * tile_W);
+                    int start = tile_start + (face_y * (face_H * tile_W));
                     for (int col = 0; col < face_W; col++) {
                         for (int row = 0; row < face_H; row++) {
-                            result.push_back(data[start + col + row * face_W]);
+                            result.push_back(data[start + col + (row * face_W)]);
                         }
                     }
                 }
@@ -216,18 +216,18 @@ std::vector<T> convert_to_flat_layout(
                     for (int face_x = 0; face_x < num_faces_col; face_x++) {
                         int offset = face_x * face_HW;
                         for (int row = 0; row < face_H; row++) {
-                            result.push_back(data[start + offset + row * face_W]);
+                            result.push_back(data[start + offset + (row * face_W)]);
                         }
                     }
                 }
             } else {
                 for (int face_x = 0; face_x < num_faces_col; face_x++) {
                     for (int col = 0; col < face_W; col++) {
-                        int start = tile_start + face_x * face_HW + col;
+                        int start = tile_start + (face_x * face_HW) + col;
                         for (int face_y = 0; face_y < num_faces_row; face_y++) {
                             int offset = face_y * (face_H * tile_W);
                             for (int row = 0; row < face_H; row++) {
-                                result.push_back(data[start + offset + row * face_W]);
+                                result.push_back(data[start + offset + (row * face_W)]);
                             }
                         }
                     }
@@ -236,7 +236,7 @@ std::vector<T> convert_to_flat_layout(
         } else {
             for (int face_y = 0; face_y < num_faces_row; face_y++) {
                 for (int row = 0; row < face_H; row++) {
-                    int start = tile_start + face_y * (face_H * tile_W) + row * face_W;
+                    int start = tile_start + (face_y * (face_H * tile_W)) + (row * face_W);
                     for (int face_x = 0; face_x < num_faces_col; face_x++) {
                         int offset = face_x * face_HW;
                         for (int col = offset; col < offset + face_W; col++) {

@@ -84,20 +84,20 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
     }
 
-    std::string unpadded_sticks_str = "";
+    std::string unpadded_sticks_str;
     for (auto& i : num_input_sticks_per_dim) {
         unpadded_sticks_str += std::to_string(i) + ", ";
     }
-    std::string padded_sticks_str = "";
+    std::string padded_sticks_str;
     for (auto& i : num_output_sticks_per_dim) {
         padded_sticks_str += std::to_string(i) + ", ";
     }
-    std::string accumulated_str = "";
+    std::string accumulated_str;
     for (auto& i : accumulated_total_per_dim) {
         accumulated_str += std::to_string(i) + ", ";
     }
 
-    std::string rev_stride_str = "";
+    std::string rev_stride_str;
     for (auto& i : rev_stride) {
         rev_stride_str += std::to_string(i) + ", ";
     }
@@ -143,7 +143,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
         // issue more reads before calling barrier
         uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
         if (num_sticks_per_core != 0) {
-            auto num_sticks_per_core_pad32 = num_sticks_per_core + (32 - num_sticks_per_core % 32) % 32;
+            auto num_sticks_per_core_pad32 = num_sticks_per_core + ((32 - num_sticks_per_core % 32) % 32);
             num_sticks_per_core_read =
                 tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core_pad32, input_row_size_bytes, max_read_size);
             num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
@@ -245,15 +245,15 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
         accumulated_input_total_per_dim[i] = num_unpadded_dim * accumulated_input_total_per_dim[i - 1];
     }
 
-    std::string unpadded_sticks_str = "";
+    std::string unpadded_sticks_str;
     for (auto& i : num_input_sticks_per_dim) {
         unpadded_sticks_str += std::to_string(i) + ", ";
     }
-    std::string padded_sticks_str = "";
+    std::string padded_sticks_str;
     for (auto& i : num_output_sticks_per_dim) {
         padded_sticks_str += std::to_string(i) + ", ";
     }
-    std::string accumulated_str = "";
+    std::string accumulated_str;
     for (auto& i : accumulated_total_per_dim) {
         accumulated_str += std::to_string(i) + ", ";
     }
@@ -274,7 +274,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 
     log_debug(tt::LogOp, "Output Buffer adddress: {}", output_buffer->address());
     std::vector<uint32_t> common_writer_kernel_args = {
-        output_buffer->address() + output_tensor_start[-1] * output_tensor.element_size(),
+        output_buffer->address() + (output_tensor_start[-1] * output_tensor.element_size()),
         output_row_size_bytes,
         input_row_size_bytes,
         input_row_size_bytes_offset,

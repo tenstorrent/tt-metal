@@ -26,26 +26,6 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_binary_hypot_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
-
-    output_tensor = ttnn.hypot(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.hypot)
-    golden_tensor = golden_function(in_data1, in_data2)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
 def test_binary_nextafter_ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
     in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
@@ -70,8 +50,8 @@ def test_binary_nextafter_ttnn(input_shapes, device):
 @pytest.mark.parametrize("rtol", [1.0, 5.0, 10.0])
 @pytest.mark.parametrize("equal_nan", [True, False])
 def test_binary_isclose_ttnn(input_shapes, atol, rtol, equal_nan, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device, seed=0)
+    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device, seed=42)
 
     output_tensor = ttnn.isclose(input_tensor1, input_tensor2, rtol=rtol, atol=atol, equal_nan=equal_nan)
 

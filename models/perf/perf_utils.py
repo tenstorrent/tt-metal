@@ -11,6 +11,8 @@ from os.path import isfile, join
 import git
 from loguru import logger
 
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+
 today = time.strftime("%Y_%m_%d")
 
 
@@ -59,13 +61,7 @@ def process_perf_results(fname, expected_cols):
     return cols, merge_res
 
 
-def check_perf_results(
-    fname,
-    expected_cols,
-    check_cols,
-    table_width=110,
-    float_precision=4,
-):
+def check_perf_results(fname, expected_cols, check_cols, table_width=110, float_precision=4, threshold=0.80):
     red_color_code = "\033[91m"
     green_color_code = "\033[92m"
     reset_color_code = "\033[0m"
@@ -96,15 +92,26 @@ def check_perf_results(
         for col in check_cols:
             model_expected_col = float(dict_info[f"Expected {col}"])
             model_measured_col = float(dict_info[col])
+            low_tolerance = (
+                model_expected_col * threshold
+            )  # fail if model is too fast so we can update the expected values
+
             if model_measured_col > model_expected_col:
                 slow_measured[col].append((model_name, model_measured_col, model_expected_col))
                 print(
-                    f"  FAIL {col}: {red_color_code}{model_measured_col:.{float_precision}f} > {model_expected_col:.{float_precision}f}{reset_color_code}"
+                    f"  FAIL {col}: {red_color_code}{model_measured_col:.{float_precision}f} > {model_expected_col:.{float_precision}f} (performance regression){reset_color_code}"
+                )
+                highlight = True
+            elif model_measured_col < low_tolerance:
+                slow_measured[col].append((model_name, model_measured_col, model_expected_col))
+                improvement_pct = ((model_expected_col - model_measured_col) / model_expected_col) * 100
+                print(
+                    f"  FAIL {col}: {red_color_code}{model_measured_col:.{float_precision}f} < {low_tolerance:.{float_precision}f} ({improvement_pct:.1f}% better than expected - update baseline){reset_color_code}"
                 )
                 highlight = True
             else:
                 print(
-                    f"  PASS {col}: {model_measured_col:.{float_precision}f} <= {model_expected_col:.{float_precision}f}"
+                    f"  PASS {col}: {model_measured_col:.{float_precision}f} (within tolerance: {low_tolerance:.{float_precision}f} - {model_expected_col:.{float_precision}f})"
                 )
 
         if highlight:
@@ -120,10 +127,16 @@ def check_perf_results(
     for col in slow_measured:
         if slow_measured[col]:
             all_passed = False
-            print(f"{red_color_code}{fail_label} The following models are too slow for '{col}':{reset_color_code}")
+            print(f"{red_color_code}{fail_label} The following models failed '{col}' checks:{reset_color_code}")
             for model_name, measured, expected in slow_measured[col]:
+                tolerance_range = f"[{expected * threshold:.{float_precision}f}, {expected:.{float_precision}f}]"
+                if measured > expected:
+                    status = "regression"
+                else:
+                    improvement_pct = ((expected - measured) / expected) * 100
+                    status = f"{improvement_pct:.1f}% improvement"
                 print(
-                    f"  - {model_name}: measured={measured:.{float_precision}f}, expected={expected:.{float_precision}f}"
+                    f"  - {model_name}: measured={measured:.{float_precision}f}, expected={expected:.{float_precision}f}, tolerance={tolerance_range} ({status})"
                 )
         else:
             print(f"{green_color_code}{pass_label} All models meet expected '{col}' performance.{reset_color_code}")
@@ -136,7 +149,9 @@ def check_perf_results(
     print("=" * table_width)
 
     if any(len(slow) > 0 for slow in slow_measured.values()):
-        raise Exception("Some model(s) are too slow - see above for details on slow models")
+        raise Exception(
+            "Performance checks failed - see above for models with regressions or significant improvements requiring baseline updates"
+        )
 
 
 def prep_perf_report(
@@ -182,3 +197,39 @@ def prep_perf_report(
     model_name = model_name.replace("/", "_")
     csv_file = f"perf_{model_name}_{comments}_{today}.csv"
     write_dict_to_file(csv_file, dict_res)
+
+    # Dummy profiler to satisfy BenchmarkData's requirements
+    profiler = BenchmarkProfiler()
+    profiler.start("run")
+    profiler.end("run")
+    step_name = "end_to_end_perf"
+    profiler.start(step_name)
+    profiler.end(step_name)
+
+    benchmark_data = BenchmarkData()
+
+    # Add measurements for the key performance metrics
+    # Convert string values back to float for measurements
+    benchmark_data.add_measurement(profiler, 0, step_name, "inference_time_s", inference_time)
+    benchmark_data.add_measurement(profiler, 0, step_name, "compile_time_s", compile_time)
+    benchmark_data.add_measurement(profiler, 0, step_name, "throughput_iter_per_s", float(device_throughput))
+    benchmark_data.add_measurement(profiler, 0, step_name, "first_run_s", inference_and_compile_time)
+    benchmark_data.add_measurement(profiler, 0, step_name, "expected_inference_time_s", expected_inference_time)
+    benchmark_data.add_measurement(profiler, 0, step_name, "expected_compile_time_s", expected_compile_time)
+
+    if inference_time_cpu is not None:
+        benchmark_data.add_measurement(profiler, 0, step_name, "inference_time_cpu_s", inference_time_cpu)
+        benchmark_data.add_measurement(
+            profiler,
+            0,
+            step_name,
+            "throughput_cpu_iter_per_s",
+            float(cpu_throughput) if cpu_throughput != "unknown" else 0.0,
+        )
+
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type="end_to_end_perf",
+        ml_model_name=model_name,
+        batch_size=batch_size,
+    )

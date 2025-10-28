@@ -8,9 +8,8 @@
 #include <tt_stl/indestructible.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/distributed_context.hpp>
-#include <tt-metalium/core_descriptor.hpp>
+#include "llrt/core_descriptor.hpp"
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/allocator_types.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <llrt/hal.hpp>
 #include <llrt/rtoptions.hpp>
@@ -19,6 +18,7 @@
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/debug/dprint_server.hpp>
 #include <impl/debug/watcher_server.hpp>
+#include <impl/allocator/allocator_types.hpp>
 
 #include <array>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -78,7 +78,7 @@ public:
     tt::tt_fabric::ControlPlane& get_control_plane();
     void set_custom_fabric_topology(
         const std::string& mesh_graph_desc_file,
-        const std::map<tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+        const std::map<tt_fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
     void set_default_fabric_topology();
     void set_fabric_config(
         tt_fabric::FabricConfig fabric_config,
@@ -91,6 +91,7 @@ public:
     tt_fabric::FabricConfig get_fabric_config() const;
 
     distributed::multihost::DistributedContext& global_distributed_context();
+    std::shared_ptr<distributed::multihost::DistributedContext> get_distributed_context_ptr();
 
     // Fabric tensix configuration
     void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
@@ -106,36 +107,36 @@ private:
     MetalContext();
     ~MetalContext();
 
-    void clear_l1_state(chip_id_t device_id);
-    void clear_dram_state(chip_id_t device_id);
-    void clear_launch_messages_on_eth_cores(chip_id_t device_id);
+    void clear_l1_state(ChipId device_id);
+    void clear_dram_state(ChipId device_id);
+    void clear_launch_messages_on_eth_cores(ChipId device_id);
     void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
     void teardown_fabric_config();
 
-    void reset_cores(chip_id_t device_id);
-    void assert_cores(chip_id_t device_id);
+    void reset_cores(ChipId device_id);
+    void assert_cores(ChipId device_id);
 
     // Returns the ERISC Launch Flag address
     uint32_t get_active_erisc_launch_flag_addr();
     // Returns true if metal firmware or a kernel is running on the virtual ethernet core
-    bool erisc_app_still_running(chip_id_t device_id, CoreCoord virtual_core);
+    bool erisc_app_still_running(ChipId device_id, CoreCoord virtual_core);
     // Send a message to exit the erisc app
-    void erisc_send_exit_signal(chip_id_t device_id, CoreCoord virtual_core, bool is_idle_eth);
+    void erisc_send_exit_signal(ChipId device_id, CoreCoord virtual_core, bool is_idle_eth);
 
     // Functions used to init/run firmware on devices
-    CoreCoord virtual_noc0_coordinate(chip_id_t device_id, uint8_t noc_index, CoreCoord coord);
-    void generate_device_bank_to_noc_tables(chip_id_t device_id);
+    CoreCoord virtual_noc0_coordinate(ChipId device_id, uint8_t noc_index, CoreCoord coord);
+    void generate_device_bank_to_noc_tables(ChipId device_id);
     void initialize_device_bank_to_noc_tables(
-        chip_id_t device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core);
+        ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core);
     void initialize_firmware(
-        chip_id_t device_id,
+        ChipId device_id,
         const HalProgrammableCoreType& core_type,
         CoreCoord virtual_core,
         dev_msgs::launch_msg_t::View launch_msg,
         dev_msgs::go_msg_t::ConstView go_msg);
-    void initialize_and_launch_firmware(chip_id_t device_id);
+    void initialize_and_launch_firmware(ChipId device_id);
     dev_msgs::core_info_msg_t populate_core_info_msg(
-        chip_id_t device_id, HalProgrammableCoreType programmable_core_type) const;
+        ChipId device_id, HalProgrammableCoreType programmable_core_type) const;
 
     bool initialized_ = false;
     bool teardown_registered_ = false;
@@ -149,13 +150,13 @@ private:
     size_t fw_compile_hash_ = 0;  // To check if FW recompilation is needed
 
     // Used to track which FW has been built already
-    std::unordered_set<uint32_t> firmware_built_keys_;
+    std::unordered_set<uint64_t> firmware_built_keys_;
 
     // Written to device as part of FW init, device-specific
-    std::unordered_map<chip_id_t, std::vector<int32_t>> dram_bank_offset_map_;
-    std::unordered_map<chip_id_t, std::vector<int32_t>> l1_bank_offset_map_;
-    std::unordered_map<chip_id_t, std::vector<uint16_t>> dram_bank_to_noc_xy_;
-    std::unordered_map<chip_id_t, std::vector<uint16_t>> l1_bank_to_noc_xy_;
+    std::unordered_map<ChipId, std::vector<int32_t>> dram_bank_offset_map_;
+    std::unordered_map<ChipId, std::vector<int32_t>> l1_bank_offset_map_;
+    std::unordered_map<ChipId, std::vector<uint16_t>> dram_bank_to_noc_xy_;
+    std::unordered_map<ChipId, std::vector<uint16_t>> l1_bank_to_noc_xy_;
 
     llrt::RunTimeOptions rtoptions_;
     std::unique_ptr<Cluster> cluster_;
@@ -183,7 +184,7 @@ private:
     // according to which links are available.
     tt_fabric::FabricReliabilityMode fabric_reliability_mode_ = tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
     uint8_t num_fabric_active_routing_planes_ = 0;
-    std::map<tt_fabric::FabricNodeId, chip_id_t> logical_mesh_chip_id_to_physical_chip_id_mapping_;
+    std::map<tt_fabric::FabricNodeId, ChipId> logical_mesh_chip_id_to_physical_chip_id_mapping_;
     std::optional<std::string> custom_mesh_graph_desc_path_ = std::nullopt;
 };
 
