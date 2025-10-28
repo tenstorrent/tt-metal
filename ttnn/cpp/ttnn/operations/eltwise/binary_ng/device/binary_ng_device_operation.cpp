@@ -10,7 +10,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::binary_ng {
 
 namespace utils {
-bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
+bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_approximate_mode = false) {
     using enum BinaryOpType;
     using enum DataType;
     switch (val) {
@@ -27,7 +27,6 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case LOGICAL_XOR:
         case SQUARED_DIFFERENCE:
             return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
-        case DIV:
         case LOGADDEXP:
         case LOGADDEXP2:
         case LDEXP:
@@ -54,6 +53,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case MINIMUM:
         case XLOGY:
         case POWER: return true;
+        case DIV: return !fast_and_approximate_mode || (a == FLOAT32 && b == FLOAT32);
         default: return false;
     }
     return false;
@@ -416,6 +416,7 @@ BinaryNgDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output_tensor,
+    const std::optional<bool>& fast_and_approximate_mode,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations) {
@@ -438,7 +439,8 @@ BinaryNgDeviceOperation::invoke(
 
     DataType dtype_a = input_tensor_a.dtype();
     DataType dtype_b = input_tensor_b.dtype();
-    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_b));
+    bool is_sfpu_op =
+        (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_b, fast_and_approximate_mode.value_or(false)));
     bool is_quant_op = utils::is_quant_op(binary_op_type);
     return {
         operation_attributes_t{
@@ -470,11 +472,13 @@ BinaryNgDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output_tensor,
+    const std::optional<bool>& fast_and_approximate_mode,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations) {
     DataType dtype_a = input_tensor_a.dtype();
-    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_a));
+    bool is_sfpu_op =
+        (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_a, fast_and_approximate_mode.value_or(false)));
     bool is_quant_op = utils::is_quant_op(binary_op_type);
     return {
         operation_attributes_t{
