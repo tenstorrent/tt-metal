@@ -29,6 +29,7 @@ Some test suites use slow dispatch mode for reliable program execution. These te
 | Conv Hardcoded              | 21-23                | Uses existing conv tests to analyse their bandwidth and latency. **(Slow Dispatch)**    |
 | Interleaved Page Read/Write | 61-69, 71-75         | Reads and writes pages between interleaved buffers and a Tensix core.                   |
 | One Packet Read/Write       | 80-83                | Reads or writes packets between two Tensix cores.                                       |
+| DRAM Sharded Read           | 84-86                | Reads from sharded DRAM into one core.                                                  |
 | Multi Interleaved           | 110-127              | Reads and writes pages between interleaved DRAM buffers and multiple Tensix cores.      |
 | Core Bidrectional           | 140-148              | Tensix core reads from and writes to another Tensix core simultaneously.                |
 | Deinterleave                | 200-201              | Tests deinterleaving. **(Slow Dispatch)**                                               |
