@@ -159,6 +159,34 @@ union NocCommandFields {
 };
 static_assert(sizeof(NocCommandFields) == 24, "CommandFields size is not 24 bytes");
 
+struct UDMWriteControlHeader {
+    uint8_t src_chip_id;
+    uint16_t src_mesh_id;
+    uint16_t src_noc_xy;
+    uint8_t risc_id;
+    uint16_t transaction_id;
+} __attribute__((packed));
+
+struct UDMReadControlHeader {
+    uint8_t src_chip_id;
+    uint16_t src_mesh_id;
+    uint16_t src_noc_xy;
+    uint16_t src_l1_address;
+    uint32_t size_bytes;
+    uint8_t risc_id;
+    uint16_t transaction_id;
+} __attribute__((packed));
+
+static_assert(sizeof(UDMWriteControlHeader) == 8, "UDMWriteControlHeader size is not 8 bytes");
+static_assert(sizeof(UDMReadControlHeader) == 14, "UDMReadControlHeader size is not 14 bytes");
+
+union UDMControlFields {
+    UDMWriteControlHeader write;
+    UDMReadControlHeader read;
+} __attribute__((packed));
+
+static_assert(sizeof(UDMControlFields) == 14, "UDMControlFields size is not 14 bytes");
+
 // TODO: wrap this in a debug version that holds type info so we can assert for field/command/
 template <typename Derived>
 struct PacketHeaderBase {
@@ -557,6 +585,12 @@ public:
     }
 };
 
+struct UDMLowLatencyPacketHeader : public LowLatencyPacketHeader {
+    UDMControlFields udm_control;
+    uint8_t padding[2];  // Padding to align to 48 bytes (32 + 14 + 2)
+} __attribute__((packed));
+static_assert(sizeof(UDMLowLatencyPacketHeader) == 48, "sizeof(UDMLowLatencyPacketHeader) is not equal to 48B");
+
 struct LowLatencyMeshRoutingFieldsV2 {
     static constexpr uint32_t FIELD_WIDTH = 8;
     static constexpr uint32_t FIELD_MASK = 0b1111;
@@ -683,6 +717,12 @@ struct HybridMeshPacketHeader : PacketHeaderBase<HybridMeshPacketHeader> {
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
 } __attribute__((packed));
 static_assert(sizeof(HybridMeshPacketHeader) == 64, "sizeof(HybridMeshPacketHeader) is not equal to 64B");
+
+struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {
+    UDMControlFields udm_control;
+    uint8_t padding[2];  // Padding to align to 80 bytes
+} __attribute__((packed));
+static_assert(sizeof(UDMHybridMeshPacketHeader) == 80, "sizeof(UDMHybridMeshPacketHeader) is not equal to 80B");
 
 // TODO: When we remove the 32B padding requirement, reduce to 16B size check
 static_assert(sizeof(PacketHeader) == 32, "sizeof(PacketHeader) is not equal to 32B");

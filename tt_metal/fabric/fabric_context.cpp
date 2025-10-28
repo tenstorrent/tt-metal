@@ -14,6 +14,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {
@@ -75,11 +76,21 @@ bool FabricContext::is_dynamic_routing_config(tt::tt_fabric::FabricConfig fabric
 }
 
 size_t FabricContext::get_packet_header_size_bytes() const {
-    if (this->is_2D_routing_enabled()) {
-        return (this->is_dynamic_routing_enabled()) ? sizeof(tt::tt_fabric::MeshPacketHeader)
-                                                    : sizeof(tt::tt_fabric::HybridMeshPacketHeader);
+    bool udm_enabled =
+        tt::tt_metal::MetalContext::instance().get_fabric_udm_mode() == tt::tt_fabric::FabricUDMMode::ENABLED;
+    if (udm_enabled) {
+        if (this->is_2D_routing_enabled()) {
+            return sizeof(tt::tt_fabric::UDMHybridMeshPacketHeader);
+        } else {
+            return sizeof(tt::tt_fabric::UDMLowLatencyPacketHeader);
+        }
     } else {
-        return sizeof(tt::tt_fabric::PacketHeader);
+        if (this->is_2D_routing_enabled()) {
+            return (this->is_dynamic_routing_enabled()) ? sizeof(tt::tt_fabric::MeshPacketHeader)
+                                                        : sizeof(tt::tt_fabric::HybridMeshPacketHeader);
+        } else {
+            return sizeof(tt::tt_fabric::PacketHeader);
+        }
     }
 }
 

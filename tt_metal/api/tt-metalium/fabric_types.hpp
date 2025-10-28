@@ -31,6 +31,12 @@ enum class FabricTensixConfig : uint32_t {
     MUX = 1,       // using mux kernel as tensix extension
 };
 
+// Unidfied Datamovement knob for configuring fabric with different parameters
+enum class FabricUDMMode : uint32_t {
+    DISABLED = 0,
+    ENABLED = 1,
+};
+
 enum class FabricType {
     MESH = 1 << 0,
     TORUS_X = 1 << 1,  // Connections along mesh_coord[1]
