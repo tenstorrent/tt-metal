@@ -18,7 +18,11 @@ PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         // If the last dimension is not permuted, we can use the row-invariant kernel
         if (dims.back() == input_tensor.logical_shape().rank() - 1) {
-            return MultiCoreRowInvariant{};
+            if (input_tensor.is_sharded() && input_tensor.buffer()->is_dram()) {
+                return DramShardedRowInvariant{};
+            } else {
+                return MultiCoreRowInvariant{};
+            }
         }
         // Otherwise, we need to use the blocked generic, row moving kernel
         return MultiCoreBlockedGeneric{};

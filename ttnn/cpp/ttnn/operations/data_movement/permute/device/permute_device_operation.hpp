@@ -52,6 +52,28 @@ struct PermuteDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
+    // Implementation for a row major tensor where the row dimension is not moved in the permutation,
+    // and optimized for DRAM sharded inputs
+    struct DramShardedRowInvariant {
+        struct shared_variables_t {
+            tt::tt_metal::KernelHandle unary_reader_kernel_id{};
+            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+            tt::tt_metal::CoreRangeSet core_range;
+        };
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+        static cached_program_t create(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+
+        static void override_runtime_arguments(
+            cached_program_t& cached_program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
     // Implementation for a row major tensor where the row dimension is moved in the permutation
     struct MultiCoreBlockedGeneric {
         struct shared_variables_t {
@@ -148,6 +170,7 @@ struct PermuteDeviceOperation {
 
     using program_factory_t = std::variant<
         MultiCoreRowInvariant,
+        DramShardedRowInvariant,
         MultiCoreBlockedGeneric,
         MultiCoreTileInvariant,
         MultiCoreTileRowInvariant,
