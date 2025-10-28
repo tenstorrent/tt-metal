@@ -160,6 +160,14 @@ class Generator:
 
         return tt_out_trace
 
+    def model_supports_trace(self):
+        """
+        This function is used to determine if trace is supported for the model.
+        """
+        if "mixtral" in self.model_args[0].model_name.lower():
+            return False
+        return True
+
     def can_enable_trace(self, prefill_seq_len):
         """
         This function is used to determine if trace should be enabled for the prefill.
@@ -192,6 +200,8 @@ class Generator:
         else:
             # Only paged attention is supported for prefill
             enable_trace = False
+
+        enable_trace = enable_trace and self.model_supports_trace()
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
