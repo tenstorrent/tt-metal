@@ -12,8 +12,6 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
 from sphinx.ext.autodoc import FunctionDocumenter, DataDocumenter
-from docutils import nodes
-from docutils.parsers.rst import Directive
 
 import ttnn.decorators
 
@@ -66,9 +64,10 @@ class Param:
         # Parse the default value from the description
         default = None
         if "Defaults to" in description:
-            default_match = re.search(r"Defaults to [`']?([^`']+)[`']?", description)
+            # Match the default value, stopping at period, comma, or end of sentence
+            default_match = re.search(r"Defaults to [`']?([^`'.,\)]+)[`']?", description)
             if default_match:
-                default = default_match.group(1)
+                default = default_match.group(1).strip()
 
         return Param(name=name, type=param_type, optional=bool(optional), default=default)
 
