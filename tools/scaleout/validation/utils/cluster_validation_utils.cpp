@@ -1244,6 +1244,7 @@ void reset_cross_node_ethernet_links(
             cluster.read_core(reset, sizeof(uint32_t), tt_cxy_pair(src_chip_id, src_coord), 0x1EFC);
         }
     }
+    distributed_context.barrier();
 }
 
 void reset_ethernet_links(
