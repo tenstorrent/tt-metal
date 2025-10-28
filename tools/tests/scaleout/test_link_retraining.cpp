@@ -181,4 +181,101 @@ TEST(DirectedRetraining, ExitNodeRetraining) {
     physical_system_descriptor.run_discovery(true);
 }
 
+TEST(DirectedRetraining, TestOnDemandCableRestart) {
+    // Test the on-demand cable/link restart feature
+    // 1. Run physical discovery
+    // 2. Select a specific link (first available)
+    // 3. Take down that specific link
+    // 4. Build reset topology for just that link (similar to CLI --reset-* args)
+    // 5. Call reset_ethernet_links with that topology
+    // 6. Verify the link is retrained successfully
+
+    auto& context = tt::tt_metal::MetalContext::instance();
+    const auto& cluster = context.get_cluster();
+    const auto& driver = cluster.get_driver();
+    auto distributed_context = context.get_distributed_context_ptr();
+
+    auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
+        driver,
+        distributed_context,
+        &tt::tt_metal::MetalContext::instance().hal(),
+        tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled(),
+        true);
+
+    std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
+    for (const auto& [chip_id, asic_id] : cluster.get_unique_chip_ids()) {
+        asic_id_to_chip_id[asic_id] = chip_id;
+    }
+
+    // Select the first available link from the local host topology
+    const auto& asic_topology = physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name());
+    ASSERT_FALSE(asic_topology.empty()) << "No links available for testing";
+
+    tt::tt_metal::AsicID src_asic_id;
+    tt::tt_metal::AsicID dst_asic_id;
+    uint8_t src_channel = 0;
+    uint8_t dst_channel = 0;
+    bool is_local = false;
+
+    // Find first link
+    bool found = false;
+    for (const auto& [asic_id, asic_connections] : asic_topology) {
+        for (const auto& [dst_id, eth_connections] : asic_connections) {
+            if (!eth_connections.empty()) {
+                src_asic_id = asic_id;
+                dst_asic_id = dst_id;
+                src_channel = eth_connections[0].src_chan;
+                dst_channel = eth_connections[0].dst_chan;
+                is_local = eth_connections[0].is_local;
+                found = true;
+                break;
+            }
+        }
+        if (found) break;
+    }
+    ASSERT_TRUE(found) << "No ethernet connections found";
+
+    auto src_chip_id = asic_id_to_chip_id.at(*src_asic_id);
+    auto logical_src_coord = cluster.get_soc_desc(src_chip_id).get_eth_core_for_channel(src_channel, CoordSystem::LOGICAL);
+    auto src_coord = cluster.get_virtual_coordinate_from_logical_coordinates(
+        src_chip_id, tt_xy_pair(logical_src_coord.x, logical_src_coord.y), CoreType::ETH);
+
+    // Take down the selected link
+    std::vector<uint32_t> zero_vec(1, 0);
+    cluster.write_core(src_chip_id, src_coord, zero_vec, 0x1104);
+    cluster.l1_barrier(src_chip_id);
+
+    // Verify link is down
+    std::vector<uint32_t> link_status = {1};
+    cluster.read_core(link_status, sizeof(uint32_t), tt_cxy_pair(src_chip_id, src_coord), 0x1104);
+    EXPECT_EQ(link_status[0], 0) << "Link should be down before reset";
+
+    // Build reset topology for just this specific link (mimics CLI --reset-* args)
+    tt::tt_metal::AsicTopology reset_topology;
+    
+    tt::tt_metal::EthConnection src_to_dst_conn;
+    src_to_dst_conn.src_chan = src_channel;
+    src_to_dst_conn.dst_chan = dst_channel;
+    src_to_dst_conn.is_local = is_local;
+
+    tt::tt_metal::EthConnection dst_to_src_conn;
+    dst_to_src_conn.src_chan = dst_channel;
+    dst_to_src_conn.dst_chan = src_channel;
+    dst_to_src_conn.is_local = is_local;
+
+    reset_topology[src_asic_id].push_back({dst_asic_id, {src_to_dst_conn}});
+    reset_topology[dst_asic_id].push_back({src_asic_id, {dst_to_src_conn}});
+
+    // Reset only the specific link
+    reset_ethernet_links(physical_system_descriptor, reset_topology);
+
+    // Verify link is retrained successfully
+    link_status[0] = 0;
+    cluster.read_core(link_status, sizeof(uint32_t), tt_cxy_pair(src_chip_id, src_coord), 0x1104);
+    EXPECT_EQ(link_status[0], 1) << "Link should be up after reset";
+
+    // Run discovery and validate
+    physical_system_descriptor.run_discovery(true);
+}
+
 }  // namespace tt::scaleout_tools
