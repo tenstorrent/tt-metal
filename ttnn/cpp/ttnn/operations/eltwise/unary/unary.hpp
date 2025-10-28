@@ -7,7 +7,6 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
-#include "ttnn/operations/copy/typecast/typecast.hpp"
 
 namespace ttnn {
 namespace operations::unary {
@@ -329,11 +328,10 @@ struct Rsub {
 };
 
 struct Where {
-    template <typename T>
     static Tensor invoke(
         const Tensor& condition,
-        const T& value_true,
-        const T& value_false,
+        const ScalarVariant& value_true,
+        const ScalarVariant& value_false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
