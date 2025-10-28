@@ -358,7 +358,7 @@ def test_device_trace_run():
 @skip_for_blackhole()
 def test_dispatch_cores():
     REF_COUNT_DICT = {
-        "Tensix CQ Dispatch*": [600, 760, 1310, 2330, 6383],
+        "Tensix CQ Dispatch*": [600, 760, 1310, 2330, 3558, 6383],
         "Tensix CQ Prefetch": [900, 1440, 3870, 5000, 7752],
         "dispatch_total_cq_cmd_op_time": [236],
         "dispatch_go_send_wait_time": [236],
@@ -409,7 +409,7 @@ def test_dispatch_cores():
 @skip_for_blackhole()
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {
-        "Ethernet CQ Dispatch": [590, 1080, 1430, 1660, 1994, 3285, 3530, 3769, 4237, 6681, 7150],
+        "Ethernet CQ Dispatch": [590, 1080, 1430, 1660, 1994, 3285, 3530, 3769, 4237, 4881, 6681, 7150],
         "Ethernet CQ Prefetch": [572, 1058, 4030, 7795],
     }
     devicesData = run_device_profiler_test(
