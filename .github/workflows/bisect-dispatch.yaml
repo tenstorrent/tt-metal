@@ -6,7 +6,7 @@ on:
       tracy:
         required: true
         type: boolean
-        default: false
+        default: true
         description: "Build with tracy enabled"
       nd-mode:
         required: true
