@@ -469,6 +469,14 @@ void MetalContext::set_fabric_config(
     tt_fabric::FabricReliabilityMode reliability_mode,
     std::optional<uint8_t> num_routing_planes,
     tt_fabric::FabricTensixConfig fabric_tensix_config) {
+    if (is_2d_fabric_config(fabric_config) && !cluster_->is_ubb_galaxy()) {
+        const auto fabric_type = get_fabric_type(fabric_config);
+        if (fabric_type == tt::tt_fabric::FabricType::TORUS_X || fabric_type == tt::tt_fabric::FabricType::TORUS_Y ||
+            fabric_type == tt::tt_fabric::FabricType::TORUS_XY) {
+            TT_THROW("2D fabric with torus topology is only supported on GALAXY clusters.");
+        }
+    }
+
     // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch
     // config, not through this function exposed in the detail API.
     force_reinit_ = true;

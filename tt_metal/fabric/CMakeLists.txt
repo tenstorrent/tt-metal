@@ -55,7 +55,6 @@ target_sources(
         erisc_datamover_builder_helper.cpp
         ccl/ccl_common.cpp
         physical_system_descriptor.cpp
-        topology_mapper.cpp
 )
 
 # Include helper functions and generate headers from protobuf schemas
