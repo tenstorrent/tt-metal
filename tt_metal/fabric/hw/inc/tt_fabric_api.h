@@ -338,5 +338,4 @@ bool fabric_set_unicast_route(volatile tt_l1_ptr LowLatencyPacketHeader* packet_
         }
     }
 }
-
 }  // namespace tt::tt_fabric
