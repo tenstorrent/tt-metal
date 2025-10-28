@@ -249,32 +249,6 @@ static std::vector<Tensor> pool2d_invoke(
         .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };
 
-    // create the index tensor if needed
-    Tensor index_tensor_sharded;
-    if (return_indices) {
-        Shape spatial_shape({1, input_h, input_w, 1});
-
-        // Create the index tensor
-        Tensor indices_hw = ttnn::index_all<uint16_t>(
-            spatial_shape,
-            spatial_shape,  // No padding needed for spatial-only shape
-            DataType::UINT16);
-        Shape repeat_shape({batch_size, 1, 1, channels});
-        Tensor index_full = ttnn::repeat(indices_hw.to_device(input_tensor.device()), repeat_shape);
-
-        // Reshape from [batch_size, input_h, input_w, channels] to [1, 1, batch_size * input_h * input_w, channels]
-        uint32_t nhw = batch_size * input_h * input_w;
-        Shape flattened_shape({1, 1, nhw, channels});
-        Tensor index_full_reshaped = ttnn::reshape(index_full, flattened_shape);
-
-        TT_FATAL(
-            input_tensor_sharded.memory_config().is_sharded(), "Input tensor must be sharded to shard indices tensor.");
-        index_tensor_sharded =
-            ttnn::to_memory_config(index_full_reshaped, input_tensor_sharded.memory_config(), std::nullopt);
-    }
-
-    std::vector<Tensor> haloed_tensors;
-
     // call the halo uop
     Tensor haloed_tensor = ttnn::halo(
         input_tensor_sharded,
@@ -294,30 +268,6 @@ static std::vector<Tensor> pool2d_invoke(
         haloed_tensor = ttnn::move(haloed_tensor);
     }
 
-    // NOLINTNEXTLINE(bugprone-use-after-move)
-    haloed_tensors.push_back(std::move(haloed_tensor));
-
-    if (return_indices) {
-        Tensor haloed_index = ttnn::halo(
-            index_tensor_sharded,
-            sliding_window_config,
-            0,  // pad_val - should never be used as padding should never be the max index
-            false,
-            parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
-            index_tensor_sharded.memory_config(),
-            is_out_tiled,
-            in_place_halo);
-
-        if (deallocate_input || is_input_tensor_in_dram) {
-            index_tensor_sharded.deallocate(/*force*/ true);
-        }
-
-        if (reallocate_halo_output) {
-            haloed_index = ttnn::move(haloed_index);
-        }
-        haloed_tensors.push_back(std::move(haloed_index));
-    }
-
     // NOLINTBEGIN(bugprone-use-after-move)
     const uint32_t pre_allocate_size =
         haloed_tensor.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
@@ -325,7 +275,7 @@ static std::vector<Tensor> pool2d_invoke(
 
     // call the pool2d uop
     std::vector<Tensor> output_tensors = ttnn::prim::pool2d(
-        haloed_tensors,
+        haloed_tensor,
         sliding_window_config,
         pool_type,
         dtype,
