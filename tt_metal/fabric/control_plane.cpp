@@ -23,12 +23,14 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <yaml-cpp/yaml.h>
 #include <tt_stl/assert.hpp>
 
 #include "control_plane.hpp"
 #include "core_coord.hpp"
 #include "compressed_routing_table.hpp"
 #include "compressed_routing_path.hpp"
+#include "tools/scaleout/factory_system_descriptor/utils.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include "distributed_context.hpp"
 #include "fabric_types.hpp"
@@ -45,6 +47,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "fabric_host_utils.hpp"
 #include "tt_metal/fabric/serialization/router_port_directions.hpp"
 #include "tt_stl/small_vector.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
@@ -422,13 +425,21 @@ void ControlPlane::initialize_distributed_contexts() {
 }
 
 FabricNodeId ControlPlane::get_fabric_node_id_from_asic_id(uint64_t asic_id) const {
+    // Check cache first for faster lookup
+    auto cache_it = asic_id_to_fabric_node_cache_.find(asic_id);
+    if (cache_it != asic_id_to_fabric_node_cache_.end()) {
+        return cache_it->second;
+    }
+
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& chip_unique_ids = cluster.get_unique_chip_ids();
 
     for (const auto& [physical_chip_id, unique_id] : chip_unique_ids) {
-        // TODO: We can maintain a map of unique_id to physical_chip_id for faster lookup
         if (unique_id == asic_id) {
-            return this->get_fabric_node_id_from_physical_chip_id(physical_chip_id);
+            FabricNodeId fabric_node_id = this->get_fabric_node_id_from_physical_chip_id(physical_chip_id);
+            // Cache the result for future lookups
+            asic_id_to_fabric_node_cache_.emplace(asic_id, fabric_node_id);
+            return fabric_node_id;
         }
     }
 
@@ -2791,6 +2802,79 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
     }
     return intermesh_connections;
 }
+
+bool ControlPlane::is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_config) const {
+    if (fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
+        return false;
+    }
+
+    static const std::unordered_set<tt::tt_fabric::FabricConfig> torus_fabric_configs = {
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY
+    };
+
+    if (torus_fabric_configs.count(fabric_config)) {
+        validate_torus_setup(fabric_config);
+        return true;  // Validation passed if no exception was thrown
+    }
+
+    // Non-torus configurations are valid by default since we always have at least mesh topology,
+    // and mesh configurations don't require special validation like torus does
+    return true;
+}
+
+void ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_config) const {
+    TT_ASSERT(physical_system_descriptor_ != nullptr, "Physical system descriptor not initialized");
+
+    auto all_hostnames = physical_system_descriptor_->get_all_hostnames();
+    auto cabling_descriptor_path = get_cabling_descriptor_path(fabric_config);
+    // Check if the cabling descriptor file exists
+    TT_ASSERT(std::filesystem::exists(cabling_descriptor_path),
+              "Cabling descriptor file not found: {}", cabling_descriptor_path);
+
+    // Generate GSD YAML from the current physical system descriptor
+    YAML::Node gsd_yaml = physical_system_descriptor_->generate_yaml_node();
+
+    // Use the new validation function that handles CablingGenerator internally
+    tt::scaleout_tools::validate_cabling_descriptor_against_gsd(
+        cabling_descriptor_path,
+        all_hostnames,
+        gsd_yaml,
+        false,                      // strict_validation
+        false                       // assert_on_connection_mismatch
+    );
+
+    log_debug(tt::LogFabric, "Torus validation passed for configuration: {}", static_cast<int>(fabric_config));
+}
+
+std::string ControlPlane::get_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) const {
+    static const std::string X_TORUS_PATH = "tools/tests/scaleout/cabling_descriptors/wh_galaxy_x_torus_superpod.textproto";
+    static const std::string Y_TORUS_PATH = "tools/tests/scaleout/cabling_descriptors/wh_galaxy_y_torus_superpod.textproto";
+    static const std::string XY_TORUS_PATH = "tools/tests/scaleout/cabling_descriptors/wh_galaxy_xy_torus_superpod.textproto";
+
+    // Get fabric type from config and map to cabling descriptor paths
+    FabricType fabric_type = get_fabric_type(fabric_config);
+
+    static const std::unordered_map<FabricType, std::string> cabling_map = {
+        {FabricType::TORUS_X, X_TORUS_PATH},
+        {FabricType::TORUS_Y, Y_TORUS_PATH},
+        {FabricType::TORUS_XY, XY_TORUS_PATH}
+    };
+
+    auto it = cabling_map.find(fabric_type);
+    if (it == cabling_map.end()) {
+        log_warning(tt::LogFabric, "Unknown torus configuration: {}", static_cast<int>(fabric_config));
+        return "";  // Return empty string for unknown configurations
+    }
+
+    const auto& root_dir = tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir();
+    return root_dir + it->second;
+}
+
 
 ControlPlane::~ControlPlane() = default;
 

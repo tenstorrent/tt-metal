@@ -201,6 +201,10 @@ public:
     const std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>&
     get_global_logical_bindings() const;
 
+    // Check if the physical system supports the specified fabric configuration
+    // Returns true if valid, false otherwise
+    bool is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_config) const;
+
 private:
     // Check if the provided mesh is local to this host
     bool is_local_mesh(MeshId mesh_id) const;
@@ -364,6 +368,14 @@ private:
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> host_local_context_;
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;
     std::unique_ptr<tt::tt_fabric::TopologyMapper> topology_mapper_;
+
+    // Performance caches for frequently accessed data
+    // Cache for faster asic_id to fabric_node_id lookup
+    mutable std::unordered_map<uint64_t, FabricNodeId> asic_id_to_fabric_node_cache_;
+
+    // This method performs validation through assertions and exceptions.
+    void validate_torus_setup(tt::tt_fabric::FabricConfig fabric_config) const;
+    std::string get_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) const;
 };
 
 }  // namespace tt::tt_fabric
