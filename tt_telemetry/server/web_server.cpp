@@ -22,7 +22,7 @@
 #include <server/web_server.hpp>
 #include <server/prom_formatter.hpp>
 #include <unistd.h>
-#include <limits.h>
+#include <climits>
 
 using json = nlohmann::json;
 
@@ -261,7 +261,7 @@ public:
         server_.Get("/api/metrics", [this](const httplib::Request&, httplib::Response& res) {
             std::lock_guard<std::mutex> lock(snapshot_mutex_);
             try {
-                auto prometheus_output = tt::telemetry::format_snapshot_as_prometheus(telemetry_state_, hostname_);
+                auto prometheus_output = tt::telemetry::format_snapshot_as_prometheus(telemetry_state_);
                 res.set_content(prometheus_output, "text/plain; version=0.0.4; charset=utf-8");
             } catch (const std::exception& e) {
                 res.status = 500;

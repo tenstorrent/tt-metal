@@ -35,11 +35,18 @@ fi
 
 # Deduplicate targets
 UNIQUE_TARGETS=()
-declare -A seen_targets
 for target in "${TARGETS[@]}"; do
-    if [[ ! -v seen_targets["$target"] ]]; then
+    # Check if target is already in UNIQUE_TARGETS
+    found=0
+    for unique in "${UNIQUE_TARGETS[@]}"; do
+        if [[ "$unique" == "$target" ]]; then
+            found=1
+            break
+        fi
+    done
+    # Add if not found
+    if [[ $found -eq 0 ]]; then
         UNIQUE_TARGETS+=("$target")
-        seen_targets["$target"]=1
     fi
 done
 TARGETS=("${UNIQUE_TARGETS[@]}")

@@ -23,24 +23,22 @@ struct ParsedMetric {
 
 // Parse metric path and extract labels
 // Path format: hostname/tray3/chip0/[channel5/]metric_name
-// Returns: metric_name and labels (tray, chip, channel if present)
-ParsedMetric parse_metric_path(std::string_view path, std::string_view hostname) {
+// Returns: metric_name and labels (hostname, tray, chip, channel if present)
+ParsedMetric parse_metric_path(std::string_view path) {
     ParsedMetric result;
     std::string path_str(path);
 
-    // Find and remove hostname from the path
-    size_t hostname_pos = path_str.find(hostname);
-    if (hostname_pos == std::string::npos) {
-        throw std::runtime_error("Metric path does not contain hostname '" + std::string(hostname) + "': " + path_str);
+    // Extract hostname from the first component
+    size_t first_slash = path_str.find('/');
+    if (first_slash == std::string::npos) {
+        throw std::runtime_error("Metric path does not contain hostname component: " + path_str);
     }
 
-    // Skip hostname and the expected slash after it
-    size_t after_hostname = hostname_pos + hostname.length();
-    if (after_hostname >= path_str.length() || path_str[after_hostname] != '/') {
-        throw std::runtime_error("Expected slash after hostname in metric path: " + path_str);
-    }
-    after_hostname++;  // Skip the slash
-    path_str = path_str.substr(after_hostname);
+    std::string hostname = path_str.substr(0, first_slash);
+    result.labels["hostname"] = hostname;
+
+    // Remove hostname and the slash
+    path_str = path_str.substr(first_slash + 1);
 
     // Split path into components
     std::vector<std::string> components;
@@ -136,15 +134,14 @@ void process_metrics(
     const std::unordered_map<std::string, uint64_t>& timestamps,
     const std::unordered_map<std::string, uint16_t>* units,
     const std::unordered_map<uint16_t, std::string>& unit_labels,
-    std::string_view hostname,
     std::string_view help_text,
     ValueConverter value_converter) {
     std::unordered_set<std::string> written_metric_names;
 
     for (const auto& [path, value] : metrics) {
         try {
-            // Parse metric path to extract name and labels
-            ParsedMetric parsed = parse_metric_path(path, hostname);
+            // Parse metric path to extract name and labels (including hostname)
+            ParsedMetric parsed = parse_metric_path(path);
             std::string value_str = value_converter(value);
 
             // Get timestamp
@@ -184,7 +181,7 @@ void process_metrics(
 
 }  // anonymous namespace
 
-std::string format_snapshot_as_prometheus(const TelemetrySnapshot& snapshot, std::string_view hostname) {
+std::string format_snapshot_as_prometheus(const TelemetrySnapshot& snapshot) {
     std::stringstream output;
 
     // Write header
@@ -194,7 +191,6 @@ std::string format_snapshot_as_prometheus(const TelemetrySnapshot& snapshot, std
     localtime_r(&now_c, &tm_buf);
 
     output << "# Tenstorrent Metal Telemetry Metrics\n";
-    output << "# Host: " << hostname << "\n";
     output << "# Generated at: " << std::put_time(&tm_buf, "%c") << "\n\n";
 
     // Process bool metrics (no units)
@@ -204,7 +200,6 @@ std::string format_snapshot_as_prometheus(const TelemetrySnapshot& snapshot, std
         snapshot.bool_metric_timestamps,
         nullptr,  // No units for bool metrics
         snapshot.metric_unit_display_label_by_code,
-        hostname,
         "Boolean metric from Tenstorrent Metal",
         [](bool v) { return std::to_string(v ? 1 : 0); });
 
@@ -215,7 +210,6 @@ std::string format_snapshot_as_prometheus(const TelemetrySnapshot& snapshot, std
         snapshot.uint_metric_timestamps,
         &snapshot.uint_metric_units,
         snapshot.metric_unit_display_label_by_code,
-        hostname,
         "Unsigned integer metric from Tenstorrent Metal",
         [](uint64_t v) { return std::to_string(v); });
 
@@ -226,7 +220,6 @@ std::string format_snapshot_as_prometheus(const TelemetrySnapshot& snapshot, std
         snapshot.double_metric_timestamps,
         &snapshot.double_metric_units,
         snapshot.metric_unit_display_label_by_code,
-        hostname,
         "Floating-point metric from Tenstorrent Metal",
         [](double v) { return std::to_string(v); });
 
