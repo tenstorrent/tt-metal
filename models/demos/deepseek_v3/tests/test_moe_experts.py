@@ -90,7 +90,6 @@ def test_forward_pass(
     mode: str,
     seq_len: int,
     hf_config: Any,
-    tmp_path: Path,
     cache_path: Path,
     mesh_device: Any,
     weight_type: str,
@@ -110,7 +109,6 @@ def test_forward_pass(
         )
 
         # Do not cache random weights
-        cache_path = tmp_path
         force_recalculate_weight_config = True
     else:
         assert weight_type == "real"
