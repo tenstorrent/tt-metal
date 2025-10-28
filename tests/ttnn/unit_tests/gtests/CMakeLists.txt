@@ -198,6 +198,19 @@ target_link_libraries(
         test_common_utils
 )
 
+# test_basic_jit_operation
+
+add_executable(test_basic_jit_operation)
+target_sources(test_basic_jit_operation PRIVATE jit/basic_jit_operation.cpp)
+setup_ttnn_test_target(test_basic_jit_operation)
+target_link_libraries(
+    test_basic_jit_operation
+    PRIVATE
+        Boost::asio
+        Boost::lockfree
+        test_common_utils
+)
+
 # unit_tests_ttnn_emitc
 
 add_executable(unit_tests_ttnn_emitc)

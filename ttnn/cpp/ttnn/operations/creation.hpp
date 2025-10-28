@@ -252,21 +252,40 @@ struct Empty : public ttnn::experimental::jit::LazyOperation {
     MeshDevice* device;
     MemoryConfig memory_config;
 
+    virtual ~Empty() {}
     // This is being called from the binding layer, ttnn::empty -> this invoke
     // I return a lazy tensor
-    ttnn::experimental::jit::LazyTensor new_invoke(
-        const ttnn::Shape& shape,
-        const DataType& dtype,
-        const Layout& layout,
-        MeshDevice* device,
-        const MemoryConfig& memory_config) {
-        this->shape = shape;
-        this->dtype = dtype;
-        this->layout = layout;
-        this->device = device;
-        this->memory_config = memory_config;
+    template <typename... Args>
+    static ttnn::experimental::jit::LazyTensor new_invoke(Args&&... args) {
+        // Create an instance of Empty
+        std::shared_ptr<Empty> operation_struct = std::make_shared<Empty>();
 
-        ttnn::experimental::jit::LazyTensor lazy_tensor(std::vector<ttnn::experimental::jit::LazyTensor>{}, this);
+        // Helper lambda to map arguments to properties
+        auto map_args = [&operation_struct](auto&&... vals) {
+            (
+                [&operation_struct](auto&& val) {
+                    using T = std::decay_t<decltype(val)>;
+                    if constexpr (std::is_same_v<T, ttnn::Shape>) {
+                        operation_struct->shape = val;
+                    } else if constexpr (
+                        std::is_same_v<T, DataType> || std::is_same_v<T, std::remove_reference_t<DataType>>) {
+                        operation_struct->dtype = val;
+                    } else if constexpr (std::is_same_v<T, Layout>) {
+                        operation_struct->layout = val;
+                    } else if constexpr (std::is_same_v<T, MeshDevice*> || std::is_pointer_v<T>) {
+                        operation_struct->device = val;
+                    } else if constexpr (
+                        std::is_same_v<T, MemoryConfig> || std::is_same_v<T, std::remove_reference_t<MemoryConfig>>) {
+                        operation_struct->memory_config = val;
+                    }
+                }(std::forward<decltype(vals)>(vals)),
+                ...);
+        };
+
+        map_args(std::forward<Args>(args)...);
+
+        ttnn::experimental::jit::LazyTensor lazy_tensor(
+            std::vector<ttnn::experimental::jit::LazyTensor>{}, std::move(operation_struct));
         return lazy_tensor;
     }
 

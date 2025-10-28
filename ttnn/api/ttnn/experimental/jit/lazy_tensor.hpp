@@ -28,7 +28,7 @@ static JitOperationType jit_operation_type = JitOperationType::LAZY_JIT;
 class LazyTensor {
 public:
     LazyTensor() = delete;
-    LazyTensor(std::vector<LazyTensor> inputs, ttnn::experimental::jit::LazyOperation* Args);
+    LazyTensor(std::vector<LazyTensor> inputs, std::shared_ptr<ttnn::experimental::jit::LazyOperation>&& Args);
 
     ~LazyTensor();
 
@@ -50,6 +50,8 @@ public:
     std::optional<ttnn::TensorSpec> get_tensor_spec() const { return tensor_spec_; }
 
     void set_tensor_spec(const ttnn::TensorSpec& tensor_spec) { tensor_spec_ = tensor_spec; }
+
+    const std::vector<tt::tt_metal::Tensor>& get_output_tensors() const { return output_tensors_; }
 
 private:
     std::vector<tt::tt_metal::Tensor> output_tensors_;

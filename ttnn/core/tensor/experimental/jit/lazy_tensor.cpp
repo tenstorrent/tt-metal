@@ -8,7 +8,7 @@
 
 namespace ttnn::experimental::jit {
 
-LazyTensor::LazyTensor(std::vector<LazyTensor> inputs, ttnn::experimental::jit::LazyOperation* Args) :
+LazyTensor::LazyTensor(std::vector<LazyTensor> inputs, std::shared_ptr<ttnn::experimental::jit::LazyOperation>&& Args) :
     inputs_(std::move(inputs)), args_(std::move(Args)) {
     state_ = LazyTensorState::LAZY;
     id_ = GraphUtils::get_available_lazy_tensor_id();
