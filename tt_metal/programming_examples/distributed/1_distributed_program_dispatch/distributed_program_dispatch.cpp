@@ -37,7 +37,7 @@ int main() {
     auto mesh_workload = MeshWorkload();
     auto target_devices = MeshCoordinateRange(mesh_device->shape());
 
-    AddProgramToMeshWorkload(mesh_workload, std::move(example_program), target_devices);
+    mesh_workload.add_program(target_devices, std::move(example_program));
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
 
     // Synchronize the mesh command queue to ensure the workload has completed.

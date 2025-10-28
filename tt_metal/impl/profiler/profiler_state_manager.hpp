@@ -54,6 +54,30 @@ public:
         }
     }
 
+    void mark_trace_begin(ChipId device_id, uint32_t trace_id) {
+        TT_ASSERT(this->device_profiler_map.find(device_id) != this->device_profiler_map.end());
+        DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
+        device_profiler.markTraceBegin(trace_id);
+    }
+
+    void mark_trace_end(ChipId device_id, uint32_t trace_id) {
+        TT_ASSERT(this->device_profiler_map.find(device_id) != this->device_profiler_map.end());
+        DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
+        device_profiler.markTraceEnd(trace_id);
+    }
+
+    void mark_trace_replay(ChipId device_id, uint32_t trace_id) {
+        TT_ASSERT(this->device_profiler_map.find(device_id) != this->device_profiler_map.end());
+        DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
+        device_profiler.markTraceReplay(trace_id);
+    }
+
+    void add_runtime_id_to_trace(ChipId device_id, uint32_t trace_id, uint32_t runtime_id) {
+        TT_ASSERT(this->device_profiler_map.find(device_id) != this->device_profiler_map.end());
+        DeviceProfiler& device_profiler = this->device_profiler_map.at(device_id);
+        device_profiler.addRuntimeIdToTrace(trace_id, runtime_id);
+    }
+
     ProfilerStateManager& operator=(const ProfilerStateManager&) = delete;
     ProfilerStateManager& operator=(ProfilerStateManager&&) = delete;
     ProfilerStateManager(const ProfilerStateManager&) = delete;
@@ -61,18 +85,18 @@ public:
 
     static constexpr CoreCoord SYNC_CORE = {0, 0};
 
-    std::unordered_map<chip_id_t, DeviceProfiler> device_profiler_map{};
+    std::unordered_map<ChipId, DeviceProfiler> device_profiler_map;
 
-    std::unordered_map<chip_id_t, std::vector<std::pair<uint64_t, uint64_t>>> device_host_time_pair{};
-    std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::vector<std::pair<uint64_t, uint64_t>>>>
-        device_device_time_pair{};
-    std::unordered_map<chip_id_t, uint64_t> smallest_host_time{};
+    std::unordered_map<ChipId, std::vector<std::pair<uint64_t, uint64_t>>> device_host_time_pair;
+    std::unordered_map<ChipId, std::unordered_map<ChipId, std::vector<std::pair<uint64_t, uint64_t>>>>
+        device_device_time_pair;
+    std::unordered_map<ChipId, uint64_t> smallest_host_time;
 
     bool do_sync_on_close{};
 
-    std::unordered_set<chip_id_t> sync_set_devices{};
+    std::unordered_set<ChipId> sync_set_devices;
 
-    std::mutex file_write_mutex{};
+    std::mutex file_write_mutex;
 };
 
 }  // namespace tt_metal

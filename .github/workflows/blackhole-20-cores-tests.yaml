@@ -31,12 +31,11 @@ jobs:
       matrix:
         test-group:
           - name: "test_sharding_on_bh_20_cores_test1"
-            cmd:  tests/ttnn/unit_tests/test_bh_20_cores_sharding.py::test_sharding_on_bh_20_cores
+            cmd:  tests/ttnn/unit_tests/base_functionality/test_bh_20_cores_sharding.py::test_sharding_on_bh_20_cores
     name: ${{ matrix.test-group.name }}
     runs-on: >-
       ${{
-        (github.event.pull_request.head.repo.fork == true || contains('P150b', inputs.runner-label)) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
-        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+        (github.event.pull_request.head.repo.fork == true) || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     container:
       image: ${{ inputs.docker-image }}
@@ -54,7 +53,7 @@ jobs:
         working-directory: /work
     steps:
       - name: Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}

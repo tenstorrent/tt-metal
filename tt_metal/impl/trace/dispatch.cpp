@@ -107,7 +107,7 @@ void issue_trace_commands(
         command_sequence.add_dispatch_go_signal_mcast(
             expected_num_workers_completed[index],
             MetalContext::instance().hal().make_go_msg_u32(
-                dev_msgs::RUN_MSG_RESET_READ_PTR,
+                dev_msgs::RUN_MSG_REPLAY_TRACE,
                 dispatch_core.x,
                 dispatch_core.y,
                 MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(index)),
@@ -171,19 +171,19 @@ uint32_t compute_trace_cmd_size(uint32_t num_sub_devices) {
         align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) * num_sub_devices;
 
     uint32_t cmd_sequence_sizeB =
-        MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled() *
-            hal.get_alignment(
-                HalMemType::HOST) +  // dispatch_d -> dispatch_s sem update (send only if dispatch_s is running)
-        go_signals_cmd_size +        // go signal cmd
-        (hal.get_alignment(
-             HalMemType::HOST) +  // wait to ensure that reset go signal was processed (dispatch_d)
-                                  // when dispatch_s and dispatch_d are running on 2 cores, workers update dispatch_s.
-                                  // dispatch_s is responsible for resetting worker count and giving dispatch_d the
-                                  // latest worker state. This is encapsulated in the dispatch_s wait command (only to
-                                  // be sent when dispatch is distributed on 2 cores)
-         (MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher()) *
-             hal.get_alignment(HalMemType::HOST)) *
-            num_sub_devices +
+        (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled() *
+         hal.get_alignment(
+             HalMemType::HOST)) +  // dispatch_d -> dispatch_s sem update (send only if dispatch_s is running)
+        go_signals_cmd_size +      // go signal cmd
+        ((hal.get_alignment(
+              HalMemType::HOST) +  // wait to ensure that reset go signal was processed (dispatch_d)
+                                   // when dispatch_s and dispatch_d are running on 2 cores, workers update dispatch_s.
+                                   // dispatch_s is responsible for resetting worker count and giving dispatch_d the
+                                   // latest worker state. This is encapsulated in the dispatch_s wait command (only to
+                                   // be sent when dispatch is distributed on 2 cores)
+          (MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher()) *
+              hal.get_alignment(HalMemType::HOST)) *
+         num_sub_devices) +
         hal.get_alignment(HalMemType::HOST);  // CQ_PREFETCH_CMD_EXEC_BUF
 
     return cmd_sequence_sizeB;

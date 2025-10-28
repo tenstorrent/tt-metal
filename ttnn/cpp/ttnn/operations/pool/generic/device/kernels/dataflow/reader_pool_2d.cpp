@@ -102,7 +102,8 @@ template <
     bool last_tile_is_partial,
     uint32_t dilation_h,
     uint32_t dilation_w,
-    bool return_indices>
+    bool return_indices,
+    bool zero_pages>
 ALWI void read_window_with_top_left_index(
     uint32_t ind, uint32_t in_l1_read_base_addr, uint32_t in_idx_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
@@ -139,8 +140,12 @@ ALWI void read_window_with_top_left_index(
             cb_reserve_back(in_idx_cb_id, 1);
         }
         uint32_t processed_sticks = 0;
-        if (c_i == in_nblocks_c - 1 && last_tile_is_partial) {
-            zero_out_page<in_cb_id>();
+        // page zeroing is only necessary for tiled block output format so that scale is not affected by junk/padding
+        // data
+        if constexpr (zero_pages) {
+            if (c_i == in_nblocks_c - 1 && last_tile_is_partial) {
+                zero_out_page<in_cb_id>();
+            }
         }
         for (uint32_t h = 0; h < window_h; ++h) {
             auto process_h = [&](uint32_t w_offset, uint32_t w_multiple) __attribute__((always_inline)) {
@@ -246,7 +251,10 @@ ALWI void fill_scalar(
     // second half of the condition counter == scalar_start + 1 || counter == scalar_start + 3.
     if (counter < scalar_end && (counter == scalar_start || counter == scalar_start + 1 ||
                                  (split_reader && (counter == scalar_start + 2 || counter == scalar_start + 3)))) {
-        fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_value, false);
+        // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the values
+        // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
+        // between the first and second face.
+        fill_with_val(get_write_ptr(in_scalar_cb_id), FACE_WIDTH, scalar_value, false);
     }
     cb_push_back(in_scalar_cb_id, 1);
     counter++;
@@ -304,6 +312,8 @@ void kernel_main() {
     constexpr uint32_t dilation_h = get_compile_time_arg_val(34);
     constexpr uint32_t dilation_w = get_compile_time_arg_val(35);
     constexpr bool return_indices = (bool)get_compile_time_arg_val(36);
+    constexpr bool zero_pages = (bool)get_compile_time_arg_val(37);
+
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
@@ -349,7 +359,10 @@ void kernel_main() {
 
     // initialize the scalar CB
     if constexpr (reader_id == 0 && one_scalar_per_core) {
-        fill_with_val(get_write_ptr(in_scalar_cb_id_0), TILE_WIDTH, bf16_scalar >> 16);
+        // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the values
+        // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
+        // between the first and second face.
+        fill_with_val(get_write_ptr(in_scalar_cb_id_0), FACE_WIDTH, bf16_scalar >> 16);
         cb_push_back(in_scalar_cb_id_0, 1);
     }
 
@@ -435,7 +448,8 @@ void kernel_main() {
                 last_tile_is_partial,
                 dilation_h,
                 dilation_w,
-                return_indices>(ind, in_l1_read_base_addr, in_idx_l1_read_base_addr);
+                return_indices,
+                zero_pages>(ind, in_l1_read_base_addr, in_idx_l1_read_base_addr);
             if (split_reader && ind == end) {
                 first_row_value = false;
             }
@@ -470,6 +484,7 @@ void kernel_main() {
             last_tile_is_partial,
             dilation_h,
             dilation_w,
-            return_indices>(0, in_l1_read_base_addr, in_idx_l1_read_base_addr);
+            return_indices,
+            zero_pages>(0, in_l1_read_base_addr, in_idx_l1_read_base_addr);
     }
 }  // kernel_main()

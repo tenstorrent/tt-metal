@@ -10,18 +10,18 @@
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_constants.h"
 #include "tt-metalium/circular_buffer_config.hpp"
-#include "tt-metalium/command_queue.hpp"
+#include "impl/dispatch/command_queue.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
 #include "tt-metalium/kernel_types.hpp"  // KernelHandle
 #include "tt-metalium/program.hpp"       // KernelGroup
 #include "program_device_map.hpp"        // ProgramTransferInfo
-#include "tt-metalium/semaphore.hpp"
+#include "impl/buffers/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt_metal.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>        // CoreType
-#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 
 #include <atomic>
 #include <bitset>
@@ -45,6 +45,8 @@ class JitBuildOptions;
 
 class HWCommandQueue;
 class EnqueueProgramCommand;
+
+class Kernel;
 
 namespace distributed {
 class MeshWorkload;
@@ -220,7 +222,7 @@ public:
     void set_finalized();
     void allocate_kernel_bin_buf_on_device(IDevice* device);
     bool is_cached() const { return this->cached_device_hash_.has_value(); }
-    ProgramBinaryStatus get_program_binary_status(chip_id_t device_id) const {
+    ProgramBinaryStatus get_program_binary_status(ChipId device_id) const {
         if (auto it = this->binaries_on_device_.find(device_id); it != this->binaries_on_device_.end()) {
             return it->second;
         }
@@ -228,7 +230,7 @@ public:
     }
     void set_cached(uint64_t device_hash) { this->cached_device_hash_ = device_hash; }
     const std::optional<uint64_t>& get_cached() const { return this->cached_device_hash_; }
-    void set_program_binary_status(chip_id_t device_id, ProgramBinaryStatus status);
+    void set_program_binary_status(ChipId device_id, ProgramBinaryStatus status);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
     ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
     const ProgramConfig& get_program_config(uint32_t programmable_core_type_index) const;
@@ -294,10 +296,10 @@ private:
     CommandQueue* last_used_command_queue_for_testing = nullptr;
 
     // Buffers temporarily owned by the program
-    std::vector<std::shared_ptr<Buffer>> owned_buffer_pool = {};
+    std::vector<std::shared_ptr<Buffer>> owned_buffer_pool;
 
     // The buffer that holds the kernel/binaries/etc for this program
-    std::unordered_map<chip_id_t, std::shared_ptr<Buffer>> kernels_buffer_;
+    std::unordered_map<ChipId, std::shared_ptr<Buffer>> kernels_buffer_;
     ProgramTransferInfo program_transfer_info;
 
     bool finalized_;
@@ -307,7 +309,7 @@ private:
 
     // TODO: Should map based on the hash of the configured sub-devices
     // This way we can cache it agnostic of the device
-    std::unordered_map<chip_id_t, std::unordered_map<SubDeviceManagerId, std::vector<SubDeviceId>>> sub_device_ids_;
+    std::unordered_map<ChipId, std::unordered_map<SubDeviceManagerId, std::vector<SubDeviceId>>> sub_device_ids_;
 
     struct CircularBufferAllocator {
         CircularBufferAllocator(const CoreRange& core_range_) : core_range(core_range_) {}
@@ -347,7 +349,7 @@ private:
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_cb_indices_;
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_local_cb_indices_;
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_remote_cb_indices_;
-    std::unordered_map<chip_id_t, ProgramBinaryStatus> binaries_on_device_;
+    std::unordered_map<ChipId, ProgramBinaryStatus> binaries_on_device_;
     // Used to generate circular buffer addresses. There is one CircularBufferAllocator per unique CoreRange
     std::vector<CircularBufferAllocator> cb_allocators_;
 

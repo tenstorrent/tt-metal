@@ -63,7 +63,13 @@ void validate_pool2d(
             std::numeric_limits<uint16_t>::max());
         auto kernel_h = sliding_window_config.window_hw.first;
         auto kernel_w = sliding_window_config.window_hw.second;
-        TT_FATAL(kernel_h * kernel_w == 9, "only kernel sizes equal to 9 are supported, got {}x{}", kernel_h, kernel_w);
+        TT_FATAL(
+            kernel_h * kernel_w <= 9,
+            "only kernel sizes less than or equal to 9 are supported, got {}x{}",
+            kernel_h,
+            kernel_w);
+
+        TT_FATAL(output_layout == Layout::ROW_MAJOR, "Only ROW_MAJOR supported when return_indices is true");
     }
 
     TT_FATAL(out_mem_config.is_sharded(), "Output memory config needs to be sharded");
@@ -80,22 +86,10 @@ void validate_pool2d(
             input_shape[3],
             num_shards_c);
     }
-
-    // check that the input shape isn't too large for indices in uint16
-    if (return_indices) {
-        auto in_h = sliding_window_config.input_hw.first;
-        auto in_w = sliding_window_config.input_hw.second;
-        TT_FATAL(
-            in_h * in_w <= std::numeric_limits<uint16_t>::max(),
-            "input HW shape ({} * {}) is too large for indices stored in uint16 with a limit of {}",
-            in_h,
-            in_w,
-            std::numeric_limits<uint16_t>::max());
-    }
 }
 
 void Pool2D::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
-    return validate_pool2d(
+    validate_pool2d(
         tensors.input_tensors_,
         op_attr.pool_type_,
         op_attr.sliding_window_config_,
@@ -106,7 +100,7 @@ void Pool2D::validate_on_program_cache_miss(const operation_attributes_t& op_att
 }
 
 void Pool2D::validate_on_program_cache_hit(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
-    return validate_pool2d(
+    validate_pool2d(
         tensors.input_tensors_,
         op_attr.pool_type_,
         op_attr.sliding_window_config_,
@@ -220,8 +214,8 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Pool2D::tensor_return_value_t
     int tensix_mul_adds_per_cycle_lofi = 2048;
 
     // Calculate output dimensions: relevant for window/stride based OPs (conv, pool, downsample)
-    int output_height = std::floor((activation_h - filter_h + pad_h) / stride_h + 1);
-    int output_width = std::floor((activation_w - filter_w + pad_w) / stride_w + 1);
+    int output_height = std::floor(((activation_h - filter_h + pad_h) / stride_h) + 1);
+    int output_width = std::floor(((activation_w - filter_w + pad_w) / stride_w) + 1);
 
     // Calculate number of mul/add / compare operations
     int64_t num_mul_adds_per_elem = activation_c * filter_h * filter_w;  // 1 multiply and 1 add per element
@@ -241,6 +235,7 @@ std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke
     DataType output_dtype,
     Layout output_layout,
     MemoryConfig memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
     bool return_indices,
@@ -252,6 +247,7 @@ std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke
             .output_dtype_ = output_dtype,
             .output_layout_ = output_layout,
             .memory_config_ = std::move(memory_config),
+            .compute_kernel_config_ = compute_kernel_config,
             .count_include_pad_ = count_include_pad,
             .divisor_override_ = divisor_override,
             .return_indices_ = return_indices,

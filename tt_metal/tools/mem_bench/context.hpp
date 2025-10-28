@@ -40,7 +40,7 @@ struct L1MemoryMap {
 };
 
 struct Context {
-    std::map<chip_id_t, IDevice*> devices;
+    std::map<ChipId, IDevice*> devices;
     L1MemoryMap device_address{};
     uint32_t total_size{0};
     uint32_t page_size{0};
@@ -51,7 +51,7 @@ struct Context {
     int iterations{0};
 
     Context(
-        const std::map<chip_id_t, IDevice*>& devices_,
+        const std::map<ChipId, IDevice*>& devices_,
         uint32_t total_size_,
         uint32_t page_size_,
         int threads_,

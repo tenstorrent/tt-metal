@@ -114,7 +114,7 @@ SetRuntimeArgs(program, unary_writer_kernel_id, core, { dst_dram_buffer->address
 Enqueue the program in a mesh workload (non-blocking), then wait for completion and read back results from shard `{0, 0}`.
 
 ```cpp
-distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+workload.add_program(device_range, std::move(program));
 distributed::EnqueueMeshWorkload(cq, workload, false);
 distributed::Finish(cq);
 

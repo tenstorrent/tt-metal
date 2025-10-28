@@ -67,8 +67,7 @@ bool load_all_blank_kernels(const std::shared_ptr<distributed::MeshDevice>& mesh
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
 
     CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", all_cores, tt::tt_metal::ComputeConfig{});
-    distributed::AddProgramToMeshWorkload(
-        mesh_workload, std::move(program), distributed::MeshCoordinateRange(mesh_device->shape()));
+    mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
     return pass;
 }
@@ -83,8 +82,8 @@ TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
     }
 
     ASSERT_TRUE(num_devices > 0);
-    vector<chip_id_t> ids;
-    for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
+    vector<ChipId> ids;
+    for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
         ids.push_back(id);
     }
     const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
@@ -102,8 +101,8 @@ TEST_P(DeviceParamFixture, TensixDeviceLoadBlankKernels) {
         GTEST_SKIP();
     }
     ASSERT_TRUE(num_devices > 0);
-    vector<chip_id_t> ids;
-    for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
+    vector<ChipId> ids;
+    for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
         ids.push_back(id);
     }
     const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();

@@ -50,7 +50,8 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core_2d(
     const Tensor& a,
     Tensor& output,
     LayerNormDistributedType norm_type,
-    DeviceComputeKernelConfig compute_kernel_config) {
+    DeviceComputeKernelConfig compute_kernel_config,
+    LayerNormDistributedDefaultProgramConfig program_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
@@ -159,8 +160,6 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core_2d(
 
     std::map<std::string, std::string> compute_defines;
 
-    compute_defines["RMSNORM"] = "1";
-
     auto reader_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
@@ -175,7 +174,9 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core_2d(
         merge_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::vector<uint32_t> compute_args = {tiles_per_core_x, tiles_per_core_y, block_size, cores_y};
+    bool float32_reduction = fp32_dest_acc_en && !program_config.legacy_reduction;
+    std::vector<uint32_t> compute_args = {
+        tiles_per_core_x, tiles_per_core_y, block_size, cores_y, float32_reduction ? 1 : 0};
 
     auto compute_kernels_id = CreateKernel(
         program,
@@ -238,7 +239,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core_2d(
 
             uint32_t num_tile_rows_per_core = tiles_per_core_x;
 
-            uint32_t in_tile_offset = x * Wt + y * tiles_per_core_y;
+            uint32_t in_tile_offset = (x * Wt) + (y * tiles_per_core_y);
             uint32_t out_tile_offset = x * out0_tiles;
 
             SetRuntimeArgs(
@@ -301,7 +302,8 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     Tensor& output,
     LayerNormDistributedType norm_type,
     DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<bool> use_2d_core_grid) {
+    std::optional<bool> use_2d_core_grid,
+    LayerNormDistributedDefaultProgramConfig program_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const bool is_rmsnorm = norm_type == LayerNormDistributedType::RMSNORM;
     const auto& shape = a.padded_shape();
@@ -325,7 +327,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     }
 
     if (use_2d_kernel) {
-        return layernorm_pre_allgather_multi_core_2d(a, output, norm_type, compute_kernel_config);
+        return layernorm_pre_allgather_multi_core_2d(a, output, norm_type, compute_kernel_config, program_config);
     }
 
     uint32_t num_tile_rows = NC * Ht;
@@ -432,10 +434,6 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
 
     std::map<std::string, std::string> compute_defines;
 
-    if (is_rmsnorm) {
-        compute_defines["RMSNORM"] = "1";
-    }
-
     auto reader_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
@@ -450,19 +448,21 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::vector<uint32_t> compute_args = {Wt, block_size};
+    bool float32_reduction = fp32_dest_acc_en && !program_config.legacy_reduction;
+    std::vector<uint32_t> compute_args = {Wt, block_size, float32_reduction ? 1 : 0};
 
-    auto compute_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
-        "layernorm_pre_allgather.cpp",
-        all_cores,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_args,
-            .defines = compute_defines});
+    auto compute_kernel_file =
+        is_rmsnorm ? "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/"
+                     "rmsnorm_pre_allgather.cpp"
+                   : "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
+                     "layernorm_pre_allgather.cpp";
+    auto compute_config = tt::tt_metal::ComputeConfig{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .math_approx_mode = math_approx_mode,
+        .compile_args = compute_args,
+        .defines = compute_defines};
+    auto compute_kernels_id = CreateKernel(program, compute_kernel_file, all_cores, compute_config);
 
     // Create circular buffers
     // c_in0 -> a

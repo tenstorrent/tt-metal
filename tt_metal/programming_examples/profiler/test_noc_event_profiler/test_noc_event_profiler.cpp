@@ -72,7 +72,7 @@ int main() {
             l1_buffer->size()};
         SetRuntimeArgs(program, dram_copy_kernel_id, core, runtime_args);
 
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         distributed::EnqueueMeshWorkload(cq, workload, false);
         distributed::Finish(cq);
 

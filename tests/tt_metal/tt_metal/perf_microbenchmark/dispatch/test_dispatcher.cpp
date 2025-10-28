@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <chrono>
 #include <fmt/base.h>
 #include <stdint.h>
@@ -249,7 +250,6 @@ void gen_linear_or_packed_write_test(
 
     bool done = false;
     while (!done && total_size_bytes < buffer_size) {
-        total_size_bytes += sizeof(CQDispatchCmd);
         if (debug_g) {
             total_size_bytes += sizeof(CQDispatchCmd);
         }
@@ -266,13 +266,10 @@ void gen_linear_or_packed_write_test(
                 }
 
                 xfer_size_bytes = xfer_size_16B << 4;
-                if (xfer_size_bytes > max_xfer_size_bytes_g) {
-                    xfer_size_bytes = max_xfer_size_bytes_g;
-                }
-                if (xfer_size_bytes < min_xfer_size_bytes_g) {
-                    xfer_size_bytes = min_xfer_size_bytes_g;
-                }
+                xfer_size_bytes = std::min(xfer_size_bytes, max_xfer_size_bytes_g);
+                xfer_size_bytes = std::max(xfer_size_bytes, min_xfer_size_bytes_g);
 
+                total_size_bytes += sizeof(CQDispatchCmdLarge);
                 if (is_linear_multicast) {
                     gen_dispatcher_multicast_write_cmd(
                         device, dispatch_cmds, worker_cores, device_data, xfer_size_bytes);
@@ -282,11 +279,16 @@ void gen_linear_or_packed_write_test(
                 }
                 break;
             }
-            case 4: gen_rnd_dispatcher_packed_write_cmd(device, dispatch_cmds, device_data); break;
+            case 4:
+                total_size_bytes += sizeof(CQDispatchCmd);
+                gen_rnd_dispatcher_packed_write_cmd(device, dispatch_cmds, device_data);
+                break;
             case 5:
+                total_size_bytes += sizeof(CQDispatchCmd);
                 done = gen_rnd_dispatcher_packed_write_large_cmd(
                     device, worker_cores, dispatch_cmds, device_data, buffer_size - total_size_bytes);
                 break;
+            default: TT_THROW("Invalid test_type_g {} in gen_linear_or_packed_write_test", test_type_g);
         }
 
         uint32_t page_size_words = page_size / sizeof(uint32_t);
@@ -325,12 +327,8 @@ void gen_paged_write_test(
 
     // Treat xfer size test in test as page write page size here. Keep consistend for all cmds.
     uint32_t page_size_bytes = xfer_size_16B << 4;
-    if (page_size_bytes > max_xfer_size_bytes_g) {
-        page_size_bytes = max_xfer_size_bytes_g;
-    }
-    if (page_size_bytes < min_xfer_size_bytes_g) {
-        page_size_bytes = min_xfer_size_bytes_g;
-    }
+    page_size_bytes = std::min(page_size_bytes, max_xfer_size_bytes_g);
+    page_size_bytes = std::max(page_size_bytes, min_xfer_size_bytes_g);
 
     log_info(
         tt::LogTest,
@@ -404,6 +402,7 @@ void gen_cmds(
         case 5:
             gen_linear_or_packed_write_test(cmd_count, device, dispatch_cmds, worker_cores, device_data, page_size);
             break;
+        default: TT_THROW("Invalid test_type_g {} in gen_cmds", test_type_g);
     }
 
     log_info(LogTest, "Generated {} commands", cmd_count);
@@ -484,7 +483,7 @@ int main(int argc, char** argv) {
             exit(-1);
         }
 
-        uint32_t dram_data_addr = l1_buf_base;
+        uint32_t dram_data_addr = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
         uint32_t l1_data_addr = l1_buf_base;
 
         // Separate Buffer space for paged write testing to not conflict with dispatch or prefetch buffers in L1
@@ -526,7 +525,6 @@ int main(int argc, char** argv) {
 
             auto range = 1 + max_paged_write_base_addr_g - min_paged_write_base_addr_g;
             // TODO: can we make these play better w/ the non-paged tests?
-            dram_data_addr = ((min_paged_write_base_addr_g + (std::rand() % range)) >> 4) << 4;
             l1_data_addr = ((min_paged_write_base_addr_g + (std::rand() % range)) >> 4) << 4;
         }
 
@@ -692,6 +690,7 @@ int main(int argc, char** argv) {
             case 3: log_info(LogTest, "Running paged {} test", is_paged_dram_test() ? "DRAM" : "L1"); break;
             case 4: log_info(LogTest, "Running packed write unicast"); break;
             case 5: log_info(LogTest, "Running packed write large unicast"); break;
+            default: TT_THROW("Invalid test_type_g {} in main", test_type_g);
         }
 
         log_info(LogTest, "Worker grid {}", all_workers_g.str());

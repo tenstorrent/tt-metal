@@ -292,7 +292,7 @@ const std::vector<uint32_t> field_values_pack_config_wormhole = {
 
 // Configuration for Data Flow Test involving Reader, Datacopy, and Writer
 struct ConfigRegPrintTestConfig {
-    CoreCoord core = {};
+    CoreCoord core;
     std::string write_kernel;
     std::string print_kernel;
     int num_of_registers;
@@ -387,7 +387,7 @@ static void print_config_reg(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
 
     // Prepare write kernel
     [[maybe_unused]] auto write_kernel = prepare_writer(workload, config);

@@ -38,7 +38,6 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "device/device_impl.hpp"
 #include "hal_types.hpp"
-#include "hal.hpp"
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
@@ -48,7 +47,7 @@
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include "tt-metalium/program.hpp"
 #include "program/program_impl.hpp"
-#include "semaphore.hpp"
+#include "impl/buffers/semaphore.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <tt_stl/enum.hpp>
@@ -359,8 +358,8 @@ std::string get_platform_architecture_name() {
     return tt::get_string_lowercase(tt::tt_metal::get_platform_architecture({}));
 }
 
-std::map<chip_id_t, IDevice*> CreateDevices(
-    const std::vector<chip_id_t>& device_ids,
+std::map<ChipId, IDevice*> CreateDevices(
+    const std::vector<ChipId>& device_ids,
     const uint8_t num_hw_cqs,
     const size_t l1_small_size,
     const size_t trace_region_size,
@@ -387,7 +386,7 @@ std::map<chip_id_t, IDevice*> CreateDevices(
         initialize_fabric_and_dispatch_fw);
 
     const auto devices = tt::DevicePool::instance().get_all_active_devices();
-    std::map<chip_id_t, IDevice*> ret_devices;
+    std::map<ChipId, IDevice*> ret_devices;
     // Only include the mmio device in the active devices set returned to the caller if we are not running
     // on a Galaxy cluster.
     // On Galaxy, gateway (mmio devices) cannot run compute workloads.
@@ -402,7 +401,7 @@ std::map<chip_id_t, IDevice*> CreateDevices(
     return ret_devices;
 }
 
-void CloseDevices(const std::map<chip_id_t, IDevice*>& devices) {
+void CloseDevices(const std::map<ChipId, IDevice*>& devices) {
     std::vector<IDevice*> devices_to_close;
     devices_to_close.reserve(devices.size());
     for (auto& [id, device] : devices) {
@@ -454,13 +453,13 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
         std::span<const std::uint8_t> page(host_buffer.data() + data_index, page_size);
         if (buffer.is_l1()) {
             auto absolute_address =
-                buffer.address() + bank_offset + mapped_page.device_page * buffer.aligned_page_size();
+                buffer.address() + bank_offset + (mapped_page.device_page * buffer.aligned_page_size());
             auto core_coordinates =
                 device->worker_core_from_logical_core(buffer.allocator()->get_logical_core_from_bank_id(bank_id));
             tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                 device->id(), core_coordinates, page, absolute_address);
         } else {
-            auto bank_local_address = buffer.address() + mapped_page.device_page * buffer.aligned_page_size();
+            auto bank_local_address = buffer.address() + (mapped_page.device_page * buffer.aligned_page_size());
             WriteToDeviceDRAMChannel(device, bank_id, bank_local_address, page);
         }
     }
@@ -590,13 +589,13 @@ void read_pages_to_host_helper(
         auto core_coordinates =
             device->worker_core_from_logical_core(dev_buffer.allocator()->get_logical_core_from_bank_id(bank_id));
         auto bank_offset = device->allocator()->get_bank_offset(dev_buffer.buffer_type(), bank_id);
-        auto absolute_address = dev_buffer.address() + bank_offset + core_page_id * dev_buffer.aligned_page_size();
+        auto absolute_address = dev_buffer.address() + bank_offset + (core_page_id * dev_buffer.aligned_page_size());
         tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             host_buffer + host_buffer_start, page_size, tt_cxy_pair(device->id(), core_coordinates), absolute_address);
     } else {
         std::vector<uint32_t> page;
         page.resize(page_size / sizeof(uint32_t));
-        auto bank_local_address = dev_buffer.address() + core_page_id * dev_buffer.aligned_page_size();
+        auto bank_local_address = dev_buffer.address() + (core_page_id * dev_buffer.aligned_page_size());
         ReadFromDeviceDRAMChannel(device, bank_id, bank_local_address, page_size, page);
         std::memcpy(host_buffer + host_buffer_start, page.data(), page_size);
     }
@@ -816,8 +815,8 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         }
                         for (uint32_t buffer_index : circular_buffer->remote_buffer_indices()) {
                             uint32_t base_index =
-                                remote_offset_index + (NUM_CIRCULAR_BUFFERS - 1 - buffer_index) *
-                                                          UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG;
+                                remote_offset_index + ((NUM_CIRCULAR_BUFFERS - 1 - buffer_index) *
+                                                       UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                             uint32_t config_address = circular_buffer->config_address();
                             circular_buffer_config_vec[base_index] = config_address;
                             circular_buffer_config_vec[base_index + 1] = circular_buffer->page_size(buffer_index);
@@ -924,7 +923,7 @@ bool IsGalaxyCluster() { return tt::tt_metal::MetalContext::instance().get_clust
 
 size_t GetNumPCIeDevices() { return tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices(); }
 
-chip_id_t GetPCIeDeviceID(chip_id_t device_id) {
+ChipId GetPCIeDeviceID(ChipId device_id) {
     return tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
 }
 
@@ -935,8 +934,11 @@ std::string SerializeClusterDescriptor() {
     return path.string();
 }
 
+// This function is used to set a default root directory for the tt_metal library.
+void SetRootDir(const std::string& root_dir) { tt::llrt::RunTimeOptions::set_root_dir(root_dir); }
+
 IDevice* CreateDevice(
-    chip_id_t device_id,
+    ChipId device_id,
     const uint8_t num_hw_cqs,
     const size_t l1_small_size,
     const size_t trace_region_size,
@@ -971,7 +973,7 @@ IDevice* CreateDevice(
 }
 
 IDevice* CreateDeviceMinimal(
-    chip_id_t device_id, const uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
+    ChipId device_id, const uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
     ZoneScoped;
     tt::tt_metal::MetalContext::instance().initialize(
         dispatch_core_config, num_hw_cqs, {}, DEFAULT_L1_SMALL_SIZE, true);
@@ -1274,7 +1276,6 @@ void SetRuntimeArgs(
     stl::Span<const uint32_t> runtime_args) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32, program, kernel_id, core_spec, runtime_args);
-    ZoneScoped;
     std::visit([&](auto&& core_spec) { SetRuntimeArgsImpl(program, kernel_id, core_spec, runtime_args); }, core_spec);
 }
 

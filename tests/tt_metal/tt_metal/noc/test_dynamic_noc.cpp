@@ -153,10 +153,8 @@ void build_and_run_program(
     }
     distributed::MeshWorkload workload1;
     distributed::MeshWorkload workload2;
-    distributed::AddProgramToMeshWorkload(
-        workload1, std::move(program1), distributed::MeshCoordinateRange(device->shape()));
-    distributed::AddProgramToMeshWorkload(
-        workload2, std::move(program2), distributed::MeshCoordinateRange(device->shape()));
+    workload1.add_program(distributed::MeshCoordinateRange(device->shape()), std::move(program1));
+    workload2.add_program(distributed::MeshCoordinateRange(device->shape()), std::move(program2));
 
     // This loop caches program1 and runs
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {

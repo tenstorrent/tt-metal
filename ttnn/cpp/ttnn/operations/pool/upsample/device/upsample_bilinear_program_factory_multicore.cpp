@@ -135,7 +135,11 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
         "Output sticks per shard {} should be same as output sticks per core {}",
         out_nsticks_per_core,
         output_nsticks_per_core);
-    TT_FATAL(input_nsticks_per_core % in_w == 0, "Error");
+    TT_FATAL(
+        input_nsticks_per_core % in_w == 0,
+        "Input sticks per core ({}) must be divisible by input width ({})",
+        input_nsticks_per_core,
+        in_w);
 
     // creating halo input tensor
     auto halo_in = HaloTensorCreation(input);
@@ -212,8 +216,8 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     // computation needed for the bilinear kernel. Passing them as an argument.
     float scale_h_inv = 1.0f / (float)scale_factor_h;
     float scale_w_inv = 1.0f / (float)scale_factor_w;
-    float y_index = (float)(0.5f) * (float)scale_h_inv + 0.5f;
-    float x_index_compute = (float)(0.5f) * (float)scale_w_inv - 0.5f;
+    float y_index = ((float)(0.5f) * (float)scale_h_inv) + 0.5f;
+    float x_index_compute = ((float)(0.5f) * (float)scale_w_inv) - 0.5f;
 
     uint32_t scale_h_inv_u32 = *reinterpret_cast<uint32_t*>(&scale_h_inv);
     uint32_t scale_w_inv_u32 = *reinterpret_cast<uint32_t*>(&scale_w_inv);

@@ -21,9 +21,9 @@ namespace unit_tests::dm::core_from_all {
 struct OneFromAllConfig {
     uint32_t test_id = 0;
 
-    CoreCoord master_core_coord = CoreCoord();
-    CoreCoord sub_start_core_coord = CoreCoord();
-    CoreCoord sub_grid_size = CoreCoord();
+    CoreCoord master_core_coord;
+    CoreCoord sub_start_core_coord;
+    CoreCoord sub_grid_size;
 
     uint32_t num_of_transactions = 0;
     uint32_t transaction_size_pages = 0;
@@ -138,7 +138,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
     auto mesh_workload = distributed::MeshWorkload();
     vector<uint32_t> coord_data = {0, 0};
     auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));
-    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+    mesh_workload.add_program(target_devices, std::move(program));
 
     auto& cq = mesh_device->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);

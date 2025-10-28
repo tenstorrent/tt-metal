@@ -816,6 +816,47 @@ TEST(MeshContainerIteratorTraitsTest, STLAlgorithmsCompatibility) {
     EXPECT_TRUE(none_greater_than_10);
 }
 
+TEST(MeshCoordinateRangeTest, Wraparound2D_BasicIterationAndShape) {
+    // 4x4 mesh; wraparound range from (3,3) to (0,0) should cover a 2x2 area with wrap.
+    MeshShape shape(4, 4);
+    MeshCoordinateRange range(MeshCoordinate(3, 3), MeshCoordinate(0, 0), shape);
+
+    // Iteration order is row-major starting from start coord, wrapping in each dimension.
+    std::vector<MeshCoordinate> coords;
+    for (const auto& c : range) {
+        coords.push_back(c);
+    }
+    EXPECT_THAT(
+        coords,
+        ElementsAre(
+            MeshCoordinate(3, 3),  // start
+            MeshCoordinate(3, 0),  // wrap column
+            MeshCoordinate(0, 3),  // wrap row
+            MeshCoordinate(0, 0)));
+
+    // Shape should reflect the minimal circular span per dimension.
+    EXPECT_EQ(range.shape(), MeshShape(2, 2));
+
+    // Contains the four points and excludes an outside point.
+    EXPECT_TRUE(range.contains(MeshCoordinate(3, 3)));
+    EXPECT_TRUE(range.contains(MeshCoordinate(3, 0)));
+    EXPECT_TRUE(range.contains(MeshCoordinate(0, 3)));
+    EXPECT_TRUE(range.contains(MeshCoordinate(0, 0)));
+    EXPECT_FALSE(range.contains(MeshCoordinate(2, 2)));
+}
+
+TEST(MeshCoordinateRangeTest, Wraparound2D_IntersectionWithNonWrapped) {
+    MeshShape shape(4, 4);
+    MeshCoordinateRange wrapped(MeshCoordinate(3, 3), MeshCoordinate(0, 0), shape);
+    MeshCoordinateRange single(MeshCoordinate(0, 0), MeshCoordinate(0, 0));
+
+    ASSERT_TRUE(wrapped.intersects(single));
+    auto inter = wrapped.intersection(single);
+    ASSERT_TRUE(inter.has_value());
+    EXPECT_TRUE(inter->contains(MeshCoordinate(0, 0)));
+    EXPECT_EQ(inter->shape().mesh_size(), 1u);
+}
+
 TEST(GetNeighborTest, Basic1D) {
     MeshShape shape(5);
     MeshCoordinate coord(2);
@@ -1003,6 +1044,110 @@ TEST(GetNeighborTest, OutOfBoundsInputCoordinate) {
     MeshCoordinate out_of_bounds3(5, 10);
     EXPECT_ANY_THROW(out_of_bounds3.get_neighbor(shape, 0, 0, MeshCoordinate::BoundaryMode::WRAP));
 }
+
+TEST(MeshCoordinateRangeTest, Wraparound1D_BasicIterationAndShape) {
+    MeshShape shape(5);
+    MeshCoordinateRange range(MeshCoordinate(4), MeshCoordinate(1), shape);
+    std::vector<MeshCoordinate> coords;
+    for (const auto& c : range) {
+        coords.push_back(c);
+    }
+    EXPECT_THAT(coords, ElementsAre(MeshCoordinate(4), MeshCoordinate(0), MeshCoordinate(1)));
+    EXPECT_EQ(range.shape(), MeshShape(3));
+    EXPECT_TRUE(range.contains(MeshCoordinate(4)));
+    EXPECT_TRUE(range.contains(MeshCoordinate(0)));
+    EXPECT_TRUE(range.contains(MeshCoordinate(1)));
+    EXPECT_FALSE(range.contains(MeshCoordinate(2)));
+    EXPECT_FALSE(range.contains(MeshCoordinate(3)));
+}
+
+TEST(MeshCoordinateRangeTest, Wraparound1D_FullWrap) {
+    MeshShape shape(5);
+    MeshCoordinateRange range(MeshCoordinate(1), MeshCoordinate(0), shape);
+    std::vector<MeshCoordinate> coords;
+    for (const auto& c : range) {
+        coords.push_back(c);
+    }
+    EXPECT_THAT(
+        coords,
+        ElementsAre(MeshCoordinate(1), MeshCoordinate(2), MeshCoordinate(3), MeshCoordinate(4), MeshCoordinate(0)));
+    EXPECT_EQ(range.shape(), MeshShape(5));
+    // Since full wrap, contains all
+    for (uint32_t i = 0; i < 5; ++i) {
+        EXPECT_TRUE(range.contains(MeshCoordinate(i)));
+    }
+}
+
+TEST(MeshCoordinateRangeTest, Wraparound2D_PartialWrap) {
+    MeshShape shape(4, 4);
+    MeshCoordinateRange range(MeshCoordinate(1, 3), MeshCoordinate(2, 1), shape);
+    std::vector<MeshCoordinate> coords;
+    for (const auto& c : range) {
+        coords.push_back(c);
+    }
+    EXPECT_THAT(
+        coords,
+        ElementsAre(
+            MeshCoordinate(1, 3),
+            MeshCoordinate(1, 0),
+            MeshCoordinate(1, 1),
+            MeshCoordinate(2, 3),
+            MeshCoordinate(2, 0),
+            MeshCoordinate(2, 1)));
+    EXPECT_EQ(range.shape(), MeshShape(2, 3));
+    EXPECT_TRUE(range.contains(MeshCoordinate(1, 3)));
+    EXPECT_TRUE(range.contains(MeshCoordinate(2, 1)));
+    EXPECT_FALSE(range.contains(MeshCoordinate(1, 2)));
+    EXPECT_FALSE(range.contains(MeshCoordinate(0, 0)));
+    EXPECT_FALSE(range.contains(MeshCoordinate(3, 3)));
+}
+
+TEST(MeshCoordinateRangeTest, Wraparound3D_BasicIterationAndShape) {
+    MeshShape shape(3, 4, 5);
+    MeshCoordinateRange range(MeshCoordinate(2, 3, 4), MeshCoordinate(0, 1, 2), shape);
+    std::vector<MeshCoordinate> coords;
+    for (const auto& c : range) {
+        coords.push_back(c);
+    }
+    EXPECT_EQ(coords.size(), 2 * 3 * 4);  // lengths 2,3,4
+    EXPECT_EQ(range.shape(), MeshShape(2, 3, 4));
+    EXPECT_TRUE(range.contains(MeshCoordinate(2, 3, 4)));
+    EXPECT_TRUE(range.contains(MeshCoordinate(0, 1, 2)));
+    EXPECT_FALSE(range.contains(MeshCoordinate(1, 2, 3)));  // Assuming not in range
+}
+
+TEST(MeshCoordinateRangeTest, Wraparound3D_Intersection) {
+    MeshShape shape(5, 5, 5);
+    MeshCoordinateRange a(MeshCoordinate(4, 4, 4), MeshCoordinate(1, 1, 1), shape);
+    MeshCoordinateRange b(MeshCoordinate(0, 0, 0), MeshCoordinate(3, 3, 3), shape);
+    auto inter_opt = a.intersection(b);
+    ASSERT_TRUE(inter_opt.has_value());
+    auto& inter = inter_opt.value();
+    // Check bounding range contains intersecting points (overapprox ok)
+    EXPECT_TRUE(inter.contains(MeshCoordinate(0, 0, 0)));
+    EXPECT_TRUE(inter.contains(MeshCoordinate(1, 1, 1)));
+    // May contain extra, but verify shape or something
+    EXPECT_GE(inter.shape().mesh_size(), 8);  // At least 2^3 for corners
+}
+
+TEST(MeshCoordinateRangeTest, Wraparound4D_BasicIterationAndShape) {
+    MeshShape shape({2, 3, 4, 5});
+    MeshCoordinateRange range(
+        MeshCoordinate(std::vector<uint32_t>{1, 2, 3, 4}), MeshCoordinate(std::vector<uint32_t>{0, 1, 0, 1}), shape);
+    std::vector<MeshCoordinate> coords;
+    for (const auto& c : range) {
+        coords.push_back(c);
+    }
+    EXPECT_EQ(
+        coords.size(), 2 * 3 * 2 * 3);  // lengths: dim0: (1 to 0) -> (2-1)+(0+1)=2, dim1: (2 to 1) -> (3-2)+(1+1)=3,
+                                        // dim2: (3 to 0) -> (4-3)+(0+1)=2, dim3: (4 to 1) -> (5-4)+(1+1)=3
+    EXPECT_EQ(range.shape(), MeshShape({2, 3, 2, 3}));
+    EXPECT_TRUE(range.contains(MeshCoordinate(std::vector<uint32_t>{1, 2, 3, 4})));
+    EXPECT_TRUE(range.contains(MeshCoordinate(std::vector<uint32_t>{0, 1, 0, 1})));
+    EXPECT_FALSE(range.contains(MeshCoordinate(std::vector<uint32_t>{0, 0, 2, 2})));
+}
+
+// Add more detailed assertions as needed
 
 }  // namespace
 }  // namespace tt::tt_metal::distributed

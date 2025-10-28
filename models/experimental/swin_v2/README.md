@@ -9,7 +9,6 @@ Swin Transformer v2 builds upon the original Swin Transformer to tackle key chal
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-  - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
 - Login to huggingface with: `huggingface-cli login` or by setting the token with the command `export HF_TOKEN=<token>`
    - To obtain a huggingface token visit: https://huggingface.co/docs/hub/security-tokens
 
@@ -23,14 +22,14 @@ Swin Transformer v2 builds upon the original Swin Transformer to tackle key chal
 
 #### Single Device (BS=1):
 
-- For `512x512` resolution, end-2-end perf is `7` FPS
+- For `512x512` resolution, end-2-end perf is `16` FPS
 
     ```sh
     pytest models/experimental/swin_v2/tests/perf/test_e2e_performant.py::test_e2e_performant
     ```
 #### Multi Device (DP=2, N300):
 
-- For `512x512` resolution, end-2-end perf is `14` FPS
+- For `512x512` resolution, end-2-end perf is `32` FPS
 
     ```sh
     pytest models/experimental/swin_v2/tests/perf/test_e2e_performant.py::test_e2e_performant_dp

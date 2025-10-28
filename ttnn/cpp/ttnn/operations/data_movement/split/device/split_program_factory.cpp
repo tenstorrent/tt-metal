@@ -38,10 +38,10 @@ void setup_runtime(
 
     for (int id_r_outer = 0; id_r_outer < z; id_r_outer++) {
         for (int id_r_inner = 0; id_r_inner < num_cores_x; id_r_inner++) {
-            uint32_t id_r = id_r_outer * num_cores_x + id_r_inner;
+            uint32_t id_r = (id_r_outer * num_cores_x) + id_r_inner;
 
             uint32_t id_r_reader =
-                id_r_outer * num_tiles_per_z + id_r_inner * per_core_tiles_y * num_cores_c * per_core_tiles_x;
+                (id_r_outer * num_tiles_per_z) + (id_r_inner * per_core_tiles_y * num_cores_c * per_core_tiles_x);
             uint32_t id_r_writer = id_r_reader / 2;
             if (num_cores_c > 1) {
                 idc_outer_limit = 2;
@@ -49,7 +49,7 @@ void setup_runtime(
             }
             for (int id_c_outer = 0; id_c_outer < idc_outer_limit; id_c_outer++) {
                 for (int id_c_inner = 0; id_c_inner < idc_inner_limit; id_c_inner++) {
-                    uint32_t id_c = id_c_outer * idc_inner_limit + id_c_inner;
+                    uint32_t id_c = (id_c_outer * idc_inner_limit) + id_c_inner;
                     CoreCoord core = {(std::size_t)start_core_x + id_r, (std::size_t)start_core_y + id_c};
 
                     uint32_t reader_core_id = id_c * per_core_tiles_y;
@@ -67,7 +67,7 @@ void setup_runtime(
                         out1_only = (id_c_outer == 1);
                     }
 
-                    uint32_t writer_core_id = id_c_inner * per_core_tiles_y + (id_r_writer);
+                    uint32_t writer_core_id = (id_c_inner * per_core_tiles_y) + (id_r_writer);
 
                     const std::array writer_runtime_args = {
                         writer_core_id,
@@ -101,7 +101,11 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     tt::tt_metal::Buffer* in0_buffer = input_tensor.buffer();
 
     // Output buffers
-    TT_FATAL(output_tensors.size() == num_chunks, "Error");
+    TT_FATAL(
+        output_tensors.size() == num_chunks,
+        "Number of output tensors ({}) must equal number of chunks ({})",
+        output_tensors.size(),
+        num_chunks);
     tt::tt_metal::Tensor& out0 = output_tensors[0];
     tt::tt_metal::Tensor& out1 = output_tensors[1];
 

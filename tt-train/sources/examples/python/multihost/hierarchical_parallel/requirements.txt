@@ -1,0 +1,6 @@
+datasets
+transformers
+tqdm
+numpy
+loguru
+pydantic

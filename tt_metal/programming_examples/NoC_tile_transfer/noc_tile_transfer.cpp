@@ -110,7 +110,7 @@ int main() {
     SetRuntimeArgs(program, core1_writer_kernel_id, core1, {dst_dram_buffer->address()});
 
     // Program enqueue (non-blocking). Wait for completion before reading back.
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 

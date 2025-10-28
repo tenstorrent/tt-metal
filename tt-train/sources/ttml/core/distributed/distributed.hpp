@@ -6,7 +6,6 @@
 
 #include <core/ttnn_all_includes.hpp>
 
-#include "autograd/auto_context.hpp"
 #include "serialization/serializable.hpp"
 
 namespace ttml::core::distributed {

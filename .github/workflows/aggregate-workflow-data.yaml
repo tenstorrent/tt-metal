@@ -4,7 +4,7 @@ on:
     branches:
       - mchiou/0-aggregate-workflow-report
   schedule:
-    - cron: '0 * * * *' # every hour
+    - cron: '*/15 * * * *' # every 15 minutes
   workflow_dispatch:
     inputs:
       days:
@@ -17,6 +17,14 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       cache-path: ${{ steps.fetch.outputs.cache-path }}
+      commits-path: ${{ steps.fetch.outputs.commits-path }}
+      annotations-root: ${{ steps.fetch.outputs.annotations-root }}
+      annotations-index-path: ${{ steps.fetch.outputs.annotations-index-path }}
+      gtest-logs-root: ${{ steps.fetch.outputs.gtest-logs-root }}
+      gtest-logs-index-path: ${{ steps.fetch.outputs.gtest-logs-index-path }}
+      other-logs-root: ${{ steps.fetch.outputs.other-logs-root }}
+      other-logs-index-path: ${{ steps.fetch.outputs.other-logs-index-path }}
+      last-success-timestamps-path: ${{ steps.fetch.outputs.last-success-timestamps-path }}
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
 
@@ -37,6 +45,47 @@ jobs:
           path: ${{ github.workspace }}/workflow-data.json
           retention-days: 1
 
+      - name: Upload annotations artifact (if any)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
+        with:
+          name: workflow-annotations
+          path: |
+            ${{ steps.fetch.outputs.annotations-root }}/
+            ${{ steps.fetch.outputs.annotations-index-path }}
+          retention-days: 1
+
+      - name: Upload commits artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
+        with:
+          name: commits-main
+          path: ${{ steps.fetch.outputs.commits-path }}
+          retention-days: 1
+
+      - name: Upload gtest logs artifact (if any)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
+        with:
+          name: workflow-gtest-logs
+          path: |
+            ${{ steps.fetch.outputs.gtest-logs-root }}/
+            ${{ steps.fetch.outputs.gtest-logs-index-path }}
+          retention-days: 1
+
+      - name: Upload other logs artifact (if any)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
+        with:
+          name: workflow-other-logs
+          path: |
+            ${{ steps.fetch.outputs.other-logs-root }}/
+            ${{ steps.fetch.outputs.other-logs-index-path }}
+          retention-days: 1
+
+      - name: Upload last success timestamps artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
+        with:
+          name: last-success-timestamps
+          path: ${{ steps.fetch.outputs.last-success-timestamps-path }}
+          retention-days: 1
+
       - name: Debug cache file
         run: ls -l ${{ github.workspace }}/workflow-data.json || echo "File not found"
 
@@ -45,6 +94,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       failed_workflows: ${{ steps.analyze.outputs.failed_workflows }}
+      regressed_workflows: ${{ steps.analyze.outputs.regressed_workflows }}
+      alert_all_message: ${{ steps.analyze.outputs.alert_all_message }}
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
       - name: Discover previous successful run id
@@ -61,9 +112,9 @@ jobs:
               workflow_id,
               branch: 'main',
               status: 'completed',
-              per_page: 2
+              per_page: 10
             });
-            const runs = (resp.data.workflow_runs || []).filter(r => r.event === 'schedule');
+            const runs = (resp.data.workflow_runs || []).filter(r => r.event === 'schedule' && r.conclusion === 'success');
             const run = runs[0];
             const selectedId = run ? String(run.id) : '';
             core.info(`Selected previous run id: ${selectedId || 'none'}`);
@@ -102,6 +153,31 @@ jobs:
         with:
           name: workflow-data
           path: ${{ github.workspace }}
+      - name: Download annotations (if any)
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          name: workflow-annotations
+          path: ${{ github.workspace }}/annotations
+      - name: Download gtest logs (if any)
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          name: workflow-gtest-logs
+          path: ${{ github.workspace }}/logs/gtest
+      - name: Download other logs (if any)
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          name: workflow-other-logs
+          path: ${{ github.workspace }}/logs/other
+      - name: Download commits index
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          name: commits-main
+          path: ${{ github.workspace }}
+      - name: Download last success timestamps
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          name: last-success-timestamps
+          path: ${{ github.workspace }}
       - name: Analyze workflow data
         id: analyze
         uses: ./.github/actions/analyze-workflow-data
@@ -110,6 +186,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           cache-path: ${{ github.workspace }}/workflow-data.json
           previous-cache-path: ${{ github.workspace }}/prev/workflow-data.json
+          annotations-index-path: ${{ github.workspace }}/annotations/annotations-index.json
+          commits-path: ${{ github.workspace }}/commits-main.json
+          gtest-logs-index-path: ${{ github.workspace }}/logs/gtest/gtest-logs-index.json
+          other-logs-index-path: ${{ github.workspace }}/logs/other/other-logs-index.json
+          last-success-timestamps-path: ${{ github.workspace }}/last-success-timestamps.json
+          alert-all: 'false'
           workflow_configs: |
             [
               {"display": "All post-commit tests", "wkflw_name": "All post-commit tests"},
@@ -132,20 +214,22 @@ jobs:
           path: ${{ steps.analyze.outputs.status_changes_path }}
           retention-days: 1
 
-      - name: Post regressions to Slack
-        if: ${{ steps.analyze.outputs.regressed_workflows != '[]' }}
-        uses: ./.github/actions/slack-report-analyze-workflow-data
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_AGGREGATE_PIPELINE_STATUS_ALERT }}
-          regressed_workflows: ${{ steps.analyze.outputs.regressed_workflows }}
+      # Slack notification moved to handle-failures job
 
   handle-failures:
     needs: analyze-data
     if: ${{ fromJson(needs.analyze-data.outputs.failed_workflows) != '[]' }}
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
       - name: Handle failed workflows
         run: |
           echo "The following workflows have failed:"
           echo '${{ needs.analyze-data.outputs.failed_workflows }}' | jq -r '.[]'
           # Add any additional failure handling steps here
+      - name: Post regressions to Slack
+        uses: ./.github/actions/slack-report-analyze-workflow-data
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_AGGREGATE_PIPELINE_STATUS_ALERT }}
+          regressed_workflows: ${{ needs.analyze-data.outputs.regressed_workflows }}
+          alert_all_message: ${{ needs.analyze-data.outputs.alert_all_message }}

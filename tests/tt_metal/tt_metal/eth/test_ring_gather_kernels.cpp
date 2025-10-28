@@ -38,6 +38,7 @@
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/xy_pair.hpp>
+#include "eth_test_common.hpp"
 
 using std::vector;
 using namespace tt;
@@ -232,10 +233,10 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
     std::vector<std::vector<uint32_t>> inputs;
     inputs.reserve(sender_receivers.size());
     std::vector<uint32_t> all_zeros(numel * sender_receivers.size(), 0);
-    std::map<chip_id_t, tt_metal::Program> programs;
+    std::map<ChipId, tt_metal::Program> programs;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    std::map<chip_id_t, distributed::MeshWorkload> workloads;
+    std::map<ChipId, distributed::MeshWorkload> workloads;
     std::vector<uint32_t> full_input;
     full_input.reserve(numel * sender_receivers.size());
 
@@ -259,17 +260,19 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
                 sender_receiver_core = sender_device->ethernet_core_from_logical_core(std::get<3>(sender_receivers[j]));
             }
         }
+        auto sender_ethernet_config = tt_metal::EthernetConfig{
+            .noc = tt_metal::NOC::NOC_0,
+            .compile_args = {
+                uint32_t(num_bytes_per_send),
+                uint32_t(num_bytes_per_send >> 4),
+                uint32_t(sender_receiver_core.x),
+                uint32_t(sender_receiver_core.y)}};
+        eth_test_common::set_arch_specific_eth_config(sender_ethernet_config);
         auto eth_sender_kernel = tt_metal::CreateKernel(
             sender_program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_ring_gather_send.cpp",
             eth_sender_core,
-            tt_metal::EthernetConfig{
-                .noc = tt_metal::NOC::NOC_0,
-                .compile_args = {
-                    uint32_t(num_bytes_per_send),
-                    uint32_t(num_bytes_per_send >> 4),
-                    uint32_t(sender_receiver_core.x),
-                    uint32_t(sender_receiver_core.y)}});
+            sender_ethernet_config);
 
         tt_metal::SetRuntimeArgs(
             sender_program,
@@ -287,7 +290,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
             sender_device->id(),
             sender_device->ethernet_core_from_logical_core(eth_sender_core),
             inputs[i],
-            src_eth_l1_byte_address + i * byte_size_per_device);
+            src_eth_l1_byte_address + (i * byte_size_per_device));
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             sender_device->id(),
             sender_device->ethernet_core_from_logical_core(eth_sender_core),
@@ -316,15 +319,15 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
             receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
             std::vector{INVALID},
             sem_l1_byte_address);
+        auto receiver_ethernet_config = tt_metal::EthernetConfig{
+            .noc = tt_metal::NOC::NOC_1,
+            .compile_args = {uint32_t(receiver_sender_core.x), uint32_t(receiver_sender_core.y)}};
+        eth_test_common::set_arch_specific_eth_config(receiver_ethernet_config);
         auto eth_receiver_kernel = tt_metal::CreateKernel(
             receiver_program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_ring_gather_receive.cpp",
             eth_receiver_core,
-            tt_metal::EthernetConfig{
-                .noc = tt_metal::NOC::NOC_1,
-                .compile_args = {
-                    uint32_t(receiver_sender_core.x),
-                    uint32_t(receiver_sender_core.y)}});  // probably want to use NOC_1 here
+            receiver_ethernet_config);
 
         tt_metal::SetRuntimeArgs(
             receiver_program,
@@ -341,10 +344,8 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
     ths.reserve(sender_receivers.size());
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
         const auto& device = std::get<0>(sender_receivers[i]);
-        distributed::AddProgramToMeshWorkload(
-            workloads[device->get_devices()[0]->id()],
-            std::move(programs[device->get_devices()[0]->id()]),
-            device_range);
+        workloads[device->get_devices()[0]->id()].add_program(
+            device_range, std::move(programs[device->get_devices()[0]->id()]));
         ths.emplace_back([&] {
             distributed::EnqueueMeshWorkload(
                 device->mesh_command_queue(), workloads[device->get_devices()[0]->id()], false);
@@ -389,8 +390,8 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
     std::vector<std::vector<uint32_t>> inputs;
     inputs.reserve(sender_receivers.size());
     std::vector<uint32_t> all_zeros(numel * sender_receivers.size(), 0);
-    std::map<chip_id_t, tt_metal::Program> programs;
-    std::map<chip_id_t, distributed::MeshWorkload> workloads;
+    std::map<ChipId, tt_metal::Program> programs;
+    std::map<ChipId, distributed::MeshWorkload> workloads;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     std::vector<uint32_t> full_input;
@@ -500,10 +501,8 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
     ths.reserve(sender_receivers.size());
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
         const auto& device = std::get<0>(sender_receivers[i]);
-        distributed::AddProgramToMeshWorkload(
-            workloads[device->get_devices()[0]->id()],
-            std::move(programs[device->get_devices()[0]->id()]),
-            device_range);
+        workloads[device->get_devices()[0]->id()].add_program(
+            device_range, std::move(programs[device->get_devices()[0]->id()]));
         ths.emplace_back([&] {
             distributed::EnqueueMeshWorkload(
                 device->mesh_command_queue(), workloads[device->get_devices()[0]->id()], false);

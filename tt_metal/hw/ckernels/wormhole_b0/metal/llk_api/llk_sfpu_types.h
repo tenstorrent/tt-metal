@@ -84,6 +84,8 @@ enum class SfpuType {
     mul_int32,
     lt,
     gt,
+    ge,
+    le,
     topk_local_sort,
     topk_merge,
     topk_rebuild,
@@ -128,4 +130,5 @@ enum class SfpuType {
     selu,
     rpow,
     cbrt,  // cube root
+    hardmish,
 };

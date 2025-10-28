@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "height_sharded_reader_common.hpp"
+#include "conv_reader_common.hpp"
 
 void kernel_main() {
     constexpr uint32_t dilation_h = get_compile_time_arg_val(0);
@@ -28,7 +28,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
 
-    uint32_t core_index = get_arg_val<uint32_t>(0);
+    uint32_t runtime_arg_idx = 0;
+    uint32_t core_index = get_arg_val<uint32_t>(runtime_arg_idx++);
     load_config_tensor_if_in_dram<27, 28, 29, cb_reader_indices>(core_index);
 
 #ifdef ACTIVATION_REUSE
@@ -41,7 +42,7 @@ void kernel_main() {
     constexpr bool need_to_push_remaining_tiles = get_compile_time_arg_val(36) == 1;
     constexpr bool single_core_processes_multiple_batches = get_compile_time_arg_val(37) == 1;
 
-    uint32_t remaining_tiles_to_push = get_arg_val<uint32_t>(0);
+    uint32_t remaining_tiles_to_push = get_arg_val<uint32_t>(runtime_arg_idx++);
 #endif
 
 
@@ -80,6 +81,7 @@ void kernel_main() {
     for (uint32_t bh = 0; bh < act_num_blocks_h; bh++) {
 #ifdef ACTIVATION_REUSE
         uint32_t l1_write_addr_act = cb_start_addr;
+        get_local_cb_interface(cb_id_act).fifo_wr_ptr = l1_write_addr_act;
 #endif
         uint32_t reader_offset = act_l1_read_addr;
         for (uint32_t outer = 0; outer < window_outer; outer++) {

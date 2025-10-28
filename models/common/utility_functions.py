@@ -665,6 +665,92 @@ def comp_ulp(golden, calculated, ulp_threshold, allow_nonfinite=False):
     return (ulp_delta <= ulp_threshold, f"Max ULP Delta: {ulp_delta}")
 
 
+def calculate_detailed_ulp_stats(expected, actual):
+    """
+    Calculate detailed ULP statistics for analysis.
+
+    Returns:
+        dict: Dictionary with ULP statistics including max, mean, std, and percentiles
+    """
+    if isinstance(actual, ttnn.Tensor):
+        actual = ttnn.to_torch(actual)
+    if isinstance(expected, ttnn.Tensor):
+        expected = ttnn.to_torch(expected)
+
+    # Convert to bfloat16 if not already
+    expected = expected.to(torch.bfloat16)
+    actual = actual.to(torch.bfloat16)
+
+    # Handle special cases
+    if torch.allclose(expected, actual, rtol=0, atol=0, equal_nan=True):
+        return {
+            "max_ulp": 0.0,
+            "mean_ulp": 0.0,
+            "median_ulp": 0.0,
+            "std_ulp": 0.0,
+            "p95_ulp": 0.0,
+            "p99_ulp": 0.0,
+            "perfect_matches": 1.0,
+        }
+
+    # Convert bfloat16 to uint16 representation for bit manipulation
+    expected_bits = expected.view(torch.int16).to(torch.int32)
+    actual_bits = actual.view(torch.int16).to(torch.int32)
+
+    # Handle sign differences
+    expected_sign = expected_bits < 0
+    actual_sign = actual_bits < 0
+    same_sign = expected_sign == actual_sign
+
+    # Calculate ULP differences
+    expected_abs_bits = torch.where(expected_sign, -expected_bits, expected_bits)
+    actual_abs_bits = torch.where(actual_sign, -actual_bits, actual_bits)
+
+    ulp_diff = torch.where(same_sign, torch.abs(expected_bits - actual_bits), expected_abs_bits + actual_abs_bits)
+
+    # Handle non-finite values
+    expected_finite = torch.isfinite(expected)
+    actual_finite = torch.isfinite(actual)
+    both_finite = expected_finite & actual_finite
+
+    ulp_diff = torch.where(both_finite, ulp_diff, torch.tensor(float("inf")))
+
+    # Handle same non-finite values
+    both_nan = torch.isnan(expected) & torch.isnan(actual)
+    both_posinf = torch.isposinf(expected) & torch.isposinf(actual)
+    both_neginf = torch.isneginf(expected) & torch.isneginf(actual)
+    same_nonfinite = both_nan | both_posinf | both_neginf
+
+    ulp_diff = torch.where(same_nonfinite, torch.tensor(0.0), ulp_diff)
+
+    # Calculate statistics only on finite ULP differences
+    finite_ulp = ulp_diff[torch.isfinite(ulp_diff)]
+
+    if len(finite_ulp) == 0:
+        return {
+            "max_ulp": float("inf"),
+            "mean_ulp": float("inf"),
+            "median_ulp": float("inf"),
+            "std_ulp": float("inf"),
+            "p95_ulp": float("inf"),
+            "p99_ulp": float("inf"),
+            "perfect_matches": 0.0,
+        }
+
+    finite_ulp_float = finite_ulp.float()
+    perfect_matches = (finite_ulp == 0).float().mean().item()
+
+    return {
+        "max_ulp": torch.max(finite_ulp).item(),
+        "mean_ulp": torch.mean(finite_ulp_float).item(),
+        "median_ulp": torch.median(finite_ulp_float).item(),
+        "std_ulp": torch.std(finite_ulp_float).item(),
+        "p95_ulp": torch.quantile(finite_ulp_float, 0.95).item(),
+        "p99_ulp": torch.quantile(finite_ulp_float, 0.99).item(),
+        "perfect_matches": perfect_matches,
+    }
+
+
 def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
@@ -972,32 +1058,44 @@ def is_grayskull():
     return "grayskull" in ARCH_NAME
 
 
-def skip_for_blackhole(reason_str="not working for Blackhole"):
-    return pytest.mark.skipif(is_blackhole(), reason=reason_str)
-
-
-def skip_for_wormhole_b0(reason_str="not working for Wormhole B0"):
-    return pytest.mark.skipif(is_wormhole_b0(), reason=reason_str)
-
-
-def run_for_blackhole(reason_str="only runs for Blackhole"):
-    return pytest.mark.skipif(not is_blackhole(), reason=reason_str)
-
-
-def run_for_wormhole_b0(reason_str="only runs for Wormhole B0"):
-    return pytest.mark.skipif(not is_wormhole_b0(), reason=reason_str)
-
-
-def run_for_grayskull(reason_str="only runs for Grayskull"):
-    return pytest.mark.skipif(not is_grayskull(), reason=reason_str)
-
-
 def is_slow_dispatch():
     return os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") == "1"
 
 
+def ti_skip(condition, reason="Invalid test parameters"):
+    return pytest.mark.skipif(condition, reason="Skipping unsupported case: " + reason)
+
+
+def skip_for_blackhole(reason_str="not a blackhole test"):
+    return ti_skip(is_blackhole(), reason=reason_str)
+
+
+def skip_for_wormhole_b0(reason_str="not a wormhole test"):
+    return ti_skip(is_wormhole_b0(), reason=reason_str)
+
+
+def run_for_blackhole(reason_str="only runs for Blackhole"):
+    return ti_skip(not is_blackhole(), reason=reason_str)
+
+
+def run_for_wormhole_b0(reason_str="only runs for Wormhole B0"):
+    return ti_skip(not is_wormhole_b0(), reason=reason_str)
+
+
+def run_for_grayskull(reason_str="only runs for Grayskull"):
+    return ti_skip(not is_grayskull(), reason=reason_str)
+
+
+def skip_for_n_dev(n, reason_str="Test is not meant for this number of devices"):
+    return ti_skip(ttnn.get_num_devices() == n, reason=reason_str)
+
+
+def skip_for_n_or_less_dev(n, reason_str="Test is not meant for this number of devices"):
+    return ti_skip(ttnn.get_num_devices() <= n, reason=reason_str)
+
+
 def skip_for_slow_dispatch(reason_str="not working for slow dispatch"):
-    return pytest.mark.skipif(is_slow_dispatch(), reason=reason_str)
+    return ti_skip(is_slow_dispatch(), reason=reason_str)
 
 
 def get_devices_for_t3000(all_devices, num_devices):

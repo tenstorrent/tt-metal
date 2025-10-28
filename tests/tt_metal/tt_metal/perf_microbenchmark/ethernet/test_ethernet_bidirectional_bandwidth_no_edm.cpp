@@ -48,7 +48,7 @@ public:
 
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() >= 2 and
             tt::tt_metal::GetNumPCIeDevices() >= 1) {
-            std::vector<chip_id_t> ids{0, 1, 2, 3, 4, 5, 6, 7};
+            std::vector<ChipId> ids{0, 1, 2, 3, 4, 5, 6, 7};
             auto reserved_devices = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
                 ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1);
             for (const auto& [id, device] : reserved_devices) {
@@ -72,7 +72,7 @@ public:
         }
     }
 
-    std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
+    std::map<ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -154,9 +154,9 @@ void run(
     tt::tt_metal::distributed::MeshCoordinateRange device_range1 =
         tt::tt_metal::distributed::MeshCoordinateRange(zero_coord1, zero_coord1);
     tt::tt_metal::distributed::MeshWorkload mesh_workload0;
-    tt::tt_metal::distributed::AddProgramToMeshWorkload(mesh_workload0, std::move(program0), device_range0);
+    mesh_workload0.add_program(device_range0, std::move(program0));
     tt::tt_metal::distributed::MeshWorkload mesh_workload1;
-    tt::tt_metal::distributed::AddProgramToMeshWorkload(mesh_workload1, std::move(program1), device_range1);
+    mesh_workload1.add_program(device_range1, std::move(program1));
 
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         // For slow dispatch mode, use threads with mesh workloads

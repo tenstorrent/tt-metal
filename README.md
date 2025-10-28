@@ -50,7 +50,7 @@ The Models team is focused on developing the following models to a customer-read
 ### [Llama 3.1 70B (TP=32)](./models/demos/llama3_70b_galaxy)
 | Batch | Hardware                                                     | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                                     | vLLM Tenstorrent Repo Release                                                                         |
 |-------|--------------------------------------------------------------|-----------|-------|-----------------|--------|-------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------|
-| 32    | [Galaxy (Wormhole)](https://tenstorrent.com/hardware/galaxy) | 53        | 72.5  | 80              | 2268.8 | [v0.62.2](https://github.com/tenstorrent/tt-metal/tree/v0.62.2) | [c348d08](https://github.com/tenstorrent/vllm/tree/c348d085a463340a66194bbee9cd4bfc5f9c697a/tt_metal) |
+| 32    | [Galaxy (Wormhole)](https://tenstorrent.com/hardware/galaxy) | 53        | 72.5  | 80              | 2268.8 | [v0.62.0-dev20251015](https://github.com/tenstorrent/tt-metal/tree/v0.62.0-dev20251015) | [1d799da](https://github.com/tenstorrent/vllm/tree/1d799da2ebc6a809d45a543debca89a92ed6a6d7/tt_metal) |
 
 ### [Qwen 3 32B (TP=8)](./models/tt_transformers)
 | Batch | Hardware                                                            | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                                       | vLLM Tenstorrent Repo Release                                                                         |
@@ -114,7 +114,6 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metal/latest/t
 - [Flash Attention on Wormhole](./tech_reports/FlashAttention/FlashAttention.md) (updated Sept 6th, 2024)
 - [CNNs on TT Architectures](./tech_reports/CNNs/ttcnn.md) (updated Sept 6th, 2024)
 - [Ethernet and Multichip Basics](./tech_reports/EthernetMultichip/BasicEthernetGuide.md) (Updated Sept 20th, 2024)
-- [Collective Communication Library (CCL)](./tech_reports/EthernetMultichip/CclDeveloperGuide.md) (Updated Sept 20th, 2024)
 - [Blackhole Bring-Up Programming Guide](./tech_reports/Blackhole/BlackholeBringUpProgrammingGuide.md) (Updated Dec 18th, 2024)
 - [Sub-Devices](./tech_reports/SubDevices/SubDevices.md) (Updated Jan 7th, 2025)
 
@@ -162,6 +161,9 @@ pip install ttnn-visualizer
 
 #### [TT-Exalens](https://github.com/tenstorrent/tt-exalens)
 The TT-Exalens repository describes TT-Lensium, a low-level debugging tool for Tenstorrent hardware. It allows developers to access and communicate with Wormhole and Blackhole devices.
+
+#### [TT-SMI](https://github.com/tenstorrent/tt-smi)
+The TT-SMI repository describes the Tenstorrent System Management Interface. This command line utility can interact with Tenstorrent devices on host. TT-SMI provides an easy to use interface displaying device, telemetry, and firmware information.
 
 #### [Model Explorer](https://github.com/tenstorrent/model-explorer)
 The Model Explorer is an intuitive and hierarchical visualization tool using model graphs. It organizes model operations into nested layers and provides features for model exploration and debugging.
