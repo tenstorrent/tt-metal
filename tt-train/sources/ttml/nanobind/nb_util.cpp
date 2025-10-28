@@ -325,7 +325,7 @@ tt::tt_metal::Tensor make_metal_tensor(
             std::span<const NumpyType> numpy_data_span(
                 static_cast<const NumpyType*>(numpy_data.data()), numpy_data.size());
 
-            auto const to_device_maybe_tilize = [device, target_layout](auto&& t) {
+            auto const to_device_maybe_tilize = [device, target_layout](tt::tt_metal::Tensor& t) {
                 t = ttnn::to_device(t, device, tt::tt_metal::MemoryConfig{});
 
                 if (target_layout == tt::tt_metal::Layout::ROW_MAJOR) {
