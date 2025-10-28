@@ -528,7 +528,6 @@ def train():
             scaled_loss = ttml.ops.binary.mul(loss, 1.0 / float(accum_steps))  # check if accum_steps > 1
             scaled_loss.backward(False)
             ttml.autograd.AutoContext.get_instance().reset_graph()
-            exit(0) # Temporary exit for testing
 
         # Synchronize gradients if DDP is enabled
         if device_config.enable_ddp:
