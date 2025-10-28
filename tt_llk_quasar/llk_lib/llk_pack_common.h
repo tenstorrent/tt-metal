@@ -20,9 +20,6 @@ inline void _llk_pack_hw_configure_(const tdma_descriptor_t& tdma_desc)
 {
     static_assert((PACK_SEL == p_pacr::PACK0) || (PACK_SEL == p_pacr::PACK1), "PACK_SEL can only be set to p_pacr::PACK0/PACK1");
 
-    // Turn on automatic Tensix-TRISC synchronization
-    set_ttsync_enables<TRACK_ALL>(ckernel::pack::TRISC_ID);
-
     // Populate the buffer descriptor table
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
 

@@ -17,7 +17,7 @@ inline void _calculate_typecast_int32_to_fp32_rows()
     TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, 0); // load from dest into lreg[0], uses ADDR_MOD_7 (set to all zeroes)
     // TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG2, 3); //convert from 2s completent to sign+magnitude
 
-    TTI_SFPCAST(p_sfpu::LREG2, p_sfpu::LREG1, 0); // convert from int32 sign+mag to fp32 using rnd nearest even
+    TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG1, 0); // convert from int32 sign+mag to fp32 using rnd nearest even
 
     TTI_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0, 0); // Store from lreg[1] into dest register
 }

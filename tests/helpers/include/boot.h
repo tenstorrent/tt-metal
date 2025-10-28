@@ -17,8 +17,13 @@ inline void device_setup()
     TTI_ZEROACC(ckernel::p_zeroacc::CLR_ALL, 0, 0);
 #endif
 
-    // Enable CC stack
+// Enable CC stack
+#if defined(ARCH_QUASAR)
+    TTI_SFPENCC(3, 10);
+#else
     TTI_SFPENCC(3, 0, 0, 10);
+#endif
+
     TTI_NOP;
 
     // Set default sfpu constant register state

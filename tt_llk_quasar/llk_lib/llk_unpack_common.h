@@ -49,8 +49,6 @@ inline void _llk_unpack_hw_configure_(const tdma_descriptor_t& tdma_desc_src)
 template <uint32_t UNP_SEL>
 inline void _llk_unpack_configure_unary_(const tdma_descriptor_t& tdma_desc_src)
 {
-    // Turn on automatic Tensix-TRISC synchronization
-    set_ttsync_enables<TRACK_ALL>(ckernel::unpack::TRISC_ID);
     _llk_unpack_hw_configure_<UNP_SEL>(tdma_desc_src);
 }
 
@@ -62,8 +60,6 @@ inline void _llk_unpack_configure_unary_(const tdma_descriptor_t& tdma_desc_src)
 template <uint32_t UNP_SEL_0, uint32_t UNP_SEL_1>
 inline void _llk_unpack_configure_binary_(const tdma_descriptor_t& tdma_desc_src0, const tdma_descriptor_t& tdma_desc_src1)
 {
-    // Turn on automatic Tensix-TRISC synchronization
-    set_ttsync_enables<TRACK_ALL>(ckernel::unpack::TRISC_ID);
     _llk_unpack_hw_configure_<UNP_SEL_0>(tdma_desc_src0);
     _llk_unpack_hw_configure_<UNP_SEL_1>(tdma_desc_src1);
 }

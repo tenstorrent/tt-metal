@@ -454,7 +454,7 @@ struct p_ttsync
                                             //</ttsync_class_numbers> //Please do not remove this line, it is used by gen_tt_instrn_resources_used.lua
 };
 
-struct p_sfparecip
+struct p_sfpnonlinear
 {
     constexpr static uint RECIP_MODE = 0x0;
     constexpr static uint RELU_MODE  = 0x2;

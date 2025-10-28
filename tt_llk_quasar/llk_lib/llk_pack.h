@@ -33,11 +33,12 @@ inline void _llk_pack_mop_config_(const uint32_t num_tiles)
     {
         if constexpr (PACK_SEL == p_pacr::PACK0)
         {
-            return TT_OP_PACR0_TILE_INC(0, 1 /*Src Face Idx*/, BUF_DESC_ID, 0);
+            return TT_OP_PACR0_TILE_INC(1 /*Dest Tile Idx*/, 1 /*Src Tile Idx*/, BUF_DESC_ID, 0);
         }
         else
         {
-            return TT_OP_PACR1_TILE_INC(0, 1 /*Src Face Idx*/, BUF_DESC_ID, 0);
+            // PACR1 slice size is only 16x8, no need to increment SrcS counter
+            return TT_OP_PACR1_TILE_INC(1 /*Dest Tile Idx*/, 0, BUF_DESC_ID, 0);
         }
     }();
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, pack_instrn);
