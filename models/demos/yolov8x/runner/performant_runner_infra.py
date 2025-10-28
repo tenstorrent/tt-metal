@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import divup, is_wormhole_b0
+from models.common.utility_functions import divup, is_blackhole, is_wormhole_b0
 from models.demos.yolov8x.common import load_torch_model
 from models.demos.yolov8x.tt.ttnn_yolov8x import TtYolov8xModel
 from models.demos.yolov8x.tt.ttnn_yolov8x_utils import custom_preprocessor
@@ -57,7 +57,7 @@ class YOLOv8xPerformanceRunnerInfra:
         self.output_tensor = self.ttnn_yolov8_model(self.input_tensor)[0]
 
     def setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=16):
-        if is_wormhole_b0():
+        if is_wormhole_b0() or is_blackhole():
             core_grid = ttnn.CoreGrid(y=8, x=8)
         else:
             exit("Unsupported device")

@@ -18,7 +18,7 @@ pytest --disable-warnings models/demos/blackhole/yolov7/tests/pcc/test_ttnn_yolo
 
 ### Model Performant with Trace+2CQ
 #### Single Device (BS=1):
-- For `640x640`, end-2-end perf is `--` FPS (**On P150**)
+- For `640x640`, end-2-end perf is `190` FPS (**On P150**)
   ```bash
   pytest --disable-warnings models/demos/blackhole/yolov7/tests/perf/test_e2e_performant.py::test_e2e_performant
   ```
