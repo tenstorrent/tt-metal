@@ -38,7 +38,6 @@ const std::
 };
 
 int main(int argc, char** argv) {
-    log_info(tt::LogTest, "Starting Test");
     std::vector<std::string> input_args(argv, argv + argc);
 
     auto fixture = std::make_shared<TestFixture>();
@@ -70,8 +69,14 @@ int main(int argc, char** argv) {
             physical_mesh_config = parsed_yaml.physical_mesh_config;
         }
     } else {
-        raw_test_configs = cmdline_parser.generate_default_configs();
+        log_error(
+            tt::LogTest,
+            "No YAML config file path specified. Please use --test_config <file_path> to specify the test config. Use "
+            "--help for more information.");
+        return 1;
     }
+
+    log_info(tt::LogTest, "Starting Test");
 
     fixture->init(physical_mesh_config);
 
