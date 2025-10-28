@@ -473,9 +473,7 @@ class WanResidualBlock:
     def __call__(self, x_BTHWC, logical_h, feat_cache=None, feat_idx=[0]):
         x_tile_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
         h_tile_BTHWC = (
-            self.conv_shortcut(
-                x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config, core_grid=self.core_grid
-            )
+            self.conv_shortcut(x_tile_BTHWC, compute_kernel_config=self.hifi4_compute_kernel_config)
             if self.conv_shortcut is not None
             else x_tile_BTHWC
         )
