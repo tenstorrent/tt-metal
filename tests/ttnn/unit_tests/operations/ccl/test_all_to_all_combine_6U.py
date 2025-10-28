@@ -6,7 +6,7 @@ from loguru import logger
 import pytest
 import ttnn
 
-from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_combine_t3000 import (
+from tests.nightly.t3000.ccl.test_all_to_all_combine import (
     run_all_to_all_combine_test,
     trace_all_to_all_combine,
 )
