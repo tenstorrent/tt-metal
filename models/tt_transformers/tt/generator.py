@@ -172,7 +172,7 @@ class Generator:
             return False
         if prefill_seq_len > self.model_args[0].max_prefill_chunk_size:
             return False
-        if hasattr(self.model_args[0], "sliding_window"):
+        if self.model_args[0].sliding_window != None:
             return False
         return True
 
