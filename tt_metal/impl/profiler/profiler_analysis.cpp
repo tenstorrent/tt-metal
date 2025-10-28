@@ -107,7 +107,11 @@ AnalysisResults parse_duration(
     for (auto& [_, result] : results_per_op_id) {
         if (result != AnalysisResults::INVALID_SINGLE_RESULT) {
             TT_ASSERT(result.start_timestamp <= result.end_timestamp);
-            result.duration = result.end_timestamp - result.start_timestamp;
+            TT_ASSERT(result.start_marker.chip_id == result.end_marker.chip_id);
+            const int chip_frequency_mhz =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(result.start_marker.chip_id);
+            result.duration = static_cast<uint64_t>(
+                std::round((result.end_timestamp - result.start_timestamp) * 1000.0 / chip_frequency_mhz));
         }
     }
 
