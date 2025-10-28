@@ -29,10 +29,12 @@ void MAIN {
         DPRINT << "UNTILIZE reserving block " << b << ENDL();
         cb_reserve_back(out_cb_id, per_core_block_tile_cnt);
 
+        // UNPACK(tt::compute::common::print_full_tile(src_cb_id, 0));
+
         untilize_block(src_cb_id, per_core_block_tile_cnt, out_cb_id);
 
         DPRINT << "UNTILIZE pushing block " << b << ENDL();
-        PACK(tt::compute::common::print_full_tile(out_cb_id, 2));
+        PACK(tt::compute::common::print_full_tile(out_cb_id, 0, true));
         cb_push_back(out_cb_id, per_core_block_tile_cnt);
         DPRINT << "UNTILIZE popping block " << b << ENDL();
         cb_pop_front(src_cb_id, per_core_block_tile_cnt);

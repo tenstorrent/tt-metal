@@ -212,7 +212,7 @@ def run_avg_pool2d(
         dtype=out_dtype,
         output_layout=output_layout,
         compute_kernel_config=compute_kernel_config,
-        in_place_halo=True,
+        # in_place_halo=True,
     )
 
     # TODO always use run_twice after resolution of https://github.com/tenstorrent/tt-metal/issues/26093
@@ -251,7 +251,7 @@ def run_avg_pool2d(
             dtype=out_dtype,
             output_layout=output_layout,
             compute_kernel_config=compute_kernel_config,
-            in_place_halo=True,
+            # in_place_halo=True,
         )
 
     # apply padding manually to torch tensor since torch doesn't support asymmetric padding
