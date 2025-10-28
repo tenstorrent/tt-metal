@@ -72,6 +72,7 @@ import sys
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.elf import ElfVariable
 from typing import Any, Callable, Iterable, TypeVar
 from types import ModuleType
 
@@ -128,6 +129,11 @@ def default_serializer(value) -> str:
         return str(value._id)
     elif isinstance(value, OnChipCoordinate):
         return value.to_user_str()
+    elif isinstance(value, ElfVariable):
+        try:
+            return serialize_collection(value.as_list())
+        except:
+            return str(value)
     elif isinstance(value, Iterable) and not isinstance(value, str):
         return serialize_collection(value)
     else:

@@ -19,7 +19,6 @@ from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.firmware import ELF
-from ttexalens.parse_elf import mem_access
 
 
 script_config = ScriptConfig(
@@ -58,19 +57,19 @@ def read_ring_buffer(
     mem_reader = _get_mem_reader(location, risc_name)
     mailboxes = fw_elf.read_global("mailboxes", mem_reader)
 
-    current_ptr = mailboxes.watcher.debug_ring_buf.current_ptr.value()
+    current_ptr = mailboxes.watcher.debug_ring_buf.current_ptr
     if current_ptr == 65535:
         # Nothing pushed
         return None
 
-    wrapped = mailboxes.watcher.debug_ring_buf.wrapped.value()
+    wrapped = mailboxes.watcher.debug_ring_buf.wrapped
 
     ring_elements = fw_elf.get_constant("DEBUG_RING_BUFFER_ELEMENTS")
 
     values: list[str] = []
-    idx = int(current_ptr)
+    idx = current_ptr
     for _ in range(ring_elements):
-        val = mailboxes.watcher.debug_ring_buf.data[idx].value()
+        val = mailboxes.watcher.debug_ring_buf.data[idx]
         values.append(f"0x{val:08X}")
         if idx == 0:
             if wrapped == 0:
