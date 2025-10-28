@@ -164,7 +164,7 @@ struct UDMWriteControlHeader {
     uint16_t src_mesh_id;
     uint16_t src_noc_xy;
     uint8_t risc_id;
-    uint16_t transaction_id;
+    uint8_t transaction_id;
 } __attribute__((packed));
 
 struct UDMReadControlHeader {
@@ -174,18 +174,18 @@ struct UDMReadControlHeader {
     uint16_t src_l1_address;
     uint32_t size_bytes;
     uint8_t risc_id;
-    uint16_t transaction_id;
+    uint8_t transaction_id;
 } __attribute__((packed));
 
-static_assert(sizeof(UDMWriteControlHeader) == 8, "UDMWriteControlHeader size is not 8 bytes");
-static_assert(sizeof(UDMReadControlHeader) == 14, "UDMReadControlHeader size is not 14 bytes");
+static_assert(sizeof(UDMWriteControlHeader) == 7, "UDMWriteControlHeader size is not 8 bytes");
+static_assert(sizeof(UDMReadControlHeader) == 13, "UDMReadControlHeader size is not 14 bytes");
 
 union UDMControlFields {
     UDMWriteControlHeader write;
     UDMReadControlHeader read;
 } __attribute__((packed));
 
-static_assert(sizeof(UDMControlFields) == 14, "UDMControlFields size is not 14 bytes");
+static_assert(sizeof(UDMControlFields) == 13, "UDMControlFields size is not 14 bytes");
 
 // TODO: wrap this in a debug version that holds type info so we can assert for field/command/
 template <typename Derived>
@@ -587,7 +587,7 @@ public:
 
 struct UDMLowLatencyPacketHeader : public LowLatencyPacketHeader {
     UDMControlFields udm_control;
-    uint8_t padding[2];  // Padding to align to 48 bytes (32 + 14 + 2)
+    uint8_t padding[3];  // Padding to align to 48 bytes
 } __attribute__((packed));
 static_assert(sizeof(UDMLowLatencyPacketHeader) == 48, "sizeof(UDMLowLatencyPacketHeader) is not equal to 48B");
 
@@ -720,7 +720,7 @@ static_assert(sizeof(HybridMeshPacketHeader) == 64, "sizeof(HybridMeshPacketHead
 
 struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {
     UDMControlFields udm_control;
-    uint8_t padding[2];  // Padding to align to 80 bytes
+    uint8_t padding[3];  // Padding to align to 80 bytes
 } __attribute__((packed));
 static_assert(sizeof(UDMHybridMeshPacketHeader) == 80, "sizeof(UDMHybridMeshPacketHeader) is not equal to 80B");
 
