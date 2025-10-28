@@ -309,6 +309,9 @@ def test_validation_non_decorator_host(ttnn_mesh_device: ttnn.MeshDevice):
     assert registry.results[-1].passed
 
 
+# todo)) checkpoint validation --> essentially checking from_torch against a reference checkpoint
+
+
 @pytest.fixture(scope="module", autouse=True)
 def _print_validation_report_after_module(request):
     # Runs once after all tests in this module finish

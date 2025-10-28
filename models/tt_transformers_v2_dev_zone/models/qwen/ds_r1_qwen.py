@@ -10,8 +10,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
 
-# Import validation framework
-# from tt_transformers_v2.src.testing import get_validation_registry
+# todo)) work on ds_r1_qwen model validation using new decorator
 
 # TODO)) accumulate prompts that instructs AI to use testing tools to validate the model
 # -- where, how, what to add to validate_against decorator
