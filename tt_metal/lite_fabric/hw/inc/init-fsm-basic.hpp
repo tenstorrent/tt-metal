@@ -18,7 +18,7 @@
 #include "ethernet/dataflow_api.h"
 #include "dataflow_api.h"
 #include "ethernet/tunneling.h"
-#include "tt_metal/lite_fabric/hw/inc/lf_dev_mem_map.hpp"
+#include "lf_dev_mem_map.hpp"
 #include "risc_common.h"
 #include "host_interface.hpp"
 #include "tt_metal/lite_fabric/hw/inc/risc_interface.hpp"

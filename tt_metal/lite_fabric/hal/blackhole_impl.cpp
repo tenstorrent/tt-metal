@@ -4,7 +4,7 @@
 
 #include "blackhole_impl.hpp"
 #include "hw/inc/host_interface.hpp"
-#include "tt_metal/lite_fabric/hw/inc/lf_dev_mem_map.hpp"
+#include "tt_metal/lite_fabric/hw/inc/blackhole/lf_dev_mem_map.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 
 namespace {
@@ -170,7 +170,8 @@ std::vector<std::filesystem::path> BlackholeLiteFabricHal::build_includes(const 
         root_dir / "tt_metal/api/",
         root_dir / "tt_metal/api/tt-metalium/",
         root_dir / "tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib",
-        root_dir / "tt_metal/lite_fabric/hw/inc"};  // For memory configuration headers
+        root_dir / "tt_metal/lite_fabric/hw/inc",
+        root_dir / "tt_metal/lite_fabric/hw/inc/blackhole"};
 }
 
 std::vector<std::string> BlackholeLiteFabricHal::build_defines() {

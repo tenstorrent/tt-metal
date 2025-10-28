@@ -18,7 +18,7 @@ target_sources(
             hw/inc/channel_util.hpp
             hw/inc/channels.hpp
             hw/inc/constants.hpp
-            hw/inc/lf_dev_mem_map.hpp
+            hw/inc/blackhole/lf_dev_mem_map.hpp
             hw/inc/header.hpp
             hw/inc/host_interface.hpp
             hw/inc/init-fsm-basic.hpp

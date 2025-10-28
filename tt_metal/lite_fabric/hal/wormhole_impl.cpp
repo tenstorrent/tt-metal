@@ -21,15 +21,57 @@ void WormholeLiteFabricHal::terminate() {}
 void WormholeLiteFabricHal::wait_for_state(tt_cxy_pair virtual_core, lite_fabric::InitState state) {}
 
 std::vector<std::filesystem::path> WormholeLiteFabricHal::build_includes(const std::filesystem::path& root_dir) {
-    return {};
+    return {
+        root_dir,
+        root_dir.parent_path(),
+        root_dir / "tt_metal",
+        root_dir / "tt_metal/include",
+        root_dir / "tt_metal/hw/inc",
+        root_dir / "tt_metal/hw/inc/ethernet",
+        root_dir / "tt_metal/hostdevcommon/api",
+        root_dir / "tt_metal/hw/inc/debug",
+        root_dir / "tt_metal/hw/inc/tt-1xx/",
+        root_dir / "tt_metal/hw/inc/tt-1xx/wormhole",
+        root_dir / "tt_metal/hw/inc/tt-1xx/wormhole/blackhole_defines",
+        root_dir / "tt_metal/hw/inc/tt-1xx/wormhole/noc",
+        root_dir / "tt_metal/hw/ckernels/wormhole/metal/common",
+        root_dir / "tt_metal/hw/ckernels/wormhole/metal/llk_io",
+        root_dir / "tt_metal/third_party/tt_llk/wormhole/common/inc",
+        root_dir / "tt_metal/api/",
+        root_dir / "tt_metal/api/tt-metalium/",
+        root_dir / "tt_metal/third_party/tt_llk/tt_llk_wormhole/llk_lib",
+        root_dir / "tt_metal/lite_fabric/hw/inc"};  // For memory configuration headers
 }
 
 std::vector<std::string> WormholeLiteFabricHal::build_defines() {
-    return {};
+    // Most of these are not used but are needed to get things to compile
+    return {
+        "ARCH_WORMHOLE",
+        "TENSIX_FIRMWARE",
+        "LOCAL_MEM_EN=0",
+        "COMPILE_FOR_ERISC",  // This is needed to enable the ethernet APIs
+        "ERISC",
+        "RISC_B0_HW",
+        "FW_BUILD",
+        "NOC_INDEX=0",
+        "DISPATCH_MESSAGE_ADDR=0",
+        "COMPILE_FOR_LITE_FABRIC=1",
+        "ROUTING_FW_ENABLED",
+        "NUM_DRAM_BANKS=1",
+        "NUM_L1_BANKS=1",
+        "LOG_BASE_2_OF_NUM_DRAM_BANKS=0",
+        "LOG_BASE_2_OF_NUM_L1_BANKS=0",
+        "PCIE_NOC_X=0",
+        "PCIE_NOC_Y=0",
+        "PROCESSOR_INDEX=0",
+    };
 }
 
 std::vector<std::filesystem::path> WormholeLiteFabricHal::build_linker(const std::filesystem::path& root_dir) {
-    return {};
+    return {
+        root_dir / "runtime/hw/lib/blackhole/tmu-crt0.o",
+        root_dir / "runtime/hw/lib/blackhole/substitutes.o",
+    };
 }
 
 }  // namespace lite_fabric
