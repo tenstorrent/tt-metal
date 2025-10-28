@@ -9,7 +9,51 @@
 
 namespace tt::scaleout_tools {
 
-// Helper function to process ethernet connections for a given operation
+constexpr uint32_t ETH_TRAINING_STATUS_REG = 0x1104;
+
+struct TestFixture {
+    tt::tt_metal::MetalContext& context;
+    const tt::Cluster& cluster;
+    std::shared_ptr<const tt::umd::cluster::ClusterDesc> driver;
+    std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> distributed_context;
+    tt::tt_metal::PhysicalSystemDescriptor physical_system_descriptor;
+    std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
+
+    TestFixture()
+        : context(tt::tt_metal::MetalContext::instance()),
+          cluster(context.get_cluster()),
+          driver(cluster.get_driver()),
+          distributed_context(context.get_distributed_context_ptr()),
+          physical_system_descriptor(
+              driver,
+              distributed_context,
+              &context.hal(),
+              context.rtoptions().get_mock_enabled(),
+              true) {
+        for (const auto& [chip_id, asic_id] : cluster.get_unique_chip_ids()) {
+            asic_id_to_chip_id[asic_id] = chip_id;
+        }
+    }
+};
+
+tt_xy_pair get_eth_core_coord(const tt::Cluster& cluster, ChipId chip_id, uint8_t channel) {
+    auto logical_coord = cluster.get_soc_desc(chip_id).get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
+    return cluster.get_virtual_coordinate_from_logical_coordinates(
+        chip_id, tt_xy_pair(logical_coord.x, logical_coord.y), CoreType::ETH);
+}
+
+void set_link_training_status(const tt::Cluster& cluster, ChipId chip_id, const tt_xy_pair& coord, uint32_t status) {
+    std::vector<uint32_t> status_vec(1, status);
+    cluster.write_core(chip_id, coord, status_vec, ETH_TRAINING_STATUS_REG);
+    cluster.l1_barrier(chip_id);
+}
+
+uint32_t get_link_training_status(const tt::Cluster& cluster, ChipId chip_id, const tt_xy_pair& coord) {
+    std::vector<uint32_t> status(1);
+    cluster.read_core(status, sizeof(uint32_t), tt_cxy_pair(chip_id, coord), ETH_TRAINING_STATUS_REG);
+    return status[0];
+}
+
 template <typename Operation>
 void process_ethernet_connections(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
@@ -26,13 +70,7 @@ void process_ethernet_connections(
                 (!cluster_desc->is_chip_mmio_capable(src_chip_id) &&
                  !cluster_desc->is_chip_mmio_capable(dst_chip_id))) {
                 for (const auto& eth_connection : eth_connections) {
-                    auto src_chan = eth_connection.src_chan;
-                    auto logical_src_coord =
-                        cluster.get_soc_desc(src_chip_id).get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
-                    auto src_coord = cluster.get_virtual_coordinate_from_logical_coordinates(
-                        src_chip_id, tt_xy_pair(logical_src_coord.x, logical_src_coord.y), CoreType::ETH);
-
-                    operation(src_chip_id, src_coord);
+                    operation(src_chip_id, get_eth_core_coord(cluster, src_chip_id, eth_connection.src_chan));
                 }
             }
         }
@@ -40,185 +78,87 @@ void process_ethernet_connections(
 }
 
 TEST(DirectedRetraining, TestActiveEthRetraining) {
-    // Run physical discovery.
-    // Purposely take down active ethernet links on specific ASICs.
-    // Run Ethernet Link retrain API on all ASICs
-    // Readback ethernet link status from all ASICs and ensure that the links are retrained successfully.
+    TestFixture fixture;
+    auto cluster_desc = fixture.driver->get_cluster_description();
 
-    auto& context = tt::tt_metal::MetalContext::instance();
-    const auto& cluster = context.get_cluster();
-    const auto& driver = cluster.get_driver();
-    auto distributed_context = context.get_distributed_context_ptr();
-    // Discover all links in the cluster.
-    auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
-        driver,
-        distributed_context,
-        &tt::tt_metal::MetalContext::instance().hal(),
-        tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled(),
-        true);
-
-    std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
-    for (const auto& [chip_id, asic_id] : cluster.get_unique_chip_ids()) {
-        asic_id_to_chip_id[asic_id] = chip_id;
-    }
-
-    // Set training status on specific links to 0 (LINK_TRAIN_FAIL) to purposely take down them down
-    // Logic for selecting which links to take down is as follows:
-    // Take down eth links connecting non-MMIO chips to non-MMIO chips
-    // Take down eth links connecting MMIO chips to MMIO chips
-    // On a single T3K this will take down 12 / 20 links in the cluster
-    // On a single 6U Galaxy this will take down all links in the cluster
-    std::vector<uint32_t> zero_vec(1, 0);
-    auto cluster_desc = driver->get_cluster_description();
+    // Take down MMIO-to-MMIO and non-MMIO-to-non-MMIO links
     process_ethernet_connections(
-        physical_system_descriptor,
-        asic_id_to_chip_id,
-        cluster,
+        fixture.physical_system_descriptor,
+        fixture.asic_id_to_chip_id,
+        fixture.cluster,
         cluster_desc,
-        [&cluster, &zero_vec](ChipId src_chip_id, const tt_xy_pair& src_coord) {
-            cluster.write_core(src_chip_id, src_coord, zero_vec, 0x1104);
-            cluster.l1_barrier(src_chip_id);
+        [&](ChipId chip_id, const tt_xy_pair& coord) {
+            set_link_training_status(fixture.cluster, chip_id, coord, 0);
         });
 
-    // Reset all links in the cluster
     reset_ethernet_links(
-        physical_system_descriptor,
-        physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name()));
+        fixture.physical_system_descriptor,
+        fixture.physical_system_descriptor.get_asic_topology(fixture.physical_system_descriptor.my_host_name()));
 
-    // Verify that links retraining was successful. All links should report a status of 1 (LINK_TRAIN_SUCCESS)
     process_ethernet_connections(
-        physical_system_descriptor,
-        asic_id_to_chip_id,
-        cluster,
+        fixture.physical_system_descriptor,
+        fixture.asic_id_to_chip_id,
+        fixture.cluster,
         cluster_desc,
-        [&cluster](ChipId src_chip_id, const tt_xy_pair& src_coord) {
-            std::vector<uint32_t> src_value = {0};
-            cluster.read_core(src_value, sizeof(uint32_t), tt_cxy_pair(src_chip_id, src_coord), 0x1104);
-            EXPECT_EQ(src_value[0], 1);
+        [&](ChipId chip_id, const tt_xy_pair& coord) {
+            EXPECT_EQ(get_link_training_status(fixture.cluster, chip_id, coord), 1);
         });
 
-    // Run discovery and validate connectivity again
-    physical_system_descriptor.run_discovery(true);
+    fixture.physical_system_descriptor.run_discovery(true);
 }
 
 TEST(DirectedRetraining, ExitNodeRetraining) {
-    // Run physical discovery on all compute nodes in the cluster.
-    // Purposely take down all exit node links.
-    // Issue retrain API on all liks.
-    // Readback ethernet link status from all exit nodes and ensure that the links are retrained successfully.
+    TestFixture fixture;
 
-    auto& context = tt::tt_metal::MetalContext::instance();
-    const auto& cluster = context.get_cluster();
-    const auto& driver = cluster.get_driver();
-    auto distributed_context = context.get_distributed_context_ptr();
-
-    std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
-    for (const auto& [chip_id, asic_id] : cluster.get_unique_chip_ids()) {
-        asic_id_to_chip_id[asic_id] = chip_id;
-    }
-
-    // Discover all links in the cluster.
-    auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
-        driver,
-        distributed_context,
-        &tt::tt_metal::MetalContext::instance().hal(),
-        tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled(),
-        true);
-
-    // Loop over all neighboring hosts
-    // For each neighboring host, query the exit nodes connecting to the current host
-    // For each exit node connection, take down the link by writing 0 to the link training status register
-    std::vector<uint32_t> zero_vec(1, 0);
-    for (const auto& host : physical_system_descriptor.get_all_hostnames()) {
-        if (host == physical_system_descriptor.my_host_name()) {
+    for (const auto& host : fixture.physical_system_descriptor.get_all_hostnames()) {
+        if (host == fixture.physical_system_descriptor.my_host_name()) {
             continue;
         }
-        auto exit_nodes =
-            physical_system_descriptor.get_connecting_exit_nodes(physical_system_descriptor.my_host_name(), host);
-        log_info(tt::LogTest, "Take {} exit node links down on host {}", exit_nodes.size(), host);
+        auto exit_nodes = fixture.physical_system_descriptor.get_connecting_exit_nodes(
+            fixture.physical_system_descriptor.my_host_name(), host);
+        log_info(tt::LogTest, "Taking {} exit node links down on host {}", exit_nodes.size(), host);
+        
         for (const auto& exit_node : exit_nodes) {
-            auto src_chan = exit_node.eth_conn.src_chan;
-            auto logical_src_coord = cluster.get_soc_desc(asic_id_to_chip_id.at(*exit_node.src_exit_node))
-                                         .get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
-            auto src_coord = cluster.get_virtual_coordinate_from_logical_coordinates(
-                asic_id_to_chip_id.at(*exit_node.src_exit_node),
-                tt_xy_pair(logical_src_coord.x, logical_src_coord.y),
-                CoreType::ETH);
-            cluster.write_core(asic_id_to_chip_id.at(*exit_node.src_exit_node), src_coord, zero_vec, 0x1104);
+            auto chip_id = fixture.asic_id_to_chip_id.at(*exit_node.src_exit_node);
+            auto coord = get_eth_core_coord(fixture.cluster, chip_id, exit_node.eth_conn.src_chan);
+            set_link_training_status(fixture.cluster, chip_id, coord, 0);
         }
     }
 
-    // Issue retrain API on all links in the cluster
     reset_ethernet_links(
-        physical_system_descriptor,
-        physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name()));
+        fixture.physical_system_descriptor,
+        fixture.physical_system_descriptor.get_asic_topology(fixture.physical_system_descriptor.my_host_name()));
 
-    // Verify that exit node link retraining was successful. All links should report a status of 1 (LINK_TRAIN_SUCCESS)
-    for (const auto& host : physical_system_descriptor.get_all_hostnames()) {
-        if (host == physical_system_descriptor.my_host_name()) {
+    for (const auto& host : fixture.physical_system_descriptor.get_all_hostnames()) {
+        if (host == fixture.physical_system_descriptor.my_host_name()) {
             continue;
         }
-        auto exit_nodes =
-            physical_system_descriptor.get_connecting_exit_nodes(physical_system_descriptor.my_host_name(), host);
+        auto exit_nodes = fixture.physical_system_descriptor.get_connecting_exit_nodes(
+            fixture.physical_system_descriptor.my_host_name(), host);
+        
         for (const auto& exit_node : exit_nodes) {
-            auto src_chan = exit_node.eth_conn.src_chan;
-            auto logical_src_coord = cluster.get_soc_desc(asic_id_to_chip_id.at(*exit_node.src_exit_node))
-                                         .get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
-            auto src_coord = cluster.get_virtual_coordinate_from_logical_coordinates(
-                asic_id_to_chip_id.at(*exit_node.src_exit_node),
-                tt_xy_pair(logical_src_coord.x, logical_src_coord.y),
-                CoreType::ETH);
-            std::vector<uint32_t> src_value = {0};
-            cluster.read_core(
-                src_value,
-                sizeof(uint32_t),
-                tt_cxy_pair(asic_id_to_chip_id.at(*exit_node.src_exit_node), src_coord),
-                0x1104);
-            EXPECT_EQ(src_value[0], 1);
+            auto chip_id = fixture.asic_id_to_chip_id.at(*exit_node.src_exit_node);
+            auto coord = get_eth_core_coord(fixture.cluster, chip_id, exit_node.eth_conn.src_chan);
+            EXPECT_EQ(get_link_training_status(fixture.cluster, chip_id, coord), 1);
         }
     }
-    distributed_context->barrier();
-    physical_system_descriptor.run_discovery(true);
+    
+    fixture.distributed_context->barrier();
+    fixture.physical_system_descriptor.run_discovery(true);
 }
 
 TEST(DirectedRetraining, TestOnDemandCableRestart) {
-    // Test the on-demand cable/link restart feature
-    // 1. Run physical discovery
-    // 2. Select a specific link (first available)
-    // 3. Take down that specific link
-    // 4. Build reset topology for just that link (similar to CLI --reset-* args)
-    // 5. Call reset_ethernet_links with that topology
-    // 6. Verify the link is retrained successfully
+    TestFixture fixture;
 
-    auto& context = tt::tt_metal::MetalContext::instance();
-    const auto& cluster = context.get_cluster();
-    const auto& driver = cluster.get_driver();
-    auto distributed_context = context.get_distributed_context_ptr();
-
-    auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
-        driver,
-        distributed_context,
-        &tt::tt_metal::MetalContext::instance().hal(),
-        tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled(),
-        true);
-
-    std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
-    for (const auto& [chip_id, asic_id] : cluster.get_unique_chip_ids()) {
-        asic_id_to_chip_id[asic_id] = chip_id;
-    }
-
-    // Select the first available link from the local host topology
-    const auto& asic_topology = physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name());
+    const auto& asic_topology = fixture.physical_system_descriptor.get_asic_topology(
+        fixture.physical_system_descriptor.my_host_name());
     ASSERT_FALSE(asic_topology.empty()) << "No links available for testing";
 
-    tt::tt_metal::AsicID src_asic_id;
-    tt::tt_metal::AsicID dst_asic_id;
-    uint8_t src_channel = 0;
-    uint8_t dst_channel = 0;
+    tt::tt_metal::AsicID src_asic_id, dst_asic_id;
+    uint8_t src_channel = 0, dst_channel = 0;
     bool is_local = false;
-
-    // Find first link
     bool found = false;
+
     for (const auto& [asic_id, asic_connections] : asic_topology) {
         for (const auto& [dst_id, eth_connections] : asic_connections) {
             if (!eth_connections.empty()) {
@@ -235,47 +175,23 @@ TEST(DirectedRetraining, TestOnDemandCableRestart) {
     }
     ASSERT_TRUE(found) << "No ethernet connections found";
 
-    auto src_chip_id = asic_id_to_chip_id.at(*src_asic_id);
-    auto logical_src_coord = cluster.get_soc_desc(src_chip_id).get_eth_core_for_channel(src_channel, CoordSystem::LOGICAL);
-    auto src_coord = cluster.get_virtual_coordinate_from_logical_coordinates(
-        src_chip_id, tt_xy_pair(logical_src_coord.x, logical_src_coord.y), CoreType::ETH);
+    auto src_chip_id = fixture.asic_id_to_chip_id.at(*src_asic_id);
+    auto src_coord = get_eth_core_coord(fixture.cluster, src_chip_id, src_channel);
 
-    // Take down the selected link
-    std::vector<uint32_t> zero_vec(1, 0);
-    cluster.write_core(src_chip_id, src_coord, zero_vec, 0x1104);
-    cluster.l1_barrier(src_chip_id);
-
-    // Verify link is down
-    std::vector<uint32_t> link_status = {1};
-    cluster.read_core(link_status, sizeof(uint32_t), tt_cxy_pair(src_chip_id, src_coord), 0x1104);
-    EXPECT_EQ(link_status[0], 0) << "Link should be down before reset";
+    set_link_training_status(fixture.cluster, src_chip_id, src_coord, 0);
+    EXPECT_EQ(get_link_training_status(fixture.cluster, src_chip_id, src_coord), 0) << "Link should be down before reset";
 
     // Build reset topology for just this specific link (mimics CLI --reset-* args)
     tt::tt_metal::AsicTopology reset_topology;
-    
-    tt::tt_metal::EthConnection src_to_dst_conn;
-    src_to_dst_conn.src_chan = src_channel;
-    src_to_dst_conn.dst_chan = dst_channel;
-    src_to_dst_conn.is_local = is_local;
+    tt::tt_metal::EthConnection src_to_dst{src_channel, dst_channel, is_local};
+    tt::tt_metal::EthConnection dst_to_src{dst_channel, src_channel, is_local};
+    reset_topology[src_asic_id].push_back({dst_asic_id, {src_to_dst}});
+    reset_topology[dst_asic_id].push_back({src_asic_id, {dst_to_src}});
 
-    tt::tt_metal::EthConnection dst_to_src_conn;
-    dst_to_src_conn.src_chan = dst_channel;
-    dst_to_src_conn.dst_chan = src_channel;
-    dst_to_src_conn.is_local = is_local;
+    reset_ethernet_links(fixture.physical_system_descriptor, reset_topology);
 
-    reset_topology[src_asic_id].push_back({dst_asic_id, {src_to_dst_conn}});
-    reset_topology[dst_asic_id].push_back({src_asic_id, {dst_to_src_conn}});
-
-    // Reset only the specific link
-    reset_ethernet_links(physical_system_descriptor, reset_topology);
-
-    // Verify link is retrained successfully
-    link_status[0] = 0;
-    cluster.read_core(link_status, sizeof(uint32_t), tt_cxy_pair(src_chip_id, src_coord), 0x1104);
-    EXPECT_EQ(link_status[0], 1) << "Link should be up after reset";
-
-    // Run discovery and validate
-    physical_system_descriptor.run_discovery(true);
+    EXPECT_EQ(get_link_training_status(fixture.cluster, src_chip_id, src_coord), 1) << "Link should be up after reset";
+    fixture.physical_system_descriptor.run_discovery(true);
 }
 
 }  // namespace tt::scaleout_tools
