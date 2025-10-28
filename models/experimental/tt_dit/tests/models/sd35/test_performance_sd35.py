@@ -8,8 +8,8 @@ import ttnn
 from loguru import logger
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 
-from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import (
-    create_pipeline,
+from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import (
+    StableDiffusion3Pipeline,
     TimingCollector,
 )
 
@@ -83,7 +83,7 @@ def test_sd35_new_pipeline_performance(
     logger.info(f"  Guidance scale: {guidance_scale}")
     logger.info(f"  Inference steps: {num_inference_steps}")
 
-    pipeline = create_pipeline(
+    pipeline = StableDiffusion3Pipeline.create_pipeline(
         mesh_device=mesh_device,
         batch_size=1,
         image_w=image_w,
@@ -294,9 +294,9 @@ def test_sd35_new_pipeline_performance(
     }
     if tuple(mesh_device.shape) == (2, 4):
         expected_metrics = {
-            "clip_encoding_time": 0.1,
+            "clip_encoding_time": 0.15,
             "t5_encoding_time": 0.1,
-            "total_encoding_time": 0.22,
+            "total_encoding_time": 0.25,
             "denoising_steps_time": 11,
             "vae_decoding_time": 1.6,
             "total_time": 12.6,

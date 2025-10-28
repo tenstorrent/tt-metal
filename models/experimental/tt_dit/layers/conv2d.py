@@ -23,7 +23,6 @@ class Conv2d(Module):
         packer_l1_acc=False,
     )
 
-    # slice_params[mesh_shape][tuple(height, width, in_channels, out_channels)] = num_slices
     slice_params = {
         (1, 4): {
             (512, 512, 512, 64): 16,
@@ -64,6 +63,19 @@ class Conv2d(Module):
             (1024, 1024, 128, 3): 8,
         },
     }
+    slice_default = {
+        (512, 512, 512, 64): 16,
+        (128, 128, 16, 512): 8,
+        (128, 128, 512, 512): 4,
+        (256, 256, 512, 512): 8,
+        (512, 512, 512, 512): 16,
+        (512, 512, 512, 256): 16,
+        (512, 512, 256, 256): 4,
+        (1024, 1024, 256, 256): 16,
+        (1024, 1024, 256, 128): 16,
+        (1024, 1024, 128, 128): 16,
+        (1024, 1024, 128, 3): 8,
+    }
 
     # TODO: Allow weight initilization?
     def __init__(
@@ -76,6 +88,7 @@ class Conv2d(Module):
         dilation=None,
         mesh_device=None,
         mesh_axis=None,
+        sp_axis=None,
         ccl_manager=None,
         torch_ref=None,
     ):
@@ -91,6 +104,7 @@ class Conv2d(Module):
             dilation: Dilation of the convolution.
             mesh_device: Mesh device to use.
             mesh_axis: Axis to use for mesh parallelism.
+            sp_axis: Axis to use for sequence parallelism. Currently only used for gather before computation
             ccl_manager: CCL manager to use.
             torch_ref: Reference to the torch layer. Paramaters from this will be used to iniitialize the layer
         Returns:
@@ -106,6 +120,7 @@ class Conv2d(Module):
         self.dilation = dilation or torch_ref.dilation
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
+        self.sp_axis = sp_axis
         self.ccl_manager = ccl_manager
 
         self.weight = Parameter(
@@ -128,10 +143,11 @@ class Conv2d(Module):
             self.load_torch_state_dict(torch_ref.state_dict())
 
     @classmethod
-    def from_torch(cls, torch_ref, mesh_device, mesh_axis, ccl_manager):
+    def from_torch(cls, torch_ref, mesh_device, mesh_axis, sp_axis, ccl_manager):
         layer = cls(
             mesh_device=mesh_device,
             mesh_axis=mesh_axis,
+            sp_axis=sp_axis,
             ccl_manager=ccl_manager,
             torch_ref=torch_ref,
         )
@@ -155,11 +171,13 @@ class Conv2d(Module):
         TODO: Add support for DP and SP
         """
         if self.is_sharded_tensor(x):
-            x = vae_all_gather(self.ccl_manager, x)
+            x = vae_all_gather(self.ccl_manager, x, cluster_axis=self.sp_axis)
 
         b, h, w, c = x.shape
         slice_config = ttnn.Conv2dSliceConfig(
-            num_slices=self.slice_params[tuple(self.mesh_device.shape)][(h, w, self.in_channels, self.out_channels)],
+            num_slices=self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)[
+                (h, w, self.in_channels, self.out_channels)
+            ],
             slice_type=ttnn.Conv2dDRAMSliceWidth,
         )
 

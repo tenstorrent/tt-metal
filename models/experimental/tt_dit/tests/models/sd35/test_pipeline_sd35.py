@@ -9,8 +9,8 @@ import pytest
 import ttnn
 from loguru import logger
 
-from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import (
-    create_pipeline,
+from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import (
+    StableDiffusion3Pipeline,
     TimingCollector,
 )
 
@@ -83,7 +83,7 @@ def test_sd35_pipeline(
     timing_collector = TimingCollector()
 
     # Create pipeline
-    pipeline = create_pipeline(
+    pipeline = StableDiffusion3Pipeline.create_pipeline(
         mesh_device=mesh_device,
         batch_size=1,
         image_w=image_w,
