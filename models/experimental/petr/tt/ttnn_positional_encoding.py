@@ -54,7 +54,7 @@ class ttnn_SinePositionalEncoding3D:
 
         dim_t = ttnn.arange(end=self.num_feats, dtype=ttnn.bfloat16, device=mask.device())
         dim_t = ttnn.to_layout(dim_t, layout=ttnn.TILE_LAYOUT)
-        dim_t = ttnn.reshape(dim_t, (1, -1))  # This is becuase ttnn.arange creates 4d tensor
+        dim_t = ttnn.reshape(dim_t, (1, -1))
 
         dim_t = ttnn.div(dim_t, 2)
         dim_t = ttnn.floor(dim_t)

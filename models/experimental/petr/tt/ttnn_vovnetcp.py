@@ -334,17 +334,11 @@ class ttnn_VoVNetCP:
         self.out_features = out_features
 
         # Initialize stem convolutions using Conv class
-        self.stem_conv1 = Conv(
-            [2, 2, 1, 1], stem_parameters["stem_1"], activation="relu", height_sharding=False  # stride=2, padding=1
-        )
+        self.stem_conv1 = Conv([2, 2, 1, 1], stem_parameters["stem_1"], activation="relu", height_sharding=False)
 
-        self.stem_conv2 = Conv(
-            [1, 1, 1, 1], stem_parameters["stem_2"], activation="relu", height_sharding=False  # stride=1, padding=1
-        )
+        self.stem_conv2 = Conv([1, 1, 1, 1], stem_parameters["stem_2"], activation="relu", height_sharding=False)
 
-        self.stem_conv3 = Conv(
-            [2, 2, 1, 1], stem_parameters["stem_3"], activation="relu", height_sharding=False  # stride=2, padding=1
-        )
+        self.stem_conv3 = Conv([2, 2, 1, 1], stem_parameters["stem_3"], activation="relu", height_sharding=False)
 
         # Initialize stages
         self.stage2 = ttnn_osa_stage(parameters.stage2, 128, 128, 256, 1, 5, 2, SE=True, depthwise=False)

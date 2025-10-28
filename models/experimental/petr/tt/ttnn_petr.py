@@ -142,7 +142,6 @@ class ttnn_PETR:
             result_dict["pts_bbox"] = pts_bbox
         return bbox_list
 
-    # may need speed-up
     def add_lidar2img(self, img, batch_input_metas):
         """add 'lidar2img' transformation matrix into batch_input_metas.
 

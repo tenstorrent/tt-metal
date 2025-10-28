@@ -8,23 +8,136 @@ import ttnn
 import numpy as np
 import cv2
 import matplotlib
+import urllib.request
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 from pathlib import Path
 from loguru import logger
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 # Import the TT-specific modules
 from models.experimental.petr.reference.utils import LiDARInstance3DBoxes
 from models.experimental.petr.reference.petr import PETR
 from models.experimental.petr.tt.ttnn_petr import ttnn_PETR
-
 from models.experimental.petr.tt.common import get_parameters, generate_petr_inputs
 
 
+NUSCENES_CLASSES = [
+    "car",
+    "truck",
+    "construction_vehicle",
+    "bus",
+    "trailer",
+    "barrier",
+    "motorcycle",
+    "bicycle",
+    "pedestrian",
+    "traffic_cone",
+]
+
+CAMERA_NAMES = ["CAM_FRONT", "CAM_FRONT_RIGHT", "CAM_FRONT_LEFT", "CAM_BACK", "CAM_BACK_LEFT", "CAM_BACK_RIGHT"]
+
+
+def load_calibration(data_root="models/experimental/petr/resources/sample_input"):
+    """Load the proven working calibration"""
+    _, meta_data = generate_petr_inputs()
+    meta = meta_data[0] if isinstance(meta_data, list) else meta_data
+    cam2img_orig = meta["cam2img"][0]
+    if isinstance(cam2img_orig, torch.Tensor):
+        cam2img_orig = cam2img_orig.to(torch.float32).cpu().numpy()
+
+    # Compute lidar2img
+    if "lidar2img" not in meta:
+        lidar2img_list = []
+
+        for i in range(6):
+            cam2img = meta["cam2img"][i]
+            lidar2cam = meta["lidar2cam"][i]
+
+            # Convert to numpy
+            if isinstance(cam2img, torch.Tensor):
+                cam2img = cam2img.to(torch.float32).cpu().numpy()
+            if isinstance(lidar2cam, torch.Tensor):
+                lidar2cam = lidar2cam.to(torch.float32).cpu().numpy()
+            lidar2img = cam2img @ lidar2cam
+            lidar2img_list.append(lidar2img)
+
+        meta["lidar2img"] = lidar2img_list
+    # Test the calibration
+    test_point = np.array([10.0, 0.0, 0.0, 1.0])
+    lidar2img = meta["lidar2img"][0]  # CAM_FRONT
+    if isinstance(lidar2img, torch.Tensor):
+        lidar2img = lidar2img.to(torch.float32).cpu().numpy()
+
+    proj = lidar2img @ test_point
+    u, v = proj[0] / proj[2], proj[1] / proj[2]
+
+    return meta
+
+
+def load_images_with_calibration(data_root="models/experimental/petr/resources/sample_input"):
+    """Load the images that match the calibration"""
+
+    cam_names = ["CAM_FRONT", "CAM_FRONT_RIGHT", "CAM_FRONT_LEFT", "CAM_BACK", "CAM_BACK_LEFT", "CAM_BACK_RIGHT"]
+    # Load calibration
+    meta = load_calibration(data_root)
+
+    FILENAMES = [
+        "n015-2018-07-24-11-22-45+0800__CAM_FRONT__1532402927612460.jpg",
+        "n015-2018-07-24-11-22-45+0800__CAM_FRONT_RIGHT__1532402927620339.jpg",
+        "n015-2018-07-24-11-22-45+0800__CAM_FRONT_LEFT__1532402927604844.jpg",
+        "n015-2018-07-24-11-22-45+0800__CAM_BACK__1532402927637525.jpg",
+        "n015-2018-07-24-11-22-45+0800__CAM_BACK_LEFT__1532402927647423.jpg",
+        "n015-2018-07-24-11-22-45+0800__CAM_BACK_RIGHT__1532402927627893.jpg",
+    ]
+
+    imgs_list = []
+    camera_images = []
+
+    for cam, filename in zip(cam_names, FILENAMES):
+        img_path = Path(data_root) / filename
+
+        if img_path.exists():
+            img = cv2.imread(str(img_path))
+        else:
+            img = np.zeros((900, 1600, 3), dtype=np.uint8)
+
+        # Resize to model input size
+        img = cv2.resize(img, (800, 320))
+        camera_images.append(img.copy())  # Store for visualization
+
+        # Normalize
+        img = img.astype(np.float32)
+        mean = np.array([103.530, 116.280, 123.675])
+        std = np.array([57.375, 57.120, 58.395])
+        img = (img - mean) / std
+        img = img.transpose(2, 0, 1)  # HWC -> CHW
+        imgs_list.append(img)
+
+    # Stack images
+    imgs = np.stack(imgs_list).astype(np.float32)
+    imgs = torch.from_numpy(imgs).unsqueeze(0)  # [1, 6, 3, H, W]
+
+    # Create img_metas with calibration
+    img_metas = [
+        {
+            "filename": cam_names,
+            "ori_shape": [(900, 1600)] * 6,
+            "img_shape": (320, 800),
+            "pad_shape": (320, 800),
+            "lidar2img": meta["lidar2img"],
+            "cam2img": meta.get("cam2img", [np.eye(4, dtype=np.float32) for _ in range(6)]),
+            "cam_intrinsic": meta.get("cam_intrinsic", [np.eye(3, dtype=np.float32) for _ in range(6)]),
+            "lidar2cam": meta.get("lidar2cam", [np.eye(4, dtype=np.float32) for _ in range(6)]),
+        }
+    ]
+
+    return {"imgs": imgs, "img_metas": img_metas}, camera_images
+
+
 class Det3DDataPreprocessor:
-    """Mock Implementation of Det3DDataPreprocessor"""
+    """Simple Implementation of Det3DDataPreprocessor"""
 
     def __init__(
         self, mean=[103.53, 116.28, 123.675], std=[57.375, 57.12, 58.395], bgr_to_rgb=False, pad_size_divisor=32
@@ -94,412 +207,254 @@ class Det3DDataPreprocessor:
         return output
 
 
-def create_lidar_bev_image(boxes, scores, labels, img_size=800):
-    """Create bird's eye view image"""
+def get_box_corners_3d(box):
+    """Convert box to 8 corner coordinates."""
+    x, y, z, w, l, h, yaw = box[:7]
 
-    # Create black canvas
-    bev_img = np.zeros((img_size, img_size, 3), dtype=np.uint8)
+    hw, hl, hh = w / 2, l / 2, h / 2
 
-    # Coordinate system:
-    # X: -50 to +50 meters (left to right)
-    # Y: -50 to +50 meters (back to front)
-    meters_per_pixel = 100 / img_size  # 100m range, img_size pixels
+    local_corners = np.array(
+        [
+            [-hl, -hw, -hh],
+            [hl, -hw, -hh],
+            [hl, hw, -hh],
+            [-hl, hw, -hh],
+            [-hl, -hw, hh],
+            [hl, -hw, hh],
+            [hl, hw, hh],
+            [-hl, hw, hh],
+        ],
+        dtype=np.float64,
+    )
 
-    def world_to_pixel(x, y):
-        """Convert world coordinates (meters) to pixel coordinates"""
-        px = int((x + 50) / meters_per_pixel)
-        py = int((50 - y) / meters_per_pixel)  # Flip Y so front is up
-        return px, py
+    cos_yaw = np.cos(yaw)
+    sin_yaw = np.sin(yaw)
+    rotation_matrix = np.array([[cos_yaw, -sin_yaw, 0], [sin_yaw, cos_yaw, 0], [0, 0, 1]], dtype=np.float64)
 
-    # Class colors
-    class_colors = [
-        (255, 0, 0),  # Red - Car
-        (0, 255, 0),  # Green - Truck
-        (0, 0, 255),  # Blue - Bus
-        (255, 255, 0),  # Yellow - Trailer
-        (255, 0, 255),  # Magenta - Pedestrian
-        (0, 255, 255),  # Cyan - Motorcycle
-        (128, 128, 0),  # Olive - Bicycle
-        (128, 0, 128),  # Purple - Traffic cone
-        (0, 128, 128),  # Teal - Barrier
-        (255, 128, 0),  # Orange - Construction vehicle
-    ]
-
-    # Draw ego vehicle (center)
-    ego_px, ego_py = world_to_pixel(0, 0)
-    cv2.circle(bev_img, (ego_px, ego_py), 5, (255, 255, 255), -1)
-    cv2.putText(bev_img, "EGO", (ego_px - 15, ego_py - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-
-    # Draw detected boxes
-    for i, box in enumerate(boxes):
-        if scores[i] < 0.2:  # Skip low confidence
-            continue
-
-        x, y, z, l, w, h, yaw = box[:7]
-        label = int(labels[i])
-        color = class_colors[label % len(class_colors)]
-
-        # Get 4 corners of box (top-down view)
-        cos_yaw = np.cos(yaw)
-        sin_yaw = np.sin(yaw)
-
-        corners_x = np.array([-l / 2, l / 2, l / 2, -l / 2])
-        corners_y = np.array([-w / 2, -w / 2, w / 2, w / 2])
-
-        # Rotate corners
-        rot_x = corners_x * cos_yaw - corners_y * sin_yaw + x
-        rot_y = corners_x * sin_yaw + corners_y * cos_yaw + y
-
-        # Convert to pixels
-        pts = []
-        for cx, cy in zip(rot_x, rot_y):
-            px, py = world_to_pixel(cx, cy)
-            pts.append([px, py])
-
-        pts = np.array(pts, dtype=np.int32)
-
-        # Draw box
-        cv2.polylines(bev_img, [pts], True, color, 2)
-
-        # Draw heading direction (front of box)
-        front_x = x + (l / 2) * cos_yaw
-        front_y = y + (l / 2) * sin_yaw
-        fx, fy = world_to_pixel(front_x, front_y)
-        cx, cy = world_to_pixel(x, y)
-        cv2.arrowedLine(bev_img, (cx, cy), (fx, fy), color, 2, tipLength=0.3)
-
-        # Add score text
-        cv2.putText(bev_img, f"{scores[i]:.2f}", (cx - 15, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-
-    # Add grid lines
-    for meter in range(-50, 51, 10):
-        px, py_top = world_to_pixel(meter, 50)
-        px, py_bot = world_to_pixel(meter, -50)
-        cv2.line(bev_img, (px, py_top), (px, py_bot), (50, 50, 50), 1)
-
-        px_left, py = world_to_pixel(-50, meter)
-        px_right, py = world_to_pixel(50, meter)
-        cv2.line(bev_img, (px_left, py), (px_right, py), (50, 50, 50), 1)
-
-    # Add axis labels
-    cv2.putText(bev_img, "FRONT", (img_size // 2 - 30, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-    cv2.putText(bev_img, "BACK", (img_size // 2 - 25, img_size - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-
-    return bev_img
+    corners = local_corners @ rotation_matrix.T + np.array([x, y, z])
+    return corners
 
 
-def visualizations(ttnn_output, camera_images, img_metas, output_dir="./"):
-    """Save visualizations comparing PyTorch and TTNN outputs side-by-side"""
+def project_point_simple(point_3d, lidar2img, image_shape):
+    """Simple projection using lidar2img directly."""
+    h, w = image_shape[:2]
 
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    # Convert to homogeneous coordinates
+    point_homo = np.array([point_3d[0], point_3d[1], point_3d[2], 1.0])
 
-    # Process TTNN output
-    ttnn_dict = ttnn_output[0]["pts_bbox"]
-    ttnn_boxes = ttnn_dict["bboxes_3d"].tensor.cpu().numpy()
-    ttnn_scores = ttnn_dict["scores_3d"].to(torch.float32).cpu().numpy()
-    ttnn_labels = ttnn_dict["labels_3d"].to(torch.float32).cpu().numpy()
+    # Project using lidar2img matrix
+    proj = lidar2img @ point_homo
 
-    threshold = 0.2
+    # Check depth
+    if proj[2] <= 0:
+        return None, None, False
 
-    # Filter TTNN results
-    ttnn_mask = ttnn_scores > threshold
-    ttnn_filtered_boxes = ttnn_boxes[ttnn_mask]
-    ttnn_filtered_scores = ttnn_scores[ttnn_mask]
-    ttnn_filtered_labels = ttnn_labels[ttnn_mask]
+    # Normalize
+    u = proj[0] / proj[2]
+    v = proj[1] / proj[2]
 
-    cam_names = ["CAM_FRONT", "CAM_FRONT_RIGHT", "CAM_FRONT_LEFT", "CAM_BACK", "CAM_BACK_LEFT", "CAM_BACK_RIGHT"]
+    # Check bounds
+    in_image = (0 <= u < w) and (0 <= v < h)
 
-    logger.info(f"Saved visualization to {output_dir}")
-    for cam_id, cam_name in enumerate(cam_names):
-        ttnn_img = camera_images[cam_id].copy()
-
-        if "lidar2img" in img_metas[0] and len(img_metas[0]["lidar2img"]) > cam_id:
-            # Now cam_id directly corresponds to the correct calibration
-            lidar2img = img_metas[0]["lidar2img"][cam_id]
-
-            if isinstance(lidar2img, torch.Tensor):
-                lidar2img = lidar2img.cpu().numpy()
-
-            # Draw boxes...
-            ttnn_img = draw_lidar_bbox3d_on_img(
-                ttnn_filtered_boxes[:50], ttnn_img, lidar2img, ttnn_img.shape[:2], color=(255, 0, 0), thickness=2
-            )
-            # Create ttnn image
-            cv2.imwrite(f"{output_dir}/{cam_name}.jpg", ttnn_img)
-            logger.info(f"{cam_name}.jpg")
-
-    # TTNN BEV visualization
-    fig, ax = plt.subplots(1, 1, figsize=(10, 10))  # Single plot, not (ax1, ax2)
-
-    class_colors = ["red", "blue", "green", "yellow", "purple", "orange", "cyan", "magenta", "brown", "pink"]
-
-    # TTNN BEV
-    for i, box in enumerate(ttnn_filtered_boxes[:100]):
-        x, y, z, l, w, h, yaw = box[:7]
-        label = int(ttnn_filtered_labels[i])
-        color = class_colors[label % len(class_colors)]
-
-        rect = patches.Rectangle(
-            (x - l / 2, y - w / 2), l, w, angle=np.degrees(yaw), linewidth=2, edgecolor=color, facecolor="none"
-        )
-        ax.add_patch(rect)
-        ax.text(x, y, f"{ttnn_filtered_scores[i]:.2f}", fontsize=8, ha="center")
-
-    ax.set_xlim(-50, 50)
-    ax.set_ylim(-50, 50)
-    ax.set_xlabel("X (meters)", fontsize=12)
-    ax.set_ylabel("Y (meters)", fontsize=12)
-    ax.set_title(f"TTNN BEV - {len(ttnn_filtered_boxes)} objects", fontsize=14)
-    ax.grid(True, alpha=0.3)
-    ax.set_aspect("equal")
-
-    plt.tight_layout()
-    plt.savefig(f"{output_dir}/bev_ttnn.jpg", dpi=150, bbox_inches="tight")
-    plt.close()
-
-    bev_img = create_lidar_bev_image(ttnn_filtered_boxes, ttnn_filtered_scores, ttnn_filtered_labels)
-    cv2.imwrite(f"{output_dir}/bev_lidar_view.jpg", bev_img)
-
-    return ttnn_filtered_boxes
+    return u, v, in_image
 
 
-def draw_lidar_bbox3d_on_img(bboxes_3d, img, lidar2img, img_shape, color=(0, 255, 0), thickness=2):
-    """Draws lidar bboxes on image, handles invalid projections and checks depth."""
-    if isinstance(lidar2img, torch.Tensor):
-        lidar2img = lidar2img.cpu().numpy()
+def draw_box_simple(img, box, lidar2img, color=(255, 0, 255), thickness=2, label_text=""):
+    """Draw 3D box on image."""
+    corners_3d = get_box_corners_3d(box)
+    h, w = img.shape[:2]
 
-    if len(bboxes_3d) == 0:
+    corners_2d = []
+    valid_indices = []
+
+    for idx, corner in enumerate(corners_3d):
+        u, v, in_img = project_point_simple(corner, lidar2img, img.shape)
+        if in_img:
+            corners_2d.append([u, v])
+            valid_indices.append(idx)
+
+    if len(valid_indices) < 2:
         return img
 
-    boxes_drawn = 0
-    boxes_skipped_behind = 0
-    boxes_skipped_outside = 0
-    boxes_skipped_invalid = 0
+    corners_2d = np.array(corners_2d).astype(np.int32)
 
-    for bbox in bboxes_3d:
-        l, w, h = bbox[3:6]
+    # Draw edges
+    edges = [
+        (0, 1),
+        (1, 2),
+        (2, 3),
+        (3, 0),
+        (4, 5),
+        (5, 6),
+        (6, 7),
+        (7, 4),
+        (0, 4),
+        (1, 5),
+        (2, 6),
+        (3, 7),
+    ]
 
-        # Create 8 corners
-        x_corners = np.array([l / 2, l / 2, -l / 2, -l / 2, l / 2, l / 2, -l / 2, -l / 2])
-        y_corners = np.array([w / 2, -w / 2, -w / 2, w / 2, w / 2, -w / 2, -w / 2, w / 2])
-        z_corners = np.array([h / 2, h / 2, h / 2, h / 2, -h / 2, -h / 2, -h / 2, -h / 2])
-        corners = np.vstack([x_corners, y_corners, z_corners])
+    for start_idx, end_idx in edges:
+        if start_idx in valid_indices and end_idx in valid_indices:
+            start_pos = valid_indices.index(start_idx)
+            end_pos = valid_indices.index(end_idx)
 
-        # Rotate
-        yaw = bbox[6]
-        rot_mat = np.array([[np.cos(yaw), -np.sin(yaw), 0], [np.sin(yaw), np.cos(yaw), 0], [0, 0, 1]])
-        corners = rot_mat @ corners
+            start_pt = tuple(corners_2d[start_pos])
+            end_pt = tuple(corners_2d[end_pos])
+            cv2.line(img, start_pt, end_pt, color, thickness, cv2.LINE_AA)
 
-        # Translate
-        corners[0, :] += bbox[0]
-        corners[1, :] += bbox[1]
-        corners[2, :] += bbox[2]
-        corners = corners.T  # 8x3
+    # Draw center
+    if len(corners_2d) > 0:
+        center = corners_2d.mean(axis=0).astype(np.int32)
+        if 0 <= center[0] < w and 0 <= center[1] < h:
+            cv2.circle(img, tuple(center), 5, color, -1)
 
-        # Project to image
-        pts_4d = np.concatenate([corners, np.ones((8, 1))], axis=-1)
-        pts_2d = pts_4d @ lidar2img.T  # 8x4
+    # Draw label
+    if label_text and len(corners_2d) > 0:
+        label_pt = tuple(corners_2d[0])
+        (text_w, text_h), _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
 
-        # Check depth
-        depths = pts_2d[:, 2]
-        valid_depth_mask = depths > 1.0
-        if valid_depth_mask.sum() < 2:
-            boxes_skipped_behind += 1
-            continue
-
-        pts_2d_normalized = pts_2d.copy()
-
-        safe_depths = np.where(depths > 0.1, depths, 1e10)
-        pts_2d_normalized[:, 0] = pts_2d[:, 0] / safe_depths
-        pts_2d_normalized[:, 1] = pts_2d[:, 1] / safe_depths
-
-        if np.any(np.isnan(pts_2d_normalized[:, :2])) or np.any(np.isinf(pts_2d_normalized[:, :2])):
-            boxes_skipped_invalid += 1
-            continue
-
-        corners_2d = pts_2d_normalized[:, :2].astype(np.int32)
-
-        # Draw only edges where BOTH corners have valid depth
-        edges = [
-            (0, 1),
-            (1, 2),
-            (2, 3),
-            (3, 0),  # bottom
-            (4, 5),
-            (5, 6),
-            (6, 7),
-            (7, 4),  # top
-            (0, 4),
-            (1, 5),
-            (2, 6),
-            (3, 7),  # vertical
-        ]
-
-        lines_drawn = 0
-        for i, j in edges:
-            # Both corners must be in front of camera
-            if not (valid_depth_mask[i] and valid_depth_mask[j]):
-                continue
-
-            pt1 = corners_2d[i]
-            pt2 = corners_2d[j]
-
-            # Check if line is reasonably within extended image bounds
-            margin = 200
-            if (
-                min(pt1[0], pt2[0]) < img_shape[1] + margin
-                and max(pt1[0], pt2[0]) > -margin
-                and min(pt1[1], pt2[1]) < img_shape[0] + margin
-                and max(pt1[1], pt2[1]) > -margin
-            ):
-                # Clip to image bounds to avoid OpenCV errors
-                pt1_clipped = (
-                    max(-1000, min(img_shape[1] + 1000, pt1[0])),
-                    max(-1000, min(img_shape[0] + 1000, pt1[1])),
-                )
-                pt2_clipped = (
-                    max(-1000, min(img_shape[1] + 1000, pt2[0])),
-                    max(-1000, min(img_shape[0] + 1000, pt2[1])),
-                )
-
-                cv2.line(img, pt1_clipped, pt2_clipped, color, thickness)
-                lines_drawn += 1
-
-        if lines_drawn > 0:
-            boxes_drawn += 1
-        else:
-            boxes_skipped_outside += 1
+        cv2.rectangle(
+            img, (label_pt[0], label_pt[1] - text_h - 3), (label_pt[0] + text_w, label_pt[1] + 2), (0, 0, 0), -1
+        )
+        cv2.putText(
+            img, label_text, (label_pt[0], label_pt[1] - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA
+        )
 
     return img
 
 
-def load_calibration(data_root="models/experimental/functional_petr/resources/sample_input"):
-    """Load the proven working calibration"""
-    _, meta_data = generate_petr_inputs()
-    meta = meta_data[0] if isinstance(meta_data, list) else meta_data
-    cam2img_orig = meta["cam2img"][0]
-    if isinstance(cam2img_orig, torch.Tensor):
-        cam2img_orig = cam2img_orig.cpu().numpy()
+def create_3d_plot(predictions, output_path, title="3D", threshold=0.2):
+    """Create 3D visualization."""
+    logger.info(f"  {title}...")
 
-    # Compute lidar2img
-    if "lidar2img" not in meta:
-        lidar2img_list = []
+    pred = predictions[0]["pts_bbox"]
+    boxes = pred["bboxes_3d"].tensor.to(torch.float32).cpu().numpy()
+    scores = pred["scores_3d"].to(torch.float32).cpu().numpy()
 
-        for i in range(6):
-            cam2img = meta["cam2img"][i]
-            lidar2cam = meta["lidar2cam"][i]
+    keep = scores >= threshold
+    boxes = boxes[keep]
 
-            # Convert to numpy
-            if isinstance(cam2img, torch.Tensor):
-                cam2img = cam2img.cpu().numpy()
-            if isinstance(lidar2cam, torch.Tensor):
-                lidar2cam = lidar2cam.cpu().numpy()
+    fig = plt.figure(figsize=(12, 9))
+    ax = fig.add_subplot(111, projection="3d")
 
-            # NO SCALING NEEDED! cam2img is already for 320x800 images
-            lidar2img = cam2img @ lidar2cam
-            lidar2img_list.append(lidar2img)
+    ax.set_xlabel("X (m)", fontsize=11, weight="bold")
+    ax.set_ylabel("Y (m)", fontsize=11, weight="bold")
+    ax.set_zlabel("Z (m)", fontsize=11, weight="bold")
+    ax.set_title(title, fontsize=13, weight="bold")
 
-        meta["lidar2img"] = lidar2img_list
-    # Test the calibration
-    test_point = np.array([10.0, 0.0, 0.0, 1.0])
-    lidar2img = meta["lidar2img"][0]  # CAM_FRONT
-    if isinstance(lidar2img, torch.Tensor):
-        lidar2img = lidar2img.cpu().numpy()
-
-    proj = lidar2img @ test_point
-    u, v = proj[0] / proj[2], proj[1] / proj[2]
-
-    return meta
-
-
-# Approximate calibration for the sample input
-def load_images_with_calibration(data_root="models/experimental/functional_petr/resources/sample_input"):
-    """
-    Load the images that match the golden calibration
-    """
-
-    cam_names = ["CAM_FRONT", "CAM_FRONT_RIGHT", "CAM_FRONT_LEFT", "CAM_BACK", "CAM_BACK_LEFT", "CAM_BACK_RIGHT"]
-
-    # Load calibration
-    meta = load_calibration(data_root)
-
-    FILENAMES = [
-        "n015-2018-07-24-11-22-45+0800__CAM_FRONT__1532402927612460.jpg",
-        "n015-2018-07-24-11-22-45+0800__CAM_FRONT_RIGHT__1532402927620339.jpg",
-        "n015-2018-07-24-11-22-45+0800__CAM_FRONT_LEFT__1532402927604844.jpg",
-        "n015-2018-07-24-11-22-45+0800__CAM_BACK__1532402927637525.jpg",
-        "n015-2018-07-24-11-22-45+0800__CAM_BACK_LEFT__1532402927647423.jpg",
-        "n015-2018-07-24-11-22-45+0800__CAM_BACK_RIGHT__1532402927627893.jpg",
+    # Ego vehicle
+    ego_corners = np.array(
+        [
+            [-2, -1, 0],
+            [2, -1, 0],
+            [2, 1, 0],
+            [-2, 1, 0],
+            [-2, -1, -0.5],
+            [2, -1, -0.5],
+            [2, 1, -0.5],
+            [-2, 1, -0.5],
+        ]
+    )
+    ego_faces = [
+        [ego_corners[0], ego_corners[1], ego_corners[5], ego_corners[4]],
+        [ego_corners[2], ego_corners[3], ego_corners[7], ego_corners[6]],
     ]
+    ego_collection = Poly3DCollection(ego_faces, alpha=0.5, facecolor="red", edgecolors="red", linewidths=2)
+    ax.add_collection3d(ego_collection)
 
-    imgs_list = []
-    camera_images = []
+    # Draw boxes
+    for box in boxes:
+        corners = get_box_corners_3d(box)
+        faces = [
+            [corners[0], corners[1], corners[5], corners[4]],
+            [corners[2], corners[3], corners[7], corners[6]],
+        ]
+        face_collection = Poly3DCollection(faces, alpha=0.2, facecolor="magenta", edgecolors="magenta", linewidths=1.5)
+        ax.add_collection3d(face_collection)
 
-    for cam, filename in zip(cam_names, FILENAMES):
-        img_path = Path(data_root) / filename
+    if len(boxes) > 0:
+        all_corners = np.vstack([get_box_corners_3d(box) for box in boxes])
+        x_min, x_max = all_corners[:, 0].min() - 5, all_corners[:, 0].max() + 5
+        y_min, y_max = all_corners[:, 1].min() - 5, all_corners[:, 1].max() + 5
+        z_min, z_max = all_corners[:, 2].min() - 5, all_corners[:, 2].max() + 5
+    else:
+        x_min, x_max, y_min, y_max, z_min, z_max = -50, 50, -50, 50, -5, 5
 
-        if img_path.exists():
-            img = cv2.imread(str(img_path))
-        else:
-            img = np.zeros((900, 1600, 3), dtype=np.uint8)
+    ax.set_xlim([x_min, x_max])
+    ax.set_ylim([y_min, y_max])
+    ax.set_zlim([z_min, z_max])
+    ax.view_init(elev=20, azim=45)
 
-        # Resize to model input size
-        img = cv2.resize(img, (800, 320))
-        camera_images.append(img.copy())  # Store for visualization
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
 
-        # Normalize
-        img = img.astype(np.float32)
-        mean = np.array([103.530, 116.280, 123.675])
-        std = np.array([57.375, 57.120, 58.395])
-        img = (img - mean) / std
-        img = img.transpose(2, 0, 1)  # HWC -> CHW
-        imgs_list.append(img)
 
-    # Stack images
-    imgs = np.stack(imgs_list).astype(np.float32)
-    imgs = torch.from_numpy(imgs).unsqueeze(0)  # [1, 6, 3, H, W]
+def visualize_on_images(predictions, camera_images, img_metas, output_dir, threshold=0.2, prefix=""):
+    """Visualize boxes on camera images."""
+    os.makedirs(output_dir, exist_ok=True)
+    logger.info(f"  Camera projections ({prefix})...")
 
-    # Create img_metas with calibration
-    img_metas = [
-        {
-            "filename": cam_names,
-            "ori_shape": [(900, 1600)] * 6,
-            "img_shape": (320, 800),
-            "pad_shape": (320, 800),
-            "lidar2img": meta["lidar2img"],
-            "cam2img": meta.get("cam2img", [np.eye(4, dtype=np.float32) for _ in range(6)]),
-            "cam_intrinsic": meta.get("cam_intrinsic", [np.eye(3, dtype=np.float32) for _ in range(6)]),
-            "lidar2cam": meta.get("lidar2cam", [np.eye(4, dtype=np.float32) for _ in range(6)]),
-        }
-    ]
+    pred = predictions[0]["pts_bbox"]
+    boxes = pred["bboxes_3d"].tensor.to(torch.float32).cpu().numpy()
+    scores = pred["scores_3d"].to(torch.float32).cpu().numpy()
+    labels = pred["labels_3d"].to(torch.float32).cpu().numpy()
 
-    return {"imgs": imgs, "img_metas": img_metas}, camera_images
+    keep = scores >= threshold
+    boxes = boxes[keep]
+    scores = scores[keep]
+    labels = labels[keep]
+
+    img_meta = img_metas[0]
+    lidar2img_list = img_meta["lidar2img"]
+
+    if isinstance(camera_images, list):
+        camera_items = [
+            (CAMERA_NAMES[i] if i < len(CAMERA_NAMES) else f"CAM_{i}", img) for i, img in enumerate(camera_images)
+        ]
+    else:
+        camera_items = list(camera_images.items())
+
+    for cam_idx, (cam_name, cam_image) in enumerate(camera_items):
+        if cam_idx >= len(lidar2img_list):
+            continue
+
+        lidar2img = lidar2img_list[cam_idx]
+        if isinstance(lidar2img, torch.Tensor):
+            lidar2img = lidar2img.to(torch.float32).cpu().numpy()
+
+        vis_img = cam_image.copy()
+        if vis_img.dtype in [np.float32, np.float64]:
+            if vis_img.max() <= 1.0:
+                vis_img = (vis_img * 255).astype(np.uint8)
+            else:
+                vis_img = vis_img.astype(np.uint8)
+        if len(vis_img.shape) == 3 and vis_img.shape[2] == 3:
+            vis_img = cv2.cvtColor(vis_img, cv2.COLOR_RGB2BGR)
+
+        for box, score, label in zip(boxes, scores, labels):
+            class_name = NUSCENES_CLASSES[int(label)]
+            label_text = f"{class_name} {score:.2f}"
+            vis_img = draw_box_simple(vis_img, box, lidar2img, color=(255, 0, 255), thickness=2, label_text=label_text)
+
+        output_path = os.path.join(output_dir, f"{prefix}{cam_name}.jpg")
+        cv2.imwrite(output_path, vis_img)
+        logger.info(f"    {cam_name}")
 
 
 def test_demo(device, reset_seeds):
-    """
-    Updated test_demo that uses calibration
-    """
+    """Main demo."""
+    logger.info("Loading data...")
     input_data, camera_images = load_images_with_calibration("models/experimental/petr/resources/sample_input")
 
-    # Initialize preprocessor
     data_preprocessor = Det3DDataPreprocessor()
-
     output_after_preprocess = data_preprocessor(input_data, False)
     batch_img_metas = [ds.metainfo for ds in output_after_preprocess["data_samples"]]
 
-    # Verify calibration is correct
-    test_point = np.array([10.0, 0.0, 0.0, 1.0])
-    lidar2img = batch_img_metas[0]["lidar2img"][0]
-    if isinstance(lidar2img, torch.Tensor):
-        lidar2img = lidar2img.cpu().numpy()
-    proj = lidar2img @ test_point
-    u, v = proj[0] / proj[2], proj[1] / proj[2]
-
-    # Load model
     weights_url = (
-        "https://download.openmmlab.com/mmdetection3d/v1.1.0_models/petr/petr_vovnet_gridmask_p4_800x320-e2191752.pth"
+        "https://download.openmmlab.com/mmdetection3d/v1.1.0_models/petr/"
+        "petr_vovnet_gridmask_p4_800x320-e2191752.pth"
     )
     resources_dir = os.path.join(os.path.dirname(__file__), "..", "resources")
     weights_path = os.path.abspath(os.path.join(resources_dir, "petr_vovnet_gridmask_p4_800x320-e2191752.pth"))
@@ -507,36 +462,27 @@ def test_demo(device, reset_seeds):
     if not os.path.exists(resources_dir):
         os.makedirs(resources_dir)
     if not os.path.exists(weights_path):
-        import urllib.request
-
-        logger.info(f"Downloading PETR weights from {weights_url} ...")
+        logger.info("Downloading weights...")
         urllib.request.urlretrieve(weights_url, weights_path)
-        logger.info(f"Weights downloaded to {weights_path}")
+
     weights_state_dict = torch.load(weights_path, weights_only=False)["state_dict"]
 
+    logger.info("Running PyTorch inference...")
     torch_model = PETR(use_grid_mask=True)
     torch_model.load_state_dict(weights_state_dict)
     torch_model.eval()
 
-    # Run PyTorch inference
     with torch.no_grad():
         torch_output = torch_model.predict(output_after_preprocess["inputs"], batch_img_metas)
 
-    # Check results
-    boxes = torch_output[0]["pts_bbox"]["bboxes_3d"].tensor.cpu().numpy()
-    scores = torch_output[0]["pts_bbox"]["scores_3d"].cpu().numpy()
-
-    # Convert to TTNN and run inference
+    logger.info("Running TTNN inference...")
     ttnn_inputs = dict()
     imgs_tensor = output_after_preprocess["inputs"]["imgs"]
     if len(imgs_tensor.shape) == 4:
         imgs_tensor = imgs_tensor.unsqueeze(0)
     ttnn_inputs["imgs"] = ttnn.from_torch(imgs_tensor, device=device)
 
-    # Preprocess parameters
     parameters, query_embedding_input = get_parameters(torch_model, device)
-
-    # Initialize TTNN model
     ttnn_model = ttnn_PETR(
         use_grid_mask=True,
         parameters=parameters,
@@ -544,15 +490,19 @@ def test_demo(device, reset_seeds):
         device=device,
     )
 
-    # Run TTNN inference
     ttnn_output = ttnn_model.predict(ttnn_inputs, batch_img_metas)
 
-    # Save visualizations with approximate calibration
-    ttnn_filtered = visualizations(
-        ttnn_output, camera_images, batch_img_metas, output_dir="models/experimental/petr/resources/sample_output"
-    )
+    output_dir = "models/experimental/petr/resources/sample_output"
+    os.makedirs(output_dir, exist_ok=True)
 
-    logger.info("Demo completed!")
+    create_3d_plot(ttnn_output, os.path.join(output_dir, "ttnn_3d.png"), "TTNN 3D Predictions", 0.2)
+
+    visualize_on_images(ttnn_output, camera_images, batch_img_metas, output_dir, 0.2, "ttnn_")
+
+    logger.info("\n" + "=" * 80)
+    logger.info(f"Files saved to: {output_dir}/\n")
+    logger.info("✓ VISUALIZATION COMPLETE!")
+    logger.info("=" * 80)
 
 
 if __name__ == "__main__":

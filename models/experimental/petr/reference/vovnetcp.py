@@ -189,9 +189,6 @@ class eSEModule(nn.Module):
         return input * x
 
 
-# OSA stands for "One-Shot Aggregation" module.
-# In VoVNet architectures, the OSA module is a building block that aggregates features from multiple convolutional layers in a single step (one-shot),
-# instead of sequentially as in traditional residual blocks. This design helps to improve information flow and feature reuse.
 class _OSA_module(nn.Module):
     def __init__(
         self,
@@ -287,7 +284,6 @@ class _OSA_stage(nn.Sequential):
             )
 
 
-# @MODELS.register_module()
 class VoVNetCP(torch.nn.Module):
     def __init__(
         self,
