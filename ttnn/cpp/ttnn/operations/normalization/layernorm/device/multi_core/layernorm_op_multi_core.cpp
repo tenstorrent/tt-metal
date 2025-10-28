@@ -42,6 +42,42 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
     return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
+
+std::pair<std::optional<Tensor>, uint32_t> create_reciprocal_tensor_if_needed(
+    IDevice* device, uint32_t W, const CoreRangeSet& cores, const bool use_welford) {
+    const auto num_cores = cores.num_cores();
+    std::optional<Tensor> recip_tensor = std::nullopt;
+    uint32_t reciprocal_CB_size_bytes = 0;
+    if (use_welford) {
+        const auto recip_dtype = tt::tt_metal::DataType::FLOAT32;
+        const ShardSpec shard_spec(cores, {1, W}, ShardOrientation::ROW_MAJOR);
+        const MemoryConfig mem_config =
+            MemoryConfig{tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec};
+        const TensorLayout tensor_layout(TensorLayout(recip_dtype, Layout::ROW_MAJOR, mem_config));
+        const Shape tensor_shape{num_cores, W};
+        const TensorSpec tensor_spec(tensor_shape, tensor_layout);
+        // Compute the reciprocals of an ascending sequence of integers
+        std::vector<float> reciprocals(num_cores * W);
+        for (uint32_t i = 0; i < W; i++) {
+            // Compute for first row
+            reciprocals[i] = 1.0f / (i + 1);
+        }
+        for (uint32_t i = 1; i < num_cores; i++) {
+            // Copy to other rows
+            std::copy(reciprocals.begin(), reciprocals.begin() + W, reciprocals.begin() + i * W);
+        }
+
+        if (auto p_mesh_device = dynamic_cast<distributed::MeshDevice*>(device)) {
+            recip_tensor = Tensor::from_vector(std::move(reciprocals), tensor_spec, p_mesh_device);
+        } else {
+            TT_THROW("Cannot cast to MeshDevice");
+        }
+
+        reciprocal_CB_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
+    }
+
+    return std::make_pair(recip_tensor, reciprocal_CB_size_bytes);
+}
 }  // namespace
 
 // computes layernorm(a+*b)*gamma + beta
@@ -61,6 +97,7 @@ bool CB_can_fit_in_L1(
     uint32_t in2_size,
     uint32_t in3_size,
     uint32_t im2_size,
+    uint32_t recip_size,
     uint32_t l1_size) {
     uint32_t sum = 0;
     sum += in0_size;
@@ -77,6 +114,7 @@ bool CB_can_fit_in_L1(
     sum += in2_size;
     sum += in3_size;
     sum += im2_size;
+    sum += recip_size;
     return sum < l1_size * 0.95;
 }
 operation::ProgramWithCallbacks layernorm_multi_core(
@@ -129,6 +167,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     tt::DataFormat beta_cb_data_format = beta.has_value()
                                              ? tt::tt_metal::datatype_to_dataformat_converter(beta.value().dtype())
                                              : tt::DataFormat::Float16_b;
+    tt::DataFormat reciprocal_cb_data_format = tt::DataFormat::Float32;
+
     uint32_t in_single_tile_size = tt::tile_size(in_data_format);
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
@@ -141,6 +181,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
     log_debug(tt::LogOp, "gamma_cb_data_format: {}", gamma_cb_data_format);
     log_debug(tt::LogOp, "beta_cb_data_format: {}", beta_cb_data_format);
+    log_debug(tt::LogOp, "reciprocal_cb_data_format: {}", reciprocal_cb_data_format);
     log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
     log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
@@ -167,6 +208,20 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
         num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_WIDTH : 0;
     }
+
+    uint32_t num_tile_rows = NC * Ht;
+    auto grid_size = device->compute_with_storage_grid_size();
+    auto
+        [num_cores,
+         all_cores,
+         core_group_1,
+         core_group_2,
+         num_tile_rows_per_core_group_1,
+         num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
+
+    // Create the sharded reciprocal LUT tensor if using Welford
+    auto [recip_tensor, reciprocal_CB_size_bytes] =
+        create_reciprocal_tensor_if_needed(device, W, all_cores, use_welford);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -212,6 +267,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         in2_t * bfloat16_tile_size,
         in3_t * bfloat16_tile_size,
         im2_t * single_tile_size,
+        reciprocal_CB_size_bytes,
         a.device()->l1_size_per_core());
     if (!rms_norm and !use_row_major_kernel) {
         if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and !cb_fits_in_L1) {
@@ -256,24 +312,19 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         num_beta_tiles,
         block_size);
 
-    uint32_t num_tile_rows = NC * Ht;
-    auto grid_size = device->compute_with_storage_grid_size();
-    auto
-        [num_cores,
-         all_cores,
-         core_group_1,
-         core_group_2,
-         num_tile_rows_per_core_group_1,
-         num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     Program program = CreateProgram();
 
+    const auto use_welford_and_not_rms_norm = use_welford && !rms_norm;
+
     const auto fuse_pre_add = b.has_value();
 
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_size};
+    if (!large_tensor_needed) {
+        reader_compile_time_args.push_back((std::uint32_t)use_welford);
+    }
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(b ? b->buffer() : nullptr).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(reader_compile_time_args);
@@ -312,8 +363,6 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     if (rms_norm) {
         compute_defines["RMSNORM"] = "1";
     }
-
-    const auto use_welford_and_not_rms_norm = use_welford && !rms_norm;
 
     auto reader_kernel_path = use_row_major_kernel
                                   ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
@@ -386,10 +435,12 @@ operation::ProgramWithCallbacks layernorm_multi_core(
                 .set_page_size(tt::CBIndex::c_18, single_tile_size);
         CreateCircularBuffer(program, all_cores, cb_intermed1_config);
     }
-    CircularBufferConfig cb_in2_config =
-        CircularBufferConfig(in2_t * bfloat16_tile_size, {{tt::CBIndex::c_2, tt::DataFormat::Float16_b}})
-            .set_page_size(tt::CBIndex::c_2, bfloat16_tile_size);
-    CreateCircularBuffer(program, all_cores, cb_in2_config);
+    if (!use_welford) {
+        CircularBufferConfig cb_in2_config =
+            CircularBufferConfig(in2_t * bfloat16_tile_size, {{tt::CBIndex::c_2, tt::DataFormat::Float16_b}})
+                .set_page_size(tt::CBIndex::c_2, bfloat16_tile_size);
+        CreateCircularBuffer(program, all_cores, cb_in2_config);
+    }
     CircularBufferConfig cb_in3_config =
         CircularBufferConfig(in3_t * bfloat16_tile_size, {{tt::CBIndex::c_3, tt::DataFormat::Float16_b}})
             .set_page_size(tt::CBIndex::c_3, bfloat16_tile_size);
@@ -459,6 +510,14 @@ operation::ProgramWithCallbacks layernorm_multi_core(
             CircularBufferConfig(in1_t * inb_single_tile_size, {{tt::CBIndex::c_1, inb_data_format}})
                 .set_page_size(tt::CBIndex::c_1, inb_single_tile_size);
         CreateCircularBuffer(program, all_cores, c_in1_config);
+    }
+    if (use_welford) {
+        // Reciprocal LUT
+        CircularBufferConfig c_recip_config =
+            CircularBufferConfig(reciprocal_CB_size_bytes, {{tt::CBIndex::c_25, reciprocal_cb_data_format}})
+                .set_page_size(tt::CBIndex::c_25, reciprocal_CB_size_bytes)
+                .set_globally_allocated_address(*recip_tensor.value().buffer());
+        CreateCircularBuffer(program, all_cores, c_recip_config);
     }
 
     uint32_t curr_row = 0;
@@ -576,7 +635,7 @@ void assert_subblock_compute_config_compatible(bool dst_full_sync_en, bool fp32_
     }
 }
 
-std::tuple<tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat> get_cb_data_formats(
+std::tuple<tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat> get_cb_data_formats(
     const Tensor& output,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
@@ -589,7 +648,8 @@ std::tuple<tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat> get_c
     tt::DataFormat beta_cb_data_format = beta.has_value()
                                              ? tt::tt_metal::datatype_to_dataformat_converter(beta.value().dtype())
                                              : tt::DataFormat::Float16_b;
-    return {out_data_format, cb_data_format, gamma_cb_data_format, beta_cb_data_format};
+    tt::DataFormat reciprocal_cb_data_format = tt::DataFormat::Float32;
+    return {out_data_format, cb_data_format, gamma_cb_data_format, beta_cb_data_format, reciprocal_cb_data_format};
 }
 
 bool should_use_two_stage_reduce(
@@ -659,7 +719,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
     assert_subblock_compute_config_compatible(dst_full_sync_en, fp32_dest_acc_en, subblock_wt);
 
-    auto [out_data_format, cb_data_format, gamma_cb_data_format, beta_cb_data_format] =
+    auto [out_data_format, cb_data_format, gamma_cb_data_format, beta_cb_data_format, reciprocal_cb_data_format] =
         get_cb_data_formats(output, gamma, beta, fp32_dest_acc_en);
 
     // tile sizes
@@ -675,6 +735,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
     log_debug(tt::LogOp, "gamma_cb_data_format: {}", gamma_cb_data_format);
     log_debug(tt::LogOp, "beta_cb_data_format: {}", beta_cb_data_format);
+    log_debug(tt::LogOp, "reciprocal_cb_data_format: {}", reciprocal_cb_data_format);
     log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
     log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
@@ -1019,6 +1080,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         all_to_all_workers_except_sender = applyStartOffset(all_to_all_workers_except_sender, grid_offset.value());
         not_all_to_all_workers = applyStartOffset(not_all_to_all_workers, grid_offset.value());
     }
+
     // Mcast args
     auto reduce_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto reduce_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
@@ -1262,6 +1324,15 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     if (rms_norm && !use_welford) {
         compute_defines["RMSNORM"] = "1";
     }
+
+    // Create the sharded reciprocal LUT tensor if using Welford.
+    // The size has to be a compile-time constant in the kernel,
+    // so we'll take the max of the padded and unpadded partial reduce widths.
+    uint32_t per_core_recip_lut_size = std::max(num_rows_per_all_to_all_worker, num_rows_per_all_to_all_worker_last);
+    per_core_recip_lut_size *= row_wise ? tt::constants::TILE_WIDTH : tt::constants::TILE_HEIGHT;
+    auto [recip_tensor, reciprocal_CB_size_bytes] =
+        create_reciprocal_tensor_if_needed(device, per_core_recip_lut_size, all_cores, use_welford);
+
     // compute kernel compile time args
     bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
     std::vector<uint32_t> all_to_all_except_top_compute_compile_time_args = {
@@ -1308,10 +1379,12 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         all_to_all_except_top_compute_compile_time_args.push_back(last_tile_W);
         all_to_all_except_top_compute_compile_time_args.push_back(K);
         all_to_all_except_top_compute_compile_time_args.push_back(e.u);
+        all_to_all_except_top_compute_compile_time_args.push_back(per_core_recip_lut_size);
         not_all_to_all_compute_compile_time_args.push_back(tile_width);
         not_all_to_all_compute_compile_time_args.push_back(last_tile_W);
         not_all_to_all_compute_compile_time_args.push_back(K);
         not_all_to_all_compute_compile_time_args.push_back(e.u);
+        not_all_to_all_compute_compile_time_args.push_back(per_core_recip_lut_size);
     }
 
     // compute kernel
@@ -1382,20 +1455,6 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             cb_add_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, add_out_cb_config);
         }
     }
-    // in2 scaler
-    uint32_t in2_cb_index = tt::CBIndex::c_2;
-    tt::tt_metal::CircularBufferConfig in2_cb_config =
-        tt::tt_metal::CircularBufferConfig(in2_CB_size, {{in2_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(in2_cb_index, bfloat16_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, in2_cb_config);
-    // in4 scaler-c
-    if (!use_welford) {
-        uint32_t in4_cb_index = tt::CBIndex::c_4;
-        tt::tt_metal::CircularBufferConfig in4_cb_config =
-            tt::tt_metal::CircularBufferConfig(in2_CB_size, {{in4_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(in4_cb_index, bfloat16_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, in4_cb_config);
-    }
     // gamma
     if (gamma.has_value()) {
         uint32_t in5_cb_index = tt::CBIndex::c_5;
@@ -1447,12 +1506,24 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external_config);
     }
     if (!use_welford) {
+        // in2 scaler
+        uint32_t in2_cb_index = tt::CBIndex::c_2;
+        tt::tt_metal::CircularBufferConfig in2_cb_config =
+            tt::tt_metal::CircularBufferConfig(in2_CB_size, {{in2_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(in2_cb_index, bfloat16_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, in2_cb_config);
         // in3 eps
         uint32_t in3_cb_index = tt::CBIndex::c_3;
         tt::tt_metal::CircularBufferConfig in3_cb_config =
             tt::tt_metal::CircularBufferConfig(in3_CB_size, {{in3_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(in3_cb_index, bfloat16_tile_size);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, in3_cb_config);
+        // in4 scaler-c
+        uint32_t in4_cb_index = tt::CBIndex::c_4;
+        tt::tt_metal::CircularBufferConfig in4_cb_config =
+            tt::tt_metal::CircularBufferConfig(in2_CB_size, {{in4_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(in4_cb_index, bfloat16_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, in4_cb_config);
         // ex_partial2
         uint32_t ex_cb_partial2_index = tt::CBIndex::c_11;
         tt::tt_metal::CircularBufferConfig ex_cb_partial2_config =
@@ -1485,14 +1556,21 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         tt::tt_metal::CircularBufferConfig(ex_global_CB_size, {{ex_global_cb_index, cb_data_format}})
             .set_page_size(ex_global_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_global_cb_config);
-    // Intermediate buffer to store transposed Welford results
-    // This is only needed as a workaround for a transpose_wh_dest() bug
     if (use_welford) {
+        // Intermediate buffer to store transposed Welford results
+        // This is only needed as a workaround for a transpose_wh_dest() bug
         uint32_t cb_transpose_index = tt::CBIndex::c_22;
         tt::tt_metal::CircularBufferConfig cb_transpose_config =
             tt::tt_metal::CircularBufferConfig(ex_global_CB_size, {{cb_transpose_index, cb_data_format}})
                 .set_page_size(cb_transpose_index, single_tile_size);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_transpose_config);
+
+        // Reciprocal LUT
+        CircularBufferConfig cb_recip_config =
+            CircularBufferConfig(reciprocal_CB_size_bytes, {{tt::CBIndex::c_25, reciprocal_cb_data_format}})
+                .set_page_size(tt::CBIndex::c_25, reciprocal_CB_size_bytes)
+                .set_globally_allocated_address(*recip_tensor.value().buffer());
+        CreateCircularBuffer(program, all_cores, cb_recip_config);
     }
 
     CBHandle cb_stats = 0;
