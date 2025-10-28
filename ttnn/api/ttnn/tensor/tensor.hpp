@@ -6,5 +6,6 @@
 
 namespace ttnn {
 
+std::string write_to_string(const Tensor& tensor);
 void tensor_print(const Tensor& input_tensor);
 }  // namespace ttnn

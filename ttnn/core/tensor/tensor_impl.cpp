@@ -7,11 +7,9 @@
 #include <tt_stl/span.hpp>
 #include <sstream>
 
-namespace tt {
-
-namespace tt_metal {
-
-namespace tensor_impl {
+namespace ttnn {
+using namespace tt::tt_metal;
+using namespace tt::tt_metal::tensor_impl;
 
 PrintOptions TTNN_PRINT_OPTIONS;
 
@@ -231,17 +229,8 @@ std::string to_string(const Tensor& tensor) {
     return std::visit(
         tt::stl::overloaded{
             [&](const HostStorage& storage) -> std::string {
-                const Tensor row_major_tensor = get_row_major_tensor(tensor);
-                const auto strides = row_major_tensor.tensor_spec().compute_strides();
-                const std::vector<HostBuffer> buffers = get_device_buffers(row_major_tensor.host_storage());
-                std::stringstream ss;
-                for (size_t i = 0; i < buffers.size(); i++) {
-                    detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
-                    if (i + 1 != buffers.size()) {
-                        ss << std::endl;
-                    }
-                }
-                return ss.str();
+                // TODO: Call tt-metal implementation
+                return tensor.write_to_string();
             },
             [&](const DeviceStorage& storage) -> std::string {
                 auto cpu_tensor = tensor.cpu();
@@ -292,6 +281,5 @@ template <>
 std::string to_string<bfloat4_b>(const Tensor& tensor) {
     return to_string<float>(tensor);
 }
-}  // namespace tensor_impl
-}  // namespace tt_metal
-}  // namespace tt
+
+}  // namespace ttnn

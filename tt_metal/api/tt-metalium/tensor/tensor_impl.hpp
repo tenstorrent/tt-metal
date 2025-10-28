@@ -245,6 +245,8 @@ struct PrintOptions {
 
 extern PrintOptions TTNN_PRINT_OPTIONS;
 
+std::string to_string(const Tensor& tensor);
+
 template <typename T>
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id);
 

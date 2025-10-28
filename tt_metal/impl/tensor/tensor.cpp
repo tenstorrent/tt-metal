@@ -40,6 +40,7 @@
 
 #include <tt-metalium/common/queue_id.hpp>
 #include <tt-metalium/shape.hpp>
+#include <tt-metalium/tensor/tensor_impl.hpp>
 
 namespace tt::tt_metal {
 namespace {
@@ -394,14 +395,12 @@ Tensor Tensor::extract_shard(const uint32_t& core_id) const {
 
 Tensor Tensor::to_layout(Layout target_layout) const { return tensor_ops::tensor_to_layout(*this, target_layout); }
 
-std::string Tensor::write_to_string() const {
-    // TOOD: Implement host only implementation
-    return "TODO: Implement";
-}
-void Tensor::print() const {
-    // TOOD: Implement host only implementation
+std::string Tensor::write_to_string() const { return tensor_impl::to_string(*this); }
 
-    // tensor_ops::tensor_print(*this);
+void Tensor::print() const {
+    GraphTracker::instance().track_function_start("Tensor::print", *this);
+    tensor_ops::tensor_print(*this);
+    GraphTracker::instance().track_function_end();
 }
 
 Tensor Tensor::pad(const Shape& output_padded_shape, const Shape& input_tensor_start, float pad_value) const {

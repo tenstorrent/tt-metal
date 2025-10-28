@@ -64,6 +64,12 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout) {
     return output;
 }
 
+void tensor_print(const Tensor& input_tensor) {
+    GraphTracker::instance().track_function_start("Tensor::print", input_tensor);
+    std::cout << input_tensor.write_to_string() << std::endl;
+    GraphTracker::instance().track_function_end();
+}
+
 Tensor tensor_pad(
     const Tensor& input_tensor, const Shape& output_padded_shape, const Shape& input_tensor_start, float pad_value) {
     GraphTracker::instance().track_function_start(

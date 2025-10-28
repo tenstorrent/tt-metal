@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt-metalium/tensor/tensor_impl.hpp"
+#include <tt-metalium/tensor/tensor_impl.hpp>
 #include "tt-metalium/tensor/tensor_utils.hpp"
 #include <fmt/format.h>
 #include <optional>
@@ -12,7 +12,7 @@
 #include <tt_stl/assert.hpp>
 #include "tt-metalium/distributed_host_buffer.hpp"
 #include "tt-metalium/host_buffer.hpp"
-// #include "tt-metalium/memory_pin.hpp"
+
 #include "tt-metalium/mesh_buffer.hpp"
 #include "tt-metalium/mesh_coord.hpp"
 #include "tt-metalium/mesh_device.hpp"
@@ -22,29 +22,44 @@
 #include "tt-metalium/shape.hpp"
 
 #include "tt-metalium/tensor/storage.hpp"
-// #include "tt-metalium/tensor/tensor_impl_wrapper.hpp"
 #include "tt-metalium/tensor/layout/tensor_layout.hpp"
 #include "tt-metalium/tensor/types.hpp"
-// #include "tt-metalium/operations/core.hpp"
-// #include "tt-metalium/distributed/api.hpp"
-// #include "ttnn/distributed/distributed_tensor.hpp"
 
 #include "tt_stl/concepts.hpp"
-// #include "ttnn/tensor/host_buffer/functions.hpp"
-// #include "ttnn/tensor/layout/tensor_layout.hpp"
-// #include "ttnn/tensor/tensor_impl.hpp"
-// #include "ttnn/tensor/tensor.hpp"
-// #include "ttnn/tensor/tensor_spec.hpp"
-// #include "ttnn/tensor/types.hpp"
-// #include "ttnn/types.hpp"
 
-#include "tt-metalium/host_buffer.hpp"
 #include "tt-metalium/bfloat16.hpp"
 
 #include <algorithm>
 #include <type_traits>
 
 #include <tracy/Tracy.hpp>
+
+namespace {
+template <typename Func, typename... Args>
+auto dispatch(tt::tt_metal::DataType dtype, Func&& func, Args&&... args) {
+    using tt::tt_metal::DataType;
+    using namespace tt::tt_metal::tensor_impl;
+    switch (dtype) {
+        case DataType::BFLOAT16:
+            return (std::forward<Func>(func)).template operator()<bfloat16>(std::forward<Args>(args)...);
+        case DataType::FLOAT32:
+            return (std::forward<Func>(func)).template operator()<float>(std::forward<Args>(args)...);
+        case DataType::INT32:
+            return (std::forward<Func>(func)).template operator()<int32_t>(std::forward<Args>(args)...);
+        case DataType::UINT32:
+            return (std::forward<Func>(func)).template operator()<uint32_t>(std::forward<Args>(args)...);
+        case DataType::UINT16:
+            return (std::forward<Func>(func)).template operator()<uint16_t>(std::forward<Args>(args)...);
+        case DataType::UINT8:
+            return (std::forward<Func>(func)).template operator()<uint8_t>(std::forward<Args>(args)...);
+        case DataType::BFLOAT8_B:
+            return (std::forward<Func>(func)).template operator()<bfloat8_b>(std::forward<Args>(args)...);
+        case DataType::BFLOAT4_B:
+            return (std::forward<Func>(func)).template operator()<bfloat4_b>(std::forward<Args>(args)...);
+        default: TT_THROW("Unsupported data type");
+    }
+}
+}  // namespace
 
 namespace tt {
 
@@ -258,7 +273,6 @@ Tensor unpad_bfloat4_b(const Tensor& tensor, const Shape& output_tensor_start, c
 // ======================================================================================
 //                                      .to_string()
 // ======================================================================================
-
 namespace detail {
 
 struct DimensionShortener {
@@ -351,7 +365,7 @@ bool should_use_scientific_notation(tt::stl::Span<const T> buffer) {
                (nonzero_finite_min < 1.0e-4);
     }
 }
-}  // namespace detail
+
 constexpr int constexpr_strlen(const char* str) { return *str ? 1 + constexpr_strlen(str + 1) : 0; }
 
 constexpr auto TENSOR_TYPE_STRING = "ttnn.Tensor";
@@ -415,6 +429,89 @@ void to_string_row_major(
     if (rank != 0) {
         ss << "]";
     }
+}
+
+template <typename T>
+void to_string(
+    std::stringstream& ss,
+    tt::stl::Span<const T> buffer,
+    const tt::tt_metal::Shape& shape,
+    const tt::tt_metal::Strides& strides,
+    DataType dtype,
+    Layout layout) {
+    ss << TENSOR_TYPE_STRING << "(";
+
+    if (TTNN_PRINT_OPTIONS.profile == TensorPrintProfile::Empty) {
+        ss << "...";
+    } else {
+        bool use_scientific = should_use_scientific_notation<T>(buffer);
+        to_string_row_major<T>(ss, buffer, shape, strides, 0, 0, shape.rank(), 0, use_scientific);
+    }
+    ss << ", shape=" << fmt::format("{}", shape) << ", dtype=" << fmt::format("{}", dtype)
+       << ", layout=" << fmt::format("{}", layout) << ")";
+}
+}  // namespace detail
+
+template <typename T>
+std::string write_to_string_impl(const Tensor& tensor) {
+    auto get_row_major_tensor = [&](const Tensor& tensor) -> Tensor {
+        if (tensor.layout() == Layout::ROW_MAJOR) {
+            return tensor;
+        } else if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
+            return dispatch(
+                tensor.dtype(),
+                []<typename U>(auto&&... args) {
+                    return tensor_impl::to_layout<U>(std::forward<decltype(args)>(args)...);
+                },
+                tensor_impl::to_dtype_metal(tensor, DataType::FLOAT32),
+                Layout::ROW_MAJOR);
+
+        } else {
+            return dispatch(
+                tensor.dtype(),
+                []<typename U>(auto&&... args) {
+                    return tensor_impl::to_layout<U>(std::forward<decltype(args)>(args)...);
+                },
+                tensor,
+                Layout::ROW_MAJOR);
+        }
+    };
+
+    auto get_device_buffers = [&](const HostStorage& storage) {
+        std::vector<HostBuffer> buffers;
+        storage.buffer().apply([&](const HostBuffer& shard) { buffers.push_back(shard); });
+        return buffers;
+    };
+
+    const auto& shape = tensor.logical_shape();
+    const Tensor row_major_tensor = get_row_major_tensor(tensor);
+    const auto strides = row_major_tensor.tensor_spec().compute_strides();
+    const std::vector<HostBuffer> buffers = get_device_buffers(row_major_tensor.host_storage());
+    std::stringstream ss;
+    for (size_t i = 0; i < buffers.size(); i++) {
+        detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
+        if (i + 1 != buffers.size()) {
+            ss << std::endl;
+        }
+    }
+    return ss.str();
+}
+
+template <>
+std::string write_to_string_impl<bfloat8_b>(const Tensor& tensor) {
+    return write_to_string_impl<float>(tensor);
+}
+
+template <>
+std::string write_to_string_impl<bfloat4_b>(const Tensor& tensor) {
+    return write_to_string_impl<float>(tensor);
+}
+
+std::string to_string(const Tensor& tensor) {
+    return dispatch(
+        tensor.dtype(),
+        []<typename T>(auto&&... args) { return write_to_string_impl<T>(std::forward<decltype(args)>(args)...); },
+        tensor);
 }
 
 // ======================================================================================
@@ -1287,6 +1384,7 @@ Tensor extract_shard<bfloat4_b>(const Tensor& tensor, const uint32_t& core_id) {
     return extract_shard<uint32_t>(tensor, core_id);
 }
 
+// Return removed code
 namespace detail {
 
 struct bfloat4_tag {};
@@ -1419,6 +1517,7 @@ Tensor to_dtype_metal(const Tensor& input_tensor, DataType dtype) {
 
     return Tensor(tt::tt_metal::HostStorage(std::move(output_storage)), output_spec, input_tensor.tensor_topology());
 }
+
 }  // namespace tensor_impl
 
 }  // namespace tt_metal
