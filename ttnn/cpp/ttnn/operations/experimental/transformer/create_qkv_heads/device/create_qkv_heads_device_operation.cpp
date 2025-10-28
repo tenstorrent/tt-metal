@@ -16,7 +16,8 @@ void CreateQKVHeadsDeviceOperation::validate(const std::vector<Tensor>& input_te
             input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
             input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
         "Unsupported data format");
-    TT_FATAL(input_tensor.layout() == Layout::TILE, "Error");
+    TT_FATAL(
+        input_tensor.layout() == Layout::TILE, "Input tensor layout must be TILE but got {}", input_tensor.layout());
     TT_FATAL(input_tensor.is_sharded(), "Operands to TM must be sharded");
     const auto& input_shape = input_tensor.padded_shape();
     TT_FATAL(input_shape[1] == 1, "Unsupported input shape");
@@ -26,7 +27,10 @@ void CreateQKVHeadsDeviceOperation::validate(const std::vector<Tensor>& input_te
         (bbox.end_coord.x < input_tensor.device()->compute_with_storage_grid_size().x &&
          bbox.end_coord.y < input_tensor.device()->compute_with_storage_grid_size().y),
         "Error");
-    TT_FATAL(input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED, "Error");
+    TT_FATAL(
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
+        "Input tensor memory layout must be BLOCK_SHARDED but got {}",
+        input_tensor.memory_config().memory_layout());
     ShardOrientation shard_orientation = input_tensor.shard_spec().value().orientation;
     bool rm = shard_orientation == ShardOrientation::ROW_MAJOR;
     uint32_t num_h_cores = rm ? bbox.end_coord.y + 1 : bbox.end_coord.x + 1;
@@ -45,7 +49,10 @@ void CreateQKVHeadsDeviceOperation::validate(const std::vector<Tensor>& input_te
         num_w_cores,
         tt::constants::TILE_WIDTH);
 
-    TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+    TT_FATAL(
+        this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+        "Output memory config layout must be HEIGHT_SHARDED but got {}",
+        this->output_mem_config.memory_layout());
     TT_FATAL(input_shape[0] == num_h_cores, "Batch size {} must be equal to num cores {}", input_shape[0], num_h_cores);
 }
 

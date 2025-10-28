@@ -493,17 +493,45 @@ target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
 install(
     TARGETS
         _ttml
-    ARCHIVE
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT tar
+        DESTINATION ttml
+        COMPONENT ttml
 )
+
+# Install Python source files
 install(
-    TARGETS
-        _ttml
-        DESTINATION
-        ${PROJECT_SOURCE_DIR}/tt-train/sources/ttml
-        COMPONENT
-        tt_pybinds
+    DIRECTORY
+        ${CMAKE_CURRENT_SOURCE_DIR}/ttml
+    DESTINATION ttml
+    COMPONENT ttml
+    FILES_MATCHING
+    PATTERN
+    "*.py"
+    PATTERN
+    "__pycache__"
+        EXCLUDE
 )
+
+# CPack configuration for creating ttml deb package
+set(CPACK_GENERATOR "DEB")
+set(CPACK_PACKAGE_NAME "ttml")
+set(CPACK_PACKAGE_VERSION "1.0.0")
+set(CPACK_PACKAGE_VENDOR "Tenstorrent")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "TT Machine Learning Library")
+set(CPACK_PACKAGE_DESCRIPTION "TT Machine Learning Library - Training framework for Tenstorrent hardware")
+set(CPACK_PACKAGE_CONTACT "support@tenstorrent.com")
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Tenstorrent")
+
+# Component-based packaging
+set(CPACK_DEB_COMPONENT_INSTALL ON)
+set(CPACK_COMPONENTS_ALL ttml)
+
+# Debian-specific settings
+set(CPACK_DEBIAN_TTML_PACKAGE_NAME "ttml")
+set(CPACK_DEBIAN_TTML_FILE_NAME "ttml-${CPACK_PACKAGE_VERSION}-Linux.deb")
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+
+# Set the package architecture
+set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "amd64")
+
+include(CPack)
