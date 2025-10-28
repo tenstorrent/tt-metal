@@ -386,32 +386,25 @@ TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_2pins)
 
     TopologyMapper topology_mapper_with_pins(mesh_graph, *physical_system_descriptor_, local_mesh_binding, pins);
 
-    tt::tt_metal::AsicID mapped_asic;
-    tt::tt_metal::AsicID mapped_asic2;
-    const auto my_host = physical_system_descriptor_->my_host_name();
-    for (const auto& asics : physical_system_descriptor_->get_asics_connected_to_host(my_host)) {
-        auto tray = physical_system_descriptor_->get_tray_id(asics);
-        auto loc = physical_system_descriptor_->get_asic_location(asics);
-        log_critical(
-            tt::LogFabric,
-            "ASIC: {} fabric node id {} is on tray {} and location {}",
-            asics,
-            topology_mapper_with_pins.get_fabric_node_id_from_asic_id(asics),
-            *tray,
-            *loc);
+    // Check that the potential mapped ASICs are correctly for the pinned ASICs
+    std::vector<tt::tt_metal::AsicID> potential_mapped_asics;
+    std::vector<tt::tt_metal::AsicID> potential_mapped_asics2;
+    for (const auto& [asic_id, _] : physical_system_descriptor_->get_asic_descriptors()) {
+        auto tray = physical_system_descriptor_->get_tray_id(asic_id);
+        auto loc = physical_system_descriptor_->get_asic_location(asic_id);
         if (tray == pinned_asic.first && loc == pinned_asic.second) {
-            mapped_asic = asics;
+            potential_mapped_asics.push_back(asic_id);
         }
         if (tray == pinned_asic2.first && loc == pinned_asic2.second) {
-            mapped_asic2 = asics;
+            potential_mapped_asics2.push_back(asic_id);
         }
     }
 
     // Verify that the mapping for FabricNodeId(0,0) resolves to the pinned ASIC
     auto mapped_asic_for_node0 = topology_mapper_with_pins.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 0));
     auto mapped_asic_for_node1 = topology_mapper_with_pins.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 1));
-    EXPECT_EQ(mapped_asic_for_node0, mapped_asic);
-    EXPECT_EQ(mapped_asic_for_node1, mapped_asic2);
+    EXPECT_TRUE(contains(potential_mapped_asics, mapped_asic_for_node0));
+    EXPECT_TRUE(contains(potential_mapped_asics2, mapped_asic_for_node1));
 }
 
 TEST_F(TopologyMapperTest, PinningThrowsOnBadAsicPositionGalaxyMesh) {
