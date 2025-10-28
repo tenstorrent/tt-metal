@@ -137,7 +137,7 @@ def test_ttnn_insemb(device, model_location_generator):
             ttnn_offset_out_tt,
             to_channel_first=False,
             output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
-            exp_pcc=0.738,
+            exp_pcc=0.739,
         )
     )
 
