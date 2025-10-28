@@ -30,6 +30,7 @@ jobs:
     # tt-train in N300 is timing out on CIv2-viommu: https://github.com/tenstorrent/tt-metal/issues/29443
     runs-on: >-
       tt-ubuntu-2204-N150-stable
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
       image: harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved!' }}
       env:
@@ -85,7 +86,6 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: 45
         run: |
-          cp ./build/tt-train/3rd_party/wandb-cpp/libwandbcpp.so build/lib/
           cd /work/build/tt-train
           mkdir -p generated/test_reports
           ldd tests/ttml_tests || true

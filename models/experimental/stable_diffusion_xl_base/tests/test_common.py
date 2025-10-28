@@ -23,7 +23,7 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl impor
 # to having an extra VAE encode call, which increases it.
 # For simplicity, increase both to 29000 as there's enough
 # space left in base variant as well.
-SDXL_L1_SMALL_SIZE = 29000
+SDXL_L1_SMALL_SIZE = 30000
 SDXL_TRACE_REGION_SIZE = 34000000
 SDXL_CI_WEIGHTS_PATH = "/mnt/MLPerf/tt_dnn-models/hf_home"
 SDXL_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_1D
@@ -696,6 +696,7 @@ def run_tt_image_gen(
     capture_trace=False,
     use_cfg_parallel=False,
     guidance_rescale=0.0,
+    one_minus_guidance_rescale=1.0,
 ):
     assert not (capture_trace and num_steps != 1), "Trace should capture only 1 iteration"
     profiler.start("image_gen")
@@ -768,7 +769,7 @@ def run_tt_image_gen(
             noise_pred_rescaled = ttnn.mul(noise_pred, std_ratio)
 
             rescaled_term = ttnn.mul(noise_pred_rescaled, guidance_rescale)
-            original_term = ttnn.mul(noise_pred, (1.0 - guidance_rescale))
+            original_term = ttnn.mul(noise_pred, one_minus_guidance_rescale)
             ttnn.deallocate(noise_pred)
             noise_pred = ttnn.add(rescaled_term, original_term)
             ttnn.deallocate(std_text)
@@ -887,6 +888,7 @@ def run_tt_image_gen_inpainting(
     capture_trace=False,
     use_cfg_parallel=False,
     guidance_rescale=0.0,
+    one_minus_guidance_rescale=1.0,
 ):
     assert not (capture_trace and num_steps != 1), "Trace should capture only 1 iteration"
     profiler.start("image_gen")
@@ -961,7 +963,7 @@ def run_tt_image_gen_inpainting(
             noise_pred_rescaled = ttnn.mul(noise_pred, std_ratio)
 
             rescaled_term = ttnn.mul(noise_pred_rescaled, guidance_rescale)
-            original_term = ttnn.mul(noise_pred, (1.0 - guidance_rescale))
+            original_term = ttnn.mul(noise_pred, one_minus_guidance_rescale)
             ttnn.deallocate(noise_pred)
             noise_pred = ttnn.add(rescaled_term, original_term)
             ttnn.deallocate(std_text)
