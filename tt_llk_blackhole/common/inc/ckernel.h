@@ -392,32 +392,16 @@ inline void cfg_reg_rmw_tensix(uint32_t val)
 
 inline void mailbox_write(const uint8_t thread, const uint32_t data)
 {
-    mailbox_base[thread + 1][0] = data;
+    mailbox_base[thread][0] = data;
 }
 
 // Blocking read
 inline uint32_t mailbox_read(const uint8_t thread)
 {
-    return mailbox_base[thread + 1][0];
-}
-
-inline bool mailbox_not_empty(const uint8_t thread)
-{
-    return mailbox_base[thread + 1][1] > 0;
-}
-
-inline void mailbox_write_full(const uint8_t thread, const uint32_t data)
-{
-    mailbox_base[thread][0] = data;
-}
-
-// Blocking read
-inline uint32_t mailbox_read_full(const uint8_t thread)
-{
     return mailbox_base[thread][0];
 }
 
-inline bool mailbox_not_empty_full(const uint8_t thread)
+inline bool mailbox_not_empty(const uint8_t thread)
 {
     return mailbox_base[thread][1] > 0;
 }
