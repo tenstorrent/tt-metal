@@ -123,19 +123,19 @@ void kernel_main() {
                             // read a tile from src_a
                             cb_reserve_back(predicate_cb, onetile);
                             uint32_t l1_write_addr_a = get_write_ptr(predicate_cb);
-                            noc_async_read_tile(tile_offset + tw, s0, l1_write_addr_a);
+                            noc_async_read_page(tile_offset + tw, s0, l1_write_addr_a);
                             // #endif
                             // #if !SRC_SHARDED_B
                             // read a tile from src_b
                             cb_reserve_back(true_cb, onetile);
                             uint32_t l1_write_addr_b = get_write_ptr(true_cb);
-                            noc_async_read_tile(tile_offset_b + tw, s1, l1_write_addr_b);
+                            noc_async_read_page(tile_offset_b + tw, s1, l1_write_addr_b);
                             // #endif
                             // #if !SRC_SHARDED_C
                             // read a tile from src_c
                             cb_reserve_back(false_cb, onetile);
                             uint32_t l1_write_addr_c = get_write_ptr(false_cb);
-                            noc_async_read_tile(tile_offset_c + tw, s2, l1_write_addr_c);
+                            noc_async_read_page(tile_offset_c + tw, s2, l1_write_addr_c);
                             // #endif
                             // #if !SRC_SHARDED_A || !SRC_SHARDED_B || !SRC_SHARDED_C
                             noc_async_read_barrier();
