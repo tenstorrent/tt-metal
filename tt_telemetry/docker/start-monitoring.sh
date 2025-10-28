@@ -33,7 +33,58 @@ if [ ${#TARGETS[@]} -eq 0 ]; then
     TARGETS=("host.docker.internal:8080")
 fi
 
-# Deduplicate targets
+# Resolve hostnames to IPs (for Docker on macOS compatibility)
+resolve_target() {
+    local target="$1"
+    local host="${target%:*}"
+    local port="${target##*:}"
+
+    # If it's already an IP address, return as-is
+    if [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "$target"
+        return
+    fi
+
+    # Special case: host.docker.internal doesn't need resolution
+    if [[ "$host" == "host.docker.internal" ]]; then
+        echo "$target"
+        return
+    fi
+
+    # Try to resolve hostname to IPv4
+    local resolved_ip
+
+    # Method 1: getent (Linux)
+    if command -v getent &>/dev/null; then
+        resolved_ip=$(getent hosts "$host" 2>/dev/null | awk '{print $1; exit}')
+    fi
+
+    # Method 2: dscacheutil (macOS)
+    if [[ -z "$resolved_ip" ]] && command -v dscacheutil &>/dev/null; then
+        resolved_ip=$(dscacheutil -q host -a name "$host" 2>/dev/null | awk '/^ip_address:/ {print $2; exit}')
+    fi
+
+    # Method 3: host command
+    if [[ -z "$resolved_ip" ]] && command -v host &>/dev/null; then
+        resolved_ip=$(host -t A "$host" 2>/dev/null | awk '/has address/ {print $NF; exit}')
+    fi
+
+    # Method 4: nslookup
+    if [[ -z "$resolved_ip" ]] && command -v nslookup &>/dev/null; then
+        resolved_ip=$(nslookup "$host" 2>/dev/null | awk '/^Address: / && !/127\.0\.0\.1/ {print $2; exit}')
+    fi
+
+    # If resolved successfully, return IP:port
+    if [[ -n "$resolved_ip" ]]; then
+        echo "  Resolved $host -> $resolved_ip" >&2
+        echo "$resolved_ip:$port"
+    else
+        echo "  Warning: Could not resolve $host, using as-is" >&2
+        echo "$target"
+    fi
+}
+
+# Deduplicate and resolve targets
 UNIQUE_TARGETS=()
 for target in "${TARGETS[@]}"; do
     # Check if target is already in UNIQUE_TARGETS
@@ -46,7 +97,8 @@ for target in "${TARGETS[@]}"; do
     done
     # Add if not found
     if [[ $found -eq 0 ]]; then
-        UNIQUE_TARGETS+=("$target")
+        resolved_target=$(resolve_target "$target")
+        UNIQUE_TARGETS+=("$resolved_target")
     fi
 done
 TARGETS=("${UNIQUE_TARGETS[@]}")
@@ -69,14 +121,11 @@ scrape_configs:
     static_configs:
 EOF
 
-    # Create separate target block for each host with its own host label
+    # Create separate target block for each host
     for i in "${!TARGETS[@]}"; do
         local target="${TARGETS[$i]}"
-        local host="${target%:*}"
         cat >> prometheus.yml <<EOF
       - targets: ['${target}']
-        labels:
-          host: '${host}'
 EOF
     done
 
@@ -87,8 +136,9 @@ echo "TT-Metal Telemetry Monitoring Stack"
 echo "==================================================================="
 echo ""
 echo "TT-Metal Telemetry endpoints:"
-for target in "${TARGETS[@]}"; do
-    echo "  - http://$target/api/metrics"
+# Print original targets (before resolution) from command line args
+for target in "$@"; do
+    [[ -n "$target" ]] && echo "  - http://$target/api/metrics"
 done
 
 echo ""

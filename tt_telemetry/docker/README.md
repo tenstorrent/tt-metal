@@ -112,6 +112,33 @@ This setup should work on:
 - **Linux**: Uses `host-gateway` for host access
 - **Windows**: Should work with Docker Desktop
 
+### Hostname Resolution on macOS
+
+When running on macOS, you can provide unresolved hostnames to the monitoring script:
+
+```bash
+./start-monitoring.sh sjc-wh-05:53494 sjc-wh-02:53494
+```
+
+However, due to Docker's architecture on macOS (containers run inside a Linux VM with separate DNS), the script automatically resolves hostnames to IP addresses before configuring Prometheus. This means:
+
+- ✅ You can use friendly hostnames when starting the monitoring stack
+- ℹ️ The `instance` label in Prometheus will show resolved IPs (e.g., `10.229.36.45:53494`)
+- ℹ️ Prometheus targets page will display IPs instead of hostnames
+- ✅ Your metrics still contain the full `hostname` label from the telemetry server (e.g., `sjc-wh-05-special-kkfernandez-for-reservation-13353`)
+
+**Why this happens:** Docker on macOS runs containers inside a Linux VM that doesn't share your Mac's DNS configuration. The script resolves hostnames on your Mac and passes IPs to Prometheus to ensure connectivity.
+
+**For filtering/grouping:** Use the `hostname` label from your metrics rather than the `instance` label:
+
+```promql
+# Filter by hostname prefix
+ASICTemperature{hostname=~"sjc-wh-05.*"}
+
+# Group by hostname
+avg(ASICTemperature) by (hostname)
+```
+
 ## Customization
 
 ### Change scrape interval
