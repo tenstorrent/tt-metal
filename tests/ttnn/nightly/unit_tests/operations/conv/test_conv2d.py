@@ -5240,7 +5240,7 @@ def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
         # UNet
         # kernel 3x3
         (1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True, 1, False), # Regular case
-        (1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True, 2, False), # Weights split over output channels. Output tensor is just concatenated via host->device transfer
+        (1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True, 2, False), # Weights split over output channels. Output tensor is just concatenated via device->host transfer
         (1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True, 2, True), # Weights split over output channels. Output tensor is concatenated via AG (something like this would be done in a model)
     ),
 )
