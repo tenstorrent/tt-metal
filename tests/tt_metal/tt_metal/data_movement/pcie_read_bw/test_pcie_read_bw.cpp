@@ -55,7 +55,7 @@ bool run_pcie_read_bw_test(
 
     // Get PCIe core coordinates
     const metal_SocDescriptor& soc_d = MetalContext::instance().get_cluster().get_soc_desc(device_id);
-    vector<tt::umd::CoreCoord> pcie_cores = soc_d.get_cores(CoreType::PCIE, tt::umd::CoordSystem::TRANSLATED);
+    vector<tt::umd::CoreCoord> pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
     TT_ASSERT(!pcie_cores.empty(), "No PCIe cores found");
 
     // Get PCIe memory addresses
@@ -112,10 +112,10 @@ bool run_pcie_read_bw_test(
     float total_bytes =
         (float)test_config.page_count * (float)test_config.page_size_bytes * (float)test_config.iterations;
     float elapsed_seconds_float = elapsed_seconds.count() / 1e9;
-    float bw_gb_s = total_bytes / (elapsed_seconds_float * 1000.0 * 1000.0 * 1000.0);
+    float bw = total_bytes / (elapsed_seconds_float * 1000.0 * 1000.0 * 1000.0);
 
     std::stringstream ss;
-    ss << std::fixed << std::setprecision(3) << bw_gb_s;
+    ss << std::fixed << std::setprecision(3) << bw;
 
     log_info(LogTest, "Bandwidth: {} GB/s", ss.str());
 
