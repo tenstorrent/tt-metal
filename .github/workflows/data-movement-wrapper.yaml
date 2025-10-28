@@ -40,9 +40,9 @@ jobs:
         build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
         wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
         gtest_filter: "*-*NIGHTLY_*"
-  additional-workflow:
+  data-movement-perf-tests:
     if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.run-additional-workflow == 'true' }}
-    uses: ./.github/workflows/metal-run-microbenchmarks-impl.yaml
+    uses: ./.github/workflows/data-movement-perf-impl.yaml
     needs: build-artifact
     secrets: inherit
     with:
