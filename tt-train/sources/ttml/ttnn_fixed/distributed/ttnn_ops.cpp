@@ -13,62 +13,72 @@
 namespace ttml::ttnn_fixed::distributed {
 
 tt::tt_metal::Tensor all_gather(const tt::tt_metal::Tensor& tensor, int dim) {
-    auto* current_device = &ttml::autograd::ctx().get_device();
-    auto num_devices = current_device->num_devices();
-    if (num_devices == 1U) {
-        throw std::logic_error("All gather should not be called for a single device case");
-    }
-    auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
+    // auto* current_device = &ttml::autograd::ctx().get_device();
+    // auto num_devices = current_device->num_devices();
+    // if (num_devices == 1U) {
+    //     throw std::logic_error("All gather should not be called for a single device case");
+    // }
+    // auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
 
-    return ttnn::experimental::all_gather_async(
-        tensor,
-        dim,
-        ccl_resources.get_all_gather_semaphore(),
-        /* num_links */ 1,
-        /* memory_config */ std::nullopt,
-        ttnn::ccl::Topology::Linear,
-        /* subdevice_id */ std::nullopt,
-        /* use_optimal_ccl_for_llama */ false,
-        /* barrier_semaphore */ ccl_resources.get_barrier_semaphore());
+    // return ttnn::experimental::all_gather_async(
+    //     tensor,
+    //     dim,
+    //     ccl_resources.get_all_gather_semaphore(),
+    //     /* num_links */ 1,
+    //     /* memory_config */ std::nullopt,
+    //     ttnn::ccl::Topology::Linear,
+    //     /* subdevice_id */ std::nullopt,
+    //     /* use_optimal_ccl_for_llama */ false,
+    //     /* barrier_semaphore */ ccl_resources.get_barrier_semaphore());
+    return ttnn::all_gather(tensor, dim);
 }
 
 tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor) {
-    auto* current_device = &ttml::autograd::ctx().get_device();
-    auto num_devices = current_device->num_devices();
-    if (num_devices == 1U) {
-        throw std::logic_error("All reduce should not be called for a single device case");
-    }
+    // auto* current_device = &ttml::autograd::ctx().get_device();
+    // auto num_devices = current_device->num_devices();
+    // if (num_devices == 1U) {
+    //     throw std::logic_error("All reduce should not be called for a single device case");
+    // }
 
-    auto shape = tensor.logical_shape();
-    if (shape.rank() != 4U) {
-        throw std::logic_error("All reduce supports only 4D tensors");
-    }
+    // auto shape = tensor.logical_shape();
+    // if (shape.rank() != 4U) {
+    //     throw std::logic_error("All reduce supports only 4D tensors");
+    // }
 
-    auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
-    auto all_reduce_barrier_semaphores = ccl_resources.get_all_reduce_barrier_semaphores();
-    auto all_gather_semaphores = ccl_resources.get_all_gather_semaphore();
-    auto reduce_scatter_semaphores = ccl_resources.get_reduce_scatter_semaphores();
-    return ttnn::experimental::all_reduce_async(
-        tensor,
-        num_devices,
-        all_reduce_barrier_semaphores,
-        reduce_scatter_semaphores,
-        all_gather_semaphores,
-        ttnn::operations::reduction::ReduceType::Sum);
+    // auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
+    // auto all_reduce_barrier_semaphores = ccl_resources.get_all_reduce_barrier_semaphores();
+    // auto all_gather_semaphores = ccl_resources.get_all_gather_semaphore();
+    // auto reduce_scatter_semaphores = ccl_resources.get_reduce_scatter_semaphores();
+    // return ttnn::experimental::all_reduce_async(
+    //     tensor,
+    //     num_devices,
+    //     all_reduce_barrier_semaphores,
+    //     reduce_scatter_semaphores,
+    //     all_gather_semaphores,
+    //     ttnn::operations::reduction::ReduceType::Sum);
+
+    return ttnn::all_reduce(
+        tensor, 
+        /* cluster_axis */ std::nullopt, 
+        /* subdevice_id */ std::nullopt, 
+        /* memory_config */ std::nullopt, 
+        /* num_links */ std::nullopt, 
+        /* topology */ ttnn::ccl::Topology::Linear);
 }
 
 tt::tt_metal::Tensor reduce_scatter(const tt::tt_metal::Tensor& tensor, int dim) {
-    auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
-    return ttnn::experimental::reduce_scatter_minimal_async(
-        tensor,
-        /* persistent_output_buffers */ std::nullopt,
-        dim,
-        ccl_resources.get_reduce_scatter_semaphores(),
-        ccl_resources.get_barrier_semaphore(),
-        /* num_links */ 1U,
-        /* memory_config */ std::nullopt,
-        /* intermediate_memory_config */ std::nullopt,
-        ttnn::ccl::Topology::Linear);
+    // auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
+    // return ttnn::experimental::reduce_scatter_minimal_async(
+    //     tensor,
+    //     /* persistent_output_buffers */ std::nullopt,
+    //     dim,
+    //     ccl_resources.get_reduce_scatter_semaphores(),
+    //     ccl_resources.get_barrier_semaphore(),
+    //     /* num_links */ 1U,
+    //     /* memory_config */ std::nullopt,
+    //     /* intermediate_memory_config */ std::nullopt,
+    //     ttnn::ccl::Topology::Linear);
+    return ttnn::reduce_scatter(tensor, dim);
 }
 
 }  // namespace ttml::ttnn_fixed::distributed
