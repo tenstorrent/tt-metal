@@ -138,7 +138,6 @@ def run_conv(
     sub_device_stall_group=None,
     ccl_semaphore_handles=None,
     barrier_semaphore_handles=None,
-    persistent_output_buffers=None,
 ):
     if tp_factor != 1:
         assert has_bias == False, "Bias is not supported for multi-chip tests with tp_factor != 1"
@@ -292,7 +291,6 @@ def run_conv(
         slice_config = ttnn.Conv2dL1FullSliceConfig
 
     out_channels_per_device = output_channels // tp_factor
-    print(f"out_channels_per_device: {out_channels_per_device}")
 
     [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
@@ -348,9 +346,9 @@ def run_conv(
         tt_output_tensor_on_device = ttnn.experimental.all_gather_async(
             tt_output_tensor_on_device,
             dim=3,
-            multi_device_global_semaphore=ccl_semaphore_handles[0],
-            barrier_semaphore=barrier_semaphore_handles[0],
-            persistent_output_buffer=persistent_output_buffers[0],
+            multi_device_global_semaphore=ccl_semaphore_handles,
+            barrier_semaphore=barrier_semaphore_handles,
+            persistent_output_buffer=None,
             subdevice_id=worker_sub_device_id,
         )
         ttnn.synchronize_device(device, sub_device_ids=sub_device_stall_group)
@@ -358,7 +356,6 @@ def run_conv(
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     out = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
 
-    print("out shape is", out.shape)
     # out is in row major layout and NHWC shape
     # NHWC to NCHW
     out = out.reshape(total_batch_size, out_height, out_width, out.shape[-1])
@@ -5242,9 +5239,9 @@ def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
 
         # UNet
         # kernel 3x3
-        #(1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True, 1, False),
-        #(1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True, 2, False),
-        (1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True, 2, True),
+        (1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True, 1, False), # Regular case
+        (1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True, 2, False), # Weights split over output channels. Output tensor is just concatenated via host->device transfer
+        (1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, True, True, 2, True), # Weights split over output channels. Output tensor is concatenated via AG (something like this would be done in a model)
     ),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
@@ -5275,9 +5272,6 @@ def test_conv2d_multichip(
     tp_factor,
     concat_with_ag,
 ):
-
-    # Skip all on N300
-
     if concat_with_ag:
         assert tp_factor == 2, "Concat with AG is only supported for tp_factor == 2"
 
@@ -5294,43 +5288,32 @@ def test_conv2d_multichip(
         weight_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
         output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=-1)
 
-    compute_grid_size = mesh_device.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-    worker_sub_device = ttnn.SubDevice(
-        [
-            ccl_sub_device_crs,
-        ]
-    )
-    worker_sub_device_id = ttnn.SubDeviceId(0)
-    sub_device_stall_group = [worker_sub_device_id]
+    ccl_sub_device_crs = None
+    worker_sub_device_id = None
+    sub_device_stall_group = None
+    sub_device_manager = None
+    ccl_semaphore_handles = None
+    barrier_semaphore_handles = None
 
-    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    mesh_device.load_sub_device_manager(sub_device_manager)
-    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
-
-    # create global semaphore handles
-    ccl_semaphore_handles = [
-        create_global_semaphores(mesh_device, 2, ccl_sub_device_crs, 0) for _ in range(1)
-    ]
-
-    barrier_semaphore_handles = [
-        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(1)
-    ]
-
-    ag_output_shape = [1, 1, 1024, 1280]
-    persistent_output_buffers = [
-                ttnn.from_torch(
-                    torch.zeros(ag_output_shape),
-                    device=mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=output_dtype,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-                )
+    # ag setup
+    if concat_with_ag:
+        compute_grid_size = mesh_device.compute_with_storage_grid_size()
+        ccl_sub_device_crs = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+        )
+        worker_sub_device = ttnn.SubDevice(
+            [
+                ccl_sub_device_crs,
             ]
+        )
+        worker_sub_device_id = ttnn.SubDeviceId(0)
+        sub_device_stall_group = [worker_sub_device_id]
 
+        sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+        mesh_device.load_sub_device_manager(sub_device_manager)
+        mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+        ccl_semaphore_handles = create_global_semaphores(mesh_device, 2, ccl_sub_device_crs, 0)
+        barrier_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
 
     run_conv(
         device=mesh_device,
@@ -5372,5 +5355,4 @@ def test_conv2d_multichip(
         sub_device_stall_group=sub_device_stall_group,
         ccl_semaphore_handles=ccl_semaphore_handles,
         barrier_semaphore_handles=barrier_semaphore_handles,
-        persistent_output_buffers=persistent_output_buffers,
     )
