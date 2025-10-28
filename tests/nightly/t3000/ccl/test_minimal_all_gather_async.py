@@ -1078,3 +1078,36 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
 
         eq, mess = comp_pcc(torch_reference, tt_output_tensor)
         assert eq, mess
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [2, 2, 32, 32 * MESH_SHAPE[1] * MESH_SHAPE[0]],
+    ],
+)
+def test_all_gather_async_2x4_non_flat_mesh(mesh_device, input_shape):
+    torch.manual_seed(2005)
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+        device=mesh_device,
+    )  # [2, 2, 32, 32] per device
+
+    tt_output = ttnn.all_gather(tt_input, dim=3)  # [2, 2, 32, 32*MESH_SHAPE[1]*MESH_SHAPE[0]] per device
+
+    torch_output = ttnn.to_torch(
+        tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    )  # [2*MESH_SHAPE[0]*MESH_SHAPE[1], 2, 32, 32*MESH_SHAPE[1]*MESH_SHAPE[0]]
+
+    torch_reference = torch_input.repeat([MESH_SHAPE[0] * MESH_SHAPE[1], 1, 1, 1])
+    logger.info(f"torch_reference: {torch_reference.shape}")
+    logger.info(f"torch_output: {torch_output.shape}")
+    assert torch.allclose(
+        torch_reference, torch_output, atol=1e-4, rtol=1e-4
+    ), "Output mismatch between torch and ttnn all-gather"

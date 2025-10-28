@@ -4,6 +4,7 @@
 
 #include "ttnn/common/queue_id.hpp"
 
+#include <algorithm>
 #include <tt-metalium/constants.hpp>
 
 #include "all_gather.hpp"
@@ -27,6 +28,25 @@ ttnn::Tensor ExecuteAllGather::invoke(
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology) {
+    // If cluster_axis is None, but mesh shape is not 1xM or Mx1, then we call all-gather on cluster_axis=1, then
+    // all-gather on cluster_axis=0
+    if (cluster_axis == std::nullopt) {
+        auto mesh_shape = input_tensor.device()->get_view().shape();
+        // Check if flat mesh (1x...M...x1) where M = total mesh volume
+        // if it is not flat, then we need to call all-gather on the highest dimension to the lowest dimension
+        uint32_t num_devices = mesh_shape.mesh_size();
+        bool is_not_flat_mesh = std::none_of(
+            mesh_shape.cbegin(), mesh_shape.cend(), [num_devices](uint32_t dim) { return dim == num_devices; });
+        if (is_not_flat_mesh) {
+            Tensor tensor = input_tensor;
+            for (int i = mesh_shape.dims() - 1; i >= 0; --i) {
+                tensor = ttnn::all_gather(
+                    tensor, dim, i, subdevice_id, memory_config, optional_output_tensor, num_links, topology);
+            }
+            return tensor;
+        }
+    }
+
     auto mesh_device = input_tensor.device();
     uint32_t normalized_dim = input_tensor.logical_shape().get_normalized_index(dim);
     tt::tt_fabric::Topology topology_ = topology.value_or(
