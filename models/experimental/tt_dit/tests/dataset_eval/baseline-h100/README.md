@@ -8,11 +8,10 @@
     - enter your token
 5. Load weights locally, ex:
     - `pip install accelerate`
-    - ```
-      hf download black-forest-labs/FLUX.1-schnell \
+    - `hf download black-forest-labs/FLUX.1-schnell \
     --repo-type model \
     --local-dir ./flux_schnell \
-    --include "*"
-    ```
+    --include "*"`
+
 
 4. Run eval: `pytest model.py::test_accuracy_model -v -s --start-from=0 --num-prompts=5`
