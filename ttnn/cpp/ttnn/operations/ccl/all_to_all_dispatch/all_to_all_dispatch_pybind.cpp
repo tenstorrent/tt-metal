@@ -50,8 +50,8 @@ void py_bind_all_to_all_dispatch(py::module& module) {
            Returns:
                Tuple[ttnn.Tensor, ttnn.Tensor]: The sparse output tokens tensor and the metadata tensor. The output tensor on each device is sparsely populated with all the tokens that are dispatched to that device. The non-dispatched tokens have placeholder rows populated with garbage. The metadata tensor is used to track the expert indices.
 
-               output_tensor: The output tensor is expected to be [1, B, S, H] per device, sharded fully such that we have [D, B, S, H] total when gathered along dimension 0. Each row is either a token if that token was dispatched to that device, or a placeholder row if that token was not dispatched to that device. The tensor is expected to be in Row Major, Interleaved format.
-               expert_metadata_tensor: The metadata tensor is expected to be [1, B, S, K] per device, replicated across all devices. Each row contains the all the expert indices selected for each token. This is the all-gather of the expert indices. The tensor is expected to be in Row Major, Interleaved format.
+               output_tensor: The output tensor is expected to be [1, B*D[A], S, H] per device if output_concat_dim is 1 or [1, B, S*D[A], H] per device if output_concat_dim is 2, sharded fully such that we have [D, B*D[A], S, H] total when gathered along dimension 0 or [D, B, S*D[A], H] total when gathered along dimension 0. Each row is either a token if that token was dispatched to that device, or a placeholder row if that token was not dispatched to that device. The tensor is expected to be in Row Major, Interleaved format.
+               expert_metadata_tensor: The metadata tensor is expected to be [1, B*D[A], S, K] per device if output_concat_dim is 1 or [1, B, S*D[A], K] per device if output_concat_dim is 2, replicated across all devices. Each row contains the all the expert indices selected for each token. This is the all-gather of the expert indices. The tensor is expected to be in Row Major, Interleaved format.
 
             Example:
 
