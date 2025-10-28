@@ -257,10 +257,9 @@ FORCE_INLINE void cb_wait_all_pages(uint32_t n) {
     WAYPOINT("TAPD");
 }
 
-
 template <uint32_t my_sem_id, uint8_t noc_idx, uint32_t downstream_noc_xy, uint32_t downstream_sem_id>
 class CBWriter {
-  public:
+public:
     FORCE_INLINE void acquire_pages(uint32_t n) {
         volatile tt_l1_ptr uint32_t* sem_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
@@ -295,10 +294,11 @@ class CBWriter {
     }
 
     FORCE_INLINE void release_pages(uint32_t n) {
-        noc_semaphore_inc(get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)), n, noc_idx);
+        noc_semaphore_inc(
+            get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)), n, noc_idx);
     }
 
-  uint32_t additional_count{0};
+    uint32_t additional_count{0};
 };
 
 template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>

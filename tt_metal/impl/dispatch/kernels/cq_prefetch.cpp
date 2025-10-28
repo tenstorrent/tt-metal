@@ -200,7 +200,8 @@ struct DispatchSRelayInlineState {
     static constexpr uint32_t downstream_cb_end_addr = dispatch_s_buffer_end;
     static constexpr uint32_t downstream_write_cmd_buf = BRISC_WR_REG_CMD_BUF;
     static constexpr uint32_t downstream_noc_index = my_noc_index;
-    static inline CBWriter<my_dispatch_s_cb_sem_id, my_noc_index, dispatch_s_noc_xy, downstream_dispatch_s_cb_sem_id> cb_writer{};
+    static inline CBWriter<my_dispatch_s_cb_sem_id, my_noc_index, dispatch_s_noc_xy, downstream_dispatch_s_cb_sem_id>
+        cb_writer{};
 };
 
 struct PrefetchExecBufState {
@@ -1084,7 +1085,9 @@ FORCE_INLINE static uint32_t process_exec_buf_relay_inline_cmd(
     // DPRINT << "relay_inline_exec_buf_cmd:" << length << ENDL();
     uint32_t npages =
         (length + RelayInlineState::downstream_page_size - 1) >> RelayInlineState::downstream_log_page_size;
-    static_assert(&RelayInlineState::cb_writer.additional_count ==  &DispatchRelayInlineState::cb_writer.additional_count || &RelayInlineState::cb_writer.additional_count ==  &DispatchSRelayInlineState::cb_writer.additional_count); 
+    static_assert(
+        &RelayInlineState::cb_writer.additional_count == &DispatchRelayInlineState::cb_writer.additional_count ||
+        &RelayInlineState::cb_writer.additional_count == &DispatchSRelayInlineState::cb_writer.additional_count);
 
     // Assume the downstream buffer is big relative to cmddat command size that we can
     // grab what we need in one chunk
