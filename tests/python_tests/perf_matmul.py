@@ -70,19 +70,19 @@ def test_perf_matmul(perf_report, test_name, combos, math_fidelity):
     run_types = [PerfRunType.L1_TO_L1]
 
     # Calculate all matmul dimensions using helper function
-    matmul_dims = generate_tile_dims((matrix_a, matrix_b))
+    dims = generate_tile_dims((matrix_a, matrix_b))
 
     test_config = {
         "formats": formats,
         "testname": test_name,
         "loop_factor": 16,
-        "tile_cnt": matmul_dims.output_tile_cnt,
+        "tile_cnt": dims.rt_dim * dims.ct_dim * dims.kt_dim,
         "input_A_dimensions": matrix_a,
         "input_B_dimensions": matrix_b,
-        "output_dimensions": matmul_dims.output_dimensions,
-        "rt_dim": matmul_dims.rt_dim,
-        "ct_dim": matmul_dims.ct_dim,
-        "kt_dim": matmul_dims.kt_dim,
+        "output_dimensions": dims.output_dimensions,
+        "rt_dim": dims.rt_dim,
+        "ct_dim": dims.ct_dim,
+        "kt_dim": dims.kt_dim,
         "dest_acc": dest_acc,
         "math_fidelity": math_fidelity,
     }
