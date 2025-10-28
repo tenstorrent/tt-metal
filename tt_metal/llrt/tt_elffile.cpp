@@ -16,6 +16,7 @@
 #include <cstring>
 #include <iterator>
 #include <map>
+#include <type_traits>
 
 #include <tt-logger/tt-logger.hpp>
 
@@ -53,54 +54,92 @@ static constexpr unsigned mask_lo12_s_shift_2 = 25;
 using namespace ll_api;
 
 class ElfFile::Impl {
-private:
-    std::span<Elf32_Phdr> phdrs_;
-    std::span<Elf32_Shdr> shdrs_;
-    const std::string path_;
+protected:
     ElfFile& owner_;
+    // This is a view of the caller's object, which must remain live
+    // for the lifetime of this object. (As that's the case anyway,
+    // there's no burden on the caller). See the document on
+    // ReadImage's declaration.
+    const std::string_view path_;
+
+public:
+    Impl(ElfFile& owner, std::string_view path) : owner_(owner), path_(path) {}
+    virtual ~Impl() = default;
+
+private:
+    Impl(const Impl&) = delete;
+    Impl& operator=(const Impl&) = delete;
+    Impl(Impl&&) = delete;
+    Impl& operator=(Impl&&) = delete;
+
+public:
+    static Impl* Make(ElfFile& owner, const std::string& path);
+
+public:
+    virtual void LoadImage() = 0;
+    virtual void WeakenDataSymbols(std::span<const std::string_view> strong_names) = 0;
+    virtual void XIPify() = 0;
+
+private:
+    template <bool Is64>
+    class Elf;
+};
+
+template <bool Is64>
+class ElfFile::Impl::Elf final : public Impl {
+public:
+    using Ehdr = std::conditional_t<Is64, Elf64_Ehdr, Elf32_Ehdr>;
+    using Phdr = std::conditional_t<Is64, Elf64_Phdr, Elf32_Phdr>;
+    using Shdr = std::conditional_t<Is64, Elf64_Shdr, Elf32_Shdr>;
+    using Sym = std::conditional_t<Is64, Elf64_Sym, Elf32_Sym>;
+    using Rela = std::conditional_t<Is64, Elf64_Rela, Elf32_Rela>;
+
+private:
+    std::span<Phdr> phdrs_;
+    std::span<Shdr> shdrs_;
 
     class Weakener;
 
 public:
-    Impl(ElfFile& owner, std::string_view path) : path_(std::string(path)), owner_(owner) {}
-    ~Impl() = default;
+    Elf(ElfFile& owner, std::string_view path) : Impl(owner, path) {}
+    virtual ~Elf() override = default;
 
-    void LoadImage();
-    void WeakenDataSymbols(std::span<std::string_view const> strong_names);
-    void XIPify();
+    virtual void LoadImage() override;
+    virtual void WeakenDataSymbols(std::span<const std::string_view> strong_names) override;
+    virtual void XIPify() override;
 
 private:
-    [[nodiscard]] auto GetHeader() const -> Elf32_Ehdr const& { return *ByteOffset<Elf32_Ehdr>(GetContents().data()); }
-    [[nodiscard]] auto GetPhdrs() const -> std::span<Elf32_Phdr const> { return phdrs_; }
-    [[nodiscard]] auto GetShdrs() const -> std::span<Elf32_Shdr const> { return shdrs_; }
-    [[nodiscard]] auto GetShdr(unsigned ix) const -> Elf32_Shdr const& { return shdrs_[ix]; }
+    [[nodiscard]] auto GetHeader() const -> const Ehdr& { return *ByteOffset<Ehdr>(GetContents().data()); }
+    [[nodiscard]] auto GetPhdrs() const -> std::span<const Phdr> { return phdrs_; }
+    [[nodiscard]] auto GetShdrs() const -> std::span<const Shdr> { return shdrs_; }
+    [[nodiscard]] auto GetShdr(unsigned ix) const -> const Shdr& { return shdrs_[ix]; }
     [[nodiscard]] auto GetSegments() const -> std::vector<Segment>& { return owner_.segments_; }
     [[nodiscard]] auto GetContents() const -> std::span<std::byte>& { return owner_.contents_; }
-    [[nodiscard]] auto GetContents(Elf32_Phdr const& phdr) const -> std::span<std::byte> {
+    [[nodiscard]] auto GetContents(const Phdr& phdr) const -> std::span<std::byte> {
         return GetContents().subspan(phdr.p_offset, phdr.p_filesz);
     }
-    [[nodiscard]] auto GetContents(Elf32_Shdr const& shdr) const -> std::span<std::byte> {
+    [[nodiscard]] auto GetContents(const Shdr& shdr) const -> std::span<std::byte> {
         return GetContents().subspan(shdr.sh_offset, shdr.sh_size);
     }
-    [[nodiscard]] auto GetString(size_t offset, Elf32_Shdr const& shdr) const -> char const* {
+    [[nodiscard]] auto GetString(size_t offset, const Shdr& shdr) const -> const char* {
         return ByteOffset<char const>(GetContents(shdr).data(), offset);
     }
-    [[nodiscard]] auto GetName(Elf32_Shdr const& shdr) const -> char const* {
+    [[nodiscard]] auto GetName(const Shdr& shdr) const -> const char* {
         return GetString(shdr.sh_name, GetShdr(GetHeader().e_shstrndx));
     }
-    [[nodiscard]] auto GetSymbols(Elf32_Shdr const& shdr) const -> std::span<Elf32_Sym> {
+    [[nodiscard]] auto GetSymbols(const Shdr& shdr) const -> std::span<Sym> {
         auto section = GetContents(shdr);
-        return std::span(ByteOffset<Elf32_Sym>(section.data()), section.size() / shdr.sh_entsize);
+        return std::span(ByteOffset<Sym>(section.data()), section.size() / shdr.sh_entsize);
     }
-    [[nodiscard]] auto GetName(Elf32_Sym const& sym, unsigned link) const -> char const* {
+    [[nodiscard]] auto GetName(const Sym& sym, unsigned link) const -> const char* {
         return GetString(sym.st_name, GetShdr(link));
     }
-    [[nodiscard]] auto GetRelocations(Elf32_Shdr const& shdr) const -> std::span<Elf32_Rela> {
+    [[nodiscard]] auto GetRelocations(const Shdr& shdr) const -> std::span<Rela> {
         auto section = GetContents(shdr);
-        return std::span(ByteOffset<Elf32_Rela>(section.data()), section.size() / shdr.sh_entsize);
+        return std::span(ByteOffset<Rela>(section.data()), section.size() / shdr.sh_entsize);
     }
 
-    [[nodiscard]] static bool IsInSegment(Segment const& segment, Elf32_Shdr const& shdr) {
+    [[nodiscard]] static bool IsInSegment(const Segment& segment, const Shdr& shdr) {
         // Remember, Segments use word_t sizes. If a zero-sized
         // section is at the end of a segment, it is considered in
         // that segment. Fortunately, we do not have abutting
@@ -111,11 +150,11 @@ private:
         // wholey outside, and (b) unsigned arithmetic.
         return shdr.sh_flags & SHF_ALLOC && shdr.sh_addr + shdr.sh_size - segment.address <= segment.membytes;
     }
-    [[nodiscard]] bool IsInSegment(unsigned _ix, Elf32_Shdr const& shdr) const {
+    [[nodiscard]] bool IsInSegment(unsigned _ix, const Shdr& shdr) const {
         return IsInSegment(GetSegments()[_ix], shdr);
     }
-    [[nodiscard]] bool IsInText(Elf32_Shdr const& shdr) const { return IsInSegment(GetSegments().front(), shdr); };
-    [[nodiscard]] int GetSegmentIx(Elf32_Shdr const& shdr) const {
+    [[nodiscard]] bool IsInText(const Shdr& shdr) const { return IsInSegment(GetSegments().front(), shdr); };
+    [[nodiscard]] int GetSegmentIx(const Shdr& shdr) const {
         for (unsigned ix = GetSegments().size(); ix--;) {
             if (IsInSegment(ix, shdr)) {
                 return ix;
@@ -123,10 +162,10 @@ private:
         }
         return -1;
     };
-    [[nodiscard]] bool IsTextSymbol(Elf32_Sym const& symbol) const {
+    [[nodiscard]] bool IsTextSymbol(const Sym& symbol) const {
         return symbol.st_shndx < GetShdrs().size() && IsInText(GetShdr(symbol.st_shndx));
     }
-    [[nodiscard]] bool IsDataSymbol(Elf32_Sym const& symbol) const {
+    [[nodiscard]] bool IsDataSymbol(const Sym& symbol) const {
         return symbol.st_shndx < GetShdrs().size() && GetSegmentIx(GetShdr(symbol.st_shndx)) > 0;
     }
 
@@ -139,11 +178,62 @@ private:
         return reinterpret_cast<T const*>(base + offset);
     }
 
-    uint32_t Read32(Elf32_Shdr const& shdr, address_t addr) {
+    uint32_t Read32(const Shdr& shdr, address_t addr) {
         return *ByteOffset<uint32_t>(GetContents(shdr).data(), addr - shdr.sh_addr);
     }
-    void Write32(Elf32_Shdr const& shdr, address_t addr, uint32_t value) {
+    void Write32(const Shdr& shdr, address_t addr, uint32_t value) {
         *ByteOffset<uint32_t>(GetContents(shdr).data(), addr - shdr.sh_addr) = value;
+    }
+
+private:
+    static unsigned char GetSymBind(const Sym& sym) {
+        if constexpr (Is64) {
+            return ELF64_ST_BIND(sym.st_info);
+        } else {
+            return ELF32_ST_BIND(sym.st_info);
+        }
+    }
+    static unsigned char GetSymType(const Sym& sym) {
+        if constexpr (Is64) {
+            return ELF64_ST_TYPE(sym.st_info);
+        } else {
+            return ELF32_ST_TYPE(sym.st_info);
+        }
+    }
+    static void SetSymInfo(Sym& sym, unsigned bind, unsigned type) {
+        if constexpr (Is64) {
+            sym.st_info = ELF64_ST_INFO(bind, type);
+        } else {
+            sym.st_info = ELF32_ST_INFO(bind, type);
+        }
+    }
+    static unsigned GetRelocSymIx(const Rela& rel) {
+        if constexpr (Is64) {
+            return ELF64_R_SYM(rel.r_info);
+        } else {
+            return ELF32_R_SYM(rel.r_info);
+        }
+    }
+    static unsigned GetRelocType(const Rela& rel) {
+        if constexpr (Is64) {
+            return ELF64_R_TYPE(rel.r_info);
+        } else {
+            return ELF32_R_TYPE(rel.r_info);
+        }
+    }
+    static void SetRelocInfo(Rela& rel, unsigned sym, unsigned type) {
+        if constexpr (Is64) {
+            rel.r_info = ELF64_R_INFO(sym, type);
+        } else {
+            rel.r_info = ELF32_R_INFO(sym, type);
+        }
+    }
+    static void XorRelocInfo(Rela& rel, unsigned sym, unsigned type) {
+        if constexpr (Is64) {
+            rel.r_info ^= ELF64_R_INFO(sym, type);
+        } else {
+            rel.r_info ^= ELF32_R_INFO(sym, type);
+        }
     }
 };
 
@@ -160,6 +250,11 @@ void ElfFile::ReleaseImpl() {
 }
 
 void ElfFile::ReadImage(const std::string& path) {
+    pimpl_ = Impl::Make(*this, path);
+    pimpl_->LoadImage();
+}
+
+ElfFile::Impl* ElfFile::Impl::Make(ElfFile& owner, const std::string& path) {
     int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
     struct stat st{};
     void* buffer = MAP_FAILED;
@@ -174,10 +269,28 @@ void ElfFile::ReadImage(const std::string& path) {
         TT_THROW("{}: cannot map elf file into memory: {}", path, strerror(errno));
     }
 
-    contents_ = std::span(reinterpret_cast<std::byte*>(buffer), st.st_size);
+    owner.contents_ = std::span(reinterpret_cast<std::byte*>(buffer), st.st_size);
 
-    pimpl_ = new Impl(*this, path);
-    pimpl_->LoadImage();
+    // Sniff the header
+    const unsigned char* ident = reinterpret_cast<const unsigned char*>(buffer);
+
+    // Make sure it's ELF ...
+    if (!(ident[EI_MAG0] == 0x7f && ident[EI_MAG1] == 'E' && ident[EI_MAG2] == 'L' && ident[EI_MAG3] == 'F')) {
+        TT_THROW("{}: no ELF magic found", path);
+    }
+
+    // ... of the expected address size, endianness and version
+    bool is_32 = ident[EI_CLASS] == ELFCLASS32;
+    bool is_64 = ident[EI_CLASS] == ELFCLASS64;
+    if (!(is_32 || is_64) || !(ident[EI_DATA] == ELFDATA2LSB && ident[EI_VERSION] == EV_CURRENT)) {
+        TT_THROW("{}: incompatible address size or endianness", path);
+    }
+
+    if (is_64) {
+        return new Elf<true>(owner, path);
+    } else {
+        return new Elf<false>(owner, path);
+    }
 }
 
 void ElfFile::WriteImage(std::string const& path) {
@@ -200,20 +313,9 @@ void ElfFile::WeakenDataSymbols(std::span<std::string_view const> strong) { pimp
 
 void ElfFile::MakeExecuteInPlace() { pimpl_->XIPify(); }
 
-void ElfFile::Impl::LoadImage() {
+template <bool Is64>
+void ElfFile::Impl::Elf<Is64>::LoadImage() {
     auto& hdr = GetHeader();
-
-    // Make sure it's ELF
-    if (hdr.e_ident[EI_MAG0] != 0x7f || hdr.e_ident[EI_MAG1] != 'E' || hdr.e_ident[EI_MAG2] != 'L' ||
-        hdr.e_ident[EI_MAG3] != 'F') {
-        TT_THROW("{}: no ELF magic found", path_);
-    }
-
-    // Of the expected address size, endianness and version
-    if (hdr.e_ident[EI_CLASS] != ELFCLASS32 || hdr.e_ident[EI_DATA] != ELFDATA2LSB ||
-        hdr.e_ident[EI_VERSION] != EV_CURRENT) {
-        TT_THROW("{}: incompatible address size or endianness", path_);
-    }
 
     if (hdr.e_type != ET_EXEC) {
         TT_THROW("{}: not an executable", path_);
@@ -223,16 +325,16 @@ void ElfFile::Impl::LoadImage() {
         TT_THROW("{}: incompatible architecture {}", path_, hdr.e_machine);
     }
 
-    if (!hdr.e_phoff || hdr.e_phoff & (sizeof(address_t) - 1) || hdr.e_phentsize != sizeof(Elf32_Phdr) ||
-        (hdr.e_phoff + hdr.e_phnum * sizeof(Elf32_Phdr) > GetContents().size())) {
+    if (!hdr.e_phoff || hdr.e_phoff & (sizeof(address_t) - 1) || hdr.e_phentsize != sizeof(Phdr) ||
+        (hdr.e_phoff + hdr.e_phnum * sizeof(Phdr) > GetContents().size())) {
         TT_THROW("{}: PHDRS are missing or malformed", path_);
     }
-    phdrs_ = std::span(ByteOffset<Elf32_Phdr>(GetContents().data(), hdr.e_phoff), hdr.e_phnum);
-    if (!hdr.e_shoff || hdr.e_shoff & (sizeof(address_t) - 1) || hdr.e_shentsize != sizeof(Elf32_Shdr) ||
-        (hdr.e_shoff + hdr.e_shnum * sizeof(Elf32_Shdr) > GetContents().size())) {
+    phdrs_ = std::span(ByteOffset<Phdr>(GetContents().data(), hdr.e_phoff), hdr.e_phnum);
+    if (!hdr.e_shoff || hdr.e_shoff & (sizeof(address_t) - 1) || hdr.e_shentsize != sizeof(Shdr) ||
+        (hdr.e_shoff + hdr.e_shnum * sizeof(Shdr) > GetContents().size())) {
         TT_THROW("{}: sections are missing or malformed", path_);
     }
-    shdrs_ = std::span(ByteOffset<Elf32_Shdr>(GetContents().data(), hdr.e_shoff), hdr.e_shnum);
+    shdrs_ = std::span(ByteOffset<Shdr>(GetContents().data(), hdr.e_shoff), hdr.e_shnum);
     if (!hdr.e_shstrndx || hdr.e_shstrndx >= GetShdrs().size()) {
         TT_THROW("{}: string table is missing or malformed", path_);
     }
@@ -264,9 +366,11 @@ void ElfFile::Impl::LoadImage() {
             phdr.p_offset);
 
         // Require loadable segments to be nicely aligned
-        if ((phdr.p_offset | phdr.p_vaddr | phdr.p_paddr) & (sizeof(word_t) - 1)) {
+        if (((phdr.p_offset | phdr.p_vaddr | phdr.p_paddr) & (sizeof(word_t) - 1)) ||
+            // Only support loading into the first 4GB
+            (Is64 && ((phdr.p_vaddr | phdr.p_paddr) + phdr.p_memsz) >> 32 * Is64)) {
             TT_THROW(
-                "{}: loadable segment {} is misaligned, [{}({}),+{}/{})@{}",
+                "{}: loadable segment {} is misaligned or misplaced, [{}({}),+{}/{})@{}",
                 path_,
                 unsigned(GetSegments().size()),
                 phdr.p_vaddr,
@@ -368,23 +472,23 @@ void ElfFile::Impl::LoadImage() {
     }
 }
 
-class ElfFile::Impl::Weakener {
+template <bool Is64>
+class ElfFile::Impl::Elf<Is64>::Weakener {
     enum { LOCAL, GLOBAL, HWM };
 
-    Elf32_Shdr const& shdr_;
-    std::span<Elf32_Sym> syms_in_;
+    const Shdr& shdr_;
+    std::span<Sym> syms_in_;
     std::vector<unsigned> remap_;
-    std::vector<Elf32_Sym> syms_out_[HWM];
+    std::vector<Sym> syms_out_[HWM];
 
 public:
-    Weakener(Elf32_Shdr const& shdr, std::span<Elf32_Sym> symbols) :
-        shdr_(shdr), syms_in_(symbols.subspan(shdr.sh_info)) {
+    Weakener(const Shdr& shdr, std::span<Sym> symbols) : shdr_(shdr), syms_in_(symbols.subspan(shdr.sh_info)) {
         unsigned reserve = syms_in_.size();
         remap_.reserve(reserve);
-        std::ranges::for_each(syms_out_, [=](std::vector<Elf32_Sym>& syms) { syms.reserve(reserve); });
+        std::ranges::for_each(syms_out_, [=](std::vector<Sym>& syms) { syms.reserve(reserve); });
     }
 
-    void WeakenOrLocalizeSymbols(Impl& impl, std::span<std::string_view const> strong) {
+    void WeakenOrLocalizeSymbols(Elf<Is64>& impl, std::span<const std::string_view> strong) {
         auto name_matches = [](std::string_view name, std::span<std::string_view const> list) {
             return std::ranges::any_of(list, [&](std::string_view pattern) {
                 return pattern.back() == '*' ? name.starts_with(pattern.substr(0, pattern.size() - 1))
@@ -395,10 +499,10 @@ public:
         // Weaken or hide globals
         for (auto& sym : syms_in_) {
             auto kind = GLOBAL;
-            if ((ELF32_ST_BIND(sym.st_info) == STB_GLOBAL || ELF32_ST_BIND(sym.st_info) == STB_WEAK) &&
-                !name_matches(impl.GetName(sym, shdr_.sh_link), strong)) {
-                unsigned bind = impl.IsDataSymbol(sym) ? STB_WEAK : STB_LOCAL;
-                sym.st_info = ELF32_ST_INFO(bind, ELF32_ST_TYPE(sym.st_info));
+            auto bind = impl.GetSymBind(sym);
+            if ((bind == STB_GLOBAL || bind == STB_WEAK) && !name_matches(impl.GetName(sym, shdr_.sh_link), strong)) {
+                bind = impl.IsDataSymbol(sym) ? STB_WEAK : STB_LOCAL;
+                impl.SetSymInfo(sym, bind, impl.GetSymType(sym));
                 if (bind == STB_LOCAL) {
                     kind = LOCAL;
                 }
@@ -408,11 +512,11 @@ public:
         }
     }
 
-    void UpdateRelocations(std::span<Elf32_Rela> relocs) {
+    void UpdateRelocations(std::span<Rela> relocs) {
         // Adjust relocs using remap array.
         const unsigned num_locals = shdr_.sh_info;
         for (auto& reloc : relocs) {
-            unsigned sym_ix = ELF32_R_SYM(reloc.r_info);
+            unsigned sym_ix = GetRelocSymIx(reloc);
             if (sym_ix < num_locals) {
                 continue;
             }
@@ -421,14 +525,14 @@ public:
             if (bool(sym_ix & (~0U ^ (~0U >> 1)))) {
                 sym_ix = ~sym_ix + syms_out_[LOCAL].size();
             }
-            reloc.r_info = ELF32_R_INFO(ELF32_R_TYPE(reloc.r_info), sym_ix + num_locals);
+            SetRelocInfo(reloc, sym_ix + num_locals, GetRelocType(reloc));
         }
     }
 
     void RewriteSymbols() {
         // Rewrite the symbols
         std::copy(syms_out_[LOCAL].begin(), syms_out_[LOCAL].end(), syms_in_.begin());
-        const_cast<Elf32_Shdr&>(shdr_).sh_info += syms_out_[LOCAL].size();
+        const_cast<Shdr&>(shdr_).sh_info += syms_out_[LOCAL].size();
 
         std::copy(
             syms_out_[GLOBAL].begin(),
@@ -440,7 +544,8 @@ public:
 // Any global symbol matching STRONG is preserved.
 // Any global symbol in a data-segment section is weakened
 // Any other global symbol is made local
-void ElfFile::Impl::WeakenDataSymbols(std::span<std::string_view const> strong) {
+template <bool Is64>
+void ElfFile::Impl::Elf<Is64>::WeakenDataSymbols(std::span<const std::string_view> strong) {
     for (unsigned ix = GetShdrs().size(); bool(ix--);) {
         auto& shdr = GetShdr(ix);
         if (shdr.sh_type != SHT_SYMTAB || bool(shdr.sh_flags & SHF_ALLOC)) {
@@ -460,7 +565,8 @@ void ElfFile::Impl::WeakenDataSymbols(std::span<std::string_view const> strong) 
     }
 }
 
-void ElfFile::Impl::XIPify() {
+template <bool Is64>
+void ElfFile::Impl::Elf<Is64>::XIPify() {
     // In general there can be several lo12 relocs for a hi20
     // reloc. This is particularly true for lui/{addi,lw,sw,etc}
     // pairs -- a load and a store might share a single lui, as
@@ -494,21 +600,21 @@ void ElfFile::Impl::XIPify() {
     //   terminate the CFG.
 
     struct ComposedReloc {
-        std::vector<Elf32_Rela*> lo_relocs;
-        Elf32_Rela* hi_reloc = nullptr;  // the high part
+        std::vector<Rela*> lo_relocs;
+        Rela* hi_reloc = nullptr;  // the high part
 
-        ComposedReloc(Elf32_Rela* hi) : hi_reloc(hi) {}
+        ComposedReloc(Rela* hi) : hi_reloc(hi) {}
     };
 
     enum { ABS, PCREL, HWM };
     static char const* const r_names[][2] = {
         {"R_RISCV_HI20", "R_RISCV_LO12"}, {"R_RISCV_PCREL_HI20", "R_RISCV_PCREL_LO12"}};
 
-    auto check_relaxed = [&](Elf32_Rela const& reloc) {
+    auto check_relaxed = [&](const Rela& reloc) {
         // If RELOC is the final reloc, this will
         // be out of bounds (and probably fail),
         // but we kind of want that anyway
-        if (ELF32_R_TYPE((&reloc)[1].r_info) != R_RISCV_RELAX) {
+        if (GetRelocType((&reloc)[1]) != R_RISCV_RELAX) {
             log_debug(tt::LogLLRuntime, "{}: Relocation at {} is not relaxed", path_, reloc.r_offset);
         }
     };
@@ -533,7 +639,7 @@ void ElfFile::Impl::XIPify() {
 
         num_reloc_sections++;
         std::map<offset_t, ComposedReloc> composed[HWM];
-        std::vector<Elf32_Rela*> lo[HWM];
+        std::vector<Rela*> lo[HWM];
 
         auto symbols = GetSymbols(GetShdr(relocHdr.sh_link));
         auto relocs = GetRelocations(relocHdr);
@@ -541,12 +647,12 @@ void ElfFile::Impl::XIPify() {
 
         // ADD32/SUB32 pairs are used for switch tables. Make sure
         // they're consistent.
-        Elf32_Rela const* sub_reloc = nullptr;  // Active sub reloc.
+        const Rela* sub_reloc = nullptr;  // Active sub reloc.
         for (auto ix = relocs.size(); ix--;) {
             auto& reloc = relocs[ix];
             // We can get a RISCV_NONE right at the end (!)
             if (reloc.r_offset & 3 ||
-                reloc.r_offset - section.sh_addr >= section.sh_size + int(ELF32_R_TYPE(reloc.r_info) == R_RISCV_NONE)) {
+                reloc.r_offset - section.sh_addr >= section.sh_size + int(GetRelocType(reloc) == R_RISCV_NONE)) {
                 TT_THROW(
                     "{}: relocation @ {} is {} section {}",
                     path_,
@@ -555,8 +661,8 @@ void ElfFile::Impl::XIPify() {
                     GetName(section));
             }
 
-            auto type = ELF32_R_TYPE(reloc.r_info);
-            auto sym_ix = ELF32_R_SYM(reloc.r_info);
+            auto type = GetRelocType(reloc);
+            auto sym_ix = GetRelocSymIx(reloc);
             auto const* symbol = &symbols[sym_ix];
             bool is_to_text = IsTextSymbol(*symbol);
 
@@ -573,7 +679,7 @@ void ElfFile::Impl::XIPify() {
                 throw_unpaired();
             }
             if (type == R_RISCV_ADD32) {
-                auto const* sub_symbol = &symbols[ELF32_R_SYM(sub_reloc->r_info)];
+                const auto* sub_symbol = &symbols[GetRelocSymIx(*sub_reloc)];
                 bool sub_is_to_text = IsTextSymbol(*sub_symbol);
                 if (is_to_text != sub_is_to_text) {
                     TT_THROW(
@@ -669,14 +775,14 @@ void ElfFile::Impl::XIPify() {
                 // Find the matching hi-reloc by searching backwards. This
                 // presumes block reordering hasn't done something to
                 // break that.
-                unsigned sym_ix = ELF32_R_SYM(lo_reloc->r_info);
+                unsigned sym_ix = GetRelocSymIx(*lo_reloc);
                 auto hi_reloc = composed[kind].begin();
 
                 if (kind == ABS) {
                     hi_reloc = composed[kind].lower_bound(lo_reloc->r_offset);
                     while (hi_reloc != composed[kind].begin()) {
                         --hi_reloc;
-                        if (ELF32_R_SYM(hi_reloc->second.hi_reloc->r_info) == sym_ix) {
+                        if (GetRelocSymIx(*hi_reloc->second.hi_reloc) == sym_ix) {
                             goto found;
                         }
                     }
@@ -711,7 +817,7 @@ void ElfFile::Impl::XIPify() {
                 }
 
                 auto hi_reloc = slot.second.hi_reloc;
-                unsigned sym_ix = ELF32_R_SYM(hi_reloc->r_info);
+                unsigned sym_ix = GetRelocSymIx(*hi_reloc);
                 auto const& symbol = symbols[sym_ix];
                 bool is_to_text = IsTextSymbol(symbol);
                 if (kind == PCREL && is_to_text == is_from_text) {
@@ -747,11 +853,11 @@ void ElfFile::Impl::XIPify() {
                 // Insert new immediate
                 insn |= ((value + (1 << 11)) >> 12) << mask_hi20_shift;
                 Write32(section, hi_reloc->r_offset, insn);
-                hi_reloc->r_info ^= ELF32_R_INFO(0, R_RISCV_HI20 ^ R_RISCV_PCREL_HI20);
+                XorRelocInfo(*hi_reloc, 0, R_RISCV_HI20 ^ R_RISCV_PCREL_HI20);
 
                 // translate lo
                 for (auto* lo_reloc : slot.second.lo_relocs) {
-                    unsigned type = ELF32_R_TYPE(lo_reloc->r_info);
+                    unsigned type = GetRelocType(*lo_reloc);
                     bool is_form_i = type == (kind == PCREL ? R_RISCV_PCREL_LO12_I : R_RISCV_LO12_I);
                     check_relaxed(*lo_reloc);
                     uint32_t insn = Read32(section, lo_reloc->r_offset);
@@ -776,7 +882,8 @@ void ElfFile::Impl::XIPify() {
                     // We can't convert to PCREL with fidelity, as
                     // that involves adding a symbol. Instead, let's
                     // use a null symbol and an addend.
-                    lo_reloc->r_info = ELF32_R_INFO(
+                    SetRelocInfo(
+                        *lo_reloc,
                         sym_ix,
                         type ^ (is_form_i ? (R_RISCV_LO12_I ^ R_RISCV_PCREL_LO12_I)
                                           : (R_RISCV_LO12_S ^ R_RISCV_PCREL_LO12_S)));
