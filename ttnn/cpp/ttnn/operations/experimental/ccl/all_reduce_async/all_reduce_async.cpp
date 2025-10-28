@@ -35,7 +35,7 @@ uint32_t finding_scatter_dim(const ttnn::Tensor& input_tensor, size_t num_worker
     const auto layout = input_tensor.layout();
     const auto rank = padded_shape.rank();
 
-    TT_FATAL(rank >= 2, "Expected input tensor to have 4 dimensions");
+    TT_FATAL(rank >= 2, "Expected input tensor to be of at least rank 2");
 
     ttnn::SmallVector<uint32_t> shape_vec(padded_shape.cbegin(), padded_shape.cend());
     if (layout == Layout::TILE) {
@@ -410,7 +410,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     bool use_optimal_ccl_for_llama) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
 
-    log_debug(tt::LogOp, "DEBUG: using minimal all_reduce_async 1");
+    log_debug(tt::LogOp, "Using minimal all_reduce_async");
     return ttnn::operations::experimental::ccl::all_reduce_async(
         input_tensor,
         buffer_tensor,
@@ -441,7 +441,7 @@ std::vector<ttnn::Tensor> ExecuteAllReduceAsync::invoke(
     bool use_optimal_ccl_for_llama) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensors.at(0).memory_config());
 
-    log_debug(tt::LogOp, "DEBUG: using minimal all_reduce_async 1");
+    log_debug(tt::LogOp, "Using minimal all_reduce_async with multiple tensors");
     return ttnn::operations::experimental::ccl::all_reduce_async(
         input_tensors,
         buffer_tensor,
