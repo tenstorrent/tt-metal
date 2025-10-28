@@ -252,3 +252,35 @@ def test_permute_dramsharded(device, shape, perm, dtype, layout):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "in_shape, out_shape, dtype, layout, in_mem_config, out_mem_config",
+    [
+        ([1, 1, 1920, 256], [1, 24, 80, 256], ttnn.bfloat16, TILE, DRAM, DRAM),
+        ([1, 1, 480, 256], [1, 12, 40, 256], ttnn.bfloat16, TILE, DRAM, DRAM),
+        ([1, 1, 25281, 256], [1, 159, 159, 256], ttnn.bfloat16, TILE, DRAM, DRAM),
+        ([1, 1, 9, 25281], [1, 1, 1431, 159], ttnn.bfloat16, RM, L1, L1),
+        ([1, 159, 159, 32], [1, 1, 25281, 32], ttnn.bfloat16, TILE, L1, L1),
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 100000}], indirect=True)
+def test_reshape(device, in_shape, out_shape, dtype, layout, in_mem_config, out_mem_config):
+    """
+    Original op variants used by OFT model
+    """
+    skip_if_not_20_cores(device)
+
+    torch.manual_seed(2005)
+    torch_input_tensor = random_torch_tensor(dtype, in_shape)
+    torch_output_tensor = torch_input_tensor.reshape(out_shape)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=layout, dtype=dtype, device=device, memory_config=in_mem_config
+    )
+    output_tensor = ttnn.reshape(input_tensor, out_shape, memory_config=out_mem_config)
+    # output_tensor = ttnn.reshape_on_device(input_tensor, *out_shape, memory_config=out_mem_config)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.allclose(torch_output_tensor, output_tensor)
