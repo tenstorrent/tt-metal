@@ -353,6 +353,8 @@ void process_exec_buf_end_h() {
     cmd_ptr += sizeof(CQDispatchCmd);
 }
 
+CBWriter<my_downstream_cb_sem_id> dispatch_h_cb_writer{};
+
 // Relay, potentially through the mux/dmux/tunneller path
 // Code below sends 1 page worth of data except at the end of a cmd
 // This means the downstream buffers are always page aligned, simplifies wrap handling
@@ -380,7 +382,7 @@ void relay_to_next_cb(
         while (length > 0) {
             ASSERT(downstream_cb_end > downstream_cb_data_ptr);
 
-            cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(1);
+            dispatch_h_cb_writer.acquire_pages(1);
 
             uint32_t xfer_size;
             bool not_end_of_cmd;
