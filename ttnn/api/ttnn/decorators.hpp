@@ -9,6 +9,20 @@
 #include <tracy/Tracy.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/core.hpp"
+#include "ttnn/graph/graph_argument_serializer.hpp"
+#include <sstream>
+#include <array>
+#include <span>
+
+// Forward declare Inspector methods
+namespace tt::tt_metal {
+class Inspector {
+public:
+    static void track_operation(
+        std::optional<std::int64_t> device_op_id, const std::string& operation_name, const std::string& arguments);
+};
+}  // namespace tt::tt_metal
 
 namespace ttnn {
 namespace decorators {
@@ -87,9 +101,40 @@ private:
     template <typename... args_t>
     auto traced_invoke(args_t&&... args) const {
         log_debug(tt::LogOp, "Started C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
+
+        // Capture operation start for tracking
+        ttnn::CoreIDs::instance().clear_first_assigned_device_operation_id();
+
+        // Capture and serialize arguments
+        std::string arguments;
+        if constexpr (sizeof...(args) > 0) {
+            std::array<std::any, sizeof...(args)> params{std::any(std::ref(args))...};
+            std::span<std::any> span_params(params);
+            auto serialized = ttnn::graph::GraphArgumentSerializer::instance().to_list(span_params);
+            std::ostringstream oss;
+            for (size_t i = 0; i < serialized.size(); ++i) {
+                if (i > 0) {
+                    oss << ", ";
+                }
+                oss << serialized[i];
+            }
+            arguments = oss.str();
+        } else {
+            arguments = "";
+        }
+
         tt::tt_metal::GraphTracker::instance().track_function_start(cpp_fully_qualified_name, args...);
 
         auto output = invoke(std::forward<args_t>(args)...);
+
+        // Capture device operation ID if any device operations occurred
+        auto device_op_id = ttnn::CoreIDs::instance().get_first_assigned_device_operation_id();
+
+        // Track the operation
+        tt::tt_metal::Inspector::track_operation(
+            device_op_id > 0 ? std::optional{device_op_id} : std::nullopt,
+            std::string{cpp_fully_qualified_name},
+            arguments);
 
         tt::tt_metal::GraphTracker::instance().track_function_end(output);
         log_debug(tt::LogOp, "Finished invoking C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});

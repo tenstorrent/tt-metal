@@ -65,6 +65,14 @@ struct MeshWorkloadData {
     binaryStatusPerMeshDevice @2 :List(MeshDeviceBinaryStatus);
 }
 
+struct OperationData {
+    deviceOperationId @0 :Text;   # Can be "none" for host-only operations
+    operationName @1     :Text;
+    callstack @2         :Text;
+    arguments @3         :Text;
+    timestamp @4         :UInt64;         # Optional: nanoseconds since epoch
+}
+
 # Build environment info for a specific device
 # Used to get correct firmware path for each device and build config,
 # enabling correct firmware path resolution without relying on relative
@@ -101,4 +109,8 @@ interface Inspector {
     # This replaces the old approach of constructing relative paths,
     # providing correct firmware locations for each device
     getAllBuildEnvs @5 () -> (buildEnvs :List(BuildEnvPerDevice));
+
+    # Get tracked operations
+    getOperations @6 () -> (operations :List(OperationData));
+
 }
