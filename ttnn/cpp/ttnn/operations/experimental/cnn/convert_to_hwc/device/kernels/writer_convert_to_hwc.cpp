@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-//#include "debug/dprint_pages.h"
-//#include "debug/dprint.h"
+// #include "debug/dprint_pages.h"
+// #include "debug/dprint.h"
 
 constexpr uint32_t TILE_SIZE = 32;
 
@@ -18,8 +18,8 @@ FORCE_INLINE void copy_padded_sticks(uint32_t l1_read_addr, uint32_t& l1_write_a
     }
 }
 
-template <uint32_t ReadStrideBytes, uint32_t WriteStrideBytes, uint32_t NumSticks>
-FORCE_INLINE void copy_segment_from_dram(
+template <uint32_t ReadStrideBytes, uint32_t WriteStrideBytes, uint32_t NumSticks, bool DRAM>
+FORCE_INLINE void copy_segment(
     uint32_t copy_size,
     uint32_t base_write_addr,
     uint32_t write_offset,
@@ -27,10 +27,13 @@ FORCE_INLINE void copy_segment_from_dram(
     uint32_t base_read_addr,
     uint32_t read_offset) {
     uint32_t l1_write_addr = base_write_addr + write_offset;
-
     uint32_t read_addr = base_read_addr + read_offset;
-    uint64_t noc_read_addr = get_noc_addr_from_bank_id<true>(bank_id, read_addr);
-
+    uint64_t noc_read_addr;
+    if constexpr (DRAM) {
+        noc_read_addr = get_noc_addr_from_bank_id<true>(bank_id, read_addr);
+    } else {
+        noc_read_addr = get_noc_addr(read_addr);
+    }
     noc_async_read_one_packet_set_state(noc_read_addr, copy_size);
     for (uint32_t j = 0; j < NumSticks; ++j) {
         noc_async_read_one_packet_with_state<true>(noc_read_addr, l1_write_addr);
@@ -61,36 +64,25 @@ void kernel_main() {
 
     constexpr uint32_t channel_size = channels * element_size_bytes;
 
-    if constexpr (is_input_in_dram) {
-        const uint32_t dram_base_read_addr = get_arg_val<uint32_t>(0);
-        const uint32_t num_segments = get_arg_val<uint32_t>(1);
-        tt_l1_ptr uint32_t* args = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
-        uint32_t args_idx = 0;
-        for (uint32_t i = 0; i < num_segments; ++i) {
-            uint32_t copy_size = args[args_idx++];
-            uint32_t write_offset = args[args_idx++];
-            uint32_t bank_id = args[args_idx++];
-            uint32_t read_offset = args[args_idx++];
-            copy_segment_from_dram<dram_read_stride_bytes, dram_write_stride_bytes, input_sticks_per_core>(
-                copy_size, get_write_ptr(cb_in), write_offset, bank_id, dram_base_read_addr, read_offset);
-        }
-        noc_async_read_barrier();
-
-        // One writer must wait until the other has pushed to avoid a race that will trigger a hang
-        if constexpr (should_wait) {
-            cb_wait_front(cb_in, input_sticks_per_core);
-        }
-        cb_push_back(cb_in, input_sticks_per_core);
-    } else {
-        if constexpr (should_wait) {
-            const uint32_t l1_batch_start_addr = get_read_ptr(cb_full_input);
-            constexpr uint32_t batch_size_per_core = hw * channel_size;
-            noc_async_read_one_packet_set_state(get_noc_addr(l1_batch_start_addr), batch_size_per_core);
-            noc_async_read_one_packet_with_state<true>(l1_batch_start_addr, get_write_ptr(cb_in));
-            noc_async_read_barrier();
-            cb_push_back(cb_in, hw);
-        }
+    const uint32_t dram_base_read_addr = is_input_in_dram ? get_arg_val<uint32_t>(0) : get_read_ptr(cb_full_input);
+    const uint32_t num_segments = get_arg_val<uint32_t>(1);
+    tt_l1_ptr uint32_t* args = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
+    uint32_t args_idx = 0;
+    for (uint32_t i = 0; i < num_segments; ++i) {
+        uint32_t copy_size = args[args_idx++];
+        uint32_t write_offset = args[args_idx++];
+        uint32_t bank_id = args[args_idx++];  // only used if source is in DRAM
+        uint32_t read_offset = args[args_idx++];
+        copy_segment<dram_read_stride_bytes, dram_write_stride_bytes, input_sticks_per_core, is_input_in_dram>(
+            copy_size, get_write_ptr(cb_in), write_offset, bank_id, dram_base_read_addr, read_offset);
     }
+    noc_async_read_barrier();
+
+    // One writer must wait until the other has pushed to avoid a race that will trigger a hang
+    if constexpr (should_wait) {
+        cb_wait_front(cb_in, input_sticks_per_core);
+    }
+    cb_push_back(cb_in, input_sticks_per_core);
 
     constexpr uint32_t tile_size_stick_bytes = TILE_SIZE * element_size_bytes;
 

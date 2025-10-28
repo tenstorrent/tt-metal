@@ -64,6 +64,7 @@ def test_convert_to_hwc(device, C, HW, core_grid, padded_sharded_dim, provide_me
         input_tensor, ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, mem_config=input_mem_config
     )
 
+    print(input_tensor.shape, " cores=", input_tensor.memory_config().shard_spec.num_cores())
     if provide_memory_config:
         output_shard_shape = (padded_sharded_dim, round_up(C, 8))
         output_shard_spec = ttnn.ShardSpec(core_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
@@ -72,7 +73,6 @@ def test_convert_to_hwc(device, C, HW, core_grid, padded_sharded_dim, provide_me
         )
         actual = ttnn.experimental.convert_to_hwc(input_tensor, memory_config=output_mem_config, dtype=ttnn.bfloat16)
     else:
-        print(input_tensor.shape, input_tensor.memory_config())
         actual = ttnn.experimental.convert_to_hwc(input_tensor, dtype=ttnn.bfloat16)
 
     actual = ttnn.to_torch(actual)
