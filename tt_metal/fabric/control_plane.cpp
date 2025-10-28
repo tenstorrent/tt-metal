@@ -2039,12 +2039,6 @@ void ControlPlane::assign_direction_to_fabric_eth_core(
 
 const MeshGraph& ControlPlane::get_mesh_graph() const { return *routing_table_generator_->mesh_graph; }
 
-const TopologyMapper& ControlPlane::get_topology_mapper() const {
-    // TODO: #24528 - Remove this once Topology mapper works for multi-mesh systems
-    TT_FATAL(topology_mapper_ != nullptr, "Topology mapper not initialized");
-    return *topology_mapper_;
-}
-
 std::vector<MeshId> ControlPlane::get_local_mesh_id_bindings() const {
     const auto& mesh_id_bindings = this->local_mesh_binding_.mesh_ids;
     const auto& user_mesh_ids = this->get_user_physical_mesh_ids();

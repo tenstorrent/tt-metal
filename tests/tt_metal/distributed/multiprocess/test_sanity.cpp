@@ -17,7 +17,6 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "tt_metal/fabric/topology_mapper.hpp"
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -155,13 +154,7 @@ TEST_F(BigMeshDualRankTest2x4, DistributedHostBuffer) {
     auto rank = control_plane.get_local_host_rank_id_binding();
 
     for (const auto& coord : ::tt::tt_metal::distributed::MeshCoordinateRange(mesh_device_->get_view().shape())) {
-        auto shard_rank =
-            control_plane.get_topology_mapper().get_host_rank_for_coord(mesh_device_->get_view().mesh_id(), coord);
-        if (shard_rank.has_value()) {
-            int shard_rank_value = **shard_rank;
-            host_buffer.emplace_shard(
-                coord, [shard_rank_value]() { return HostBuffer(std::vector<int>(3, shard_rank_value)); });
-        }
+        host_buffer.emplace_shard(coord, [rank]() { return HostBuffer(std::vector<int>(3, *rank)); });
     }
 
     auto validate_local_shards = [rank](const HostBuffer& buffer) {

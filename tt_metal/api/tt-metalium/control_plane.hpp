@@ -197,9 +197,6 @@ public:
     // Get the mesh graph from the routing table
     const MeshGraph& get_mesh_graph() const;
 
-    // Get the topology mapper
-    const TopologyMapper& get_topology_mapper() const;
-
     // Get the logical node id to mesh id and mesh host rank id mapping
     const std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>&
     get_global_logical_bindings() const;
