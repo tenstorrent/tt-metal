@@ -299,3 +299,22 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
 
     msg = f"Activation function {activation_fn} not supported"
     raise ValueError(msg)
+
+
+def prepare_chunked_linear_output(
+    state: dict[str, torch.Tensor], *, prefix: str, device_count: int, chunks: int
+) -> None:
+    weight_key = f"{prefix}.weight"
+    bias_key = f"{prefix}.bias"
+
+    weight = state.get(weight_key)
+    bias = state.get(bias_key)
+
+    if weight is not None:
+        _, in_dim = weight.shape
+        weight = weight.reshape([chunks, device_count, -1, in_dim]).transpose(0, 1).reshape([-1, in_dim])
+        state[weight_key] = weight
+
+    if bias is not None:
+        bias = state[bias_key].reshape([chunks, device_count, -1]).transpose(0, 1).reshape([-1])
+        state[bias_key] = bias
