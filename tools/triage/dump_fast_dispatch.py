@@ -50,7 +50,7 @@ def _read_symbol_value(elf_obj: ParsedElfFile, symbol: str, mem_reader) -> int |
     Returns None if the symbol cannot be read.
     """
     try:
-        return int(elf_obj.get_global(symbol, mem_reader).value())
+        return int(elf_obj.get_global(symbol, mem_reader).get_value())
     except Exception:
         return None
 

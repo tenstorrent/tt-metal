@@ -53,7 +53,7 @@ def check_noc_status(
         # If reading fails, write error message and skip to next core
         try:
             reg_val = read_tensix_register(location=location, register=reg, noc_id=noc_id)
-            var_val = fw_elf.get_global(var, loc_mem_reader)[noc_id].value()
+            var_val = fw_elf.get_global(var, loc_mem_reader)[noc_id]
         except Exception as e:
             message += "    " + str(e) + "\n"
             passed = False
