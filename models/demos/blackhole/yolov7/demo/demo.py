@@ -97,7 +97,7 @@ def run_yolov7_demo(model_location_generator, device, model_type, input_loc, bat
     dataset = LoadImages(path=input_loc, batch=batch_size, img_size=640, vid_stride=32)
     im_tensor, orig_images, paths_images, batch = process_images(dataset, (640, 640), batch_size)
     names = load_coco_class_names()
-    save_dir = "models/demos/yolov7/demo/runs"
+    save_dir = "models/demos/blackhole/yolov7/demo/runs"
 
     run_inference_and_save(
         model, runner, model_type, mesh_composer, im_tensor, orig_images, paths_images, save_dir, names, batch, dataset

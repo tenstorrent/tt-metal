@@ -69,7 +69,7 @@ def run_yolov8s_world_inference(
 
     expected_compile_time, expected_inference_time = get_expected_times("yolov8s_world")
     prep_perf_report(
-        model_name="models/demos/yolov8s_world",
+        model_name="models/demos/wormhole/yolov8s_world",
         batch_size=batch_size,
         inference_and_compile_time=inference_and_compile_time,
         inference_time=inference_time,
