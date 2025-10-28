@@ -17,6 +17,11 @@
 #include "stream_io_map.h"
 #include "tensix.h"
 
+// Mailboxes are only supported on BRISC and TRISC
+#if defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_BRISC)
+#include "mailbox_common.h"
+#endif
+
 #define NOC_X(x) NOC_0_X(noc_index, noc_size_x, (x))
 #define NOC_Y(y) NOC_0_Y(noc_index, noc_size_y, (y))
 #define DYNAMIC_NOC_X(noc, x) NOC_0_X(noc, noc_size_x, (x))

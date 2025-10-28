@@ -143,10 +143,12 @@ void MAIN {
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
+            // The BRISC thread writes the batch validity to each thread's mailbox.
+            // We read the batch validity from the mailbox and continue if the batch is not valid.
             bool is_batch_valid;
-            UNPACK(is_batch_valid = (bool)mailbox_read_full(0);)  // 0 is BRISC ThreadID, no enum for that.
-            MATH(is_batch_valid = (bool)mailbox_read_full(0);)    // 0 is BRISC ThreadID, no enum for that.
-            PACK(is_batch_valid = (bool)mailbox_read_full(0);)    // 0 is BRISC ThreadID, no enum for that.
+            UNPACK(is_batch_valid = (bool)mailbox_read(ThreadId::BRISCThreadId);)
+            MATH(is_batch_valid = (bool)mailbox_read(ThreadId::BRISCThreadId);)
+            PACK(is_batch_valid = (bool)mailbox_read(ThreadId::BRISCThreadId);)
             if (!is_batch_valid) {
                 continue;
             }

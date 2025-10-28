@@ -471,6 +471,7 @@ target_sources(
             inc/tt-2xx/quasar/tensix_types.h
             inc/remote_circular_buffer_api.h
             inc/risc_attribs.h
+            inc/tt-1xx/mailbox_common.h
             inc/tt-1xx/risc_common.h
             inc/tensix_functions.h
             inc/utils/bfloat16.h
