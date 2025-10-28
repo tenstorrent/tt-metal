@@ -1,12 +1,18 @@
 #include "ttnn/tensor/serialization.hpp"
 
 #include <ttnn/distributed/host_ccl.hpp>
+#include "tt_stl/cleanup.hpp"
+
+#include "tt-metalium/tensor/flatbuffer/tensor_flatbuffer.hpp"
+#include <flatbuffers/flatbuffers.h>
 
 namespace {
 
 void safe_fwrite(const void* buffer, size_t size, size_t count, FILE* file) {
     TT_FATAL(fwrite(buffer, size, count, file) == count, "Failed to write tensor data: file write failed");
 }
+
+constexpr std::uint32_t kFlatbufferAlignment = alignof(std::uint64_t);
 
 }  // namespace
 
@@ -20,7 +26,7 @@ void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) 
     // be fully host-local. In this latter case, host buffer context will consist of a single (local) host rank, and
     // each host will attempt to flush the serialized tensor file to disk.
     cpu_tensor = ttnn::distributed::host_ccl::all_gather(cpu_tensor);
-    const auto& ctx = distributed::multihost::DistributedContext::get_current_world();
+    const auto& ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     if (ctx->rank() == tt::tt_metal::distributed::multihost::Rank(0)) {
         FILE* output_file = fopen(file_name.c_str(), "wb");
         TT_FATAL(output_file != nullptr, "Cannot open \"{}\"", file_name);
@@ -30,9 +36,9 @@ void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) 
             }
         });
 
-        std::vector<HostBuffer> buffers;
+        std::vector<tt::tt_metal::HostBuffer> buffers;
         flatbuffers::FlatBufferBuilder builder;
-        auto tensor_offset = ttnn::to_flatbuffer(cpu_tensor, builder, buffers);
+        auto tensor_offset = tt::tt_metal::to_flatbuffer(cpu_tensor, builder, buffers);
         // To be able to read flatbuffer data with `mmap` safely, make sure the serialized flatbuffer is aligned to at
         // least 8 bytes, just like `header_size`. Individual `buffers` are aligned according to their element size,
         // which is already what we need for `mmap` to work.

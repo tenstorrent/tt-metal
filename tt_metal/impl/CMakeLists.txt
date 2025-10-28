@@ -102,6 +102,8 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/unit_mesh/unit_mesh_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/xtensor/partition.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/distributed/tensor_topology.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/distributed/distributed_configs.cpp
 )
 
 # Include helper functions and generate headers from flatbuffer schemas

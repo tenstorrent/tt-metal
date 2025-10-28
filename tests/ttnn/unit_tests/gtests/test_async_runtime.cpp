@@ -123,14 +123,15 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
             ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(shape));
             auto input_tensor = allocate_tensor_on_device(TensorSpec(shape, tensor_layout), device_);
-            ttnn::write_buffer(io_cq, input_tensor, {host_data});            // Write using cq 1
+            ttnn::write_buffer(io_cq, input_tensor, {host_data});                        // Write using cq 1
             auto write_event = ttnn::record_event(device_->mesh_command_queue(*io_cq));  // Record write on cq 1
             // Wait until cq 1 write is complete
             ttnn::wait_for_event(device_->mesh_command_queue(*workload_dispatch_cq), write_event);
 
             // Run operation on cq 0
             Tensor output_tensor;
-            with_command_queue_id(workload_dispatch_cq, [&]() { output_tensor = ttnn::sqrt(input_tensor); });
+            ttnn::core::with_command_queue_id(
+                workload_dispatch_cq, [&]() { output_tensor = ttnn::sqrt(input_tensor); });
 
             auto dummy_buffer_0 =
                 tt::tt_metal::tensor_impl::allocate_device_buffer(device_, TensorSpec(shape, tensor_layout));

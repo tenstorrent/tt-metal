@@ -62,10 +62,8 @@ target_sources(
         core/device.cpp
         core/distributed/api.cpp
         core/distributed/distributed_tensor.cpp
-        core/distributed/distributed_configs.cpp
         core/distributed/distribution_mode.cpp
         core/distributed/host_ccl.cpp
-        core/distributed/tensor_topology.cpp
         core/distributed/bidirectional_fabric_socket.cpp
         core/distributed/create_socket.cpp
         core/distributed/fabric_socket.cpp
@@ -79,6 +77,10 @@ target_sources(
         core/old_infra_device_operation.cpp
         core/reports.cpp
         core/run_operation.cpp
+        core/tensor/serialization.cpp
+        core/tensor/tensor_impl.cpp
+        core/tensor/tensor_ops.cpp
+        core/tensor/tensor.cpp
 )
 target_include_directories(
     ttnn_core

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/distributed/distributed_configs.hpp"
+#include <tt-metalium/distributed/distributed_configs.hpp>
 #include <tt_stl/overloaded.hpp>
 
 namespace tt::tt_metal::distributed {

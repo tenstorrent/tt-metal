@@ -394,10 +394,15 @@ Tensor Tensor::extract_shard(const uint32_t& core_id) const {
 
 Tensor Tensor::to_layout(Layout target_layout) const { return tensor_ops::tensor_to_layout(*this, target_layout); }
 
-// TODO: Move to ttnn
-//  std::string Tensor::write_to_string() const { return tensor_impl::to_string_wrapper(*this); }
+std::string Tensor::write_to_string() const {
+    // TOOD: Implement host only implementation
+    return "TODO: Implement";
+}
+void Tensor::print() const {
+    // TOOD: Implement host only implementation
 
-void Tensor::print() const { tensor_ops::tensor_print(*this); }
+    // tensor_ops::tensor_print(*this);
+}
 
 Tensor Tensor::pad(const Shape& output_padded_shape, const Shape& input_tensor_start, float pad_value) const {
     return tensor_ops::tensor_pad(*this, output_padded_shape, input_tensor_start, pad_value);
@@ -422,6 +427,7 @@ uint32_t Tensor::element_size() const { return tensor_impl::element_size_bytes(t
 Tensor Tensor::reshape(const Shape& new_shape) const { return tensor_ops::tensor_reshape(*this, new_shape); }
 
 Tensor Tensor::reshape(const Shape& new_logical_shape, const Shape& new_padded_shape) const {
+    // TODO: Implement
     return tensor_ops::tensor_reshape(*this, new_logical_shape, new_padded_shape);
 }
 

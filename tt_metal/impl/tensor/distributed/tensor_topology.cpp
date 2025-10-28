@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/distributed/tensor_topology.hpp"
+#include <tt-metalium/distributed/tensor_topology.hpp>
 
 namespace tt::tt_metal {
 
