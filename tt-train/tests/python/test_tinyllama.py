@@ -54,7 +54,7 @@ def tinyllama_model(tokenizer):
     model = tt_model_factory.create_model()
     model.load_from_safetensors(safetensors_path)
 
-    return model
+    return model, tt_model_factory
 
 
 @pytest.fixture
@@ -65,13 +65,13 @@ def tokenizer():
 @pytest.fixture
 def causal_mask(tinyllama_model):
     # [1,1,T,T] float32 with 1s for allowed positions (i >= j), else 0\n",
-    T = tinyllama_model.transformer_config.max_sequence_length
+    T = tinyllama_model[1].transformer_config.max_sequence_length
     m = np.tril(np.ones((T, T), dtype=np.float32))
     return ttml.autograd.Tensor.from_numpy(m.reshape(1, 1, T, T), ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16)
 
 
 @pytest.fixture
-def logits_mask_tensor(tinyllama_model, tokenizer):
+def logits_mask_tensor(tokenizer):
     orig_vocab_size = tokenizer.vocab_size
     padded_vocab_size = round_up_to_tile(orig_vocab_size, 32)
 
@@ -1118,7 +1118,7 @@ def test_tinyllama_inference_128(tinyllama_model, tokenizer, causal_mask, logits
     input_text = "A dog is:"
 
     generated_out = generate_text_tt(
-        tinyllama_model,
+        tinyllama_model[0],
         tokenizer,
         input_text,
         causal_mask,
@@ -1134,7 +1134,7 @@ def test_tinyllama_inference_256(tinyllama_model, tokenizer, causal_mask, logits
     input_text = "The difference between cats and dogs is:"
 
     generated_out = generate_text_tt(
-        tinyllama_model,
+        tinyllama_model[0],
         tokenizer,
         input_text,
         causal_mask,
@@ -1150,7 +1150,7 @@ def test_tinyllama_inference_512(tinyllama_model, tokenizer, causal_mask, logits
     input_text = "The sky outside is blue, and the grass is green, then the weather is:"
 
     generated_out = generate_text_tt(
-        tinyllama_model,
+        tinyllama_model[0],
         tokenizer,
         input_text,
         causal_mask,
