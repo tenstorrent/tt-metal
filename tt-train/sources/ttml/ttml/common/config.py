@@ -60,7 +60,7 @@ class TrainingConfig:
         """
         tc = yaml_config.get("training_config", {})
         self.batch_size = int(tc.get("batch_size", 64))
-        self.validation_batch_size = int(tc.get("validation_batch_size", min(self.batch_size // 2, 1)))
+        self.validation_batch_size = int(tc.get("validation_batch_size", max(self.batch_size // 2, 1)))
         self.steps = int(tc.get("max_steps", 1000))
         self.epochs = int(tc.get("num_epochs", 1))
         self.eval_every = int(tc.get("eval_every", 200))
@@ -174,9 +174,9 @@ class SchedulerConfig:
         self.total_steps = int(tc.get("total_steps", 1000))
 
         # optional momentum warmup (beta1 ramp)
-        beta1_start = float(sc.get("beta1_start", 0.85))
-        beta1_end = float(sc.get("beta1_end", 0.95))
-        beta1_warmup_steps = int(sc.get("beta1_warmup_steps", 0))
+        self.beta1_start = float(sc.get("beta1_start", 0.85))
+        self.beta1_end = float(sc.get("beta1_end", 0.95))
+        self.beta1_warmup_steps = int(sc.get("beta1_warmup_steps", 0))
 
     def update_config(self, yaml_config: dict):
         """Update scheduler configuration from another YAML config.
@@ -189,6 +189,11 @@ class SchedulerConfig:
         self.min_lr = float(sc.get("min_lr", self.min_lr))
         self.warmup_steps = int(sc.get("warmup_steps", self.warmup_steps))
         self.hold_steps = int(sc.get("hold_steps", self.hold_steps))
+
+        # optional momentum warmup (beta1 ramp)
+        self.beta1_start = float(sc.get("beta1_start", self.beta1_start))
+        self.beta1_end = float(sc.get("beta1_end", self.beta1_end))
+        self.beta1_warmup_steps = int(sc.get("beta1_warmup_steps", self.beta1_warmup_steps))
 
 
 class PipelineParallelHostConfig:
