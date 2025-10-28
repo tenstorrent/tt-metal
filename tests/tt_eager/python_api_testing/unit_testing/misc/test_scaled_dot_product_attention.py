@@ -280,6 +280,36 @@ def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
 
 
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@pytest.mark.parametrize("dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp4", "bfp8", "bf16"])
+@pytest.mark.parametrize("q_chunk_size", [32], ids=["q32"])
+@pytest.mark.parametrize("k_chunk_size", [32], ids=["k32"])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d",
+    (
+        [1, 72, 1, 32, 32],  # Small health-check
+        [1, 72, 1, 2048, 128],  # Large health-check
+    ),
+    ids=["small", "large"],
+)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("device_id", range(32), ids=[f"device_{i}" for i in range(32)])
+def test_sdpa_tt_glx_health(mesh_device, device_id, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, reset_seeds):
+    # Tests every device in the galaxy mesh to ensure they are working correctly
+    device = mesh_device.create_submeshes(ttnn.MeshShape(1, 1))[device_id]
+    logger.info(f"Running on grid {device.compute_with_storage_grid_size()}")
+
+    if dtype == ttnn.bfloat4_b and (
+        q_chunk_size > 128 or k_chunk_size > 128 or [b, nh, nkv, s, d] != [1, 8, 1, 2048, 128]
+    ):
+        pytest.skip("just need to single test case for sanity-check bfp4")
+    if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
+        pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
+    rmse_threshold = 0.0092 if (dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b) else 0.0093
+    ttnn.device.DisablePersistentKernelCache()
+    run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=rmse_threshold)
+
+
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
 @pytest.mark.parametrize("q_chunk_size", [32], ids=["q32"])
 @pytest.mark.parametrize("k_chunk_size", [32], ids=["k32"])
