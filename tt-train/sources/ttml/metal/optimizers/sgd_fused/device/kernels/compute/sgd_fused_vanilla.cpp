@@ -89,9 +89,7 @@ void MAIN {
         cb_wait_front(cb_param_in_idx, block_size);
 
         if (!is_f32_zero_bits(weight_decay)) {
-            cb_wait_front(alias_grad_modified_idx, block_size);
             tile_regs_acquire();
-
             mul_tiles_bcast_scalar_init_short(cb_param_in_idx, cb_bcast_weight_decay_idx);
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
                 mul_tiles_bcast_scalar(cb_param_in_idx, cb_bcast_weight_decay_idx, block_idx, 0, block_idx);
@@ -99,11 +97,12 @@ void MAIN {
             tile_regs_commit();
             pack_and_push_block(cb_param_wd_idx, block_size);
 
+            cb_wait_front(alias_grad_modified_idx, block_size);
             cb_wait_front(cb_param_wd_idx, block_size);
             tile_regs_acquire();
-            add_tiles_init(alias_grad_modified_idx, cb_param_wd_idx);
+            add_tiles_init(cb_param_wd_idx, alias_grad_modified_idx);
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                add_tiles(alias_grad_modified_idx, cb_param_wd_idx, block_idx, block_idx, block_idx);
+                add_tiles(cb_param_wd_idx, alias_grad_modified_idx, block_idx, block_idx, block_idx);
             }
             tile_regs_commit();
             pack_and_push_block(cb_grad_wd_idx, block_size);
@@ -114,6 +113,16 @@ void MAIN {
 
         uint32_t alias_momentum_modified_idx = cb_momentum_in_idx;
 #if USE_MOMENTUM
+        cb_wait_front(alias_momentum_modified_idx, block_size);
+        tile_regs_acquire();
+        mul_tiles_bcast_scalar_init_short(alias_momentum_modified_idx, cb_bcast_momentum_idx);
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            mul_tiles_bcast_scalar(alias_momentum_modified_idx, cb_bcast_momentum_idx, block_idx, 0, block_idx);
+        }
+        tile_regs_commit();
+        pack_and_push_block(cb_momentum_scaled_idx, block_size);
+        cb_pop_front(alias_momentum_modified_idx, block_size);
+
         // dampening only applied if momentum is used
         if (!is_f32_one_bits(one_minus_dampening)) {
             cb_wait_front(alias_grad_modified_idx, block_size);
@@ -127,16 +136,6 @@ void MAIN {
             cb_pop_front(alias_grad_modified_idx, block_size);
             alias_grad_modified_idx = cb_grad_dampened_idx;
         }
-
-        cb_wait_front(alias_momentum_modified_idx, block_size);
-        tile_regs_acquire();
-        mul_tiles_bcast_scalar_init_short(alias_momentum_modified_idx, cb_bcast_momentum_idx);
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            mul_tiles_bcast_scalar(alias_momentum_modified_idx, cb_bcast_momentum_idx, block_idx, 0, block_idx);
-        }
-        tile_regs_commit();
-        pack_and_push_block(cb_momentum_scaled_idx, block_size);
-        cb_pop_front(alias_momentum_modified_idx, block_size);
 
         cb_wait_front(cb_momentum_scaled_idx, block_size);
         cb_wait_front(alias_grad_modified_idx, block_size);
@@ -162,9 +161,9 @@ void MAIN {
 
         cb_wait_front(cb_nesterov_momentum_scaled_idx, block_size);
         tile_regs_acquire();
-        add_tiles_init(cb_nesterov_momentum_scaled_idx, alias_grad_modified_idx);
+        add_tiles_init(alias_grad_modified_idx, cb_nesterov_momentum_scaled_idx);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            add_tiles(cb_nesterov_momentum_scaled_idx, alias_grad_modified_idx, block_idx, block_idx, block_idx);
+            add_tiles(alias_grad_modified_idx, cb_nesterov_momentum_scaled_idx, block_idx, block_idx, block_idx);
         }
         tile_regs_commit();
         cb_pop_front(cb_nesterov_momentum_scaled_idx, block_size);
@@ -177,11 +176,9 @@ void MAIN {
 #else
         alias_momentum_modified_idx = alias_grad_modified_idx;
 #endif
-
         cb_wait_front(alias_momentum_modified_idx, block_size);
         tile_regs_acquire();
         mul_tiles_bcast_scalar_init_short(alias_momentum_modified_idx, cb_bcast_lr_idx);
-        reconfig_data_format(cb_momentum_out_idx, cb_bcast_lr_idx);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             mul_tiles_bcast_scalar(alias_momentum_modified_idx, cb_bcast_lr_idx, block_idx, 0, block_idx);
         }
@@ -192,7 +189,6 @@ void MAIN {
         cb_wait_front(cb_update_idx, block_size);
         tile_regs_acquire();
         sub_tiles_init(cb_param_in_idx, cb_update_idx);
-        reconfig_data_format(cb_param_in_idx, cb_update_idx);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             sub_tiles(cb_param_in_idx, cb_update_idx, block_idx, block_idx, block_idx);
         }
