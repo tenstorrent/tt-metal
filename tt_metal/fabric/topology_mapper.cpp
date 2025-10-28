@@ -233,8 +233,6 @@ void TopologyMapper::build_mapping() {
         auto adjacency_map_logical = build_adjacency_map_logical(mesh_id_host_names);
         auto adjacency_map_physical = build_adjacency_map_physical(mesh_id_host_names);
 
-        log_critical(tt::LogFabric, "Adjacency map physical: {}", adjacency_map_physical);
-
         // Use sat solver algo to preserve the logical connectivity in the physical topology
         populate_fabric_node_id_to_asic_id_mappings(adjacency_map_physical, adjacency_map_logical);
 
