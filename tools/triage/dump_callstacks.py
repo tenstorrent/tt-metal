@@ -10,7 +10,7 @@ Usage:
 Options:
     --full-callstack   Dump full callstack with all frames. Defaults to dumping only the top frame.
     --gdb-callstack    Dump callstack using GDB client instead of built-in methods.
-    --active-eth       Override default behaivour of not dumping callstack for active ethe cores if full callstack or gdb callstack is used.
+    --active-eth       Override default behaviour of not dumping callstack for active eth cores if full callstack or gdb callstack is used.
     --all-cores        Show all cores including ones with Go Message = DONE. By default, DONE cores are filtered out.
 
 Description:
