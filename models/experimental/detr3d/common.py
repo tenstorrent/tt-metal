@@ -16,7 +16,7 @@ from models.experimental.detr3d.reference.model_3detr import (
     TransformerDecoder,
 )
 from torch.nn import MultiheadAttention
-from models.experimental.detr3d.reference.pointnet2_modules import SharedMLP
+from models.experimental.detr3d.reference.pytorch_utils import SharedMLP
 
 
 def load_partial_state(torch_model: torch.nn.Module, state_dict, layer_name: str = ""):

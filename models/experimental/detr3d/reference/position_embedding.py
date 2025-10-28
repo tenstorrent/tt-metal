@@ -1,16 +1,14 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
+# Modified from the 3Detr implementation in facebookresearch
+# https://github.com/facebookresearch/3detr
+# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 
 import math
 import torch
 import numpy as np
 from torch import nn
-from models.experimental.detr3d.reference.model_utils import shift_scale_points
-
-"""
-Copy-paste from https://github.com/facebookresearch/3detr
-"""
+from models.experimental.detr3d.reference.utils.pc_util import shift_scale_points
 
 
 class PositionEmbeddingCoordsSine(nn.Module):

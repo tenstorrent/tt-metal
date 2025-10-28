@@ -11,7 +11,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 from models.common.utility_functions import comp_pcc, comp_allclose
 from models.experimental.detr3d.ttnn.shared_mlp import TtnnSharedMLP
 from models.experimental.detr3d.common import load_torch_model_state
-from models.experimental.detr3d.reference.pointnet2_modules import SharedMLP
+from models.experimental.detr3d.reference.pytorch_utils import SharedMLP
 from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
 
 

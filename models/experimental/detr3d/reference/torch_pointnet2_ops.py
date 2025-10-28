@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -20,7 +19,7 @@ The implementations closely follow the CUDA code in:
 
 
 # Sampling Operations (from sampling_gpu.cu)
-def furthest_point_sampling(xyz: torch.Tensor, npoint: int) -> torch.Tensor:
+def furthest_point_sample(xyz: torch.Tensor, npoint: int) -> torch.Tensor:
     """
     Furthest Point Sampling (FPS) algorithm.
     Iteratively selects the point that is farthest from all previously selected points.
@@ -75,7 +74,7 @@ def furthest_point_sampling(xyz: torch.Tensor, npoint: int) -> torch.Tensor:
     return idx
 
 
-def gather_points(points: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
+def gather_operation(points: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
     """
     Gather points/features based on indices.
     This is the PyTorch equivalent of gather_points_kernel in sampling_gpu.cu.
@@ -180,46 +179,6 @@ def group_points(points: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
     out = torch.gather(points.unsqueeze(3).expand(B, C, N, nsample), 2, idx_expanded)
 
     return out
-
-
-class FurthestPointSampling(nn.Module):
-    """
-    Module wrapper for Furthest Point Sampling.
-    """
-
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, xyz: torch.Tensor, npoint: int) -> torch.Tensor:
-        """
-        Args:
-            xyz: (B, N, 3) input points
-            npoint: int, number of points to sample
-
-        Returns:
-            idx: (B, npoint) sampled indices
-        """
-        return furthest_point_sampling(xyz, npoint)
-
-
-class GatherOperation(nn.Module):
-    """
-    Module wrapper for gathering points/features.
-    """
-
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, features: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            features: (B, C, N) tensor
-            idx: (B, M) or (B, M, K) tensor of indices
-
-        Returns:
-            gathered: (B, C, M) or (B, C, M, K) tensor
-        """
-        return gather_points(features, idx)
 
 
 class BallQuery(nn.Module):

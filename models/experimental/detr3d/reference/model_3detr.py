@@ -1,6 +1,12 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-
 # SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Facebook, Inc. and its affiliates.
+"""
+Modified from https://github.com/facebookresearch/3detr
+Main 3DETR model.
+
+Uses CUDA equivalent Pytorch code for furthest_point_sample
+"""
 
 import math
 import torch
@@ -15,15 +21,56 @@ from models.experimental.detr3d.reference.transformer import (
     TransformerEncoder,
     MaskedTransformerEncoder,
 )
-from models.experimental.detr3d.reference.model_utils import BoxProcessor
 from models.experimental.detr3d.reference.position_embedding import PositionEmbeddingCoordsSine
 from models.experimental.detr3d.reference.helpers import GenericMLP
 from models.experimental.detr3d.reference.pointnet2_modules import PointnetSAModuleVotes
-from models.experimental.detr3d.reference.torch_pointnet2_ops import FurthestPointSampling
+from models.experimental.detr3d.reference.torch_pointnet2_ops import furthest_point_sample
+from models.experimental.detr3d.reference.utils.pc_util import scale_points, shift_scale_points
 
-"""
-Copy-paste from https://github.com/facebookresearch/3detr
-"""
+
+class BoxProcessor(object):
+    """
+    Class to convert 3DETR MLP head outputs into bounding boxes
+    """
+
+    def __init__(self, dataset_config):
+        self.dataset_config = dataset_config
+
+    def compute_predicted_center(self, center_offset, query_xyz, point_cloud_dims):
+        center_unnormalized = query_xyz + center_offset
+        center_normalized = shift_scale_points(center_unnormalized, src_range=point_cloud_dims)
+        return center_normalized, center_unnormalized
+
+    def compute_predicted_size(self, size_normalized, point_cloud_dims):
+        scene_scale = point_cloud_dims[1] - point_cloud_dims[0]
+        scene_scale = torch.clamp(scene_scale, min=1e-1)
+        size_unnormalized = scale_points(size_normalized, mult_factor=scene_scale)
+        return size_unnormalized
+
+    def compute_predicted_angle(self, angle_logits, angle_residual):
+        if angle_logits.shape[-1] == 1:
+            # special case for datasets with no rotation angle
+            # we still use the predictions so that model outputs are used
+            # in the backwards pass (DDP may complain otherwise)
+            angle = angle_logits * 0 + angle_residual * 0
+            angle = angle.squeeze(-1).clamp(min=0)
+        else:
+            angle_per_cls = 2 * np.pi / self.dataset_config.num_angle_bin
+            pred_angle_class = angle_logits.argmax(dim=-1).detach()
+            angle_center = angle_per_cls * pred_angle_class
+            angle = angle_center + angle_residual.gather(2, pred_angle_class.unsqueeze(-1)).squeeze(-1)
+            mask = angle > np.pi
+            angle[mask] = angle[mask] - 2 * np.pi
+        return angle
+
+    def compute_objectness_and_cls_prob(self, cls_logits):
+        assert cls_logits.shape[-1] == self.dataset_config.num_semcls + 1
+        cls_prob = torch.nn.functional.softmax(cls_logits, dim=-1)
+        objectness_prob = 1 - cls_prob[..., -1]
+        return cls_prob[..., :-1], objectness_prob
+
+    def box_parametrization_to_corners(self, box_center_unnorm, box_size_unnorm, box_angle):
+        return self.dataset_config.box_parametrization_to_corners(box_center_unnorm, box_size_unnorm, box_angle)
 
 
 class Model3DETR(nn.Module):
@@ -87,7 +134,6 @@ class Model3DETR(nn.Module):
 
         self.num_queries = num_queries
         self.box_processor = BoxProcessor(dataset_config)
-        self.furthest_point_sample = FurthestPointSampling()
 
     def build_mlp_heads(self, dataset_config, decoder_dim, mlp_dropout):
         mlp_func = partial(
@@ -120,7 +166,7 @@ class Model3DETR(nn.Module):
         self.mlp_heads = nn.ModuleDict(mlp_heads)
 
     def get_query_embeddings(self, encoder_xyz, point_cloud_dims):
-        query_inds = self.furthest_point_sample(encoder_xyz, self.num_queries)
+        query_inds = furthest_point_sample(encoder_xyz, self.num_queries)
         query_inds = query_inds.long()
         query_xyz = [torch.gather(encoder_xyz[..., x], 1, query_inds) for x in range(3)]
         query_xyz = torch.stack(query_xyz)
@@ -312,7 +358,7 @@ def build_encoder(args):
         masking_radius = [math.pow(x, 2) for x in [0.4, 0.8, 1.2]]
         encoder = MaskedTransformerEncoder(
             encoder_layer=encoder_layer,
-            num_layers=args.enc_nlayers,
+            num_layers=3,
             interim_downsampling=interim_downsampling,
             masking_radius=masking_radius,
         )

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+# Modified from the 3Detr implementation in facebookresearch
+# https://github.com/facebookresearch/3detr
 # Copyright (c) Facebook, Inc. and its affiliates.
 
 """ Helper functions for calculating 2D and 3D bounding box IoU.

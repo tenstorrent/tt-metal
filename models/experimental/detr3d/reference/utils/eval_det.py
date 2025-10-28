@@ -1,21 +1,9 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+# Modified from the 3Detr implementation in facebookresearch
+# https://github.com/facebookresearch/3detr
 # Copyright (c) Facebook, Inc. and its affiliates.
 
-""" Generic Code for Object Detection Evaluation
-
-    Input:
-    For each class:
-        For each image:
-            Predictions: box, score
-            Groundtruths: box
-
-    Output:
-    For each class:
-        precision-recal and average precision
-
-    Author: Charles R. Qi
-
-    Ref: https://raw.githubusercontent.com/rbgirshick/py-faster-rcnn/master/lib/datasets/voc_eval.py
-"""
 import numpy as np
 from models.experimental.detr3d.reference.utils.box_util import box3d_iou
 

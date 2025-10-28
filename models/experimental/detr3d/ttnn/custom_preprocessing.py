@@ -14,7 +14,7 @@ from ttnn.model_preprocessing import (
 
 from models.experimental.detr3d.reference.model_3detr import GenericMLP
 from models.experimental.detr3d.reference.model_3detr import MaskedTransformerEncoder, TransformerEncoderLayer
-from models.experimental.detr3d.reference.pointnet2_modules import SharedMLP
+from models.experimental.detr3d.reference.pytorch_utils import SharedMLP
 from models.experimental.detr3d.reference.position_embedding import PositionEmbeddingCoordsSine
 
 

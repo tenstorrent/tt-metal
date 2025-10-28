@@ -14,7 +14,7 @@ from models.experimental.detr3d.common import load_torch_model_state
 from models.experimental.detr3d.ttnn.model_3detr import build_ttnn_3detr
 from models.experimental.detr3d.reference.model_3detr import build_3detr
 from models.experimental.detr3d.reference.model_config import Detr3dArgs
-from models.experimental.detr3d.reference.model_utils import SunrgbdDatasetConfig
+from models.experimental.detr3d.reference.utils.dataset import SunrgbdDatasetConfig
 from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
 
 

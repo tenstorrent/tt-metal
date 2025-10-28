@@ -1,15 +1,13 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
+# Modified from the 3Detr implementation in facebookresearch
+# https://github.com/facebookresearch/3detr
+# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 
 import torch
 from typing import Optional
 from torch import Tensor, nn
 from models.experimental.detr3d.reference.helpers import ACTIVATION_DICT, NORM_DICT, WEIGHT_INIT_DICT, get_clones
-
-"""
-Copy-paste from https://github.com/facebookresearch/3detr
-"""
 
 
 class TransformerEncoder(nn.Module):

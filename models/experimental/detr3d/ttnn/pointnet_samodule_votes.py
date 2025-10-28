@@ -4,14 +4,10 @@
 
 import torch
 import ttnn
+from typing import List
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.detr3d.ttnn.shared_mlp import TtnnSharedMLP
-from models.experimental.detr3d.reference.torch_pointnet2_ops import (
-    QueryAndGroup,
-    GatherOperation,
-    FurthestPointSampling,
-)
-from typing import List
+from models.experimental.detr3d.reference import torch_pointnet2_ops as pointnet2_utils
 
 
 class TtnnBallQuery(LightweightModule):
@@ -254,7 +250,7 @@ class TtnnPointnetSAModuleVotes(LightweightModule):
         self.sample_uniformly = sample_uniformly
 
         if npoint is not None:
-            self.grouper = QueryAndGroup(
+            self.grouper = pointnet2_utils.QueryAndGroup(
                 radius,
                 nsample,
                 use_xyz=use_xyz,
@@ -271,8 +267,6 @@ class TtnnPointnetSAModuleVotes(LightweightModule):
             mlp_spec[0] += 3
 
         self.mlp_module = TtnnSharedMLP(parameters, device)
-        self.gather_operation = GatherOperation()
-        self.furthest_point_sample = FurthestPointSampling()
 
     def forward(self, xyz, features=None, inds=None):
         if not isinstance(xyz, torch.Tensor):
@@ -284,11 +278,13 @@ class TtnnPointnetSAModuleVotes(LightweightModule):
 
         xyz_flipped = xyz.transpose(1, 2).contiguous()
         if inds is None:
-            inds = self.furthest_point_sample(xyz, self.npoint)
+            inds = pointnet2_utils.furthest_point_sample(xyz, self.npoint)
         else:
             assert inds.shape[1] == self.npoint
         new_xyz = (
-            self.gather_operation(xyz_flipped, inds).transpose(1, 2).contiguous() if self.npoint is not None else None
+            pointnet2_utils.gather_operation(xyz_flipped, inds).transpose(1, 2).contiguous()
+            if self.npoint is not None
+            else None
         )
 
         unique_cnt = None

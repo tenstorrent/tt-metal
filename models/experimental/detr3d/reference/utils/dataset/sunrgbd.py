@@ -1,24 +1,9 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+# Modified from the 3Detr implementation in facebookresearch
+# https://github.com/facebookresearch/3detr
 # Copyright (c) Facebook, Inc. and its affiliates.
 
-
-"""
-Modified from https://github.com/facebookresearch/votenet
-Dataset for 3D object detection on SUN RGB-D (with support of vote supervision).
-
-A sunrgbd oriented bounding box is parameterized by (cx,cy,cz), (l,w,h) -- (dx,dy,dz) in upright depth coord
-(Z is up, Y is forward, X is right ward), heading angle (from +X rotating to -Y) and semantic class
-
-Point clouds are in **upright_depth coordinate (X right, Y forward, Z upward)**
-Return heading class, heading residual, size class and size residual for 3D bounding boxes.
-Oriented bounding box is parameterized by (cx,cy,cz), (l,w,h), heading_angle and semantic class label.
-(cx,cy,cz) is in upright depth coordinate
-(l,h,w) are *half length* of the object sizes
-The heading angle is a rotation rad from +X rotating towards -Y. (+X is 0, -Y is pi/2)
-
-Author: Charles R. Qi
-Date: 2019
-
-"""
 import os
 import numpy as np
 from torch.utils.data import Dataset
