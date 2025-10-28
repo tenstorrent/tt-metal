@@ -9,9 +9,9 @@ def main():
     device_id = 0
     device = ttnn.open_device(device_id=device_id)
 
-    m = 1024
-    k = 1024
-    n = 1024
+    m = 1024  # Number of rows in matrix A and result
+    k = 1024  # Number of columns in A / rows in B (must match for valid matmul)
+    n = 1024  # Number of columns in matrix B and result
 
     a = ttnn.rand((m, k), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
     b = ttnn.rand((k, n), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
