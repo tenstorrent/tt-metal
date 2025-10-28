@@ -158,7 +158,7 @@ class ValidationResult:
     execution_time_impl: float = 0.0
     execution_time_ref: float = 0.0
     timestamp: float = field(default_factory=time.time)
-    # todo)) add a field for collecting log messages during validation of the function
+    logs: List[str] = field(default_factory=list)
 
 
 class ValidationRegistry:
@@ -192,7 +192,7 @@ class ValidationRegistry:
             ),
         }
 
-    def print_report(self):
+    def print_report(self, verbose: bool = False):
         """Print detailed validation report"""
         summary = self.get_summary()
         print("\n" + "=" * 80)
@@ -227,6 +227,16 @@ class ValidationRegistry:
                     print(f"    {name_str}: {val_str} — {status}")
                     if mres.error:
                         print(f"      error: {mres.error}")
+
+            # Print any collected logs for this validation
+            if result.logs and verbose:
+                print("  Logs:")
+                for entry in result.logs:
+                    try:
+                        msg = str(entry)
+                    except Exception:
+                        msg = "<unprintable log entry>"
+                    print(f"    {msg}")
 
             # All errors are reported via per-metric entries
             print()
@@ -286,6 +296,48 @@ METRIC_SPECS: Dict[Metric, MetricSpec] = {
 # Convenience groupings for quick checks
 HIGHER_IS_BETTER_METRICS = {m.value for m, spec in METRIC_SPECS.items() if spec.higher_is_better}
 LOWER_IS_BETTER_METRICS = {m.value for m, spec in METRIC_SPECS.items() if not spec.higher_is_better}
+
+
+# Helper: prefer Metric enum as dict key when possible
+def _metric_key(key: Any) -> Any:
+    try:
+        return Metric(key)
+    except Exception:
+        return key
+
+
+# Helper: Build active metrics map (name -> compute fn). Accept Metric enum keys for tolerances.
+def _normalize_key(k: Any) -> str:
+    try:
+        # Enum or similar objects with .value as canonical string
+        return k.value if hasattr(k, "value") else str(k)
+    except Exception:
+        return str(k)
+
+
+# Helper: Prepare metrics, tolerances, and directionality
+def _prepare_metric_config(metric_tolerances_input):
+    metrics_map = {name: fn for name, fn in DEFAULT_METRICS.items()}
+    hib = set(HIGHER_IS_BETTER_METRICS)
+    logs_local: List[str] = []
+    tol_map: Dict[str, float] = {}
+
+    for raw_key, spec in (metric_tolerances_input or {}).items():
+        name = _normalize_key(raw_key)
+        if isinstance(spec, MetricSpec):
+            tol_map[name] = float(spec.tolerance)
+            metrics_map[name] = spec.compute_function
+            if spec.higher_is_better:
+                hib.add(name)
+            else:
+                hib.discard(name)
+            continue
+        try:
+            tol_map[name] = float(spec)
+        except Exception:
+            logs_local.append(f"unrecognized tolerance: {raw_key}: {spec}")
+
+    return metrics_map, hib, tol_map, logs_local
 
 
 # todo)) stretch goals:
@@ -349,37 +401,7 @@ def __validate_against(
             return ttnn.rms_norm(x, self.weight, self.eps)  # Returns ttnn.Tensor
     """
 
-    # Build active metrics map (name -> compute fn). Accept Metric enum keys for tolerances.
-    def _normalize_key(k: Any) -> str:
-        try:
-            # Enum or similar objects with .value as canonical string
-            return k.value if hasattr(k, "value") else str(k)
-        except Exception:
-            return str(k)
-
-    # Start with built-ins; allow optional extensions/overrides via metric_tolerances
-    metrics_to_use: Dict[str, Callable] = {name: fn for name, fn in DEFAULT_METRICS.items()}
-    higher_is_better_effective = set(HIGHER_IS_BETTER_METRICS)
-
-    # Parse metric_tolerances into normalized tolerances map and optional additions
-    tolerances_map: Dict[str, float] = {}
-    for raw_key, spec in (metric_tolerances or {}).items():
-        name = _normalize_key(raw_key)
-        # MetricSpec
-        if isinstance(spec, MetricSpec):
-            tolerances_map[name] = float(spec.tolerance)
-            metrics_to_use[name] = spec.compute_function
-            if spec.higher_is_better:
-                higher_is_better_effective.add(name)
-            else:
-                higher_is_better_effective.discard(name)
-            continue
-        # Float-like tolerance only
-        try:
-            tolerances_map[name] = float(spec)
-        except Exception:
-            # Ignore unrecognized spec
-            pass
+    metrics_to_use, higher_is_better_effective, tolerances_map, pre_logs = _prepare_metric_config(metric_tolerances)
 
     def decorator(func):
         @wraps(func)
@@ -392,9 +414,12 @@ def __validate_against(
             start_time = time.perf_counter()
             impl_output = func(*args, **kwargs)
             impl_time = time.perf_counter() - start_time
+            logs: List[str] = pre_logs.copy()
 
             # Map inputs for reference function: prefer input_map, else pass-through
             if input_map:
+                _nm = getattr(input_map, "__name__", None) or type(input_map).__name__
+                logs.append(f"input_map={_nm}")
                 mapped = input_map(*args, **kwargs)
                 # Normalize mapper output:
                 # - If (ref_args, ref_kwargs) with kwargs as dict, use directly
@@ -405,6 +430,7 @@ def __validate_against(
                     ref_args = mapped if isinstance(mapped, (list, tuple)) else (mapped,)
                     ref_kwargs = {}
             else:
+                logs.append("input_map=pass-through")
                 ref_args, ref_kwargs = args, kwargs
 
             # Execute reference
@@ -414,6 +440,9 @@ def __validate_against(
                 ref_time = time.perf_counter() - start_time
             except Exception as e:
                 # If reference fails, just return impl output and log error via metrics
+                logs.append(f"reference_execution_error={str(e)}")
+                # Record elapsed time until failure
+                ref_time = time.perf_counter() - start_time
                 result = ValidationResult(
                     function_name=f"{func.__module__}.{func.__qualname__}",
                     passed=False,
@@ -423,6 +452,8 @@ def __validate_against(
                         )
                     },
                     execution_time_impl=impl_time,
+                    execution_time_ref=ref_time,
+                    logs=logs,
                 )
                 _validation_registry.add_result(result)
                 return impl_output
@@ -430,9 +461,12 @@ def __validate_against(
             # Map outputs for comparison
             # Note: output_map only applies to impl_output to convert it to match ref_output's type
             try:
+                _nm = getattr(output_map, "__name__", None) or type(output_map).__name__
+                logs.append(f"output_map={_nm}")
                 impl_comparable = output_map(impl_output) if output_map else impl_output
                 ref_comparable = ref_output  # Reference output is always used as-is
             except Exception as e:
+                logs.append(f"output_mapping_error={str(e)}")
                 result = ValidationResult(
                     function_name=f"{func.__module__}.{func.__qualname__}",
                     passed=False,
@@ -443,6 +477,7 @@ def __validate_against(
                     },
                     execution_time_impl=impl_time,
                     execution_time_ref=ref_time,
+                    logs=logs,
                 )
                 _validation_registry.add_result(result)
                 return impl_output
@@ -451,51 +486,56 @@ def __validate_against(
             computed_metrics: Dict[Any, MetricResult] = {}
             passed = True
 
-            for metric_name, metric_fn in metrics_to_use.items():
+            for metric_name, threshold in tolerances_map.items():
                 try:
-                    # Only compute metrics we have tolerances for
-                    if metric_name in tolerances_map:
-                        value = metric_fn(impl_comparable, ref_comparable)
-                        threshold = tolerances_map[metric_name]
+                    metric_fn = metrics_to_use.get(metric_name)
 
-                        # Store results keyed by enum when available
-                        try:
-                            metric_key = Metric(metric_name)
-                        except Exception:
-                            metric_key = metric_name
+                    # Store results keyed by enum when available
+                    metric_key = _metric_key(metric_name)
+                    # If metric function isn't known, record an error
+                    if metric_fn is None:
+                        computed_metrics[metric_key] = MetricResult(
+                            value=None, passed=False, error=f"Unknown metric: {metric_name}"
+                        )
+                        passed = False
+                        continue
 
-                        # Determine direction using registry when available
-                        if metric_name in higher_is_better_effective:
-                            ok = value >= threshold
-                            err = None
-                            if not ok:
-                                passed = False
-                                err = f"{metric_name}={value:.6e} below threshold {threshold:.6e}"
-                            computed_metrics[metric_key] = MetricResult(value=value, passed=ok, error=err)
-                        else:
-                            ok = value <= threshold
-                            err = None
-                            if not ok:
-                                passed = False
-                                err = f"{metric_name}={value:.6e} exceeds tolerance {threshold:.6e}"
-                            computed_metrics[metric_key] = MetricResult(value=value, passed=ok, error=err)
+                    value = metric_fn(impl_comparable, ref_comparable)
+
+                    # Determine direction using registry when available
+                    if metric_name in higher_is_better_effective:
+                        ok = value >= threshold
+                        err = None
+                        if not ok:
+                            passed = False
+                            err = f"{metric_name}={value:.6e} below threshold {threshold:.6e}"
+                        computed_metrics[metric_key] = MetricResult(value=value, passed=ok, error=err)
+                    else:
+                        ok = value <= threshold
+                        err = None
+                        if not ok:
+                            passed = False
+                            err = f"{metric_name}={value:.6e} exceeds tolerance {threshold:.6e}"
+                        computed_metrics[metric_key] = MetricResult(value=value, passed=ok, error=err)
                 except Exception as e:
                     msg = f"Metric {metric_name} failed: {str(e)}"
-                    # If enum is available, keep consistency
-                    try:
-                        metric_key = Metric(metric_name)
-                    except Exception:
-                        metric_key = metric_name
                     computed_metrics[metric_key] = MetricResult(value=None, passed=False, error=msg)
                     passed = False
 
             # Record results
+            try:
+                pass_count = sum(1 for v in computed_metrics.values() if v.passed)
+                fail_count = sum(1 for v in computed_metrics.values() if not v.passed)
+                logs.append(f"metrics={pass_count}_pass,{fail_count}_fail")
+            except Exception:
+                pass
             result = ValidationResult(
                 function_name=f"{func.__module__}.{func.__qualname__}",
                 passed=passed,
                 metrics=computed_metrics,
                 execution_time_impl=impl_time,
                 execution_time_ref=ref_time,
+                logs=logs,
             )
             _validation_registry.add_result(result)
 
