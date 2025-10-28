@@ -2057,7 +2057,7 @@ FORCE_INLINE uint32_t noc_async_read_tile_dram_sharded_set_state(
 
     DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
     RECORD_NOC_EVENT_WITH_ADDR(
-        NocEventType::READ_DRAM_SHARDED_SET_STATE, uint64_t(src_noc_xy) << 32, page_size, (use_vc) ? vc : -1);
+        NocEventType::READ_DRAM_SHARDED_SET_STATE, src_noc_addr, page_size, (use_vc) ? vc : -1);
 
     WAYPOINT("NRTW");
     ncrisc_noc_read_set_state<DM_DEDICATED_NOC, true /* one_packet */, use_vc>(
