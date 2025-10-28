@@ -1789,4 +1789,803 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
     });
 }
 
+// ============================================================================
+// Addrgen API Overloads
+// ============================================================================
+
+// Include addrgen API for helper functions
+#include "tt_metal/fabric/hw/inc/mesh/addrgen_api.h"
+
+// Unicast Write Addrgen Overloads
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_unicast_write(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_unicast_noc_unicast_write(
+        client_interface,
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        src_addr,
+        page_size,
+        tt::tt_fabric::NocUnicastCommandHeader{noc_address});
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_unicast_write(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_unicast_noc_unicast_write(
+        connection_manager, route_id, src_addr, page_size, tt::tt_fabric::NocUnicastCommandHeader{noc_address});
+}
+
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_unicast_noc_unicast_write_with_state(
+        client_interface,
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        src_addr,
+        tt::tt_fabric::NocUnicastCommandHeader{noc_address});
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_unicast_noc_unicast_write_with_state(
+        connection_manager, route_id, src_addr, tt::tt_fabric::NocUnicastCommandHeader{noc_address});
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_unicast_noc_unicast_write_set_state(
+        packet_header, dst_dev_id, dst_mesh_id, tt::tt_fabric::NocUnicastCommandHeader{noc_address});
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_unicast_noc_unicast_write_set_state(
+        connection_manager, route_id, tt::tt_fabric::NocUnicastCommandHeader{noc_address});
+}
+
+// Multicast Write Addrgen Overloads
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_unicast_write(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_multicast_noc_unicast_write(
+        client_interface,
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        src_addr,
+        page_size,
+        tt::tt_fabric::NocUnicastCommandHeader{noc_address});
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_unicast_write(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_multicast_noc_unicast_write(
+        connection_manager, route_id, src_addr, page_size, tt::tt_fabric::NocUnicastCommandHeader{noc_address});
+}
+
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_multicast_noc_unicast_write_with_state(
+        client_interface,
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        src_addr,
+        tt::tt_fabric::NocUnicastCommandHeader{noc_address});
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_multicast_noc_unicast_write_with_state(
+        connection_manager, route_id, src_addr, tt::tt_fabric::NocUnicastCommandHeader{noc_address});
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_multicast_noc_unicast_write_set_state(
+        packet_header, dst_dev_id, dst_mesh_id, tt::tt_fabric::NocUnicastCommandHeader{noc_address});
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_multicast_noc_unicast_write_set_state(
+        connection_manager, route_id, tt::tt_fabric::NocUnicastCommandHeader{noc_address});
+}
+
+// Unicast Scatter Write Addrgen Overloads
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_scatter_write(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id0,
+    uint32_t page_id1,
+    uint32_t offset0 = 0,
+    uint32_t offset1 = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
+    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
+
+    tt::tt_fabric::NocUnicastScatterCommandHeader scatter_header;
+    scatter_header.noc_address[0] = noc_address0;
+    scatter_header.noc_address[1] = noc_address1;
+    scatter_header.chunk_size[0] = static_cast<uint16_t>(page_size);
+
+    fabric_unicast_noc_scatter_write(
+        client_interface, packet_header, dst_dev_id, dst_mesh_id, src_addr, page_size, scatter_header);
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_scatter_write(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id0,
+    uint32_t page_id1,
+    uint32_t offset0 = 0,
+    uint32_t offset1 = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
+    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
+
+    tt::tt_fabric::NocUnicastScatterCommandHeader scatter_header;
+    scatter_header.noc_address[0] = noc_address0;
+    scatter_header.noc_address[1] = noc_address1;
+    scatter_header.chunk_size[0] = static_cast<uint16_t>(page_size);
+
+    fabric_unicast_noc_scatter_write(connection_manager, route_id, src_addr, page_size, scatter_header);
+}
+
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id0,
+    uint32_t page_id1,
+    uint32_t offset0 = 0,
+    uint32_t offset1 = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
+    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
+
+    tt::tt_fabric::NocUnicastScatterCommandHeader scatter_header;
+    scatter_header.noc_address[0] = noc_address0;
+    scatter_header.noc_address[1] = noc_address1;
+    scatter_header.chunk_size[0] = static_cast<uint16_t>(page_size);
+
+    fabric_unicast_noc_scatter_write_with_state(
+        client_interface, packet_header, dst_dev_id, dst_mesh_id, src_addr, scatter_header);
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id0,
+    uint32_t page_id1,
+    uint32_t offset0 = 0,
+    uint32_t offset1 = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
+    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
+
+    tt::tt_fabric::NocUnicastScatterCommandHeader scatter_header;
+    scatter_header.noc_address[0] = noc_address0;
+    scatter_header.noc_address[1] = noc_address1;
+    scatter_header.chunk_size[0] = static_cast<uint16_t>(page_size);
+
+    fabric_unicast_noc_scatter_write_with_state(connection_manager, route_id, src_addr, scatter_header);
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    const AddrGenType& addrgen,
+    uint32_t page_id0,
+    uint32_t page_id1,
+    uint32_t offset0 = 0,
+    uint32_t offset1 = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
+    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
+
+    tt::tt_fabric::NocUnicastScatterCommandHeader scatter_header;
+    scatter_header.noc_address[0] = noc_address0;
+    scatter_header.noc_address[1] = noc_address1;
+    scatter_header.chunk_size[0] = static_cast<uint16_t>(page_size);
+
+    fabric_unicast_noc_scatter_write_set_state(packet_header, dst_dev_id, dst_mesh_id, scatter_header);
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    const AddrGenType& addrgen,
+    uint32_t page_id0,
+    uint32_t page_id1,
+    uint32_t offset0 = 0,
+    uint32_t offset1 = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
+    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
+
+    tt::tt_fabric::NocUnicastScatterCommandHeader scatter_header;
+    scatter_header.noc_address[0] = noc_address0;
+    scatter_header.noc_address[1] = noc_address1;
+    scatter_header.chunk_size[0] = static_cast<uint16_t>(page_size);
+
+    fabric_unicast_noc_scatter_write_set_state(connection_manager, route_id, scatter_header);
+}
+
+// Multicast Scatter Write Addrgen Overloads
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_scatter_write(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id0,
+    uint32_t page_id1,
+    uint32_t offset0 = 0,
+    uint32_t offset1 = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
+    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
+
+    tt::tt_fabric::NocUnicastScatterCommandHeader scatter_header;
+    scatter_header.noc_address[0] = noc_address0;
+    scatter_header.noc_address[1] = noc_address1;
+    scatter_header.chunk_size[0] = static_cast<uint16_t>(page_size);
+
+    fabric_multicast_noc_scatter_write(
+        client_interface, packet_header, dst_dev_id, dst_mesh_id, src_addr, page_size, scatter_header);
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_scatter_write(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id0,
+    uint32_t page_id1,
+    uint32_t offset0 = 0,
+    uint32_t offset1 = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
+    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
+
+    tt::tt_fabric::NocUnicastScatterCommandHeader scatter_header;
+    scatter_header.noc_address[0] = noc_address0;
+    scatter_header.noc_address[1] = noc_address1;
+    scatter_header.chunk_size[0] = static_cast<uint16_t>(page_size);
+
+    fabric_multicast_noc_scatter_write(connection_manager, route_id, src_addr, page_size, scatter_header);
+}
+
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id0,
+    uint32_t page_id1,
+    uint32_t offset0 = 0,
+    uint32_t offset1 = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
+    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
+
+    tt::tt_fabric::NocUnicastScatterCommandHeader scatter_header;
+    scatter_header.noc_address[0] = noc_address0;
+    scatter_header.noc_address[1] = noc_address1;
+    scatter_header.chunk_size[0] = static_cast<uint16_t>(page_size);
+
+    fabric_multicast_noc_scatter_write_with_state(
+        client_interface, packet_header, dst_dev_id, dst_mesh_id, src_addr, scatter_header);
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id0,
+    uint32_t page_id1,
+    uint32_t offset0 = 0,
+    uint32_t offset1 = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
+    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
+
+    tt::tt_fabric::NocUnicastScatterCommandHeader scatter_header;
+    scatter_header.noc_address[0] = noc_address0;
+    scatter_header.noc_address[1] = noc_address1;
+    scatter_header.chunk_size[0] = static_cast<uint16_t>(page_size);
+
+    fabric_multicast_noc_scatter_write_with_state(connection_manager, route_id, src_addr, scatter_header);
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    const AddrGenType& addrgen,
+    uint32_t page_id0,
+    uint32_t page_id1,
+    uint32_t offset0 = 0,
+    uint32_t offset1 = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
+    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
+
+    tt::tt_fabric::NocUnicastScatterCommandHeader scatter_header;
+    scatter_header.noc_address[0] = noc_address0;
+    scatter_header.noc_address[1] = noc_address1;
+    scatter_header.chunk_size[0] = static_cast<uint16_t>(page_size);
+
+    fabric_multicast_noc_scatter_write_set_state(packet_header, dst_dev_id, dst_mesh_id, scatter_header);
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    const AddrGenType& addrgen,
+    uint32_t page_id0,
+    uint32_t page_id1,
+    uint32_t offset0 = 0,
+    uint32_t offset1 = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
+    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
+
+    tt::tt_fabric::NocUnicastScatterCommandHeader scatter_header;
+    scatter_header.noc_address[0] = noc_address0;
+    scatter_header.noc_address[1] = noc_address1;
+    scatter_header.chunk_size[0] = static_cast<uint16_t>(page_size);
+
+    fabric_multicast_noc_scatter_write_set_state(connection_manager, route_id, scatter_header);
+}
+
+// Unicast Fused Atomic Inc Addrgen Overloads
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    const tt::tt_fabric::NocUnicastAtomicIncCommandHeader& atomic_inc_spec,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_unicast_noc_fused_unicast_with_atomic_inc(
+        client_interface,
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        src_addr,
+        page_size,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+            noc_address,
+            atomic_inc_spec.noc_address,
+            atomic_inc_spec.val,
+            atomic_inc_spec.wrap,
+            atomic_inc_spec.flush));
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    const tt::tt_fabric::NocUnicastAtomicIncCommandHeader& atomic_inc_spec,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_unicast_noc_fused_unicast_with_atomic_inc(
+        connection_manager,
+        route_id,
+        src_addr,
+        page_size,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+            noc_address,
+            atomic_inc_spec.noc_address,
+            atomic_inc_spec.val,
+            atomic_inc_spec.wrap,
+            atomic_inc_spec.flush));
+}
+
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    const tt::tt_fabric::NocUnicastAtomicIncCommandHeader& atomic_inc_spec,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
+        client_interface,
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        src_addr,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+            noc_address,
+            atomic_inc_spec.noc_address,
+            atomic_inc_spec.val,
+            atomic_inc_spec.wrap,
+            atomic_inc_spec.flush));
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    const tt::tt_fabric::NocUnicastAtomicIncCommandHeader& atomic_inc_spec,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
+        connection_manager,
+        route_id,
+        src_addr,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+            noc_address,
+            atomic_inc_spec.noc_address,
+            atomic_inc_spec.val,
+            atomic_inc_spec.wrap,
+            atomic_inc_spec.flush));
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    const tt::tt_fabric::NocUnicastAtomicIncCommandHeader& atomic_inc_spec,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+            noc_address,
+            atomic_inc_spec.noc_address,
+            atomic_inc_spec.val,
+            atomic_inc_spec.wrap,
+            atomic_inc_spec.flush));
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    const tt::tt_fabric::NocUnicastAtomicIncCommandHeader& atomic_inc_spec,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
+        connection_manager,
+        route_id,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+            noc_address,
+            atomic_inc_spec.noc_address,
+            atomic_inc_spec.val,
+            atomic_inc_spec.wrap,
+            atomic_inc_spec.flush));
+}
+
+// Multicast Fused Atomic Inc Addrgen Overloads
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    const tt::tt_fabric::NocUnicastAtomicIncCommandHeader& atomic_inc_spec,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_multicast_noc_fused_unicast_with_atomic_inc(
+        client_interface,
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        src_addr,
+        page_size,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+            noc_address,
+            atomic_inc_spec.noc_address,
+            atomic_inc_spec.val,
+            atomic_inc_spec.wrap,
+            atomic_inc_spec.flush));
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    const tt::tt_fabric::NocUnicastAtomicIncCommandHeader& atomic_inc_spec,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_multicast_noc_fused_unicast_with_atomic_inc(
+        connection_manager,
+        route_id,
+        src_addr,
+        page_size,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+            noc_address,
+            atomic_inc_spec.noc_address,
+            atomic_inc_spec.val,
+            atomic_inc_spec.wrap,
+            atomic_inc_spec.flush));
+}
+
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    const tt::tt_fabric::NocUnicastAtomicIncCommandHeader& atomic_inc_spec,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
+        client_interface,
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        src_addr,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+            noc_address,
+            atomic_inc_spec.noc_address,
+            atomic_inc_spec.val,
+            atomic_inc_spec.wrap,
+            atomic_inc_spec.flush));
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    const tt::tt_fabric::NocUnicastAtomicIncCommandHeader& atomic_inc_spec,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
+        connection_manager,
+        route_id,
+        src_addr,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+            noc_address,
+            atomic_inc_spec.noc_address,
+            atomic_inc_spec.val,
+            atomic_inc_spec.wrap,
+            atomic_inc_spec.flush));
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    const tt::tt_fabric::NocUnicastAtomicIncCommandHeader& atomic_inc_spec,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+            noc_address,
+            atomic_inc_spec.noc_address,
+            atomic_inc_spec.val,
+            atomic_inc_spec.wrap,
+            atomic_inc_spec.flush));
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    const tt::tt_fabric::NocUnicastAtomicIncCommandHeader& atomic_inc_spec,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
+        connection_manager,
+        route_id,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+            noc_address,
+            atomic_inc_spec.noc_address,
+            atomic_inc_spec.val,
+            atomic_inc_spec.wrap,
+            atomic_inc_spec.flush));
+}
+
 }  // namespace tt::tt_fabric::mesh::experimental
