@@ -10,6 +10,7 @@ from models.common.utility_functions import torch_random
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 
 
 binary_fns = {
@@ -460,6 +461,84 @@ def test_sub_opt_output_typecast_b(input_shapes, device):
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
     status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
     assert status >= 0.999
+
+
+@pytest.mark.parametrize(
+    "test_shapes",
+    ([[1, 1, 2304, 1792], [1, 1, 2112, 1792]],),  # Test 18 cores then 17 cores
+)
+# HEIGHT SHARDING test - tests program cache with different shapes
+def test_inplace_sub_height_sharded_different_shapes(test_shapes, device):
+    import math
+
+    skip_if_not_blackhole_20_cores(device)
+    for iteration, shape in enumerate(test_shapes):
+        print(f"\n=== Iteration {iteration+1}: shape {shape} ===")
+
+        # Generate random tensors
+        torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16)
+        torch_input_tensor_b = torch.rand(shape, dtype=torch.bfloat16)
+
+        # Calculate shard dimensions
+        total_rows = math.prod(shape[:-1])  # 2304 or 2112
+        total_cols = shape[-1]  # 1792
+
+        grid_size = device.compute_with_storage_grid_size()
+        num_cores = grid_size.y * grid_size.x  # 20 cores
+
+        shard_height = math.ceil(total_rows / num_cores / 32) * 32
+        shard_width = math.ceil(total_cols / 32) * 32
+        cores_needed = math.ceil(total_rows / shard_height)
+
+        print(
+            f"Total rows: {total_rows}, Shard: {shard_height}x{shard_width}, Cores needed: {cores_needed}/{num_cores}"
+        )
+
+        # Create HEIGHT_SHARDED memory config
+        sharded_memory_config = ttnn.create_sharded_memory_config(
+            shape=(shard_height, shard_width),
+            core_grid=ttnn.CoreGrid(y=grid_size.y, x=grid_size.x),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        # Create tensors on device as INTERLEAVED
+        input_tensor_a = ttnn.from_torch(
+            torch_input_tensor_a,
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        # Convert to HEIGHT_SHARDED
+        input_tensor_a = ttnn.to_memory_config(input_tensor_a, sharded_memory_config)
+
+        input_tensor_b = ttnn.from_torch(
+            torch_input_tensor_b,
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        # Convert to HEIGHT_SHARDED
+        input_tensor_b = ttnn.to_memory_config(input_tensor_b, sharded_memory_config)
+
+        print(f"Calling ttnn.sub_()...")
+        ttnn.sub_(input_tensor_a, input_tensor_b)
+        print(f"✓ sub_ completed successfully")
+
+        output_tensor = ttnn.to_torch(input_tensor_a)
+
+        # Validate results
+        golden_fn = ttnn.get_golden_function(ttnn.sub_)
+        torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
+        status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
+        assert status >= 0.999
+
+        # Cleanup before next iteration
+        ttnn.deallocate(input_tensor_a)
+        ttnn.deallocate(input_tensor_b)
 
 
 @pytest.mark.parametrize(
