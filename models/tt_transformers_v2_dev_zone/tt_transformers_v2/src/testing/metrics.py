@@ -100,53 +100,8 @@ def compute_mean_abs_error(impl, ref):
         return float("inf")
 
 
-# todo)) remove this metric
-def compute_cosine_similarity(impl, ref):
-    """
-    Compute cosine similarity between two tensors.
-
-    Measures the cosine of the angle between two vectors. Returns 1.0 for
-    identical directions, 0.0 for orthogonal, and -1.0 for opposite directions.
-
-    Note: For TTNN tensors, converts to PyTorch before computing cosine similarity
-    as TTNN doesn't have a built-in cosine similarity operation.
-
-    Args:
-        impl: Implementation output (PyTorch or TTNN tensor)
-        ref: Reference output (PyTorch or TTNN tensor)
-
-    Returns:
-        float: Cosine similarity in range [-1.0, 1.0]
-
-    Examples:
-        >>> a = torch.tensor([1.0, 0.0])
-        >>> b = torch.tensor([1.0, 0.0])
-        >>> _compute_cosine_similarity(a, b)
-        1.0
-
-        >>> a = torch.tensor([1.0, 0.0])
-        >>> b = torch.tensor([0.0, 1.0])
-        >>> _compute_cosine_similarity(a, b)
-        0.0
-    """
-    try:
-        if _is_ttnn_tensor(impl) and _is_ttnn_tensor(ref):
-            # TTNN path - convert to torch for cosine similarity
-            # todo)) we want to avoid this conversion to torch; we want to stay on device; maybe we need to enable different sets of metrics for different device versus host
-            impl_torch = ttnn.to_torch(impl).flatten()
-            ref_torch = ttnn.to_torch(ref).flatten()
-            return torch.nn.functional.cosine_similarity(impl_torch, ref_torch, dim=0).item()
-        elif torch.is_tensor(impl) and torch.is_tensor(ref):
-            # PyTorch path
-            return torch.nn.functional.cosine_similarity(impl.flatten(), ref.flatten(), dim=0).item()
-        else:
-            return 0.0
-    except Exception as e:
-        return 0.0
-
-
-# code stolen from tests/tt_eager/python_api_testing/sweep_tests/comparison_funcs.py
-# todo)) maybe it is a good idea to separate device pcc and host pcc? May want to consider this during metrics refactoring on validate_against.py
+# code stolen from tests/tt_eager/python_api_testing/sweep_tests/comparison_funcs.py and models/common/utility_functions.py
+# todo)) refactor this to two functions: compute_pcc_device and compute_pcc_host
 def compute_pcc(impl, ref):
     """
     Compute Pearson Correlation Coefficient (PCC) between two tensors.
@@ -192,7 +147,10 @@ def compute_pcc(impl, ref):
             # - One tensor all zero and the other not → 0.0
             # - Both constant → 1.0 if equal, else 0.0
 
+            # todo)) also need to assert that impl and ref have the same sharding scheme
+
             # Any nonzero check (all-zero detection)
+            # todo)) to_torch_auto_compose here instead of to_torch
             impl_abs_max = ttnn.to_torch(ttnn.max(ttnn.abs(impl))).item()
             ref_abs_max = ttnn.to_torch(ttnn.max(ttnn.abs(ref))).item()
             impl_has_any = impl_abs_max != 0.0
@@ -201,6 +159,7 @@ def compute_pcc(impl, ref):
                 return 0.0
 
             # Min/Max scalars for constant and NaN detection
+            # todo)) to_torch_auto_compose here instead of to_torch
             impl_min = ttnn.to_torch(ttnn.min(impl)).item()
             impl_max = ttnn.to_torch(ttnn.max(impl)).item()
             ref_min = ttnn.to_torch(ttnn.min(ref)).item()
@@ -256,6 +215,8 @@ def compute_pcc(impl, ref):
         if torch.is_tensor(impl) and torch.is_tensor(ref):
             calculated = impl
             golden = ref
+            if golden.dtype != calculated.dtype:
+                calculated = calculated.type(golden.dtype)
 
             # Handle complex tensors
             if golden.is_complex() and calculated.is_complex():

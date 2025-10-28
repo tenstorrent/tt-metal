@@ -261,6 +261,41 @@ def test_validation_attention(ttnn_mesh_device: ttnn.MeshDevice):
 
 
 # ============================================================================
+# Example 4: Validating from_torch checkpoint
+# ============================================================================
+
+
+@host_validate_against(
+    reference_fn=lambda tensor, device: tensor,
+    output_to_torch=lambda x: to_torch_auto_compose(x),
+    tolerances={
+        "max_abs_error": 0.01,
+        "mean_abs_error": 0.01,
+        "pcc": 0.99,
+    },
+)
+def from_torch_checkpoint(tensor: torch.Tensor, device: ttnn.MeshDevice):
+    """Return TTNN tensor created via from_torch from a checkpoint tensor."""
+    return ttnn.from_torch(tensor, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+
+def test_validation_checkpoint_from_torch(ttnn_mesh_device: ttnn.MeshDevice):
+    registry = get_validation_registry()
+    before = len(registry.results)
+
+    # Simulated checkpoint tensor (e.g., a weight matrix)
+    rows, cols = 32, 128
+    weight = torch.randn(rows, cols, dtype=torch.float32)
+
+    # Validate a direct from_torch call via the decorated function
+    _ = from_torch_checkpoint(weight, ttnn_mesh_device)
+
+    # Ensure a result was recorded and it passed
+    assert len(registry.results) == before + 1
+    assert registry.results[-1].passed
+
+
+# ============================================================================
 # Additional test functions
 # ============================================================================
 
@@ -307,9 +342,6 @@ def test_validation_non_decorator_host(ttnn_mesh_device: ttnn.MeshDevice):
 
     assert len(registry.results) == before + 1
     assert registry.results[-1].passed
-
-
-# todo)) checkpoint validation --> essentially checking from_torch against a reference checkpoint
 
 
 @pytest.fixture(scope="module", autouse=True)
