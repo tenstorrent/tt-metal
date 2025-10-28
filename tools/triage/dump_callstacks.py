@@ -319,6 +319,7 @@ def dump_callstacks(
     gdb_server: GdbServer | None,
     process_ids: dict[OnChipCoordinate, dict[str, int]] | None,
     show_all_cores: bool = False,
+    force_active_eth: bool = False,
 ) -> DumpCallstacksData | None:
     result: DumpCallstacksData | None = None
 
@@ -336,30 +337,18 @@ def dump_callstacks(
                 pc=None,
                 kernel_callstack_with_message=KernelCallstackWithMessage(callstack=[], message="Core is in reset"),
             )
-        if gdb_callstack:
-            if risc_name == "ncrisc":
-                # Cannot attach to NCRISC process due to lack of debug hardware so we are defaulting to top callstack
-                error_message = (
-                    "Cannot attach to NCRISC process due to lack of debug hardware - defaulting to top callstack"
-                )
-                # Default to top callstack
-                callstack_with_message = get_callstack(
-                    location, risc_name, dispatcher_core_data, elfs_cache, full_callstack=False
-                )
-                # If top callstack failed too, print both error messages
-                callstack_with_message.message = (
-                    error_message
-                    if callstack_with_message.message is None
-                    else "\n".join([error_message, callstack_with_message.message])
-                )
-            else:
-                assert gdb_server is not None and process_ids is not None
-                callstack_with_message = get_gdb_callstack(
-                    location, risc_name, dispatcher_core_data, gdb_server.server.port, process_ids
-                )
-                # If GDB failed to get callstack, we default to top callstack
-                if len(callstack_with_message.callstack) == 0:
-                    error_message = "Failed to get callstack from GDB. Look for error message above the table."
+        if "erisc" in risc_name and not force_active_eth:
+            callstack_with_message = get_callstack(
+                location, risc_name, dispatcher_core_data, elfs_cache, full_callstack=False
+            )
+        else:
+            if gdb_callstack:
+                if risc_name == "ncrisc":
+                    # Cannot attach to NCRISC process due to lack of debug hardware so we are defaulting to top callstack
+                    error_message = (
+                        "Cannot attach to NCRISC process due to lack of debug hardware - defaulting to top callstack"
+                    )
+                    # Default to top callstack
                     callstack_with_message = get_callstack(
                         location, risc_name, dispatcher_core_data, elfs_cache, full_callstack=False
                     )
@@ -369,19 +358,36 @@ def dump_callstacks(
                         if callstack_with_message.message is None
                         else "\n".join([error_message, callstack_with_message.message])
                     )
-
-            # If GDB has not recoreded PC we do that ourselves, this also provides PC for NCRISC case
-            if len(callstack_with_message.callstack) > 0 and callstack_with_message.callstack[0].pc is None:
-                try:
-                    callstack_with_message.callstack[0].pc = (
-                        location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+                else:
+                    assert gdb_server is not None and process_ids is not None
+                    callstack_with_message = get_gdb_callstack(
+                        location, risc_name, dispatcher_core_data, gdb_server.server.port, process_ids
                     )
-                except:
-                    pass
-        else:
-            callstack_with_message = get_callstack(
-                location, risc_name, dispatcher_core_data, elfs_cache, full_callstack
-            )
+                    # If GDB failed to get callstack, we default to top callstack
+                    if len(callstack_with_message.callstack) == 0:
+                        error_message = "Failed to get callstack from GDB. Look for error message above the table."
+                        callstack_with_message = get_callstack(
+                            location, risc_name, dispatcher_core_data, elfs_cache, full_callstack=False
+                        )
+                        # If top callstack failed too, print both error messages
+                        callstack_with_message.message = (
+                            error_message
+                            if callstack_with_message.message is None
+                            else "\n".join([error_message, callstack_with_message.message])
+                        )
+
+                # If GDB has not recoreded PC we do that ourselves, this also provides PC for NCRISC case
+                if len(callstack_with_message.callstack) > 0 and callstack_with_message.callstack[0].pc is None:
+                    try:
+                        callstack_with_message.callstack[0].pc = (
+                            location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+                        )
+                    except:
+                        pass
+            else:
+                callstack_with_message = get_callstack(
+                    location, risc_name, dispatcher_core_data, elfs_cache, full_callstack
+                )
 
         # Create result with dispatcher core data (verbose levels handled in serialization)
         result = DumpCallstacksData(
@@ -447,9 +453,10 @@ def run(args, context: Context):
     verbose_level = args["-v"]
     set_verbose_level(verbose_level)
 
-    should_skip_active_eth = (full_callstack or gdb_callstack) and not active_eth
-
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"] if should_skip_active_eth else ["tensix", "idle_eth", "active_eth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
+    # We are skipping active eth cores if full callstack or gdb callstack is used by default, this can be overridden with --active-eth
+    force_active_eth = (full_callstack or gdb_callstack) and active_eth
+    if force_active_eth:
         util.WARN(
             "Getting full or gdb callstack may break active eth core. Use tt-smi reset to fix. See issue #661 in tt-exalens for more details."
         )
@@ -478,6 +485,7 @@ def run(args, context: Context):
             gdb_server,
             process_ids,
             show_all_cores,
+            force_active_eth,
         ),
         block_filter=BLOCK_TYPES_TO_CHECK,
     )
