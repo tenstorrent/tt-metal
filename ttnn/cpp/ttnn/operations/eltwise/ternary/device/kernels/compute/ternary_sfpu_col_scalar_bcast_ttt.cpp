@@ -59,8 +59,8 @@ ALWI void process_tile(
         copy_tile(false_cb, 0, 2);  // false to reg 2, 5, 8, ...
 
         // Perform the ternary operation
-        TERNARY_OP_INIT();
-        TERNARY_OP_FUNC(0, 1, 2, 0);  // ternary_op(predicate, true, false)
+        TERNARY_SFPU_OP_INIT();
+        TERNARY_SFPU_OP_FUNC(0, 1, 2, 0);  // ternary_op(predicate, true, false)
 
         tile_regs_commit();
 

@@ -20,8 +20,8 @@ namespace ternary {
 struct WhereOperation {
     static Tensor invoke(
         const Tensor& predicate,
-        const ScalarVariant& value_true,
-        const ScalarVariant& value_false,
+        const TensorScalarVariant& value_true,
+        const TensorScalarVariant& value_false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& output = std::nullopt);
 };

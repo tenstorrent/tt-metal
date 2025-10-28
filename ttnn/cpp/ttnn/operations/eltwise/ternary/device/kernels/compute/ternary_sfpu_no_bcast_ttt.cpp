@@ -40,8 +40,8 @@ void MAIN {
         copy_tile_to_dst_init_short(cb_pre_in3);
         copy_tile(cb_pre_in3, 0, 2);  // Copy to dst reg 2
 
-        TERNARY_OP_INIT();
-        TERNARY_OP_FUNC(0, 1, 2, 0);
+        TERNARY_SFPU_OP_INIT();
+        TERNARY_SFPU_OP_FUNC(0, 1, 2, 0);
 
         tile_regs_commit();
         tile_regs_wait();

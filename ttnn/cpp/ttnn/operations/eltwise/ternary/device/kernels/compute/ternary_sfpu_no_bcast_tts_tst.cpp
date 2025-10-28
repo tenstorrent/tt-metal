@@ -66,8 +66,8 @@ void MAIN {
 #endif
         }
 
-        TERNARY_OP_INIT();
-        TERNARY_OP_FUNC(0, 1, 2, 0);
+        TERNARY_SFPU_OP_INIT();
+        TERNARY_SFPU_OP_FUNC(0, 1, 2, 0);
 
         tile_regs_commit();
         tile_regs_wait();

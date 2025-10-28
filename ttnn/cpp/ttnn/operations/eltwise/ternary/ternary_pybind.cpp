@@ -139,8 +139,8 @@ void bind_ternary_where(py::module& module, const ternary_operation_t& operation
         ttnn::pybind_overload_t{
             [](const ternary_operation_t& self,
                const Tensor& predicate,
-               const ScalarVariant& true_value,
-               const ScalarVariant& false_value,
+               const TensorScalarVariant& true_value,
+               const TensorScalarVariant& false_value,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor) {
                 return self(predicate, true_value, false_value, memory_config, output_tensor);

@@ -254,19 +254,19 @@ std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, Da
 
     switch (op_type) {
         case TernaryOpType::WHERE:
-            defines["TERNARY_OP_INIT"] = "where_tile_init";
+            defines["TERNARY_SFPU_OP_INIT"] = "where_tile_init";
             if (dtype == DataType::FLOAT32) {
-                defines["TERNARY_OP_FUNC"] = "where_fp32_tile";
+                defines["TERNARY_SFPU_OP_FUNC"] = "where_fp32_tile";
             } else if (dtype == DataType::INT32) {
-                defines["TERNARY_OP_FUNC"] = "where_int32_tile";
+                defines["TERNARY_SFPU_OP_FUNC"] = "where_int32_tile";
             } else {
-                defines["TERNARY_OP_FUNC"] = "where_tile";
+                defines["TERNARY_SFPU_OP_FUNC"] = "where_tile";
             }
             break;
         case TernaryOpType::LERP:
             // LERP will use lerp_tile_init and lerp_tile functions (to be implemented)
-            defines["TERNARY_OP_INIT"] = "lerp_tile_init";
-            defines["TERNARY_OP_FUNC"] = "lerp_tile";
+            defines["TERNARY_SFPU_OP_INIT"] = "lerp_tile_init";
+            defines["TERNARY_SFPU_OP_FUNC"] = "lerp_tile";
             break;
         default: TT_FATAL(false, "Unsupported ternary operation type");
     }
