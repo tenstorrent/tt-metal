@@ -299,7 +299,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 noc_async_read_barrier();
                 cb_push_back(in_cb_id, 1);
             }
-            if constexpr (reader_id == 1 && return_indices) {
+            /* if constexpr (reader_id == 1 && return_indices) {
                 constexpr uint32_t num_faces_in_output_tile = 2;
                 constexpr uint32_t num_faces_in_last_output_tile =
                     last_tile_is_partial && in_c % TILE_WIDTH <= FACE_WIDTH ? 1 : 2;
@@ -324,7 +324,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 if constexpr (return_indices) {
                     cb_push_back(out_idx_cb_id, output_faces);
                 }
-            }
+            } */
         }
     }
 }

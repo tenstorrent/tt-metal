@@ -303,18 +303,23 @@ void MAIN {
                     tile_regs_release();
                 }
             } else {
-                cb_reserve_back(pack_tmp_cb_id, 1);
-                pack_reconfig_data_format(pack_tmp_cb_id);
-                pack_tile<true>(data_dst_idx, pack_tmp_cb_id, mpwi_cb_tile_idx);
-                cb_push_back(pack_tmp_cb_id, 1);
+                cb_reserve_back(out_cb_id, 1);
+                pack_reconfig_data_format(out_cb_id);
+                // notice here we now want to pack to the out CB - this call needs to be updated to output just 1 row or
+                // face
+                pack_tile<true>(data_dst_idx, out_cb_id, mpwi_cb_tile_idx);
+                cb_push_back(out_cb_id, 1);
 
-                cb_reserve_back(pack_idx_tmp_cb_id, 1);
-                pack_reconfig_data_format(pack_idx_tmp_cb_id);
-                pack_tile<true>(index_dst_idx, pack_idx_tmp_cb_id, mpwi_cb_tile_idx);
-                cb_push_back(pack_idx_tmp_cb_id, 1);
+                cb_reserve_back(out_idx_cb_id, 1);
+                pack_reconfig_data_format(out_idx_cb_id);
+                // notice here we now want to pack to the out CB - this call needs to be updated to output just 1 row or
+                // face
+                pack_tile<true>(index_dst_idx, out_idx_cb_id, mpwi_cb_tile_idx);
+                cb_push_back(out_idx_cb_id, 1);
 
                 if (last_c_block) {
                     cb_reserve_back(in_idx_cb_id, 1);
+                    // this call should not be changed
                     pack_tile<true>(index_scratch_out_dst_idx, in_idx_cb_id, mpwi_cb_tile_idx);
                     cb_push_back(in_idx_cb_id, 1);
                 }
