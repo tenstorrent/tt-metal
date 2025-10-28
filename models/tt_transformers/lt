@@ -909,11 +909,9 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
     env = os.environ.copy()
     env["MESH_DEVICE"] = entry["device"]
     model_dir = get_dir(entry["model"])
+    dir_env = "HF_MODEL"
     if model_dir.startswith("hf:"):
-        dir_env = "HF_MODEL"
         model_dir = model_dir.split("hf:", 1)[1]
-    else:
-        dir_env = "HF_MODEL"
     env[dir_env] = model_dir
 
     # Open log file
@@ -1146,6 +1144,7 @@ def get_dir(model):
         return model
 
     try:
+        # returns path to hf_model snapshot based on HF_HOME or HF_HUB_CACHE
         hf_model_dir = snapshot_download(model, local_files_only=True)
         return hf_model_dir
     except (LocalEntryNotFoundError, HFValidationError):
@@ -1169,6 +1168,7 @@ def get_dir(model):
         return model_dir
 
     try:
+        # returns path to hf_model snapshot based on HF_HOME or HF_HUB_CACHE
         model_dir = snapshot_download(model_dir, local_files_only=True)
         return model_dir
     except (LocalEntryNotFoundError, HFValidationError):
