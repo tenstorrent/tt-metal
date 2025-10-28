@@ -147,10 +147,14 @@ class TTMistral3MultiModalProjector(LightweightModule):
             )
 
         self.linear_1_weight = as_tensor("linear_1", dtype)
-        self.linear_1_bias = as_tensor("linear_1", ttnn.bfloat16, is_bias=False)
+        self.linear_1_bias = as_tensor(
+            "linear_1", ttnn.bfloat16, is_bias=False
+        )  # Bias tensor created but not used - matches original Mistral model which has bias=False
 
         self.linear_2_weight = as_tensor("linear_2", dtype)
-        self.linear_2_bias = as_tensor("linear_2", ttnn.bfloat16, is_bias=False)
+        self.linear_2_bias = as_tensor(
+            "linear_2", ttnn.bfloat16, is_bias=False
+        )  # Bias tensor created but not used - matches original Mistral model which has bias=False
 
     def forward(self, image_features: ttnn.Tensor, image_sizes):
         image_features = self.norm(image_features, mode="decode")
