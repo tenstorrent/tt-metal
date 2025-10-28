@@ -313,6 +313,25 @@ void print_usage_info() {
     std::cout << "To run on a multi-node cluster, use mpirun with a --hostfile option" << std::endl;
 }
 
+void perform_link_reset(const InputArgs& input_args, PhysicalSystemDescriptor& physical_system_descriptor) {
+    log_output_rank0("Operating in reset mode for specific link");
+    
+    TT_FATAL(
+        !input_args.gsd_path.has_value(),
+        "Reset mode requires live physical discovery. Please do not use --global-descriptor-path with reset mode.");
+    
+    bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
+    TT_FATAL(
+        link_retrain_supported,
+        "Link reset is only supported on WORMHOLE_B0 architecture");
+    
+    AsicTopology reset_topology = build_reset_topology(input_args, physical_system_descriptor);
+    
+    reset_ethernet_links(physical_system_descriptor, reset_topology);
+    
+    log_output_rank0("Link reset completed. Please run the validation tool again to verify the link.");
+}
+
 void set_config_vars() {
     // This tool must be run with slow dispatch mode, since
     // it writes custom kernels to ethernet cores, which shouldn't
@@ -353,24 +372,7 @@ int main(int argc, char* argv[]) {
                          input_args.reset_channel.has_value();
     
     if (is_reset_mode) {
-        log_output_rank0("Operating in reset mode for specific link");
-        
-        TT_FATAL(
-            !input_args.gsd_path.has_value(),
-            "Reset mode requires live physical discovery. Please do not use --global-descriptor-path with reset mode.");
-        
-        bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
-        TT_FATAL(
-            link_retrain_supported,
-            "Link reset is only supported on WORMHOLE_B0 architecture");
-        
-        AsicTopology reset_topology = build_reset_topology(input_args, physical_system_descriptor);
-        
-        // All ranks must participate for cross-node coordination
-        reset_ethernet_links(physical_system_descriptor, reset_topology);
-        
-        distributed_context.barrier();
-        log_output_rank0("Link reset completed. Please run the validation tool again to verify the link.");
+        perform_link_reset(input_args, physical_system_descriptor);
         return 0;
     }
 
