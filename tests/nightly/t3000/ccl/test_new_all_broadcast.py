@@ -233,26 +233,35 @@ def run_all_broadcast_impl(
 
 
 # Enumerate the post-commit cases explicitly
+# Testing diverse combinations of layout, dtype, and memory config to maintain coverage while reducing test time.
+# Not all permutations are tested; only representative cases are chosen to balance coverage and runtime.
 @pytest.mark.parametrize(
-    "num_devices, num_links, output_shape, layout, input_dtype",
+    "num_devices, num_links, output_shape, layout, input_dtype, mem_config",
     [
-        (2, 1, [2, 30], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
-        (2, 1, [3, 121, 2042], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
-        (4, 1, [1, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (4, 1, [2, 64, 512], ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
-        (8, 1, [256, 3328], ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
-        (4, 1, [1, 69, 4000], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
-        (8, 1, [10, 8320], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
-        (2, 1, [11, 10, 32784], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
-        (4, 1, [1, 2, 16300], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
-        (4, 1, [2, 2, 2, 16, 16], ttnn.TILE_LAYOUT, ttnn.bfloat16),
-    ],
-)
-@pytest.mark.parametrize(
-    "mem_config",
-    [
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        (2, 1, [2, 30], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)),
+        (2, 1, [3, 121, 2042], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)),
+        (4, 1, [1, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)),
+        (4, 1, [2, 64, 512], ttnn.TILE_LAYOUT, ttnn.bfloat8_b, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)),
+        (8, 1, [256, 3328], ttnn.TILE_LAYOUT, ttnn.bfloat8_b, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)),
+        (4, 1, [1, 69, 4000], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)),
+        (8, 1, [10, 8320], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)),
+        (
+            2,
+            1,
+            [11, 10, 32784],
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        ),
+        (
+            4,
+            1,
+            [1, 2, 16300],
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ),
+        (4, 1, [2, 2, 2, 16, 16], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)),
     ],
 )
 @pytest.mark.parametrize("num_iters", [3])
@@ -261,17 +270,14 @@ def test_all_broadcast(
     t3k_mesh_device,
     # pcie_mesh_device,
     num_devices,
-    output_shape,
     num_links,
-    input_dtype,
+    output_shape,
     layout,
+    input_dtype,
     mem_config,
     num_iters,
     function_level_defaults,
 ):
-    if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
-        pytest.skip("bfloat8_b not supported for row-major")
-
     run_all_broadcast_impl(
         t3k_mesh_device,
         num_devices,

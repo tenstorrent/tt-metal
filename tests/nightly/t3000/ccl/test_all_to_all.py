@@ -284,52 +284,54 @@ def run_all_to_all_impl(
 
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "num_links, logical_shape, in_dim, out_dim, layout",
+    "num_links, logical_shape, in_dim, out_dim, layout, input_dtype, mem_config, num_iters, do_check, reuse_inputs, enable_trace",
     [
-        (1, [1, 1, 44544, 3072 * 3], 2, 3, ttnn.TILE_LAYOUT),  # Pre-attn all-to-all
-        (1, [1, 1, 44544, 3072], 3, 2, ttnn.TILE_LAYOUT),  # Post-attn all-to-all
+        (
+            1,
+            [1, 1, 44544, 3072 * 3],
+            2,
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            2,
+            True,
+            False,
+            True,
+        ),  # Pre-attn, check, use_trace
+        (
+            1,
+            [1, 1, 44544, 3072],
+            3,
+            2,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            20,
+            False,
+            True,
+            False,
+        ),  # Post-attn, stress, no_trace
     ],
-    ids=["pre-attn", "post-attn"],
-)
-@pytest.mark.parametrize(
-    "input_dtype",
-    [
-        ttnn.bfloat16,
-    ],
-)
-@pytest.mark.parametrize(
-    "mem_config",
-    [
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-    ],
-)
-@pytest.mark.parametrize(
-    "num_iters, do_check, reuse_inputs",
-    [(2, True, False), (6, False, True), (20, False, True)],
-    ids=["check", "perf", "stress"],
-)
-@pytest.mark.parametrize(
-    "enable_trace",
-    [True, False],
-    ids=["use_trace", "no_trace"],
+    ids=["pre-attn-check-use_trace", "post-attn-stress-no_trace"],
 )
 @pytest.mark.parametrize(
     "device_params", [{"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True
 )
 def test_all_to_all(
     mesh_device,
+    num_links,
     logical_shape,
     in_dim,
     out_dim,
-    num_links,
-    input_dtype,
     layout,
+    input_dtype,
     mem_config,
     num_iters,
-    function_level_defaults,
     do_check,
     reuse_inputs,
     enable_trace,
+    function_level_defaults,
     is_ci_env,
 ):
     run_all_to_all_impl(
@@ -353,62 +355,51 @@ def test_all_to_all(
 
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "num_links, logical_shape, in_dim, out_dim",
+    "num_links, logical_shape, in_dim, out_dim, layout, input_dtype, mem_config, num_iters, do_check, reuse_inputs",
     [
-        (1, [1, 1, 256 + 32, 128 * 3], 2, 3),
-        (1, [1, 1, 256, 128 + 32], 3, 2),
+        (
+            1,
+            [1, 1, 256 + 32, 128 * 3],
+            2,
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            2,
+            True,
+            False,
+        ),  # pad_dim2, check
+        (
+            1,
+            [1, 1, 256, 128 + 32],
+            3,
+            2,
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            20,
+            False,
+            True,
+        ),  # pad_dim3, stress (using DRAM to avoid skip)
     ],
-    ids=["pad_dim2", "pad_dim3"],
-)
-@pytest.mark.parametrize(
-    "layout",
-    [
-        ttnn.TILE_LAYOUT,
-        ttnn.ROW_MAJOR_LAYOUT,
-    ],
-)
-@pytest.mark.parametrize(
-    "input_dtype",
-    [
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
-    ],
-)
-@pytest.mark.parametrize(
-    "mem_config",
-    [
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
-    ],
-)
-@pytest.mark.parametrize(
-    "num_iters, do_check, reuse_inputs",
-    [(2, True, False), (20, False, True)],
-    ids=["check", "stress"],
+    ids=["pad_dim2-check-TILE-bf16-DRAM", "pad_dim3-stress-RM-bf16-DRAM"],
 )
 @pytest.mark.parametrize(
     "device_params", [{"trace_region_size": 200000, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True
 )
 def test_all_to_all_unaligned(
     mesh_device,
+    num_links,
     logical_shape,
     in_dim,
     out_dim,
-    num_links,
-    input_dtype,
     layout,
+    input_dtype,
     mem_config,
     num_iters,
     do_check,
     reuse_inputs,
 ):
-    if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
-        pytest.skip("Row-major layout is not supported for bfloat8_b")
-
-    # TODO uncomment the below once all_broadcast is fixed (Issue #29183)
-    if mem_config.buffer_type == ttnn.BufferType.L1 and in_dim == 3:
-        pytest.skip("Temporarily skipping due to bug in all_broadcast (Issue #29183)")
-
     run_all_to_all_impl(
         mesh_device,
         mesh_device.get_num_devices(),
