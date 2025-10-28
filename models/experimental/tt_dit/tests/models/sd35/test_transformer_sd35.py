@@ -8,13 +8,14 @@ import torch
 import ttnn
 from loguru import logger
 
-from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
-from ...utils.check import assert_quality
-from ...models.transformers.transformer_sd35 import SD35TransformerBlock, SD35Transformer2DModel
-from ...parallel.manager import CCLManager
-from ....stable_diffusion_35_large.reference import SD3Transformer2DModel as TorchSD3Transformer2DModel
-from ...utils.padding import PaddingConfig
-from ...utils.cache import get_cache_path, get_and_create_cache_path, save_cache_dict, load_cache_dict
+from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from ....utils.check import assert_quality
+from ....models.transformers.transformer_sd35 import SD35TransformerBlock, SD35Transformer2DModel
+from ....parallel.manager import CCLManager
+from ....parallel.config import DiTParallelConfig, ParallelFactor
+from .....stable_diffusion_35_large.reference import SD3Transformer2DModel as TorchSD3Transformer2DModel
+from ....utils.padding import PaddingConfig
+from ....utils.cache import get_cache_path, get_and_create_cache_path, save_cache_dict, load_cache_dict
 import time
 import os
 
@@ -80,18 +81,11 @@ def test_sd35_transformer_block(
         topology=ttnn.Topology.Linear,
     )
 
-    # Create a simple parallel config mock for the transformer block
-    class SimpleParallelConfig:
-        def __init__(self, mesh_axis, factor):
-            self.mesh_axis = mesh_axis
-            self.factor = factor
-
-    class MockParallelConfig:
-        def __init__(self, tp_axis, tp_factor, sp_axis, sp_factor):
-            self.tensor_parallel = SimpleParallelConfig(tp_axis, tp_factor)
-            self.sequence_parallel = SimpleParallelConfig(sp_axis, sp_factor)
-
-    parallel_config = MockParallelConfig(tp_axis, tp_factor, sp_axis, sp_factor)
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+    )
 
     # Create padding config if needed for tensor parallelism
     if num_heads % tp_factor != 0:
@@ -111,7 +105,7 @@ def test_sd35_transformer_block(
         parallel_config=parallel_config,
         padding_config=padding_config,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     # Create input tensors
     torch.manual_seed(0)
@@ -238,18 +232,11 @@ def test_sd35_transformer2d_model(
         topology=ttnn.Topology.Linear,
     )
 
-    # Create parallel config mock
-    class SimpleParallelConfig:
-        def __init__(self, mesh_axis, factor):
-            self.mesh_axis = mesh_axis
-            self.factor = factor
-
-    class MockParallelConfig:
-        def __init__(self, tp_axis, tp_factor, sp_axis, sp_factor):
-            self.tensor_parallel = SimpleParallelConfig(tp_axis, tp_factor)
-            self.sequence_parallel = SimpleParallelConfig(sp_axis, sp_factor)
-
-    parallel_config = MockParallelConfig(tp_axis, tp_factor, sp_axis, sp_factor)
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+    )
 
     # Create padding config if needed for tensor parallelism
     if num_attention_heads % tp_factor != 0:
@@ -281,6 +268,7 @@ def test_sd35_transformer2d_model(
             model_name="stable-diffusion-3.5-large",
             subfolder="transformer",
             parallel_config=parallel_config,
+            mesh_shape=tuple(mesh_device.shape),
             dtype="bf16",
         )
         assert os.path.exists(
@@ -293,7 +281,7 @@ def test_sd35_transformer2d_model(
         logger.info(f"Time taken to load cached state dict: {end - start} seconds")
     else:
         start = time.time()
-        tt_model.load_state_dict(torch_model.state_dict())
+        tt_model.load_torch_state_dict(torch_model.state_dict())
         end = time.time()
         logger.info(f"Time taken to load state dict: {end - start} seconds")
 
@@ -432,23 +420,17 @@ def test_sd35_transformer_model_caching(
         topology=ttnn.Topology.Linear,
     )
 
-    # Create parallel config mock
-    class SimpleParallelConfig:
-        def __init__(self, mesh_axis, factor):
-            self.mesh_axis = mesh_axis
-            self.factor = factor
-
-    class MockParallelConfig:
-        def __init__(self, tp_axis, tp_factor, sp_axis, sp_factor):
-            self.tensor_parallel = SimpleParallelConfig(tp_axis, tp_factor)
-            self.sequence_parallel = SimpleParallelConfig(sp_axis, sp_factor)
-
-    parallel_config = MockParallelConfig(tp_axis, tp_factor, sp_axis, sp_factor)
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+    )
 
     cache_path = get_and_create_cache_path(
         model_name="stable-diffusion-3.5-large",
         subfolder="transformer",
         parallel_config=parallel_config,
+        mesh_shape=tuple(mesh_device.shape),
         dtype="bf16",
     )
 
@@ -477,7 +459,7 @@ def test_sd35_transformer_model_caching(
         padding_config=padding_config,
     )
     start = time.time()
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
     end = time.time()
     logger.info(f"Time taken to load state dict: {end - start} seconds")
 
