@@ -1,5 +1,6 @@
 import ttnn
 from loguru import logger
+import math
 
 
 # Track unique warning signatures to avoid stdout spam
@@ -100,6 +101,15 @@ def get_matmul_config(M, K, N, core_grid):
 
     if config_tuple is None:
         M_block_size, K_block_size, N_block_size = 8, 8, 8
+
+        M_tiles = math.ceil(M / 32)
+        N_tiles = math.ceil(N / 32)
+
+        if M_tiles < M_block_size:
+            M_block_size = subblock_h
+        if N_tiles < N_block_size:
+            N_block_size = subblock_w
+
         grid_x = getattr(core_grid, "x", None)
         grid_y = getattr(core_grid, "y", None)
         signature = (M, K, N, grid_x, grid_y)
