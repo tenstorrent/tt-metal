@@ -32,11 +32,9 @@
  * They mirror the NoC counters from noc_nonblocking_api.h but for fabric operations.
  *
  * The counters are used to track:
- * - Number of read requests issued through the fabric
- * - Number of non-posted write requests issued (require acknowledgment)
- * - Number of non-posted write acknowledgments received
- * - Number of non-posted atomic operation acknowledgments received
- * - Number of posted write requests issued (no acknowledgment required)
+ * - fabric_reads_num_acked: Number of read acknowledgments received
+ * - fabric_nonposted_writes_acked: Number of non-posted write acknowledgments received
+ * - fabric_nonposted_atomics_acked: Number of non-posted atomic operation acknowledgments received
  *
  * Each processor maintains its own counter.
  */
@@ -51,7 +49,7 @@ extern uint32_t fabric_nonposted_atomics_acked;
  * These are used to synchronize different types of fabric transactions.
  */
 enum class FabricBarrierType : uint8_t {
-    READS_NUM_ACKED,          // Track number of read requests issued
+    READS_NUM_ACKED,          // Track number of read acknowledgments received
     NONPOSTED_WRITES_ACKED,   // Track number of non-posted write acknowledgments
     NONPOSTED_ATOMICS_ACKED,  // Track number of non-posted atomic acknowledgments
     COUNT                     // Total number of barrier types
@@ -212,10 +210,9 @@ FORCE_INLINE void udm_fabric_set_unicast_route(
  * This function manages a static connection instance that persists across calls.
  * The connection is initialized on first use and reused for subsequent operations.
  *
- * @param rt_args_idx Reference to runtime args index (will be updated if connection needs to be built)
  * @return Reference to the fabric connection
  */
-inline tt::tt_fabric::WorkerToFabricEdmSender& get_fabric_connection(size_t& rt_args_idx) {
+inline tt::tt_fabric::WorkerToFabricEdmSender& get_fabric_connection() {
     static tt::tt_fabric::WorkerToFabricEdmSender* connection = nullptr;
     static bool initialized = false;
 
@@ -224,6 +221,7 @@ inline tt::tt_fabric::WorkerToFabricEdmSender& get_fabric_connection(size_t& rt_
         // This assumes the runtime args are set up properly by the host
         // TODO: instead of using rt args, use the reserved L1 region for get the correct ETH channel, and semaphore
         // addresses.
+        size_t rt_args_idx = 0;
         static tt::tt_fabric::WorkerToFabricEdmSender conn;
         conn = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
         conn.open();
@@ -240,14 +238,14 @@ inline tt::tt_fabric::WorkerToFabricEdmSender& get_fabric_connection(size_t& rt_
  * This function sends data through the fabric network to a remote destination.
  * It automatically handles the fabric connection setup and management internally.
  *
+ * @param dst_dev_id Destination device ID for fabric routing
+ * @param dst_mesh_id Destination mesh ID for fabric routing
  * @param src_addr Source address in local L1 memory
  * @param dest_addr Destination NOC address (encoded with x,y coordinates and local address)
  * @param len_bytes Number of bytes to write
- * @param dst_dev_id Destination device ID for fabric routing
- * @param dst_mesh_id Destination mesh ID for fabric routing
  * @param multicast Whether this is a multicast operation
  * @param num_dests Number of destinations (for multicast)
- * @param trid transaction id
+ * @param trid Transaction ID for UDM operations
  */
 inline __attribute__((always_inline)) void fabric_fast_write(
     uint16_t dst_dev_id,
@@ -259,10 +257,7 @@ inline __attribute__((always_inline)) void fabric_fast_write(
     uint32_t num_dests = 1,
     uint16_t trid = 0) {
     // Get or create the singleton fabric connection
-    // TODO: instead of using rt args, use the reserved L1 region for get the correct ETH channel, and semaphore
-    // addresses.
-    size_t rt_args_idx = 0;  // This would need to be set appropriately
-    auto& connection = get_fabric_connection(rt_args_idx);
+    auto& connection = get_fabric_connection();
 
     // Allocate packet header from pool
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::allocate_header();
