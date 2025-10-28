@@ -1085,6 +1085,7 @@ FORCE_INLINE static uint32_t process_exec_buf_relay_inline_cmd(
     // DPRINT << "relay_inline_exec_buf_cmd:" << length << ENDL();
     uint32_t npages =
         (length + RelayInlineState::downstream_page_size - 1) >> RelayInlineState::downstream_log_page_size;
+    static_assert(&RelayInlineState::cb_writer.additional_count ==  &DispatchRelayInlineState::cb_writer.additional_count || &RelayInlineState::cb_writer.additional_count ==  &DispatchSRelayInlineState::cb_writer.additional_count); 
 
     // Assume the downstream buffer is big relative to cmddat command size that we can
     // grab what we need in one chunk
