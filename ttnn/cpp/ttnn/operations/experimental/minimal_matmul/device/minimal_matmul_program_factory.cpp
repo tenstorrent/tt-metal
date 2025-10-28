@@ -154,15 +154,8 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     auto in0_tensor_shape = input_tensor.padded_shape();
     auto in1_tensor_shape = weight_tensor.padded_shape();
     // Fold activation (LHS) upper dimensions into rows: M_total = prod(upper dims) * M
-    uint32_t M = in0_tensor_shape[-2];
     uint32_t K = in0_tensor_shape[-1];
-    if (in0_tensor_shape.rank() > 2) {
-        uint32_t folded = 1;
-        for (int i = 0; i < static_cast<int>(in0_tensor_shape.rank()) - 2; ++i) {
-            folded *= in0_tensor_shape[i];
-        }
-        M *= folded;
-    }
+    uint32_t M = input_tensor.physical_volume() / K;
     uint32_t N = in1_tensor_shape[-1];
 
     uint32_t M_tiles = M / tt::constants::TILE_HEIGHT;
