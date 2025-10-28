@@ -170,22 +170,12 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
 
         # Convert to interleaved DRAM if sharded
         if center_logits.is_sharded():
-            center_logits = ttnn.sharded_to_interleaved(center_logits, ttnn.DRAM_MEMORY_CONFIG)
+            center_logits = ttnn.sharded_to_interleaved(center_logits, ttnn.L1_MEMORY_CONFIG)
         else:
-            center_logits = ttnn.to_memory_config(center_logits, ttnn.DRAM_MEMORY_CONFIG)
-
-        # Convert to ROW_MAJOR for upsample
-        center_logits = ttnn.to_layout(center_logits, ttnn.ROW_MAJOR_LAYOUT)
-
-        # Calculate scale factors
+            center_logits = ttnn.to_memory_config(center_logits, ttnn.L1_MEMORY_CONFIG)
 
         # Matmul based upsample
         center_logits = self.final_upsample(center_logits)
-
-        # Convert back to TILE_LAYOUT and DRAM
-        center_logits = ttnn.to_layout(center_logits, ttnn.TILE_LAYOUT)
-        center_logits = ttnn.to_memory_config(center_logits, ttnn.DRAM_MEMORY_CONFIG)
-        logger.debug(f"TtPanopticDeepLabInsEmbedHead center upsample complete - shape: {center_logits.shape}")
 
         # --- Final Upsample for Offset ---
         # Use saved spatial dimensions
@@ -203,21 +193,13 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
 
         # Convert to interleaved DRAM if sharded
         if offset_logits.is_sharded():
-            offset_logits = ttnn.sharded_to_interleaved(offset_logits, ttnn.DRAM_MEMORY_CONFIG)
+            offset_logits = ttnn.sharded_to_interleaved(offset_logits, ttnn.L1_MEMORY_CONFIG)
         else:
-            offset_logits = ttnn.to_memory_config(offset_logits, ttnn.DRAM_MEMORY_CONFIG)
-
-        # Convert to ROW_MAJOR for upsample
-        offset_logits = ttnn.to_layout(offset_logits, ttnn.ROW_MAJOR_LAYOUT)
+            offset_logits = ttnn.to_memory_config(offset_logits, ttnn.L1_MEMORY_CONFIG)
 
         # Calculate scale factors
-
         # Matmul based upsample
         offset_logits = self.final_upsample(offset_logits)
-
-        # Convert back to TILE_LAYOUT and DRAM
-        offset_logits = ttnn.to_layout(offset_logits, ttnn.TILE_LAYOUT)
-        offset_logits = ttnn.to_memory_config(offset_logits, ttnn.DRAM_MEMORY_CONFIG)
 
         # Apply offset scaling
         offset_logits = ttnn.mul(offset_logits, self.common_stride)
