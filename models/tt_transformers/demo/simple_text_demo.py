@@ -9,11 +9,11 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+import pytest
 import requests
 import torch
 from loguru import logger
 
-import pytest
 import ttnn
 from models.common.utility_functions import is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
