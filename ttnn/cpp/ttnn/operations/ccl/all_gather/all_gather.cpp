@@ -33,7 +33,7 @@ ttnn::Tensor ExecuteAllGather::invoke(
     if (cluster_axis == std::nullopt) {
         auto mesh_shape = input_tensor.device()->get_view().shape();
         // Check if flat mesh (1x...M...x1) where M = total mesh volume
-        // if it is not flat, then we need to call all-gather on the highest dimension to the lowest dimension
+        // if it is not flat, then we need to call all-gather on dim=-1 to dim=0
         uint32_t num_devices = mesh_shape.mesh_size();
         bool is_not_flat_mesh = std::none_of(
             mesh_shape.cbegin(), mesh_shape.cend(), [num_devices](uint32_t dim) { return dim == num_devices; });
