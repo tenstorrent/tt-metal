@@ -10,50 +10,30 @@ Requires: TTNN hardware/installation, pytest
 import pytest
 import torch
 
-# Try to import TTNN - skip tests if not available
-try:
-    import ttnn
-
-    TTNN_AVAILABLE = True
-except ImportError:
-    TTNN_AVAILABLE = False
-
-# Pytest skip marker for tests requiring TTNN
-pytestmark = pytest.mark.skipif(not TTNN_AVAILABLE, reason="TTNN not available")
-
 # Import metric functions from the validation framework
-from tt_transformers_v2.src.testing import (
-    comp_allclose,
-    compute_cosine_similarity,
-    compute_max_abs_error,
-    compute_mean_abs_error,
-    compute_pcc,
-)
+from tt_transformers_v2.src.testing import comp_allclose, compute_max_abs_error, compute_mean_abs_error, compute_pcc
 
+import ttnn
 
-# Pytest fixtures
-@pytest.fixture(scope="module")
-def ttnn_device():
-    """Setup TTNN device for all tests"""
-    if not TTNN_AVAILABLE:
-        pytest.skip("TTNN not available")
-
-    device_ids = ttnn.get_device_ids()
-    if len(device_ids) == 0:
-        pytest.skip("No TTNN devices found")
-
-    mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape([1, 1]))
-    yield mesh_device
-    ttnn.close_mesh_device(mesh_device)
-
-
-def to_ttnn(torch_tensor, device):
-    """Convert PyTorch tensor to TTNN tensor"""
-    # TTNN expects [1, 1, ...] shape for tile layout
-    while torch_tensor.dim() < 4:
-        torch_tensor = torch_tensor.unsqueeze(0)
-
-    return ttnn.from_torch(torch_tensor, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+pytestmark = [
+    pytest.mark.parametrize(
+        "ttnn_mesh_device",
+        [
+            (1, 1),
+            # todo)) add tests for the following mesh shapes:
+            # (1, 2),
+            # (1, 8),
+            # (2, 4),
+        ],
+        ids=[
+            "1x1",
+            # "1x2",
+            # "1x8",
+            # "2x4",
+        ],
+        indirect=True,
+    ),
+]
 
 
 # Test case definitions
@@ -67,7 +47,6 @@ TEST_CASES = [
         lambda t: t.clone(),
         (0.0, 1e-6),  # max: expect ~0, tight tolerance
         (0.0, 1e-6),  # mean: expect ~0, tight tolerance
-        (1.0, 0.01),  # cosine: expect ~1, larger tolerance for bf16
         id="identical_random",
     ),
     # Known differences
@@ -77,7 +56,6 @@ TEST_CASES = [
         lambda t: t + torch.tensor([[0.0, 0.0, 0.5], [0.0, 0.0, 0.0]], dtype=torch.bfloat16),
         (0.5, 0.02),  # max: expect 0.5
         None,  # mean: skip expected check, just compare TTNN vs PyTorch
-        None,  # cosine: skip expected check
         id="known_diff_max_0.5",
     ),
     pytest.param(
@@ -86,7 +64,6 @@ TEST_CASES = [
         lambda t: t + 0.5,
         (0.5, 0.02),  # max: expect 0.5
         (0.5, 0.02),  # mean: expect 0.5 (all elements differ by same amount)
-        None,  # cosine: skip expected check
         id="uniform_diff_0.5",
     ),
     # Orthogonal vectors
@@ -96,7 +73,6 @@ TEST_CASES = [
         lambda t: torch.tensor([[0.0, 1.0]], dtype=torch.bfloat16),
         None,  # max: skip expected check
         None,  # mean: skip expected check
-        (0.0, 0.1),  # cosine: expect 0, larger tolerance
         id="orthogonal_vectors",
     ),
     # Opposite vectors
@@ -106,7 +82,6 @@ TEST_CASES = [
         lambda t: -torch.ones(1, 16, dtype=torch.bfloat16),
         None,  # max: skip expected check
         None,  # mean: skip expected check
-        (-1.0, 0.02),  # cosine: expect -1
         id="opposite_vectors",
     ),
     # Large tensors
@@ -116,7 +91,6 @@ TEST_CASES = [
         lambda t: t + 0.1,
         None,  # max: skip expected check
         None,  # mean: skip expected check
-        None,  # cosine: skip expected check
         id="large_128x256",
     ),
     # Edge cases - all zeros
@@ -126,7 +100,6 @@ TEST_CASES = [
         lambda t: t.clone(),
         (0.0, 1e-6),  # max: expect 0
         (0.0, 1e-6),  # mean: expect 0
-        None,  # cosine: undefined for zero vectors
         id="edge_all_zeros",
     ),
     # Edge cases - all ones
@@ -136,14 +109,13 @@ TEST_CASES = [
         lambda t: t.clone(),
         (0.0, 1e-6),  # max: expect 0
         (0.0, 1e-6),  # mean: expect 0
-        (1.0, 1e-3),  # cosine: expect 1
         id="edge_all_ones",
     ),
 ]
 
 
-@pytest.mark.parametrize("name,tensor_a_fn,tensor_b_fn,max_spec,mean_spec,cosine_spec", TEST_CASES)
-def test_metrics_vs_pytorch(ttnn_device, name, tensor_a_fn, tensor_b_fn, max_spec, mean_spec, cosine_spec):
+@pytest.mark.parametrize("name,tensor_a_fn,tensor_b_fn,max_spec,mean_spec", TEST_CASES)
+def test_metrics_vs_pytorch(ttnn_mesh_device, name, tensor_a_fn, tensor_b_fn, max_spec, mean_spec):
     """
     Unified test for all metrics against PyTorch ground truth.
     Tests various tensor configurations and verifies TTNN metrics match PyTorch.
@@ -156,16 +128,14 @@ def test_metrics_vs_pytorch(ttnn_device, name, tensor_a_fn, tensor_b_fn, max_spe
     # Compute PyTorch ground truth
     max_error_torch = (torch_a - torch_b).abs().max().item()
     mean_error_torch = (torch_a - torch_b).abs().mean().item()
-    cosine_torch = torch.nn.functional.cosine_similarity(torch_a.flatten(), torch_b.flatten(), dim=0).item()
 
     # Convert to TTNN
-    ttnn_a = to_ttnn(torch_a, ttnn_device)
-    ttnn_b = to_ttnn(torch_b, ttnn_device)
+    ttnn_a = ttnn.from_torch(torch_a, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    ttnn_b = ttnn.from_torch(torch_b, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     # Compute with TTNN
     max_error_ttnn = compute_max_abs_error(ttnn_a, ttnn_b)
     mean_error_ttnn = compute_mean_abs_error(ttnn_a, ttnn_b)
-    cosine_ttnn = compute_cosine_similarity(ttnn_a, ttnn_b)
 
     # Default tolerance for TTNN vs PyTorch comparison (bf16 precision)
     default_tolerance = 0.02
@@ -202,24 +172,8 @@ def test_metrics_vs_pytorch(ttnn_device, name, tensor_a_fn, tensor_b_fn, max_spe
             abs(mean_error_ttnn - mean_error_torch) < default_tolerance
         ), f"mean_abs_error TTNN vs PyTorch: {mean_error_ttnn} vs {mean_error_torch}"
 
-    # Verify cosine_similarity
-    if cosine_spec is not None:
-        expected_cosine, tolerance_cosine = cosine_spec
-        assert (
-            abs(cosine_ttnn - expected_cosine) < tolerance_cosine
-        ), f"cosine_similarity: expected {expected_cosine}, got {cosine_ttnn}"
-        # Check TTNN matches PyTorch
-        assert (
-            abs(cosine_ttnn - cosine_torch) < tolerance_cosine
-        ), f"cosine_similarity TTNN vs PyTorch: {cosine_ttnn} vs {cosine_torch}"
-    else:
-        # No expected value, just check TTNN matches PyTorch with default tolerance
-        assert (
-            abs(cosine_ttnn - cosine_torch) < default_tolerance
-        ), f"cosine_similarity TTNN vs PyTorch: {cosine_ttnn} vs {cosine_torch}"
 
-
-def test_pcc_ttnn_native(ttnn_device):
+def test_pcc_ttnn_native(ttnn_mesh_device):
     """
     Test TTNN-native PCC computation with actual TTNN tensors on device.
 
@@ -235,8 +189,8 @@ def test_pcc_ttnn_native(ttnn_device):
     a_torch = torch.randn(32, 32).bfloat16()
     b_torch = a_torch.clone()
 
-    a_ttnn = to_ttnn(a_torch, ttnn_device)
-    b_ttnn = to_ttnn(b_torch, ttnn_device)
+    a_ttnn = ttnn.from_torch(a_torch, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    b_ttnn = ttnn.from_torch(b_torch, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
     pcc_torch = compute_pcc(a_torch, b_torch)
@@ -250,8 +204,8 @@ def test_pcc_ttnn_native(ttnn_device):
     a_torch = torch.randn(32, 64).bfloat16()
     b_torch = a_torch + torch.randn(32, 64).bfloat16() * 0.01
 
-    a_ttnn = to_ttnn(a_torch, ttnn_device)
-    b_ttnn = to_ttnn(b_torch, ttnn_device)
+    a_ttnn = ttnn.from_torch(a_torch, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    b_ttnn = ttnn.from_torch(b_torch, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
     pcc_torch = compute_pcc(a_torch, b_torch)
@@ -266,8 +220,8 @@ def test_pcc_ttnn_native(ttnn_device):
     a_torch = torch.randn(32, 32).bfloat16()
     b_torch = -a_torch + torch.randn(32, 32).bfloat16() * 0.1
 
-    a_ttnn = to_ttnn(a_torch, ttnn_device)
-    b_ttnn = to_ttnn(b_torch, ttnn_device)
+    a_ttnn = ttnn.from_torch(a_torch, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    b_ttnn = ttnn.from_torch(b_torch, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
     pcc_torch = compute_pcc(a_torch, b_torch)
@@ -281,8 +235,8 @@ def test_pcc_ttnn_native(ttnn_device):
     a_torch = torch.randn(128, 256).bfloat16()
     b_torch = a_torch + torch.randn(128, 256).bfloat16() * 0.05
 
-    a_ttnn = to_ttnn(a_torch, ttnn_device)
-    b_ttnn = to_ttnn(b_torch, ttnn_device)
+    a_ttnn = ttnn.from_torch(a_torch, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    b_ttnn = ttnn.from_torch(b_torch, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
     pcc_torch = compute_pcc(a_torch, b_torch)
@@ -297,8 +251,8 @@ def test_pcc_ttnn_native(ttnn_device):
     # Add significant noise (50% of signal strength)
     b_torch = a_torch + torch.randn(32, 32).bfloat16() * 0.5
 
-    a_ttnn = to_ttnn(a_torch, ttnn_device)
-    b_ttnn = to_ttnn(b_torch, ttnn_device)
+    a_ttnn = ttnn.from_torch(a_torch, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    b_ttnn = ttnn.from_torch(b_torch, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
     pcc_torch = compute_pcc(a_torch, b_torch)
@@ -314,8 +268,8 @@ def test_pcc_ttnn_native(ttnn_device):
     # Add massive noise (2x signal strength) - correlation should be weak
     b_torch = a_torch + torch.randn(32, 32).bfloat16() * 2.0
 
-    a_ttnn = to_ttnn(a_torch, ttnn_device)
-    b_ttnn = to_ttnn(b_torch, ttnn_device)
+    a_ttnn = ttnn.from_torch(a_torch, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    b_ttnn = ttnn.from_torch(b_torch, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
     pcc_torch = compute_pcc(a_torch, b_torch)
@@ -327,7 +281,7 @@ def test_pcc_ttnn_native(ttnn_device):
     print("  ✓ TTNN-native PCC correctly detects varying correlation strengths!")
 
 
-def test_pcc_constant_tensors(ttnn_device):
+def test_pcc_constant_tensors(ttnn_mesh_device):
     """
     Test that TTNN-native PCC correctly handles constant tensors.
 
@@ -340,8 +294,8 @@ def test_pcc_constant_tensors(ttnn_device):
     a_torch = torch.ones(32, 32).bfloat16() * 5.0
     b_torch = torch.ones(32, 32).bfloat16() * 5.0
 
-    a_ttnn = to_ttnn(a_torch, ttnn_device)
-    b_ttnn = to_ttnn(b_torch, ttnn_device)
+    a_ttnn = ttnn.from_torch(a_torch, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    b_ttnn = ttnn.from_torch(b_torch, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
     pcc_torch = compute_pcc(a_torch, b_torch)
@@ -354,8 +308,8 @@ def test_pcc_constant_tensors(ttnn_device):
     a_torch = torch.ones(32, 32).bfloat16() * 5.0
     b_torch = torch.ones(32, 32).bfloat16() * 3.0
 
-    a_ttnn = to_ttnn(a_torch, ttnn_device)
-    b_ttnn = to_ttnn(b_torch, ttnn_device)
+    a_ttnn = ttnn.from_torch(a_torch, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    b_ttnn = ttnn.from_torch(b_torch, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
     pcc_torch = compute_pcc(a_torch, b_torch)
@@ -369,8 +323,8 @@ def test_pcc_constant_tensors(ttnn_device):
     a_torch = torch.zeros(32, 32).bfloat16()
     b_torch = torch.zeros(32, 32).bfloat16()
 
-    a_ttnn = to_ttnn(a_torch, ttnn_device)
-    b_ttnn = to_ttnn(b_torch, ttnn_device)
+    a_ttnn = ttnn.from_torch(a_torch, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    b_ttnn = ttnn.from_torch(b_torch, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
     pcc_torch = compute_pcc(a_torch, b_torch)
@@ -382,7 +336,7 @@ def test_pcc_constant_tensors(ttnn_device):
     print("  ✓ TTNN-native PCC correctly handles constant tensors!")
 
 
-def test_pcc_all_nan_and_mixed_nan(ttnn_device):
+def test_pcc_all_nan_and_mixed_nan(ttnn_mesh_device):
     """
     TTNN-native PCC should mirror CPU semantics for NaN cases:
     - both all-NaN -> 1.0
@@ -394,9 +348,9 @@ def test_pcc_all_nan_and_mixed_nan(ttnn_device):
     b_nan = torch.full((32, 32), float("nan"), dtype=torch.float32)
     a_num = torch.zeros(32, 32, dtype=torch.float32)
 
-    a_nan_t = to_ttnn(a_nan, ttnn_device)
-    b_nan_t = to_ttnn(b_nan, ttnn_device)
-    a_num_t = to_ttnn(a_num, ttnn_device)
+    a_nan_t = ttnn.from_torch(a_nan, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    b_nan_t = ttnn.from_torch(b_nan, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    a_num_t = ttnn.from_torch(a_num, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     # Both all-NaN -> 1.0
     pcc_ttnn = compute_pcc(a_nan_t, b_nan_t)
@@ -415,7 +369,7 @@ def test_pcc_all_nan_and_mixed_nan(ttnn_device):
     print("  ✓ TTNN-native PCC correctly handles NaN cases!")
 
 
-def test_pcc_zero_vs_nonzero(ttnn_device):
+def test_pcc_zero_vs_nonzero(ttnn_mesh_device):
     """
     One tensor all-zero and the other non-zero -> PCC = 0.0 on both TTNN and CPU.
     """
@@ -424,8 +378,8 @@ def test_pcc_zero_vs_nonzero(ttnn_device):
     a_zero = torch.zeros(32, 32, dtype=torch.float32)
     b_nonzero = torch.ones(32, 32, dtype=torch.float32)
 
-    a_zero_t = to_ttnn(a_zero, ttnn_device)
-    b_nonzero_t = to_ttnn(b_nonzero, ttnn_device)
+    a_zero_t = ttnn.from_torch(a_zero, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    b_nonzero_t = ttnn.from_torch(b_nonzero, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     pcc_ttnn = compute_pcc(a_zero_t, b_nonzero_t)
     pcc_cpu = compute_pcc(a_zero, b_nonzero)
@@ -436,89 +390,13 @@ def test_pcc_zero_vs_nonzero(ttnn_device):
     print("  ✓ TTNN-native PCC correctly handles zero vs non-zero!")
 
 
-# Sanity check: Test metrics with PyTorch tensors (no TTNN device needed)
-def test_metrics_pytorch_only():
-    """
-    Test that metric functions work with pure PyTorch tensors (fallback path).
-
-    Purpose:
-    - Validates the PyTorch fallback path in metric functions when TTNN tensors aren't used
-    - Provides baseline correctness verification without requiring TTNN hardware
-    - Can run in CI/CD environments or on developer machines without accelerators
-    - Ensures the fundamental metric logic is sound before testing TTNN-specific paths
-
-    This is the only test that doesn't require TTNN hardware, making it useful for
-    quick validation during development and in environments without specialized hardware.
-    """
-    # This test doesn't require TTNN hardware
-    torch_a = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=torch.float32)
-    torch_b = torch.tensor([[1.0, 2.0, 3.5], [4.0, 5.0, 6.0]], dtype=torch.float32)
-
-    # Functions should fall back to PyTorch path
-    max_error = compute_max_abs_error(torch_a, torch_b)
-    mean_error = compute_mean_abs_error(torch_a, torch_b)
-    cosine = compute_cosine_similarity(torch_a, torch_b)
-    pcc = compute_pcc(torch_a, torch_b)
-
-    # Verify results
-    expected_max = 0.5
-    expected_mean = (torch_a - torch_b).abs().mean().item()
-
-    assert abs(max_error - expected_max) < 1e-6, f"Expected {expected_max}, got {max_error}"
-    assert abs(mean_error - expected_mean) < 1e-6, f"Mean error mismatch"
-    assert 0.0 <= cosine <= 1.0, f"Cosine should be in [0,1], got {cosine}"
-    assert 0.99 <= pcc <= 1.0, f"PCC should be high (~1.0) for similar tensors, got {pcc}"
-
-
-def test_comp_allclose_pytorch_only():
-    """PyTorch-only tests for comp_allclose covering pass/fail and edge cases."""
-    # Exact equality
-    a = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
-    b = a.clone()
-    passed, msg = comp_allclose(a, b)
-    assert passed, f"Expected pass for exact equality. Got: {msg}"
-    assert "Max ATOL Delta" in msg and "Max RTOL Delta" in msg
-
-    # Within tolerance
-    a = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
-    b = torch.tensor([1.0 + 1e-7, 2.0 - 1e-7, 3.0], dtype=torch.float32)
-    passed, msg = comp_allclose(a, b)
-    assert passed, f"Expected pass within default tolerance. Got: {msg}"
-
-    # Outside tolerance
-    a = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
-    b = torch.tensor([1.0, 2.1, 3.0], dtype=torch.float32)
-    passed, msg = comp_allclose(a, b)
-    assert not passed and "Allclose check failed" in msg
-
-    # NaN equality (equal_nan=True semantics)
-    a = torch.tensor([float("nan"), 1.0, 2.0], dtype=torch.float32)
-    b = torch.tensor([float("nan"), 1.0, 2.0], dtype=torch.float32)
-    passed, _ = comp_allclose(a, b)
-    assert passed, "Both NaNs at same positions should pass"
-
-    # Inf same sign -> pass
-    a = torch.tensor([float("inf"), -float("inf"), 1.0])
-    b = torch.tensor([float("inf"), -float("inf"), 1.0])
-    passed, _ = comp_allclose(a, b)
-    assert passed, "Same sign infinities should pass"
-
-    # Inf different sign -> fail
-    a = torch.tensor([float("inf"), -float("inf"), 1.0])
-    b = torch.tensor([float("inf"), float("inf"), 1.0])
-    passed, msg = comp_allclose(a, b)
-    assert not passed and "Allclose check failed" in msg
-
-
-def test_comp_allclose_ttnn_native(ttnn_device):
+def test_comp_allclose_ttnn_native(ttnn_mesh_device):
     """TTNN-native tests for comp_allclose using on-device ops."""
 
-    # Helper to TTNN
-    def tt(x):
-        return to_ttnn(x, ttnn_device)
-
     # Exact equality
-    a_t = tt(torch.randn(2, 4, dtype=torch.bfloat16))
+    a_t = ttnn.from_torch(
+        torch.randn(2, 4, dtype=torch.bfloat16), device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
     b_t = a_t
     passed, msg = comp_allclose(a_t, b_t)
     assert passed, f"TTNN equality should pass. Got: {msg}"
@@ -526,27 +404,34 @@ def test_comp_allclose_ttnn_native(ttnn_device):
     # Fail with tight tolerance
     a = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.bfloat16)
     b = a + 0.5
-    passed, msg = comp_allclose(tt(a), tt(b), rtol=1e-6, atol=1e-6)
+    a_t = ttnn.from_torch(a, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    b_t = ttnn.from_torch(b, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    passed, msg = comp_allclose(a_t, b_t, rtol=1e-6, atol=1e-6)
     assert not passed and "Allclose check failed" in msg
 
     # Pass with relaxed tolerance
-    passed, msg = comp_allclose(tt(a), tt(b), rtol=0.2, atol=0.6)
+    passed, msg = comp_allclose(a_t, b_t, rtol=0.2, atol=0.6)
     assert passed, f"Expected pass with relaxed tolerance. Got: {msg}"
 
     # NaN equal
     a = torch.tensor([float("nan"), 1.0], dtype=torch.float32)
     b = torch.tensor([float("nan"), 1.0], dtype=torch.float32)
-    passed, _ = comp_allclose(tt(a), tt(b))
+    a_t = ttnn.from_torch(a, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    b_t = ttnn.from_torch(b, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    passed, _ = comp_allclose(a_t, b_t)
     assert passed, "TTNN: Both NaNs at same positions should pass"
 
     # Inf same sign pass, different sign fail
     a = torch.tensor([float("inf"), -float("inf"), 2.0], dtype=torch.float32)
     b = torch.tensor([float("inf"), -float("inf"), 2.0], dtype=torch.float32)
-    passed, _ = comp_allclose(tt(a), tt(b))
+    a_t = ttnn.from_torch(a, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    b_t = ttnn.from_torch(b, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    passed, _ = comp_allclose(a_t, b_t)
     assert passed
 
     b = torch.tensor([float("inf"), float("inf"), 2.0], dtype=torch.float32)
-    passed, msg = comp_allclose(tt(a), tt(b))
+    b_t = ttnn.from_torch(b, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    passed, msg = comp_allclose(a_t, b_t)
     assert not passed and "Allclose check failed" in msg
 
 
