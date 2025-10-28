@@ -447,12 +447,9 @@ def run(args, context: Context):
     verbose_level = args["-v"]
     set_verbose_level(verbose_level)
 
-    should_skip_active_eth = full_callstack or gdb_callstack
+    should_skip_active_eth = (full_callstack or gdb_callstack) and not active_eth
 
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"] if should_skip_active_eth else ["tensix", "idle_eth", "active_eth"]
-    # If we override default behaviour print warning message
-    if active_eth and should_skip_active_eth:
-        BLOCK_TYPES_TO_CHECK.append("active_eth")
         util.WARN(
             "Getting full or gdb callstack may break active eth core. Use tt-smi reset to fix. See issue #661 in tt-exalens for more details."
         )
