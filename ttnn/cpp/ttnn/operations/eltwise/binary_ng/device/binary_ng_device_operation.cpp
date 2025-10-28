@@ -415,6 +415,7 @@ tt::stl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
+    const auto& input_shape_a = input_tensor_a.padded_shape();
 
     TT_ASSERT(
         std::holds_alternative<DeviceStorage>(input_tensor_a.storage()),
@@ -422,6 +423,7 @@ tt::stl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
         tt::stl::get_active_type_name_in_variant(input_tensor_a.storage()));
 
     if (input_tensor_b.has_value()) {
+        const auto& input_shape_b = input_tensor_b->padded_shape();
         TT_ASSERT(
             std::holds_alternative<DeviceStorage>(input_tensor_b->storage()),
             "Unexpected type {}",
@@ -431,12 +433,14 @@ tt::stl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
             attributes,
             input_tensor_a.dtype(),
             input_tensor_a.memory_config(),
+            input_shape_a.volume(),
             input_tensor_b->dtype(),
-            input_tensor_b->memory_config());
+            input_tensor_b->memory_config(),
+            input_shape_b.volume());
     }
 
     return operation::hash_operation<BinaryNgDeviceOperation>(
-        attributes, input_tensor_a.dtype(), input_tensor_a.memory_config());
+        attributes, input_tensor_a.dtype(), input_tensor_a.memory_config(), input_shape_a.volume());
 }
 
 bool BinaryNgDeviceOperation::skip_launch(
