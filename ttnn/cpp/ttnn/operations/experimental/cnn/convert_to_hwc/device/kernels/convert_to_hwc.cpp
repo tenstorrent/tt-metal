@@ -50,21 +50,24 @@ void MAIN {
     constexpr uint32_t total_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t total_sticks_per_block = get_compile_time_arg_val(5);
     constexpr uint32_t is_input_in_dram = get_compile_time_arg_val(6);
+    constexpr uint32_t total_num_blocks = get_compile_time_arg_val(7);
 
     compute_kernel_hw_startup(cb_in, cb_tiled_in);
 
-    tilize_init(cb_in, total_tiles, cb_tiled_in);
-    tilize(cb_in, total_tiles, total_sticks_per_block, cb_tiled_in);
-    tilize_uninit(cb_in, cb_tiled_in);
+    for (uint32_t block_idx = 0; block_idx < total_num_blocks; block_idx++) {
+        tilize_init(cb_in, total_tiles, cb_tiled_in);
+        tilize(cb_in, total_tiles, total_sticks_per_block, cb_tiled_in);
+        tilize_uninit(cb_in, cb_tiled_in);
 
-    pack_untilize_init(cb_in, cb_transpose_in0);
-    transpose_wh_init(cb_in, cb_transpose_in0);
-    pack_untilize_dest_init<1>(cb_in);
+        pack_untilize_init(cb_in, cb_transpose_in0);
+        transpose_wh_init(cb_in, cb_transpose_in0);
+        pack_untilize_dest_init<1>(cb_in);
 
-    for (uint32_t idx = 0; idx < total_tiles; idx++) {
-        const uint32_t cb_transpose_in = idx % 2 == 0 ? cb_transpose_in0 : cb_transpose_in1;
-        transpose<1>(cb_tiled_in, cb_transpose_in);
+        for (uint32_t idx = 0; idx < total_tiles; idx++) {
+            const uint32_t cb_transpose_in = idx % 2 == 0 ? cb_transpose_in0 : cb_transpose_in1;
+            transpose<1>(cb_tiled_in, cb_transpose_in);
+        }
+        pack_untilize_uninit(cb_transpose_in0);
     }
-    pack_untilize_uninit(cb_transpose_in0);
 }
 }  // namespace NAMESPACE

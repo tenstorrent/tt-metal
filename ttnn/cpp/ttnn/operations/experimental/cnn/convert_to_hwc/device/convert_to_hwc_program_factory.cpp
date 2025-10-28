@@ -246,7 +246,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         cb_in_transpose_id1,
         total_tiles_per_core,
         l1_input_shard_height,
-        is_input_in_dram};
+        is_input_in_dram,
+        batch_size};
     log_info(tt::LogType::LogAlways, "convert_to_hwc: compute_compile_time_args = {}", compute_compile_time_args);
 
     log_info(tt::LogType::LogAlways, "convert_to_hwc: Creating kernels on {} cores", l1_input_cores.size());
