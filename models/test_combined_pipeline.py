@@ -86,4 +86,8 @@ def test_refiner(mesh_device):
         fixed_seed_for_batch=False,
         timesteps=None,
         sigmas=None,
+        num_inference_steps=50,
+        guidance_scale=7.5,
+        crop_coords_top_left=(0, 0),
+        guidance_rescale=0.0,
     )
