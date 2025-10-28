@@ -172,6 +172,6 @@ cpack_add_component(
     GROUP ttml
     DESCRIPTION "TT-Train runtime library"
 )
-cpack_add_component(ttml-runtime GROUP ttml)
+cpack_add_component(ttml GROUP ttml)
 
 include(CPack)
