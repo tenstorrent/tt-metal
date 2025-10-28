@@ -100,8 +100,160 @@ def compute_mean_abs_error(impl, ref):
         return float("inf")
 
 
-# code stolen from tests/tt_eager/python_api_testing/sweep_tests/comparison_funcs.py and models/common/utility_functions.py
-# todo)) refactor this to two functions: compute_pcc_device and compute_pcc_host
+def compute_pcc_device(impl, ref):
+    """Fast on-device PCC for TTNN tensors only."""
+    try:
+        # Early edge-case handling to mirror CPU semantics
+        # - All NaNs → 1.0; mixed NaNs → 0.0
+        # - One tensor all zero and the other not → 0.0
+        # - Both constant → 1.0 if equal, else 0.0
+
+        # Any nonzero check (all-zero detection)
+        # todo)) to_torch_auto_compose here instead of to_torch
+        impl_abs_max = ttnn.to_torch(ttnn.max(ttnn.abs(impl))).item()
+        ref_abs_max = ttnn.to_torch(ttnn.max(ttnn.abs(ref))).item()
+        impl_has_any = impl_abs_max != 0.0
+        ref_has_any = ref_abs_max != 0.0
+        if impl_has_any != ref_has_any:
+            return 0.0
+
+        # Min/Max scalars for constant and NaN detection
+        # todo)) to_torch_auto_compose here instead of to_torch
+        impl_min = ttnn.to_torch(ttnn.min(impl)).item()
+        impl_max = ttnn.to_torch(ttnn.max(impl)).item()
+        ref_min = ttnn.to_torch(ttnn.min(ref)).item()
+        ref_max = ttnn.to_torch(ttnn.max(ref)).item()
+
+        impl_min_finite = np.isfinite(impl_min)
+        impl_max_finite = np.isfinite(impl_max)
+        ref_min_finite = np.isfinite(ref_min)
+        ref_max_finite = np.isfinite(ref_max)
+
+        impl_all_nan = (not impl_min_finite) and (not impl_max_finite)
+        ref_all_nan = (not ref_min_finite) and (not ref_max_finite)
+        if impl_all_nan and ref_all_nan:
+            return 1.0
+        if impl_all_nan != ref_all_nan:
+            return 0.0
+
+        # Constant tensors
+        if impl_min_finite and impl_max_finite and ref_min_finite and ref_max_finite:
+            if impl_min == impl_max and ref_min == ref_max:
+                return (
+                    1.0
+                    if torch.isclose(
+                        torch.tensor(impl_max, dtype=torch.float32), torch.tensor(ref_max, dtype=torch.float32)
+                    )
+                    else 0.0
+                )
+
+        # Standard PCC formula on device
+        mean_impl = ttnn.mean(impl)
+        mean_ref = ttnn.mean(ref)
+
+        impl_centered = ttnn.subtract(impl, mean_impl)
+        ref_centered = ttnn.subtract(ref, mean_ref)
+
+        numerator = ttnn.sum(ttnn.mul(impl_centered, ref_centered))
+        impl_sq_sum = ttnn.sum(ttnn.mul(impl_centered, impl_centered))
+        ref_sq_sum = ttnn.sum(ttnn.mul(ref_centered, ref_centered))
+        denominator = ttnn.sqrt(ttnn.mul(impl_sq_sum, ref_sq_sum))
+
+        # Safe divide
+        denom_scalar = ttnn.to_torch(denominator).item()
+        if denom_scalar == 0.0 or not np.isfinite(denom_scalar):
+            return 0.0
+
+        pcc_tensor = ttnn.mul(numerator, ttnn.reciprocal(denominator))
+        pcc = ttnn.to_torch(pcc_tensor).item()
+        if not np.isfinite(pcc):
+            return 0.0
+        return pcc
+    except Exception:
+        return 0.0
+
+
+# code stolen from tests/tt_eager/python_api_testing/sweep_tests/comparison_funcs.py
+# and models/common/utility_functions.py
+def compute_pcc_host(impl, ref):
+    """Robust CPU PCC for PyTorch tensors only."""
+    try:
+        calculated = impl
+        golden = ref
+        if golden.dtype != calculated.dtype:
+            calculated = calculated.type(golden.dtype)
+
+        # Handle complex tensors
+        if golden.is_complex() and calculated.is_complex():
+            golden = torch.view_as_real(golden.clone())
+            calculated = torch.view_as_real(calculated.clone())
+
+        # Convert to float if needed
+        if not (golden.is_floating_point() or calculated.is_floating_point()):
+            golden = golden.to(torch.float)
+            calculated = calculated.to(torch.float)
+
+        # Both tensors are nan
+        if torch.all(torch.isnan(golden)) and torch.all(torch.isnan(calculated)):
+            return 1.0
+
+        # One tensor is all nan, the other is not
+        if torch.all(torch.isnan(golden)) or torch.all(torch.isnan(calculated)):
+            return 0.0
+
+        # One tensor is all zero, the other is not
+        if torch.any(golden.bool()) != torch.any(calculated.bool()):
+            return 0.0
+
+        # Mask all infs and nans
+        golden = golden.clone()
+        golden[
+            torch.logical_or(
+                torch.isnan(golden),
+                torch.logical_or(torch.isinf(golden), torch.isneginf(golden)),
+            )
+        ] = 0
+        calculated = calculated.clone()
+        calculated[
+            torch.logical_or(
+                torch.isnan(calculated),
+                torch.logical_or(torch.isinf(calculated), torch.isneginf(calculated)),
+            )
+        ] = 0
+
+        if torch.equal(golden, calculated):
+            return 1.0
+
+        if golden.dtype == torch.bfloat16:
+            golden = golden.type(torch.float32)
+            calculated = calculated.type(torch.float32)
+
+        # Single element case
+        if golden.numel() == 1:
+            return float(torch.equal(golden, calculated))
+
+        # If both tensors are constant
+        if torch.max(golden) == torch.min(golden) and torch.max(calculated) == torch.min(calculated):
+            return torch.isclose(torch.max(golden), torch.max(calculated)).item()
+
+        # Compute PCC using numpy's corrcoef
+        cal_pcc = np.ma.corrcoef(
+            np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
+            np.ma.masked_invalid(torch.squeeze(calculated).detach().numpy()).flatten(),
+        )
+        # Remove correlation coefficient with self (typically always 1.0)
+        mask = np.ones(cal_pcc.shape, dtype=bool)
+        np.fill_diagonal(mask, 0)
+        cal_pcc = np.min(cal_pcc[mask])
+
+        if isinstance(cal_pcc, np.ma.core.MaskedConstant):
+            return 1.0
+
+        return float(cal_pcc)
+    except Exception:
+        return 0.0
+
+
 def compute_pcc(impl, ref):
     """
     Compute Pearson Correlation Coefficient (PCC) between two tensors.
@@ -142,155 +294,15 @@ def compute_pcc(impl, ref):
     try:
         # TTNN fast path - compute on device
         if _is_ttnn_tensor(impl) and _is_ttnn_tensor(ref):
-            # Early edge-case handling to mirror CPU semantics
-            # - All NaNs → 1.0; mixed NaNs → 0.0
-            # - One tensor all zero and the other not → 0.0
-            # - Both constant → 1.0 if equal, else 0.0
-
-            # todo)) also need to assert that impl and ref have the same sharding scheme
-
-            # Any nonzero check (all-zero detection)
-            # todo)) to_torch_auto_compose here instead of to_torch
-            impl_abs_max = ttnn.to_torch(ttnn.max(ttnn.abs(impl))).item()
-            ref_abs_max = ttnn.to_torch(ttnn.max(ttnn.abs(ref))).item()
-            impl_has_any = impl_abs_max != 0.0
-            ref_has_any = ref_abs_max != 0.0
-            if impl_has_any != ref_has_any:
-                return 0.0
-
-            # Min/Max scalars for constant and NaN detection
-            # todo)) to_torch_auto_compose here instead of to_torch
-            impl_min = ttnn.to_torch(ttnn.min(impl)).item()
-            impl_max = ttnn.to_torch(ttnn.max(impl)).item()
-            ref_min = ttnn.to_torch(ttnn.min(ref)).item()
-            ref_max = ttnn.to_torch(ttnn.max(ref)).item()
-
-            impl_min_finite = np.isfinite(impl_min)
-            impl_max_finite = np.isfinite(impl_max)
-            ref_min_finite = np.isfinite(ref_min)
-            ref_max_finite = np.isfinite(ref_max)
-
-            impl_all_nan = (not impl_min_finite) and (not impl_max_finite)
-            ref_all_nan = (not ref_min_finite) and (not ref_max_finite)
-            if impl_all_nan and ref_all_nan:
-                return 1.0
-            if impl_all_nan != ref_all_nan:
-                return 0.0
-
-            # Constant tensors
-            if impl_min_finite and impl_max_finite and ref_min_finite and ref_max_finite:
-                if impl_min == impl_max and ref_min == ref_max:
-                    return (
-                        1.0
-                        if torch.isclose(
-                            torch.tensor(impl_max, dtype=torch.float32), torch.tensor(ref_max, dtype=torch.float32)
-                        )
-                        else 0.0
-                    )
-
-            # Standard PCC formula on device
-            mean_impl = ttnn.mean(impl)
-            mean_ref = ttnn.mean(ref)
-
-            impl_centered = ttnn.subtract(impl, mean_impl)
-            ref_centered = ttnn.subtract(ref, mean_ref)
-
-            numerator = ttnn.sum(ttnn.mul(impl_centered, ref_centered))
-            impl_sq_sum = ttnn.sum(ttnn.mul(impl_centered, impl_centered))
-            ref_sq_sum = ttnn.sum(ttnn.mul(ref_centered, ref_centered))
-            denominator = ttnn.sqrt(ttnn.mul(impl_sq_sum, ref_sq_sum))
-
-            # Safe divide
-            denom_scalar = ttnn.to_torch(denominator).item()
-            if denom_scalar == 0.0 or not np.isfinite(denom_scalar):
-                return 0.0
-
-            pcc_tensor = ttnn.mul(numerator, ttnn.reciprocal(denominator))
-            pcc = ttnn.to_torch(pcc_tensor).item()
-            if not np.isfinite(pcc):
-                return 0.0
-            return pcc
+            return compute_pcc_device(impl, ref)
 
         # PyTorch tensor path - robust CPU implementation from tt-metal comparison_funcs.py
         if torch.is_tensor(impl) and torch.is_tensor(ref):
-            calculated = impl
-            golden = ref
-            if golden.dtype != calculated.dtype:
-                calculated = calculated.type(golden.dtype)
-
-            # Handle complex tensors
-            if golden.is_complex() and calculated.is_complex():
-                golden = torch.view_as_real(golden.clone())
-                calculated = torch.view_as_real(calculated.clone())
-
-            # Convert to float if needed
-            if not (golden.is_floating_point() or calculated.is_floating_point()):
-                golden = golden.to(torch.float)
-                calculated = calculated.to(torch.float)
-
-            # PCC computation from tt-metal comparison_funcs.py
-            # Both tensors are nan
-            if torch.all(torch.isnan(golden)) and torch.all(torch.isnan(calculated)):
-                return 1.0
-
-            # One tensor is all nan, the other is not
-            if torch.all(torch.isnan(golden)) or torch.all(torch.isnan(calculated)):
-                return 0.0
-
-            # One tensor is all zero, the other is not
-            if torch.any(golden.bool()) != torch.any(calculated.bool()):
-                return 0.0
-
-            # Mask all infs and nans
-            golden = golden.clone()
-            golden[
-                torch.logical_or(
-                    torch.isnan(golden),
-                    torch.logical_or(torch.isinf(golden), torch.isneginf(golden)),
-                )
-            ] = 0
-            calculated = calculated.clone()
-            calculated[
-                torch.logical_or(
-                    torch.isnan(calculated),
-                    torch.logical_or(torch.isinf(calculated), torch.isneginf(calculated)),
-                )
-            ] = 0
-
-            if torch.equal(golden, calculated):
-                return 1.0
-
-            if golden.dtype == torch.bfloat16:
-                golden = golden.type(torch.float32)
-                calculated = calculated.type(torch.float32)
-
-            # Single element case
-            if golden.numel() == 1:
-                return float(torch.equal(golden, calculated))
-
-            # If both tensors are constant
-            if torch.max(golden) == torch.min(golden) and torch.max(calculated) == torch.min(calculated):
-                return torch.isclose(torch.max(golden), torch.max(calculated)).item()
-
-            # Compute PCC using numpy's corrcoef
-            cal_pcc = np.ma.corrcoef(
-                np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
-                np.ma.masked_invalid(torch.squeeze(calculated).detach().numpy()).flatten(),
-            )
-            # Remove correlation coefficient with self (typically always 1.0)
-            mask = np.ones(cal_pcc.shape, dtype=bool)
-            np.fill_diagonal(mask, 0)
-            cal_pcc = np.min(cal_pcc[mask])
-
-            if isinstance(cal_pcc, np.ma.core.MaskedConstant):
-                return 1.0
-
-            return float(cal_pcc)
+            return compute_pcc_host(impl, ref)
 
         # Unsupported tensor type combination
         return 0.0
-
-    except Exception as e:
+    except Exception:
         return 0.0
 
 
@@ -299,7 +311,6 @@ DEFAULT_METRICS = {
     "max_abs_error": compute_max_abs_error,
     "mean_abs_error": compute_mean_abs_error,
     "pcc": compute_pcc,
-    "cosine_similarity": compute_cosine_similarity,
 }
 
 
@@ -387,14 +398,3 @@ def comp_allclose(impl, ref, rtol=1e-05, atol=1e-08):
         return False, "Unsupported input types for comp_allclose"
     except Exception:
         return False, "Error computing comp_allclose"
-
-
-# Public API
-__all__ = [
-    "compute_max_abs_error",
-    "compute_mean_abs_error",
-    "compute_pcc",
-    "compute_cosine_similarity",
-    "comp_allclose",
-    "DEFAULT_METRICS",
-]

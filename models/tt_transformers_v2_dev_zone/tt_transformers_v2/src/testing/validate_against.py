@@ -25,29 +25,13 @@ from typing import Any, Callable, Dict, List, Optional
 import ttnn
 
 from .auto_compose import to_torch_auto_compose
-from .metrics import DEFAULT_METRICS, compute_cosine_similarity, compute_max_abs_error, compute_mean_abs_error
+from .metrics import DEFAULT_METRICS
 
 # ============================================================================
 # Public API
 # ============================================================================
-#
-# Note: Metric functions (compute_max_abs_error, compute_mean_abs_error,
-# compute_cosine_similarity) are imported from metrics module and re-exported
-# here for convenience.
 
-__all__ = [
-    "device_validate_against",
-    "host_validate_against",
-    "get_validation_registry",
-    "enable_validation",
-    "clear_validation_results",
-    "ValidationResult",
-    "ValidationRegistry",
-    "compute_max_abs_error",
-    "compute_mean_abs_error",
-    "compute_cosine_similarity",
-    "DEFAULT_METRICS",
-]
+# Module exports are defined at the package level in __init__.py
 
 
 def get_validation_registry() -> "ValidationRegistry":
@@ -68,6 +52,7 @@ def clear_validation_results():
 # Convenience wrappers (public) — keep core impl private
 
 
+# todo)) specialize the metric functions for device and host
 def device_validate_against(
     reference_fn: Callable,
     *,

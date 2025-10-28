@@ -6,7 +6,6 @@ from .auto_compose import to_torch_auto_compose
 from .metrics import (
     DEFAULT_METRICS,
     comp_allclose,
-    compute_cosine_similarity,
     compute_max_abs_error,
     compute_mean_abs_error,
     compute_pcc,
@@ -34,7 +33,6 @@ __all__ = [
     "compute_max_abs_error",
     "compute_mean_abs_error",
     "compute_pcc",
-    "compute_cosine_similarity",
     "comp_allclose",
     "DEFAULT_METRICS",
     # Auto compose
