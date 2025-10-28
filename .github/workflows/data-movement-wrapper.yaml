@@ -1,4 +1,4 @@
-name: "(DM) Data Movement Test Suite"
+name: "(TM-DM) Data Movement Test Suite"
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
       microbenchmarks:
         description: 'Run data movement microbenchmarks'
         required: false
-        default: false
+        default: true
         type: boolean
   workflow_call:
   push:
