@@ -85,7 +85,6 @@ def device_validate_against(
 
     return __validate_against(
         reference_fn=reference_fn,
-        match_signature=True,
         input_map=None,
         output_map=None,
         metrics=metrics,
@@ -134,7 +133,7 @@ def host_validate_against(
             return {k: _map_structure(v, fn) for k, v in obj.items()}
         return fn(obj)
 
-    def _default_input_map(args, kwargs):
+    def _default_input_map(*args, **kwargs):
         ref_args = _map_structure(args, _to_torch_auto)
         ref_kwargs = _map_structure(kwargs, _to_torch_auto)
         return ref_args, ref_kwargs
@@ -144,7 +143,6 @@ def host_validate_against(
 
     return __validate_against(
         reference_fn=reference_fn,
-        match_signature=False,
         input_map=input_to_torch or _default_input_map,
         output_map=output_to_torch or _default_output_map,
         metrics=metrics,
@@ -260,7 +258,6 @@ _validation_registry = ValidationRegistry()
 
 
 # todo)){
-# - rename match_signature to validate_on_device = False
 # - also enable non-decorator use of validate_against --> see pytest.mark.parametrize for inspiration @line25 of test_auto_compose.py
 # - refactor metrics and tolerances to group them by metrics type
 #   - higher_is_better_metrics = {"pcc", "cosine_similarity"} --> clean up groupings
@@ -273,7 +270,6 @@ _validation_registry = ValidationRegistry()
 def __validate_against(
     reference_fn: Callable,
     *,
-    match_signature: bool = False,
     input_map: Optional[Callable] = None,
     output_map: Optional[Callable] = None,
     metrics: Optional[Dict[str, Callable]] = None,
@@ -298,11 +294,6 @@ def __validate_against(
         tolerances: Dictionary of metric_name -> max_acceptable_value
                     Validation fails if any metric exceeds its tolerance
         enabled: Whether validation is enabled (can disable globally via registry)
-        match_signature: If True, reference_fn has the same signature as the decorated
-                        function and will be called with identical args/kwargs.
-                        This allows using wrapper functions without complex input_map.
-                        With TTNN-native metrics, reference should return ttnn.Tensor
-                        for on-device computation (100-1000× faster).
 
     Examples:
         # Pattern 1: TTNN-native metrics (recommended, 100-1000× faster!)
@@ -315,7 +306,6 @@ def __validate_against(
 
         @validate_against(
             reference_fn=lambda self, x: self._reference_impl(x),
-            match_signature=True,
             tolerances={'max_abs_error': 1e-3}
         )
         def __call__(self, x):
@@ -357,15 +347,18 @@ def __validate_against(
             impl_output = func(*args, **kwargs)
             impl_time = time.perf_counter() - start_time
 
-            # Map inputs for reference function
-            if match_signature:
-                # Reference function has same signature, call with same args/kwargs
-                ref_args, ref_kwargs = args, kwargs
-            elif input_map:
-                # Use custom input mapping
-                ref_args, ref_kwargs = input_map(args, kwargs)
+            # Map inputs for reference function: prefer input_map, else pass-through
+            if input_map:
+                mapped = input_map(*args, **kwargs)
+                # Normalize mapper output:
+                # - If (ref_args, ref_kwargs) with kwargs as dict, use directly
+                # - Otherwise, treat return as positional args and use empty kwargs
+                if isinstance(mapped, tuple) and len(mapped) == 2 and isinstance(mapped[1], dict):
+                    ref_args, ref_kwargs = mapped
+                else:
+                    ref_args = mapped if isinstance(mapped, (list, tuple)) else (mapped,)
+                    ref_kwargs = {}
             else:
-                # Pass through as-is
                 ref_args, ref_kwargs = args, kwargs
 
             # Execute reference
