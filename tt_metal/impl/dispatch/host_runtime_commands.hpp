@@ -73,7 +73,6 @@ class EnqueueProgramCommand : public Command {
 private:
     uint32_t command_queue_id;
     IDevice* device;
-    NOC noc_index;
     Program& program;
     SystemMemoryManager& manager;
     WorkerConfigBufferMgr& config_buffer_mgr;
@@ -112,7 +111,6 @@ public:
 class EnqueueTerminateCommand : public Command {
 private:
     uint32_t command_queue_id;
-    IDevice* device;
     SystemMemoryManager& manager;
 
 public:

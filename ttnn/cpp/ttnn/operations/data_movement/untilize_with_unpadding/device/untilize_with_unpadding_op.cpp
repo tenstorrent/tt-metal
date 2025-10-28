@@ -19,12 +19,22 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
 
-    TT_FATAL(input_tensor_a.physical_volume() % tt::constants::TILE_HW == 0, "Error");
+    TT_FATAL(
+        input_tensor_a.physical_volume() % tt::constants::TILE_HW == 0,
+        "Input tensor physical volume ({}) must be divisible by TILE_HW ({})",
+        input_tensor_a.physical_volume(),
+        tt::constants::TILE_HW);
 
     if (input_tensor_a.memory_config().is_sharded()) {
         if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-            TT_FATAL(input_tensor_a.shard_spec().value().grid.ranges().size() == 1, "Error");
-            TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
+            TT_FATAL(
+                input_tensor_a.shard_spec().value().grid.ranges().size() == 1,
+                "Expected single grid range and got {}",
+                input_tensor_a.shard_spec().value().grid.ranges().size());
+            TT_FATAL(
+                this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                "Output memory config layout must be INTERLEAVED for block sharded input but got {}",
+                this->output_mem_config.memory_layout());
             TT_FATAL(
                 input_tensor_a.physical_volume() /
                         (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
@@ -32,24 +42,42 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
                 "Can only write unbatched output interleaved");
         } else if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
             if (output_mem_config.is_sharded()) {
-                TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+                TT_FATAL(
+                    this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+                    "Output memory config layout must be HEIGHT_SHARDED when output is sharded but got {}",
+                    this->output_mem_config.memory_layout());
             }
             // What else?
         } else if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
             auto output_shape = this->compute_output_specs(input_tensors).at(0).padded_shape();
             for (uint32_t i = 0; i < output_shape.rank() - 2; i++) {
-                TT_FATAL(input_tensor_a.padded_shape()[i] == output_shape[i], "Error");
+                TT_FATAL(
+                    input_tensor_a.padded_shape()[i] == output_shape[i],
+                    "Input tensor padded shape[{}] ({}) must equal output shape[{}] ({})",
+                    i,
+                    input_tensor_a.padded_shape()[i],
+                    i,
+                    output_shape[i]);
             }
             if (output_mem_config.is_sharded()) {
                 TT_FATAL(
-                    this->output_mem_config.memory_layout() == input_tensor_a.memory_config().memory_layout(), "Error");
+                    this->output_mem_config.memory_layout() == input_tensor_a.memory_config().memory_layout(),
+                    "Output memory config layout ({}) must match input tensor memory layout ({})",
+                    this->output_mem_config.memory_layout(),
+                    input_tensor_a.memory_config().memory_layout());
                 TT_FATAL(
                     input_tensor_a.padded_shape()[-1] == output_shape[-1] ||
                         (tt::div_up(output_shape[-1], input_tensor_a.shard_spec().value().shape[1]) ==
                          input_tensor_a.shard_spec().value().grid.num_cores()),
-                    "Error");
+                    "Input tensor width ({}) must equal output width ({}) or output width / shard width must equal num "
+                    "cores",
+                    input_tensor_a.padded_shape()[-1],
+                    output_shape[-1]);
             } else {
-                TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
+                TT_FATAL(
+                    this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                    "Output memory config layout must be INTERLEAVED but got {}",
+                    this->output_mem_config.memory_layout());
                 TT_FATAL(
                     input_tensor_a.physical_volume() /
                             (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
@@ -57,14 +85,22 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
                     "Can only write unbatched output interleaved");
                 TT_FATAL(
                     input_tensor_a.padded_shape()[-1] - output_shape[-1] < input_tensor_a.shard_spec().value().shape[1],
-                    "Error");
+                    "Input tensor width difference ({}) must be less than shard width ({})",
+                    input_tensor_a.padded_shape()[-1] - output_shape[-1],
+                    input_tensor_a.shard_spec().value().shape[1]);
             }
         } else {
             TT_THROW("Unsupported sharding scheme");
         }
     } else {
-        TT_FATAL(input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
-        TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
+        TT_FATAL(
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Input tensor memory layout must be INTERLEAVED but got {}",
+            input_tensor_a.memory_config().memory_layout());
+        TT_FATAL(
+            this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Output memory config layout must be INTERLEAVED but got {}",
+            this->output_mem_config.memory_layout());
     }
 
     // Pack untilize is what allows uint32/int32 support, so if it is not enabled, we do not support uint32/int32
