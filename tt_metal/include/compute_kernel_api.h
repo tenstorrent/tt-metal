@@ -602,16 +602,16 @@ ALWI void max_reduce_with_indices_init() {
  * |-----------------|--------------------------------------------------------------------------|-----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register containing the data to be reduced  | uint32_t  | Must be less than the size of the DST register buffer | True     |
  * | pool_type       | The type of reduction operation (SUM or AVG)                             | PoolType  | SUM, AVG                                              | True     |
- * | reduce_dim      | The reduction dimension, set to column for column reduce                 | ReduceDim | REDUCE_COL                                            | True     |
- * | is_32x32_tile   | The tile dimensions to perform the reduction on                          | bool      | true                                                  | True     |
  * | format          | The data format for the reduction operation                              | DataFormat| Float32, Int32, UInt16, UInt32                        | True     |
+ * | reduce_dim      | The reduction dimension, set to column for column reduce                 | ReduceDim | REDUCE_COL                                            | False    |
+ * | is_32x32_tile   | The tile dimensions to perform the reduction on                          | bool      | true                                                  | False    |
  */
 // clang-format on
 template <
     PoolType pool_type,
+    DataFormat format = DataFormat::Int32,
     ReduceDim reduce_dim = ReduceDim::REDUCE_COL,
-    bool is_32x32_tile = true,
-    DataFormat format = DataFormat::Int32>
+    bool is_32x32_tile = true>
 ALWI void sfpu_reduce_sum_avg(uint32_t idst) {
     static_assert(is_32x32_tile, "Only 32x32 tile dimensions are supported for reduce operations");
     static_assert(reduce_dim == ReduceDim::REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
