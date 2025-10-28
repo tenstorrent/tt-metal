@@ -88,11 +88,6 @@ def output_size_128():
     with max_sequence_length=128"
     """
     return [
-        1,
-        319,
-        11203,
-        338,
-        29901,
         13,
         29874,
         29897,
@@ -232,16 +227,6 @@ def output_size_256():
     with max_sequence_length=256"
     """
     return [
-        1,
-        450,
-        4328,
-        1546,
-        26361,
-        322,
-        274,
-        1446,
-        338,
-        29901,
         29871,
         29896,
         29889,
@@ -510,24 +495,6 @@ def output_size_512():
     """
 
     return [
-        1,
-        450,
-        14744,
-        5377,
-        338,
-        7254,
-        29892,
-        322,
-        278,
-        17455,
-        338,
-        7933,
-        29892,
-        769,
-        278,
-        14826,
-        338,
-        29901,
         13,
         13,
         13,
@@ -1114,7 +1081,7 @@ def generate_text_tt(
     return generated_tokens
 
 
-def test_tinyllama_inference_128(tinyllama_model, tokenizer, causal_mask, logits_mask_tensor):
+def test_tinyllama_inference_128(tinyllama_model, tokenizer, causal_mask, logits_mask_tensor, output_size_128):
     input_text = "A dog is:"
 
     generated_out = generate_text_tt(
@@ -1127,10 +1094,10 @@ def test_tinyllama_inference_128(tinyllama_model, tokenizer, causal_mask, logits
         pad_token_id=tokenizer.eos_token_id,
     )
 
-    assert generated_out == output_size_128()
+    assert generated_out == output_size_128
 
 
-def test_tinyllama_inference_256(tinyllama_model, tokenizer, causal_mask, logits_mask_tensor):
+def test_tinyllama_inference_256(tinyllama_model, tokenizer, causal_mask, logits_mask_tensor, output_size_256):
     input_text = "The difference between cats and dogs is:"
 
     generated_out = generate_text_tt(
@@ -1143,10 +1110,10 @@ def test_tinyllama_inference_256(tinyllama_model, tokenizer, causal_mask, logits
         pad_token_id=tokenizer.eos_token_id,
     )
 
-    assert generated_out == output_size_256()
+    assert generated_out == output_size_256
 
 
-def test_tinyllama_inference_512(tinyllama_model, tokenizer, causal_mask, logits_mask_tensor):
+def test_tinyllama_inference_512(tinyllama_model, tokenizer, causal_mask, logits_mask_tensor, output_size_512):
     input_text = "The sky outside is blue, and the grass is green, then the weather is:"
 
     generated_out = generate_text_tt(
@@ -1159,4 +1126,4 @@ def test_tinyllama_inference_512(tinyllama_model, tokenizer, causal_mask, logits
         pad_token_id=tokenizer.eos_token_id,
     )
 
-    assert generated_out == output_size_512()
+    assert generated_out == output_size_512
