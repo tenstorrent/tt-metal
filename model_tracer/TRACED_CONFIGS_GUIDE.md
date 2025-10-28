@@ -21,7 +21,7 @@ Automatically extracts real-world operation configurations from model tests and 
 | **Trace a model** | `python model_tracer/generic_ops_tracer.py <test_path>` |
 | **View configurations** | `python model_tracer/analyze_operations.py <operation_name>` |
 | **Generate sweep vectors** | `python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name <op_name> --dump-file` |
-| **Run sweep test** | `python3 tests/sweep_framework/sweeps_runner.py --module-name <op_name> --suite model_traced` |
+| **Run sweep test** | `python3 tests/sweep_framework/sweeps_runner.py --module-name <op_name> --suite model_traced --vector-source vectors_export --result-dest results_export` |
 
 ### Key Files
 
@@ -163,7 +163,9 @@ python3 tests/sweep_framework/sweeps_parameter_generator.py \
 # Run model_traced suite
 python3 tests/sweep_framework/sweeps_runner.py \
   --module-name eltwise.unary.sigmoid_accurate.sigmoid_accurate \
-  --suite model_traced
+  --suite model_traced \
+  --vector-source vectors_export \
+  --result-dest results_export
 ```
 
 ---
