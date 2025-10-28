@@ -6,6 +6,7 @@ Simple test using PyTorch tensors without mocking.
 
 import torch
 from tt_transformers_v2.src.testing.validate_against import (
+    Metric,
     clear_validation_results,
     device_validate_against,
     get_validation_registry,
@@ -28,7 +29,7 @@ def test_match_signature_method():
 
         @device_validate_against(
             reference_fn=lambda self, x: self._reference_impl(x),
-            tolerances={"max_abs_error": 1e-6, "pcc": 0.99},  # PCC check
+            tolerances={Metric.MAX_ABS_ERROR: 1e-6, Metric.PCC: 0.99},  # PCC check
         )
         def __call__(self, x):
             # Implementation - same as reference
@@ -43,10 +44,10 @@ def test_match_signature_method():
     assert registry.results[0].passed, "Validation should pass"
 
     # Check that PCC is high (close to 1.0)
-    assert "pcc" in registry.results[0].metrics
+    assert Metric.PCC in registry.results[0].metrics
     assert (
-        registry.results[0].metrics["pcc"] >= 0.99
-    ), f"PCC should be >= 0.99, got {registry.results[0].metrics['pcc']}"
+        registry.results[0].metrics[Metric.PCC].value >= 0.99
+    ), f"PCC should be >= 0.99, got {registry.results[0].metrics[Metric.PCC].value}"
 
     print("  ✓ match_signature works with methods!")
     print(f"  Metrics: {registry.results[0].metrics}")
@@ -114,7 +115,7 @@ def test_match_signature_multi_args():
 
         @device_validate_against(
             reference_fn=lambda self, a, b, c: self._reference(a, b, c),
-            tolerances={"max_abs_error": 1e-6},
+            tolerances={Metric.MAX_ABS_ERROR: 1e-6},
         )
         def __call__(self, a, b, c):
             return a * b + c
@@ -143,7 +144,7 @@ def test_match_signature_with_kwargs():
 
         @device_validate_against(
             reference_fn=lambda self, x, scale=1.0, offset=0.0: self._reference(x, scale, offset),
-            tolerances={"max_abs_error": 1e-6},
+            tolerances={Metric.MAX_ABS_ERROR: 1e-6},
         )
         def __call__(self, x, scale=1.0, offset=0.0):
             return x * scale + offset
@@ -171,7 +172,7 @@ def test_pcc_metric():
 
         @device_validate_against(
             reference_fn=lambda self, x: self._reference(x),
-            tolerances={"pcc": 0.95},  # Lower threshold due to noise
+            tolerances={Metric.PCC: 0.95},  # Lower threshold due to noise
         )
         def __call__(self, x):
             return x
@@ -185,9 +186,11 @@ def test_pcc_metric():
     assert len(registry.results) == 1
 
     r = registry.results[0]
-    print(f"  PCC value: {r.metrics['pcc']:.4f}")
+    print(f"  PCC value: {r.metrics[Metric.PCC].value:.4f}")
     # PCC should be high but not perfect due to added noise
-    assert 0.90 < r.metrics["pcc"] < 1.0, f"PCC should be in range (0.90, 1.0), got {r.metrics['pcc']}"
+    assert (
+        0.90 < r.metrics[Metric.PCC].value < 1.0
+    ), f"PCC should be in range (0.90, 1.0), got {r.metrics[Metric.PCC].value}"
     print("  ✓ PCC metric works correctly!")
 
 

@@ -13,6 +13,7 @@ from .metrics import (
 from .validate_against import (
     ValidationRegistry,
     ValidationResult,
+    Metric,
     clear_validation_results,
     device_validate_against,
     enable_validation,
@@ -29,6 +30,7 @@ __all__ = [
     "clear_validation_results",
     "ValidationResult",
     "ValidationRegistry",
+    "Metric",
     # Metrics
     "compute_max_abs_error",
     "compute_mean_abs_error",

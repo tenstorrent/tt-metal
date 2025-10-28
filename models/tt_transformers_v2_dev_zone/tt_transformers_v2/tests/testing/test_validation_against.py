@@ -6,6 +6,7 @@ against reference PyTorch implementations with automatic metrics collection.
 import pytest
 import torch
 from tt_transformers_v2.src.testing import (
+    Metric,
     clear_validation_results,
     device_validate_against,
     enable_validation,
@@ -60,10 +61,10 @@ class HostValidatedRMSNorm:
             # [INFO] produce input kwargs to torch_rms_norm as a dict
             {"eps": self.eps},
         ),
-        tolerances={
-            "max_abs_error": 1e-2,
-            "mean_abs_error": 1e-3,
-            "pcc": 0.99,
+        metric_tolerances={
+            Metric.MAX_ABS_ERROR: 1e-2,
+            Metric.MEAN_ABS_ERROR: 1e-3,
+            "pcc": 0.99,  # can use enum or their string values
         },
     )
     def __call__(self, x):
@@ -101,10 +102,10 @@ class DeviceValidatedRMSNorm:
     #        inputs as the decorated function.
     @device_validate_against(
         reference_fn=lambda self, x: self._reference_impl(x),
-        tolerances={
-            "max_abs_error": 1e-2,
-            "mean_abs_error": 1e-3,
-            "pcc": 0.99,
+        metric_tolerances={
+            Metric.MAX_ABS_ERROR: 1e-2,
+            Metric.MEAN_ABS_ERROR: 1e-3,
+            Metric.PCC: 0.99,
         },
     )
     def __call__(self, x):
@@ -139,13 +140,13 @@ def test_validation_rmsnorm_host_and_device(ttnn_mesh_device: ttnn.MeshDevice):
 
     assert len(registry.results) >= 2
     # Expect the last two validations to fail max_abs_error and mean_abs_error checks (known issue??)
-    assert not registry.results[-1].metrics["max_abs_error"].passed
-    assert not registry.results[-2].metrics["max_abs_error"].passed
-    assert not registry.results[-1].metrics["mean_abs_error"].passed
-    assert not registry.results[-2].metrics["mean_abs_error"].passed
+    assert not registry.results[-1].metrics[Metric.MAX_ABS_ERROR].passed
+    assert not registry.results[-2].metrics[Metric.MAX_ABS_ERROR].passed
+    assert not registry.results[-1].metrics[Metric.MEAN_ABS_ERROR].passed
+    assert not registry.results[-2].metrics[Metric.MEAN_ABS_ERROR].passed
     # Expect the last two validations to pass pcc check
-    assert registry.results[-1].metrics["pcc"].passed
-    assert registry.results[-2].metrics["pcc"].passed
+    assert registry.results[-1].metrics[Metric.PCC].passed
+    assert registry.results[-2].metrics[Metric.PCC].passed
 
 
 # ============================================================================
@@ -157,9 +158,9 @@ def test_validation_rmsnorm_host_and_device(ttnn_mesh_device: ttnn.MeshDevice):
     reference_fn=torch.matmul,
     # [INFO] when reference function accepts inputs in the same order as the decorated function,
     #        we can omit input_to_torch; the mapping will be inferred automatically.
-    tolerances={
-        "max_abs_error": 1.5e-1,
-        "pcc": 0.99,
+    metric_tolerances={
+        Metric.MAX_ABS_ERROR: 1.5e-1,
+        Metric.PCC: 0.99,
     },
 )
 def ttnn_matmul(a, b):
@@ -172,9 +173,9 @@ def ttnn_matmul(a, b):
     reference_fn=torch.matmul,
     # [INFO] this is a simple example of input remapping.
     input_to_torch=lambda a, b: (to_torch_auto_compose(b), to_torch_auto_compose(a)),
-    tolerances={
-        "max_abs_error": 1.5e-1,
-        "pcc": 0.99,
+    metric_tolerances={
+        Metric.MAX_ABS_ERROR: 1.5e-1,
+        Metric.PCC: 0.99,
     },
 )
 def ttnn_matmul_reverse(a, b):
@@ -224,10 +225,10 @@ def custom_attention_reference(q, k, v, scale):
     #     scale,
     # ),
     # [INFO]}
-    tolerances={
-        "max_abs_error": 0.1,
-        "mean_abs_error": 0.02,
-        "pcc": 0.99,
+    metric_tolerances={
+        Metric.MAX_ABS_ERROR: 0.1,
+        Metric.MEAN_ABS_ERROR: 0.02,
+        Metric.PCC: 0.99,
     },
 )
 def ttnn_attention(q, k, v, scale):
@@ -255,9 +256,9 @@ def test_validation_attention(ttnn_mesh_device: ttnn.MeshDevice):
     assert len(registry.results) == before + 1
     test_result = registry.results[-1]
     # expect the test to pass max_abs_error and pcc checks
-    assert test_result.metrics["max_abs_error"].passed
-    assert test_result.metrics["pcc"].passed
-    assert test_result.metrics["mean_abs_error"].passed
+    assert test_result.metrics[Metric.MAX_ABS_ERROR].passed
+    assert test_result.metrics[Metric.PCC].passed
+    assert test_result.metrics[Metric.MEAN_ABS_ERROR].passed
 
 
 # ============================================================================
@@ -268,10 +269,10 @@ def test_validation_attention(ttnn_mesh_device: ttnn.MeshDevice):
 @host_validate_against(
     reference_fn=lambda tensor, device: tensor,
     output_to_torch=lambda x: to_torch_auto_compose(x),
-    tolerances={
-        "max_abs_error": 0.01,
-        "mean_abs_error": 0.01,
-        "pcc": 0.99,
+    metric_tolerances={
+        Metric.MAX_ABS_ERROR: 0.015,
+        Metric.MEAN_ABS_ERROR: 0.01,
+        Metric.PCC: 0.99,
     },
 )
 def from_torch_checkpoint(tensor: torch.Tensor, device: ttnn.MeshDevice):
@@ -332,9 +333,9 @@ def test_validation_non_decorator_host(ttnn_mesh_device: ttnn.MeshDevice):
 
     validated_matmul = host_validate_against(
         reference_fn=torch.matmul,
-        tolerances={
-            "max_abs_error": 1.5e-1,
-            "pcc": 0.99,
+        metric_tolerances={
+            Metric.MAX_ABS_ERROR: 1.5e-1,
+            Metric.PCC: 0.99,
         },
     )(_matmul)
 
