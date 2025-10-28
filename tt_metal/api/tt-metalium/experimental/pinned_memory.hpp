@@ -192,6 +192,20 @@ private:
  */
 experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::MeshDevice& mesh_device);
 
+struct PinnedMemoryWrapper {
+    distributed::MeshCoordinateRangeSet device_range;
+    std::shared_ptr<PinnedMemory> pinned_memory;
+};
+
+void clear_pinned_memories_cache();
+
+void add_pin_to_cache(PinnedMemoryWrapper&& pinned_memory_wrapper);
+
+void remove_pin_from_cache(const PinnedMemoryWrapper& pinned_memory_wrapper);
+
+template <typename Predicate>
+std::shared_ptr<PinnedMemory> find_matching_pin_in_cache(Predicate pred);
+
 }  // namespace experimental
 
 }  // namespace tt::tt_metal
