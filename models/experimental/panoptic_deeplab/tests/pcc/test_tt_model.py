@@ -22,6 +22,7 @@ from models.experimental.panoptic_deeplab.tt.common import (
     get_panoptic_deeplab_weights_path,
     get_panoptic_deeplab_config,
 )
+from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
@@ -122,50 +123,38 @@ def test_panoptic_deeplab(device, model_location_generator):
     logger.info("Running TTNN model with fused Conv+BatchNorm parameters...")
     ttnn_semantic, ttnn_center, ttnn_offset, _ = ttnn_model.forward(ttnn_input)
 
-    # Handle semantic output - slice back to original channels if padding was applied
-    ttnn_semantic_torch = ttnn.to_torch(ttnn_semantic).permute(0, 3, 1, 2)
-    semantic_original_channels = ttnn_model.semantic_head.get_output_channels_for_slicing()
-    if semantic_original_channels is not None:
-        logger.info(
-            f"Slicing semantic output from {ttnn_semantic_torch.shape[1]} to {semantic_original_channels} channels"
+    all_passed = []
+    all_passed.append(
+        check_ttnn_output(
+            "Semantic",
+            pytorch_semantic,
+            ttnn_semantic,
+            to_channel_first=False,
+            output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
+            exp_pcc=0.994,
         )
-        ttnn_semantic_torch = ttnn_semantic_torch[:, :semantic_original_channels, :, :]
+    )
+    all_passed.append(
+        check_ttnn_output(
+            "Center",
+            pytorch_center,
+            ttnn_center,
+            to_channel_first=False,
+            output_channels=ttnn_model.instance_head.get_center_output_channels_for_slicing(),
+            exp_pcc=0.959,
+        )
+    )
+    all_passed.append(
+        check_ttnn_output(
+            "Offset",
+            pytorch_offset,
+            ttnn_offset,
+            to_channel_first=False,
+            output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
+            exp_pcc=0.999,
+        )
+    )
 
-    # Handle center output - slice back to original channels if padding was applied
-    ttnn_center_torch = ttnn.to_torch(ttnn_center).permute(0, 3, 1, 2)
-    center_original_channels = ttnn_model.instance_head.get_center_output_channels_for_slicing()
-    if center_original_channels is not None:
-        logger.info(f"Slicing center output from {ttnn_center_torch.shape[1]} to {center_original_channels} channels")
-        ttnn_center_torch = ttnn_center_torch[:, :center_original_channels, :, :]
-
-    # Handle offset output - slice back to original channels if padding was applied
-    ttnn_offset_torch = ttnn.to_torch(ttnn_offset).permute(0, 3, 1, 2)
-    offset_original_channels = ttnn_model.instance_head.get_offset_output_channels_for_slicing()
-    if offset_original_channels is not None:
-        logger.info(f"Slicing offset output from {ttnn_offset_torch.shape[1]} to {offset_original_channels} channels")
-        ttnn_offset_torch = ttnn_offset_torch[:, :offset_original_channels, :, :]
-
-    from tests.ttnn.utils_for_testing import check_with_pcc
-
-    sem_passed, sem_msg = check_with_pcc(pytorch_semantic, ttnn_semantic_torch, pcc=0.99)
-    logger.info(f"Semantic PCC: {sem_msg}")
-
-    center_passed, center_msg = check_with_pcc(pytorch_center, ttnn_center_torch, pcc=0.99)
-    logger.info(f"Center PCC: {center_msg}")
-
-    offset_passed, offset_msg = check_with_pcc(pytorch_offset, ttnn_offset_torch, pcc=0.99)
-    logger.info(f"Offset PCC: {offset_msg}")
-
-    # Report all results
-    failed_tests = []
-    if not sem_passed:
-        failed_tests.append(f"Semantic: {sem_msg}")
-    if not center_passed:
-        failed_tests.append(f"Center: {center_msg}")
-    if not offset_passed:
-        failed_tests.append(f"Offset: {offset_msg}")
-
-    if failed_tests:
-        assert False, f"PCC tests failed:\n" + "\n".join(failed_tests)
-
+    # Fail test based on PCC results
+    assert all(all_passed), f"PDL outputs did not pass the PCC check {all_passed=}"
     logger.info("All PCC tests passed!")

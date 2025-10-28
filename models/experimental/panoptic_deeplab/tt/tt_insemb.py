@@ -6,6 +6,7 @@ import ttnn
 from loguru import logger
 
 from models.experimental.panoptic_deeplab.tt.tt_semseg import TtDeepLabV3PlusHead
+from models.experimental.panoptic_deeplab.tt.tt_upsample import BilinearUpsampleMatmulTTNN as TtBilinearUpsample
 from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 
 
@@ -81,12 +82,19 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
             self._offset_output_original_channels = offset_predictor_params["original_out_channels"]
             logger.debug(f"Offset predictor: stored original_out_channels={self._offset_output_original_channels}")
 
-        # Final upsample - use builder API
-        # Store scale factor for dynamic upsample creation during forward pass
-        self.final_upsample_scale = (
-            common_stride if isinstance(common_stride, tuple) else (common_stride, common_stride)
+        # Final upsample - matmul based bilinear upsample
+        # perf wise this makes sense because we dont need to permute to channel last after it
+        # we dont need to permute to channel last because this is final output that goes to the host
+        self.final_upsample = TtBilinearUpsample(
+            device,
+            input_batch=1,
+            input_channels=32,  # true value is 1 (offset) and 2 (logits); this is padded somewhere
+            input_height=128,
+            input_width=256,
+            scale=common_stride,
+            input_channels_first=False,
+            output_channels_first=True,
         )
-        self.final_upsample_mode = "nearest"
 
         # Initialize original output channels to None if not already set from parameters
         if not hasattr(self, "_center_output_original_channels"):
@@ -130,14 +138,9 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         center_logits = ttnn.to_layout(center_logits, ttnn.ROW_MAJOR_LAYOUT)
 
         # Calculate scale factors
-        scale_h = self.final_upsample_scale[0]
-        scale_w = self.final_upsample_scale[1]
-        logger.debug(
-            f"Center: Upsampling from [{current_h}, {current_w}] with scale_factor=[{scale_h}, {scale_w}] to [{current_h * scale_h}, {current_w * scale_w}]"
-        )
 
-        # Upsample directly
-        center_logits = ttnn.upsample(center_logits, scale_factor=(scale_h, scale_w), mode=self.final_upsample_mode)
+        # Matmul based upsample
+        center_logits = self.final_upsample(center_logits)
 
         # Convert back to TILE_LAYOUT and DRAM
         center_logits = ttnn.to_layout(center_logits, ttnn.TILE_LAYOUT)
@@ -168,14 +171,9 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         offset_logits = ttnn.to_layout(offset_logits, ttnn.ROW_MAJOR_LAYOUT)
 
         # Calculate scale factors
-        scale_h = self.final_upsample_scale[0]
-        scale_w = self.final_upsample_scale[1]
-        logger.debug(
-            f"Offset: Upsampling from [{current_h}, {current_w}] with scale_factor=[{scale_h}, {scale_w}] to [{current_h * scale_h}, {current_w * scale_w}]"
-        )
 
-        # Upsample directly
-        offset_logits = ttnn.upsample(offset_logits, scale_factor=(scale_h, scale_w), mode=self.final_upsample_mode)
+        # Matmul based upsample
+        offset_logits = self.final_upsample(offset_logits)
 
         # Convert back to TILE_LAYOUT and DRAM
         offset_logits = ttnn.to_layout(offset_logits, ttnn.TILE_LAYOUT)
