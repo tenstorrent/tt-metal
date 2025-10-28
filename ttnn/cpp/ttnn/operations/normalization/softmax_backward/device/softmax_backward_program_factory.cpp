@@ -17,6 +17,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "hostdevcommon/kernel_structs.h"
+#include "tt-metalium/base_types.hpp"
 #include "tt-metalium/runtime_args_data.hpp"
 #include "tt_stl/assert.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -26,6 +27,16 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::normalization::softmax_backward {
+
+ComputeConfig precise(std::vector<uint32_t> compile_time_args, std::map<std::string, std::string> defines) {
+    ComputeConfig config;
+    config.fp32_dest_acc_en = true;
+    config.math_approx_mode = false;
+    config.math_fidelity = MathFidelity::HiFi4;
+    config.compile_args = compile_time_args;
+    config.defines = defines;
+    return config;
+}
 
 SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::create(
     const operation_attributes_t& operation_attributes,
@@ -128,7 +139,7 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
     std::vector<uint32_t> writer_compile_time_args = {out_cb_index, width_tiles};
     TensorAccessorArgs(tensor_return_value.buffer()).append_to(writer_compile_time_args);
 
-    std::vector<uint32_t> compute_compile_time_args = {
+    const std::vector<uint32_t> compute_compile_time_args = {
         src0_cb_index,       // 0: softmax_output
         src1_cb_index,       // 1: upstream_grad
         out_cb_index,        // 2: output
@@ -140,10 +151,12 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
     };
 
     // Defines for compute kernel
-    std::map<std::string, std::string> compute_defines = {
+    const std::map<std::string, std::string> compute_defines = {
         {"REDUCE_OP", "PoolType::SUM"},
         {"REDUCE_DIM", "ReduceDim::REDUCE_ROW"},
         {"BROADCAST_TYPE", "BroadcastType::COL"}};
+
+    const ComputeConfig wconf = precise(compute_compile_time_args, compute_defines);
 
     // Create kernels
     auto reader_kernel_id = CreateKernel(
@@ -162,11 +175,7 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
         program,
         "ttnn/cpp/ttnn/operations/normalization/softmax_backward/device/kernels/compute/softmax_backward_kernel.cpp",
         all_cores,
-        ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = false,  // TODO: support "true"
-            .compile_args = compute_compile_time_args,
-            .defines = compute_defines});
+        wconf);
 
     // Set runtime arguments
     for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {

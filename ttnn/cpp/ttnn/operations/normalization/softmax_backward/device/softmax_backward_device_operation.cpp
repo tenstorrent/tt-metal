@@ -4,6 +4,8 @@
 
 #include "softmax_backward_device_operation.hpp"
 #include "tt_stl/assert.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -86,13 +88,24 @@ SoftmaxBackwardDeviceOperation::invoke(
         operation_attributes_t{dim}, tensor_args_t{.softmax_output = softmax_output, .upstream_grad = upstream_grad}};
 }
 
+// #define COMPOSITE 1
+
 ttnn::Tensor softmax_backward(
     const ttnn::Tensor& softmax_output,  // softmax output
     const ttnn::Tensor& upstream_grad,   // upstream grad dL/dy
     uint32_t dim                         // reduction dimension (same as fwd)
 ) {
     // Use the fused kernel implementation via the device operation
+#if COMPOSITE
+    const ttnn::Tensor mul = ttnn::multiply(softmax_output, upstream_grad);
+    auto grad_scaled_dot = ttnn::multiply(
+        softmax_output,
+        ttnn::subtract(
+            upstream_grad, ttnn::sum(mul, static_cast<int>(dim), /*keepdim=*/true, std::nullopt, std::nullopt)));
+    return grad_scaled_dot;
+#else
     return ttnn::prim::softmax_backward(softmax_output, upstream_grad, dim);
+#endif
 }
 
 }  // namespace ttnn::operations::normalization::softmax_backward

@@ -49,7 +49,7 @@ def dump_tensors_to_files(
             f.write(f"\ndiff (reference vs moreh): {pt_output_tensor_reference - pt_output_tensor_moreh}")
 
 
-def print_tolerance_metrics(tensor1: torch.Tensor, tensor2: torch.Tensor, dtype_name: str = "") -> None:
+def print_tolerance_metrics(tensor1: torch.Tensor, tensor2: torch.Tensor, dtype_name: str = "", range: int = 0) -> None:
     if os.environ.get("TTNN_PRINT_TOLERANCES", "0") == "1":
         """Calculate and print tolerance metrics between two tensors"""
         # Calculate actual differences
@@ -62,11 +62,14 @@ def print_tolerance_metrics(tensor1: torch.Tensor, tensor2: torch.Tensor, dtype_
         max_rel_diff = torch.max(rel_diff).item()
         mean_rel_diff = torch.mean(rel_diff).item()
 
-        print(f"\nTolerance metrics for {dtype_name}:")
+        print(f"\nTolerance metrics for {dtype_name} and range {range}:")
         print(f"  Max absolute difference: {max_abs_diff:.6e}")
         print(f"  Mean absolute difference: {mean_abs_diff:.6e}")
         print(f"  Max relative difference: {max_rel_diff:.6e}")
         print(f"  Mean relative difference: {mean_rel_diff:.6e}")
+
+
+BATCH_SIZE = 1
 
 
 @pytest.mark.parametrize(
@@ -76,6 +79,12 @@ def print_tolerance_metrics(tensor1: torch.Tensor, tensor2: torch.Tensor, dtype_
         # (torch.Size([1, 1, 32, 32])),
         # (torch.Size([1, 1, 320, 384])),
         (torch.Size([10, 3, 320, 384])),  # 3.6M items, doesn't fit in L1 cache
+        # Llama2-7B tensor shapes:
+        # (torch.Size([1, 1, 32, 2048])),    # actually should be (torch.Size([B, 2048])),
+        # (torch.Size([1, BATCH_SIZE, 2048, 4096])),    # actually should be (torch.Size([B, 2048, 4096])),
+        # (torch.Size([BATCH_SIZE, 32, 2048, 128])),
+        # (torch.Size([BATCH_SIZE, 32, 2048, 2048])),
+        # (torch.Size([1, BATCH_SIZE, 2048, 32000])),    # actually should be (torch.Size([B, 2048, 32000])),
     ),
 )
 @pytest.mark.parametrize(
@@ -122,6 +131,7 @@ def test_bw_softmax(input_shapes, dtype, range, dim, device):
             pt_output_tensor_fused,
             pt_output_tensor_moreh,
             dtype_name=f"dtype={dtype}",
+            range=range,
         )
         assert torch.equal(pt_output_tensor_fused, pt_output_tensor_moreh)
 
@@ -137,6 +147,7 @@ def test_bw_softmax(input_shapes, dtype, range, dim, device):
             pt_output_tensor_fused,
             pt_output_tensor_reference,
             dtype_name=f"dtype={dtype}",
+            range=range,
         )
 
         assert torch.allclose(
