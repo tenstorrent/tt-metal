@@ -153,7 +153,6 @@ class RunTimeOptions {
     bool validate_kernel_binaries = false;
     unsigned num_hw_cqs = 1;
 
-    bool fd_fabric_en = false;
     bool using_slow_dispatch = false;
 
     bool enable_dispatch_data_collection = false;
