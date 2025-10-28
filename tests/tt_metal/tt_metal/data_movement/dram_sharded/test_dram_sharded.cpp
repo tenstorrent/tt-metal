@@ -27,7 +27,7 @@ struct DramShardedConfig {
     uint32_t pages_per_bank = 0;
     uint32_t page_size_bytes = 0;
     DataFormat l1_data_format = DataFormat::Invalid;
-    CoreRangeSet cores = CoreRangeSet();
+    CoreRangeSet cores;
 };
 
 /// @brief Reads from Sharded DRAM to L1 using stateful API
