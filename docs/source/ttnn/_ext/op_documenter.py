@@ -11,7 +11,9 @@ import ttnn
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
-from sphinx.ext.autodoc import FunctionDocumenter
+from sphinx.ext.autodoc import FunctionDocumenter, DataDocumenter
+from docutils import nodes
+from docutils.parsers.rst import Directive
 
 import ttnn.decorators
 
@@ -42,7 +44,9 @@ class Param:
     def to_string(self) -> str:
         """Return a string representation of the parameter."""
         ret = f"{self.name}{f': {self.type}' if self.type else ''}"
-        if self.type and self.optional:
+        # Only add "| None" if optional but has no default value
+        # If there's a default value, it already indicates the parameter is optional
+        if self.type and self.optional and not self.default:
             ret += " | None"
 
         return f"{ret} = {self.default}" if self.default else ret
@@ -173,5 +177,58 @@ class FastOperationDocumenter(FunctionDocumenter):
         return isinstance(member, ttnn.decorators.FastOperation)
 
 
+class OperationDocumenter(FunctionDocumenter):
+    objtype = "operation"
+    directivetype = "function"
+    priority = FunctionDocumenter.priority + 10
+
+    def format_signature(self, **kwargs: Any) -> str:
+        docstrings = self.get_doc()
+        if len(docstrings) == 0 or "Overloaded function" in self.object.__doc__:
+            return "(*args, ***kwargs)"
+
+        if len(docstrings) > 1:
+            raise ValueError("Multiple docstrings found for Operation")
+
+        lines = inspect.cleandoc(self.object.__doc__)
+        parser = DocstringParser(lines)
+        parser.parse()
+
+        return parser.construct_signature()
+
+    @classmethod
+    def can_document_member(cls, member, membername, isattr, parent):
+        return isinstance(member, ttnn.decorators.Operation)
+
+
+class OperationDataDocumenter(DataDocumenter):
+    """Custom documenter for Operation and FastOperation objects when used with autodata."""
+
+    objtype = "operationdata"
+    directivetype = "function"  # Use function directive to avoid "name =" format
+    priority = DataDocumenter.priority + 10
+
+    @classmethod
+    def can_document_member(cls, member, membername, isattr, parent):
+        return isinstance(member, (ttnn.decorators.Operation, ttnn.decorators.FastOperation))
+
+    def format_signature(self, **kwargs: Any) -> str:
+        """Format signature for Operation objects."""
+        # Try to parse the docstring to extract signature
+        try:
+            if self.object.__doc__:
+                lines = inspect.cleandoc(self.object.__doc__)
+                parser = DocstringParser(lines)
+                parser.parse()
+                return parser.construct_signature()
+        except Exception:
+            pass
+
+        # Fallback to generic signature
+        return "(*args, **kwargs)"
+
+
 def setup(app):
     app.add_autodocumenter(FastOperationDocumenter)
+    app.add_autodocumenter(OperationDocumenter)
+    app.add_autodocumenter(OperationDataDocumenter)
