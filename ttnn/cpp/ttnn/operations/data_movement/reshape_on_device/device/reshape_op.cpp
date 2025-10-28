@@ -18,7 +18,10 @@ void ReshapeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) 
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to reshape need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::FLOAT32, "Error");
+    TT_FATAL(
+        input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::FLOAT32,
+        "Input tensor dtype must be BFLOAT16 or FLOAT32 but got {}",
+        input_tensor_a.dtype());
 
     TT_FATAL(
         input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR,
@@ -32,7 +35,11 @@ void ReshapeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) 
         "Reshape does not currently support sharding. Use ttnn::reshape for reshaping sharded inputs");
 
     if (input_tensor_a.layout() == Layout::TILE) {
-        TT_FATAL(input_tensor_a.physical_volume() % TILE_HW == 0, "Error");
+        TT_FATAL(
+            input_tensor_a.physical_volume() % TILE_HW == 0,
+            "Input tensor physical volume ({}) must be divisible by TILE_HW ({})",
+            input_tensor_a.physical_volume(),
+            TILE_HW);
     } else if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
         uint32_t ROW_MAJOR_WIDTH = 8;
         TT_FATAL(

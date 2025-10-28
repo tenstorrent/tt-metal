@@ -162,8 +162,20 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         };
         const auto src_curr_edm_config =
             tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, src_edm_options);
+        log_debug(
+            tt::LogOp,
+            "FabricEriscDatamoverConfig for src_device {}: buffer_size={}, topology={}",
+            src_device->id(),
+            edm_buffer_size,
+            (int)topology);
         const auto dest_curr_edm_config =
             tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, dest_edm_options);
+        log_debug(
+            tt::LogOp,
+            "FabricEriscDatamoverConfig for dest_device {}: buffer_size={}, topology={}",
+            dest_device->id(),
+            edm_buffer_size,
+            (int)topology);
 
         edm_builders_forward_direction[src_device->id()].reserve(local_link_cores.size());
         edm_builders_backward_direction[dest_device->id()].reserve(local_link_cores.size());
