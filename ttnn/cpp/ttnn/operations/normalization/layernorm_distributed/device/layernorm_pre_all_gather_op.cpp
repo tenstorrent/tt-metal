@@ -57,12 +57,7 @@ operation::ProgramWithCallbacks LayerNormPreAllGather::create_program(
             if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
                 if (program_config.use_welford == true) {
                     return layernorm_pre_allgather_welford_multi_core(
-                        a,
-                        output_tensor,
-                        this->norm_type,
-                        this->compute_kernel_config,
-                        this->use_2d_core_grid,
-                        program_config.use_welford);
+                        a, output_tensor, this->norm_type, this->compute_kernel_config, this->use_2d_core_grid);
                 } else {
                     return layernorm_pre_allgather_multi_core(
                         a, output_tensor, this->norm_type, this->compute_kernel_config, this->use_2d_core_grid, this->program_config);
