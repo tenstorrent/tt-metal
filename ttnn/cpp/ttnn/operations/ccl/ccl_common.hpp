@@ -191,7 +191,6 @@ class CclOpShardedTensorConfig final : public virtual CclOpTensorConfig {
     tt::tt_metal::ShardSpec const& get_shard_spec() const;
 
    private:
-       uint32_t page_size{};
        tt::tt_metal::ShardSpec const shard_spec;
 };
 

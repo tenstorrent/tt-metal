@@ -97,7 +97,6 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     program_dispatch::ProgramDispatchMetadata& dispatch_md) :
     command_queue_id(command_queue_id),
     device(device),
-    noc_index(noc_index),
     manager(manager),
     config_buffer_mgr(config_buffer_mgr),
     dispatch_core_type(MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type()),
@@ -159,7 +158,7 @@ void EnqueueProgramCommand::process() {
 
 EnqueueTerminateCommand::EnqueueTerminateCommand(
     uint32_t command_queue_id, IDevice* device, SystemMemoryManager& manager) :
-    command_queue_id(command_queue_id), device(device), manager(manager) {}
+    command_queue_id(command_queue_id), manager(manager) {}
 
 void EnqueueTerminateCommand::process() {
     // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_TERMINATE
