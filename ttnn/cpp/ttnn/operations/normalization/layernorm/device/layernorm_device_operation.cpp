@@ -5,6 +5,9 @@
 #include "layernorm_device_operation.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "layernorm_op.hpp"
+#include "layernorm/device/layernorm_types.hpp"
+#include "ttnn/run_operation.hpp"
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/constants.hpp>
 
