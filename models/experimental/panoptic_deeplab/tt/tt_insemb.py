@@ -85,6 +85,43 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         # Final upsample - matmul based bilinear upsample
         # perf wise this makes sense because we dont need to permute to channel last after it
         # we dont need to permute to channel last because this is final output that goes to the host
+
+        # First config
+        final_upsample_mm_config1 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(5, 4),
+            in0_block_w=2,
+            out_subblock_h=4,
+            out_subblock_w=2,
+            out_block_h=4,
+            out_block_w=2,
+            per_core_M=4,
+            per_core_N=2,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+            gather_in0=False,
+            num_global_cb_receivers=0,
+            untilize_out=False,
+        )
+
+        # Second config
+        final_upsample_mm_config2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(5, 4),
+            in0_block_w=2,
+            out_subblock_h=4,
+            out_subblock_w=2,
+            out_block_h=16,
+            out_block_w=2,
+            per_core_M=16,
+            per_core_N=2,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+            gather_in0=False,
+            num_global_cb_receivers=0,
+            untilize_out=False,
+        )
+
         self.final_upsample = TtBilinearUpsample(
             device,
             input_batch=1,
@@ -94,6 +131,9 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
             scale=common_stride,
             input_channels_first=False,
             output_channels_first=True,
+            mm1_program_config=final_upsample_mm_config1,
+            mm2_program_config=final_upsample_mm_config2,
+            output_dtype=ttnn.bfloat8_b,
         )
 
         # Initialize original output channels to None if not already set from parameters
