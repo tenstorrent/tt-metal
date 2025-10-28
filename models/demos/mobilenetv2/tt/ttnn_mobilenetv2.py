@@ -256,9 +256,10 @@ class TtMobileNetV2:
 
         output_tensor, h, w = self.conv4(output_tensor)
 
-        grid = ttnn.CoreGrid(x=8, y=5)
+        num_cores = output_tensor.shape[3] // 32
+        grid = ttnn.num_cores_to_corerangeset(num_cores, self.device.compute_with_storage_grid_size())
         width_mem_config = ttnn.create_sharded_memory_config_(
-            [nearest_32(output_tensor.shape[2]), output_tensor.shape[3] // (grid.x * grid.y)],
+            [nearest_32(output_tensor.shape[2]), output_tensor.shape[3] // num_cores],
             grid,
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.ShardOrientation.ROW_MAJOR,
@@ -277,6 +278,9 @@ class TtMobileNetV2:
             padding=[0, 0, 0, 0],
             output_layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
+            compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                self.device.arch(), math_fidelity=ttnn.MathFidelity.LoFi
+            ),
         )
 
         compute_config = ttnn.init_device_compute_kernel_config(
@@ -286,8 +290,9 @@ class TtMobileNetV2:
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+        grid_size = grid.bounding_box().grid_size()
         matmul_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(grid.x, grid.y),
+            compute_with_storage_grid_size=(grid_size.x, grid_size.y),
             in0_block_w=1,
             out_subblock_h=1,
             out_subblock_w=1,

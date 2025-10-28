@@ -870,6 +870,9 @@ class resnet50:
             padding=[0, 0, 0, 0],
             output_layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
+            compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                self.device.arch(), math_fidelity=ttnn.MathFidelity.LoFi
+            ),
         )
 
         grid_size = (8, 4)

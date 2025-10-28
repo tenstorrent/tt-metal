@@ -10,70 +10,29 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_wormhole_b0, nearest_32
 
-hardcoded_matmul_config_linear = {
-    1: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
-        in0_block_w=2,
-        out_subblock_h=1,
-        out_subblock_w=1,
-        per_core_M=1,
-        per_core_N=1,
-        fuse_batch=True,
-        fused_activation=None,
-        mcast_in0=True,
-    ),
-    8: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
-        in0_block_w=2,
-        out_subblock_h=1,
-        out_subblock_w=1,
-        per_core_M=1,
-        per_core_N=1,
-        fuse_batch=True,
-        fused_activation=None,
-        mcast_in0=True,
-    ),
-    16: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
-        in0_block_w=2,
-        out_subblock_h=1,
-        out_subblock_w=1,
-        per_core_M=1,
-        per_core_N=1,
-        fuse_batch=True,
-        fused_activation=None,
-        mcast_in0=True,
-    ),
-    20: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
-        in0_block_w=2,
-        out_subblock_h=1,
-        out_subblock_w=1,
-        per_core_M=1,
-        per_core_N=1,
-        fuse_batch=True,
-        fused_activation=None,
-        mcast_in0=True,
-    ),
-}
-
 
 def ResnetLinear(
-    in_features: int,
-    out_features: int,
     weight: ttnn.Tensor,
     bias: ttnn.Tensor,
     output_mem_config,
     model_config,
-    device,
-    batch_size,
     compute_kernel_config,
 ):
     """
     Returns a function for linear operation in resnet with bias.
     """
 
-    matmul_config = hardcoded_matmul_config_linear[batch_size]
+    matmul_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 4),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
     weight = weight.reshape(weight.shape.to_rank(4))
     bias = bias.reshape(bias.shape.to_rank(4))
 
@@ -520,14 +479,10 @@ class resnet50:
 
         self.avgpool = ttnn.global_avg_pool2d
         self.fc = ResnetLinear(
-            in_features=512 * resnet50Bottleneck.expansion,
-            out_features=1024,
             weight=ttnn.to_device(parameters.fc.weight, device),
             bias=ttnn.to_device(parameters.fc.bias, device),
             output_mem_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             model_config=model_config,
-            device=self.device,
-            batch_size=batch_size,
             compute_kernel_config=compute_kernel_config,
         )  # num_classes = 1000
 
