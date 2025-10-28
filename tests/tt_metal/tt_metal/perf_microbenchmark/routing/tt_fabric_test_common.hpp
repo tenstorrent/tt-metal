@@ -647,32 +647,10 @@ public:
         }
 
         const auto src_coord = get_device_coord(src_node_id);
-
-        // For Torus/Ring topologies, use wrap-around links to minimize hop counts
-        // by distributing hops evenly in both directions
-        if (topology_ == Topology::Torus || topology_ == Topology::Ring) {
-            // NS dimension: need to cover (mesh_shape_[NS_DIM] - 1) total hops
-            uint32_t ns_total_hops = mesh_shape_[NS_DIM] - 1;
-            uint32_t ns_forward_hops = ns_total_hops / 2;                 // Half go in one direction
-            uint32_t ns_backward_hops = ns_total_hops - ns_forward_hops;  // Rest go in other direction
-
-            hops[RoutingDirection::N] = ns_forward_hops;
-            hops[RoutingDirection::S] = ns_backward_hops;
-
-            // EW dimension: need to cover (mesh_shape_[EW_DIM] - 1) total hops
-            uint32_t ew_total_hops = mesh_shape_[EW_DIM] - 1;
-            uint32_t ew_forward_hops = ew_total_hops / 2;                 // Half go in one direction
-            uint32_t ew_backward_hops = ew_total_hops - ew_forward_hops;  // Rest go in other direction
-
-            hops[RoutingDirection::E] = ew_forward_hops;
-            hops[RoutingDirection::W] = ew_backward_hops;
-        } else {
-            // Mesh/Linear: go all the way in one direction per dimension
-            hops[RoutingDirection::N] = src_coord[NS_DIM];
-            hops[RoutingDirection::S] = mesh_shape_[NS_DIM] - src_coord[NS_DIM] - 1;
-            hops[RoutingDirection::E] = mesh_shape_[EW_DIM] - src_coord[EW_DIM] - 1;
-            hops[RoutingDirection::W] = src_coord[EW_DIM];
-        }
+        hops[RoutingDirection::N] = src_coord[NS_DIM];
+        hops[RoutingDirection::S] = mesh_shape_[NS_DIM] - src_coord[NS_DIM] - 1;
+        hops[RoutingDirection::E] = mesh_shape_[EW_DIM] - src_coord[EW_DIM] - 1;
+        hops[RoutingDirection::W] = src_coord[EW_DIM];
 
         return hops;
     }
