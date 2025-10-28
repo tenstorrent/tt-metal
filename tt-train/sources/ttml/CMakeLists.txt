@@ -524,11 +524,11 @@ set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Tenstorrent")
 
 # Component-based packaging
 set(CPACK_DEB_COMPONENT_INSTALL ON)
-set(CPACK_COMPONENTS_ALL ttml-runtime)
+set(CPACK_COMPONENTS_ALL ttml)
 
 # Debian-specific settings
-set(CPACK_DEBIAN_TTML-RUNTIME_PACKAGE_NAME "ttml")
-set(CPACK_DEBIAN_TTML-RUNTIME_FILE_NAME "ttml-${CPACK_PACKAGE_VERSION}-Linux.deb")
+set(CPACK_DEBIAN_TTML_PACKAGE_NAME "ttml")
+set(CPACK_DEBIAN_TTML_FILE_NAME "ttml-${CPACK_PACKAGE_VERSION}-Linux.deb")
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
 
 # Set the package architecture
