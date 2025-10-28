@@ -97,7 +97,8 @@ class DeviceValidatedRMSNorm:
         )
 
     # [INFO] this decorator is useful when the reference function is a TTNN-native function.
-    #        currently, it does not support input/output remapping.
+    #        currently, it is experimental and requires the reference function has same-ordered
+    #        inputs as the decorated function.
     @device_validate_against(
         reference_fn=lambda self, x: self._reference_impl(x),
         tolerances={
@@ -281,7 +282,31 @@ def test_validation_enable_disable(ttnn_mesh_device: ttnn.MeshDevice):
     enable_validation(True)
 
 
-# todo)) add test cases where validate_against is used as normal function without the decorator
+def test_validation_non_decorator_host(ttnn_mesh_device: ttnn.MeshDevice):
+    registry = get_validation_registry()
+    before = len(registry.results)
+
+    m, n, k = 8, 10, 6
+    a = torch.randn(1, m, k, dtype=torch.bfloat16)
+    b = torch.randn(1, k, n, dtype=torch.bfloat16)
+    a_tt = ttnn.from_torch(a.unsqueeze(0), device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    b_tt = ttnn.from_torch(b.unsqueeze(0), device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    def _matmul(a, b):
+        return ttnn.matmul(a, b)
+
+    validated_matmul = host_validate_against(
+        reference_fn=torch.matmul,
+        tolerances={
+            "max_abs_error": 1.5e-1,
+            "pcc": 0.99,
+        },
+    )(_matmul)
+
+    _ = validated_matmul(a_tt, b_tt)
+
+    assert len(registry.results) == before + 1
+    assert registry.results[-1].passed
 
 
 @pytest.fixture(scope="module", autouse=True)
