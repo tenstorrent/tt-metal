@@ -1186,7 +1186,6 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
         }
         cq_shared_state_->sub_device_cq_owner.clear();
         cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
-        in_use_ = true;
         for (auto device : mesh_device_->get_devices()) {
             program_dispatch::reset_worker_dispatch_state_on_device(
                 mesh_device_,
