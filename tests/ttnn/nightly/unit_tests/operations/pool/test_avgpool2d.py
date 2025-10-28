@@ -186,15 +186,17 @@ def run_avg_pool2d(
     if in_dtype == ttnn.bfloat8_b:
         ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
         torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
-        ttnn_input = ttnn.from_torch(torch_input_reshaped, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_input_1 = ttnn.from_torch(
+            torch_input_reshaped, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+        )
     else:
-        ttnn_input = ttnn.from_torch(
+        ttnn_input_1 = ttnn.from_torch(
             torch_input_permuted, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
         )
 
     # run ttnn avg_pool2d
     ttnn_output = ttnn.avg_pool2d(
-        input_tensor=ttnn_input,
+        input_tensor=ttnn_input_1,
         batch_size=in_n,
         input_h=in_h,
         input_w=in_w,
@@ -220,8 +222,20 @@ def run_avg_pool2d(
 
     if run_twice:
         ttnn.deallocate(ttnn_output, True)
+
+        if in_dtype == ttnn.bfloat8_b:
+            ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
+            torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
+            ttnn_input_2 = ttnn.from_torch(
+                torch_input_reshaped, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+            )
+        else:
+            ttnn_input_2 = ttnn.from_torch(
+                torch_input_permuted, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+            )
+
         ttnn_output = ttnn.avg_pool2d(
-            input_tensor=ttnn_input,
+            input_tensor=ttnn_input_2,
             batch_size=in_n,
             input_h=in_h,
             input_w=in_w,

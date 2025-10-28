@@ -161,10 +161,10 @@ void copy_sticks_async_local(
     const uint32_t out_base_l1_addr,
     const uint32_t in_out_buffer_start_delta) {
     if (main_thread) {
-        DPRINT << "copy_sticks_async_local called" << ENDL();
-        DPRINT << "stick_nbytes: " << stick_nbytes << ", input_aligned_page_size: " << input_aligned_page_size
+        DPRINT << "HALO copy_sticks_async_local called" << ENDL();
+        DPRINT << "HALO stick_nbytes: " << stick_nbytes << ", input_aligned_page_size: " << input_aligned_page_size
                << ENDL();
-        tt::data_movement::common::print_bf16_pages(in_base_l1_addr, 512, 32);
+        // tt::data_movement::common::print_bf16_pages(in_base_l1_addr, 512, 32);
     }
 
     uint32_t i = 0;
@@ -349,29 +349,36 @@ void kernel_main() {
 
         noc_async_read_barrier();
 #endif
-        DPRINT << "halo_gather_in_place kernel using L1 src buffer" << ENDL();
-        DPRINT << "in_npages: " << in_npages << ENDL();
+        DPRINT << "HALO src_cb_id: " << src_cb_id << ", untilize_temp_cb_id: " << untilize_temp_cb_id
+               << ", in_cb_id: " << in_cb_id << ENDL();
+        DPRINT << "HALO halo_gather_in_place kernel using L1 src buffer" << ENDL();
+        DPRINT << "HALO in_npages: " << in_npages << ENDL();
+        DPRINT << "HALO reserving src_cb_id for in_npages: " << in_npages << ENDL();
         cb_reserve_back(src_cb_id, in_npages);
+        DPRINT << "HALO pushing src_cb_id for in_npages: " << in_npages << ENDL();
         cb_push_back(src_cb_id, in_npages);
     }
 
     // make sure untilized data is available
     // for wide tensors a temp CB must be used due to implementation of the untilize LLK function vs pack_untilize
-    if (untilize_temp_cb_id && main_thread) {
+    if constexpr (untilize_temp_cb_id && main_thread) {
+        DPRINT << "HALO tile_rows: " << tile_rows << ", tile_cols: " << tile_cols << ENDL();
         for (uint32_t i = 0; i < tile_rows; ++i) {
             cb_wait_front(untilize_temp_cb_id, tile_cols);
             cb_reserve_back(in_cb_id, tile_cols);
 
             const uint32_t in_l1_addr = get_write_ptr(in_cb_id);
             const uint64_t in_l1_noc_addr = get_noc_addr(my_noc_x, my_noc_y, in_l1_addr);
+            // tt::data_movement::common::print_bf16_pages(untilize_temp_l1_addr, 512, 32);
             noc_async_write(untilize_temp_l1_addr, in_l1_noc_addr, TILE_SIZE_BYTES * tile_cols);
             noc_async_write_barrier();
 
             cb_push_back(in_cb_id, tile_cols);
             cb_pop_front(untilize_temp_cb_id, tile_cols);
         }
+    } else {
+        cb_wait_front(in_cb_id, in_npages);
     }
-    cb_wait_front(in_cb_id, in_npages);
 
     // copy remote sticks to temp buffer
     const uint32_t temp_base_l1_addr = get_write_ptr(remote_temp_cb_id);
