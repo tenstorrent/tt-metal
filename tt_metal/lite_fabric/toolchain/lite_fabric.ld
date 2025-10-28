@@ -36,6 +36,11 @@ SECTIONS
         . = ALIGN(4);
     } :text
 
+    .version LITE_FABRIC_VERSION_ADDR :
+    {
+        KEEP(*(.version))
+    } :text
+
     .empty.init.fini :
     {
         /* Check that these sections are empty */
