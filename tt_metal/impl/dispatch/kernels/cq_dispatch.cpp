@@ -353,7 +353,7 @@ void process_exec_buf_end_h() {
     cmd_ptr += sizeof(CQDispatchCmd);
 }
 
-CBWriter<my_downstream_cb_sem_id> dispatch_h_cb_writer{};
+CBWriter<my_downstream_cb_sem_id, 0, 0, 0> dispatch_h_cb_writer{};
 
 // Relay, potentially through the mux/dmux/tunneller path
 // Code below sends 1 page worth of data except at the end of a cmd

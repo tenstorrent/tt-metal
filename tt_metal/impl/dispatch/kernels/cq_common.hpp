@@ -258,12 +258,12 @@ FORCE_INLINE void cb_wait_all_pages(uint32_t n) {
 }
 
 
-template <uint32_t sem_id>
+template <uint32_t my_sem_id, uint8_t noc_idx, uint32_t downstream_noc_xy, uint32_t downstream_sem_id>
 class CBWriter {
   public:
-    void acquire_pages(uint32_t n) {
+    FORCE_INLINE void acquire_pages(uint32_t n) {
         volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
 
         // Ensure last sem_inc has landed
         noc_async_atomic_barrier();
@@ -279,9 +279,9 @@ class CBWriter {
         WAYPOINT("DAPD");
         additional_count -= n;
     }
-    void wait_all_pages(uint32_t n) {
+    FORCE_INLINE void wait_all_pages(uint32_t n) {
         volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
 
         // Downstream component sets the MSB as a terminate bit
         // Mask that off to avoid a race between the sem count and terminate
@@ -292,6 +292,10 @@ class CBWriter {
             invalidate_l1_cache();
         } while (((additional_count + *sem_addr) & 0x7fffffff) != n);  // mask off terminate bit
         WAYPOINT("TAPD");
+    }
+
+    FORCE_INLINE void release_pages(uint32_t n) {
+        noc_semaphore_inc(get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)), n, noc_idx);
     }
 
   uint32_t additional_count{0};
