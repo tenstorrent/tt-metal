@@ -97,7 +97,6 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     program_dispatch::ProgramDispatchMetadata& dispatch_md) :
     command_queue_id(command_queue_id),
     device(device),
-    noc_index(noc_index),
     program(program),
     manager(manager),
     config_buffer_mgr(config_buffer_mgr),
@@ -159,7 +158,7 @@ void EnqueueProgramCommand::process() {
 
 EnqueueTerminateCommand::EnqueueTerminateCommand(
     uint32_t command_queue_id, IDevice* device, SystemMemoryManager& manager) :
-    command_queue_id(command_queue_id), device(device), manager(manager) {}
+    command_queue_id(command_queue_id), manager(manager) {}
 
 void EnqueueTerminateCommand::process() {
     // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_TERMINATE
