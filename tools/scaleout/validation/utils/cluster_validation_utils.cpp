@@ -991,6 +991,239 @@ void point_to_point_barrier(const ResetPair& reset_pair) {
     }
 }
 
+void issue_reset_step(const EthChannelIdentifier& link, const ResetAction& reset_action) {
+    // Execute the reset action for the given link.
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+    std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
+    for (const auto& [chip_id, asic_id] : cluster.get_unique_chip_ids()) {
+        asic_id_to_chip_id[asic_id] = chip_id;
+    }
+
+    constexpr uint32_t eth_mailbox_addr = 0x7D000;
+
+    std::vector<uint32_t> port_action_down_cmd = {0xCA110009, 2, 0, 0};
+    std::vector<uint32_t> port_action_up_cmd = {0xCA110009, 1, 0, 0};
+    std::vector<uint32_t> port_retrain_cmd = {0xCA110005, 1, 0, 0};
+    std::vector<uint32_t> port_retrain_force_cmd = {0xCA110005, 1, 1, 0};
+    std::vector<uint32_t> port_reinit_cmd = {0xCA110006, 1, 0, 0};
+    std::vector<uint32_t> port_reinit_force_cmd = {0xCA110006, 1, 1, 0};
+
+    auto src_chip = asic_id_to_chip_id[*link.asic_id];
+    auto src_chan = link.channel;
+    const auto& src_soc_desc = cluster.get_soc_desc(src_chip);
+    auto src_core = src_soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
+    auto src_coord = cluster.get_virtual_coordinate_from_logical_coordinates(
+        src_chip, tt_xy_pair(src_core.x, src_core.y), CoreType::ETH);
+
+    std::vector<uint32_t> reset_vector;
+    switch (reset_action) {
+        case ResetAction::PORT_ACTION_UP:
+            reset_vector = port_action_up_cmd;
+            break;
+        case ResetAction::PORT_ACTION_DOWN:
+            reset_vector = port_action_down_cmd;
+            break;
+        case ResetAction::PORT_RETRAIN:
+            reset_vector = port_retrain_cmd;
+            break;
+        case ResetAction::PORT_RETRAIN_FORCE:
+            reset_vector = port_retrain_force_cmd;
+            break;
+        case ResetAction::PORT_REINIT:
+            reset_vector = port_reinit_cmd;
+            break;
+        case ResetAction::PORT_REINIT_FORCE:
+            reset_vector = port_reinit_force_cmd;
+            break;
+        default:
+            TT_FATAL(false, "Invalid reset action: {}", static_cast<int>(reset_action));
+    }
+
+    cluster.write_core(src_chip, src_coord, reset_vector, eth_mailbox_addr);
+
+    bool done = false;
+    while(!done) {
+        std::vector<uint32_t> src_done = {0};
+        cluster.read_core(src_done, sizeof(uint32_t), tt_cxy_pair(src_chip, src_coord), eth_mailbox_addr);
+        done = ((src_done[0] & 0xFFFF0000) == 0xD0E50000);
+    }
+}
+
+void execute_unidirectional_reset_seq(
+    const std::vector<EthChannelIdentifier>& links_to_reset,
+    const std::vector<ResetSequence>& reset_seq_per_link,
+    uint32_t link_down_step_idx,
+    uint32_t port_down_step_idx) {
+
+    // Iterate over all links that need to be reset and issue the assocaited reset step for that link
+    static const std::vector<ResetAction> port_down_reset_actions = {
+        ResetAction::PORT_RETRAIN,
+        ResetAction::PORT_RETRAIN_FORCE,
+        ResetAction::PORT_REINIT,
+        ResetAction::PORT_REINIT_FORCE,
+    };
+    static const std::vector<ResetAction> link_down_reset_actions = {
+        ResetAction::PORT_ACTION_UP,
+        ResetAction::PORT_RETRAIN,
+        ResetAction::PORT_RETRAIN_FORCE,
+        ResetAction::PORT_REINIT,
+        ResetAction::PORT_REINIT_FORCE,
+    };
+
+    for (std::size_t link_index = 0; link_index < links_to_reset.size(); link_index++) {
+        const auto& link = links_to_reset[link_index];
+        const auto& reset_seq = reset_seq_per_link[link_index];
+        auto action = reset_seq == ResetSequence::PORT_DOWN ? port_down_reset_actions[port_down_step_idx] : link_down_reset_actions[link_down_step_idx];
+        issue_reset_step(link, action);
+    }
+ }
+
+void reset_ethernet_links_bh(const PhysicalSystemDescriptor& physical_system_descriptor, const AsicTopology& asic_topology, uint32_t link_down_step_idx, uint32_t port_down_step_idx) {
+    // Unidirectional reset step
+    // Iterate over all links and determine which side to reset
+    // Additionally determine the reset sequence to follow: Link Down vs Port Down
+
+    std::vector<EthChannelIdentifier> links_to_reset;
+    std::vector<ResetSequence> reset_seq_per_link;
+    std::unordered_map<uint64_t, std::set<uint8_t>> reset_cores;
+
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+    constexpr uint32_t port_status_addr  = 0x7CC04;
+    constexpr uint32_t port_link_up_status_addr = 0x7CE04;
+
+    constexpr uint32_t PORT_UP = 1;
+    constexpr uint32_t LINK_UP = 1;
+
+    std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
+    for (const auto& [chip_id, asic_id] : cluster.get_unique_chip_ids()) {
+        asic_id_to_chip_id[asic_id] = chip_id;
+    }
+
+    for (const auto& [asic_id, asic_connections] : asic_topology) {
+        auto src_chip_id = asic_id_to_chip_id[*asic_id];
+        const auto& src_soc_desc = cluster.get_soc_desc(src_chip_id);
+        const auto& src_asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(asic_id);
+        for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
+            auto dst_chip_id = asic_id_to_chip_id[*dst_asic_id];
+            const auto& dst_asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(dst_asic_id);
+            const auto& dst_soc_desc = cluster.get_soc_desc(dst_chip_id);
+            for (const auto& eth_connection : eth_connections) {
+                // Read Port status and Link status from each side of the link
+                // If one side is "worse" than the other, pick that side and follow the reset sequence for that side
+                // If both sides are identical, pick the link on the lower ASIC ID (tie breaker)
+
+                auto my_core = src_soc_desc.get_eth_core_for_channel(eth_connection.src_chan, CoordSystem::LOGICAL);
+                auto my_coord = cluster.get_virtual_coordinate_from_logical_coordinates(
+                    src_chip_id, tt_xy_pair(my_core.x, my_core.y), CoreType::ETH);
+                auto peer_core = dst_soc_desc.get_eth_core_for_channel(eth_connection.dst_chan, CoordSystem::LOGICAL);
+                auto peer_coord = cluster.get_virtual_coordinate_from_logical_coordinates(
+                    dst_chip_id, tt_xy_pair(peer_core.x, peer_core.y), CoreType::ETH);
+
+                std::vector<uint32_t> my_port_status = {0};
+                std::vector<uint32_t> my_port_link_up_status = {0};
+                std::vector<uint32_t> peer_port_status = {0};
+                std::vector<uint32_t> peer_port_link_up_status = {0};
+
+                cluster.read_core(my_port_status, sizeof(uint32_t), tt_cxy_pair(src_chip_id, my_coord), port_status_addr);
+                cluster.read_core(my_port_link_up_status, sizeof(uint32_t), tt_cxy_pair(src_chip_id, my_coord), port_link_up_status_addr);
+                cluster.read_core(peer_port_status, sizeof(uint32_t), tt_cxy_pair(dst_chip_id, peer_coord), port_status_addr);
+                cluster.read_core(peer_port_link_up_status, sizeof(uint32_t), tt_cxy_pair(dst_chip_id, peer_coord), port_link_up_status_addr);
+                
+                if (my_port_status[0] != PORT_UP) {
+                    if (peer_port_status[0] != PORT_UP) {
+                        // Both ports are down. Pick the link on the lower ASIC ID (tie breaker)
+                        if (*asic_id < *dst_asic_id) {
+                            links_to_reset.push_back(EthChannelIdentifier{
+                                .host = src_asic_descriptor.host_name,
+                                .asic_id = asic_id,
+                                .tray_id = src_asic_descriptor.tray_id,
+                                .asic_location = src_asic_descriptor.asic_location,
+                                .channel = eth_connection.src_chan,
+                            });
+                        } else {
+                            links_to_reset.push_back(EthChannelIdentifier{
+                                .host = dst_asic_descriptor.host_name,
+                                .asic_id = dst_asic_id,
+                                .tray_id = dst_asic_descriptor.tray_id,
+                                .asic_location = dst_asic_descriptor.asic_location,
+                                .channel = eth_connection.dst_chan,
+                            });
+                        }
+                        reset_seq_per_link.push_back(ResetSequence::PORT_DOWN);
+                    } else {
+                        // Peer is up, so reset the link on the my side
+                        links_to_reset.push_back(EthChannelIdentifier{
+                            .host = src_asic_descriptor.host_name,
+                            .asic_id = asic_id,
+                            .tray_id = src_asic_descriptor.tray_id,
+                            .asic_location = src_asic_descriptor.asic_location,
+                            .channel = eth_connection.src_chan,
+                        });
+                        reset_seq_per_link.push_back(ResetSequence::PORT_DOWN);
+                    }
+                } else if (peer_port_status[0] != PORT_UP) {
+                    // My link is up and peer is down. Reset the link on the peer.
+                    links_to_reset.push_back(EthChannelIdentifier{
+                        .host = dst_asic_descriptor.host_name,
+                        .asic_id = dst_asic_id,
+                        .tray_id = dst_asic_descriptor.tray_id,
+                        .asic_location = dst_asic_descriptor.asic_location,
+                        .channel = eth_connection.dst_chan,
+                    });
+                    reset_seq_per_link.push_back(ResetSequence::PORT_DOWN);
+                } else if (my_port_link_up_status[0] != LINK_UP) {
+                    if (peer_port_link_up_status[0] != LINK_UP) {
+                        // Both links are down. Pick the link on the lower ASIC ID (tie breaker)
+                        if (*asic_id < *dst_asic_id) {
+                            links_to_reset.push_back(EthChannelIdentifier{
+                                .host = src_asic_descriptor.host_name,
+                                .asic_id = asic_id,
+                                .tray_id = src_asic_descriptor.tray_id,
+                                .asic_location = src_asic_descriptor.asic_location,
+                                .channel = eth_connection.src_chan,
+                            });
+                        } else {
+                            links_to_reset.push_back(EthChannelIdentifier{
+                                .host = dst_asic_descriptor.host_name,
+                                .asic_id = dst_asic_id,
+                                .tray_id = dst_asic_descriptor.tray_id,
+                                .asic_location = dst_asic_descriptor.asic_location,
+                                .channel = eth_connection.dst_chan,
+                            });
+                        }
+                        reset_seq_per_link.push_back(ResetSequence::LINK_DOWN);
+                    } else {
+                        // Peer link is up, so reset the link on the my side
+                        links_to_reset.push_back(EthChannelIdentifier{
+                            .host = src_asic_descriptor.host_name,
+                            .asic_id = asic_id,
+                            .tray_id = src_asic_descriptor.tray_id,
+                            .asic_location = src_asic_descriptor.asic_location,
+                            .channel = eth_connection.src_chan,
+                        });
+                        reset_seq_per_link.push_back(ResetSequence::LINK_DOWN);
+                    }
+                } else if (peer_port_link_up_status[0] != LINK_UP) {
+                    // My link is up and peer is down. Reset the link on the peer.
+                    links_to_reset.push_back(EthChannelIdentifier{
+                        .host = dst_asic_descriptor.host_name,
+                        .asic_id = dst_asic_id,
+                        .tray_id = dst_asic_descriptor.tray_id,
+                        .asic_location = dst_asic_descriptor.asic_location,
+                        .channel = eth_connection.dst_chan,
+                    });
+                    reset_seq_per_link.push_back(ResetSequence::LINK_DOWN);
+                } else {
+                    TT_THROW("Both ports are up with active links. A reset here should not be required.");
+                }
+            }
+        }
+    }
+    execute_unidirectional_reset_seq(links_to_reset, reset_seq_per_link, link_down_step_idx, port_down_step_idx);
+}
+
 void reset_local_link(ChipId src_chip, ChipId dst_chip, uint8_t src_chan, uint8_t dst_chan) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     std::vector<uint32_t> set = {1};

@@ -252,16 +252,56 @@ int main(int argc, char* argv[]) {
 
     // Create physical system descriptor and discover the system
     auto physical_system_descriptor = generate_physical_system_descriptor(input_args);
+    // std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
+    // for (const auto& [chip_id, asic_id] : cluster.get_unique_chip_ids()) {
+    //     asic_id_to_chip_id[asic_id] = chip_id;
+    // }
+    // std::unordered_map<uint64_t, std::set<uint8_t>> reset_cores;
+    // for (const auto& [asic_id, asic_connections] : physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name())) {
+    //     auto src_chip_id = asic_id_to_chip_id[*asic_id];
+    //     for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
+    //         // auto dst_chip_id = asic_id_to_chip_id[*dst_asic_id];
+    //         for (const auto& eth_connection : eth_connections) {
+    //             if (reset_cores[*asic_id].find(eth_connection.src_chan) != reset_cores[*asic_id].end()) {
+    //                 TT_FATAL(reset_cores[*dst_asic_id].find(eth_connection.dst_chan) != reset_cores[*dst_asic_id].end(), "Expected channel {} on ASIC {} to already be reset", eth_connection.dst_chan, *dst_asic_id);
+    //                 continue;
+    //             }
+    //             reset_cores[*asic_id].insert(eth_connection.src_chan);
+    //             reset_cores[*dst_asic_id].insert(eth_connection.dst_chan);
+    //             auto src_chan = eth_connection.src_chan;
+    //             // auto dst_chan = eth_connection.dst_chan;   
+                
+    //             reset_local_link_bh(src_chip_id, src_chan, LinkResetMode::PORT_ACTION_DOWN);
+    //             reset_local_link_bh(src_chip_id, src_chan, LinkResetMode::PORT_ACTION_UP);
+    //             reset_local_link_bh(src_chip_id, src_chan, LinkResetMode::PORT_RETRAIN);
+    //             reset_local_link_bh(src_chip_id, src_chan, LinkResetMode::PORT_RETRAIN_FORCE);
+    //             reset_local_link_bh(src_chip_id, src_chan, LinkResetMode::PORT_REINIT);
+    //             reset_local_link_bh(src_chip_id, src_chan, LinkResetMode::PORT_REINIT_FORCE);
+    //         }
+    //     }
+    // }
+
+    // physical_system_descriptor.run_discovery(true, true);
 
     AsicTopology missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
     bool links_reset = false;
     // Ethernet Link Retraining through SW is currently only supported for Wormhole
-    bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
+
     constexpr uint32_t MAX_RETRAINS_BEFORE_FAILURE =
         5;  // If links don't come up after 5 retrains, the system is in an unrecoverable state.
+    constexpr uint32_t MAX_PORT_DOWN_STEPS = 5;
+    constexpr uint32_t MAX_LINK_DOWN_STEPS = 4;
+
     uint32_t num_retrains = 0;
-    while (!missing_asic_topology.empty() && link_retrain_supported && num_retrains < MAX_RETRAINS_BEFORE_FAILURE) {
-        reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
+    uint32_t port_down_step_idx = 0;
+    uint32_t link_down_step_idx = 0;
+
+    while (!missing_asic_topology.empty() && num_retrains < MAX_RETRAINS_BEFORE_FAILURE) {
+        // reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
+        reset_ethernet_links_bh(physical_system_descriptor, missing_asic_topology, link_down_step_idx, port_down_step_idx);
+
+        link_down_step_idx = (link_down_step_idx + 1) % MAX_LINK_DOWN_STEPS;
+        port_down_step_idx = (port_down_step_idx + 1) % MAX_PORT_DOWN_STEPS;
         links_reset = true;
         num_retrains++;
         physical_system_descriptor.run_discovery(true, true);

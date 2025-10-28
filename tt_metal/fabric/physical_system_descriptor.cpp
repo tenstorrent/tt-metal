@@ -77,7 +77,7 @@ TrayID get_tray_id_for_chip(
     const std::string& mobo_name,
     bool using_mock_cluster_desc) {
     static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
-        {"SIENAD8-2L2T", {0xc1, 0x01, 0x41, 0x42}},
+        {"SIENAD8-2L2T", {0xc1, 0x01, 0x42, 0x41}},
         {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
     };
 
@@ -256,8 +256,7 @@ void PhysicalSystemDescriptor::clear() {
 
 void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
     this->clear();
-
-    if (!run_live_discovery || target_device_type_ != TargetDevice::Silicon) {
+    if (target_device_type_ != TargetDevice::Silicon) {
         cluster_desc_ = std::make_unique<tt::umd::ClusterDescriptor>(*cluster_->get_cluster_description());
     } else {
         // As part of live discovery, we create a new cluster descriptor to query the latest state from UMD.
