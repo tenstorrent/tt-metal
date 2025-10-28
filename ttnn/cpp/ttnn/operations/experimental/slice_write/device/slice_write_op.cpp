@@ -20,7 +20,10 @@ void SliceWriteDeviceOperation::validate_with_output_tensors(
     const auto output_padded_shape = output_tensor.padded_shape();
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR, "Error");
+    TT_FATAL(
+        input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR,
+        "Input tensor layout must be TILE or ROW_MAJOR but got {}",
+        input_tensor_a.layout());
     TT_FATAL(
         input_tensor_a.padded_shape().rank() == this->slice_start.rank() &&
             output_padded_shape.rank() == this->slice_start.rank() &&
