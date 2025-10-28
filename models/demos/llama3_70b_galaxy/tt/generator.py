@@ -256,6 +256,8 @@ class Generator:
 
         if return_logits:
             # Return logits instead of tokens
+            # batch x seq x padded_vocab_size -> batch x seq x vocab_size
+            tt_out_logits_all_users = tt_out_logits_all_users[:, :, : self.model.vocab_size]
             return tt_out_logits_all_users
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
@@ -406,7 +408,6 @@ class Generator:
     ):
         if sampling_params is None:
             return_logits = True
-            read_from_device = False
             reset_inputs = True
         else:
             return_logits = False
