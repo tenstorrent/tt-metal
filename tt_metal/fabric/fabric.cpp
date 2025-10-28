@@ -193,11 +193,10 @@ void append_fabric_connection_rt_args(
 
         const auto& edm_config = fabric_context.get_fabric_router_config();
         auto channel_allocator = edm_config.channel_allocator.get();
-        TT_FATAL(
-            dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator) != nullptr,
-            "Only FabricStaticSizedChannelsAllocator is supported currently.");
         const auto static_channel_allocator =
             dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
+        TT_FATAL(
+            static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
         const auto sender_channel = is_2d_fabric ? router_direction : 0;
         tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
             .edm_noc_x = fabric_router_virtual_core.x,
