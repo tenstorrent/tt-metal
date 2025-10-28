@@ -43,7 +43,7 @@ class RefinerModelOptimisations(ModelOptimisations):
         self.conv_configs["ABH_32_ADB_WDB_BS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            deallocate_activation=True,
+            deallocate_activation=False,
             reallocate_halo_output=False,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
@@ -85,7 +85,7 @@ class RefinerModelOptimisations(ModelOptimisations):
     def get_conv_config(self, conv_path):
         if "downsamplers" in conv_path:
             if "down_blocks.0" in conv_path:
-                return self.conv_configs["ABH_256_ADB_WDB_BS"]
+                return self.conv_configs["ABH_256_ADB_WDB_BS_NO_MOVE"]
             elif "down_blocks.1" in conv_path:
                 return self.conv_configs["ABH_128_ADB_WDB_BS"]
             elif "down_blocks.2" in conv_path:
@@ -94,7 +94,7 @@ class RefinerModelOptimisations(ModelOptimisations):
             return self.conv_configs["ABH_512_ADB_WDB_BS"]
         if "down_blocks.1" in conv_path:
             if "resnets.0" in conv_path and "conv1" in conv_path:
-                return self.conv_configs["ABH_256_ADB_WDB_BS"]
+                return self.conv_configs["ABH_256_ADB_WDB_BS_NO_MOVE"]
             else:
                 return self.conv_configs["ABH_256_ADB_WDB_BS"]
         if "down_blocks.2" in conv_path:
@@ -103,14 +103,17 @@ class RefinerModelOptimisations(ModelOptimisations):
             else:
                 return self.conv_configs["ABH_128_ADB_WDB_BS"]
         if "down_blocks.3" in conv_path or "mid_block" in conv_path:
-            return self.conv_configs["ABH_32_ADB_WDB_BS"]
+            if "conv1" in conv_path:
+                return self.conv_configs["ABH_64_ADB_WDB_BS"]
+            else:
+                return self.conv_configs["ABH_32_ADB_WDB_BS"]
         if "upsamplers" in conv_path:
             if "up_blocks.0" in conv_path:
-                return self.conv_configs["ABH_128_ADB_WDB_BS"]
+                return self.conv_configs["ABH_128_ADB_WDB_MOVE_BS"]
             elif "up_blocks.1" in conv_path:
                 return self.conv_configs["ABH_256_NO_ADB_WDB_BS"]
             elif "up_blocks.2" in conv_path:
-                return self.conv_configs["ABH_128_ADB_WDB_BS"]
+                return self.conv_configs["ABH_128_ADB_WDB_MOVE_BS"]
         if "up_blocks.0" in conv_path:
             if "conv1" in conv_path:
                 return self.conv_configs["ABH_32_ADB_WDB_BS"]
