@@ -93,12 +93,12 @@ int main(int argc, char** argv) {
 
         // Create 3 circular buffers. Think them like pipes moving data from one core to another. cb_src0 and cb_src1
         // are used to move data from the reader kernel to the compute kernel. cb_dst is used to move data from the
-        // compute kernel to the writer kernel. Each circular buffer is made up of 2 tiles. Thus when one tile is pushed
-        // and being used by the receiving end, the sending end can get the next piece of data ready to be pushed.
+        // compute kernel to the writer kernel. Each circular buffer is made up of 4 tiles. Thus when two tiles are
+        // pushed and being used by the receiving end, the sending end can get the next two tiles ready to be pushed.
         // Overlapping the operations. Leading to better performance. However there is a trade off, The more tiles in a
         // circular buffer, the more memory is used. And Circular buffers are backed by L1(SRAM) memory and L1 is a
         // precious resource. The hardware supports up to 32 circular buffers and they all act the same.
-        constexpr uint32_t tiles_per_cb = 2;
+        constexpr uint32_t tiles_per_cb = 2 * tiles_per_cycle;
 
         // tensor A
         CreateCircularBuffer(
@@ -108,7 +108,7 @@ int main(int argc, char** argv) {
                 /*total_size=*/tiles_per_cb * tile_size_bytes,  // The total size of the circular buffer in bytes
                                                                 /*data_format_spec=*/
                 {{tt::c_0, tt::DataFormat::Float16_b}})         // The circular buffer index and data format it'll hold
-                .set_page_size(tt::c_0, tile_size_bytes));      // Since we will be sending one tile at a time, we set
+                .set_page_size(tt::c_0, tile_size_bytes));      // Since we will be sending two tiles at a time, we set
                                                                 // the page size to the tile size (and thus
                                                                 // total_size / page_size = tiles_per is the number of
                                                                 // entries in the circular buffer)
