@@ -551,15 +551,12 @@ void process_write_linear(
         // Transfer size is min(remaining_length, data_available_in_cb)
         uint32_t available_data = cb_fence - data_ptr;
         uint32_t xfer_size = length > available_data ? available_data : length;
-#if defined(FABRIC_RELAY)
-        noc_async_write(data_ptr, ((uint64_t)dst_noc << 32) | dst_addr, xfer_size);
-#else
+        cq_noc_async_wwrite_init_state<CQ_NOC_sNdl, true>(0, dst_noc, 0);
         cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size, num_mcast_dests);
         // Increment counters based on the number of packets that were written
         uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE);
         noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;
         noc_nonposted_writes_acked[noc_index] += num_mcast_dests * num_noc_packets_written;
-#endif
         length -= xfer_size;
         data_ptr += xfer_size;
         dst_addr += xfer_size;
