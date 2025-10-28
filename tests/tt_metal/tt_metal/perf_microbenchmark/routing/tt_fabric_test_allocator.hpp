@@ -397,9 +397,6 @@ inline void TestDeviceResources::initialize_credit_allocator(
                 sender_memory_map.get_credit_addresses_base(),
                 sender_memory_map.get_credit_addresses_size(),
                 SenderMemoryMap::CREDIT_ADDRESS_STRIDE));
-
-        log_debug(
-            tt::LogTest, "Device {}: Initialized credit allocator for sender core {}", node_id_, sender_core.str());
     }
 }
 
@@ -414,24 +411,12 @@ inline uint32_t TestDeviceResources::allocate_credit_chunk(
 
     // Allocate from this sender core's allocator
     uint32_t chunk_base = it->second.allocate_chunk(num_receivers);
-
-    log_debug(
-        tt::LogTest,
-        "Device {} sender core {} allocated credit chunk: base={:#x}, num_receivers={}",
-        node_id_,
-        sender_core.str(),
-        chunk_base,
-        num_receivers);
-
     return chunk_base;
 }
 
 inline void TestDeviceResources::reset_credit_allocators() {
     for (auto& [core, allocator] : credit_allocators_) {
         allocator.reset();
-    }
-    if (!credit_allocators_.empty()) {
-        log_debug(tt::LogTest, "Reset {} credit allocators for device {}", credit_allocators_.size(), node_id_);
     }
 }
 
@@ -534,14 +519,6 @@ inline void TestDeviceResources::assign_core_to_partition(
         auto& old_partition_cores = pool.partition_cores[old_partition];
         old_partition_cores.erase(
             std::remove(old_partition_cores.begin(), old_partition_cores.end(), core), old_partition_cores.end());
-
-        log_debug(
-            tt::LogTest,
-            "Device {}: Moving core {} from partition {} to partition {}",
-            node_id_,
-            core.str(),
-            old_partition,
-            partition_id);
     }
 
     // Add to new partition (works for both move and fresh assignment)
@@ -704,14 +681,10 @@ inline TestDeviceResources& GlobalAllocator::get_or_create_device_resources(cons
 /**
  * Manages dynamic allocation policy computation and caching.
  *
- * This class encapsulates all logic for computing and caching dynamic allocation policies,
- * including determining when policies need to be recomputed based on topology changes.
- *
  * Responsibilities:
  * - Compute optimal allocation policies for a given test configuration
  * - Cache policies based on topology key (name + num_links)
  * - Determine when reconstruction is needed (iteration 0 or topology change)
- * - Keep TestContext clean and focused on orchestration
  */
 class DynamicPolicyManager {
 public:
@@ -726,10 +699,6 @@ public:
      * - First iteration (iteration_number == 0), OR
      * - Topology changed (different name or num_links)
      *
-     * This allows the caller to know definitively whether reconstruction is needed.
-     *
-     * @param config Test configuration
-     * @return New policy if recomputation needed, nullopt if cached policy should be reused
      */
     std::optional<AllocatorPolicies> get_new_policy_for_test(const TestConfig& config) {
         // Build topology key from parameters that affect allocation policy:
@@ -740,7 +709,7 @@ public:
         // - size/num_packets: Only affects validation, not resource allocation
         // - ftype/ntype: Only affects routing, not allocation
         //
-        // Format: "test_name:links_N" (e.g., "all_gather:links_2")
+        // Format: "test_name:links_N" (e.g., "FlowControlMesh:links_2")
         std::string topology_key = fmt::format("{}:links_{}", config.name, config.fabric_setup.num_links);
 
         bool needs_recomputation = (config.iteration_number == 0) || (topology_key != last_topology_key_);
@@ -750,35 +719,14 @@ public:
             cached_policy_ = compute_policy(config);
             last_topology_key_ = topology_key;
 
-            log_debug(
-                tt::LogTest,
-                "[Dynamic Policy - Computed] Test: {}, Iteration: {}",
-                config.parametrized_name,
-                config.iteration_number);
-            log_debug(tt::LogTest, "  max_configs_per_core: {}", cached_policy_.receiver_config.max_configs_per_core);
-            log_debug(tt::LogTest, "  payload_chunk_size: {} KB", cached_policy_.default_payload_chunk_size / 1024);
-
             return cached_policy_;  // Return new policy
         } else {
-            log_debug(
-                tt::LogTest,
-                "[Dynamic Policy - Reused] Test: {}, Iteration: {}",
-                config.parametrized_name,
-                config.iteration_number);
-
             return std::nullopt;  // Signal to reuse existing policy
         }
     }
 
-    /**
-     * Get the current cached policy.
-     * Should only be called after at least one successful get_new_policy_for_test() call.
-     */
     const AllocatorPolicies& get_cached_policy() const { return cached_policy_; }
 
-    /**
-     * Reset cached state (e.g., between test runs).
-     */
     void reset() {
         last_topology_key_.clear();
         cached_policy_ = AllocatorPolicies{};
@@ -793,12 +741,6 @@ private:
      * - max_configs_per_core: How many receiver configs can share a single core
      * - default_payload_chunk_size: Buffer size for each receiver config
      *
-     * Performs:
-     * 1. System capacity analysis (worker cores, mux cores if flow control enabled)
-     * 2. Per-device receiver load analysis
-     * 3. Feasibility checks (sufficient cores for allocation)
-     * 4. Worst-case device identification
-     * 5. Conservative policy computation with safety margins
      */
     AllocatorPolicies compute_policy(const TestConfig& config) {
         // 1. Query system parameters
@@ -843,7 +785,7 @@ private:
 
         // 4. Per-device analysis - find worst case
         uint32_t max_configs_per_core_needed = DEFAULT_MIN_CONFIGS_PER_CORE;
-        std::optional<FabricNodeId> worst_case_device;  // Use optional since we might have no receivers
+        std::optional<FabricNodeId> worst_case_device;
         uint32_t worst_case_reserved = 0;
         uint32_t worst_case_receivers = 0;
 
@@ -929,16 +871,6 @@ private:
 
                     // Apply the stricter constraint (mux cap vs available cores)
                     required = std::max(required, sharing_factor_per_link);
-
-                    log_debug(
-                        tt::LogTest,
-                        "Device [mesh={}, chip={}]: Mux client cap applied. "
-                        "Receivers per link: {}, Cap: {}, Sharing factor: {}",
-                        device_id.mesh_id,
-                        device_id.chip_id,
-                        receivers_per_link,
-                        MAX_RECV_CORES_PER_LINK_WITH_MUX,
-                        sharing_factor_per_link);
                 }
             }
 
@@ -957,29 +889,7 @@ private:
         // since L1 alignment is not available here, align to 64 bytes as a safe minimum
         payload_chunk_size = tt::align(payload_chunk_size, 64);
 
-        // 6. Log computed policy
-        if (worst_case_device.has_value()) {
-            log_info(tt::LogTest, "");
-            log_info(tt::LogTest, "[Dynamic Allocation Policy - Worst Case Device]");
-            log_info(
-                tt::LogTest,
-                "  Device: [mesh={}, chip={}]",
-                worst_case_device.value().mesh_id,
-                worst_case_device.value().chip_id);
-            log_info(tt::LogTest, "  Reserved cores: {} (of {} total)", worst_case_reserved, total_worker_cores);
-            log_info(tt::LogTest, "  Available for receivers: {}", total_worker_cores - worst_case_reserved);
-            log_info(tt::LogTest, "  Receiver configs: {}", worst_case_receivers);
-            log_info(tt::LogTest, "  Computed: max_configs_per_core = {}", max_configs_per_core);
-            log_info(
-                tt::LogTest,
-                "  Computed: default_payload_chunk_size = {} bytes ({} KB)",
-                payload_chunk_size,
-                payload_chunk_size / 1024);
-            log_info(tt::LogTest, "");
-        }
-
-        // 7. Build and return policies (copy sender config and policy type from base policies if provided)
-        // Note: Caller should provide base policies to preserve sender_config and policy settings
+        // 6. Build and return policies
         AllocatorPolicies computed_policies;
         computed_policies.receiver_config.max_configs_per_core = max_configs_per_core;
         computed_policies.default_payload_chunk_size = payload_chunk_size;
@@ -1009,10 +919,6 @@ private:
 };
 
 inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
-    // Policies already set during construction - just use them!
-    // TestContext::prepare_for_test() has already computed optimal policies and reconstructed
-    // this allocator with the correct policies before calling this method.
-
     // Store flow control flag for use during device creation
     enable_flow_control_ = test_config.enable_flow_control;
 

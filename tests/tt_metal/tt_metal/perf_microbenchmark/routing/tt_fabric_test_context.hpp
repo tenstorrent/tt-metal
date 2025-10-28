@@ -136,13 +136,8 @@ public:
     }
 
     void prepare_for_test(const TestConfig& config) {
-        // OPTIMIZATION 1: Skip reconstruction entirely for explicit YAML policies
+        // Skip reconstruction entirely for explicit YAML policies
         if (!use_dynamic_policies_) {
-            log_debug(tt::LogTest, "[Explicit YAML Policy] Test: {}", config.parametrized_name);
-            log_debug(
-                tt::LogTest, "  max_configs_per_core: {}", allocation_policies_.receiver_config.max_configs_per_core);
-            log_debug(
-                tt::LogTest, "  payload_chunk_size: {} KB", allocation_policies_.default_payload_chunk_size / 1024);
             return;  // Early return - allocator and maps already correct, reset() will clean up state
         }
 
@@ -753,11 +748,9 @@ private:
         auto l1_unreserved_size = fixture_->get_l1_unreserved_size();
         auto l1_alignment = fixture_->get_l1_alignment();
 
-        // Create/update sender map
         sender_memory_map_ =
             tt::tt_fabric::fabric_tests::SenderMemoryMap(l1_unreserved_base, l1_unreserved_size, l1_alignment);
 
-        // Create/update receiver map with policy-specific parameters
         receiver_memory_map_ = tt::tt_fabric::fabric_tests::ReceiverMemoryMap(
             l1_unreserved_base,
             l1_unreserved_size,
@@ -765,7 +758,6 @@ private:
             policies.default_payload_chunk_size,
             policies.receiver_config.max_configs_per_core);
 
-        // Validate memory maps
         if (!sender_memory_map_.is_valid() || !receiver_memory_map_.is_valid()) {
             TT_THROW("Invalid memory map configuration");
         }
