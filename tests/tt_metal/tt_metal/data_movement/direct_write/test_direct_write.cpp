@@ -122,7 +122,7 @@ bool run_dm(
     auto mesh_workload = distributed::MeshWorkload();
     auto target_devices =
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0));  // Single device at (0,0)
-    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+    mesh_workload.add_program(target_devices, std::move(program));
 
     auto& cq = mesh_device->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
