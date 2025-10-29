@@ -196,7 +196,6 @@ run_t3000_gemma3-small_tests() {
   pytest models/demos/gemma3/tests/test_ci_dispatch.py -k "27b"
 }
 
-# mstojko - here
 run_t3000_llama3-small_tests() {
   # Record the start time
   fail=0
