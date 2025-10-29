@@ -12,13 +12,14 @@ namespace ttnn::operations::normalization::detail {
 namespace py = pybind11;
 
 void bind_normalization_layernorm_distributed_program_config(py::module& module) {
-    py::class_<LayerNormDistributedDefaultProgramConfig>(module, "LayerNormDistributedDefaultProgramConfig")
+    py::class_<LayerNormDefaultProgramConfig>(module, "LayerNormDefaultProgramConfig")
         .def(
             py::init<bool, bool>(),
             py::kw_only(),
             py::arg("legacy_reduction").noconvert() = false,
             py::arg("legacy_rsqrt").noconvert() = false)
-        .def("__repr__", [](const LayerNormDistributedDefaultProgramConfig& config) {
+            py::arg("use_welford").noconvert() = false)
+        .def("__repr__", [](const LayerNormDefaultProgramConfig& config) {
             return fmt::format("{}", config);
         });
 }
@@ -63,7 +64,6 @@ void bind_normalization_layernorm_pre_all_gather_operation(py::module& module) {
             py::arg("residual_input_tensor") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("program_config") = std::nullopt,
-            py::arg("distributed_program_config") = LayerNormDistributedDefaultProgramConfig{},
             py::arg("memory_config") = std::nullopt});
 }
 
@@ -118,7 +118,6 @@ void bind_normalization_layernorm_post_all_gather_operation(py::module& module) 
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("program_config") = std::nullopt,
-            py::arg("distributed_program_config") = LayerNormDistributedDefaultProgramConfig{},
             py::arg("dtype") = std::nullopt});
 }
 
