@@ -9,7 +9,6 @@
 #include "ttnn/operations/embedding/device/embedding_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
-#include <ttnn/operations/copy/typecast/typecast.hpp>
 
 namespace ttnn::operations::embedding {
 
@@ -64,7 +63,7 @@ ttnn::Tensor EmbeddingOperation::invoke(
                               .tilized = fused_tilized,
                               .embeddings_type = embeddings_type,
                               .pad_token = pad_token,
-                          },
+                              .output_dtype = dtype.value_or(weight.dtype())},
                           {input_tensor, weight})
                           .at(0);
     // Don't include batch_size if there was none
