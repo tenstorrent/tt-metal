@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 import numpy as np
 import pytest
 # Try this order at the top of your test file
