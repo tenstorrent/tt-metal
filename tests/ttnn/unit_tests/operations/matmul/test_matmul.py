@@ -353,7 +353,7 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
     return padded_number
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
+@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
 @pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [1280])
 @pytest.mark.parametrize("has_bias", [False, True])
