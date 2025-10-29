@@ -36,12 +36,9 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
 sfpi_inline sfpi::vFloat _sfpu_sigmoid_legacy_(sfpi::vFloat val) {
     vFloat result = 0.0f;
 
-    v_if(val < 0.0f) { val = -val; }
-    v_endif;
+    vFloat x = sfpi::setsgn(val, 0);
+    result = _sigmoid_piecewise_linear_positive_(x);
 
-    result = _sigmoid_piecewise_linear_positive_(val);
-
-    val = dst_reg[0];
     v_if(val < 0.0f) { result = 1.0f - result; }
     v_endif;
 
