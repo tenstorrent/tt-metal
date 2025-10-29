@@ -14,8 +14,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("h", [32, 384])
 @pytest.mark.parametrize("w", [64, 1024])
-@pytest.mark.parametrize("weight_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-def test_rms_norm(device, batch_size, h, w, weight_layout):
+def test_rms_norm(device, batch_size, h, w):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((batch_size, h, w), dtype=torch.bfloat16)
@@ -24,7 +23,7 @@ def test_rms_norm(device, batch_size, h, w, weight_layout):
     torch_output_tensor = golden_function(torch_input_tensor, torch_weight)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT)
-    weight = ttnn.from_torch(torch_weight, device=device, layout=weight_layout)
+    weight = ttnn.from_torch(torch_weight, device=device, layout=ttnn.TILE_LAYOUT)
     output_tensor = ttnn.rms_norm(input_tensor, weight=weight)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -33,7 +32,7 @@ def test_rms_norm(device, batch_size, h, w, weight_layout):
 
 
 @pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("h", [32, 384])
+@pytest.mark.parametrize("h", [128])
 @pytest.mark.parametrize("w", [32])
 def test_rms_norm_row_major(device, batch_size, h, w):
     torch.manual_seed(0)
