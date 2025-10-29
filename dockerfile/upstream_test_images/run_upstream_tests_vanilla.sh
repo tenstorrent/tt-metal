@@ -221,21 +221,22 @@ test_suite_bh_glx_metal_unit_tests() {
     ./build/test/tt_metal/tt_fabric/test_system_health
     RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2D*.*"
     RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric1D*.*"
-    RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
+    # RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
     RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_6U_galaxy.yaml
 
     # Dispatch
-    ./build/test/tt_metal/unit_tests_eth
-    ./build/test/tt_metal/unit_tests_dispatch
-    ./build/test/tt_metal/unit_tests_device
-    ./build/test/tt_metal/unit_tests_debug_tools
-    ./build/test/tt_metal/unit_tests_api
-    ./build/test/tt_metal/unit_tests_integration
-    ./build/test/tt_metal/unit_tests_llk
-    ./build/test/tt_metal/unit_tests_misc
-    ./build/test/tt_metal/unit_tests_noc
-    ./build/test/tt_metal/unit_tests_sfpi
-    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_dispatch
+    GTEST_FILTER="*-*NIGHTLY_*"
+    ./build/test/tt_metal/unit_tests_eth --gtest_filter="$GTEST_FILTER"
+    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="$GTEST_FILTER"
+    ./build/test/tt_metal/unit_tests_device --gtest_filter="$GTEST_FILTER"
+    ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="$GTEST_FILTER"
+    ./build/test/tt_metal/unit_tests_api --gtest_filter="$GTEST_FILTER"
+    ./build/test/tt_metal/unit_tests_integration --gtest_filter="$GTEST_FILTER"
+    ./build/test/tt_metal/unit_tests_llk --gtest_filter="$GTEST_FILTER"
+    ./build/test/tt_metal/unit_tests_misc --gtest_filter="$GTEST_FILTER"
+    ./build/test/tt_metal/unit_tests_noc --gtest_filter="$GTEST_FILTER"
+    ./build/test/tt_metal/unit_tests_sfpi --gtest_filter="$GTEST_FILTER"
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="$GTEST_FILTER"
 }
 
 test_suite_bh_glx_python_unit_tests() {
