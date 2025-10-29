@@ -129,7 +129,7 @@ class TTObjectEncoder:
         # Compute the center of each grid cell
         # perhaps could be moved to init block
         centers = grid[1:, 1:] + grid[:-1, :-1]
-        centers = ttnn.div(centers, 2.0)
+        centers = ttnn.divide(centers, 2.0, fast_and_approximate_mode=True)
         # Un-normalize grid offsets
         pos_offsets = ttnn.permute(pos_offsets, (0, 2, 3, 1))
         positions = pos_offsets * self.pos_std_ttnn + centers
