@@ -578,10 +578,6 @@ def test_lidar_center_net(
     assert does_pass, f"Center Heatmap PCC Failed! PCC: {heatmap_pcc_message}"
 
     if does_pass:
-        try:
-            print("SEED: ", torch.seed())
-        except:
-            pass
         logger.info("LidarCenterNet Passed!")
     else:
         logger.warning("LidarCenterNet Failed!")

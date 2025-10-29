@@ -41,7 +41,7 @@ class GlobalConfig:
     sync_batch_norm = False  # If this is true we convert the batch norms, to synced bach norms.
     train_debug_save_freq = 50  # At which interval to save debug files to disk during training
 
-    bb_confidence_threshold = 0.3  # Confidence of a bounding box that is needed for the detection to be accepted
+    bb_confidence_threshold = 0.25  # Confidence of a bounding box that is needed for the detection to be accepted
 
     # Lidar discretization, configuration only used for Point Pillars
     use_point_pillars = False
