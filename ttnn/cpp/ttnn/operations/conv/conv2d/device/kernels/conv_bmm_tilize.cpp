@@ -40,7 +40,6 @@ void tilize_in(
     }
 }  // tilize_in()
 
-#ifdef ACTIVATION_REUSE
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
 inline void tilize_single_block() {
     cb_wait_front(in_cb_id, in_block_w);
@@ -59,43 +58,6 @@ inline void tilize_single_block_with_out_cb_update(uint32_t& out_cb_addr) {
     PACK((get_local_cb_interface(out_cb_id).fifo_wr_ptr = out_cb_addr));
     PACK((out_cb_addr += tilized_cb_row_offset));
     tilize_single_block<in_cb_id, in_block_w, out_cb_id>();
-}
-
-template <
-    uint32_t in_cb_id,
-    uint32_t in_block_w,
-    uint32_t in_num_subblocks,
-    uint32_t out_cb_id,
-    uint32_t window_reuse_offset,
-    uint32_t image_width_in_tiles>
-inline void tilize_in_reuse(uint32_t in_cb_start_addr) {
-    fast_tilize_init_with_dt(in_cb_id, in_block_w, out_cb_id);
-
-    constexpr uint32_t num_image_rows = in_num_subblocks / image_width_in_tiles;
-    constexpr uint32_t last_row_columns = in_num_subblocks % image_width_in_tiles;
-    uint32_t in_cb_addr = in_cb_start_addr;
-
-    // full image rows
-    for (uint32_t image_row = 0; image_row < num_image_rows; ++image_row) {
-        // each time we start processing a new image row, we need to update the read pointer to the appropriate offset
-        // from the start of the CB to match the reader behavior
-        in_cb_addr = update_in_cb<in_cb_id, window_reuse_offset>(in_cb_addr);
-        for (uint32_t image_col = 0; image_col < image_width_in_tiles; ++image_col) {
-            cb_reserve_back(out_cb_id, in_block_w);
-            tilize_single_block<in_cb_id, in_block_w, out_cb_id>();
-            cb_push_back(out_cb_id, in_block_w);
-        }
-    }
-
-    // partial last image row
-    in_cb_addr = update_in_cb<in_cb_id, window_reuse_offset>(in_cb_addr);
-    for (uint32_t image_col = 0; image_col < last_row_columns; ++image_col) {
-        cb_reserve_back(out_cb_id, in_block_w);
-        tilize_single_block<in_cb_id, in_block_w, out_cb_id>();
-        cb_push_back(out_cb_id, in_block_w);
-    }
-
-    fast_tilize_uninit(in_cb_id, out_cb_id);
 }
 
 template <
@@ -172,7 +134,6 @@ inline void tilize_in_reuse_split_reader(uint32_t act_cb_start_address, uint32_t
     cb_push_back(out_cb_id, out_cb_tiles);
     fast_tilize_uninit(in2_cb_id, out_cb_id);
 }
-#endif
 
 template <uint32_t out_subblock_w, uint32_t out_block_w>
 inline void reblock_and_untilize(
@@ -241,16 +202,14 @@ void MAIN {
     constexpr bool packer_untilize = get_compile_time_arg_val(30);
     constexpr bool packer_l1_acc = get_compile_time_arg_val(31);
     constexpr bool fuse_bias = get_compile_time_arg_val(32);
-    constexpr bool split_reader_cb_shared = get_compile_time_arg_val(33) == 1;
+    constexpr bool split_reader = get_compile_time_arg_val(33);
+    constexpr bool activation_reuse = get_compile_time_arg_val(34);
 
-#ifdef ACTIVATION_REUSE
-    constexpr uint32_t image_width_in_tiles = get_compile_time_arg_val(34);
-    constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(35);
-#ifdef SPLIT_READER
-    constexpr uint32_t tilized_cb_row_offset = get_compile_time_arg_val(36);
-    constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(37);
-#endif
-#endif
+    constexpr uint32_t image_width_in_tiles = get_compile_time_arg_val(35);
+    constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(36);
+    constexpr uint32_t tilized_cb_row_offset = get_compile_time_arg_val(37);
+    constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(38);
+    constexpr bool split_reader_cb_shared = get_compile_time_arg_val(39) == 1;
 
     constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;
@@ -265,14 +224,19 @@ void MAIN {
 
     constexpr uint32_t mm_in0_cb_id = height_sharded ? tilized_in0_cb_id : in0_cb_id;
 
-#ifdef SPLIT_READER
-    constexpr bool split_reader = true;
-#else
-    constexpr bool split_reader = false;
-#endif
     constexpr uint32_t in0_num_subblocks_read_last =
         (split_reader && !split_reader_cb_shared) ? reader_num_h_subblocks / 2 : 0;
     constexpr uint32_t in0_num_subblocks_read = reader_num_h_subblocks - in0_num_subblocks_read_last;
+
+    // if activation reuse is enabled, we need to update read pointers of the act buffers
+    // each time we pass on to the new output image row to match the reader behavior
+    uint32_t act_cb_start_address = activation_reuse ? get_local_cb_interface(in0_cb_id).fifo_rd_ptr : 0;
+    const uint32_t out_cb_tiles =
+        activation_reuse ? in0_block_w * (in0_num_subblocks_read + in0_num_subblocks_read_last) : 0;
+    const uint32_t tilized_cb_start_address =
+        activation_reuse ? get_local_cb_interface(tilized_in0_cb_id).fifo_wr_ptr : 0;
+    const uint32_t act_cb_second_reader_start_address =
+        activation_reuse ? get_local_cb_interface(in0_cb_second_reader_id).fifo_rd_ptr : 0;
 
     // For block sharded conv2d, compute kernels may be scheduled on cores that only need tilize
     // operations (input grid) while actual matmul occurs on different cores (output grid).
@@ -282,16 +246,6 @@ void MAIN {
     if constexpr (check_skip_compute) {
         skip_compute = (bool)get_arg_val<uint32_t>(0);
     }
-#ifdef ACTIVATION_REUSE
-    // if activation reuse is enabled, we need to update read pointers of the act buffers
-    // each time we pass on to the new output image row to match the reader behavior
-    uint32_t act_cb_start_address = get_local_cb_interface(in0_cb_id).fifo_rd_ptr;
-#ifdef SPLIT_READER
-    const uint32_t out_cb_tiles = in0_block_w * (in0_num_subblocks_read + in0_num_subblocks_read_last);
-    const uint32_t tilized_cb_start_address = get_local_cb_interface(tilized_in0_cb_id).fifo_wr_ptr;
-    const uint32_t act_cb_second_reader_start_address = get_local_cb_interface(in0_cb_second_reader_id).fifo_rd_ptr;
-#endif
-#endif
 
     mm_block_init(mm_in0_cb_id, in1_cb_id, out_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION
@@ -356,37 +310,31 @@ void MAIN {
                         pack_reconfig_l1_acc(0);
                     }
 
-#ifndef ACTIVATION_REUSE
-                    tilize_in<true, !split_reader>(in0_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
-#ifdef SPLIT_READER
-                    tilize_in<false, true>(
-                        in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
-#endif
-#else
-#ifndef SPLIT_READER
-                    tilize_in_reuse<
-                        in0_cb_id,
-                        in0_block_w,
-                        in0_num_subblocks_read,
-                        tilized_in0_cb_id,
-                        window_reuse_offset,
-                        image_width_in_tiles>(act_cb_start_address);
-#else
-                    PACK((get_local_cb_interface(tilized_in0_cb_id).fifo_wr_ptr = tilized_cb_start_address));
-                    tilize_in_reuse_split_reader<
-                        in0_cb_id,
-                        in0_cb_second_reader_id,
-                        in0_block_w,
-                        in0_num_subblocks_read,
-                        in0_num_subblocks_read_last,
-                        tilized_in0_cb_id,
-                        out_cb_tiles,
-                        window_reuse_offset,
-                        tilized_cb_row_offset,
-                        tilized_cb_second_reader_offset,
-                        image_width_in_tiles>(act_cb_start_address, act_cb_second_reader_start_address);
-#endif
-#endif
+                    if constexpr (!activation_reuse) {
+                        tilize_in<true, !split_reader>(
+                            in0_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
+                    }
+
+                    if constexpr (split_reader) {
+                        if constexpr (!activation_reuse) {
+                            tilize_in<false, true>(
+                                in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
+                        } else {
+                            PACK((get_local_cb_interface(tilized_in0_cb_id).fifo_wr_ptr = tilized_cb_start_address));
+                            tilize_in_reuse_split_reader<
+                                in0_cb_id,
+                                in0_cb_second_reader_id,
+                                in0_block_w,
+                                in0_num_subblocks_read,
+                                in0_num_subblocks_read_last,
+                                tilized_in0_cb_id,
+                                out_cb_tiles,
+                                window_reuse_offset,
+                                tilized_cb_row_offset,
+                                tilized_cb_second_reader_offset,
+                                image_width_in_tiles>(act_cb_start_address, act_cb_second_reader_start_address);
+                        }
+                    }
 
                     mm_block_init_short_with_both_dt(
                         mm_in0_cb_id,
