@@ -1415,6 +1415,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
                     KernelImpl::from(*kernel).register_kernel_elf_paths_with_watcher(*device);
 
+                    fprintf(stderr, "Building %s\n", kernel->name().c_str());
                     if (enable_persistent_kernel_cache && KernelImpl::from(*kernel).binaries_exist_on_disk(device)) {
                         if (not detail::HashLookup::inst().exists(kernel_hash)) {
                             detail::HashLookup::inst().add(kernel_hash);

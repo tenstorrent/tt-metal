@@ -32,6 +32,7 @@
 #include "tt_metal/hw/inc/utils/utils.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
 #include "hostdevcommon/fabric_common.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 
 #include <array>
 #include <cstddef>
@@ -1387,6 +1388,14 @@ FORCE_INLINE void run_sender_channel_step(
     }
 }
 
+uint32_t recompute_path(PACKET_HEADER_TYPE* packet_header, ROUTING_FIELDS_TYPE& cached_routing_fields) {
+    fabric_set_unicast_route<true, static_cast<eth_chan_directions>(my_direction)>(
+        packet_header, packet_header->dst_start_chip_id, packet_header->dst_start_mesh_id);
+    cached_routing_fields.hop_index = 0;
+    packet_header->routing_fields.hop_index = 0;
+    return (uint32_t)packet_header->route_buffer[0];
+}
+
 template <
     uint8_t receiver_channel,
     uint8_t to_receiver_pkts_sent_id,
@@ -1444,6 +1453,40 @@ FORCE_INLINE void run_receiver_channel_step_impl(
 #if defined(FABRIC_2D)
             // need this ifdef since the packet header for 1D does not have router_buffer field in it.
             hop_cmd = packet_header->route_buffer[cached_routing_fields.hop_index];
+
+            const auto* routing_table =
+                reinterpret_cast<tt_l1_ptr tt::tt_fabric::tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
+            if (packet_header->dst_start_mesh_id != routing_table->my_mesh_id) {
+                // Arrive at exit node. Convert from local drain to forward to next mesh
+                if constexpr (my_direction == EAST) {
+                    if (hop_cmd == LowLatencyMeshRoutingFields::FORWARD_EAST ||
+                        hop_cmd == LowLatencyMeshRoutingFields::NOOP) {
+                        hop_cmd = recompute_path(packet_header, cached_routing_fields);
+                    }
+                } else if constexpr (my_direction == WEST) {
+                    if (hop_cmd == LowLatencyMeshRoutingFields::FORWARD_WEST ||
+                        hop_cmd == LowLatencyMeshRoutingFields::NOOP) {
+                        hop_cmd = recompute_path(packet_header, cached_routing_fields);
+                    }
+                } else if constexpr (my_direction == NORTH) {
+                    if (hop_cmd == LowLatencyMeshRoutingFields::FORWARD_NORTH ||
+                        hop_cmd == LowLatencyMeshRoutingFields::NOOP) {
+                        hop_cmd = recompute_path(packet_header, cached_routing_fields);
+                    }
+                } else if constexpr (my_direction == SOUTH) {
+                    if (hop_cmd == LowLatencyMeshRoutingFields::FORWARD_SOUTH ||
+                        hop_cmd == LowLatencyMeshRoutingFields::NOOP) {
+                        hop_cmd = recompute_path(packet_header, cached_routing_fields);
+                    }
+                } else {
+                    ASSERT(false);
+                }
+            } else {
+                // Arrive at target mesh if NOOP.
+                if (hop_cmd == LowLatencyMeshRoutingFields::NOOP) {
+                    hop_cmd = recompute_path(packet_header, cached_routing_fields);
+                }
+            }
             can_send_to_all_local_chip_receivers = can_forward_packet_completely<receiver_channel>(
                 hop_cmd, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
 #endif
