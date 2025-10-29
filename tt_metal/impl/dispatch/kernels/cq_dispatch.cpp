@@ -770,18 +770,14 @@ void process_write_packed_large(uint32_t* l1_cache) {
         while (length != 0) {
             // More data needs to be written, but we've exhausted the CB. Acquire more pages.
             if (data_ptr == dispatch_cb_reader.cb_fence) {
-                if (dispatch_cb_reader.cb_fence ==
-                    dispatch_cb_reader.block_next_start_addr[dispatch_cb_reader.rd_block_idx]) {
-                    if (dispatch_cb_reader.rd_block_idx == dispatch_cb_blocks - 1) {
-                        dispatch_cb_reader.cb_fence = dispatch_cb_base;
-                        data_ptr = dispatch_cb_base;
-                    }
-                    // Block completion - account for all writes issued for this block before moving to next
-                    noc_nonposted_writes_num_issued[noc_index] += writes;
-                    mcasts += num_dests * writes;
-                    writes = 0;
-                    dispatch_cb_reader.move_rd_to_next_block_and_release_pages();
-                }
+                dispatch_cb_reader.get_cb_page_and_release_pages(
+                    data_ptr,
+                    [&](uint32_t /*orphan_size*/, bool /*will_wrap*/) {
+                        // Block completion - account for all writes issued for this block before moving to next
+                        noc_nonposted_writes_num_issued[noc_index] += writes;
+                        mcasts += num_dests * writes;
+                        writes = 0;
+                    });
             }
             // Transfer size is min(remaining_length, data_available_in_cb)
             uint32_t available_data = dispatch_cb_reader.cb_fence - data_ptr;
