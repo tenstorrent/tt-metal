@@ -38,7 +38,8 @@ models/
     └── petr/
         ├── resources/
         │   ├── sample_input  # sample input images taken from nuscenes mini dataset
-        │   ├── weight        # if not present will be downloaded
+        │   ├── weight file(.pth)        # if not present will be downloaded
+        │   └── sample_output # will be generated once the demo is run
         │
         ├── reference/
         │   ├── cp_fpn.py
@@ -86,7 +87,7 @@ If missing, the code will download the same to the path
 
 Note: The weights are for nuScenes dataset VoVNet backbone.
 ## Quickstart
-### Run Tests
+## Run Tests
 ```
 models/experimental/petr/tests/pcc/test_ttnn_petr.py
 ```
@@ -97,19 +98,20 @@ This runs an end-to-end flow that:
 
 ### Run the Demo
 ```
-TODO - To be filled
+python3 models/experimental/petr/demo/demo.py
 ```
 ### Custom Images
-You can place your image(s) under:
+Sample nuScenes image(s) are placed under:
 ```
-models/experimental/petr/resources/
+models/experimental/petr/resources/sample_input
 ```
 Then re-run either the demo:
 ```
-TODO - TO be filled
+python3 models/experimental/petr/demo/demo.py
 ```
+Note: In the current demo, the calibration needs to be corrected. Since we do not use the nuScenes dataset fully at the moment, approximate calibration values were used. As a result, the predicted images shown in the visualization may not be fully accurate.
+
 ## Performance
-## TODO
 ### Single Device (BS=1):
 - end-2-end perf is `2.1` FPS
 To run perf test:

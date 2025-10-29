@@ -325,7 +325,7 @@ def draw_box_simple(img, box, lidar2img, color=(255, 0, 255), thickness=2, label
 
 
 def create_3d_plot(predictions, output_path, title="3D", threshold=0.2):
-    """Create 3D visualization."""
+    """Create visualization."""
     logger.info(f"  {title}...")
 
     pred = predictions[0]["pts_bbox"]
@@ -501,7 +501,7 @@ def test_demo(device, reset_seeds):
 
     logger.info("\n" + "=" * 80)
     logger.info(f"Files saved to: {output_dir}/\n")
-    logger.info("✓ VISUALIZATION COMPLETE!")
+    logger.info("Demo COMPLETE!")
     logger.info("=" * 80)
 
 

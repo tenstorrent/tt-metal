@@ -13,7 +13,6 @@ from ttnn.model_preprocessing import (
     fold_batch_norm2d_into_conv2d,
 )
 import numpy as np
-from pyquaternion import Quaternion
 from models.experimental.petr.reference.petr_head import PETRHead
 from models.experimental.petr.reference.cp_fpn import CPFPN
 from models.experimental.petr.reference.vovnetcp import VoVNetCP, eSEModule, _OSA_module, _OSA_stage
@@ -648,9 +647,17 @@ def generate_petr_inputs():
     # Convert to lidar2cam
     lidar2cam = []
     for trans, rot_quat in zip(translations, rotations_quat):
-        # Quaternion to rotation matrix
-        q = Quaternion(rot_quat)
-        rot_matrix = q.rotation_matrix
+        x, y, z, w = rot_quat
+        # Normalize
+        norm = np.sqrt(x * x + y * y + z * z + w * w)
+        x, y, z, w = x / norm, y / norm, z / norm, w / norm
+        rot_matrix = np.array(
+            [
+                [1 - 2 * y * y - 2 * z * z, 2 * x * y - 2 * z * w, 2 * x * z + 2 * y * w],
+                [2 * x * y + 2 * z * w, 1 - 2 * x * x - 2 * z * z, 2 * y * z - 2 * x * w],
+                [2 * x * z - 2 * y * w, 2 * y * z + 2 * x * w, 1 - 2 * x * x - 2 * y * y],
+            ]
+        )
 
         # Build 4x4 transformation
         T = np.eye(4, dtype=np.float32)
