@@ -27,7 +27,7 @@ std::vector<std::optional<ttnn::Tensor>> RMSNormBackwardOperation::invoke(
         result[0],
         ttnn::sum(
             result[1],
-            /* dim_arg */ ttnn::SmallVector<int>{0, 1, 2},
+            /* dim_arg */ ttsl::SmallVector<int>{0, 1, 2},
             /* keep_dim */ true,
             /* output_mem_config */ std::nullopt,
             /*compute_kernel_config */ core::ComputeKernelConfig::precise())  // [B,1,S,C] -> [1,1,1,C]

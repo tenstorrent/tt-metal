@@ -39,8 +39,8 @@ void MorehMatmulOperation::validate_inputs(
     TT_FATAL(input_k == other_k, "k must be the same. input_k {}, other_k {}", input_k, other_k);
 
     // check batch dims
-    ttnn::SmallVector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-    ttnn::SmallVector<uint32_t> other_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    ttsl::SmallVector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    ttsl::SmallVector<uint32_t> other_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(input_dim, input_shape);
     get_tensor_dim(other_dim, other_shape);
     for (auto i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
@@ -62,7 +62,7 @@ void MorehMatmulOperation::validate_inputs(
         TT_FATAL(input_m == output_m, "m must be the same. input_m {}, output_m {}", input_m, output_m);
         TT_FATAL(other_n == output_n, "n must be the same. other_n {}, output_n {}", other_n, output_n);
 
-        ttnn::SmallVector<uint32_t> output_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttsl::SmallVector<uint32_t> output_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
         get_tensor_dim(output_dim, output_shape);
 
         for (auto i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
@@ -128,8 +128,8 @@ MorehMatmulOperation::spec_return_value_t MorehMatmulOperation::compute_output_s
     auto h_wo_padding = (transpose_input) ? (input_shape_wo_padding[-1]) : (input_shape_wo_padding[-2]);
     auto w_wo_padding = (transpose_other) ? (other_shape_wo_padding[-2]) : (other_shape_wo_padding[-1]);
 
-    ttnn::SmallVector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-    ttnn::SmallVector<uint32_t> other_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    ttsl::SmallVector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    ttsl::SmallVector<uint32_t> other_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(input_dim, input_shape);
     get_tensor_dim(other_dim, other_shape);
 
@@ -143,7 +143,7 @@ MorehMatmulOperation::spec_return_value_t MorehMatmulOperation::compute_output_s
         other_shape.rank(),
         output_rank);
 
-    ttnn::SmallVector<uint32_t> output_dim(output_rank);
+    ttsl::SmallVector<uint32_t> output_dim(output_rank);
     // batch dims
     for (int i = 0; i < output_rank - 2; ++i) {
         int idx = output_rank - 1 - i;

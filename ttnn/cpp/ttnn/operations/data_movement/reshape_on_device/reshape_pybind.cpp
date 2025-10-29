@@ -29,7 +29,7 @@ void bind_reshape(pybind11::module& module, const data_movement_operation_t& ope
                int Y,
                int X,
                const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(input_tensor, ttnn::SmallVector<int32_t>{W, Z, Y, X}, memory_config);
+                return self(input_tensor, ttsl::SmallVector<int32_t>{W, Z, Y, X}, memory_config);
             },
             py::arg("input_tensor"),
             py::arg("W"),

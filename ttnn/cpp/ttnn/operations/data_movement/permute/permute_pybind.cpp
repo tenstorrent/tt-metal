@@ -46,7 +46,7 @@ void bind_permute(py::module& module) {
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<int64_t>& dims,
+               const ttsl::SmallVector<int64_t>& dims,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<float>& pad_value) { return self(input_tensor, dims, memory_config, pad_value); },
             py::arg("input_tensor").noconvert(),

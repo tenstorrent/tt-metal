@@ -223,7 +223,7 @@ autograd::TensorPtr rmsnorm_composite(
             false);  // [B,1,S,C] x [B,1,S,1] -> [B,1,S,C] (bcast); checked by add_grad
         auto dL_dg = ttnn::sum(
             dL_dg_components,
-            /* dim_arg */ ttnn::SmallVector<int>{0, 1, 2},
+            /* dim_arg */ ttsl::SmallVector<int>{0, 1, 2},
             /* keep_dim */ true,
             /* output_mem_config */ std::nullopt,
             /*compute_kernel_config */ core::ComputeKernelConfig::precise());  // [B,1,S,C] -> [1,1,1,C]

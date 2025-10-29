@@ -28,7 +28,7 @@ void bind_squeeze(pybind11::module& module, const data_movement_operation_t& ope
                 } else if (pybind11::isinstance<pybind11::int_>(dim)) {  // int
                     return self(input_tensor, dim.cast<int>());
                 } else if (pybind11::isinstance<pybind11::list>(dim)) {  // List[int]
-                    auto dims = dim.cast<ttnn::SmallVector<int>>();
+                    auto dims = dim.cast<ttsl::SmallVector<int>>();
                     return self(input_tensor, dims);
                 } else {
                     throw std::invalid_argument("dim must be an int, a list of ints, or None");

@@ -127,7 +127,7 @@ MorehSumBackwardOperation::invoke(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return {
         operation_attributes_t{
-            ttnn::SmallVector<int64_t>(dims.begin(), dims.end()),
+            ttsl::SmallVector<int64_t>(dims.begin(), dims.end()),
             keepdim,
             memory_config.value_or(output_grad.memory_config()),
             init_device_compute_kernel_config(

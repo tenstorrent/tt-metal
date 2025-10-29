@@ -21,14 +21,14 @@ struct ExecutePad {
     // Any rank tensor supported
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const ttnn::SmallVector<PadSpecDim>& padding,
+        const ttsl::SmallVector<PadSpecDim>& padding,
         float value,
         bool use_multicore,
         const std::optional<MemoryConfig>& memory_config_arg);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const ttnn::SmallVector<std::array<uint32_t, 2>>& padding,
+        const ttsl::SmallVector<std::array<uint32_t, 2>>& padding,
         float value,
         bool use_multicore = false,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt);

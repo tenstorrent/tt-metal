@@ -16,7 +16,7 @@ ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
     if (shape.rank() <= n) {
         return shape;
     }
-    ttnn::SmallVector<uint32_t> shape_nd(n);
+    ttsl::SmallVector<uint32_t> shape_nd(n);
     std::copy(shape.view().rbegin(), shape.view().rbegin() + n, shape_nd.rbegin());
     const auto rank_diff_end = shape.rank() - n + 1;
     shape_nd[0] = std::accumulate(shape.cbegin(), shape.cbegin() + rank_diff_end, 1, std::multiplies<uint32_t>());
@@ -53,7 +53,7 @@ ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
 }
 
 ttnn::Shape unsqueeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
-    ttnn::SmallVector<uint32_t> shape_vector(n, 1);
+    ttsl::SmallVector<uint32_t> shape_vector(n, 1);
     std::copy(shape.view().rbegin(), shape.view().rend(), shape_vector.rbegin());
     return ttnn::Shape(shape_vector);
 }
@@ -509,7 +509,7 @@ ttnn::Tensor pad_to_tile_vol(
         auto padded_height = tt::round_up(padded_shape[-2], tt::constants::TILE_HEIGHT);
         auto padded_width = tt::round_up(padded_shape[-1], tt::constants::TILE_WIDTH);
         uint32_t num_non_hw_dims = rank - 2u;
-        auto padding_vec = ttnn::SmallVector<std::array<uint32_t, 2>>(num_non_hw_dims, {0, 0});
+        auto padding_vec = ttsl::SmallVector<std::array<uint32_t, 2>>(num_non_hw_dims, {0, 0});
         padding_vec.reserve(rank);
         padding_vec.emplace_back(0, padded_height - padded_shape[-2]);
         padding_vec.emplace_back(0, padded_width - padded_shape[-1]);
@@ -565,7 +565,7 @@ ttnn::Shape compute_padded_shape(
         return ttnn::Shape{tile_height, tile_width};
     }
 
-    ttnn::SmallVector<uint32_t> output_shape_vec(logical_shape.rank());
+    ttsl::SmallVector<uint32_t> output_shape_vec(logical_shape.rank());
     std::copy(logical_shape.cbegin(), logical_shape.cend(), output_shape_vec.begin());
 
     const std::array<uint32_t, 2> tile_shape = {tt::constants::TILE_WIDTH, tt::constants::TILE_HEIGHT};

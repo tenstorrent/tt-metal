@@ -88,7 +88,7 @@ Tensor fast_reduce_nc(
     const std::optional<const ttnn::Tensor>& output,
     const MemoryConfig& output_mem_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-    ttnn::SmallVector<int32_t> sorted_dims(dims.begin(), dims.end());
+    ttsl::SmallVector<int32_t> sorted_dims(dims.begin(), dims.end());
     std::sort(sorted_dims.begin(), sorted_dims.end());
 
     auto temp_input = input;

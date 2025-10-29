@@ -30,14 +30,14 @@
 namespace ttnn::operations::moreh::moreh_norm_backward {
 
 std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(float p);
-void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape);
+void get_tensor_dim(ttsl::SmallVector<uint32_t>& dim, const ttnn::Shape& shape);
 ttnn::Shape get_output_grad_shape(
-    const Tensor& output_grad, const Tensor& input_grad, const ttnn::SmallVector<int64_t>& dims, const bool& keepdim);
+    const Tensor& output_grad, const Tensor& input_grad, const ttsl::SmallVector<int64_t>& dims, const bool& keepdim);
 
 struct MorehNormBackwardOperation {
     struct operation_attributes_t {
         float p;
-        ttnn::SmallVector<int64_t> dims;
+        ttsl::SmallVector<int64_t> dims;
         bool keepdim;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
@@ -69,7 +69,7 @@ struct MorehNormBackwardOperation {
         const Tensor& output,
         const Tensor& output_grad,
         float p,
-        const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim,
+        const std::optional<std::variant<int64_t, ttsl::SmallVector<int64_t>>>& dim,
         bool keepdim,
         const std::optional<Tensor>& input_grad,
         const std::optional<MemoryConfig>& memory_config,

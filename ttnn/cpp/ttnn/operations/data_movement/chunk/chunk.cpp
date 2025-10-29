@@ -29,14 +29,14 @@ std::vector<ttnn::Tensor> ChunkOperation::invoke(const ttnn::Tensor& input_tenso
     while (start < size_along_dim) {
         int end = std::min(start + chunk_size, size_along_dim);
 
-        ttnn::SmallVector<int> slice_start(num_dims, 0);
-        ttnn::SmallVector<int> slice_end(num_dims);
+        ttsl::SmallVector<int> slice_start(num_dims, 0);
+        ttsl::SmallVector<int> slice_end(num_dims);
         for (int i = 0; i < num_dims; ++i) {
             slice_end[i] = size[i];
         }
         slice_start[dim] = start;
         slice_end[dim] = end;
-        ttnn::SmallVector<int> slice_step(num_dims, 1);
+        ttsl::SmallVector<int> slice_step(num_dims, 1);
 
         ttnn::Tensor chunk_tensor = ttnn::slice(input_tensor, slice_start, slice_end, slice_step);
 

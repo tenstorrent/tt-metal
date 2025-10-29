@@ -42,7 +42,7 @@ ttnn::Tensor repeat_upper_dims_rm(
     // figure out the shape of the input tensor for the op. dims before and after rep dim get collapsed, not including
     // page size.
     const auto& input_shape = tensor.logical_shape();
-    ttnn::SmallVector<uint32_t> collapsed_shape_vector(4);
+    ttsl::SmallVector<uint32_t> collapsed_shape_vector(4);
 
     collapsed_shape_vector[UpperRepeatDims::collapsed_upper] =
         std::accumulate(input_shape.cbegin(), input_shape.cbegin() + dim, 1, std::multiplies<uint32_t>());
@@ -70,7 +70,7 @@ ttnn::Tensor repeat_last_dim_rm(
     // op
     // un-collapse
     const auto& input_shape = tensor.logical_shape();
-    ttnn::SmallVector<uint32_t> collapsed_shape_vector(2);
+    ttsl::SmallVector<uint32_t> collapsed_shape_vector(2);
 
     collapsed_shape_vector[0] =
         std::accumulate(input_shape.cbegin(), input_shape.cend() - 1, 1, std::multiplies<uint32_t>());
@@ -90,7 +90,7 @@ ttnn::Tensor repeat_last_dim_rm(
     return ttnn::view(out_tensor, ttnn::Shape(expected_shape));
 }
 
-std::tuple<ttnn::Tensor, ttnn::SmallVector<uint32_t>> match_input_rank(
+std::tuple<ttnn::Tensor, ttsl::SmallVector<uint32_t>> match_input_rank(
     const ttnn::Tensor& tensor, const SmallVector<uint32_t>& repetition_vector) {
     auto working_tensor = tensor;
     const auto& input_shape = working_tensor.logical_shape();
@@ -100,7 +100,7 @@ std::tuple<ttnn::Tensor, ttnn::SmallVector<uint32_t>> match_input_rank(
         std::accumulate(repetition_vector.cbegin(), repetition_vector.cend(), 1, std::multiplies<uint_fast32_t>());
 
     if (input_shape.rank() < repetition_vector.size()) {
-        ttnn::SmallVector<uint32_t> new_shape_vec(repetition_vector.size(), 1);
+        ttsl::SmallVector<uint32_t> new_shape_vec(repetition_vector.size(), 1);
         std::copy_backward(input_shape.cbegin(), input_shape.cend(), new_shape_vec.end());
         working_tensor = ttnn::view(working_tensor, ttnn::Shape(new_shape_vec));
         working_repetition_vector = repetition_vector;
@@ -130,7 +130,7 @@ std::tuple<ttnn::Tensor, ttnn::SmallVector<uint32_t>> match_input_rank(
 
 ttnn::Tensor RepeatOperation::invoke(
     const ttnn::Tensor& tensor,
-    const ttnn::SmallVector<uint32_t>& provided_repetition_vector,
+    const ttsl::SmallVector<uint32_t>& provided_repetition_vector,
     const std::optional<MemoryConfig>& provided_output_mem_config) {
     auto [working_tensor, repetition_vector] = detail::match_input_rank(tensor, provided_repetition_vector);
     MemoryConfig output_mem_config = provided_output_mem_config.value_or(tensor.memory_config());

@@ -12,7 +12,7 @@ namespace operations::data_movement {
 
 struct SqueezeOperation {
     // Note: dim is passed by non-const reference because it's convenient to modify it for processing
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int>& dim);
+    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const ttsl::SmallVector<int>& dim);
     static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, int dim);
     static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor);
 };

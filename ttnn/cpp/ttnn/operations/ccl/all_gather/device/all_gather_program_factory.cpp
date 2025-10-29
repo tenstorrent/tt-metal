@@ -40,7 +40,7 @@ AllGatherDeviceOperation::AllGatherProgram::create_mesh_workload(
     };
 
     // 1 barrier semaphore used to ensure that all the buffers are allocated
-    ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevice_ids = {sd_id};
+    ttsl::SmallVector<tt::tt_metal::SubDeviceId> subdevice_ids = {sd_id};
     auto barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0);
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevice_ids);
 

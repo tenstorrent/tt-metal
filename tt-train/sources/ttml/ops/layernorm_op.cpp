@@ -118,7 +118,7 @@ autograd::TensorPtr composite_layernorm(
 
         auto dbeta = ttnn::moreh_sum(
             dout,
-            /* dim */ ttnn::SmallVector<int64_t>{0, 1, 2},
+            /* dim */ ttsl::SmallVector<int64_t>{0, 1, 2},
             /* keep_dim */ true,
             /* output */ std::nullopt,
             /* output_mem_config */ std::nullopt,
@@ -126,7 +126,7 @@ autograd::TensorPtr composite_layernorm(
 
         auto dgamma = ttnn::moreh_sum(
             ttnn::multiply(dout, normalized_tensor),
-            /* dim */ ttnn::SmallVector<int64_t>{0, 1, 2},
+            /* dim */ ttsl::SmallVector<int64_t>{0, 1, 2},
             /* keep_dim */ true,
             /* output */ std::nullopt,
             /* output_mem_config */ std::nullopt,

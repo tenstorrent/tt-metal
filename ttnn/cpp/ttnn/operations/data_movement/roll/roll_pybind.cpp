@@ -24,8 +24,8 @@ void bind_roll(pybind11::module& module, const data_movement_operation_t& operat
         ttnn::pybind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<int>& shifts,
-               const ttnn::SmallVector<int>& dim) -> ttnn::Tensor { return self(input_tensor, shifts, dim); },
+               const ttsl::SmallVector<int>& shifts,
+               const ttsl::SmallVector<int>& dim) -> ttnn::Tensor { return self(input_tensor, shifts, dim); },
             py::arg("input_tensor"),
             py::arg("shifts"),
             py::arg("dim")},

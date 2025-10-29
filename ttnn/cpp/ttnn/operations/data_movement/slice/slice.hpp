@@ -24,9 +24,9 @@ struct SliceOperation {
     template <typename T>
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const ttnn::SmallVector<T>& begins,
-        const ttnn::SmallVector<T>& ends,
-        const ttnn::SmallVector<T>& step,
+        const ttsl::SmallVector<T>& begins,
+        const ttsl::SmallVector<T>& ends,
+        const ttsl::SmallVector<T>& step,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
         const std::optional<float>& pad_value = std::nullopt) {
@@ -55,7 +55,7 @@ struct SliceOperation {
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& output_tensor_start,
         const ttnn::Tensor& output_tensor_end,
-        const std::optional<ttnn::SmallVector<T>>& step,
+        const std::optional<ttsl::SmallVector<T>>& step,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
         const std::optional<float>& pad_value = std::nullopt);

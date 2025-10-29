@@ -60,7 +60,7 @@ MorehMeanBackwardOperation::tensor_return_value_t MorehMeanBackwardOperation::cr
 std::tuple<MorehMeanBackwardOperation::operation_attributes_t, MorehMeanBackwardOperation::tensor_args_t>
 MorehMeanBackwardOperation::invoke(
     const Tensor& output_grad,
-    const ttnn::SmallVector<int64_t>& dims,
+    const ttsl::SmallVector<int64_t>& dims,
     const bool keepdim,
     const std::optional<ttnn::Shape>& input_grad_shape,
     const std::optional<Tensor>& input_grad,

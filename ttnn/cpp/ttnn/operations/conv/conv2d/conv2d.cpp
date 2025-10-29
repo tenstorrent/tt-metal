@@ -544,9 +544,9 @@ Result conv2d_DRAM(
 
         Tensor sliced_input_tensor = ttnn::experimental::padded_slice(
             input_tensor_on_device,
-            ttnn::SmallVector<uint32_t>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
-            ttnn::SmallVector<uint32_t>{batch_size, input_slice_height_end, input_slice_width_end, in_channels},
-            ttnn::SmallVector<uint32_t>{1, 1, 1, 1},  // Step
+            ttsl::SmallVector<uint32_t>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
+            ttsl::SmallVector<uint32_t>{batch_size, input_slice_height_end, input_slice_width_end, in_channels},
+            ttsl::SmallVector<uint32_t>{1, 1, 1, 1},  // Step
             sliced_input_tensor_memory_config);
 
         auto conv_config_l1 = conv_config;
@@ -603,9 +603,9 @@ Result conv2d_DRAM(
         ttnn::experimental::slice_write(
             sliced_output_tensor,
             dram_output_tensor,
-            ttnn::SmallVector<uint32_t>{0, output_slice_height_start, output_slice_width_start, 0},
-            ttnn::SmallVector<uint32_t>{batch_size, output_slice_height_end, output_slice_width_end, out_channels},
-            ttnn::SmallVector<uint32_t>{1, 1, 1, 1});
+            ttsl::SmallVector<uint32_t>{0, output_slice_height_start, output_slice_width_start, 0},
+            ttsl::SmallVector<uint32_t>{batch_size, output_slice_height_end, output_slice_width_end, out_channels},
+            ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
         first_run = false;
         output_slice_dim_start += output_slice_size;
         slice_index++;

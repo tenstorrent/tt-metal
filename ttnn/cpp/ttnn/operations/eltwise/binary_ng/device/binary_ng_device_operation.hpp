@@ -31,9 +31,9 @@ struct BinaryNgDeviceOperation {
 
     struct operation_attributes_t {
         BinaryOpType binary_op_type;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> post_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> post_activations;
         std::optional<float> scalar;
         tt::tt_metal::MemoryConfig memory_config;
         DataType input_dtype;

@@ -74,8 +74,8 @@ struct MorehMatmulOperation {
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 
-void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape);
-ttnn::SmallVector<int64_t> find_reduce_dim(const ttnn::Shape& a_shape, const ttnn::Shape& b_shape);
+void get_tensor_dim(ttsl::SmallVector<uint32_t>& dim, const ttnn::Shape& shape);
+ttsl::SmallVector<int64_t> find_reduce_dim(const ttnn::Shape& a_shape, const ttnn::Shape& b_shape);
 bool is_same_batch_dim(const Tensor& tensor_a, const Tensor& tensor_b);
 
 }  // namespace ttnn::operations::moreh::moreh_matmul

@@ -10,7 +10,7 @@ namespace operations::data_movement {
 
 struct RollOperation {
     static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int>& shifts, const ttnn::SmallVector<int>& dim);
+        const ttnn::Tensor& input_tensor, const ttsl::SmallVector<int>& shifts, const ttsl::SmallVector<int>& dim);
     static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, int shifts);
     static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, int shifts, int dim);
 };

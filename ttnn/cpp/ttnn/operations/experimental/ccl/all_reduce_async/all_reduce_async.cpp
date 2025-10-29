@@ -123,7 +123,7 @@ Tensor local_sum_float32(
         input_tensor = ttnn::to_layout(gathered_tensor, Layout::TILE);
     }
 
-    ttnn::SmallVector<uint32_t> reshape_dims_vec;
+    ttsl::SmallVector<uint32_t> reshape_dims_vec;
     for (int i = 0; i < rank; ++i) {
         if (i == reduce_dim) {
             reshape_dims_vec.push_back(num_devices);

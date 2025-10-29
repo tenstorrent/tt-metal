@@ -113,7 +113,7 @@ MassagedConcat build_untilize_rm_retilize_concat(
                     TT_FATAL(
                         input_tensor.layout() == ttnn::TILE_LAYOUT,
                         "ttnn.concat: expected all input tensors to be in tile layout");
-                    ttnn::SmallVector<uint32_t> ends(
+                    ttsl::SmallVector<uint32_t> ends(
                         input_tensor.logical_shape().cbegin(), input_tensor.logical_shape().cend());
                     std::transform(ends.begin(), ends.end(), ends.begin(), [](const auto l) { return l - 1; });
                     return ttnn::untilize_with_unpadding(input_tensor, ttnn::Shape(ends), std::nullopt);

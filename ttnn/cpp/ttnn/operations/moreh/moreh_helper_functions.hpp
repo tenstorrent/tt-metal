@@ -261,16 +261,16 @@ uint32_t compute_inner(const ttnn::Shape& shape, uint32_t dim);
 
 uint32_t compute_outer(const ttnn::Shape& shape, uint32_t dim);
 
-void expand_to_max_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape);
+void expand_to_max_dim(ttsl::SmallVector<uint32_t>& dim, const ttnn::Shape& shape);
 
 void validate_input_with_dim(const Tensor& input, const int64_t& dim);
 
 void validate_output_with_keepdim(const Tensor& input, const Tensor& output, const int64_t& dim, const bool& keepdim);
 
-void initialize_dims_with_range(ttnn::SmallVector<int64_t>& dims, uint32_t input_rank);
+void initialize_dims_with_range(ttsl::SmallVector<int64_t>& dims, uint32_t input_rank);
 
-ttnn::SmallVector<int64_t> get_dim(
-    const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim, uint32_t input_rank);
+ttsl::SmallVector<int64_t> get_dim(
+    const std::optional<std::variant<int64_t, ttsl::SmallVector<int64_t>>>& dim, uint32_t input_rank);
 
 std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::Shape& shape);
 

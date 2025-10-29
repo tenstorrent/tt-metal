@@ -69,7 +69,7 @@ std::vector<Tensor> fold_with_transpose_(
     log_debug(tt::LogOp, "pad_output: {}", pad_output.logical_shape());
 
     auto transpose_hc_output = ttnn::prim::permute(
-        pad_output, ttnn::SmallVector<uint32_t>({0, 3, 1, 2}), std::make_optional(L1_mem_config), std::nullopt);
+        pad_output, ttsl::SmallVector<uint32_t>({0, 3, 1, 2}), std::make_optional(L1_mem_config), std::nullopt);
 
     log_debug(tt::LogOp, "transpose_hc_output: {}", transpose_hc_output.logical_shape());
 
@@ -463,7 +463,7 @@ Tensor FoldOperation::invoke(
 
         // Apply padding if needed
         if (has_hw_padding || has_c_padding) {
-            ttnn::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding_spec;
+            ttsl::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding_spec;
             padding_spec.push_back({0, 0});                 // N dimension
             padding_spec.push_back({pad_top, pad_bottom});  // H dimension
             padding_spec.push_back({pad_left, pad_right});  // W dimension

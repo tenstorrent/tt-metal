@@ -120,7 +120,7 @@ void bind_reduction_prod_operation(py::module& module, const unary_operation_t& 
             [](const unary_operation_t& self,
                const Tensor& input_tensor,
                const Tensor& output_tensor,
-               ttnn::SmallVector<int64_t>& dims,
+               ttsl::SmallVector<int64_t>& dims,
                const std::optional<MemoryConfig>& memory_config) {
                 return self(input_tensor, output_tensor, dims, memory_config);
             },

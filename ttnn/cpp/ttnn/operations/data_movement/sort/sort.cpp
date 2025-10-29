@@ -92,9 +92,9 @@ std::vector<Tensor> post_sort_transform_tensor(
     // Check if manual padding was applied for the last dimension
     const auto output_logical_shape = result[0].logical_shape();
     if (output_logical_shape[-1] != original_lshape[-1]) {
-        const ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
-        const ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-        const ttnn::SmallVector<uint32_t> end_index = {
+        const ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
+        const ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+        const ttsl::SmallVector<uint32_t> end_index = {
             original_lshape[-4], original_lshape[-3], original_lshape[-2], original_lshape[-1]};
         result[0] = ttnn::slice(result[0], start_index, end_index, step, input_memory_config);
         result[1] = ttnn::slice(result[1], start_index, end_index, step, input_memory_config);
@@ -104,7 +104,7 @@ std::vector<Tensor> post_sort_transform_tensor(
         result[0] = ttnn::squeeze_from_4D(result[0], orig_rank);
         result[1] = ttnn::squeeze_from_4D(result[1], orig_rank);
     } else if (orig_rank > 4) {
-        ttnn::SmallVector<uint32_t> result_shape(input_shape.cbegin(), input_shape.cend());
+        ttsl::SmallVector<uint32_t> result_shape(input_shape.cbegin(), input_shape.cend());
         result[0] = ttnn::reshape(result[0], ttnn::Shape{result_shape});
         result[1] = ttnn::reshape(result[1], ttnn::Shape{result_shape});
     }

@@ -38,7 +38,7 @@ void py_bind_view(py::module& module) {
         doc,
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::experimental::view)& self, ttnn::Tensor& input_tensor, int N, int C, int H, int W) {
-                return self(input_tensor, infer_dims_for_reshape(input_tensor, ttnn::SmallVector<int>{N, C, H, W}));
+                return self(input_tensor, infer_dims_for_reshape(input_tensor, ttsl::SmallVector<int>{N, C, H, W}));
             },
             py::arg("input_tensor"),
             py::arg("N"),
@@ -49,7 +49,7 @@ void py_bind_view(py::module& module) {
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::experimental::view)& self,
                ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<int32_t>& shape) {
+               const ttsl::SmallVector<int32_t>& shape) {
                 return self(input_tensor, infer_dims_for_reshape(input_tensor, shape));
             },
             py::arg("input_tensor"),

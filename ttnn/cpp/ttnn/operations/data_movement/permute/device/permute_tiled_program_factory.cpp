@@ -30,7 +30,7 @@ uint32_t tile_size(const ttnn::Tensor& input_tensor) {
 ttnn::Shape get_tiled_shape(const ttnn::Tensor& input_tensor) {
     const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     const auto& shape = input_tensor.padded_shape();
-    ttnn::SmallVector<uint32_t> tiled_shape;
+    ttsl::SmallVector<uint32_t> tiled_shape;
     tiled_shape.reserve(shape.rank());
     for (int i = 0; i < shape.rank(); i++) {
         uint32_t dim = 0;
@@ -47,8 +47,8 @@ ttnn::Shape get_tiled_shape(const ttnn::Tensor& input_tensor) {
     return res;
 }
 
-ttnn::SmallVector<uint32_t> get_strides(const ttnn::Shape& shape) {
-    ttnn::SmallVector<uint32_t> strides(shape.rank());
+ttsl::SmallVector<uint32_t> get_strides(const ttnn::Shape& shape) {
+    ttsl::SmallVector<uint32_t> strides(shape.rank());
     strides[shape.rank() - 1] = 1;
     for (int i = shape.rank() - 2; i >= 0; i--) {
         strides[i] = strides[i + 1] * shape[i + 1];
@@ -57,15 +57,15 @@ ttnn::SmallVector<uint32_t> get_strides(const ttnn::Shape& shape) {
 }
 
 // Function to compute the inverse of a permutation
-ttnn::SmallVector<uint32_t> get_inverse_permutation(const ttnn::SmallVector<uint32_t>& perm) {
+ttsl::SmallVector<uint32_t> get_inverse_permutation(const ttsl::SmallVector<uint32_t>& perm) {
     // Get the size of the permutation
     size_t n = perm.size();
 
     // Create a vector for the inverse permutation
-    ttnn::SmallVector<uint32_t> inverse_permutation(n);
+    ttsl::SmallVector<uint32_t> inverse_permutation(n);
 
     // Validate the input permutation
-    ttnn::SmallVector<bool> seen(n, false);
+    ttsl::SmallVector<bool> seen(n, false);
     for (size_t i = 0; i < n; ++i) {
         if (perm[i] >= n || seen[perm[i]]) {
             TT_FATAL(false, "Invalid permutation: duplicate or out of range value");

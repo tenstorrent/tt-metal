@@ -13,7 +13,7 @@ namespace ttnn::operations::full {
 
 struct FullOperation {
     struct operation_attributes_t {
-        const ttnn::SmallVector<uint32_t> shape;
+        const ttsl::SmallVector<uint32_t> shape;
         const std::variant<float, int> fill_value;
         const DataType dtype;
         const Layout layout;
@@ -58,7 +58,7 @@ struct FullOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        ttnn::SmallVector<uint32_t> shape,
+        ttsl::SmallVector<uint32_t> shape,
         std::variant<float, int> fill_value,
         const Tensor& any,
         const std::optional<DataType>& dtype,

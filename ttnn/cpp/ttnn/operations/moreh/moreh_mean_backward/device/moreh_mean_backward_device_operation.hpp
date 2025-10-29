@@ -17,7 +17,7 @@
 namespace ttnn::operations::moreh::moreh_mean_backward {
 struct MorehMeanBackwardOperation {
     struct operation_attributes_t {
-        const ttnn::SmallVector<int64_t> dims;
+        const ttsl::SmallVector<int64_t> dims;
         const bool keepdim;
         const std::optional<ttnn::Shape> input_grad_shape;
         const MemoryConfig memory_config;
@@ -63,7 +63,7 @@ struct MorehMeanBackwardOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& output_grad,
-        const ttnn::SmallVector<int64_t>& dims,
+        const ttsl::SmallVector<int64_t>& dims,
         bool keepdim,
         const std::optional<ttnn::Shape>& input_grad_shape,
         const std::optional<Tensor>& input_grad,

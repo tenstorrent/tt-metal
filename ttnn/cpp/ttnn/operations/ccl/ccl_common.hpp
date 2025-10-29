@@ -94,7 +94,7 @@ class EriscDatamoverBuilder;
 std::vector<ttnn::Tensor> unpad_output_tensor(
     const std::vector<ttnn::Tensor>& output_tensor,
     uint32_t num_devices,
-    const ttnn::SmallVector<uint32_t>& unpad_elements,
+    const ttsl::SmallVector<uint32_t>& unpad_elements,
     int dim);
 
 class LineTopology {

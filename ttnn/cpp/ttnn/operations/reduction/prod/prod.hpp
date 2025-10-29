@@ -23,7 +23,7 @@ struct ProdOperation {
     static Tensor invoke(
         const Tensor& input,
         const Tensor& output,
-        ttnn::SmallVector<int64_t>& dims,
+        ttsl::SmallVector<int64_t>& dims,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 

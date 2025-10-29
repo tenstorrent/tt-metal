@@ -46,7 +46,7 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
         }
     }
     // Apply prod
-    ttnn::SmallVector<int64_t> dimension = {(dim == 1 || dim == -3) ? 1 : 0};
+    ttsl::SmallVector<int64_t> dimension = {(dim == 1 || dim == -3) ? 1 : 0};
     const auto& input_shape = formatted_input_tensor.logical_shape();
     std::array<uint32_t, 4> required = {
         ((dim == 1 || dim == -3) ? input_shape[0] : 1),
@@ -107,7 +107,7 @@ Tensor ProdOperation::invoke(
         const int third_last_dim_idx = input_a.logical_shape().rank() - 3;
         const bool permute_required = third_last_dim_idx != positive_dim;
 
-        ttnn::SmallVector<int64_t> post_permute_dims(input_a.logical_shape().rank());
+        ttsl::SmallVector<int64_t> post_permute_dims(input_a.logical_shape().rank());
         std::iota(post_permute_dims.begin(), post_permute_dims.end(), 0);
         std::swap(post_permute_dims[third_last_dim_idx], post_permute_dims[positive_dim]);
 
@@ -150,32 +150,32 @@ Tensor ProdOperation::invoke(
         Tensor temp = input_tensor_4d;
         // Permute for dim 2,3
         if (dim_4d == 2 || dim_4d == -2) {
-            ttnn::SmallVector<int64_t> permute_dims = {2, 0, 1, 3};
+            ttsl::SmallVector<int64_t> permute_dims = {2, 0, 1, 3};
             temp = ttnn::permute(input_tensor_4d, permute_dims, output_mem_config);
         } else if (dim_4d == 3 || dim_4d == -1) {
-            ttnn::SmallVector<int64_t> permute_dims = {3, 0, 1, 2};
+            ttsl::SmallVector<int64_t> permute_dims = {3, 0, 1, 2};
             temp = ttnn::permute(input_tensor_4d, permute_dims, output_mem_config);
         }
         Tensor result = prod_nc(temp, dim_4d, output_mem_config);
         // Permute and unpad result for dim 2,3. Don't need to process dim 0,1.
-        auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
+        auto step = ttsl::SmallVector<uint32_t>({1, 1, 1, 1});
         if (dim_4d == 0 || dim_4d == 1 || dim_4d == -4 || dim_4d == -3) {
             result = ttnn::squeeze_from_4D(result, old_rank);
         } else if (dim_4d == 2 || dim_4d == -2) {
-            ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
+            ttsl::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
             Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
             const auto& input_shape = input_tensor_4d.logical_shape();
-            ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-            ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[3]};
+            ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+            ttsl::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[3]};
             result = ttnn::squeeze_from_4D(ttnn::slice(required, start_index, end_index, step, std::nullopt), old_rank);
         } else {  // dim 3
             // permute
-            ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
+            ttsl::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
             Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
             // unpad
             const auto& input_shape = input_tensor_4d.logical_shape();
-            ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-            ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[2]};
+            ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+            ttsl::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[2]};
             Tensor new_unpad_tensor = ttnn::slice(required, start_index, end_index, step, std::nullopt);
             // permute back
             after_permute_dims = {0, 1, 3, 2};
@@ -189,7 +189,7 @@ Tensor ProdOperation::invoke(
 Tensor ProdOperation::invoke(
     const Tensor& input,
     const Tensor& output,
-    ttnn::SmallVector<int64_t>& dims,
+    ttsl::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config) {
     auto mem_cfg = memory_config.value_or(input.memory_config());
 

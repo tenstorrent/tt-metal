@@ -57,7 +57,7 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
                 .optional_output_tensor = optional_output_tensor,
             });
         // currently full only supports tile layout
-        ttnn::SmallVector<uint32_t> output_shape;
+        ttsl::SmallVector<uint32_t> output_shape;
         output_shape.reserve(output_spec.logical_shape().rank());
         for (size_t i = 0; i < output_spec.logical_shape().rank(); i++) {
             output_shape.push_back(output_spec.logical_shape()[i]);

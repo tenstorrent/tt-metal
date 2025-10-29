@@ -49,9 +49,9 @@ std::vector<Tensor> post_topk_transform_tensor(
     if (adjusted_k != k) {
         // slicing into padded shapes that will allow reshape below to work
         auto output_shape = result[0].padded_shape();
-        ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
-        ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-        ttnn::SmallVector<uint32_t> end_index = {output_shape[0], output_shape[1], output_shape[2], k};
+        ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
+        ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+        ttsl::SmallVector<uint32_t> end_index = {output_shape[0], output_shape[1], output_shape[2], k};
         result[0] = ttnn::slice(result[0], start_index, end_index, step, input_memory_config);
         result[1] = ttnn::slice(result[1], start_index, end_index, step, input_memory_config);
     }
@@ -61,7 +61,7 @@ std::vector<Tensor> post_topk_transform_tensor(
         result[0] = ttnn::squeeze_from_4D(result[0], orig_rank);
         result[1] = ttnn::squeeze_from_4D(result[1], orig_rank);
     } else if (orig_rank > 4) {
-        ttnn::SmallVector<uint32_t> result_shape(input_shape.cbegin(), input_shape.cend());
+        ttsl::SmallVector<uint32_t> result_shape(input_shape.cbegin(), input_shape.cend());
         result_shape[result_shape.size() - 1] = k;
         result[0] = ttnn::reshape(result[0], ttnn::Shape{result_shape});
         result[1] = ttnn::reshape(result[1], ttnn::Shape{result_shape});
@@ -77,9 +77,9 @@ std::vector<Tensor> post_topk_transform_tensor(
     if (result[0].logical_shape() != final_lshape) {
         int rank = final_lshape.rank();
 
-        ttnn::SmallVector<uint32_t> step;
-        ttnn::SmallVector<uint32_t> start_index;
-        ttnn::SmallVector<uint32_t> end_index;
+        ttsl::SmallVector<uint32_t> step;
+        ttsl::SmallVector<uint32_t> start_index;
+        ttsl::SmallVector<uint32_t> end_index;
 
         for (int i = 0; i < rank; i++) {
             step.push_back(1);
@@ -136,7 +136,7 @@ std::vector<Tensor> ExecuteTopK::invoke(
         0);
     const auto pad_val = largest ? std::numeric_limits<float>::min() : std::numeric_limits<float>::max();
     if (pad_amount > 0) {
-        ttnn::SmallVector<std::array<uint32_t, 2>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, pad_amount}};
+        ttsl::SmallVector<std::array<uint32_t, 2>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, pad_amount}};
         padded_tensor = ttnn::pad(transformed_tensor, padding, pad_val);
     }
 

@@ -14,7 +14,7 @@ using namespace tt::tt_metal;
 
 ttnn::Shape squeeze_vector_shape(ttnn::Shape output_shape) {
     if (output_shape.rank() > 4) {
-        ttnn::SmallVector<uint32_t> output_shape_4d(output_shape.rank());
+        ttsl::SmallVector<uint32_t> output_shape_4d(output_shape.rank());
         output_shape_4d[0] = 1;
         int extra_rank = output_shape.size() - 4;
         for (int i = extra_rank; i >= 0; i--) {
@@ -63,7 +63,7 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
     // MT: Currently only uint32 is moved to DST directly, fp32 is converted to fp16b
     bool fp32_dest_acc_en = input_tensor.dtype() == DataType::UINT32;
 
-    ttnn::SmallVector<uint32_t> output_end_vector;
+    ttsl::SmallVector<uint32_t> output_end_vector;
     ttnn::Shape output_end;
     const auto& input_shape = input_tensor.logical_shape();
     if (input_shape.rank() > 4) {

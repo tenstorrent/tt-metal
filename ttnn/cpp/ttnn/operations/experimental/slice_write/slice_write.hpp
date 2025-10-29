@@ -14,9 +14,9 @@ struct SliceWriteOperation {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         ttnn::Tensor& output_tensor,
-        const ttnn::SmallVector<uint32_t>& output_tensor_start,
-        const ttnn::SmallVector<uint32_t>& output_tensor_end,
-        const ttnn::SmallVector<uint32_t>& step);
+        const ttsl::SmallVector<uint32_t>& output_tensor_start,
+        const ttsl::SmallVector<uint32_t>& output_tensor_end,
+        const ttsl::SmallVector<uint32_t>& step);
 };
 
 }  // namespace experimental

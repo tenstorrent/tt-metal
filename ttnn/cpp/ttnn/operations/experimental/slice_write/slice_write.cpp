@@ -20,9 +20,9 @@ namespace ttnn::operations::experimental {
 ttnn::Tensor SliceWriteOperation::invoke(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& output_tensor,
-    const ttnn::SmallVector<uint32_t>& begins,
-    const ttnn::SmallVector<uint32_t>& ends,
-    const ttnn::SmallVector<uint32_t>& step) {
+    const ttsl::SmallVector<uint32_t>& begins,
+    const ttsl::SmallVector<uint32_t>& ends,
+    const ttsl::SmallVector<uint32_t>& step) {
     const auto& logical_input_shape = input_tensor.logical_shape();
     const auto& padded_input_shape = input_tensor.padded_shape();
     const auto& padded_output_shape = output_tensor.padded_shape();
@@ -40,7 +40,7 @@ ttnn::Tensor SliceWriteOperation::invoke(
     const bool tiled = input.layout() == Layout::TILE;
     bool on_device = input.storage_type() == StorageType::DEVICE;
 
-    ttnn::SmallVector<uint32_t> padded_ends = ends;
+    ttsl::SmallVector<uint32_t> padded_ends = ends;
     if (tiled && ends.size() >= 2) {
         // Only pad the last two dimensions for tiled layout
         size_t rank = ends.size();
@@ -49,8 +49,8 @@ ttnn::Tensor SliceWriteOperation::invoke(
         padded_ends[rank - 1] =
             std::max(tt::round_up(ends[rank - 1], tt::constants::TILE_WIDTH), tt::constants::TILE_WIDTH);
     }
-    ttnn::SmallVector<uint32_t> actual_shape_vec;
-    ttnn::SmallVector<uint32_t> padded_shape_vec;
+    ttsl::SmallVector<uint32_t> actual_shape_vec;
+    ttsl::SmallVector<uint32_t> padded_shape_vec;
     actual_shape_vec.reserve(ends.size());
     padded_shape_vec.reserve(ends.size());
 

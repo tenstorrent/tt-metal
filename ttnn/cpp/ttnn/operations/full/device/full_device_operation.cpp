@@ -65,7 +65,7 @@ FullOperation::tensor_return_value_t FullOperation::create_output_tensors(
 }
 
 std::tuple<FullOperation::operation_attributes_t, FullOperation::tensor_args_t> FullOperation::invoke(
-    ttnn::SmallVector<uint32_t> shape,
+    ttsl::SmallVector<uint32_t> shape,
     std::variant<float, int> fill_value,
     const Tensor& any,
     const std::optional<DataType>& dtype,

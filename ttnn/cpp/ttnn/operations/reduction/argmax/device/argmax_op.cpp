@@ -9,10 +9,10 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::reduction {
 
-ttnn::SmallVector<uint32_t> ArgMax::get_output_shape(const Tensor& input_tensor) const {
+ttsl::SmallVector<uint32_t> ArgMax::get_output_shape(const Tensor& input_tensor) const {
     auto input_shape = input_tensor.logical_shape();
     int rank = input_shape.size();
-    ttnn::SmallVector<uint32_t> output_shape;
+    ttsl::SmallVector<uint32_t> output_shape;
 
     // If no reduction dims are specified, we reduce all dimensions
     auto all_dim_reduce = not this->dim.has_value();

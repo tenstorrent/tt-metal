@@ -328,7 +328,7 @@ uint32_t compute_outer(const ttnn::Shape& shape, uint32_t dim) {
     return num_outer;
 }
 
-void expand_to_max_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) {
+void expand_to_max_dim(ttsl::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -378,10 +378,10 @@ void validate_output_with_keepdim(const Tensor& input, const Tensor& output, con
                 output_rank);
         }
 
-        ttnn::SmallVector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        ttnn::SmallVector<uint32_t> output_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        ttnn::SmallVector<uint32_t> input_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        ttnn::SmallVector<uint32_t> output_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttsl::SmallVector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttsl::SmallVector<uint32_t> output_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttsl::SmallVector<uint32_t> input_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttsl::SmallVector<uint32_t> output_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
         expand_to_max_dim(input_dim, input_shape);
         expand_to_max_dim(output_dim, output_shape);
         expand_to_max_dim(input_dim_wo_padding, input_shape_wo_padding);
@@ -394,14 +394,14 @@ void validate_output_with_keepdim(const Tensor& input, const Tensor& output, con
             TT_FATAL(input_dim_wo_padding[i] == output_dim_wo_padding[i], "Error");
         }
     } else {
-        ttnn::SmallVector<uint32_t> expected_output_shape;
+        ttsl::SmallVector<uint32_t> expected_output_shape;
         for (int i = 0; i < output_shape.rank(); ++i) {
             if (i == padded_dim && !is_tile_dim) {
                 expected_output_shape.push_back(1);
             }
             expected_output_shape.push_back(output_shape[i]);
         }
-        ttnn::SmallVector<uint32_t> expected_output_shape_wo_padding;
+        ttsl::SmallVector<uint32_t> expected_output_shape_wo_padding;
         for (int i = 0; i < output_shape_wo_padding.rank(); ++i) {
             if (i == dim && !is_tile_dim) {
                 expected_output_shape_wo_padding.push_back(1);
@@ -421,21 +421,21 @@ void validate_output_with_keepdim(const Tensor& input, const Tensor& output, con
     }
 }
 
-void initialize_dims_with_range(ttnn::SmallVector<int64_t>& dims, uint32_t input_rank) {
+void initialize_dims_with_range(ttsl::SmallVector<int64_t>& dims, uint32_t input_rank) {
     dims.resize(input_rank);
     std::iota(dims.begin(), dims.end(), 0);
 }
 
-ttnn::SmallVector<int64_t> get_dim(
-    const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim, uint32_t input_rank) {
-    ttnn::SmallVector<int64_t> dims;
+ttsl::SmallVector<int64_t> get_dim(
+    const std::optional<std::variant<int64_t, ttsl::SmallVector<int64_t>>>& dim, uint32_t input_rank) {
+    ttsl::SmallVector<int64_t> dims;
     if (!dim.has_value()) {
         initialize_dims_with_range(dims, input_rank);
     } else if (std::holds_alternative<int64_t>(dim.value())) {
         auto d = std::get<int64_t>(dim.value());
         dims.push_back(d);
     } else {
-        dims = std::get<ttnn::SmallVector<int64_t>>(dim.value());
+        dims = std::get<ttsl::SmallVector<int64_t>>(dim.value());
         if (dims.empty()) {
             initialize_dims_with_range(dims, input_rank);
         }

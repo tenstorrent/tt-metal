@@ -24,9 +24,9 @@ struct PaddedSliceOperation {
     template <typename T>
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const ttnn::SmallVector<T>& begins,
-        const ttnn::SmallVector<T>& ends,
-        const ttnn::SmallVector<T>& step,
+        const ttsl::SmallVector<T>& begins,
+        const ttsl::SmallVector<T>& ends,
+        const ttsl::SmallVector<T>& step,
         const MemoryConfig& memory_config_arg,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
         const std::optional<float>& pad_value = std::nullopt) {

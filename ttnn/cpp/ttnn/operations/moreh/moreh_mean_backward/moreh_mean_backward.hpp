@@ -9,7 +9,7 @@ namespace ttnn::operations::moreh::moreh_mean_backward {
 struct MorehMeanBackward {
     static Tensor invoke(
         const Tensor& output_grad,
-        std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>> dim,
+        std::optional<std::variant<int64_t, ttsl::SmallVector<int64_t>>> dim,
         bool keepdim,
         const std::optional<ttnn::Shape>& input_grad_shape,
         const std::optional<Tensor>& input_grad,

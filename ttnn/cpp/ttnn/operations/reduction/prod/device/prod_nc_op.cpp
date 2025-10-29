@@ -99,11 +99,11 @@ Tensor prod_(const Tensor& input, const int64_t& dim, const MemoryConfig& mem_co
 Tensor prod_nc(
     const Tensor& input,
     const Tensor& output,
-    ttnn::SmallVector<int64_t>& dims,
+    ttsl::SmallVector<int64_t>& dims,
     const MemoryConfig& output_mem_config) {
     TT_FATAL(!dims.empty(), "prod_nc dims should not be empty");
 
-    ttnn::SmallVector<int64_t> sorted_dims = dims;
+    ttsl::SmallVector<int64_t> sorted_dims = dims;
     std::sort(sorted_dims.begin(), sorted_dims.end());
 
     auto temp_input = input;

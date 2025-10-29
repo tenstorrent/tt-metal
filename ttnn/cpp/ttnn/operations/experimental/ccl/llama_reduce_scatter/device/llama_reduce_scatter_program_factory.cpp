@@ -24,7 +24,7 @@ namespace ttnn::operations::experimental::ccl {
 namespace detail {
 
 std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index, tt::tt_fabric::Topology topology) {
-    ttnn::SmallVector<uint32_t> device_order;
+    ttsl::SmallVector<uint32_t> device_order;
     device_order.reserve(ring_size - 1);
     // Add all indices except ring_index
     for (uint32_t i = 0; i < ring_size; i++) {

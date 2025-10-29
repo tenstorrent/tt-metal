@@ -346,7 +346,7 @@ void device_module(py::module& m_device) {
     m_device.def(
         "format_output_tensor",
         [](const Tensor& output,
-           const ttnn::SmallVector<uint32_t>& shape,
+           const ttsl::SmallVector<uint32_t>& shape,
            MeshDevice* device,
            Layout target_layout,
            std::optional<MemoryConfig> target_mem_config) {

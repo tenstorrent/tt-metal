@@ -64,7 +64,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     }
     // Create golden data using tt_eager APIs
     Tensor np_tensor = ttnn::full(input_shape, static_cast<float>(1), DataType::BFLOAT16, Layout::TILE, *device_);
-    ttnn::SmallVector<int64_t> reduce_dims = {3};
+    ttsl::SmallVector<int64_t> reduce_dims = {3};
     Tensor np_out = ttnn::moreh_sum(np_tensor, reduce_dims, false, std::nullopt, std::nullopt, std::nullopt);
     Tensor np_out_host = np_out.cpu();
     const Tensor reference_tensor = ttnn::distributed::get_device_tensors(np_out_host).front();

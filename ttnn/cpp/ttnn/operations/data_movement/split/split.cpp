@@ -38,7 +38,7 @@ std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor& input_tensor, 
 
     const int Y = shape[2], X = shape[3];
     const Tensor& reshaped_tensor =
-        ttnn::reshape_on_device(input_tensor, ttnn::SmallVector<int32_t>{1, -1, Y, X}, mem_config);
+        ttnn::reshape_on_device(input_tensor, ttsl::SmallVector<int32_t>{1, -1, Y, X}, mem_config);
 
     auto part_reshaped = impl_split_last_dim_two_chunks_tiled(reshaped_tensor, mem_config);
 
@@ -46,7 +46,7 @@ std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor& input_tensor, 
     results.reserve(part_reshaped.size());
     for (auto& part : part_reshaped) {
         results.emplace_back(
-            ttnn::reshape_on_device(part, ttnn::SmallVector<int32_t>{-1, (int32_t)shape[1], Y, X / 2}, mem_config));
+            ttnn::reshape_on_device(part, ttsl::SmallVector<int32_t>{-1, (int32_t)shape[1], Y, X / 2}, mem_config));
     }
 
     return results;
@@ -54,7 +54,7 @@ std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor& input_tensor, 
 
 std::vector<ttnn::Tensor> split_with_slice_impl(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<int64_t>& split_sizes,
+    const ttsl::SmallVector<int64_t>& split_sizes,
     const int32_t dim,
     const MemoryConfig& memory_config) {
     const auto& input_shape = input_tensor.logical_shape();
@@ -68,8 +68,8 @@ std::vector<ttnn::Tensor> split_with_slice_impl(
     std::vector<ttnn::Tensor> results;
     results.reserve(split_sizes.size());
 
-    const ttnn::SmallVector<int32_t> steps(input_shape.rank(), 1);
-    ttnn::SmallVector<int32_t> begins(input_shape.rank(), 0), ends(input_shape.cbegin(), input_shape.cend());
+    const ttsl::SmallVector<int32_t> steps(input_shape.rank(), 1);
+    ttsl::SmallVector<int32_t> begins(input_shape.rank(), 0), ends(input_shape.cbegin(), input_shape.cend());
     const tt::stl::Span<const int32_t> sbegins(begins), ssteps(steps), sends(ends);
 
     ends[dim] = 0;
@@ -117,7 +117,7 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
         std::vector<ttnn::Tensor> outputs;
         outputs.reserve(detail::TWO_CHUNKS);
         for (const auto& t : outputs_4d) {
-            ttnn::SmallVector<uint32_t> final_shape(input_shape.cbegin(), input_shape.cend());
+            ttsl::SmallVector<uint32_t> final_shape(input_shape.cbegin(), input_shape.cend());
             final_shape.back() = t.logical_shape()[-1];
             outputs.emplace_back(ttnn::view(t, ttnn::Shape(final_shape)));
         }
@@ -138,7 +138,7 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
     const auto num_chunks =
         std::ceil(static_cast<float>(input_tensor.logical_shape()[dim]) / static_cast<float>(split_size));
 
-    const ttnn::SmallVector<int64_t> split_sizes(num_chunks, split_size);
+    const ttsl::SmallVector<int64_t> split_sizes(num_chunks, split_size);
     return SplitOperation::invoke(input_tensor, split_sizes, dim, memory_config);
 }
 

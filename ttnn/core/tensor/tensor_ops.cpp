@@ -116,8 +116,8 @@ Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value) {
     uint32_t padded_height = round_up(height, constants::TILE_HEIGHT);
     uint32_t padded_width = round_up(width, constants::TILE_WIDTH);
 
-    ttnn::SmallVector<uint32_t> padded_shape;
-    ttnn::SmallVector<uint32_t> input_tensor_start;
+    ttsl::SmallVector<uint32_t> padded_shape;
+    ttsl::SmallVector<uint32_t> input_tensor_start;
 
     for (auto index = 0; index < static_cast<int>(input_tensor.padded_shape().rank()) - 2; index++) {
         padded_shape.push_back(input_tensor.padded_shape()[index]);
@@ -152,8 +152,8 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::Shape& out
         input_tensor.padded_shape()[-2] < output_tensor_shape[-2] + constants::TILE_HEIGHT &&
             input_tensor.padded_shape()[-1] < output_tensor_shape[-1] + constants::TILE_WIDTH,
         "Last 2 dims of output must be within range to have been padded to input");
-    Shape output_tensor_start(ttnn::SmallVector<uint32_t>(input_tensor.padded_shape().rank(), 0));
-    Shape output_tensor_end(ttnn::SmallVector<uint32_t>(input_tensor.padded_shape().rank(), 1));
+    Shape output_tensor_start(ttsl::SmallVector<uint32_t>(input_tensor.padded_shape().rank(), 0));
+    Shape output_tensor_end(ttsl::SmallVector<uint32_t>(input_tensor.padded_shape().rank(), 1));
     for (int index = -1; index >= -static_cast<int>(output_tensor_shape.rank()); index--) {
         output_tensor_end[index] = output_tensor_shape[index];
     }

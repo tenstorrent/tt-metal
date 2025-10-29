@@ -20,7 +20,7 @@ namespace detail {
 
 ttnn::Tensor permute_impl(
     const ttnn::Tensor& a,
-    const ttnn::SmallVector<uint32_t>& dims,
+    const ttsl::SmallVector<uint32_t>& dims,
     const MemoryConfig& output_mem_config,
     const std::optional<float>& pad_value) {
     // Get the device
@@ -97,13 +97,13 @@ ttnn::Tensor permute_impl(
 
 ttnn::Tensor permute_launch(
     const ttnn::Tensor& a,
-    const ttnn::SmallVector<uint32_t>& dims,
+    const ttsl::SmallVector<uint32_t>& dims,
     const MemoryConfig& output_mem_config,
     const std::optional<float>& pad_value) {
     return permute_impl(a, dims, output_mem_config, pad_value);
 }
 
-bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& dims) {
+bool is_permute_nop(const ttnn::Tensor& a, const ttsl::SmallVector<uint32_t>& dims) {
     // 1) Trivial early-out for rank <= 1
     const auto rank = a.logical_shape().rank();
     if (rank <= 1) {
@@ -111,7 +111,7 @@ bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& di
     }
 
     // 2) Check for identity permutation
-    ttnn::SmallVector<uint32_t> seq_dims(rank);
+    ttsl::SmallVector<uint32_t> seq_dims(rank);
     std::iota(seq_dims.begin(), seq_dims.end(), 0);
     if (dims == seq_dims) {
         return true;
@@ -127,7 +127,7 @@ bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& di
 
     // Build permuted shape
     const auto& shape = a.logical_shape();
-    ttnn::SmallVector<uint32_t> perm_shape(rank);
+    ttsl::SmallVector<uint32_t> perm_shape(rank);
     for (uint32_t i = 0; i < rank; ++i) {
         perm_shape[i] = shape[dims[i]];
     }
@@ -158,7 +158,7 @@ bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& di
 
 ttnn::Tensor ExecutePermute::invoke(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<int64_t>& dims,
+    const ttsl::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<float>& pad_value) {
     const auto input_rank = input_tensor.logical_shape().rank();
@@ -175,8 +175,8 @@ ttnn::Tensor ExecutePermute::invoke(
         return ttnn::to_memory_config(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     }
 
-    auto adjust_order = [](const ttnn::SmallVector<uint32_t>& dims) {
-        ttnn::SmallVector<uint32_t> new_order;
+    auto adjust_order = [](const ttsl::SmallVector<uint32_t>& dims) {
+        ttsl::SmallVector<uint32_t> new_order;
         TT_FATAL(dims.size() <= 4, "Minimum rank of tensor required is 4");
         int additional_ranks = 4 - dims.size();
         for (int i = 0; i < additional_ranks; i++) {
@@ -203,7 +203,7 @@ ttnn::Tensor ExecutePermute::invoke(
 }
 
 ttnn::Tensor ExecutePermute::invoke(
-    const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int64_t>& dims, const std::optional<float>& pad_value) {
+    const ttnn::Tensor& input_tensor, const ttsl::SmallVector<int64_t>& dims, const std::optional<float>& pad_value) {
     return invoke(input_tensor, dims, std::nullopt, pad_value);
 }
 

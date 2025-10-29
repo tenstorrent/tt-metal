@@ -45,13 +45,13 @@ void bind_padded_slice(py::module& module) {
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<int>& padded_slice_start,
-               const ttnn::SmallVector<int>& padded_slice_end,
-               const std::optional<ttnn::SmallVector<int>>& step,
+               const ttsl::SmallVector<int>& padded_slice_start,
+               const ttsl::SmallVector<int>& padded_slice_end,
+               const std::optional<ttsl::SmallVector<int>>& step,
                const MemoryConfig& memory_config,
                const std::optional<Tensor>& optional_output_tensor,
                const std::optional<float>& pad_value) {
-                const auto step_value = step.value_or(ttnn::SmallVector<int>(padded_slice_end.size(), 1));
+                const auto step_value = step.value_or(ttsl::SmallVector<int>(padded_slice_end.size(), 1));
                 return self(
                     input_tensor,
                     padded_slice_start,

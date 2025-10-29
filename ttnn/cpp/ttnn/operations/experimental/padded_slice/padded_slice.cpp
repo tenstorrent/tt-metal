@@ -75,9 +75,9 @@ ttnn::Tensor PaddedSliceOperation::invoke(
     }
 
     // Create modified vectors with wrapped indices and adjust them to match the tensor's rank
-    ttnn::SmallVector<uint32_t> modified_begins(input_rank, 0);
-    ttnn::SmallVector<uint32_t> modified_ends(input_rank, 0);
-    ttnn::SmallVector<uint32_t> modified_step(input_rank, 1);
+    ttsl::SmallVector<uint32_t> modified_begins(input_rank, 0);
+    ttsl::SmallVector<uint32_t> modified_ends(input_rank, 0);
+    ttsl::SmallVector<uint32_t> modified_step(input_rank, 1);
 
     // Wrap indices and adjust begins, ends, and step
     for (size_t i = 0; i < begins.size(); ++i) {
@@ -92,13 +92,13 @@ ttnn::Tensor PaddedSliceOperation::invoke(
         }
     }
 
-    auto output_dim_i = [&modified_begins, &modified_step](size_t i, const ttnn::SmallVector<uint32_t>& modified_ends) {
+    auto output_dim_i = [&modified_begins, &modified_step](size_t i, const ttsl::SmallVector<uint32_t>& modified_ends) {
         return (modified_ends[i] - modified_begins[i] + modified_step[i] - 1) / modified_step[i];
     };
 
-    ttnn::SmallVector<uint32_t> padded_ends = modified_ends;
+    ttsl::SmallVector<uint32_t> padded_ends = modified_ends;
 
-    ttnn::SmallVector<uint32_t> actual_shape_vec, final_padded_shape_vec;
+    ttsl::SmallVector<uint32_t> actual_shape_vec, final_padded_shape_vec;
     actual_shape_vec.reserve(input_rank);
     final_padded_shape_vec.reserve(input_rank);
     bool empty = false;

@@ -178,7 +178,7 @@ static std::vector<Tensor> pool2d_invoke(
         // have random values it would affect common exponent calculation
         Tensor input_tensor_padded;
         if (padding_needed > 0 && is_block_float(dtype)) {
-            ttnn::SmallVector<std::array<uint32_t, 2>> pad_spec = {{0, 0}, {0, 0}, {0, 0}, {0, padding_needed}};
+            ttsl::SmallVector<std::array<uint32_t, 2>> pad_spec = {{0, 0}, {0, 0}, {0, 0}, {0, padding_needed}};
 
             input_tensor_padded = ttnn::pad(input_tensor, pad_spec, 0.0f);
         } else {

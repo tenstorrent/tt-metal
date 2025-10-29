@@ -12,7 +12,7 @@
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor RollOperation::invoke(
-    const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int>& shifts, const ttnn::SmallVector<int>& input_dims) {
+    const ttnn::Tensor& input_tensor, const ttsl::SmallVector<int>& shifts, const ttsl::SmallVector<int>& input_dims) {
     ttnn::Tensor result = input_tensor;
     auto size = result.logical_shape();
     int num_dims = size.rank();
@@ -42,7 +42,7 @@ ttnn::Tensor RollOperation::invoke(
         adjusted_shifts[i] = ((shift % shift_size) + shift_size) % shift_size;
     }
 
-    const ttnn::SmallVector<int> stride_vector(num_dims, 1);
+    const ttsl::SmallVector<int> stride_vector(num_dims, 1);
 
     for (size_t i = 0; i < adjusted_shifts.size(); ++i) {
         int dim = input_dims[i];
@@ -56,8 +56,8 @@ ttnn::Tensor RollOperation::invoke(
             continue;
         }
 
-        ttnn::SmallVector<int> start_left(num_dims, 0), end_left;
-        ttnn::SmallVector<int> start_right(num_dims, 0), end_right;
+        ttsl::SmallVector<int> start_left(num_dims, 0), end_left;
+        ttsl::SmallVector<int> start_right(num_dims, 0), end_right;
 
         for (int j = 0; j < num_dims; ++j) {
             end_left.push_back(size[j]);
@@ -79,8 +79,8 @@ ttnn::Tensor RollOperation::invoke(
 }
 
 ttnn::Tensor RollOperation::invoke(const ttnn::Tensor& input_tensor, const int shift) {
-    ttnn::SmallVector<int> shifts = {shift};
-    ttnn::SmallVector<int> dims = {1};  // Rolling will happen on dimension 1 after flattening
+    ttsl::SmallVector<int> shifts = {shift};
+    ttsl::SmallVector<int> dims = {1};  // Rolling will happen on dimension 1 after flattening
 
     auto original_shape = input_tensor.logical_shape();
 
@@ -101,8 +101,8 @@ ttnn::Tensor RollOperation::invoke(const ttnn::Tensor& input_tensor, const int s
 }
 
 ttnn::Tensor RollOperation::invoke(const ttnn::Tensor& input_tensor, const int shift, const int dim) {
-    ttnn::SmallVector<int> shifts = {shift};
-    ttnn::SmallVector<int> dims = {dim};
+    ttsl::SmallVector<int> shifts = {shift};
+    ttsl::SmallVector<int> dims = {dim};
 
     return invoke(input_tensor, shifts, dims);
 }

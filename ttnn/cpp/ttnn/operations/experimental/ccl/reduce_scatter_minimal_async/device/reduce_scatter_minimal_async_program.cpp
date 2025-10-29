@@ -65,7 +65,7 @@ uint32_t default_workers(
     auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     uint32_t num_cores = subdevice_core_range_set.num_cores();
     log_trace(tt::LogOp, "DEBUG: num_cores: {}", num_cores);
-    ttnn::SmallVector<uint32_t> candidate_worker_counts;
+    ttsl::SmallVector<uint32_t> candidate_worker_counts;
     double data_moved_per_link_bytes = double(input_data_size_bytes) * (ring_size - 1) / ring_size / num_links /
                                        (topology == ttnn::ccl::Topology::Ring ? 2 : 1);
     log_trace(tt::LogOp, "DEBUG: data_moved_per_link_bytes: {}", data_moved_per_link_bytes);

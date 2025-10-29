@@ -57,7 +57,7 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
         ttnn::pybind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<int32_t>& shape,
+               const ttsl::SmallVector<int32_t>& shape,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<PadValue>& pad_value,
                const ttnn::TileReshapeMapMode reshape_tile_mode) -> ttnn::Tensor {

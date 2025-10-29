@@ -1644,7 +1644,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
         grad_tensor.emplace_back(zero_tensor);
         return grad_tensor;
     } else if (shape[0] > 1) {
-        ttnn::SmallVector<int64_t> dim = {0};
+        ttsl::SmallVector<int64_t> dim = {0};
         TT_FATAL(shape[1] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[1], [2], [3] should be 1");
         std::array<std::uint32_t, 4> intended_shape_array = {1, shape_wh[1], shape_wh[2], shape_wh[3]};
         const auto required = ttnn::Shape(intended_shape_array);
@@ -1658,7 +1658,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
         grad_tensor.emplace_back(result);
         return grad_tensor;
     } else if (shape[1] > 1) {
-        ttnn::SmallVector<int64_t> dim = {1};
+        ttsl::SmallVector<int64_t> dim = {1};
         TT_FATAL(shape[0] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[0], [2], [3] should be 1");
         std::array<std::uint32_t, 4> intended_shape_array = {shape_wh[0], 1, shape_wh[2], shape_wh[3]};
         const auto required = ttnn::Shape(intended_shape_array);
@@ -1721,13 +1721,13 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
 
     // all_dimensions = False
     Tensor updated_grad = prod_result;
-    auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
+    auto step = ttsl::SmallVector<uint32_t>({1, 1, 1, 1});
     if (prod_result.logical_shape() != grad.padded_shape()) {
         if (*dim == 3 || *dim == -1) {
-            ttnn::SmallVector<int64_t> after_permute_dims = {0, 3, 1, 2};
+            ttsl::SmallVector<int64_t> after_permute_dims = {0, 3, 1, 2};
             Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
-            ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-            ttnn::SmallVector<uint32_t> end_index = {
+            ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+            ttsl::SmallVector<uint32_t> end_index = {
                 grad.padded_shape()[0], 1, grad.padded_shape()[1], grad.padded_shape()[2]};
             Tensor new_slice_tensor = ttnn::slice(required, start_index, end_index, step, std::nullopt);
             after_permute_dims = {0, 2, 3, 1};
@@ -1738,10 +1738,10 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
                 updated_grad = pad_updated_grad.to_device(input.device());
             }
         } else if (*dim == 2 || *dim == -2) {
-            ttnn::SmallVector<int64_t> after_permute_dims = {0, 2, 1, 3};
+            ttsl::SmallVector<int64_t> after_permute_dims = {0, 2, 1, 3};
             Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
-            ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-            ttnn::SmallVector<uint32_t> end_index = {
+            ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+            ttsl::SmallVector<uint32_t> end_index = {
                 grad.padded_shape()[0], 1, grad.padded_shape()[1], grad.padded_shape()[3]};
             Tensor new_slice_tensor = ttnn::slice(required, start_index, end_index, step, std::nullopt);
             updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
@@ -1773,11 +1773,11 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     } else if (*dim == 1 || *dim == -3) {
         Tensor tensor_1_temp = reciprocal_input;
         if (reciprocal_input.padded_shape()[1] % 32 != 0) {
-            ttnn::SmallVector<std::array<uint32_t, 2>> padding = {
+            ttsl::SmallVector<std::array<uint32_t, 2>> padding = {
                 {0, 0}, {0, 32 - (reciprocal_input.padded_shape()[1] % 32)}, {0, 0}, {0, 0}};
             tensor_1_temp = ttnn::pad(reciprocal_input, padding, 0, true, std::nullopt);
         }
-        ttnn::SmallVector<int64_t> after_permute_dims = {0, 2, 3, 1};
+        ttsl::SmallVector<int64_t> after_permute_dims = {0, 2, 3, 1};
         Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_memory_config);
         Tensor tensor_2 = ttnn::permute(temp, after_permute_dims, output_memory_config);
 
@@ -1793,10 +1793,10 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
             output_memory_config);
         Tensor grad_result = result;
         if (reciprocal_input.padded_shape()[1] % 32 != 0) {
-            ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-            ttnn::SmallVector<uint32_t> end_index = {
+            ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+            ttsl::SmallVector<uint32_t> end_index = {
                 input.padded_shape()[0], input.padded_shape()[1], input.padded_shape()[2], input.padded_shape()[3]};
-            auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
+            auto step = ttsl::SmallVector<uint32_t>({1, 1, 1, 1});
             grad_result = ttnn::slice(result, start_index, end_index, step, std::nullopt);
         }
         grad_tensor.emplace_back(grad_result);
@@ -1805,11 +1805,11 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     // dim 0
     Tensor tensor_1_temp = reciprocal_input;
     if (reciprocal_input.padded_shape()[0] % 32 != 0) {
-        ttnn::SmallVector<std::array<uint32_t, 2>> padding = {
+        ttsl::SmallVector<std::array<uint32_t, 2>> padding = {
             {0, (32 - (reciprocal_input.padded_shape()[0] % 32))}, {0, 0}, {0, 0}, {0, 0}};
         tensor_1_temp = ttnn::pad(reciprocal_input, padding, 0, false, std::nullopt);
     }
-    ttnn::SmallVector<int64_t> after_permute_dims = {3, 1, 2, 0};
+    ttsl::SmallVector<int64_t> after_permute_dims = {3, 1, 2, 0};
     Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_memory_config);
     Tensor tensor_2 = ttnn::permute(temp, after_permute_dims, output_memory_config);
 
@@ -1824,8 +1824,8 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
         output_memory_config);
     Tensor grad_result = result;
     if (reciprocal_input.padded_shape()[0] % 32 != 0) {
-        ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-        ttnn::SmallVector<uint32_t> end_index = {
+        ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+        ttsl::SmallVector<uint32_t> end_index = {
             input.padded_shape()[0], input.padded_shape()[1], input.padded_shape()[2], input.padded_shape()[3]};
         grad_result = ttnn::slice(result, start_index, end_index, step, std::nullopt);
     }

@@ -47,10 +47,10 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
         adjusted_input_shape[dim] = (is_tile_dim) ? tt::constants::TILE_HEIGHT : 1;
         adjusted_input_shape_wo_padding[dim] = 1;
 
-        ttnn::SmallVector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        ttnn::SmallVector<uint32_t> output_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        ttnn::SmallVector<uint32_t> input_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        ttnn::SmallVector<uint32_t> output_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttsl::SmallVector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttsl::SmallVector<uint32_t> output_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttsl::SmallVector<uint32_t> input_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttsl::SmallVector<uint32_t> output_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
 
         expand_to_max_dim(input_dim, adjusted_input_shape);
         expand_to_max_dim(output_dim, output_shape);
@@ -67,8 +67,8 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
     } else {
         TT_FATAL(!is_tile_dim, "Dimension {} should not be a tile dimension when keepdim is false.", dim);
 
-        ttnn::SmallVector<uint32_t> expected_output_shape;
-        ttnn::SmallVector<uint32_t> expected_output_shape_wo_padding;
+        ttsl::SmallVector<uint32_t> expected_output_shape;
+        ttsl::SmallVector<uint32_t> expected_output_shape_wo_padding;
         for (int i = 0; i < output_rank; ++i) {
             if (i == dim && !is_tile_dim) {
                 expected_output_shape.push_back(1);
@@ -149,7 +149,7 @@ MorehNormOperation::spec_return_value_t MorehNormOperation::compute_output_specs
             TensorLayout(tensor_args.input.dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
     }
 
-    ttnn::SmallVector<uint32_t> shape;
+    ttsl::SmallVector<uint32_t> shape;
     for (int i = 0; i < input_rank; ++i) {
         bool is_reduced_dim = (i == dim);
         if (is_reduced_dim && !is_tile_dim) {

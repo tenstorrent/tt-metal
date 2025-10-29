@@ -61,13 +61,13 @@ void py_module(py::module& module) {
         });
 
     auto PyShape = static_cast<py::class_<ttnn::Shape>>(module.attr("Shape"));
-    PyShape.def(py::init<const ttnn::SmallVector<uint32_t>&>(), py::arg("shape"))
+    PyShape.def(py::init<const ttsl::SmallVector<uint32_t>&>(), py::arg("shape"))
         .def("__len__", [](const Shape& self) { return self.rank(); })
         .def("__getitem__", [](const Shape& self, std::int64_t index) { return self[index]; })
         .def(
             "__iter__",
             [](const Shape& self) {
-                return py::iter(py::cast(ttnn::SmallVector<uint32_t>(self.cbegin(), self.cend())));
+                return py::iter(py::cast(ttsl::SmallVector<uint32_t>(self.cbegin(), self.cend())));
             })
         .def(pybind11::self == pybind11::self)
         .def(
@@ -92,7 +92,7 @@ void py_module(py::module& module) {
 
             return ttnn::Shape(std::move(new_shape));
         });
-    py::implicitly_convertible<ttnn::SmallVector<uint32_t>, ttnn::Shape>();
+    py::implicitly_convertible<ttsl::SmallVector<uint32_t>, ttnn::Shape>();
 }
 
 }  // namespace ttnn::types

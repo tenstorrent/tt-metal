@@ -12,7 +12,7 @@
 
 namespace ttnn::operations::moreh::moreh_matmul {
 
-void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) {
+void get_tensor_dim(ttsl::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -31,14 +31,14 @@ void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) 
     }
 }
 
-ttnn::SmallVector<int64_t> find_reduce_dim(const ttnn::Shape& a_shape, const ttnn::Shape& b_shape) {
-    ttnn::SmallVector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-    ttnn::SmallVector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+ttsl::SmallVector<int64_t> find_reduce_dim(const ttnn::Shape& a_shape, const ttnn::Shape& b_shape) {
+    ttsl::SmallVector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    ttsl::SmallVector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(a_dim, a_shape);
     get_tensor_dim(b_dim, b_shape);
     int32_t rank = std::max(a_shape.rank(), b_shape.rank());
     log_debug(tt::LogOp, "find_reduce_dim :{} rank {} a {} b {}", __LINE__, rank, a_shape.rank(), b_shape.rank());
-    ttnn::SmallVector<int64_t> dims;
+    ttsl::SmallVector<int64_t> dims;
     // batch dims
     for (int i = 0; i < rank - 2; ++i) {
         int idx = rank - 1 - i;
@@ -55,8 +55,8 @@ bool is_same_batch_dim(const Tensor& tensor_a, const Tensor& tensor_b) {
     // check batch dims
     const auto& a_shape = tensor_a.padded_shape();
     const auto& b_shape = tensor_b.padded_shape();
-    ttnn::SmallVector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-    ttnn::SmallVector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    ttsl::SmallVector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    ttsl::SmallVector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(a_dim, a_shape);
     get_tensor_dim(b_dim, b_shape);
     for (auto i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
@@ -69,7 +69,7 @@ bool is_same_batch_dim(const Tensor& tensor_a, const Tensor& tensor_b) {
     return true;
 }
 
-void get_tensor_stride(ttnn::SmallVector<uint32_t>& stride, ttnn::SmallVector<uint32_t>& dim) {
+void get_tensor_stride(ttsl::SmallVector<uint32_t>& stride, ttsl::SmallVector<uint32_t>& dim) {
     stride[0] = 1;
     for (auto i = 1; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
         stride[i] = stride[i - 1] * dim[i - 1];
@@ -81,10 +81,10 @@ void get_tensor_stride(ttnn::SmallVector<uint32_t>& stride, ttnn::SmallVector<ui
 }
 
 void get_not_bcast(
-    ttnn::SmallVector<uint32_t>& input_not_bcast,
-    ttnn::SmallVector<uint32_t>& input_dim,
-    ttnn::SmallVector<uint32_t>& other_not_bcast,
-    ttnn::SmallVector<uint32_t>& other_dim) {
+    ttsl::SmallVector<uint32_t>& input_not_bcast,
+    ttsl::SmallVector<uint32_t>& input_dim,
+    ttsl::SmallVector<uint32_t>& other_not_bcast,
+    ttsl::SmallVector<uint32_t>& other_dim) {
     // first 2-dims are M,K and K,N
     // TODO: refaactoring
     for (auto i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
@@ -140,37 +140,37 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     const auto& input_shape = input.padded_shape();
     const auto& input_shape_wo_padding = input.logical_shape();
     log_debug(tt::LogOp, "input dim");
-    ttnn::SmallVector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    ttsl::SmallVector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(input_dim, input_shape);
 
     log_debug(tt::LogOp, "input stride");
-    ttnn::SmallVector<uint32_t> input_stride(tt::tt_metal::MAX_NUM_DIMENSIONS);
+    ttsl::SmallVector<uint32_t> input_stride(tt::tt_metal::MAX_NUM_DIMENSIONS);
     get_tensor_stride(input_stride, input_dim);
 
     // other tensor
     const auto& other_shape = other.padded_shape();
     const auto& other_shape_wo_padding = other.logical_shape();
     log_debug(tt::LogOp, "other dim");
-    ttnn::SmallVector<uint32_t> other_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    ttsl::SmallVector<uint32_t> other_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(other_dim, other_shape);
 
     log_debug(tt::LogOp, "other stride");
-    ttnn::SmallVector<uint32_t> other_stride(tt::tt_metal::MAX_NUM_DIMENSIONS);
+    ttsl::SmallVector<uint32_t> other_stride(tt::tt_metal::MAX_NUM_DIMENSIONS);
     get_tensor_stride(other_stride, other_dim);
 
     log_debug(tt::LogOp, "not bcast");
-    ttnn::SmallVector<uint32_t> input_not_bcast(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-    ttnn::SmallVector<uint32_t> other_not_bcast(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    ttsl::SmallVector<uint32_t> input_not_bcast(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    ttsl::SmallVector<uint32_t> other_not_bcast(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_not_bcast(input_not_bcast, input_dim, other_not_bcast, other_dim);
 
     // output tensor
     const auto& output_shape = output.padded_shape();
     log_debug(tt::LogOp, "output dim");
-    ttnn::SmallVector<uint32_t> output_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    ttsl::SmallVector<uint32_t> output_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(output_dim, output_shape);
 
     log_debug(tt::LogOp, "output stride");
-    ttnn::SmallVector<uint32_t> output_stride(tt::tt_metal::MAX_NUM_DIMENSIONS);
+    ttsl::SmallVector<uint32_t> output_stride(tt::tt_metal::MAX_NUM_DIMENSIONS);
     get_tensor_stride(output_stride, output_dim);
 
     // matrix shape

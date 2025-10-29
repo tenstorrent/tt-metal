@@ -60,7 +60,7 @@ uint32_t default_workers(
     // Above 4 workers we start getting performance drops, so we limit to 4 workers or less, depending on the number of
     // available cores This was determined by the sweep
     // tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_T3K.py
-    ttnn::SmallVector<uint32_t> candidate_worker_counts;
+    ttsl::SmallVector<uint32_t> candidate_worker_counts;
     // if per link data moved is greater than 0.25 MB, we search greedily for 4 workers, otherwise we search greedily
     // for 2 workers. for ring, half the data is moved per link, so we divide by 2
     double data_moved_per_link_bytes = double(output_data_size_bytes) * (ring_size - 1) / ring_size / num_links /

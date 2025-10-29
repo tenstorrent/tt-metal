@@ -73,7 +73,7 @@ MorehMeanOperation::spec_return_value_t MorehMeanOperation::compute_output_specs
                 tensor_args.input.dtype(), PageConfig(tensor_args.input.layout()), operation_attributes.memory_config));
     }
 
-    ttnn::SmallVector<uint32_t> shape;
+    ttsl::SmallVector<uint32_t> shape;
     const bool is_tile_dim = (dim == input_rank - 1 || dim == input_rank - 2);
 
     // e.g. (2, 64, 64) with dim 1 to be (2, 1[32], 64)

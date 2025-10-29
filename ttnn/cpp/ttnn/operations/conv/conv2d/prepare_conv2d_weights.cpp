@@ -647,13 +647,13 @@ static Tensor conv_group_weight_zero_pad_helper(
                     for (int m = 0; m < original_weight_shape[3]; m++) {
                         // Get value from original weight tensor
                         auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
-                            ttnn::SmallVector<int>{curr_batch_idx, j, k, m}, compute_strides(original_weight_shape));
+                            ttsl::SmallVector<int>{curr_batch_idx, j, k, m}, compute_strides(original_weight_shape));
                         auto value = conv_weight_tensor_buffer[value_flat_input_index];
 
                         // Copy value to output tensor at the adjusted position
                         auto new_channel_idx = new_channel_start_idx + j;
                         auto output_flat_input_index = tt::tt_metal::compute_flat_indices(
-                            ttnn::SmallVector<int>{new_batch_idx, new_channel_idx, k, m},
+                            ttsl::SmallVector<int>{new_batch_idx, new_channel_idx, k, m},
                             compute_strides(output_weight_shape));
                         output_buffer[output_flat_input_index] = value;
                     }
@@ -698,10 +698,10 @@ static Tensor conv_depthwise_weight_bcast_helper(
                         for (int k = 0; k < output_weight_shape[2]; k++) {
                             for (int l = 0; l < output_weight_shape[3]; l++) {
                                 auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
-                                    ttnn::SmallVector<int>{i, 0, k, l}, compute_strides(original_weight_shape));
+                                    ttsl::SmallVector<int>{i, 0, k, l}, compute_strides(original_weight_shape));
                                 auto value = conv_weight_tensor_buffer[value_flat_input_index];
                                 auto output_flat_input_index = tt::tt_metal::compute_flat_indices(
-                                    ttnn::SmallVector<int>{i, j, k, l}, compute_strides(output_weight_shape));
+                                    ttsl::SmallVector<int>{i, j, k, l}, compute_strides(output_weight_shape));
                                 output_buffer[output_flat_input_index] = value;
                             }
                         }

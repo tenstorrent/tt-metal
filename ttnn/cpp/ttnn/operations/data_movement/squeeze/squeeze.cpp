@@ -8,7 +8,7 @@
 
 namespace ttnn::operations::data_movement {
 
-ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int>& dim) {
+ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const ttsl::SmallVector<int>& dim) {
     const auto& original_logical_shape = input_tensor.logical_shape();
     const auto& padded_shape = input_tensor.padded_shape();
     auto input_tensor_rank = original_logical_shape.rank();
@@ -68,13 +68,13 @@ ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const tt
 }
 
 ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor, int dim) {
-    ttnn::SmallVector<int> dims{dim};
+    ttsl::SmallVector<int> dims{dim};
     return invoke(input_tensor, dims);
 }
 
 ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor) {
     auto input_tensor_rank = input_tensor.logical_shape().rank();
-    ttnn::SmallVector<int> dims(input_tensor_rank);
+    ttsl::SmallVector<int> dims(input_tensor_rank);
     std::iota(dims.begin(), dims.end(), 0);
     return invoke(input_tensor, dims);
 }

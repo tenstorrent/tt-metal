@@ -12,7 +12,7 @@ namespace operations::data_movement {
 struct SplitOperation {
     static std::vector<ttnn::Tensor> invoke(
         const ttnn::Tensor& input_tensor,
-        const ttnn::SmallVector<int64_t>& split_sizes,
+        const ttsl::SmallVector<int64_t>& split_sizes,
         int64_t dim,
         const std::optional<MemoryConfig>& memory_config_arg);
 

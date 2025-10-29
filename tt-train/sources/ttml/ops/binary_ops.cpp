@@ -40,8 +40,8 @@ bool was_broadcasted(const autograd::TensorPtr& input, const ttnn::Tensor& grad)
     return false;
 }
 
-ttnn::SmallVector<int64_t> get_broadcast_dimensions(const autograd::TensorPtr& input, const ttnn::Tensor& grad) {
-    ttnn::SmallVector<int64_t> broadcast_dims;
+ttsl::SmallVector<int64_t> get_broadcast_dimensions(const autograd::TensorPtr& input, const ttnn::Tensor& grad) {
+    ttsl::SmallVector<int64_t> broadcast_dims;
     auto input_shape = input->get_value().logical_shape();
     auto grad_shape = grad.logical_shape();
     for (size_t i = 0; i < input_shape.size(); ++i) {

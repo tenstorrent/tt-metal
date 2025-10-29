@@ -143,9 +143,9 @@ Tensor pre_scatter_transform_tensor(
 
     Tensor processed_tensor = input_tensor;
     if (index_shape.has_value()) {
-        const ttnn::SmallVector<uint32_t> start(index_shape->rank(), 0);
-        const ttnn::SmallVector<uint32_t> steps(index_shape->rank(), 1);
-        const ttnn::SmallVector<uint32_t> end(index_shape->cbegin(), index_shape->cend());
+        const ttsl::SmallVector<uint32_t> start(index_shape->rank(), 0);
+        const ttsl::SmallVector<uint32_t> steps(index_shape->rank(), 1);
+        const ttsl::SmallVector<uint32_t> end(index_shape->cbegin(), index_shape->cend());
         processed_tensor = ttnn::slice(processed_tensor, start, end, steps, processed_tensor.memory_config());
     }
     // if layout is tile, convert to row-major first
@@ -172,9 +172,9 @@ Tensor pre_scatter_transform_tensor(
 
     Tensor processed_tensor = input_tensor;
     if (index_shape.has_value()) {
-        const ttnn::SmallVector<uint32_t> start(index_shape->rank(), 0);
-        const ttnn::SmallVector<uint32_t> steps(index_shape->rank(), 1);
-        const ttnn::SmallVector<uint32_t> end(index_shape->cbegin(), index_shape->cend());
+        const ttsl::SmallVector<uint32_t> start(index_shape->rank(), 0);
+        const ttsl::SmallVector<uint32_t> steps(index_shape->rank(), 1);
+        const ttsl::SmallVector<uint32_t> end(index_shape->cbegin(), index_shape->cend());
         processed_tensor = ttnn::slice(processed_tensor, start, end, steps, processed_tensor.memory_config());
     }
     // if layout is tile, convert to row-major first - this allows for minimized memory usage by transpose (no padding)

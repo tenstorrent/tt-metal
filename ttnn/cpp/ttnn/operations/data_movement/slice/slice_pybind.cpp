@@ -54,7 +54,7 @@ void bind_slice(py::module& module) {
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& slice_start,
                const ttnn::Tensor& slice_end,
-               const std::optional<ttnn::SmallVector<uint32_t>>& step,
+               const std::optional<ttsl::SmallVector<uint32_t>>& step,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<Tensor>& optional_output_tensor,
                const std::optional<float>& pad_value) {
@@ -93,13 +93,13 @@ void bind_slice(py::module& module) {
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<int>& slice_start,
-               const ttnn::SmallVector<int>& slice_end,
-               const std::optional<ttnn::SmallVector<int>>& step,
+               const ttsl::SmallVector<int>& slice_start,
+               const ttsl::SmallVector<int>& slice_end,
+               const std::optional<ttsl::SmallVector<int>>& step,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<Tensor>& optional_output_tensor,
                const std::optional<float>& pad_value) {
-                const auto step_value = step.value_or(ttnn::SmallVector<int>(slice_end.size(), 1));
+                const auto step_value = step.value_or(ttsl::SmallVector<int>(slice_end.size(), 1));
                 return self(
                     input_tensor, slice_start, slice_end, step_value, memory_config, optional_output_tensor, pad_value);
             },

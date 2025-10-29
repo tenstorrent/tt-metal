@@ -1215,7 +1215,7 @@ Tensor pad(
         auto output_strides = compute_strides(output_padded_shape);
 
         // Process all coordinates except for the last dimension (it's copied with mempcy)
-        ttnn::SmallVector<size_t> coords(rank - 1, 0);
+        ttsl::SmallVector<size_t> coords(rank - 1, 0);
 
         bool processed_all_coords = false;
         while (!processed_all_coords) {
@@ -1324,7 +1324,7 @@ Tensor unpad(const Tensor& tensor, const ttnn::Shape& output_tensor_start, const
     const auto input_strides = tensor.strides();
 
     // Validate inputs and compute output shape
-    ttnn::SmallVector<uint32_t> output_shape;
+    ttsl::SmallVector<uint32_t> output_shape;
     for (auto i = 0; i < input_shape.rank(); i++) {
         // Check if tensor start and end indices are within input tensor shape
         TT_ASSERT(output_tensor_start[i] <= input_shape[i]);
@@ -1338,7 +1338,7 @@ Tensor unpad(const Tensor& tensor, const ttnn::Shape& output_tensor_start, const
     auto unpad = [&input_shape, &input_strides, &output_shape, &output_tensor_start, &output_tensor_end](
                      const HostBuffer& input_host_buffer) {
         const auto input_buffer = input_host_buffer.view_as<T>();
-        ttnn::SmallVector<uint32_t> input_indices(input_shape.rank(), 0);
+        ttsl::SmallVector<uint32_t> input_indices(input_shape.rank(), 0);
 
         auto flat_output_index = 0;
         auto output_buffer = std::vector<T>(ttnn::Shape(output_shape).volume());

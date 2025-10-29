@@ -170,7 +170,7 @@ std::tuple<MorehGetItemOperation::operation_attributes_t, MorehGetItemOperation:
 MorehGetItemOperation::invoke(
     const Tensor& input,
     const std::vector<Tensor>& index_tensors,
-    const ttnn::SmallVector<uint32_t>& index_dims,
+    const ttsl::SmallVector<uint32_t>& index_dims,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config) {
     operation_attributes_t operation_attributes = {index_dims, memory_config.value_or(input.memory_config())};

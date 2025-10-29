@@ -24,7 +24,7 @@ Tensor preprocess_input_tensor(
         int32_t final_rank = input_rank;
         int32_t final_cum_axis = cum_axis;
         if (input_rank < FOUR_DIMENSIONS) {
-            ttnn::SmallVector<uint32_t> new_dims = {};
+            ttsl::SmallVector<uint32_t> new_dims = {};
             for (int32_t i = input_rank; i < FOUR_DIMENSIONS; ++i) {
                 new_dims.push_back(1);
             }
@@ -109,7 +109,7 @@ Tensor accumulation_invoke(
     }
 
     Tensor wip_tensor = input_tensor;
-    ttnn::SmallVector<int64_t> permutation;
+    ttsl::SmallVector<int64_t> permutation;
     int32_t accumulation_axis;
     wip_tensor = common::preprocess_input_tensor(wip_tensor, cum_axis, permutation, accumulation_axis, dtype);
     wip_tensor = ttnn::prim::accumulation(

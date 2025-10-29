@@ -16,7 +16,7 @@
 namespace ttnn::operations::moreh::moreh_getitem {
 struct MorehGetItemOperation {
     struct operation_attributes_t {
-        const ttnn::SmallVector<uint32_t> index_dims;
+        const ttsl::SmallVector<uint32_t> index_dims;
         // const CoreRange core_range;
         const MemoryConfig memory_config;
     };
@@ -36,7 +36,7 @@ struct MorehGetItemOperation {
             tt::tt_metal::KernelHandle unary_writer_kernel_id{};
             std::size_t num_cores{};
             uint32_t core_h{};
-            ttnn::SmallVector<uint32_t> index_dims;
+            ttsl::SmallVector<uint32_t> index_dims;
             uint32_t input_dim_offset{};
         };
 
@@ -60,7 +60,7 @@ struct MorehGetItemOperation {
             tt::tt_metal::KernelHandle unary_writer_kernel_id{};
             std::size_t num_cores{};
             uint32_t core_h{};
-            ttnn::SmallVector<uint32_t> index_dims;
+            ttsl::SmallVector<uint32_t> index_dims;
             uint32_t input_dim_offset{};
         };
 
@@ -89,7 +89,7 @@ struct MorehGetItemOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
         const std::vector<Tensor>& index_tensors,
-        const ttnn::SmallVector<uint32_t>& index_dims,
+        const ttsl::SmallVector<uint32_t>& index_dims,
         const std::optional<Tensor>& output,
         // const CoreRange core_range,
         const std::optional<MemoryConfig>& memory_config);

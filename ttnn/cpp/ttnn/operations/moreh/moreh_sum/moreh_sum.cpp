@@ -10,12 +10,12 @@
 namespace ttnn::operations::moreh::moreh_sum {
 Tensor MorehSum::invoke(
     const Tensor& input,
-    const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim,
+    const std::optional<std::variant<int64_t, ttsl::SmallVector<int64_t>>>& dim,
     const bool keepdim,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::SmallVector<int64_t> dims = get_dim(dim, input.padded_shape().rank());
+    ttsl::SmallVector<int64_t> dims = get_dim(dim, input.padded_shape().rank());
     std::sort(dims.begin(), dims.end());
 
     auto temp_input = input;

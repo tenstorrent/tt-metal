@@ -49,7 +49,7 @@ ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int
         TT_THROW("{}", error_msg);
     }
 
-    ttnn::SmallVector<uint32_t> new_shape(shape.size());
+    ttsl::SmallVector<uint32_t> new_shape(shape.size());
     std::copy(shape.begin(), shape.end(), new_shape.begin());
     if (index_of_negative_1 == -1) {
         TT_FATAL(new_volume == old_volume, "Invalid arguments to reshape");

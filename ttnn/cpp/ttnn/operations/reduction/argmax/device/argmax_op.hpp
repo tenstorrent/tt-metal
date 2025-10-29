@@ -26,7 +26,7 @@ struct ArgMax {
      * @param input_tensor The input tensor on which reduction is performed.
      * @return The output shape.
      */
-    ttnn::SmallVector<uint32_t> get_output_shape(const Tensor& input_tensor) const;
+    ttsl::SmallVector<uint32_t> get_output_shape(const Tensor& input_tensor) const;
     void validate_with_output_tensors(
         const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     std::vector<TensorSpec> compute_output_specs(

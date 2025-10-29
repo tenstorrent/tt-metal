@@ -50,7 +50,7 @@ TEST_F(SoftmaxTest, SoftmaxTest_Batch) {
     using namespace ttml;
 
     const uint32_t N = 64U, C = 1U, H = 59U, W = 197U;
-    const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
+    const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
     int32_t dim = 3U;
 
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
@@ -87,7 +87,7 @@ TEST_F(SoftmaxTest, SoftmaxTest_Big_Batch) {
     using namespace ttml;
 
     const uint32_t N = 1U, C = 1U, H = 32U, W = 128007U;
-    const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
+    const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
     int32_t dim = 3U;
 
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
@@ -125,7 +125,7 @@ TEST_F(SoftmaxTest, NIGHTLY_SoftmaxTest_Huge_Batch) {
     using namespace ttml;
 
     const uint32_t N = 64U, C = 1U, H = 32U, W = 128000U;
-    const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
+    const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
     int32_t dim = 3U;
 
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
@@ -159,7 +159,7 @@ TEST_F(SoftmaxTest, SoftmaxTest_Large_Values) {
     using namespace ttml;
 
     const uint32_t N = 1U, C = 1U, H = 1U, W = 256U;
-    const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
+    const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
     int32_t dim = 3U;
 
     xt::xarray<float> input_tensor = {

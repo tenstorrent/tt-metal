@@ -58,7 +58,7 @@ void bind_split(py::module& module) {
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<int64_t>& split_sizes,
+               const ttsl::SmallVector<int64_t>& split_sizes,
                const int64_t dim,
                const std::optional<ttnn::MemoryConfig>& memory_config) {
                 return self(input_tensor, split_sizes, dim, memory_config);

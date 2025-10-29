@@ -52,7 +52,7 @@ Alignment legacyShapeToAlignment(
 
     // INTERLEAVED with only height/width padding
     if (alignment_can_be_2D) {
-        ttnn::SmallVector<uint32_t> values(std::min((int)padded_rank, 2));
+        ttsl::SmallVector<uint32_t> values(std::min((int)padded_rank, 2));
         const auto alignment_size = values.size();
         if (alignment_size >= 1) {
             values[alignment_size - 1] = legacy_padded_shape[-1];
@@ -66,7 +66,7 @@ Alignment legacyShapeToAlignment(
 
     // INTERLEAVED with (deprecated) non-height/width padding
     // NOTE: Rank > 2 is guaranteed in this case
-    ttnn::SmallVector<uint32_t> values(padded_rank);
+    ttsl::SmallVector<uint32_t> values(padded_rank);
     values[padded_rank - 1] = legacy_padded_shape[-1];
     values[padded_rank - 2] = legacy_padded_shape[-2];
 
@@ -156,7 +156,7 @@ void TensorLayout::initialize_alignment() {
         return;
     }
 
-    ttnn::SmallVector<uint32_t> result(std::max(alignment_.size(), default_alignment.size()), 1);
+    ttsl::SmallVector<uint32_t> result(std::max(alignment_.size(), default_alignment.size()), 1);
     for (size_t i = 0; i < alignment_.size(); i++) {
         result[i + result.size() - alignment_.size()] = alignment_[i];
     }
@@ -360,7 +360,7 @@ Strides TensorLayout::compute_strides(const ttnn::Shape& logical_shape) const {
 }
 
 ttnn::Shape TensorLayout::compute_padded_shape(const ttnn::Shape& shape) const {
-    ttnn::SmallVector<uint32_t> padded_shape(std::max(shape.rank(), alignment_.size()));
+    ttsl::SmallVector<uint32_t> padded_shape(std::max(shape.rank(), alignment_.size()));
     int rank_index = static_cast<int>(shape.rank()) - 1;
     int alignment_index = static_cast<int>(alignment_.size()) - 1;
     int padded_shape_index = static_cast<int>(padded_shape.size() - 1);

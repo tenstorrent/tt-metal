@@ -17,7 +17,7 @@
 
 namespace {
 template <typename T>
-ttnn::Tensor GenInputTensor(const ttnn::SmallVector<uint32_t>& shape) {
+ttnn::Tensor GenInputTensor(const ttsl::SmallVector<uint32_t>& shape) {
     using namespace tt::tt_metal;
     static std::mt19937 gen(42);  // fixed seed for reproducibility
 
@@ -37,8 +37,8 @@ ttnn::Tensor GenInputTensor(const ttnn::SmallVector<uint32_t>& shape) {
 
 void BM_pad_rm_2d_last_dim_right(benchmark::State& state) {
     auto input_tensor = GenInputTensor<bfloat16>({8192, 8100});
-    ttnn::SmallVector<uint32_t> padded_shape = {8192, 8192};
-    ttnn::SmallVector<uint32_t> tensor_start = {0, 0};
+    ttsl::SmallVector<uint32_t> padded_shape = {8192, 8192};
+    ttsl::SmallVector<uint32_t> tensor_start = {0, 0};
 
     for (auto _ : state) {
         auto out = input_tensor.pad(
@@ -52,8 +52,8 @@ void BM_pad_rm_2d_last_dim_right(benchmark::State& state) {
 
 void BM_pad_rm_2d_last_dim_left_right(benchmark::State& state) {
     auto input_tensor = GenInputTensor<bfloat16>({8192, 8100});
-    ttnn::SmallVector<uint32_t> padded_shape = {8192, 8192};
-    ttnn::SmallVector<uint32_t> tensor_start = {0, 92};
+    ttsl::SmallVector<uint32_t> padded_shape = {8192, 8192};
+    ttsl::SmallVector<uint32_t> tensor_start = {0, 92};
 
     for (auto _ : state) {
         auto out = input_tensor.pad(
@@ -67,8 +67,8 @@ void BM_pad_rm_2d_last_dim_left_right(benchmark::State& state) {
 
 void BM_pad_rm_4d_last_dim_left_right(benchmark::State& state) {
     auto input_tensor = GenInputTensor<bfloat16>({16, 20, 512, 500});
-    ttnn::SmallVector<uint32_t> padded_shape = {16, 20 + 12, 512 + 30, 500 + 30};
-    ttnn::SmallVector<uint32_t> tensor_start = {0, 1, 3, 4};
+    ttsl::SmallVector<uint32_t> padded_shape = {16, 20 + 12, 512 + 30, 500 + 30};
+    ttsl::SmallVector<uint32_t> tensor_start = {0, 1, 3, 4};
 
     for (auto _ : state) {
         auto out = input_tensor.pad(
@@ -85,8 +85,8 @@ void BM_pad_rm_2d_scaling(benchmark::State& state) {
     int N_padded = N + (2 * 100);
 
     auto input_tensor = GenInputTensor<bfloat16>({8192, N});
-    ttnn::SmallVector<uint32_t> padded_shape = {8192, N_padded};
-    ttnn::SmallVector<uint32_t> tensor_start = {0, 100};
+    ttsl::SmallVector<uint32_t> padded_shape = {8192, N_padded};
+    ttsl::SmallVector<uint32_t> tensor_start = {0, 100};
 
     for (auto _ : state) {
         auto out = input_tensor.pad(

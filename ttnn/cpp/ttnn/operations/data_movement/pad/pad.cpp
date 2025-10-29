@@ -17,7 +17,7 @@ namespace detail {
 bool eq_spans(const auto a, const auto b) { return std::equal(a.begin(), a.end(), b.begin(), b.end()); }
 
 ttnn::Shape update_original_shape(const ttnn::Shape& padded_shape, const ttnn::Shape& input_shape) {
-    ttnn::SmallVector<uint32_t> updated_shape;
+    ttsl::SmallVector<uint32_t> updated_shape;
     size_t input_rank = input_shape.rank();
     for (size_t i = 0; i < input_rank - 2; i++) {
         updated_shape.push_back(input_shape[i]);
@@ -94,7 +94,7 @@ ttnn::Tensor pad_impl(
                 if (height_distinct(input_logical_shape, output_padded_shape)) {
                     // we will decompose the padding into two parts and run two
                     // separate pads.
-                    ttnn::SmallVector<uint32_t> adjusted_input_tensor_start{0, 0, 0, input_tensor_start[3]};
+                    ttsl::SmallVector<uint32_t> adjusted_input_tensor_start{0, 0, 0, input_tensor_start[3]};
 
                     TT_ASSERT(
                         not(height_distinct(input_logical_shape, output_shape_width_padded) and
@@ -159,7 +159,7 @@ ttnn::Tensor pad_impl(
 
 ttnn::Tensor pad_impl(
     const ttnn::Tensor& input_tensor,
-    ttnn::SmallVector<PadSpecDim> padding,
+    ttsl::SmallVector<PadSpecDim> padding,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg) {
@@ -205,7 +205,7 @@ ttnn::Tensor pad_impl(
 }
 
 std::tuple<ttnn::Shape, ttnn::Shape> compute_requested_shape(
-    const ttnn::Shape& input_logical_shape, const ttnn::SmallVector<PadSpecDim>& pad_spec) {
+    const ttnn::Shape& input_logical_shape, const ttsl::SmallVector<PadSpecDim>& pad_spec) {
     if (std::all_of(pad_spec.begin(), pad_spec.end(), [](auto& p) {
             return p.before_elements == 0 && p.after_elements == 0;
         })) {
@@ -213,7 +213,7 @@ std::tuple<ttnn::Shape, ttnn::Shape> compute_requested_shape(
     }
 
     const auto rank = input_logical_shape.rank();
-    ttnn::SmallVector<uint32_t> requested_logical_shape_vec(rank, 0);
+    ttsl::SmallVector<uint32_t> requested_logical_shape_vec(rank, 0);
 
     std::transform(
         input_logical_shape.cbegin(),
@@ -228,7 +228,7 @@ std::tuple<ttnn::Shape, ttnn::Shape> compute_requested_shape(
 
 ttnn::Tensor invoke_rm(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<PadSpecDim>& padding_vec,
+    const ttsl::SmallVector<PadSpecDim>& padding_vec,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg) {
@@ -238,7 +238,7 @@ ttnn::Tensor invoke_rm(
 
     // output_tensor is currently 4D. We have to squeeze back to the original rank
     if (original_rank <= 4) {
-        auto to_vec = [](const auto& span) { return ttnn::SmallVector<uint32_t>{span.begin(), span.end()}; };
+        auto to_vec = [](const auto& span) { return ttsl::SmallVector<uint32_t>{span.begin(), span.end()}; };
         auto output_shape = to_vec(output_tensor.padded_shape().view());
         auto padded_shape = to_vec(output_tensor.padded_shape().view());
         if (const auto rank_diff = output_shape.size() - original_rank; rank_diff) {
@@ -257,7 +257,7 @@ ttnn::Tensor invoke_rm(
 
 ttnn::Tensor invoke_tile(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<PadSpecDim>& padding_vec,
+    const ttsl::SmallVector<PadSpecDim>& padding_vec,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg) {
@@ -273,7 +273,7 @@ ttnn::Tensor invoke_tile(
 
     // Consistent with behavior expected by callers
     if (input_tensor.storage_type() != StorageType::DEVICE) {
-        ttnn::Shape zeros(ttnn::SmallVector<uint32_t>(input_logical_shape.rank(), 0));
+        ttnn::Shape zeros(ttsl::SmallVector<uint32_t>(input_logical_shape.rank(), 0));
         return input_tensor.pad(requested_padded_shape, zeros, value);
     }
 
@@ -294,7 +294,7 @@ ttnn::Tensor invoke_tile(
     } else {
         // need to align the requested padding to tile size. Note that begin padding is not supported so now just
         // set to zero
-        ttnn::SmallVector<PadSpecDim> padded_padding_vec;
+        ttsl::SmallVector<PadSpecDim> padded_padding_vec;
         padded_padding_vec.reserve(requested_rank);
         std::transform(
             requested_padded_shape.cbegin(),
@@ -331,13 +331,13 @@ ttnn::Tensor invoke_tile(
 
 ttnn::Tensor ExecutePad::invoke(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<PadSpecDim>& padding,
+    const ttsl::SmallVector<PadSpecDim>& padding,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg) {
     const int original_rank = input_tensor.logical_shape().rank();
 
-    ttnn::SmallVector<PadSpecDim> working_padding = padding;
+    ttsl::SmallVector<PadSpecDim> working_padding = padding;
 
     if (int diff = original_rank - padding.size(); diff != 0) {
         TT_FATAL(diff > 0, "ttnn.pad: padding len can't be larger than input tensor rank");
@@ -371,11 +371,11 @@ ttnn::Tensor ExecutePad::invoke(
 
 ttnn::Tensor ExecutePad::invoke(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<std::array<uint32_t, 2>>& padding,
+    const ttsl::SmallVector<std::array<uint32_t, 2>>& padding,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    ttnn::SmallVector<PadSpecDim> padding_impl;
+    ttsl::SmallVector<PadSpecDim> padding_impl;
     std::transform(padding.begin(), padding.end(), std::back_inserter(padding_impl), [](auto& p) {
         return PadSpecDim(p[0], p[1]);
     });
@@ -390,7 +390,7 @@ ttnn::Tensor ExecutePad::invoke(
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    ttnn::SmallVector<PadSpecDim> padding_impl;
+    ttsl::SmallVector<PadSpecDim> padding_impl;
     const auto& log_shape = input_tensor.logical_shape();
     for (uint32_t i = 0; i < output_padded_shape.size(); ++i) {
         padding_impl.emplace_back(
