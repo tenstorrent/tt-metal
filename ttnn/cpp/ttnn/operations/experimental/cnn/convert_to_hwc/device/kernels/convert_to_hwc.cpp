@@ -8,6 +8,8 @@
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/tilize.h"
 
+#include "debug/dprint_pages.h"
+
 template <uint32_t BatchSize = 1>
 FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
     cb_wait_front(cb_in, BatchSize);
@@ -34,6 +36,8 @@ FORCE_INLINE void tilize(
     uint32_t cb_in, uint32_t total_tiles_per_block, uint32_t total_sticks_per_block, uint32_t cb_out) {
     cb_wait_front(cb_in, total_sticks_per_block);
     cb_reserve_back(cb_out, total_tiles_per_block);
+
+    UNPACK(tt::compute::common::print_tile_rows(cb_in, 32, 0, false));
 
     tilize_block(cb_in, total_tiles_per_block, cb_out);
 
@@ -65,6 +69,7 @@ void MAIN {
 
         for (uint32_t idx = 0; idx < total_tiles; idx++) {
             const uint32_t cb_transpose_in = idx % 2 == 0 ? cb_transpose_in0 : cb_transpose_in1;
+            DPRINT << "transpose into " << cb_transpose_in << ENDL();
             transpose<1>(cb_tiled_in, cb_transpose_in);
         }
         pack_untilize_uninit(cb_transpose_in0);

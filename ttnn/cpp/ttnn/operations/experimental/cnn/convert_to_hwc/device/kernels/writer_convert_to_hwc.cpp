@@ -3,15 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-// #include "debug/dprint_pages.h"
-// #include "debug/dprint.h"
+#include "debug/dprint_pages.h"
+#include "debug/dprint.h"
 
 constexpr uint32_t TILE_SIZE = 32;
 
 template <uint32_t StickSize, uint32_t PaddedStickSize, uint32_t NumSticks>
 FORCE_INLINE void copy_padded_sticks(uint32_t l1_read_addr, uint32_t& l1_write_addr) {
     noc_async_read_one_packet_set_state(get_noc_addr(l1_read_addr), StickSize);
+    DPRINT << "copy padded sticks read_base=" << l1_read_addr << "  l1_write_base=" << l1_write_addr << ENDL();
     for (uint32_t row = 0; row < NumSticks; row++) {
+        DPRINT << "copy stick from tile cb at " << l1_read_addr << "  to output cb at " << l1_write_addr << ENDL();
+        // tt::data_movement::common::print_bf16_pages(l1_read_addr, 32, 32);
         noc_async_read_one_packet_with_state<true>(l1_read_addr, l1_write_addr);
         l1_read_addr += PaddedStickSize;
         l1_write_addr += StickSize;
@@ -34,8 +37,12 @@ FORCE_INLINE void copy_segment(
     } else {
         noc_read_addr = get_noc_addr(read_addr);
     }
+    DPRINT << "STARTING COPY SEGMENT - BASE_READ=" << base_read_addr << " offset=" << read_offset
+           << " - BASE_WRITE=" << base_write_addr << " offset=" << write_offset << ENDL();
     noc_async_read_one_packet_set_state(noc_read_addr, copy_size);
     for (uint32_t j = 0; j < NumSticks; ++j) {
+        DPRINT << "copy stick from input at " << noc_read_addr << "  to output at " << l1_write_addr << ENDL();
+        // tt::data_movement::common::print_bf16_pages(noc_read_addr, 32, 1);
         noc_async_read_one_packet_with_state<true>(noc_read_addr, l1_write_addr);
         l1_write_addr += WriteStrideBytes;
         noc_read_addr += ReadStrideBytes;
@@ -63,6 +70,21 @@ void kernel_main() {
     constexpr uint32_t input_sticks_per_core = get_compile_time_arg_val(14);
     constexpr uint32_t input_block_size_sticks_per_core = get_compile_time_arg_val(15);
     constexpr uint32_t input_num_blocks = get_compile_time_arg_val(16);
+    constexpr uint32_t semaphore_id = get_compile_time_arg_val(17);
+    constexpr uint32_t semaphore_id2 = get_compile_time_arg_val(18);
+
+    const uint32_t x = NOC_X(my_x[0]);
+    const uint32_t y = NOC_Y(my_y[0]);
+
+    const uint32_t semaphore_addr = get_semaphore(semaphore_id);
+    const uint64_t semaphore_noc_addr = get_noc_addr(x, y, semaphore_addr);
+    volatile tt_l1_ptr uint32_t* semaphore_noc_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_noc_addr);
+
+    const uint32_t semaphore_addr2 = get_semaphore(semaphore_id2);
+    const uint64_t semaphore_noc_addr2 = get_noc_addr(x, y, semaphore_addr);
+    volatile tt_l1_ptr uint32_t* semaphore_noc_addr_ptr2 =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_noc_addr2);
 
     constexpr uint32_t channel_size = channels * element_size_bytes;
 
@@ -78,14 +100,22 @@ void kernel_main() {
 
     uint32_t l1_output_write_addr = base_l1_write_addr;
 
-    for (uint32_t block_id = 0; block_id < input_num_blocks; block_id++) {  // TODO: wrap the entire program
+    for (uint32_t block_id = 0; block_id < input_num_blocks; block_id++) {
+        if constexpr (should_wait) {
+            noc_semaphore_wait(semaphore_noc_addr_ptr, block_id + 1);
+        } else {
+            cb_reserve_back(cb_in, 2 * input_block_size_sticks_per_core);
+            noc_semaphore_set(semaphore_noc_addr_ptr, block_id + 1);
+        }
+        noc_async_read_barrier();
+
         tt_l1_ptr uint32_t* args = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
         uint32_t args_idx = 0;
         for (uint32_t i = 0; i < num_segments; ++i) {
             uint32_t copy_size = args[args_idx++];
             uint32_t write_offset = args[args_idx++];
             uint32_t bank_id = args[args_idx++];  // only used if source is in DRAM
-            uint32_t read_offset = args[args_idx++];
+            uint32_t read_offset = args[args_idx++] + (block_id * copy_size * (2 * input_block_size_sticks_per_core));
             copy_segment<
                 dram_read_stride_bytes,
                 dram_write_stride_bytes,
@@ -97,18 +127,30 @@ void kernel_main() {
 
         // One writer must wait until the other has pushed to avoid a race that will trigger a hang
         if constexpr (should_wait) {
-            cb_wait_front(cb_in, input_block_size_sticks_per_core);
+            noc_semaphore_wait(semaphore_noc_addr_ptr2, block_id + 1);
+        } else {
+            cb_push_back(cb_in, 2 * input_block_size_sticks_per_core);
+            noc_semaphore_set(semaphore_noc_addr_ptr2, block_id + 1);
         }
-        cb_push_back(cb_in, input_block_size_sticks_per_core);
+        noc_async_read_barrier();
+
+        DPRINT << "pushed block " << block_id << ENDL();
+        DPRINT << "   num tiles?=" << num_full_tiles << ENDL();
+        DPRINT << "   l1_write_addr_stride=" << l1_write_addr_stride << ENDL();
 
         for (uint32_t i = 0; i < num_full_tiles; i++) {
             cb_wait_front(cb_in_transpose, 1);
+
             const uint32_t l1_read_addr = get_read_ptr(cb_in_transpose);
+
+            // tt::data_movement::common::print_bf16_pages(l1_read_addr, 32, 32);
+
             copy_padded_sticks<channel_size, tile_size_stick_bytes, TILE_SIZE>(l1_read_addr, l1_output_write_addr);
             noc_async_read_barrier();
             cb_pop_front(cb_in_transpose, 1);
-            l1_output_write_addr +=
-                l1_write_addr_stride;  // skip some number of sticks if splitting writers across cores
+
+            // stride by a number of sticks when splitting writers across cores
+            // l1_output_write_addr += l1_write_addr_stride;
         }
     }
 }

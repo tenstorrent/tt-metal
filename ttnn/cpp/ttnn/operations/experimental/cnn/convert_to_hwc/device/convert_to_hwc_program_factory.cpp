@@ -38,6 +38,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
 
     const uint32_t l1_input_shard_height = is_input_in_dram ? a.logical_shape()[-2] : a.shard_spec()->shape[0];
     const uint32_t l1_input_shard_width = is_input_in_dram ? output_shard_height : a.shard_spec()->shape[1];
+    const uint32_t batch_size = a.logical_shape()[1];  // TODO: get this from the right place
+    //
     const CoreRangeSet l1_input_core_grid = is_input_in_dram ? output.shard_spec()->grid : a.shard_spec()->grid;
     const std::vector<CoreCoord> l1_input_cores = corerange_to_cores(
         l1_input_core_grid, std::nullopt, a.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
@@ -48,12 +50,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         l1_input_shard_width,
         l1_input_cores.size());
 
-    TT_FATAL(
-        l1_input_shard_height <= TILE_HEIGHT, "Shard height must be 32 or smaller (was {})", l1_input_shard_height);
-    TT_FATAL(
-        l1_input_shard_width % TILE_WIDTH == 0,
-        "Shard width must be multiple of tile width (was {})",
-        l1_input_shard_width);
+    // TT_FATAL(
+    // l1_input_shard_height <= TILE_HEIGHT, "Shard height must be 32 or smaller (was {})", l1_input_shard_height);
+    // TT_FATAL(
+    // l1_input_shard_width % TILE_WIDTH == 0,
+    //"Shard width must be multiple of tile width (was {})",
+    // l1_input_shard_width);
     const auto alignment_elements = compute_alignment_requirement_in_elements(output);
     log_info(tt::LogType::LogAlways, "convert_to_hwc: Alignment elements={}", alignment_elements);
     TT_FATAL(alignment_elements != 0, "Number of alignment elements cannot be 0");
@@ -116,7 +118,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
 
     const uint32_t cb_in_id = tt::CBIndex::c_0;
     const uint32_t cb_in_page_size = l1_input_shard_width * input_element_size;
-    const uint32_t cb_in_total_size = l1_input_shard_height * cb_in_page_size;
+    const uint32_t cb_in_total_size = (l1_input_shard_height / batch_size) * cb_in_page_size;
     create_circular_buffer(cb_in_id, cb_in_total_size, cb_in_page_size, input_format);
 
     const uint32_t cb_in_tiled_id = tt::CBIndex::c_1;
@@ -142,7 +144,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     const auto cb_out =
         create_circular_buffer(cb_out_id, cb_out_total_size, cb_out_page_size, output_format, output.buffer());
 
-    const uint32_t total_tiles_per_core = tt::div_up(l1_input_shard_width, TILE_HEIGHT);
+    const uint32_t total_tiles_per_core = tt::div_up(l1_input_shard_width / batch_size, TILE_HEIGHT);
     const uint32_t total_tiles_writer0 = tt::div_up(total_tiles_per_core, 2);
     const uint32_t total_tiles_writer1 = total_tiles_per_core - total_tiles_writer0;
     uint32_t output_stride_sticks = TILE_WIDTH;  // needed to stride output address when doing split writers
@@ -153,6 +155,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         total_tiles_writer0,
         total_tiles_writer1,
         output_stride_sticks);
+
+    uint32_t block_start_semaphore_id = tt::tt_metal::CreateSemaphore(program, l1_input_core_grid, 0);
+    uint32_t block_end_semaphore_id = tt::tt_metal::CreateSemaphore(program, l1_input_core_grid, 0);
 
     const auto dram_input_cores = corerange_to_cores(
         a.shard_spec()->grid, std::nullopt, a.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
@@ -184,12 +189,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     log_info(tt::LogType::LogAlways, "runtime_args_for_each_core[0]={}", runtime_args_for_each_core[0]);
 
     // Split DRAM read across each kernel along tensor height since this is the best way to split work evenly
-    const uint32_t total_num_sticks_kernel_0 = l1_input_shard_height / 2;
-    const uint32_t total_num_sticks_kernel_1 = l1_input_shard_height - total_num_sticks_kernel_0;
+    const uint32_t total_num_sticks_kernel_0 = (l1_input_shard_height / batch_size) / 2;
+    const uint32_t total_num_sticks_kernel_1 = (l1_input_shard_height / batch_size) - total_num_sticks_kernel_0;
 
-    const uint32_t batch_size = 1;  // TODO: get this from the right place
-    const uint32_t num_sticks_block_size_kernel_0 = total_num_sticks_kernel_0 / batch_size;
-    const uint32_t num_sticks_block_size_kernel_1 = total_num_sticks_kernel_1 / batch_size;
+    const uint32_t num_sticks_block_size_kernel_0 = total_num_sticks_kernel_0;
+    const uint32_t num_sticks_block_size_kernel_1 = total_num_sticks_kernel_1;
 
     log_info(
         tt::LogType::LogAlways,
@@ -216,7 +220,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         dram_read_stride_bytes,
         total_num_sticks_kernel_0,
         num_sticks_block_size_kernel_0,
-        batch_size};
+        batch_size,
+        block_start_semaphore_id,
+        block_end_semaphore_id};
     log_info(tt::LogType::LogAlways, "convert_to_hwc: writer_compile_time_args0 = {}", writer_compile_time_args0);
 
     std::vector<uint32_t> writer_compile_time_args1 = {
@@ -236,7 +242,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         dram_read_stride_bytes,
         total_num_sticks_kernel_1,
         num_sticks_block_size_kernel_1,
-        batch_size};
+        batch_size,
+        block_start_semaphore_id,
+        block_end_semaphore_id};
     log_info(tt::LogType::LogAlways, "convert_to_hwc: writer_compile_time_args1 = {}", writer_compile_time_args1);
 
     std::vector<uint32_t> compute_compile_time_args = {
@@ -245,7 +253,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         cb_in_transpose_id0,
         cb_in_transpose_id1,
         total_tiles_per_core,
-        l1_input_shard_height,
+        l1_input_shard_height / batch_size,
         is_input_in_dram,
         batch_size};
     log_info(tt::LogType::LogAlways, "convert_to_hwc: compute_compile_time_args = {}", compute_compile_time_args);
