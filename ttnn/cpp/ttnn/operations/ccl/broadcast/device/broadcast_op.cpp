@@ -144,7 +144,6 @@ Tensor broadcast_impl(
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
     const auto& tensor_topology = input_tensor.tensor_topology();
     const auto& tensor_topology_shape = tensor_topology.distribution_shape();
-    TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "broadcast op is only supported for Fast Dispatch");
 
     if (!cluster_axis.has_value()) {
         TT_FATAL(
