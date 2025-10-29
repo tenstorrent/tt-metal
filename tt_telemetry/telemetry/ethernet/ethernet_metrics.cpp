@@ -195,7 +195,9 @@ void EthernetCRCErrorCountMetric::update(
     const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
     uint32_t crc_error_val = 0;
     cluster->read_from_device(&crc_error_val, chip_id_, ethernet_core_, crc_addr_, sizeof(uint32_t));
-    value_ = uint64_t(crc_error_val);
+    uint64_t new_value = uint64_t(crc_error_val); 
+    changed_since_transmission_ = new_value != value_;
+    value_ = new_value;
     set_timestamp_now();
 }
 
@@ -227,7 +229,9 @@ void EthernetRetrainCountMetric::update(
     const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
     uint32_t data = 0;
     cluster->read_from_device(&data, chip_id_, ethernet_core_, retrain_count_addr_, sizeof(uint32_t));
-    value_ = uint64_t(data);
+    uint64_t new_value = uint64_t(data);
+    changed_since_transmission_ = new_value != value_;
+    value_ = new_value;
     set_timestamp_now();
 }
 
@@ -263,7 +267,9 @@ void EthernetCorrectedCodewordCountMetric::update(
     uint32_t lo = 0;
     cluster->read_from_device(&hi, chip_id_, ethernet_core_, corr_addr_ + 0, sizeof(uint32_t));
     cluster->read_from_device(&lo, chip_id_, ethernet_core_, corr_addr_ + 4, sizeof(uint32_t));
-    value_ = (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
+    uint64_t new_value = (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
+    changed_since_transmission_ = new_value != value_;
+    value_ = new_value;
     set_timestamp_now();
 }
 
@@ -299,7 +305,9 @@ void EthernetUncorrectedCodewordCountMetric::update(
     uint32_t lo = 0;
     cluster->read_from_device(&hi, chip_id_, ethernet_core_, uncorr_addr_ + 0, sizeof(uint32_t));
     cluster->read_from_device(&lo, chip_id_, ethernet_core_, uncorr_addr_ + 4, sizeof(uint32_t));
-    value_ = (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
+    uint64_t new_value = (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
+    changed_since_transmission_ = new_value != value_;
+    value_ = new_value;
     set_timestamp_now();
 }
 
@@ -465,7 +473,10 @@ const std::vector<std::string> FabricHeartbeatMetric::telemetry_path() const {
 
 void FabricHeartbeatMetric::update(
     const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
-    cluster->read_from_device(&value_, chip_id_, ethernet_core_, heartbeat_addr_, sizeof(uint64_t));
+    uint64_t new_value = 0;
+    cluster->read_from_device(&new_value, chip_id_, ethernet_core_, heartbeat_addr_, sizeof(uint64_t));
+    changed_since_transmission_ = new_value != value_;
+    value_ = new_value;
     timestamp_ = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
 }
