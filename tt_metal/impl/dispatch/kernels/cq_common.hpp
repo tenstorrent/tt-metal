@@ -438,6 +438,23 @@ public:
         return this->acquire_pages();
     }
 
+    // on_boundary is called when we're at the end of a block and need to release the pages and move to the next block.
+    template <typename OnBoundaryFn>
+    FORCE_INLINE uint32_t get_cb_page_and_release_pages(uint32_t& cmd_ptr, OnBoundaryFn&& on_boundary) {
+        if (this->cb_fence == this->block_next_start_addr[this->rd_block_idx]) {
+            const uint32_t orphan_size = this->cb_fence - cmd_ptr;
+            const bool will_wrap = (this->rd_block_idx == cb_blocks - 1);
+            on_boundary(orphan_size, will_wrap);
+            if (will_wrap) {
+                cmd_ptr = cb_base;
+                this->cb_fence = cb_base;
+            }
+            move_rd_to_next_block_and_release_pages();
+        }
+        return this->acquire_pages();
+    }
+
+
     FORCE_INLINE void release_all_pages(uint32_t curr_ptr) {
         release_block_pages();
         uint32_t pages_to_release =

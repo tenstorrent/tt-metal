@@ -405,36 +405,25 @@ void relay_to_next_cb(uint32_t data_ptr, uint64_t wlength) {
             }
             // Get a page if needed
             if (data_ptr + xfer_size > dispatch_cb_reader.cb_fence) {
-                // Check for block completion
-                if (dispatch_cb_reader.cb_fence ==
-                    dispatch_cb_reader.block_next_start_addr[dispatch_cb_reader.rd_block_idx]) {
-                    uint32_t orphan_size = dispatch_cb_reader.cb_fence - data_ptr;
-                    // No more writes from this block. Decrement the number of writes
-                    // since they were all accounted for.
-                    // Check for dispatch_cb wrap
-                    if (dispatch_cb_reader.rd_block_idx == dispatch_cb_blocks - 1) {
-                        ASSERT(dispatch_cb_reader.cb_fence == dispatch_cb_end);
+                dispatch_cb_reader.get_cb_page_and_release_pages(
+                    data_ptr,
+                    [&](uint32_t orphan_size, bool will_wrap) {
                         if (orphan_size != 0) {
                             relay_client.write<my_noc_index, true, NCRISC_WR_CMD_BUF>(
-                                data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr), orphan_size);
+                                data_ptr,
+                                get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr),
+                                orphan_size);
                             length -= orphan_size;
                             xfer_size -= orphan_size;
                             downstream_cb_data_ptr += orphan_size;
                             if (downstream_cb_data_ptr == downstream_cb_end) {
                                 downstream_cb_data_ptr = downstream_cb_base;
                             }
-                            // All writes from this block have completed.
-                            orphan_size = 0;
+                            if (!will_wrap) {
+                                data_ptr += orphan_size;
+                            }
                         }
-                        dispatch_cb_reader.cb_fence = dispatch_cb_base;
-                        data_ptr = dispatch_cb_base;
-                    }
-
-                    dispatch_cb_reader.move_rd_to_next_block_and_release_pages();
-                }
-
-                // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
-                uint32_t n_pages = dispatch_cb_reader.acquire_pages();
+                    });
             }
 
             relay_client.write_atomic_inc_any_len<
@@ -653,31 +642,24 @@ void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
             // Check for block completion and issue orphan writes for this block
             // before proceeding to next block
             uint32_t orphan_size = 0;
-            if (dispatch_cb_reader.cb_fence ==
-                dispatch_cb_reader.block_next_start_addr[dispatch_cb_reader.rd_block_idx]) {
-                orphan_size = dispatch_cb_reader.cb_fence - data_ptr;
-                if (orphan_size != 0) {
-                    wait_for_barrier();
-                    cq_noc_async_write_with_state<CQ_NOC_SNdL>(data_ptr, dst, orphan_size, num_dests);
-                    writes++;
-                    mcasts += num_dests;
-                }
-                // Handle wrapping on dispatch cb
-                if (dispatch_cb_reader.rd_block_idx == dispatch_cb_blocks - 1) {
-                    dispatch_cb_reader.cb_fence = dispatch_cb_base;
-                    data_ptr = dispatch_cb_base;
-                } else {
-                    data_ptr += orphan_size;
-                }
-                noc_nonposted_writes_num_issued[noc_index] += writes;
-                noc_nonposted_writes_acked[noc_index] += mcasts;
-                writes = 0;
-                mcasts = 0;
-                dispatch_cb_reader.move_rd_to_next_block_and_release_pages();
-            }
-
-            // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
-            uint32_t n_pages = dispatch_cb_reader.acquire_pages();
+            dispatch_cb_reader.get_cb_page_and_release_pages(
+                data_ptr,
+                [&](uint32_t os, bool will_wrap) {
+                    orphan_size = os;
+                    if (os != 0) {
+                        wait_for_barrier();
+                        cq_noc_async_write_with_state<CQ_NOC_SNdL>(data_ptr, dst, os, num_dests);
+                        writes++;
+                        mcasts += num_dests;
+                        if (!will_wrap) {
+                            data_ptr += os;
+                        }
+                    }
+                    noc_nonposted_writes_num_issued[noc_index] += writes;
+                    noc_nonposted_writes_acked[noc_index] += mcasts;
+                    writes = 0;
+                    mcasts = 0;
+                });
 
             // This is done here so the common case doesn't have to restore the pointers
             if (orphan_size != 0) {
@@ -800,7 +782,6 @@ void process_write_packed_large(uint32_t* l1_cache) {
                     writes = 0;
                     dispatch_cb_reader.move_rd_to_next_block_and_release_pages();
                 }
-                uint32_t n_pages = dispatch_cb_reader.acquire_pages();
             }
             // Transfer size is min(remaining_length, data_available_in_cb)
             uint32_t available_data = dispatch_cb_reader.cb_fence - data_ptr;
@@ -843,22 +824,13 @@ void process_write_packed_large(uint32_t* l1_cache) {
 
         // Handle padded size and potential wrap
         if (data_ptr + pad_size > dispatch_cb_reader.cb_fence) {
-            // Check for block completion
-            if (dispatch_cb_reader.cb_fence ==
-                dispatch_cb_reader.block_next_start_addr[dispatch_cb_reader.rd_block_idx]) {
-                // Check for dispatch_cb wrap
-                if (dispatch_cb_reader.rd_block_idx == dispatch_cb_blocks - 1) {
-                    ASSERT(dispatch_cb_reader.cb_fence == dispatch_cb_end);
-                    uint32_t orphan_size = dispatch_cb_reader.cb_fence - data_ptr;
-                    dispatch_cb_reader.cb_fence = dispatch_cb_base;
-                    data_ptr = dispatch_cb_base;
-                    pad_size -= orphan_size;
-                }
-                dispatch_cb_reader.move_rd_to_next_block_and_release_pages();
-            }
-
-            // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
-            uint32_t n_pages = dispatch_cb_reader.acquire_pages();
+            dispatch_cb_reader.get_cb_page_and_release_pages(
+                data_ptr,
+                [&](uint32_t orphan_size, bool will_wrap) {
+                    if (will_wrap) {
+                        pad_size -= orphan_size;
+                    }
+                });
         }
         data_ptr += pad_size;
 
