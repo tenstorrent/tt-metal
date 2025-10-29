@@ -142,10 +142,11 @@ def test_classification_head_full(device, pcc, reset_seeds):
     ttnn_parameters = create_classification_head_parameters(classification_head, device)
 
     # Import TTNN implementation
-    from models.experimental.retinanet.tt.classification_head import ttnn_retinanet_classification_head
+    from models.experimental.retinanet.TTNN.classification_head import ttnn_retinanet_classification_head
 
     # TTNN forward pass
     logger.info("Running TTNN forward pass")
+
     ttnn_output = ttnn_retinanet_classification_head(
         feature_maps=ttnn_features,
         parameters=ttnn_parameters,

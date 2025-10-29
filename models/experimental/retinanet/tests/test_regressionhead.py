@@ -8,7 +8,7 @@ import pickle
 import os
 from torchvision.models.detection import retinanet_resnet50_fpn_v2, RetinaNet_ResNet50_FPN_V2_Weights
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.retinanet.tt.regression_head import ttnn_retinanet_regression_head
+from models.experimental.retinanet.TTNN.regression_head import ttnn_retinanet_regression_head
 
 
 def create_regression_head_parameters(torch_model, device):
