@@ -93,14 +93,14 @@ run_tg_tests() {
     ./build/test/tt_metal/unit_tests_device --gtest_filter="GalaxyFixture.*:TGFixture.*"
     TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshMultiCQMultiDevice*Fixture.*"
 
-  # elif [[ "$1" == "fabric" ]]; then
-  #   echo "LOG_FABRIC: running run_tg_fabric_tests"
-  #   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*TG*
-  #   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-  #   # TODO: Fix bug and enable Push mode https://github.com/tenstorrent/tt-metal/issues/19999
-  #   #       TG + push mode + fast dispatch has bug at tt::tt_metal::detail::CreateDevices(ids)
-  #   ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-  #   ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric*MuxFixture.*"
+  elif [[ "$1" == "fabric" ]]; then
+    echo "LOG_FABRIC: running run_tg_fabric_tests"
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*TG*
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    # TODO: Fix bug and enable Push mode https://github.com/tenstorrent/tt-metal/issues/19999
+    #       TG + push mode + fast dispatch has bug at tt::tt_metal::detail::CreateDevices(ids)
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric*MuxFixture.*"
 
     # MGD 2.0 Tests
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*TG*
@@ -109,8 +109,8 @@ run_tg_tests() {
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric*MuxFixture.*"
 
-  # elif [[ "$1" == "llama3-70b" ]]; then
-  #   run_tg_llama3.3-70b_tests
+  elif [[ "$1" == "llama3-70b" ]]; then
+    run_tg_llama3.3-70b_tests
 
   elif [[ "$1" == "gpt-oss" ]]; then
     run_tg_gpt_oss_tests
@@ -118,14 +118,11 @@ run_tg_tests() {
   elif [[ "$1" == "prefetcher" ]]; then
     run_tg_prefetcher_tests
 
-  # elif [[ "$1" == "prefetcher" ]]; then
-  #   run_tg_prefetcher_tests
+  elif [[ "$1" == "distributed-ops" ]]; then
+    run_tg_distributed_op_tests
 
-  # elif [[ "$1" == "distributed-ops" ]]; then
-  #   run_tg_distributed_op_tests
-
-  # elif [[ "$1" == "distributed-runtime" ]]; then
-  #   ./build/test/tt_metal/distributed/distributed_unit_tests
+  elif [[ "$1" == "distributed-runtime" ]]; then
+    ./build/test/tt_metal/distributed/distributed_unit_tests
 
   else
     echo "LOG_METAL: Unknown model type: $1"
