@@ -492,9 +492,11 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         // Get arch from node
         // Assume arch for start and end are the same
         // This is validated in create_port_connection
-        auto arch = host_id_to_node_.at(std::get<0>(start))->boards.at(std::get<1>(start)).get_arch();
 
-        CableLength cable_l = calc_cable_length(host1, tray_id1, host2, tray_id2, host1_node_type);
+        // TODO: Determine better heuristic/specification for cable length and type
+        // auto arch = host_id_to_node_.at(std::get<0>(start))->boards.at(std::get<1>(start)).get_arch();
+        // CableLength cable_l = calc_cable_length(host1, tray_id1, host2, tray_id2, host1_node_type);
+
         if (loc_info) {
             output_file << host1.hostname << ",";
             output_file << host1.hall << "," << host1.aisle << "," << std::setw(2) << host1.rack << ",U" << std::setw(2)

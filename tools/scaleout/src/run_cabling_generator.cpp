@@ -107,6 +107,7 @@ InputConfig parse_arguments(int argc, char** argv) {
                     throw std::invalid_argument("Output name contains invalid character '" + std::string(1, c) + "'. Avoid: " + invalid_chars);
                 }
             }
+            config.output_name = "_" + config.output_name;
         }
 
         return config;
@@ -130,8 +131,8 @@ int main(int argc, char** argv) {
         std::cout << "Loading descriptors and initializing generator..." << std::endl;
         CablingGenerator cabling_generator(config.cabling_descriptor_path, config.deployment_descriptor_path);
 
-        std::string factory_output = "out/scaleout/factory_system_descriptor_" + config.output_name + ".textproto";
-        std::string cabling_output = "out/scaleout/cabling_guide_" + config.output_name + ".csv";
+        std::string factory_output = "out/scaleout/factory_system_descriptor" + config.output_name + ".textproto";
+        std::string cabling_output = "out/scaleout/cabling_guide" + config.output_name + ".csv";
 
         // Ensure output directory exists
         std::filesystem::create_directories("out/scaleout");
