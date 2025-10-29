@@ -181,6 +181,7 @@ class PatchEmbed(Module):
         pos_embed_max_size,
         tp_mesh_axis,
         sp_mesh_axis,
+        sequence_padding: tuple[int, int] = (0, 0),
         mesh_device=None,
     ):
         super().__init__()
@@ -194,6 +195,7 @@ class PatchEmbed(Module):
         self.mesh_device = mesh_device
         self.tp_mesh_axis = tp_mesh_axis
         self.sp_mesh_axis = sp_mesh_axis
+        self.sequence_padding = sequence_padding
 
         # Position embeddings
         self.pos_embed = None
@@ -215,8 +217,10 @@ class PatchEmbed(Module):
         self.proj_bias = Parameter(
             total_shape=[1, 1, 1, embed_dim], mesh_axes=[None, None, None, tp_mesh_axis], device=mesh_device
         )
+
+        seq_len = self.height * self.width + sequence_padding[0] + sequence_padding[1]
         self.pos_embed = Parameter(
-            total_shape=[1, self.height * self.width, embed_dim],
+            total_shape=[1, seq_len, embed_dim],
             device=mesh_device,
             mesh_axes=[None, sp_mesh_axis, tp_mesh_axis],
         )
@@ -228,7 +232,9 @@ class PatchEmbed(Module):
 
         spatial_pos_embed = pos_embed_param.reshape([1, pos_embed_max_size, pos_embed_max_size, -1])
         spatial_pos_embed = spatial_pos_embed[:, top : top + self.height, left : left + self.width, :]
-        return spatial_pos_embed.reshape([1, -1, spatial_pos_embed.shape[-1]])
+        spatial_pos_embed = spatial_pos_embed.reshape([1, -1, spatial_pos_embed.shape[-1]])
+
+        return torch.nn.functional.pad(spatial_pos_embed, (0, 0, *self.sequence_padding))
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         conv_weight = state.pop("proj.weight", None)
