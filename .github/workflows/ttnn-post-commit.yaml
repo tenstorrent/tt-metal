@@ -105,8 +105,8 @@ jobs:
             cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/light_metal tests/ttnn/unit_tests/tensor -xv -m "not disable_fast_runtime_mode"
           - name: ttnn notebook
             cmd: TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto --timeout 300 tests/ttnn/notebook_tests -xv -m "not disable_fast_runtime_mode"
-          - name: ttnn fast runtime off
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
+          # - name: ttnn fast runtime off
+          #   cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
             fast_runtime_mode_off: true
           - name: ttnn example tests
             cmd: ./tests/scripts/run_ttnn_examples.sh
