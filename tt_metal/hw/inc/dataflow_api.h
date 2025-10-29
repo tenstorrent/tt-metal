@@ -1942,18 +1942,18 @@ FORCE_INLINE void noc_inline_dw_write_set_state(
  *
  * Return value: None
  *
- * | Argument                                   | Description                                         | Data type | Valid range   | required |
- * |--------------------------------------------|-----------------------------------------------------|-----------|---------------|----------|
- * | val                                        | The value to be written                             | uint32_t  | Any uint32_t  | True     |
- * | addr                                       | The local address to write to (if not set in state) | uint32_t  | 0..1MB        | False    |
- * | cmd_buf                                    | Command buffer to use for the transaction           | uint8_t   | 0-3           | False    |
- * | noc                                        | NOC to use for the transaction                      | uint8_t   | 0 or 1        | False    |
- * | update_addr_lo (template parameter)        | Whether to update the lower 32 bits of the address  | bool      | true or false | False    |
- * | update_counter (template parameter)        | Whether to update the write counters                | bool      | true or false | False    |
- * | posted (template parameter)                | Whether the call is posted (i.e. ack requirement)   | bool      | true or false | False    |
- * | update_addr_hi (template parameter)        | Whether to update the upper 32 bits of the address  | bool      | true or false | False    |
- * | update_val (template parameter)            | Whether to set the value to be written              | bool      | true or false | False    |
- * | update_be_on_addr_lo (template parameter)  | Whether to update the BE when update_addr_lo is true| bool      | true or false | False    |
+ * | Argument                                   | Description                                            | Data type | Valid range   | required |
+ * |--------------------------------------------|--------------------------------------------------------|-----------|---------------|----------|
+ * | val                                        | The value to be written                                | uint32_t  | Any uint32_t  | True     |
+ * | addr                                       | The local address to write to (if not set in state)    | uint32_t  | 0..1MB        | False    |
+ * | cmd_buf                                    | Command buffer to use for the transaction              | uint8_t   | 0-3           | False    |
+ * | noc                                        | NOC to use for the transaction                         | uint8_t   | 0 or 1        | False    |
+ * | update_addr_lo (template parameter)        | Whether to update the lower 32 bits of the address     | bool      | true or false | False    |
+ * | update_counter (template parameter)        | Whether to update the write counters                   | bool      | true or false | False    |
+ * | posted (template parameter)                | Whether the call is posted (i.e. ack requirement)      | bool      | true or false | False    |
+ * | update_addr_hi (template parameter)        | Whether to update the upper 32 bits of the address     | bool      | true or false | False    |
+ * | update_val (template parameter)            | Whether to set the value to be written                 | bool      | true or false | False    |
+ * | dst_type (template parameter)              | Whether the write is targeting L1 or a Stream Register | InlineWriteDst| DEFAULT, L1, REG | False    |
  */
 // clang-format on
 template <
@@ -1962,7 +1962,7 @@ template <
     bool posted = false,
     bool update_addr_hi = false,
     bool update_val = false,
-    bool update_be_on_addr_lo = true>
+    InlineWriteDst dst_type = InlineWriteDst::DEFAULT>
 FORCE_INLINE void noc_inline_dw_write_with_state(
     uint32_t val, uint32_t addr = 0, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
 #ifdef ARCH_BLACKHOLE
@@ -1982,7 +1982,7 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
         update_val,
         posted,
         update_counter_in_callee,
-        update_be_on_addr_lo>(noc, cmd_buf, val, addr);
+        dst_type>(noc, cmd_buf, val, addr);
     WAYPOINT("NWID");
 }
 
