@@ -280,8 +280,7 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
             const ChipId src_chip_id = src_instance.local_id;
             const ChipId dst_chip_id = dst_instance.local_id;
 
-            requested_intermesh_ports_[*src_mesh_id][*dst_mesh_id].push_back(
-                {src_chip_id, dst_chip_id, connection_data.count});
+            requested_intermesh_ports_[*src_mesh_id][*dst_mesh_id].push_back({src_chip_id, dst_chip_id, connection_data.count});
         } else {
             const MeshId src_mesh_id = MeshId(src_instance.local_id);
             const MeshId dst_mesh_id = MeshId(dst_instance.local_id);
@@ -360,17 +359,14 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
         }
         // South, start from SW corner
         chan_id = 0;
-        for (std::uint32_t chip_id = ((mesh_shape[0] * mesh_shape[1]) - mesh_shape[1]);
-             chip_id < (mesh_shape[0] * mesh_shape[1]);
-             chip_id++) {
+        for (std::uint32_t chip_id = ((mesh_shape[0] * mesh_shape[1]) - mesh_shape[1]); chip_id < (mesh_shape[0] * mesh_shape[1]); chip_id++) {
             for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
                 mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::S, chan_id++}] = chip_id;
             }
         }
         // East, start from NE corner
         chan_id = 0;
-        for (std::uint32_t chip_id = (mesh_shape[1] - 1); chip_id < (mesh_shape[0] * mesh_shape[1]);
-             chip_id += mesh_shape[1]) {
+        for (std::uint32_t chip_id = (mesh_shape[1] - 1); chip_id < (mesh_shape[0] * mesh_shape[1]); chip_id += mesh_shape[1]) {
             for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
                 mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::E, chan_id++}] = chip_id;
             }

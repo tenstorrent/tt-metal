@@ -5,8 +5,6 @@
 #include "physical_system_descriptor_serialization.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "protobuf/physical_system_descriptor.pb.h"
-#include <tt-metalium/fabric_types.hpp>
-#include <tt_metal/llrt/tt_target_device.hpp>
 
 #include <umd/device/cluster.hpp>
 
@@ -203,7 +201,7 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
         PhysicalSystemDescriptor::null_cluster,
         nullptr,
         nullptr,
-        proto_desc.mock_cluster() ? TargetDevice::Mock : TargetDevice::Silicon,
+        proto_desc.mock_cluster(),
         false);  // Don't run discovery
 
     // Convert system graph

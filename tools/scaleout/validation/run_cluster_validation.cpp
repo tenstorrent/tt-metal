@@ -151,9 +151,8 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
             driver,
             context.get_distributed_context_ptr(),
             &context.hal(),
-            context.rtoptions(),
-            run_discovery
-        );
+            context.rtoptions().get_mock_enabled(),
+            run_discovery);
         log_output_rank0("Physical Discovery Complete");
         log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
         return physical_system_descriptor;
@@ -224,14 +223,9 @@ void set_config_vars() {
     // it writes custom kernels to ethernet cores, which shouldn't
     // be running fabric routers
     setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", 1);
-
-    // Only set these if they are not already set
-    if (getenv("TT_MESH_HOST_RANK") == nullptr) {
-        setenv("TT_MESH_HOST_RANK", "0", 1);
-    }
-    if (getenv("TT_MESH_ID") == nullptr) {
-        setenv("TT_MESH_ID", "0", 1);
-    }
+    // Set env vars required by Control Plane when running on a multi-node cluster
+    setenv("TT_MESH_HOST_RANK", "0", 1);
+    setenv("TT_MESH_ID", "0", 1);
 }
 
 }  // namespace tt::scaleout_tools
