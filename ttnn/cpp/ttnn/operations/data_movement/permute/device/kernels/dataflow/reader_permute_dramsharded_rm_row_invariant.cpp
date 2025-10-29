@@ -8,6 +8,8 @@
 // TODO:
 // the reserve_back and noc_barrier logic is causing
 // functional failures.
+//
+// removal of dram_sharded APIs: https://github.com/tenstorrent/tt-metal/pull/30687
 
 void kernel_main() {
     constexpr uint32_t N = get_named_compile_time_arg_val("N");
