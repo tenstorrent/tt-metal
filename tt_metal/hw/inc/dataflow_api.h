@@ -730,7 +730,8 @@ void noc_async_read_inc_num_issued(std::uint32_t num_issued_reads_inc, uint8_t n
 template <bool enable_noc_tracing = true, bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet(
     std::uint32_t src_local_l1_addr,
-    std::uint64_t dst_noc_addr,
+    std::uint32_t dst_noc_addr,
+    std::uint64_t dst_addr,
     std::uint32_t size,
     uint8_t noc = noc_index,
     uint32_t vc = NOC_UNICAST_WRITE_VC) {
@@ -748,6 +749,7 @@ FORCE_INLINE void noc_async_write_one_packet(
         write_cmd_buf,
         src_local_l1_addr,
         dst_noc_addr,
+        dst_addr,
         size,
         vc,
         false /* mcast */,
@@ -755,6 +757,16 @@ FORCE_INLINE void noc_async_write_one_packet(
         1 /* num_dests */,
         true /* multicast_path_reserve */,
         posted);
+}
+template <bool enable_noc_tracing = true, bool posted = false>
+FORCE_INLINE void noc_async_write_one_packet(
+    std::uint32_t src_local_l1_addr,
+    std::uint64_t dst_addr,
+    std::uint32_t size,
+    uint8_t noc = noc_index,
+    uint32_t vc = NOC_UNICAST_WRITE_VC) {
+    uint32_t dst_noc_addr = get_noc_xy(dst_addr);
+    noc_async_write_one_packet<enable_noc_tracing, posted>(src_local_l1_addr, dst_noc_addr, dst_addr, size, noc, vc);
 }
 
 // clang-format off
@@ -784,7 +796,8 @@ FORCE_INLINE void noc_async_write_one_packet(
 template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1, bool enable_noc_tracing = true, bool posted = false>
 inline void noc_async_write(
     uint32_t src_local_l1_addr,
-    uint64_t dst_noc_addr,
+    uint32_t dst_noc_addr,
+    uint64_t dst_addr,
     uint32_t size,
     uint8_t noc = noc_index,
     uint32_t vc = NOC_UNICAST_WRITE_VC) {
@@ -793,15 +806,49 @@ inline void noc_async_write(
     }
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_write_one_packet<false, posted>(src_local_l1_addr, dst_noc_addr, size, noc, vc);
+        noc_async_write_one_packet<false, posted>(src_local_l1_addr, dst_noc_addr, dst_addr, size, noc, vc);
     } else {
         WAYPOINT("NAWW");
         DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
         ncrisc_noc_fast_write_any_len<noc_mode>(
-            noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, vc, false, false, 1, true, posted);
+            noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, dst_addr, size, vc, false, false, 1, true, posted);
         WAYPOINT("NAWD");
     }
 }
+#if 0
+template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1, bool enable_noc_tracing = true, bool posted = false>
+inline void noc_async_write(
+    uint32_t src_local_l1_addr,
+    uint64_t dst_addr,
+    uint32_t size,
+    uint8_t noc = noc_index,
+    uint32_t vc = NOC_UNICAST_WRITE_VC) {
+    uint32_t dst_noc_addr = get_noc_xy(dst_addr);
+    noc_async_write<max_page_size, enable_noc_tracing, posted>(src_local_l1_addr, dst_noc_addr, dst_addr, size, noc, vc);
+}
+#else
+template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1, bool enable_noc_tracing = true, bool posted = false>
+inline void noc_async_write(
+    uint32_t src_local_l1_addr,
+    uint64_t dst_addr,
+    uint32_t size,
+    uint8_t noc = noc_index,
+    uint32_t vc = NOC_UNICAST_WRITE_VC) {
+    if constexpr (enable_noc_tracing) {
+        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, dst_addr, size, vc);
+    }
+
+    if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
+        noc_async_write_one_packet<false, posted>(src_local_l1_addr, dst_addr, size, noc, vc);
+    } else {
+        WAYPOINT("NAWW");
+        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_addr, src_local_l1_addr, size);
+        ncrisc_noc_fast_write_any_len<noc_mode>(
+            noc, write_cmd_buf, src_local_l1_addr, dst_addr, size, vc, false, false, 1, true, posted);
+        WAYPOINT("NAWD");
+    }
+}
+#endif
 
 // clang-format off
 /**

@@ -187,6 +187,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     uint32_t noc,
     uint32_t cmd_buf,
     uint32_t src_addr,
+    uint32_t dest_noc_addr,
     uint64_t dest_addr,
     uint32_t len_bytes,
     uint32_t vc,
@@ -216,7 +217,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE, dest_noc_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 
@@ -228,6 +229,36 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
             noc_nonposted_writes_acked[noc] += num_dests;
         }
     }
+}
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false, bool update_counter = true>
+inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
+    uint32_t noc,
+    uint32_t cmd_buf,
+    uint32_t src_addr,
+    uint64_t dest_addr,
+    uint32_t len_bytes,
+    uint32_t vc,
+    bool mcast,
+    bool linked,
+    uint32_t num_dests,
+    bool multicast_path_reserve,
+    bool posted = false,
+    uint32_t trid = 0) {
+    uint32_t dest_noc_addr = (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT);
+    ncrisc_noc_fast_write<noc_mode, use_trid, update_counter>(
+        noc,
+        cmd_buf,
+        src_addr,
+        dest_noc_addr,
+        dest_addr,
+        len_bytes,
+        vc,
+        mcast,
+        linked,
+        num_dests,
+        multicast_path_reserve,
+        posted,
+        trid);
 }
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
@@ -507,6 +538,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
     uint32_t noc,
     uint32_t cmd_buf,
     uint32_t src_addr,
+    uint32_t dest_noc_addr,
     uint64_t dest_addr,
     uint32_t len_bytes,
     uint32_t vc,
@@ -523,6 +555,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
                 noc,
                 cmd_buf,
                 src_addr,
+                dest_noc_addr,
                 dest_addr,
                 NOC_MAX_BURST_SIZE,
                 vc,
@@ -542,6 +575,37 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
         noc,
         cmd_buf,
         src_addr,
+        dest_noc_addr,
+        dest_addr,
+        len_bytes,
+        vc,
+        mcast,
+        linked,
+        num_dests,
+        multicast_path_reserve,
+        posted,
+        trid);
+}
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false, bool one_packet = false>
+inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
+    uint32_t noc,
+    uint32_t cmd_buf,
+    uint32_t src_addr,
+    uint64_t dest_addr,
+    uint32_t len_bytes,
+    uint32_t vc,
+    bool mcast,
+    bool linked,
+    uint32_t num_dests,
+    bool multicast_path_reserve,
+    bool posted = false,
+    uint32_t trid = 0) {
+    uint32_t dest_noc_addr = (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT);
+    ncrisc_noc_fast_write_any_len<noc_mode, use_trid, one_packet>(
+        noc,
+        cmd_buf,
+        src_addr,
+        dest_noc_addr,
         dest_addr,
         len_bytes,
         vc,

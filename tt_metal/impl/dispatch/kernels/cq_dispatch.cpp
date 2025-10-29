@@ -552,7 +552,7 @@ void process_write_linear(
         uint32_t available_data = cb_fence - data_ptr;
         uint32_t xfer_size = length > available_data ? available_data : length;
 #if defined(FABRIC_RELAY)
-        noc_async_write(data_ptr, ((uint64_t)dst_noc << 32) | dst_addr, xfer_size);
+        noc_async_write(data_ptr, dst_noc, dst_addr, xfer_size);
 #else
         cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size, num_mcast_dests);
         // Increment counters based on the number of packets that were written

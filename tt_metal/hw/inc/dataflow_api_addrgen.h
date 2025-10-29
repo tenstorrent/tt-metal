@@ -210,6 +210,12 @@ std::uint64_t get_noc_addr_helper(std::uint32_t noc_xy, std::uint32_t addr) {
     return ((uint64_t)(noc_xy) << NOC_ADDR_COORD_SHIFT) | addr;
 }
 
+/*
+    Extract the NOC (x,y) coordinates encoding from the NOC address in the format returned from get_noc_addr_helper
+*/
+FORCE_INLINE
+std::uint32_t get_noc_xy(std::uint64_t noc_addr) { return (uint32_t)(noc_addr >> NOC_ADDR_COORD_SHIFT); }
+
 uint64_t get_dram_noc_addr(
     const uint32_t id,
     const uint32_t page_size,

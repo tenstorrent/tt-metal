@@ -311,13 +311,41 @@
 
 #define NOC_LOCAL_ADDR_OFFSET(addr) ((addr) & NOC_LOCAL_ADDR_MASK)
 
-#define NOC_UNICAST_ADDR_X(addr) (((addr) >> NOC_ADDR_LOCAL_BITS) & NOC_NODE_ID_MASK)
-#define NOC_UNICAST_ADDR_Y(addr) (((addr) >> (NOC_ADDR_LOCAL_BITS + NOC_ADDR_NODE_ID_BITS)) & NOC_NODE_ID_MASK)
+constexpr uint32_t NOC_UNICAST_ADDR_X(uint64_t addr) {
+    return (uint32_t)((addr >> NOC_ADDR_LOCAL_BITS) & NOC_NODE_ID_MASK);
+}
+constexpr uint32_t NOC_UNICAST_ADDR_Y(uint64_t addr) {
+    return (uint32_t)((addr >> (NOC_ADDR_LOCAL_BITS + NOC_ADDR_NODE_ID_BITS)) & NOC_NODE_ID_MASK);
+}
+constexpr uint32_t NOC_UNICAST_ADDR_X(uint32_t noc_xy) { return noc_xy & NOC_NODE_ID_MASK; }
+constexpr uint32_t NOC_UNICAST_ADDR_Y(uint32_t noc_xy) { return (noc_xy >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK; }
 
 #define NOC_MCAST_ADDR_END_X(addr) (((addr) >> NOC_ADDR_LOCAL_BITS) & NOC_NODE_ID_MASK)
 #define NOC_MCAST_ADDR_END_Y(addr) (((addr) >> (NOC_ADDR_LOCAL_BITS + NOC_ADDR_NODE_ID_BITS)) & NOC_NODE_ID_MASK)
 #define NOC_MCAST_ADDR_START_X(addr) (((addr) >> (NOC_ADDR_LOCAL_BITS + 2 * NOC_ADDR_NODE_ID_BITS)) & NOC_NODE_ID_MASK)
 #define NOC_MCAST_ADDR_START_Y(addr) (((addr) >> (NOC_ADDR_LOCAL_BITS + 3 * NOC_ADDR_NODE_ID_BITS)) & NOC_NODE_ID_MASK)
+constexpr uint32_t NOC_MCAST_ADDR_END_X(uint32_t noc_xy) { return (noc_xy)&NOC_NODE_ID_MASK; }
+constexpr uint32_t NOC_MCAST_ADDR_END_Y(uint32_t noc_xy) {
+    return ((noc_xy) >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+}
+constexpr uint32_t NOC_MCAST_ADDR_START_X(uint32_t noc_xy) {
+    return ((noc_xy) >> (2 * NOC_ADDR_NODE_ID_BITS)) & NOC_NODE_ID_MASK;
+}
+constexpr uint32_t NOC_MCAST_ADDR_START_Y(uint32_t noc_xy) {
+    return ((noc_xy) >> (3 * NOC_ADDR_NODE_ID_BITS)) & NOC_NODE_ID_MASK;
+}
+constexpr uint32_t NOC_MCAST_ADDR_END_X(uint64_t addr) {
+    return (uint32_t)((addr >> NOC_ADDR_LOCAL_BITS) & NOC_NODE_ID_MASK);
+}
+constexpr uint32_t NOC_MCAST_ADDR_END_Y(uint64_t addr) {
+    return (uint32_t)((addr >> (NOC_ADDR_LOCAL_BITS + NOC_ADDR_NODE_ID_BITS)) & NOC_NODE_ID_MASK);
+}
+constexpr uint32_t NOC_MCAST_ADDR_START_X(uint64_t addr) {
+    return (uint32_t)((addr >> (NOC_ADDR_LOCAL_BITS + 2 * NOC_ADDR_NODE_ID_BITS)) & NOC_NODE_ID_MASK);
+}
+constexpr uint32_t NOC_MCAST_ADDR_START_Y(uint64_t addr) {
+    return (uint32_t)((addr >> (NOC_ADDR_LOCAL_BITS + 3 * NOC_ADDR_NODE_ID_BITS)) & NOC_NODE_ID_MASK);
+}
 
 #define NOC_UNICAST_COORDINATE_Y(noc_coordinate) (((noc_coordinate) >> (1 * NOC_ADDR_NODE_ID_BITS)) & NOC_NODE_ID_MASK)
 #define NOC_UNICAST_COORDINATE_X(noc_coordinate) (((noc_coordinate) >> (0 * NOC_ADDR_NODE_ID_BITS)) & NOC_NODE_ID_MASK)
