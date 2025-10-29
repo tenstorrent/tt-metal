@@ -24,6 +24,12 @@ from models.demos.ttnn_resnet.tests.common.resnet50_performant import (
 def test_run_resnet50_inference(
     device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator, skip_compile_run
 ):
+    print("\n")
+    print("--------------------------------------------------")
+    print("Test Run Resnet50 Inference - BEGIN               ")
+    print("--------------------------------------------------")
+    print("\n")
+
     run_resnet50_inference(
         device,
         batch_size,
@@ -33,6 +39,12 @@ def test_run_resnet50_inference(
         model_location_generator,
         skip_compile_run=skip_compile_run,
     )
+
+    print("\n")
+    print("--------------------------------------------------")
+    print("Test Run Resnet50 Inference - END                 ")
+    print("--------------------------------------------------")
+    print("\n")
 
 
 @run_for_wormhole_b0()

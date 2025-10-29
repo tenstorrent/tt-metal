@@ -98,6 +98,12 @@ def test_perf_trace_2cqs(
     hf_cat_image_sample_input,
     model_location_generator,
 ):
+    print("\n")
+    print("--------------------------------------------------")
+    print("Test Perf Trace, 2 Command Queues - BEGIN         ")
+    print("--------------------------------------------------")
+    print("\n")
+
     run_perf_resnet(
         batch_size,
         expected_inference_time,
@@ -107,3 +113,9 @@ def test_perf_trace_2cqs(
         "resnet50_trace_2cqs",
         model_location_generator,
     )
+
+    print("\n")
+    print("--------------------------------------------------")
+    print("Test Perf Trace, 2 Command Queues - END           ")
+    print("--------------------------------------------------")
+    print("\n")

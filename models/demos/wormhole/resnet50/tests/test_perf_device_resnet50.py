@@ -20,4 +20,17 @@ def test_perf_device(batch_size, test, expected_perf):
     command = (
         f"pytest models/demos/wormhole/resnet50/tests/test_resnet50_performant.py::test_run_resnet50_inference[{test}]"
     )
+
+    print("\n")
+    print("-------------------------------------------------------------")
+    print("Test Perf Device Resnet50, Test Perf Device - BEGIN          ")
+    print("-------------------------------------------------------------")
+    print("\n")
+
     run_perf_device(batch_size, test, command, expected_perf)
+
+    print("\n")
+    print("-----------------------------------------------------------")
+    print("Test Perf Device Resnet50, Test Perf Device - END          ")
+    print("-----------------------------------------------------------")
+    print("\n")

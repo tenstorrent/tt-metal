@@ -30,10 +30,23 @@ def run_device_perf(
     has_signposts=False,
     device_analysis_types=["device_kernel_duration"],
 ) -> dict:
+
+    print("\n")
+    print("-------------------------------------------------------------")
+    print("Device Perf Utils, Run Device Perf - BEGIN           ")
+    print("-------------------------------------------------------------")
+    print("\n")
+
     duration_cols = [col + " DURATION [ns]" for col in cols]
     samples_cols = [col + " SAMPLES/S" for col in cols]
 
     clear_profiler_runtime_artifacts()
+
+    print("\n")
+    print("-------------------------------------------------------------")
+    print("Device Perf Utils, Run Device Perf - 1               ")
+    print("-------------------------------------------------------------")
+    print("\n")
 
     results = {}
     for d_col in duration_cols:
@@ -41,13 +54,47 @@ def run_device_perf(
         results[f"MIN {d_col}"] = float("inf")
         results[f"MAX {d_col}"] = -float("inf")
 
+    print("\n")
+    print("-------------------------------------------------------------")
+    print("Device Perf Utils, Run Device Perf - 2               ")
+    print("-------------------------------------------------------------")
+    print("\n")
+
+    print(f"Number of iterations: {num_iterations}")
+    print(f"Command: {command}")
+    print(f"Subdir: {subdir}")
+    print(f"Device analysis types: {device_analysis_types}")
+    print(f"Duration columns: {duration_cols}")
+    print(f"Op name: {op_name}")
+    print(f"Has signposts: {has_signposts}")
+
     for _ in range(num_iterations):
+        print("\n")
+        print("-------------------------------------------------------------")
+        print("Device Perf Utils, Run Device Profiler - BEGIN ")
+        print("-------------------------------------------------------------")
+        print("\n")
+
         run_device_profiler(command, subdir, device_analysis_types)
+
+        print("\n")
+        print("-------------------------------------------------------------")
+        print("Device Perf Utils, Run Device Profiler - END ")
+        print("-------------------------------------------------------------")
+        print("\n")
+
         r = post_process_ops_log(subdir, duration_cols, op_name=op_name, has_signposts=has_signposts)
+
         for d_col in duration_cols:
             results[f"AVG {d_col}"] += r[d_col]
             results[f"MIN {d_col}"] = min(results[f"MIN {d_col}"], r[d_col])
             results[f"MAX {d_col}"] = max(results[f"MAX {d_col}"], r[d_col])
+
+    print("\n")
+    print("-------------------------------------------------------------")
+    print("Device Perf Utils, Run Device Perf - 3               ")
+    print("-------------------------------------------------------------")
+    print("\n")
 
     post_processed_results = {}
     for s_col, d_col in zip(samples_cols, duration_cols):
@@ -58,11 +105,24 @@ def run_device_perf(
         post_processed_results[f"MIN {d_col}"] = results[f"MIN {d_col}"]
         post_processed_results[f"MAX {d_col}"] = results[f"MAX {d_col}"]
 
+    print("\n")
+    print("-------------------------------------------------------------")
+    print("Device Perf Utils, Run Device Perf - 4               ")
+    print("-------------------------------------------------------------")
+    print("\n")
+
     logger.info(
         f"\nTest: {command}"
         f"\nPerformance statistics over {num_iterations} iterations"
         f"\n{json.dumps(post_processed_results, indent=4)}"
     )
+
+    print("\n")
+    print("-------------------------------------------------------------")
+    print("Test Perf Device Resnet50, Run Device Perf - END             ")
+    print("-------------------------------------------------------------")
+    print("\n")
+
     return post_processed_results
 
 

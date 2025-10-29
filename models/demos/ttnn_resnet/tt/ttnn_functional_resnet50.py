@@ -64,6 +64,7 @@ class resnet50Bottleneck:
         self.conv1_bias_tensor = parameters.conv1.bias
         self.conv1_input_channels = self.conv1_weight_tensor.shape[1]
         self.conv1_output_channels = self.conv1_weight_tensor.shape[0]
+
         assert self.conv1_weight_tensor.shape[2] == 1
 
         self.conv2_weight_tensor = parameters.conv2.weight
@@ -71,12 +72,14 @@ class resnet50Bottleneck:
         self.conv2_input_channels = self.conv2_weight_tensor.shape[1]
         self.conv2_output_channels = self.conv2_weight_tensor.shape[0]
         self.conv2_stride = 2 if downsample else 1
+
         assert self.conv2_weight_tensor.shape[2] == 3
 
         self.conv3_weight_tensor = parameters.conv3.weight
         self.conv3_bias_tensor = parameters.conv3.bias
         self.conv3_input_channels = self.conv3_weight_tensor.shape[1]
         self.conv3_output_channels = self.conv3_weight_tensor.shape[0]
+
         assert self.conv3_weight_tensor.shape[2] == 1
 
         self.downsample = downsample
@@ -87,7 +90,9 @@ class resnet50Bottleneck:
             self.ds_conv_input_channels = self.ds_conv_weight_tensor.shape[1]
             self.ds_conv_output_channels = self.ds_conv_weight_tensor.shape[0]
             assert self.ds_conv_weight_tensor.shape[2] == 1
+
         self.model_config = model_config
+
         return
 
     def run_downsample_if_req(
@@ -162,6 +167,12 @@ class resnet50Bottleneck:
         packer_l1_acc=True,
         layer_module=None,
     ):
+        print("\n")
+        print("----------------------------------------------------------------")
+        print("TTNN Functional Resnet50, Resnet50 Bottleneck, call - BEGIN ")
+        print("----------------------------------------------------------------")
+        print("\n")
+
         logger.debug(
             f"==== Running {batch_size}, {input_height}, {input_width}, {self.conv1_input_channels}, {self.conv1_output_channels}"
         )
@@ -169,8 +180,33 @@ class resnet50Bottleneck:
         ds_input_height = input_height
         ds_input_width = input_width
 
+        print("\n")
+        print("----------------------------------------------------------------")
+        print("TTNN Functional Resnet50, Resnet50 Bottleneck, call - END ")
+        print(f"ds input height: {ds_input_height}")
+        print(f"ds input wirdth: {ds_input_width}")
+        print("----------------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("---------------------------------------------------------------------------")
+        print("TTNN Functional Resnet50, Resnet50 Bottleneck, running conv 1 - BEGIN")
+        print("---------------------------------------------------------------------------")
+        print("\n")
+
         # conv1 is 1x1 conv
         logger.debug(f"Running conv1")
+        module_input_height = input_height
+        module_input_width = input_width
+
+        print("\n")
+        print("---------------------------------------------------------------------------")
+        print("TTNN Functional Resnet50, Resnet50 Bottleneck running conv 1 - END")
+        print(f"module input height: {module_input_height}")
+        print(f"moduel input width: {module_input_width}")
+        print("---------------------------------------------------------------------------")
+        print("\n")
+
         conv_kwargs_1 = {
             "in_channels": self.conv1_input_channels,
             "out_channels": self.conv1_output_channels,
@@ -193,6 +229,19 @@ class resnet50Bottleneck:
             ),
         }
 
+        print("\n")
+        print("------------------------------------------------------------------------")
+        print("TTNN Functional Resnet50, Resnet50 Bottleneck, call, conv 1 - BEGIN ")
+        import pprint
+
+        pp = pprint.PrettyPrinter()
+        pp.pprint(f"conv kwargs: {conv_kwargs_1}")
+        print(f"model config: {self.model_config}")
+        print(f"packer l1 acc: {packer_l1_acc}")
+        print(f"device arch: {device.arch()}")
+        print("------------------------------------------------------------------------")
+        print("\n")
+
         out, [input_height, input_width], [self.conv1_weight_tensor, self.conv1_bias_tensor] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.conv1_weight_tensor,
@@ -208,10 +257,28 @@ class resnet50Bottleneck:
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
+        print("\n")
+        print("-----------------------------------------------------------------------")
+        print("TTNN Functional Resnet50, Resnet50 Bottleneck, call, conv 1 - END ")
+        print("-----------------------------------------------------------------------")
+        print("\n")
+
         act_block_h_override = 0
         ds_out = None
 
+        print("\n")
+        print("---------------------------------------------------------------------------")
+        print("TTNN Functional Resnet50, Resnet50 Bottleneck, running conv 2 - BEGIN")
+        print("---------------------------------------------------------------------------")
+        print("\n")
+
         logger.debug(f"Running conv2")
+
+        print("\n")
+        print("---------------------------------------------------------------------------")
+        print("TTNN Functional Resnet50, Resnet50 Bottleneck, running conv 2 - END")
+        print("---------------------------------------------------------------------------")
+        print("\n")
 
         conv_kwargs_2 = {
             "in_channels": self.conv2_input_channels,
@@ -252,6 +319,14 @@ class resnet50Bottleneck:
         if is_wormhole_b0():
             if layer_module == "layer1_module2" or layer_module == "layer1_module3":
                 conv_kwargs_2["conv_config"].act_block_h_override = 14 * 32
+        print("\n")
+        print("-----------------------------------------------------------------------")
+        print("TTNN Functional Resnet50, Resnet50 Bottleneck, call, conv 2 - BEGIN ")
+        pp.pprint(f"conv kwargs: {conv_kwargs_2}")
+        print(f"model config: {self.model_config}")
+        print(f"packer l1 acc: {packer_l1_acc}")
+        print("-----------------------------------------------------------------------")
+        print("\n")
 
         out, [input_height, input_width], [self.conv2_weight_tensor, self.conv2_bias_tensor] = ttnn.conv2d(
             input_tensor=out,
@@ -268,8 +343,27 @@ class resnet50Bottleneck:
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
+        print("\n")
+        print("-----------------------------------------------------------------------")
+        print("TTNN Functional Resnet50, Resnet50 Bottleneck, call, conv 2 - END ")
+        print("-----------------------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("---------------------------------------------------------------------------")
+        print("TTNN Functional Resnet50, Resnet50 Bottleneck, running conv 3 - BEGIN")
+        print("---------------------------------------------------------------------------")
+        print("\n")
+
         # conv3 is 1x1 conv
         logger.debug(f"Running conv3")
+
+        print("\n")
+        print("---------------------------------------------------------------------------")
+        print("TTNN Functional Resnet50, Resnet50 Bottleneck, running conv 3 - END")
+        print("---------------------------------------------------------------------------")
+        print("\n")
+
         conv_kwargs_3 = {
             "in_channels": self.conv3_input_channels,
             "out_channels": self.conv3_output_channels,
@@ -292,6 +386,15 @@ class resnet50Bottleneck:
             ),
         }
 
+        print("\n")
+        print("-----------------------------------------------------------------------")
+        print("TTNN Functional Resnet50, Resnet50 Bottleneck, call, conv 3 - BEGIN ")
+        pp.pprint(f"conv kwargs: {conv_kwargs_3}")
+        print(f"model config: {self.model_config}")
+        print(f"packer l1 acc: {packer_l1_acc}")
+        print("-----------------------------------------------------------------------")
+        print("\n")
+
         out, [self.conv3_weight_tensor, self.conv3_bias_tensor] = ttnn.conv2d(
             input_tensor=out,
             weight_tensor=self.conv3_weight_tensor,
@@ -307,6 +410,18 @@ class resnet50Bottleneck:
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
+        print("\n")
+        print("-----------------------------------------------------------------------")
+        print("TTNN Functional Resnet50, Resnet50 Bottleneck, call, conv 3 - END ")
+        print("-----------------------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("--------------------------------------------------------------------------------")
+        print("TTNN Functional Resnet50, Resnet50 Bottleneck, run downsample if req - BEGIN")
+        print("--------------------------------------------------------------------------------")
+        print("\n")
+
         ds_out = self.run_downsample_if_req(
             x,
             device,
@@ -318,8 +433,20 @@ class resnet50Bottleneck:
             packer_l1_accum_enabled=packer_l1_acc,
         )
 
+        print("\n")
+        print("--------------------------------------------------------------------------------")
+        print("TTNN Functional Resnet50, Resnet50 Bottleneck, run downsample if req - END")
+        print("--------------------------------------------------------------------------------")
+        print("\n")
+
         if ds_out.memory_config() != out.memory_config():
             ds_out = ttnn.to_memory_config(ds_out, out.memory_config())
+
+        print("\n")
+        print("--------------------------------------------------------------------------------")
+        print("TTNN Functional Resnet50, Resnet50 Bottleneck, add - BEGIN")
+        print("--------------------------------------------------------------------------------")
+        print("\n")
 
         # underscore version is in_place = True
         out = ttnn.add_(
@@ -328,6 +455,13 @@ class resnet50Bottleneck:
             activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)],
         )
         ttnn.deallocate(ds_out)
+
+        print("\n")
+        print("--------------------------------------------------------------------------------")
+        print("TTNN Functional Resnet50, Resnet50 Bottleneck, add - END")
+        print("--------------------------------------------------------------------------------")
+        print("\n")
+
         return out, input_height, input_width
 
 
@@ -345,14 +479,17 @@ class resnet50:
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
     ) -> None:
         super().__init__()
+
         layers = [3, 4, 6, 3]
         conv_input_face_shape_hw = [224, 224]
+
         self.device = device
         self.conv_input_face_shape_hw = conv_input_face_shape_hw
         self.batch_size = batch_size
         self.model_config = model_config
         self.inplanes = 64
         self.final_output_mem_config = final_output_mem_config
+
         compute_kernel_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=model_config["MATH_FIDELITY"],
@@ -360,10 +497,12 @@ class resnet50:
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+
         self.conv1_weight_tensor = parameters.conv1.weight
         self.conv1_bias_tensor = parameters.conv1.bias
         self.conv1_input_channels = self.conv1_weight_tensor.shape[1]
         self.conv1_output_channels = self.conv1_weight_tensor.shape[0]
+
         assert self.conv1_weight_tensor.shape[2] == 4
 
         self.layer1 = self._make_layer(
@@ -373,6 +512,7 @@ class resnet50:
             stride=1,
             model_config=model_config,
         )
+
         self.layer2 = self._make_layer(
             parameters=parameters.layer2,
             planes=128,
@@ -380,6 +520,7 @@ class resnet50:
             stride=2,
             model_config=model_config,
         )
+
         self.layer3 = self._make_layer(
             parameters=parameters.layer3,
             planes=256,
@@ -387,6 +528,7 @@ class resnet50:
             stride=2,
             model_config=model_config,
         )
+
         self.layer4 = self._make_layer(
             parameters=parameters.layer4,
             planes=512,
@@ -444,11 +586,13 @@ class resnet50:
             # otherwise act block h is not big enough for the reuse
             enable_activation_reuse=(not is_wormhole_b0() or device.get_num_devices() <= 8),
         )
+
         self.conv1_compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=self.model_config["MATH_FIDELITY"],
             packer_l1_acc=True,
         )
+
         if is_wormhole_b0():
             # Issue #13145: Temp workaround for Galaxy to avoid hangs
             if device.get_num_devices() > 8:
@@ -471,11 +615,13 @@ class resnet50:
         # fold params
         self.fold_stride_h = stride
         self.fold_stride_w = stride
+
         _, c, h, w = input_shape
         n = batch_size
         h += kernel_size * 2
         w += kernel_size * 2
         C = _nearest_y(c, 4)
+
         self.fold_pad_c = C - c
         self.fold_pad_h = kernel_size
         self.fold_pad_w = kernel_size
@@ -485,8 +631,10 @@ class resnet50:
             w // self.fold_stride_w,
             C * (self.fold_stride_h * self.fold_stride_w),
         )
+
         num_cores_x = 8
         num_cores_y = 8
+
         if self.batch_size == 16:
             num_cores_x = 8
             num_cores_y = 8
@@ -542,7 +690,20 @@ class resnet50:
         stride: int,
         model_config=None,
     ) -> List[resnet50Bottleneck]:
+        print("\n")
+        print("-----------------------------------------")
+        print("make layer - BEGIN ")
+        print("-----------------------------------------")
+        print("\n")
+
         layers = []
+
+        print("\n")
+        print("------------------------------------------------------------------------")
+        print("make layer, TTNN Functional Resnet50, Resnet50 Bottleneck - BEGIN ")
+        print("------------------------------------------------------------------------")
+        print("\n")
+
         layers.append(
             resnet50Bottleneck(
                 parameters=parameters[0],
@@ -551,7 +712,25 @@ class resnet50:
                 model_config=model_config,
             )
         )
+
+        print("\n")
+        print("---------------------------------------------------------------------")
+        print("make layer, TTNN Functional Resnet50, Resnet50 Bottleneck - END ")
+        print("---------------------------------------------------------------------")
+        print("\n")
+
         self.inplanes = planes * resnet50Bottleneck.expansion
+
+        print("\n")
+        print("------------------------------------------------------------------------")
+        print("make layer, TTNN Functional Resnet50, Resnet50 Bottleneck - BEGIN ")
+        print(f"Blocks: {blocks}")
+        print(f"planes: {planes}")
+        print(f"expansion: {resnet50Bottleneck.expansion}")
+        print(f"inplanes: {self.inplanes}")
+        print("------------------------------------------------------------------------")
+        print("\n")
+
         for block_num in range(1, blocks):
             layers.append(
                 resnet50Bottleneck(
@@ -561,6 +740,13 @@ class resnet50:
                     model_config=model_config,
                 )
             )
+
+        print("\n")
+        print("------------------------------------------------------------------------")
+        print("make layer, TTNN Functional Resnet50, Resnet50 Bottleneck - END ")
+        print("------------------------------------------------------------------------")
+        print("\n")
+
         return layers
 
     def __call__(self, input_tensor, device, ops_parallel_config) -> ttnn.Tensor:
@@ -571,7 +757,25 @@ class resnet50:
 
     ## merged runs (first and optimized)
     def run(self, input_tensor, device) -> ttnn.Tensor:
+        print("\n")
+        print("----------------------------------------------------")
+        print("resnet50, run, fold on device log - BEGIN ")
+        print("----------------------------------------------------")
+        print("\n")
+
         logger.debug(f"==== fold on device")
+
+        print("\n")
+        print("----------------------------------------------------")
+        print("resnet50, run, fold on device log - END ")
+        print("----------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------")
+        print("TTNN Functional Resnet50, fold - BEGIN ")
+        print("----------------------------------------------------")
+        print("\n")
 
         # run fold
         fold_output_tensor = ttnn.fold(
@@ -583,12 +787,55 @@ class resnet50:
             grid_size=self.fold_compute_grid_size,
             override_memory_config=self.override_fold_mem_config,
         )
+
+        print("\n")
+        print("----------------------------------------------------")
+        print("TTNN Functional Resnet50, fold - END ")
+        print("----------------------------------------------------")
+        print("\n")
+
         n, c, h, w = fold_output_tensor.shape
+
+        print(f"n: {n}")
+        print(f"c: {c}")
+        print(f"h: {h}")
+        print(f"w: {w}")
+        print(f"fold output tensor shape: {fold_output_tensor.shape}")
+
         fold_output_tensor = ttnn.reshape(fold_output_tensor, (1, 1, n * c * h, w))
+
+        print(f"fold output tensor shape: {fold_output_tensor.shape}")
 
         ttnn.deallocate(input_tensor)
 
+        print("\n")
+        print("----------------------------------------------------")
+        print("resnet50, run, first conv log - BEGIN ")
+        print("----------------------------------------------------")
+        print("\n")
+
         logger.debug(f"==== first conv")
+
+        print("\n")
+        print("----------------------------------------------------")
+        print("resnet50, run, first conv log - END ")
+        print("----------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------")
+        print("resnet50, conv kwargs - BEGIN ")
+        print(f"conv1 input channels: {self.conv1_input_channels}")
+        print(f"conv1 output channels: {self.conv1_output_channels}")
+        print(f"batch size: {self.batch_size}")
+        print(f"input height: {self.conv1_input_height}")
+        print(f"input width: {self.conv1_input_width}")
+        print(f"kernel size: {self.conv1_kernel_size}")
+        print(f"stride: {self.conv1_stride}")
+        print(f"padding: {self.conv1_padding}")
+        print(f"conv config: {self.conv1_config}")
+        print("----------------------------------------------------")
+        print("\n")
 
         # first conv
         conv_kwargs = {
@@ -606,6 +853,23 @@ class resnet50:
             "conv_config": self.conv1_config,
         }
 
+        print("\n")
+        print("----------------------------------------------------")
+        print("resnet50, conv kwargs - END ")
+        print("----------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------")
+        print("resnet50, CONV 1 - BEGIN")
+        print(f"fold output tensor shape: {fold_output_tensor.shape}")
+        print(f"conv1 weight tensor shape: {self.conv1_weight_tensor.shape}")
+        print(f"conv1 bias tensor shape: {self.conv1_bias_tensor.shape}")
+        print(f"conv1 compute config: {self.conv1_compute_config}")
+        print(f"model config: {self.model_config}")
+        print("----------------------------------------------------")
+        print("\n")
+
         x, [x_height, x_width], [self.conv1_weight_tensor, self.conv1_bias_tensor] = ttnn.conv2d(
             input_tensor=fold_output_tensor,
             weight_tensor=self.conv1_weight_tensor,
@@ -616,6 +880,27 @@ class resnet50:
             return_weights_and_bias=True,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
+
+        print("\n")
+        print("----------------------------------------------------")
+        print("resnet50, CONV 1 - END ")
+        print(f"x shape: {x.shape}")
+        print(f"x height: {x_height}")
+        print(f"x width: {x_width}")
+        print(f"conv1 weight tensor shape: {self.conv1_weight_tensor.shape}")
+        print(f"conv1 bias tensor shape: {self.conv1_bias_tensor.shape}")
+        print("----------------------------------------------------")
+        print("\n")
+
+        # Relu is fused with conv1
+        if self.batch_size == 20:
+            x = ttnn.reallocate(x)
+
+        print("\n")
+        print("----------------------------------------------------")
+        print("TTNN Functional Resnet50, max pool 1 - BEGIN ")
+        print("----------------------------------------------------")
+        print("\n")
 
         x = ttnn.max_pool2d(
             input_tensor=x,
@@ -628,6 +913,15 @@ class resnet50:
             padding=[1, 1],
             dilation=[1, 1],
         )
+
+        print("")
+        print("----------------------------------------------------")
+        print("TTNN Functional Resnet50, max pool 1 - END ")
+        print("----------------------------------------------------")
+        print("")
+
+        print("\n")
+        print("\n")
 
         x_height = 56
         x_width = 56
@@ -644,7 +938,30 @@ class resnet50:
             x = ttnn.to_memory_config(x, mem_config)
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, dtype=self.model_config["ACTIVATIONS_DTYPE"])
 
+        print("\n")
+        print("\n")
+
+        print("\n")
+        print("--------------------------------------------------------------------------")
+        print("TTNN Functional Resnet50, Running layer 1 module 1, log - BEGIN ")
+        print("--------------------------------------------------------------------------")
+        print("\n")
+
         logger.debug(f"==== Running layer 1 module 1")
+
+        print("\n")
+        print("--------------------------------------------------------------------------")
+        print("TTNN Functional Resnet50, Running layer 1 module 1, log - END ")
+        print("--------------------------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("--------------------------------------------------------")
+        print("TTNN Functional Resnet50, Layer1 Module1 - BEGIN ")
+        print("--------------------------------------------------------")
+        print("\n")
+
+        layer1_module1_input_shape = ttnn.Shape(x.padded_shape)
 
         reshard = is_blackhole()
         height_shard = True
@@ -660,7 +977,32 @@ class resnet50:
             layer_module="layer1_module1",
         )
 
+        print("\n")
+        print("------------------------------------------------------")
+        print("TTNN Functional Resnet50, Layer1 Module1 - END ")
+        print("------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("-----------------------------------------------------------------")
+        print("TTNN Functional Resnet50, Running layer 1 module 2 - BEGIN ")
+        print("-----------------------------------------------------------------")
+        print("\n")
+
         logger.debug(f"==== Running layer 1 module 2")
+
+        print("\n")
+        print("-----------------------------------------------------------------")
+        print("TTNN Functional Resnet50, Running layer 1 module 2 - END ")
+        print("-----------------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("---------------------------------------------------------")
+        print("TTNN Functional Resnet50, Layer1 Module2 - BEGIN ")
+        print("---------------------------------------------------------")
+        print("\n")
+
         x, x_height, x_width = self.layer1_module2(
             x,
             device,
@@ -670,7 +1012,24 @@ class resnet50:
             layer_module="layer1_module2",
         )
 
+        print("\n")
+        print("---------------------------------------------------------")
+        print("TTNN Functional Resnet50, Layer1 Module1 - END ")
+        print("---------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         logger.debug(f"==== Running layer 1 module 3")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         x, x_height, x_width = self.layer1_module3(
             x,
             device,
@@ -681,9 +1040,31 @@ class resnet50:
         )
 
         reshard = False
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        reshard = is_blackhole()
         height_shard = True
 
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         logger.debug(f"==== Running layer 2 module 1")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         x, x_height, x_width = self.layer2_module1(
             x,
             device,
@@ -695,7 +1076,28 @@ class resnet50:
             layer_module="layer2_module1",
         )
 
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         logger.debug(f"==== Running layer 2 module 2")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         x, x_height, x_width = self.layer2_module2(
             x,
             device,
@@ -705,7 +1107,28 @@ class resnet50:
             layer_module="layer2_module2",
         )
 
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         logger.debug(f"==== Running layer 2 module 3")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         x, x_height, x_width = self.layer2_module3(
             x,
             device,
@@ -715,7 +1138,28 @@ class resnet50:
             layer_module="layer2_module3",
         )
 
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         logger.debug(f"==== Running layer 2 module 4")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         x, x_height, x_width = self.layer2_module4(
             x,
             device,
@@ -726,13 +1170,35 @@ class resnet50:
         )
 
         reshard = is_blackhole()
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        reshard = True
         height_shard = is_blackhole()
         if is_wormhole_b0():
             x = ttnn.to_memory_config(
                 x, ttnn.create_sharded_memory_config(x.shape, ttnn.CoreGrid(x=8, y=8), ttnn.ShardStrategy.BLOCK)
             )
 
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         logger.debug(f"==== Running layer 3 module 1")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         x, x_height, x_width = self.layer3_module1(
             x,
             device,
@@ -744,7 +1210,23 @@ class resnet50:
             layer_module="layer3_module1",
         )
 
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         logger.debug(f"==== Running layer 3 module 2")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         x, x_height, x_width = self.layer3_module2(
             x,
             device,
@@ -754,7 +1236,23 @@ class resnet50:
             layer_module="layer3_module2",
         )
 
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         logger.debug(f"==== Running layer 3 module 3")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         x, x_height, x_width = self.layer3_module3(
             x,
             device,
@@ -764,7 +1262,28 @@ class resnet50:
             layer_module="layer3_module3",
         )
 
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         logger.debug(f"==== Running layer 3 module 4")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         x, x_height, x_width = self.layer3_module4(
             x,
             device,
@@ -774,7 +1293,28 @@ class resnet50:
             layer_module="layer3_module4",
         )
 
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         logger.debug(f"==== Running layer 3 module 5")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         x, x_height, x_width = self.layer3_module5(
             x,
             device,
@@ -784,7 +1324,28 @@ class resnet50:
             layer_module="layer3_module5",
         )
 
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         logger.debug(f"==== Running layer 3 module 6")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         x, x_height, x_width = self.layer3_module6(
             x,
             device,
@@ -815,8 +1376,31 @@ class resnet50:
                 use_height_and_width_as_shard_shape=True,
             )
             x = ttnn.to_memory_config(x, block_mem_config)
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        reshard = is_blackhole()
+        height_shard = False
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
 
         logger.debug(f"==== Running layer 4 module 1")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         x, x_height, x_width = self.layer4_module1(
             x,
             device,
@@ -828,7 +1412,28 @@ class resnet50:
             layer_module="layer4_module1",
         )
 
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         logger.debug(f"==== Running layer 4 module 2")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         x, x_height, x_width = self.layer4_module2(
             x,
             device,
@@ -838,7 +1443,28 @@ class resnet50:
             layer_module="layer4_module2",
         )
 
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         logger.debug(f"==== Running layer 4 module 3")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
+
         x, x_height, x_width = self.layer4_module3(
             x,
             device,
@@ -874,6 +1500,10 @@ class resnet50:
                 self.device.arch(), math_fidelity=ttnn.MathFidelity.LoFi
             ),
         )
+        print("\n")
+        print("----------------------------------------------------------")
+        print("----------------------------------------------------------")
+        print("\n")
 
         grid_size = (8, 4)
         width_mem_config = ttnn.create_sharded_memory_config_(

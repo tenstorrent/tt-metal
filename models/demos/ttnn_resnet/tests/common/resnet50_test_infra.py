@@ -182,7 +182,9 @@ class ResNet50TestInfra:
         model_location_generator=None,
     ):
         super().__init__()
+
         torch.manual_seed(0)
+
         self.pcc_passed = False
         self.pcc_message = "Did you forget to call validate()?"
         self.device = device
@@ -217,6 +219,15 @@ class ResNet50TestInfra:
             "ACTIVATIONS_DTYPE": act_dtype,
         }
 
+        print("\n")
+        print("--------------------------------------------------")
+        print("Model Config")
+        print(f"math fidelity: {math_fidelity}")
+        print(f"weight dtype: {weight_dtype}")
+        print(f"act dtype: {act_dtype}")
+        print("--------------------------------------------------")
+        print("\n")
+
         input_shape = (batch_size * self.num_devices, 3, 224, 224)
 
         self.torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
@@ -236,6 +247,12 @@ class ResNet50TestInfra:
 
         ## ttnn
 
+        print("\n")
+        print("--------------------------------------------------")
+        print("Resnet50 Test Infra, ResNet50TestInfra - BEGIN ")
+        print("--------------------------------------------------")
+        print("\n")
+
         self.ttnn_resnet50_model = resnet50(
             device=device,
             parameters=parameters,
@@ -247,6 +264,13 @@ class ResNet50TestInfra:
             dealloc_input=dealloc_input,
             final_output_mem_config=final_output_mem_config,
         )
+
+        print("\n")
+        print("--------------------------------------------------")
+        print("Resnet50 Test Infra, ResNet50TestInfra - END ")
+        print("--------------------------------------------------")
+        print("\n")
+
         self.ops_parallel_config = {}
 
     def get_mesh_mappers(self, device):
@@ -354,6 +378,12 @@ def create_test_infra(
     final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
     model_location_generator=None,
 ):
+    print("\n")
+    print("--------------------------------------------------")
+    print("Resnet50 Test Infra, Create Test Infra - BEGIN ")
+    print("--------------------------------------------------")
+    print("\n")
+
     return ResNet50TestInfra(
         device,
         batch_size,
@@ -365,3 +395,9 @@ def create_test_infra(
         final_output_mem_config,
         model_location_generator,
     )
+
+    print("\n")
+    print("--------------------------------------------------")
+    print("Resnet50 Test Infra, Create Test Infra - END ")
+    print("--------------------------------------------------")
+    print("\n")
