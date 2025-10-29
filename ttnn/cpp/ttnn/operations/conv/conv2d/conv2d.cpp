@@ -992,7 +992,7 @@ ttnn::Tensor Conv2dSliceAttr::run_L1_op(
 
     if (output_slice_width % width_rounding_value != 0) {
         uint32_t additional_padded_width = width_rounding_value - (output_slice_width % width_rounding_value);
-        log_warning(
+        log_trace(
             LogOp, "Conv2d DRAM Slicing: Additional padding of {} added to the right side.", additional_padded_width);
         pad_right += additional_padded_width * stride[1];
         output_slice_width += additional_padded_width;
