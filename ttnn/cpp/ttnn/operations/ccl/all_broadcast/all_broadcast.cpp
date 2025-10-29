@@ -7,6 +7,7 @@
 #include "ttnn/operations/ccl/all_broadcast/device/all_broadcast_op.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include <deque>
 
 namespace ttnn::operations::ccl {
 
@@ -18,6 +19,31 @@ std::vector<ttnn::Tensor> ExecuteAllBroadcast::invoke(
     std::optional<uint32_t> num_links,
     std::optional<ttnn::ccl::Topology> topology) {
     // Default values for num_links and topology
+    if (cluster_axis == std::nullopt) {
+        auto mesh_shape = input_tensor.device()->get_view().shape();
+        // Check if flat mesh (1x...M...x1) where M = total mesh volume
+        // if it is not flat, then we need to call all-broadcast on dim=-1 to dim=0
+        // first all broadcast will be on the last dimension, producing a vector of tensors
+        // we then recursively call all broadcast on each of the tensors in the vector
+        uint32_t num_devices = mesh_shape.mesh_size();
+        bool is_not_flat_mesh = std::none_of(
+            mesh_shape.cbegin(), mesh_shape.cend(), [num_devices](uint32_t dim) { return dim == num_devices; });
+        if (is_not_flat_mesh) {
+            std::deque<ttnn::Tensor> tensors;
+            tensors.push_back(input_tensor);
+            for (uint32_t axis = 0; axis < mesh_shape.dims(); ++axis) {
+                uint32_t num_tensors = tensors.size();
+                for (uint32_t i = 0; i < num_tensors; ++i) {
+                    auto tensor = tensors.front();
+                    tensors.pop_front();
+                    auto curr_tensors =
+                        ttnn::all_broadcast(tensor, axis, subdevice_id, memory_config, num_links, topology);
+                    tensors.insert(tensors.end(), curr_tensors.begin(), curr_tensors.end());
+                }
+            }
+            return std::vector<ttnn::Tensor>(tensors.begin(), tensors.end());
+        }
+    }
     uint32_t num_links_ = num_links.value_or(1);
     ttnn::ccl::Topology topology_ = topology.value_or(ttnn::ccl::Topology::Linear);
 

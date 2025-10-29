@@ -521,3 +521,37 @@ def test_all_broadcast_sharded_2x4(
         output_shard_grid=output_shard_grid,
         tensor_mem_layout=tensor_mem_layout,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [1, 1, 1, 32],
+    ],
+)
+def test_all_broadcast_2x4_non_flat_mesh(mesh_device, input_shape):
+    torch.manual_seed(2005)
+    devices = mesh_device.get_num_devices()
+    logger.info(f"devices: {devices}")
+    torch_inputs_per_device = [torch.rand(input_shape, dtype=torch.bfloat16) for i in range(devices)]
+
+    torch_input = torch.cat(torch_inputs_per_device, dim=-1)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+    )  # [2, 2, 32, 32] per device after sharding
+    tt_output = ttnn.all_broadcast(tt_input)
+
+    for i, torch_reference in enumerate(torch_inputs_per_device):
+        tt_torch_output = ttnn.to_torch(tt_output[i], mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        # split the tensor across dim = 0
+        tt_torch_output_slices = torch.chunk(tt_torch_output, devices, dim=0)
+        for tt_torch_output_slice in tt_torch_output_slices:
+            eq, output = comp_equal(tt_torch_output_slice, torch_reference)
+            assert eq, f"Tensor{i} FAILED: {output}"
