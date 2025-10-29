@@ -7,7 +7,7 @@ from loguru import logger
 import ttnn
 
 # Import the test function from the t3000 file
-from tests.ttnn.unit_tests.operations.ccl.test_mesh_partition_t3000 import (
+from tests.nightly.t3000.ccl.test_mesh_partition import (
     run_mesh_partition_test,
 )
 
