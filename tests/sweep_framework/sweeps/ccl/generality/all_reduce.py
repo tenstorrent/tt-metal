@@ -187,7 +187,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if not validate_serializable_shard_spec(test_vector["input_shape"], test_vector["shard_specs"], None, cluster_size):
         return True, "Invalid shard spec"
 
-    if cluster_axis and mesh_shape[cluster_axis] == 1:
+    if cluster_axis is not None and mesh_shape[cluster_axis] == 1:
         return True, "Unit cluster axis"
 
     if (
