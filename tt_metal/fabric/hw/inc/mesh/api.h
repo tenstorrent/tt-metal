@@ -14,6 +14,7 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/api_common.h"
+#include "tt_metal/fabric/hw/inc/mesh/addrgen_api.h"
 
 using namespace tt::tt_fabric::common::experimental;
 namespace tt::tt_fabric::mesh::experimental {
@@ -1792,9 +1793,6 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
 // ============================================================================
 // Addrgen API Overloads
 // ============================================================================
-
-// Include addrgen API for helper functions
-#include "tt_metal/fabric/hw/inc/mesh/addrgen_api.h"
 
 // Unicast Write Addrgen Overloads
 template <typename FabricSenderType, typename AddrGenType>

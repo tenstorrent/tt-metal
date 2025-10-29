@@ -1534,5 +1534,11 @@ TEST_F(Fabric2DFixture, TestSetUnicastRouteIdleEth) {
     RunSetUnicastRouteTest(this, false, HalProgrammableCoreType::IDLE_ETH);
 }
 
+// Mesh Addrgen Test
+TEST_F(NightlyFabric2DFixture, TestMeshFabricAddrgenUnicastWrite) {
+    FabricUnicastCommon(
+        this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, 1)}, FabricApiType::Mesh, false, true);
+}
+
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric

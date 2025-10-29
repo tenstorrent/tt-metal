@@ -2122,7 +2122,8 @@ void FabricUnicastCommon(
     NocSendType noc_send_type,
     const std::vector<std::tuple<RoutingDirection, uint32_t>>& pair_ordered_dirs,
     FabricApiType api_type,
-    bool with_state) {
+    bool with_state,
+    bool use_addrgen) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
     uint32_t num_packets = 10;
@@ -2203,6 +2204,17 @@ void FabricUnicastCommon(
         worker_mem_map.packet_payload_size_bytes = 4;
     }
 
+    // Set up defines for kernel compilation
+    std::map<std::string, std::string> defines = {};
+    if (api_type == FabricApiType::Mesh) {
+        defines["API_TYPE_Mesh"] = "";
+    } else {
+        defines["API_TYPE_Linear"] = "";
+    }
+    if (use_addrgen) {
+        defines["USE_ADDRGEN"] = "";
+    }
+
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
         (noc_send_type == NOC_FUSED_UNICAST_ATOMIC_INC || noc_send_type == NOC_UNICAST_ATOMIC_INC)
@@ -2212,7 +2224,8 @@ void FabricUnicastCommon(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_time_args});
+            .compile_args = compile_time_args,
+            .defines = defines});
 
     std::vector<uint32_t> sender_runtime_args = {
         worker_mem_map.source_l1_buffer_address,
@@ -2224,6 +2237,14 @@ void FabricUnicastCommon(
     };
     for (auto [dir, num_hops] : dir_configs) {
         sender_runtime_args.push_back(num_hops);
+    }
+
+    // Add addrgen runtime arguments if using addrgen
+    if (use_addrgen) {
+        sender_runtime_args.push_back(worker_mem_map.target_address);             // addrgen_base_address
+        sender_runtime_args.push_back(worker_mem_map.packet_payload_size_bytes);  // addrgen_page_size
+        sender_runtime_args.push_back(num_packets);                               // addrgen_num_pages
+        sender_runtime_args.push_back(0);                                         // initial page_id
     }
 
     append_routing_plane_connection_manager_rt_args(

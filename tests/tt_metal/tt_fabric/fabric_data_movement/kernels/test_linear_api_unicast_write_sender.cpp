@@ -28,6 +28,14 @@ constexpr uint32_t num_send_dir = get_compile_time_arg_val(5);
 constexpr bool with_state = get_compile_time_arg_val(6) == 1;
 constexpr bool is_chip_multicast = get_compile_time_arg_val(7) == 1;
 
+// Addrgen compile-time flag
+constexpr bool use_addrgen =
+#ifdef USE_ADDRGEN
+    true;
+#else
+    false;
+#endif
+
 void kernel_main() {
     size_t rt_arg_idx = 0;
     uint32_t source_l1_buffer_address = get_arg_val<uint32_t>(rt_arg_idx++);
@@ -37,6 +45,19 @@ void kernel_main() {
     uint32_t noc_x_start = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t noc_y_start = get_arg_val<uint32_t>(rt_arg_idx++);
     auto hop_info = get_hop_info_from_args<is_chip_multicast, num_send_dir>(rt_arg_idx);
+
+    // Addrgen runtime arguments
+    uint32_t addrgen_base_address;
+    uint32_t addrgen_page_size;
+    uint32_t addrgen_num_pages;
+    uint32_t page_id;
+
+    if constexpr (use_addrgen) {
+        addrgen_base_address = get_arg_val<uint32_t>(rt_arg_idx++);
+        addrgen_page_size = get_arg_val<uint32_t>(rt_arg_idx++);
+        addrgen_num_pages = get_arg_val<uint32_t>(rt_arg_idx++);
+        page_id = get_arg_val<uint32_t>(rt_arg_idx++);
+    }
 
 #ifdef API_TYPE_Mesh
     // Build MeshMcastRange array from hop_info once
@@ -204,23 +225,50 @@ void kernel_main() {
         if constexpr (is_chip_multicast) {
             switch (noc_send_type) {
                 case NOC_UNICAST_WRITE: {
-                    if constexpr (with_state) {
-                        fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                            connections,
-                            route_id,
-                            source_l1_buffer_address,
-                            tt::tt_fabric::NocUnicastCommandHeader{
-                                get_noc_addr(noc_x_start, noc_y_start, target_address)},
-                            packet_payload_size_bytes);
-                    } else {
-                        fabric_multicast_noc_unicast_write(
-                            connections,
-                            route_id,
-                            ranges,
-                            source_l1_buffer_address,
-                            packet_payload_size_bytes,
-                            tt::tt_fabric::NocUnicastCommandHeader{
-                                get_noc_addr(noc_x_start, noc_y_start, target_address)});
+#ifdef USE_ADDRGEN
+                    if constexpr (use_addrgen) {
+                        auto dram_addrgen = create_interleaved_addrgen<true>(
+                            addrgen_base_address, addrgen_page_size, addrgen_num_pages);
+
+                        if constexpr (with_state) {
+                            fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                                connections,
+                                route_id,
+                                source_l1_buffer_address,
+                                dram_addrgen,
+                                page_id + i,
+                                packet_payload_size_bytes);
+                        } else {
+                            fabric_multicast_noc_unicast_write(
+                                connections,
+                                route_id,
+                                ranges,
+                                source_l1_buffer_address,
+                                dram_addrgen,
+                                page_id + i,
+                                packet_payload_size_bytes);
+                        }
+                    } else
+#endif
+                    {
+                        if constexpr (with_state) {
+                            fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                                connections,
+                                route_id,
+                                source_l1_buffer_address,
+                                tt::tt_fabric::NocUnicastCommandHeader{
+                                    get_noc_addr(noc_x_start, noc_y_start, target_address)},
+                                packet_payload_size_bytes);
+                        } else {
+                            fabric_multicast_noc_unicast_write(
+                                connections,
+                                route_id,
+                                ranges,
+                                source_l1_buffer_address,
+                                packet_payload_size_bytes,
+                                tt::tt_fabric::NocUnicastCommandHeader{
+                                    get_noc_addr(noc_x_start, noc_y_start, target_address)});
+                        }
                     }
                 } break;
                 case NOC_UNICAST_INLINE_WRITE: {
@@ -270,22 +318,38 @@ void kernel_main() {
         } else {
             switch (noc_send_type) {
                 case NOC_UNICAST_WRITE: {
-                    if constexpr (with_state) {
-                        fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                            connections,
-                            route_id,
-                            source_l1_buffer_address,
-                            tt::tt_fabric::NocUnicastCommandHeader{
-                                get_noc_addr(noc_x_start, noc_y_start, target_address)},
-                            packet_payload_size_bytes);
-                    } else {
-                        fabric_unicast_noc_unicast_write(
-                            connections,
-                            route_id,
-                            source_l1_buffer_address,
-                            packet_payload_size_bytes,
-                            tt::tt_fabric::NocUnicastCommandHeader{
-                                get_noc_addr(noc_x_start, noc_y_start, target_address)});
+#ifdef USE_ADDRGEN
+                    if constexpr (use_addrgen) {
+                        auto dram_addrgen = create_interleaved_addrgen<true>(
+                            addrgen_base_address, addrgen_page_size, addrgen_num_pages);
+
+                        if constexpr (with_state) {
+                            fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                                connections, route_id, source_l1_buffer_address, dram_addrgen, page_id + i);
+                        } else {
+                            fabric_unicast_noc_unicast_write(
+                                connections, route_id, source_l1_buffer_address, dram_addrgen, page_id + i);
+                        }
+                    } else
+#endif
+                    {
+                        if constexpr (with_state) {
+                            fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                                connections,
+                                route_id,
+                                source_l1_buffer_address,
+                                tt::tt_fabric::NocUnicastCommandHeader{
+                                    get_noc_addr(noc_x_start, noc_y_start, target_address)},
+                                packet_payload_size_bytes);
+                        } else {
+                            fabric_unicast_noc_unicast_write(
+                                connections,
+                                route_id,
+                                source_l1_buffer_address,
+                                packet_payload_size_bytes,
+                                tt::tt_fabric::NocUnicastCommandHeader{
+                                    get_noc_addr(noc_x_start, noc_y_start, target_address)});
+                        }
                     }
                 } break;
                 case NOC_UNICAST_INLINE_WRITE: {

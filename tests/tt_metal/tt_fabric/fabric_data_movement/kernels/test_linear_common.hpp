@@ -15,6 +15,16 @@ using namespace tt::tt_fabric::mesh::experimental;
 #endif
 #include "fabric/fabric_edm_packet_header.hpp"
 
+#ifdef USE_ADDRGEN
+#include "tt_metal/hw/inc/dataflow_api_addrgen.h"
+
+// Helper to create InterleavedAddrGen
+template <bool is_dram>
+InterleavedAddrGen<is_dram> create_interleaved_addrgen(uint32_t base_address, uint32_t page_size, uint32_t num_pages) {
+    return InterleavedAddrGen<is_dram>{.bank_base_address = base_address, .page_size = page_size};
+}
+#endif
+
 template <uint8_t num_send_dir>
 union HopInfo {
     struct {
