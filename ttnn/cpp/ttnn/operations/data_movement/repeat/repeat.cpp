@@ -10,6 +10,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/view/view.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/run_operation.hpp"
@@ -188,7 +189,10 @@ ttnn::Tensor RepeatOperation::invoke(
 
     // RM -> OG page layout
     if (tensor.layout() == ttnn::TILE_LAYOUT) {
-        working_tensor = ttnn::to_layout(working_tensor, ttnn::TILE_LAYOUT, tensor.dtype());
+        ttnn::Shape padded_shape = working_tensor.logical_shape();
+        padded_shape[-1] = tt::round_up(padded_shape[-1], tt::constants::TILE_WIDTH);
+        padded_shape[-2] = tt::round_up(padded_shape[-2], tt::constants::TILE_HEIGHT);
+        working_tensor = ttnn::tilize_with_val_padding(working_tensor, padded_shape, 0.0f);
     }
 
     // Interleaved to OG mem layout
