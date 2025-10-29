@@ -7,7 +7,6 @@
 #include "compute_kernel_api/common.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
-#include "llk_math_sfpu_reduce_sdpa.h"
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_A_api.h"
