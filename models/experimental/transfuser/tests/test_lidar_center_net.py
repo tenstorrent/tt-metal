@@ -5,6 +5,8 @@ import torch
 import pytest
 import numpy as np
 import ttnn
+from collections import OrderedDict
+from typing import Dict, Any, List
 
 from loguru import logger
 from tests.ttnn.utils_for_testing import check_with_pcc
@@ -153,6 +155,144 @@ def print_results(top_pcc, all_pcc_scores):
             print(f"Rank {rank}: Ref box {ref_idx} ↔ Torch box {torch_idx} (PCC: {str(pcc_val)})")
 
 
+def fix_and_filter_checkpoint_keys(
+    checkpoint_path: str, target_prefix: str = "module._model.", state_dict_key: str = None
+) -> Dict[str, Any]:
+    """
+    Loads a PyTorch checkpoint, filters for keys starting with the target_prefix,
+    and then removes that prefix from the keys.
+
+    Args:
+        checkpoint_path: Path to the .pth or .pt checkpoint file.
+        target_prefix: The prefix that identifies the weights you want to keep
+                       AND remove from the key (Default is 'module._model.').
+        state_dict_key: The key in the loaded checkpoint dict that holds the
+                        actual model state_dict (e.g., 'state_dict').
+                        If None, it assumes the checkpoint itself is the state_dict.
+
+    Returns:
+        The modified state dictionary (OrderedDict) containing only the filtered
+        and renamed keys, ready for model loading.
+    """
+    print(f"Loading checkpoint from: {checkpoint_path}")
+    # 1. Load the checkpoint
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+
+    # 2. Extract the state dictionary
+    if state_dict_key and state_dict_key in checkpoint:
+        checkpoint_state_dict = checkpoint[state_dict_key]
+    else:
+        checkpoint_state_dict = checkpoint
+
+    # 3. Filter and Strip the keys
+    new_state_dict = OrderedDict()
+    removed_keys_count = 0
+
+    for k, v in checkpoint_state_dict.items():
+        if k.startswith(target_prefix):
+            # KEEP AND RENAME: Strip the prefix to match your model's keys
+            name = k[len(target_prefix) :]
+            new_state_dict[name] = v
+        else:
+            # DISCARD: These keys are outside of the module._model scope
+            removed_keys_count += 1
+
+    print(f"✅ Filtered and kept {len(new_state_dict)} keys starting with '{target_prefix}'.")
+    print(f"🗑️ Discarded {removed_keys_count} keys that did not match the prefix.")
+
+    return new_state_dict
+
+
+def load_trained_weights(weight_path: str):
+    """
+    Load trained Transfuser weights and clean them for use
+
+    Args:
+        weight_path: Path to the .pth file
+
+    Returns:
+        Cleaned state dict ready for model loading
+    """
+    print(f"Loading trained weights from: {weight_path}")
+
+    # Load the checkpoint
+    checkpoint = torch.load(weight_path, map_location="cpu")
+
+    # The weights are stored with 'module._model.' prefix, we need to clean this
+    state_dict = {}
+    for key, value in checkpoint.items():
+        # Remove 'module._model.' prefix
+        if key.startswith("module._model."):
+            clean_key = key[len("module._model.") :]
+            state_dict[clean_key] = value
+        else:
+            state_dict[key] = value
+
+    print(f"Loaded {len(state_dict)} parameters")
+    print(
+        f"Cleaned {len([k for k in checkpoint.keys() if k.startswith('module._model.')])} keys with 'module._model.' prefix"
+    )
+
+    # Add '_model.' prefix to backbone keys for compatibility with model structure
+    backbone_keys = [
+        "image_encoder",
+        "lidar_encoder",
+        "transformer1",
+        "transformer2",
+        "transformer3",
+        "transformer4",
+        "change_channel_conv_image",
+        "change_channel_conv_lidar",
+        "up_conv5",
+        "up_conv4",
+        "up_conv3",
+        "c5_conv",
+    ]
+    backbone_renamed = 0
+    for key in list(state_dict.keys()):
+        for backbone in backbone_keys:
+            if key.startswith(f"{backbone}."):
+                new_key = f"_model.{backbone}.{key[len(backbone)+1:]}"
+                state_dict[new_key] = state_dict.pop(key)
+                backbone_renamed += 1
+                break
+
+    print(f"Added '_model.' prefix to {backbone_renamed} backbone keys")
+
+    # Handle detection head and other components that need to be loaded without _model prefix
+    # These components are at the top level in the model, not under _model
+    detection_components = ["head", "pred_bev", "join", "decoder", "output"]
+    detection_renamed = 0
+    for key in list(state_dict.keys()):
+        for component in detection_components:
+            if key.startswith(f"module.{component}."):
+                new_key = key[len("module.") :]  # Remove 'module.' prefix
+                state_dict[new_key] = state_dict.pop(key)
+                detection_renamed += 1
+                break
+
+    print(f"Cleaned {detection_renamed} detection component keys")
+    return state_dict
+
+
+def delete_incompatible_keys(state_dict: Dict[str, Any], keys_to_delete: List[str]) -> Dict[str, Any]:
+    """
+    Removes specified keys from a state dictionary. This is used to delete
+    weights for layers that are being re-initialized (e.g., changing input channels).
+    """
+    deleted_count = 0
+    new_state_dict = OrderedDict(state_dict)  # Create a modifiable copy
+
+    for k_del in keys_to_delete:
+        if k_del in new_state_dict:
+            del new_state_dict[k_del]
+            deleted_count += 1
+            print(f"🗑️ Deleted incompatible key: {k_del}")
+
+    print(f"Successfully deleted {deleted_count} key(s) for strict=True loading.")
+    return new_state_dict
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "image_architecture, lidar_architecture, n_layer, use_velocity, target_point_image_shape, img_shape, lidar_bev_shape",
@@ -162,6 +302,7 @@ def print_results(top_pcc, all_pcc_scores):
 )
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("weight_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("use_fallback", [True])
 def test_lidar_center_net(
     device,
     image_architecture,
@@ -173,6 +314,7 @@ def test_lidar_center_net(
     lidar_bev_shape,
     input_dtype,
     weight_dtype,
+    use_fallback,
 ):
     # Load the saved demo inputs
     inputs = torch.load("models/experimental/transfuser/tests/transfuser_inputs_final.pt")
@@ -197,6 +339,39 @@ def test_lidar_center_net(
         lidar_architecture=lidar_architecture,
         use_velocity=use_velocity,
     ).eval()
+    checkpoint_path = "model_ckpt/models_2022/transfuser/model_seed1_39.pth"
+    modified_state_dict = load_trained_weights(checkpoint_path)
+    modified_state_dict = delete_incompatible_keys(
+        modified_state_dict,
+        [
+            "_model.lidar_encoder._model.stem.conv.weight",
+            "module.seg_decoder.deconv1.0.weight",
+            "module.seg_decoder.deconv1.0.bias",
+            "module.seg_decoder.deconv1.2.weight",
+            "module.seg_decoder.deconv1.2.bias",
+            "module.seg_decoder.deconv2.0.weight",
+            "module.seg_decoder.deconv2.0.bias",
+            "module.seg_decoder.deconv2.2.weight",
+            "module.seg_decoder.deconv2.2.bias",
+            "module.seg_decoder.deconv3.0.weight",
+            "module.seg_decoder.deconv3.0.bias",
+            "module.seg_decoder.deconv3.2.weight",
+            "module.seg_decoder.deconv3.2.bias",
+            "module.depth_decoder.deconv1.0.weight",
+            "module.depth_decoder.deconv1.0.bias",
+            "module.depth_decoder.deconv1.2.weight",
+            "module.depth_decoder.deconv1.2.bias",
+            "module.depth_decoder.deconv2.0.weight",
+            "module.depth_decoder.deconv2.0.bias",
+            "module.depth_decoder.deconv2.2.weight",
+            "module.depth_decoder.deconv2.2.bias",
+            "module.depth_decoder.deconv3.0.weight",
+            "module.depth_decoder.deconv3.0.bias",
+            "module.depth_decoder.deconv3.2.weight",
+            "module.depth_decoder.deconv3.2.bias",
+        ],
+    )
+    ref_layer.load_state_dict(modified_state_dict, strict=True)
 
     ref_feature, pred_wp, ref_head_results, ref_boxes, ref_rotated_bboxes = ref_layer.forward_ego(
         image, lidar_bev, target_point, velocity
@@ -260,12 +435,14 @@ def test_lidar_center_net(
         custom_preprocessor=create_lidar_center_net_head_preprocessor(device, weight_dtype),
         device=device,
     )
-
+    transfuser_model = ref_layer._model
     tt_layer = TtLidarCenterNet(
         device,
         parameters,
         config,
         backbone="transFuser",
+        torch_model=transfuser_model,
+        use_fallback=use_fallback,
     )
 
     # Convert input to TTNN format
