@@ -22,6 +22,7 @@
 #include "sfpu/ckernel_sfpu_cumsum.h"
 #include "sfpu/ckernel_sfpu_dropout.h"
 #include "sfpu/ckernel_sfpu_elu.h"
+#include "sfpu/ckernel_sfpu_ema.h"
 #include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_exp2.h"
 #include "sfpu/ckernel_sfpu_fill.h"
