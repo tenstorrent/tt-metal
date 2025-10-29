@@ -703,9 +703,9 @@ std::vector<CoreCoord> MeshDevice::worker_cores_from_logical_cores(const std::ve
     });
 }
 std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
-    TT_FATAL(
-        num_devices() == 1,
-        "get_optimal_dram_bank_to_logical_worker_assignment() is only supported on unit MeshDevice.");
+    // TT_FATAL(
+    //     num_devices() == 1,
+    //     "get_optimal_dram_bank_to_logical_worker_assignment() is only supported on unit MeshDevice.");
     return get_devices().front()->get_optimal_dram_bank_to_logical_worker_assignment(noc);
 }
 CoreCoord MeshDevice::virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const {
