@@ -285,7 +285,11 @@ struct FullRep {
         rep{n_rows / tile_height, n_rows % tile_height, n_pads / tile_height, times},
         pad{0, 0, (n_rows + n_pads) * pads_mul / tile_height, 1},
         times_total(times_total) {
-        TT_FATAL((n_rows + n_pads) % tile_height == 0 && "total rows must be divisible by {}", "Error", tile_height);
+        TT_FATAL(
+            (n_rows + n_pads) % tile_height == 0,
+            "Total rows ({}) must be divisible by tile height ({})",
+            n_rows + n_pads,
+            tile_height);
     }
 
     std::vector<BlockRep> to_block_reps() const {

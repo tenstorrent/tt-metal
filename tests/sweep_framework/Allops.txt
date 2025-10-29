@@ -146,7 +146,6 @@ ttnn.experimental.paged_fill_cache
 ttnn.experimental.paged_fused_update_cache
 ttnn.experimental.paged_update_cache
 ttnn.experimental.prefix_scan
-ttnn.experimental.reduce_scatter_async
 ttnn.experimental.repeat_and_interleave_eltwise_mul
 ttnn.experimental.rotary_embedding
 ttnn.experimental.rotary_embedding_llama

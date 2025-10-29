@@ -873,7 +873,7 @@ void dumpDeviceResultsToCSV(
     for (const auto& [core, device_markers_per_risc_map] : device_markers_per_core_risc_map) {
         for (const auto& [risc, device_markers] : device_markers_per_risc_map) {
             for (const tracy::TTDeviceMarker& marker : device_markers) {
-                std::string meta_data_str = "";
+                std::string meta_data_str;
                 if (!marker.meta_data.is_null()) {
                     meta_data_str = marker.meta_data.dump();
                     std::replace(meta_data_str.begin(), meta_data_str.end(), ',', ';');
@@ -1503,13 +1503,13 @@ void DeviceProfiler::readDeviceMarkerData(
 
 struct DispatchMetaData {
     // Dispatch command queue command type
-    std::string cmd_type = "";
+    std::string cmd_type;
 
     // Worker's runtime id
     uint32_t worker_runtime_id = 0;
 
     // dispatch command subtype.
-    std::string cmd_subtype = "";
+    std::string cmd_subtype;
 };
 
 void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& device_markers) {
@@ -1682,8 +1682,8 @@ void DeviceProfiler::setLastFDReadAsDone() { this->is_last_fd_read_done = true; 
 bool DeviceProfiler::isLastFDReadDone() const { return this->is_last_fd_read_done; }
 
 DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) :
-    device_id(device->id()),
     device_arch(device->arch()),
+    device_id(device->id()),
     device_core_frequency(tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(this->device_id)) {
 #if defined(TRACY_ENABLE)
     ZoneScopedC(tracy::Color::Green);
