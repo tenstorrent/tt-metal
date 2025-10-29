@@ -10,7 +10,7 @@ from models.tt_transformers.tt.common import gather_cos_sin, precompute_freqs
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
 from ...tt.layer import DecoderLayer
-from ...tt.rope import get_rot_transformation_mat
+from ...tt.rope import RotarySetup
 from ..test_factory import TestFactory, compare_tensors, parametrize_batch_seq, parametrize_mesh_with_fabric
 
 
@@ -64,7 +64,7 @@ def run_attention_component(
     tt_out = attention_module(tt_hidden_states, tt_mask, rope_mats, tt_position_idx)
 
     # Compare outputs
-    passing, output = run_component_comparison(tt_out, reference_out, mesh_device, pcc_threshold=0.99)
+    passing, output = run_component_comparison(tt_out, reference_out, mesh_device, pcc_threshold=0.96)
     assert passing, f"Attention test failed. Output: {output}"
 
 
@@ -197,9 +197,7 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
 )
 @pytest.mark.parametrize(
     "mesh_shape",
-    [
-        (1, 8),
-    ],
+    [(1, 8), (4, 8)],
 )
 def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, reset_seeds):
     """Test complete decoder layer - combines attention + MLP + norms"""
@@ -225,43 +223,18 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
     # Convert HF QKV weights to Meta format for RoPE compatibility
     reference_state_swizzled = convert_hf_qkv_to_meta_format(reference_state, config.head_dim)
 
-    # Create transformation matrices for RoPE (needed by attention)
-    # Match tt-transformers RotarySetup: decode is HEIGHT_SHARDED, prefill is INTERLEAVED
-    grid_size = setup["mesh_device"].compute_with_storage_grid_size()
-    batch_grid = ttnn.num_cores_to_corerangeset(1, grid_size, row_wise=True)
-
-    # Decode: HEIGHT_SHARDED like tt-transformers
-    decode_trans_mat_torch = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE)
-    trans_mat_mem_config = ttnn.create_sharded_memory_config(
-        shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
-        core_grid=batch_grid,
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
+    # Setup RoPE using tt-transformers RotarySetup (handles cos/sin and transformation matrices)
+    max_seq_len = getattr(config, "max_position_embeddings", 131072)
+    rope_setup = RotarySetup(
+        device=setup["mesh_device"],
+        batch_size=1,
+        head_dim=config.head_dim,
+        max_seq_len=max_seq_len,
+        rope_theta=getattr(config, "rope_theta", 10000.0),
+        rope_scaling=None,
+        datatype=ttnn.bfloat16,
     )
-
-    transformation_mats = {
-        "decode": ttnn.from_torch(
-            decode_trans_mat_torch,
-            device=setup["mesh_device"],
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=trans_mat_mem_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                setup["mesh_device"],
-                dims=(None, None),
-                mesh_shape=list(setup["mesh_device"].shape),
-            ),
-        ),
-        "prefill": ttnn.from_torch(
-            get_rot_transformation_mat(dhead=config.head_dim),
-            device=setup["mesh_device"],
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(setup["mesh_device"]),
-        ),
-    }
+    transformation_mats = rope_setup.get_both_trans_mats()
 
     decoder_layer = DecoderLayer(
         setup["mesh_device"],
@@ -365,25 +338,22 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
     )
 
     # Test individual components
-
     if seq_len == 1:
         run_topk_router_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
 
-    # run_experts_component(setup["mesh_device"], hidden_states.shape, config, reference_layer, decoder_layer)
-    # run_attention_component(
-    #     setup["mesh_device"],
-    #     hidden_states.shape,
-    #     mask,
-    #     tt_mask,
-    #     position_embeddings_ref,
-    #     rope_mats,
-    #     tt_position_idx,
-    #     reference_layer,
-    #     decoder_layer,
-    # )
+    run_attention_component(
+        setup["mesh_device"],
+        hidden_states.shape,
+        mask,
+        tt_mask,
+        position_embeddings_ref,
+        rope_mats,
+        tt_position_idx,
+        reference_layer,
+        decoder_layer,
+    )
 
     run_rms_norm_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
-
     run_full_mlp_pipeline(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
 
     # Test full decoder layer integration

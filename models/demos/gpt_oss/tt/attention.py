@@ -92,7 +92,6 @@ class Attention:
             # cache_file_name=get_cache_file_name(tensor_cache_path, "wqkv_fused_new"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        print(f"[TTNN] wqkv shape={self.wqkv.shape}")
 
         # Handle biases - create fused QKV bias
         q_proj_bias = substate(state_dict, "q_proj")["bias"]
@@ -101,7 +100,6 @@ class Attention:
 
         qkv_bias_list = []
         for i in range(self.mesh_config.tp):
-            print("q_proj_bias shape", q_proj_bias.shape)
             q_bias_selected = torch.chunk(q_proj_bias, self.mesh_config.tp, dim=0)[i]
             k_bias_selected = torch.chunk(k_proj_bias, self.mesh_config.tp, dim=0)[i]
             v_bias_selected = torch.chunk(v_proj_bias, self.mesh_config.tp, dim=0)[i]
@@ -109,7 +107,6 @@ class Attention:
             qkv_bias_list.append(qkv_bias)
 
         qkv_bias_cat = torch.cat(qkv_bias_list, dim=-1)  # [total_qkv_dim]
-        print(f"[TTNN] qkv_bias_cat shape={qkv_bias_cat.shape}")
         # Match tt-transformers: use ShardTensorToMesh for bias (attention.py line 173)
         self.wqkv_bias = ttnn.as_tensor(
             qkv_bias_cat,
@@ -275,8 +272,6 @@ class Attention:
             # Output shapes: Q [1, num_local_heads, seq_len, head_dim], K/V [1, num_local_kv_heads, seq_len, head_dim]
 
         ttnn.deallocate(xqkv_fused)
-
-        # Debug: Check Q/K/V after head creation
 
         # Apply RoPE using ttnn.experimental.rotary_embedding_llama (matches tt-transformers)
 

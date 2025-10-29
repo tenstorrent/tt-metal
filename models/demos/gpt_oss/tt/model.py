@@ -4,7 +4,6 @@
 import torch
 
 import ttnn
-from models.common.utility_functions import nearest_32
 from models.demos.gpt_oss.config import MeshConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
@@ -13,7 +12,7 @@ from ttnn import replicate_tensor_to_mesh_mapper
 
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
-from .rope import get_rot_transformation_mat
+from .rope import RotarySetup
 
 
 class Model:
@@ -59,12 +58,30 @@ class Model:
         self.vocab_size = hf_config.vocab_size
         self.hf_config = hf_config
         self.core_grid = mesh_device.compute_with_storage_grid_size()
+        self.head_dim = hf_config.head_dim
 
         # Use MeshConfig for clean parallelization
         self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
 
-        # Precompute RoPE frequencies (Meta format for ttnn.experimental.rotary_embedding_llama)
+        # Setup RoPE using tt-transformers RotarySetup (handles cos/sin matrices and transformation matrices)
+        # Force datatype to bfloat16 since rotary_embedding_llama requires bfloat16
         max_seq_len = getattr(hf_config, "max_position_embeddings", 131072)
+        self.rope_setup = RotarySetup(
+            device=mesh_device,
+            batch_size=1,
+            head_dim=hf_config.head_dim,
+            max_seq_len=max_seq_len,
+            rope_theta=getattr(hf_config, "rope_theta", 10000.0),
+            rope_scaling=None,
+            datatype=ttnn.bfloat16,
+        )
+
+        # Keep references for compatibility
+        self.cos_matrix = self.rope_setup.cos_matrix
+        self.sin_matrix = self.rope_setup.sin_matrix
+        self.transformation_mats = self.rope_setup.get_both_trans_mats()
+
+        # Keep host versions for prefill mode
         cos_cached_host, sin_cached_host = precompute_freqs(
             dim=hf_config.head_dim,
             end=max_seq_len * 2,
@@ -72,77 +89,8 @@ class Model:
             scale_factor=None,
             orig_context_len=131072,
         )
-
-        # Create cos/sin lookup tables on device (like tt-transformers RotarySetup)
-        # These are used with ttnn.embedding for efficient on-device RoPE indexing in decode mode
-        # gather_cos_sin returns shape [1, 1, max_seq_len*2, head_dim] which is what we need
-        cos_matrix = gather_cos_sin(torch.arange(max_seq_len * 2), cos_cached_host, sin_cached_host)[0]
-        sin_matrix = gather_cos_sin(torch.arange(max_seq_len * 2), cos_cached_host, sin_cached_host)[1]
-        # Keep 4D shape [1, 1, max_seq_len*2, head_dim] for ttnn.embedding (matches tt-transformers rope.py lines 351-356)
-
-        self.cos_matrix = ttnn.from_torch(
-            cos_matrix,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=replicate_tensor_to_mesh_mapper(mesh_device),
-        )
-        self.sin_matrix = ttnn.from_torch(
-            sin_matrix,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=replicate_tensor_to_mesh_mapper(mesh_device),
-        )
-
-        # Keep host versions for prefill mode
         self.cos_cached = cos_cached_host
         self.sin_cached = sin_cached_host
-
-        # Create transformation matrices for ttnn.experimental.rotary_embedding_llama
-        # Match tt-transformers RotarySetup (rope.py lines 415-456)
-        self.head_dim = hf_config.head_dim
-
-        # Decode: HEIGHT_SHARDED transformation matrix (repeated across batch)
-        # Note: tt-transformers uses TILE_SIZE for decode, but we'll use head_dim for consistency
-        grid_size = mesh_device.compute_with_storage_grid_size()
-        batch_grid = ttnn.num_cores_to_corerangeset(1, grid_size, row_wise=True)  # batch=1 for decode
-
-        decode_trans_mat_torch = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE)
-        decode_trans_mat_torch = decode_trans_mat_torch.repeat(1, 1, 1, 1)  # [1, 1, 1, TILE_SIZE, TILE_SIZE]
-
-        trans_mat_mem_config = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
-            core_grid=batch_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-
-        self.transformation_mats = {
-            "decode": ttnn.from_torch(
-                decode_trans_mat_torch,
-                device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-                memory_config=trans_mat_mem_config,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    mesh_device,
-                    dims=(None, None),
-                    mesh_shape=list(mesh_device.shape),
-                ),
-            ),
-            "prefill": ttnn.from_torch(
-                get_rot_transformation_mat(dhead=self.head_dim),
-                device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
-            ),
-        }
 
         embedding_weight = substate(state_dict, "model.embed_tokens")["weight"]
         embedding_weight = embedding_weight.unsqueeze(0).unsqueeze(0)
@@ -260,15 +208,8 @@ class Model:
         For decode mode (single position), cos/sin are HEIGHT_SHARDED to match Q/K/V from nlp_create_qkv_heads_decode.
         For prefill mode (sequence), cos/sin are interleaved.
         """
-        is_decode = not (isinstance(seq_len_or_pos, int) and seq_len_or_pos > 1)
 
-        if is_decode:
-            # Decode mode - create for specific position
-            pos_val = seq_len_or_pos.item() if hasattr(seq_len_or_pos, "item") else seq_len_or_pos
-            position_ids = torch.tensor([pos_val])
-        else:
-            # Prefill mode - create for full sequence
-            position_ids = torch.arange(seq_len_or_pos)
+        position_ids = torch.arange(seq_len_or_pos)
 
         # Use gather_cos_sin to get cos/sin in Meta format (pairwise duplicated)
         cos, sin = gather_cos_sin(position_ids, self.cos_cached, self.sin_cached)
@@ -276,125 +217,15 @@ class Model:
 
         tt_cos = ttnn.from_torch(cos, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         tt_sin = ttnn.from_torch(sin, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-
-        if is_decode:
-            # For decode mode, convert to HEIGHT_SHARDED to match Q/K/V from nlp_create_qkv_heads_decode
-            # This matches tt-transformers RotarySetup.get_rot_mats behavior (rope.py lines 525-534)
-            # gather_cos_sin already returns shape [1, 1, 1, head_dim] which is correct for decode
-            grid_size = device.compute_with_storage_grid_size()
-            batch_grid = ttnn.num_cores_to_corerangeset(1, grid_size, row_wise=True)  # batch=1 for decode
-
-            mem_config = ttnn.create_sharded_memory_config(
-                shape=(ttnn.TILE_SIZE, self.head_dim),
-                core_grid=batch_grid,
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-
-            tt_cos = ttnn.interleaved_to_sharded(tt_cos, mem_config)
-            tt_sin = ttnn.interleaved_to_sharded(tt_sin, mem_config)
-
         return [tt_cos, tt_sin]
 
     def get_rot_idxs(self, position_idxs, on_host=False):
-        """
-        Get rotation indices for RoPE embedding lookup.
-        Matches tt-transformers RotarySetup.get_rot_idxs (rope.py lines 463-493).
-
-        Args:
-            position_idxs: torch.Tensor of shape [batch] with position indices
-            on_host: If True, keep tensor on host; otherwise move to device
-
-        Returns:
-            ttnn.Tensor: Position indices ready for embedding lookup, shape [1, padded_batch]
-        """
-        assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
-        assert len(position_idxs.shape) == 1, "position idxs must be a [batch] tensor"
-
-        batch = position_idxs.shape[0]
-        position_idxs = position_idxs.reshape(1, batch)  # [1, batch]
-        assert position_idxs.shape == (1, batch), "position idxs must be a [1, batch] tensor"
-        assert torch.min(position_idxs) >= 0, "position idxs must be non-negative"
-
-        # Add padding if needed (matches tt-transformers line 473)
-        pad_size = nearest_32(batch) - batch
-        position_idxs = torch.nn.functional.pad(position_idxs, (0, pad_size), "constant", 0)
-
-        if on_host:  # If tensor is on host, don't pass device but include mesh mapper
-            rot_idxs = ttnn.as_tensor(
-                position_idxs,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
-            )
-        else:  # On device
-            rot_idxs = ttnn.as_tensor(
-                position_idxs,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
-            )
-
-        return rot_idxs
+        """Delegate to RotarySetup.get_rot_idxs"""
+        return self.rope_setup.get_rot_idxs(position_idxs, on_host=on_host)
 
     def get_rot_mats(self, position_idxs):
-        """
-        Get RoPE rotation matrices for given positions using on-device embedding lookup.
-        Matches tt-transformers RotarySetup.get_rot_mats (rope.py lines 495-538).
-
-        Args:
-            position_idxs: ttnn.Tensor of shape [1, padded_batch] with position indices (on device)
-
-        Returns:
-            List[ttnn.Tensor]: [cos, sin] tensors in HEIGHT_SHARDED format for decode
-        """
-        device = self.mesh_device
-
-        # Ensure position_idxs is on device
-        if not hasattr(position_idxs, "device") or position_idxs.device != device:
-            position_idxs = ttnn.to_device(position_idxs, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        # Use embedding to index into cos/sin lookup tables
-        # ttnn.embedding expects [1, seq_len] and returns [1, seq_len, head_dim]
-        cos = ttnn.embedding(position_idxs, self.cos_matrix, layout=ttnn.TILE_LAYOUT)  # [1, padded_batch, head_dim]
-        sin = ttnn.embedding(position_idxs, self.sin_matrix, layout=ttnn.TILE_LAYOUT)  # [1, padded_batch, head_dim]
-
-        # Reshape to 4D: [1, 1, padded_batch, head_dim]
-        cos = ttnn.unsqueeze_to_4D(cos)
-        sin = ttnn.unsqueeze_to_4D(sin)
-
-        # Transpose to [1, padded_batch, 1, head_dim] (tt-transformers does this)
-        cos = ttnn.transpose(cos, 1, 2)
-        sin = ttnn.transpose(sin, 1, 2)
-
-        # Get actual batch size from args (set by create_transformer_compatible)
-        # Matches tt-transformers RotarySetup which uses self.batch_size_per_device_group
-        batch_size = 1  # self.args.max_batch_size if hasattr(self, 'args') else 1
-
-        # Slice to remove padding if batch_size is not a multiple of TILE_SIZE (matches tt-transformers lines 521-523)
-        if batch_size % ttnn.TILE_SIZE != 0:
-            cos = cos[:, :batch_size, :, :]
-            sin = sin[:, :batch_size, :, :]
-
-        # Create batch_grid based on batch_size (matches tt-transformers line 413)
-        # For batch_size=1, this creates 1 core which matches nlp_create_qkv_heads_decode output
-        batch_grid = ttnn.num_cores_to_corerangeset(batch_size, self.core_grid, row_wise=True)
-
-        mem_config = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, self.head_dim),
-            core_grid=batch_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-
-        cos = ttnn.interleaved_to_sharded(cos, mem_config)
-        sin = ttnn.interleaved_to_sharded(sin, mem_config)
-
-        return [cos, sin]
+        """Delegate to RotarySetup.get_rot_mats"""
+        return self.rope_setup.get_rot_mats(position_idxs)
 
     def ttnn_decode_forward(
         self, tokens, current_pos, rot_mat_idxs=None, page_table=None, kv_cache=None, argmax_on_device=False
@@ -538,8 +369,7 @@ class Model:
             current_pos = current_pos.unsqueeze(0)
         assert current_pos.shape[0] == B, "Batch size mismatch"
 
-        # Pad tokens to be tile-sized (32)
-        # tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens)), "constant", 0)
+        # Convert tokens to TTNN format
         tokens = ttnn.from_torch(
             tokens,
             device=None,

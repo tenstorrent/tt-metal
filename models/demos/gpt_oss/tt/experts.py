@@ -159,14 +159,12 @@ class Experts:
         assert batch_size == 1, "batch_size must be 1, we only support batch size 1 for now"
         seq_len = hidden_states.shape[1]
         hidden_states_4D = ttnn.unsqueeze_to_4D(hidden_states)
+        sparsity = ttnn.to_layout(ttnn.unsqueeze_to_4D(routing_weights), ttnn.ROW_MAJOR_LAYOUT)
+        output_tile = ttnn.Tile([32, 32])
         if seq_len > 1:
             TILE_SIZE = 32
             hidden_states_4D = ttnn.reshape(hidden_states_4D, (1, seq_len // TILE_SIZE, TILE_SIZE, self.hidden_size))
             group_size = seq_len // TILE_SIZE
-        sparsity = ttnn.to_layout(ttnn.unsqueeze_to_4D(routing_weights), ttnn.ROW_MAJOR_LAYOUT)
-        output_tile = ttnn.Tile([32, 32])
-
-        if seq_len > 1:
             sparsity = ttnn.repeat(self.prefill_sparsity, (1, 1, group_size, 1))
 
         if self.mesh_config.ep > 1 and seq_len == 1:
@@ -213,10 +211,12 @@ class Experts:
             dtype=ttnn.bfloat8_b,
         )
         hidden_states_4D.deallocate(True)
+
         if seq_len > 1:
             up_transposed = ttnn.transpose(up, 1, 3)
             up.deallocate(True)
             up = up_transposed
+
         up = ttnn.reshape(up, (batch_size, self.num_experts, seq_len, self.intermediate_size_per_device))
         up = ttnn.add(up, self.up_proj_bias, output_tensor=up)
         up_clamped = ttnn.clamp(up, min=-self.limit, max=self.limit)
