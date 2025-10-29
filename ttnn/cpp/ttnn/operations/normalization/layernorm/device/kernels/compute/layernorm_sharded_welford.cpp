@@ -130,7 +130,6 @@ void MAIN {
     // ---------------------------------------------------------------------------
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
-    constexpr uint32_t cb_eps = tt::CBIndex::c_3;
     constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
     constexpr uint32_t cb_beta = tt::CBIndex::c_6;
     constexpr uint32_t cb_x = tt::CBIndex::c_24;          // x minus mean
