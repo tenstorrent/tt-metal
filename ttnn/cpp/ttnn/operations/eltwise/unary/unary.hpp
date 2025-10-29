@@ -405,8 +405,6 @@ REGISTER_UNARY_OPERATION(sign, SIGN);
 REGISTER_UNARY_OPERATION(signbit, SIGNBIT);
 REGISTER_UNARY_OPERATION(silu, SILU);
 REGISTER_UNARY_OPERATION(sin, SIN);
-REGISTER_UNARY_OPERATION(sqrt, SQRT);
-REGISTER_UNARY_OPERATION(rsqrt, RSQRT);
 REGISTER_UNARY_OPERATION(square, SQUARE);
 REGISTER_UNARY_OPERATION(tan, TAN);
 REGISTER_UNARY_OPERATION(tiled_prod, TILED_PROD);
@@ -430,6 +428,8 @@ REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(log, LOG);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(log10, LOG10);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(log2, LOG2);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(log1p, LOG1P);
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(rsqrt, RSQRT);
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(sqrt, SQRT);
 
 // Unaries with vector mode and fast and approximate mode
 REGISTER_UNARY_OPERATION_WITH_VECTOR_AND_FAST_AND_APPROXIMATE_MODE(sigmoid, SIGMOID);
@@ -469,7 +469,6 @@ constexpr auto softplus = ttnn::register_operation<"ttnn::softplus", ttnn::opera
 constexpr auto tanh = ttnn::register_operation<"ttnn::tanh", ttnn::operations::unary::Tanh>();
 constexpr auto tanhshrink = ttnn::register_operation<"ttnn::tanhshrink", ttnn::operations::unary::Tanhshrink>();
 constexpr auto prelu_sfpu = ttnn::register_operation<"ttnn::prelu_sfpu", ttnn::operations::unary::Prelu>();
-
 constexpr auto selu = ttnn::register_operation<"ttnn::selu", ttnn::operations::unary::Selu>();
 constexpr auto fill = ttnn::register_operation<
     "ttnn::fill",
