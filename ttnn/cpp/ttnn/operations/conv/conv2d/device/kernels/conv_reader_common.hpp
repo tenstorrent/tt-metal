@@ -74,7 +74,6 @@ FORCE_INLINE void read_kernel_w(uint32_t& l1_write_addr_act, uint32_t& act_l1_of
     act_l1_offset += stride_h_bytes;
 }
 
-#ifdef ACTIVATION_REUSE
 template <uint32_t cb_id_act, uint32_t act_cb_tiles, uint32_t window_reuse_offset>
 FORCE_INLINE void pass_to_the_next_image_width(
     uint32_t& l1_write_addr_act,
@@ -333,7 +332,7 @@ FORCE_INLINE void read_sticks_activation_reuse(
             packed_reader_indices_ptr, reader_idx, start_ind, end_ind, new_batch_image_rows_to_fill);
     }
 }
-#endif
+
 template <uint32_t dram_addr_index, uint32_t page_size_index, uint32_t tensor_args_index, uint32_t cb_reader_index>
 void load_config_tensor_if_in_dram(uint32_t core_index) {
 #ifdef CONFIG_TENSOR_IN_DRAM
