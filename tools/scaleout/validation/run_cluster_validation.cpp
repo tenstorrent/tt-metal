@@ -129,6 +129,23 @@ InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
     return input_args;
 }
 
+std::string get_factory_system_descriptor_path(const InputArgs& input_args) {
+    std::string fsd_path;
+    if (input_args.cabling_descriptor_path.has_value()) {
+        const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+        log_output_rank0("Creating Factory System Descriptor (Golden Representation)");
+        tt::scaleout_tools::CablingGenerator cabling_generator(
+            input_args.cabling_descriptor_path.value(), input_args.deployment_descriptor_path.value());
+        std::string filename =
+            "generated_factory_system_descriptor_" + std::to_string(*distributed_context.rank()) + ".textproto";
+        fsd_path = input_args.output_path / filename;
+        cabling_generator.emit_factory_system_descriptor(fsd_path);
+    } else {
+        fsd_path = input_args.fsd_path.value();
+    }
+    return fsd_path;
+}
+
 PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& input_args) {
     auto log_hostnames = [&](const std::vector<std::string>& hostnames) {
         std::stringstream ss;
@@ -169,23 +186,6 @@ void cleanup_metadata(const InputArgs& input_args, const std::string& gsd_file, 
     } else {
         TT_FATAL(fsd_file == input_args.fsd_path.value(), "Internal error: Expected FSD File Paths to match");
     }
-}
-
-std::string get_factory_system_descriptor_path(const InputArgs& input_args) {
-    std::string fsd_path;
-    if (input_args.cabling_descriptor_path.has_value()) {
-        const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-        log_output_rank0("Creating Factory System Descriptor (Golden Representation)");
-        tt::scaleout_tools::CablingGenerator cabling_generator(
-            input_args.cabling_descriptor_path.value(), input_args.deployment_descriptor_path.value());
-        std::string filename =
-            "generated_factory_system_descriptor_" + std::to_string(*distributed_context.rank()) + ".textproto";
-        fsd_path = input_args.output_path / filename;
-        cabling_generator.emit_factory_system_descriptor(fsd_path);
-    } else {
-        fsd_path = input_args.fsd_path.value();
-    }
-    return fsd_path;
 }
 
 AsicTopology validate_connectivity(const InputArgs& input_args, PhysicalSystemDescriptor& physical_system_descriptor) {
