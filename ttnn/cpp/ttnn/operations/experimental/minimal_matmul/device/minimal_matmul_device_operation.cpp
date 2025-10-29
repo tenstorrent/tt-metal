@@ -52,13 +52,14 @@ void MinimalMatmulOp::validate(
         TT_FATAL(bias_ptr->layout() == Layout::TILE, "minimal_matmul requires TILE layout for bias");
     }
 
-    // DType constraints: support BFLOAT16 and BFLOAT8_B; inputs must match
+    // DType constraints: support BFLOAT16, BFLOAT8_B, BFLOAT4_B and FLOAT32
     auto dtype_supported = [](tt::tt_metal::DataType dt) {
-        return dt == DataType::BFLOAT16 || dt == DataType::BFLOAT8_B || dt == DataType::BFLOAT4_B;
+        return dt == DataType::BFLOAT16 || dt == DataType::BFLOAT8_B || dt == DataType::BFLOAT4_B ||
+               dt == DataType::FLOAT32;
     };
     TT_FATAL(
         dtype_supported(act_tensor.dtype()) && dtype_supported(weight_tensor.dtype()),
-        "minimal_matmul supports only BFLOAT16, BFLOAT8_B, and BFLOAT4_B for inputs");
+        "minimal_matmul supports only BFLOAT16, BFLOAT8_B, BFLOAT4_B, and FLOAT32 for inputs");
 
     // Bias dtype constraint, if present
     if (has_bias) {
@@ -72,10 +73,7 @@ void MinimalMatmulOp::validate(
     const auto& w_logical = weight_tensor.logical_shape();
     TT_FATAL(a_logical.rank() >= 2 && w_logical.rank() >= 2, "minimal_matmul expects rank >= 2 tensors");
 
-    // No batching: all leading dims (before last two) must be 1
-    for (int i = 0; i < static_cast<int>(a_logical.rank()) - 2; ++i) {
-        TT_FATAL(a_logical[i] == 1, "minimal_matmul activation must have 1 in all dims < -2");
-    }
+    // Allow upper-dim broadcasting on activation (LHS): activation may have arbitrary upper dims
     for (int i = 0; i < static_cast<int>(w_logical.rank()) - 2; ++i) {
         TT_FATAL(w_logical[i] == 1, "minimal_matmul weight must have 1 in all dims < -2");
     }
