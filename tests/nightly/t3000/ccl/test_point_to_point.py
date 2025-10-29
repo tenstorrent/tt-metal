@@ -49,16 +49,34 @@ def _get_test_coords_and_shapes(mesh_shape, tensor_shapes):
             yield (shape, (coords[0], coords[1]))
 
 
+def _get_test_coords_and_shapes_with_layout(mesh_shape, tensor_shapes):
+    """Generator that yields (shape, coords, layout) with alternating layouts to reduce test count"""
+    coords = [(i, j) for i in range(mesh_shape[0]) for j in range(mesh_shape[1])]
+    layouts = [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT]
+    layout_idx = 0
+
+    # only test all coordinate permutations against the first tensor shape to keep test time reasonable
+    for i, shape in enumerate(tensor_shapes):
+        if i == 0:
+            # here we do coordinate filtering appropriate for 1D fabric
+            one_d_filter = lambda cc: cc[0][0] == cc[1][0] or cc[0][1] == cc[1][1]
+            for cc in filter(one_d_filter, combinations(coords, 2)):
+                yield (shape, cc, layouts[layout_idx % 2])
+                layout_idx += 1
+        else:
+            yield (shape, (coords[0], coords[1]), layouts[layout_idx % 2])
+            layout_idx += 1
+
+
 torch.set_printoptions(threshold=10000)
 
 
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["row_major", "tile"])
-@pytest.mark.parametrize("shape_coords", _get_test_coords_and_shapes(MESH_SHAPE, TEST_SHAPES))
+@pytest.mark.parametrize("shape_coords_layout", _get_test_coords_and_shapes_with_layout(MESH_SHAPE, TEST_SHAPES))
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
-def test_point_to_point(mesh_device, shape_coords, layout, dtype):
-    shape, coords = shape_coords
+def test_point_to_point(mesh_device, shape_coords_layout, dtype):
+    shape, coords, layout = shape_coords_layout
 
     devices = prod(list(mesh_device.shape))
     multi_device_shape = tuple(s * (devices if i == 0 else 1) for i, s in enumerate(shape))
@@ -113,11 +131,17 @@ def test_point_to_point(mesh_device, shape_coords, layout, dtype):
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 500000}], indirect=True
 )
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["row_major", "tile"])
-@pytest.mark.parametrize("shape_coords", [((1, 1, 1, 16), ((0, 0), (0, 1)))])
+@pytest.mark.parametrize(
+    "shape_coords_layout",
+    [
+        ((1, 1, 1, 16), ((0, 0), (0, 1)), ttnn.ROW_MAJOR_LAYOUT),
+        ((1, 1, 1, 16), ((0, 0), (0, 1)), ttnn.TILE_LAYOUT),
+    ],
+    ids=["row_major", "tile"],
+)
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
-def test_point_to_point_with_device_delay(mesh_device, shape_coords, layout, dtype):
-    shape, coords = shape_coords
+def test_point_to_point_with_device_delay(mesh_device, shape_coords_layout, dtype):
+    shape, coords, layout = shape_coords_layout
 
     devices = prod(list(mesh_device.shape))
     multi_device_shape = tuple(s * (devices if i == 0 else 1) for i, s in enumerate(shape))
