@@ -227,15 +227,17 @@ void kernel_main() {
                 case NOC_UNICAST_WRITE: {
 #ifdef USE_ADDRGEN
                     if constexpr (use_addrgen) {
-                        auto dram_addrgen = create_interleaved_addrgen<true>(
-                            addrgen_base_address, addrgen_page_size, addrgen_num_pages);
+                        // Compute sequential addresses manually (like base test increments target_address)
+                        uint32_t sequential_addr = addrgen_base_address + (page_id + i) * addrgen_page_size;
+                        tt::tt_fabric::NocUnicastCommandHeader noc_header{
+                            get_noc_addr(noc_x_start, noc_y_start, sequential_addr)};
 
                         if constexpr (with_state) {
-                            fabric_multicast_noc_unicast_write_with_state(
-                                connections, route_id, source_l1_buffer_address, dram_addrgen, page_id + i);
+                            fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                                connections, route_id, source_l1_buffer_address, noc_header, addrgen_page_size);
                         } else {
                             fabric_multicast_noc_unicast_write(
-                                connections, route_id, source_l1_buffer_address, dram_addrgen, page_id + i);
+                                connections, route_id, ranges, source_l1_buffer_address, addrgen_page_size, noc_header);
                         }
                     } else
 #endif
@@ -309,15 +311,17 @@ void kernel_main() {
                 case NOC_UNICAST_WRITE: {
 #ifdef USE_ADDRGEN
                     if constexpr (use_addrgen) {
-                        auto dram_addrgen = create_interleaved_addrgen<true>(
-                            addrgen_base_address, addrgen_page_size, addrgen_num_pages);
+                        // Compute sequential addresses manually (like base test increments target_address)
+                        uint32_t sequential_addr = addrgen_base_address + (page_id + i) * addrgen_page_size;
+                        tt::tt_fabric::NocUnicastCommandHeader noc_header{
+                            get_noc_addr(noc_x_start, noc_y_start, sequential_addr)};
 
                         if constexpr (with_state) {
-                            fabric_unicast_noc_unicast_write_with_state(
-                                connections, route_id, source_l1_buffer_address, dram_addrgen, page_id + i);
+                            fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                                connections, route_id, source_l1_buffer_address, noc_header, addrgen_page_size);
                         } else {
                             fabric_unicast_noc_unicast_write(
-                                connections, route_id, source_l1_buffer_address, dram_addrgen, page_id + i);
+                                connections, route_id, source_l1_buffer_address, addrgen_page_size, noc_header);
                         }
                     } else
 #endif
