@@ -220,7 +220,7 @@ class Conv2d(Module):
         mesh_device: ttnn.MeshDevice,
         in_mesh_axis: int | None = None,
         out_mesh_axis: int | None = None,
-        sp_axis: int | None,
+        sp_axis: int | None = None,
         ccl_manager: CCLManager | None,
     ) -> Self:
         assert not isinstance(torch_ref.padding, str)
@@ -264,7 +264,7 @@ class Conv2d(Module):
         Data is left in the state of the final compute. The burden is on the next layer to prepare its input as needed.
         TODO: Add support for DP and SP
         """
-        if self.in_mesh_axis is None and self.is_sharded_tensor(x):
+        if self.sp_axis is not None and self.is_sharded_tensor(x):
             x = vae_all_gather(self.ccl_manager, x, cluster_axis=self.sp_axis)
 
         b, h, w, c = x.shape
