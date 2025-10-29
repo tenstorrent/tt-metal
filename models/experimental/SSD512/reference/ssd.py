@@ -1,388 +1,209 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-
-# SPDX-License-Identifier: Apache-2.0
-
-import warnings, torch
-from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Tuple
+import torch
+import torch.nn as nn
 import torch.nn.functional as F
-from torch import nn, Tensor
-from .torch_utils import (
-    _log_api_usage_once,
-    _topk_min,
-    retrieve_out_channels,
-    _xavier_init,
-    DefaultBoxGenerator,
-)
-from torchvision.ops.boxes import batched_nms, clip_boxes_to_image, box_iou
-from torchvision.models.detection._utils import BoxCoder, Matcher, SSDMatcher
-from torchvision.models.detection.transform import GeneralizedRCNNTransform
-
-
-class SSDHead(nn.Module):
-    def __init__(self, in_channels: List[int], num_anchors: List[int], num_classes: int):
-        super().__init__()
-        self.classification_head = SSDClassificationHead(in_channels, num_anchors, num_classes)
-        self.regression_head = SSDRegressionHead(in_channels, num_anchors)
-
-    def forward(self, x: List[Tensor]) -> Dict[str, Tensor]:
-        return {
-            "bbox_regression": self.regression_head(x),
-            "cls_logits": self.classification_head(x),
-        }
-
-
-class SSDScoringHead(nn.Module):
-    def __init__(self, module_list: nn.ModuleList, num_columns: int):
-        super().__init__()
-        self.module_list = module_list
-        self.num_columns = num_columns
-
-    def _get_result_from_module_list(self, x: Tensor, idx: int) -> Tensor:
-        """
-        This is equivalent to self.module_list[idx](x),
-        but torchscript doesn't support this yet
-        """
-        num_blocks = len(self.module_list)
-        if idx < 0:
-            idx += num_blocks
-        out = x
-        for i, module in enumerate(self.module_list):
-            if i == idx:
-                out = module(x)
-        return out
-
-    def forward(self, x: List[Tensor]) -> Tensor:
-        all_results = []
-
-        for i, features in enumerate(x):
-            results = self._get_result_from_module_list(features, i)
-
-            # Permute output from (N, A * K, H, W) to (N, HWA, K).
-            N, _, H, W = results.shape
-            results = results.view(N, -1, self.num_columns, H, W)
-            results = results.permute(0, 3, 4, 1, 2)
-            results = results.reshape(N, -1, self.num_columns)  # Size=(N, HWA, K)
-
-            all_results.append(results)
-
-        return torch.cat(all_results, dim=1)
-
-
-class SSDClassificationHead(SSDScoringHead):
-    def __init__(self, in_channels: List[int], num_anchors: List[int], num_classes: int):
-        cls_logits = nn.ModuleList()
-        for channels, anchors in zip(in_channels, num_anchors):
-            cls_logits.append(nn.Conv2d(channels, num_classes * anchors, kernel_size=3, padding=1))
-        _xavier_init(cls_logits)
-        super().__init__(cls_logits, num_classes)
-
-
-class SSDRegressionHead(SSDScoringHead):
-    def __init__(self, in_channels: List[int], num_anchors: List[int]):
-        bbox_reg = nn.ModuleList()
-        for channels, anchors in zip(in_channels, num_anchors):
-            bbox_reg.append(nn.Conv2d(channels, 4 * anchors, kernel_size=3, padding=1))
-        _xavier_init(bbox_reg)
-        super().__init__(bbox_reg, 4)
+from torch.autograd import Variable
+from models.experimental.SSD512.reference.layers import *
+from models.experimental.SSD512.reference.data import voc
+import os
 
 
 class SSD(nn.Module):
-    __annotations__ = {
-        "box_coder": BoxCoder,
-        "proposal_matcher": Matcher,
-    }
+    """Single Shot Multibox Architecture
+    The network is composed of a base VGG network followed by the
+    added multibox conv layers.  Each multibox layer branches into
+        1) conv2d for class conf scores
+        2) conv2d for localization predictions
+        3) associated priorbox layer to produce default bounding
+           boxes specific to the layer's feature map size.
+    See: https://arxiv.org/pdf/1512.02325.pdf for more details.
 
-    def __init__(
-        self,
-        backbone: nn.Module,
-        anchor_generator: DefaultBoxGenerator,
-        size: Tuple[int, int],
-        num_classes: int,
-        image_mean: Optional[List[float]] = None,
-        image_std: Optional[List[float]] = None,
-        head: Optional[nn.Module] = None,
-        score_thresh: float = 0.01,
-        nms_thresh: float = 0.45,
-        detections_per_img: int = 200,
-        iou_thresh: float = 0.5,
-        topk_candidates: int = 400,
-        positive_fraction: float = 0.25,
-        **kwargs: Any,
-    ):
-        super().__init__()
-        _log_api_usage_once(self)
+    Args:
+        phase: (string) Can be "test" or "train"
+        size: input image size
+        base: VGG16 layers for input, size of either 300 or 512
+        extras: extra layers that feed to multibox loc and conf layers
+        head: "multibox head" consists of loc and conf conv layers
+    """
 
-        self.backbone = backbone
+    def __init__(self, phase, size, base, extras, head, num_classes):
+        super(SSD, self).__init__()
+        self.phase = phase
+        self.num_classes = num_classes
+        self.cfg = voc["SSD{}".format(size)]
+        self.priorbox = PriorBox(self.cfg)
+        with torch.no_grad():
+            self.priors = Variable(self.priorbox.forward())
+        self.size = size
 
-        self.anchor_generator = anchor_generator
+        # SSD network
+        self.base = nn.ModuleList(base)
+        # Layer learns to scale the l2 normalized features from conv4_3
+        self.L2Norm = L2Norm(512, 20)
+        self.extras = nn.ModuleList(extras)
 
-        self.box_coder = BoxCoder(weights=(10.0, 10.0, 5.0, 5.0))
+        self.loc = nn.ModuleList(head[0])
+        self.conf = nn.ModuleList(head[1])
 
-        if head is None:
-            if hasattr(backbone, "out_channels"):
-                out_channels = backbone.out_channels
-            else:
-                out_channels = retrieve_out_channels(backbone, size)
+        if phase == "test":
+            self.softmax = nn.Softmax(dim=-1)
+            self.detect = Detect(num_classes, size, 0, 200, 0.01, 0.45)
 
-            if len(out_channels) != len(anchor_generator.aspect_ratios):
-                raise ValueError(
-                    f"The length of the output channels from the backbone ({len(out_channels)}) do not match the length of the anchor generator aspect ratios ({len(anchor_generator.aspect_ratios)})"
-                )
+    # @staticmethod
+    def forward(self, x):
+        """Applies network layers and ops on input image(s) x.
 
-            num_anchors = self.anchor_generator.num_anchors_per_location()
-            head = SSDHead(out_channels, num_anchors, num_classes)
-        self.head = head
+        Args:
+            x: input image or batch of images. Shape: [batch,3,300,300].
 
-        self.proposal_matcher = SSDMatcher(iou_thresh)
+        Return:
+            Depending on phase:
+            test:
+                Variable(tensor) of output class label predictions,
+                confidence score, and corresponding location predictions for
+                each object detected. Shape: [batch,topk,7]
 
-        if image_mean is None:
-            image_mean = [0.485, 0.456, 0.406]
-        if image_std is None:
-            image_std = [0.229, 0.224, 0.225]
-        self.transform = GeneralizedRCNNTransform(
-            min(size),
-            max(size),
-            image_mean,
-            image_std,
-            size_divisible=1,
-            fixed_size=size,
-            **kwargs,
-        )
+            train:
+                list of concat outputs from:
+                    1: confidence layers, Shape: [batch*num_priors,num_classes]
+                    2: localization layers, Shape: [batch,num_priors*4]
+                    3: priorbox layers, Shape: [2,num_priors*4]
+        """
+        sources = list()
+        loc = list()
+        conf = list()
 
-        self.score_thresh = score_thresh
-        self.nms_thresh = nms_thresh
-        self.detections_per_img = detections_per_img
-        self.topk_candidates = topk_candidates
-        self.neg_to_pos_ratio = (1.0 - positive_fraction) / positive_fraction
+        # apply vgg up to conv4_3 relu
+        for k in range(23):
+            x = self.base[k](x)
 
-        # used only on torchscript mode
-        self._has_warned = False
+        s = self.L2Norm(x)
+        sources.append(s)
 
-    @torch.jit.unused
-    def eager_outputs(
-        self, losses: Dict[str, Tensor], detections: List[Dict[str, Tensor]]
-    ) -> Tuple[Dict[str, Tensor], List[Dict[str, Tensor]]]:
-        if self.training:
-            return losses
+        # apply vgg up to fc7
+        for k in range(23, len(self.base)):
+            x = self.base[k](x)
+        sources.append(x)
 
-        return detections
+        # apply extra layers and cache source layer outputs
+        for k, v in enumerate(self.extras):
+            x = F.relu(v(x), inplace=True)
+            if k % 2 == 1:
+                sources.append(x)
 
-    def compute_loss(
-        self,
-        targets: List[Dict[str, Tensor]],
-        head_outputs: Dict[str, Tensor],
-        anchors: List[Tensor],
-        matched_idxs: List[Tensor],
-    ) -> Dict[str, Tensor]:
-        bbox_regression = head_outputs["bbox_regression"]
-        cls_logits = head_outputs["cls_logits"]
+        # apply multibox head to source layers
+        for x, l, c in zip(sources, self.loc, self.conf):
+            loc.append(l(x).permute(0, 2, 3, 1).contiguous())
+            conf.append(c(x).permute(0, 2, 3, 1).contiguous())
 
-        # Match original targets with default boxes
-        num_foreground = 0
-        bbox_loss = []
-        cls_targets = []
-        for (
-            targets_per_image,
-            bbox_regression_per_image,
-            cls_logits_per_image,
-            anchors_per_image,
-            matched_idxs_per_image,
-        ) in zip(targets, bbox_regression, cls_logits, anchors, matched_idxs):
-            # produce the matching between boxes and targets
-            foreground_idxs_per_image = torch.where(matched_idxs_per_image >= 0)[0]
-            foreground_matched_idxs_per_image = matched_idxs_per_image[foreground_idxs_per_image]
-            num_foreground += foreground_matched_idxs_per_image.numel()
-
-            # Calculate regression loss
-            matched_gt_boxes_per_image = targets_per_image["boxes"][foreground_matched_idxs_per_image]
-            bbox_regression_per_image = bbox_regression_per_image[foreground_idxs_per_image, :]
-            anchors_per_image = anchors_per_image[foreground_idxs_per_image, :]
-            target_regression = self.box_coder.encode_single(matched_gt_boxes_per_image, anchors_per_image)
-            bbox_loss.append(
-                torch.nn.functional.smooth_l1_loss(bbox_regression_per_image, target_regression, reduction="sum")
+        loc = torch.cat([o.view(o.size(0), -1) for o in loc], 1)
+        conf = torch.cat([o.view(o.size(0), -1) for o in conf], 1)
+        if self.phase == "test":
+            output = self.detect(
+                loc.view(loc.size(0), -1, 4),  # loc preds
+                self.softmax(conf.view(conf.size(0), -1, self.num_classes)),  # conf preds
+                self.priors.type(type(x.data)),  # default boxes
             )
-
-            # Estimate ground truth for class targets
-            gt_classes_target = torch.zeros(
-                (cls_logits_per_image.size(0),),
-                dtype=targets_per_image["labels"].dtype,
-                device=targets_per_image["labels"].device,
-            )
-            gt_classes_target[foreground_idxs_per_image] = targets_per_image["labels"][
-                foreground_matched_idxs_per_image
-            ]
-            cls_targets.append(gt_classes_target)
-
-        bbox_loss = torch.stack(bbox_loss)
-        cls_targets = torch.stack(cls_targets)
-
-        # Calculate classification loss
-        num_classes = cls_logits.size(-1)
-        cls_loss = F.cross_entropy(cls_logits.view(-1, num_classes), cls_targets.view(-1), reduction="none").view(
-            cls_targets.size()
-        )
-
-        # Hard Negative Sampling
-        foreground_idxs = cls_targets > 0
-        num_negative = self.neg_to_pos_ratio * foreground_idxs.sum(1, keepdim=True)
-        # num_negative[num_negative < self.neg_to_pos_ratio] = self.neg_to_pos_ratio
-        negative_loss = cls_loss.clone()
-        negative_loss[foreground_idxs] = -float("inf")  # use -inf to detect positive values that creeped in the sample
-        values, idx = negative_loss.sort(1, descending=True)
-        # background_idxs = torch.logical_and(idx.sort(1)[1] < num_negative, torch.isfinite(values))
-        background_idxs = idx.sort(1)[1] < num_negative
-
-        N = max(1, num_foreground)
-        return {
-            "bbox_regression": bbox_loss.sum() / N,
-            "classification": (cls_loss[foreground_idxs].sum() + cls_loss[background_idxs].sum()) / N,
-        }
-
-    def forward(
-        self, images: List[Tensor], targets: Optional[List[Dict[str, Tensor]]] = None
-    ) -> Tuple[Dict[str, Tensor], List[Dict[str, Tensor]]]:
-        if self.training:
-            if targets is None:
-                torch._assert(False, "targets should not be none when in training mode")
-            else:
-                for target in targets:
-                    boxes = target["boxes"]
-                    if isinstance(boxes, torch.Tensor):
-                        torch._assert(
-                            len(boxes.shape) == 2 and boxes.shape[-1] == 4,
-                            f"Expected target boxes to be a tensor of shape [N, 4], got {boxes.shape}.",
-                        )
-                    else:
-                        torch._assert(
-                            False,
-                            f"Expected target boxes to be of type Tensor, got {type(boxes)}.",
-                        )
-
-        # get the original image sizes
-        original_image_sizes: List[Tuple[int, int]] = []
-        for img in images:
-            val = img.shape[-2:]
-            torch._assert(
-                len(val) == 2,
-                f"expecting the last two dimensions of the Tensor to be H and W instead got {img.shape[-2:]}",
-            )
-            original_image_sizes.append((val[0], val[1]))
-
-        # transform the input
-        images, targets = self.transform(images, targets)
-
-        # Check for degenerate boxes
-        if targets is not None:
-            for target_idx, target in enumerate(targets):
-                boxes = target["boxes"]
-                degenerate_boxes = boxes[:, 2:] <= boxes[:, :2]
-                if degenerate_boxes.any():
-                    bb_idx = torch.where(degenerate_boxes.any(dim=1))[0][0]
-                    degen_bb: List[float] = boxes[bb_idx].tolist()
-                    torch._assert(
-                        False,
-                        "All bounding boxes should have positive height and width."
-                        f" Found invalid box {degen_bb} for target at index {target_idx}.",
-                    )
-
-        # get the features from the backbone
-        features = self.backbone(images.tensors)
-        if isinstance(features, torch.Tensor):
-            features = OrderedDict([("0", features)])
-
-        features = list(features.values())
-
-        # compute the ssd heads outputs using the features
-        head_outputs = self.head(features)
-
-        # create the set of anchors
-        anchors = self.anchor_generator(images, features)
-
-        losses = {}
-        detections: List[Dict[str, Tensor]] = []
-        if self.training:
-            matched_idxs = []
-            if targets is None:
-                torch._assert(False, "targets should not be none when in training mode")
-            else:
-                for anchors_per_image, targets_per_image in zip(anchors, targets):
-                    if targets_per_image["boxes"].numel() == 0:
-                        matched_idxs.append(
-                            torch.full(
-                                (anchors_per_image.size(0),),
-                                -1,
-                                dtype=torch.int64,
-                                device=anchors_per_image.device,
-                            )
-                        )
-                        continue
-
-                    match_quality_matrix = box_iou(targets_per_image["boxes"], anchors_per_image)
-                    matched_idxs.append(self.proposal_matcher(match_quality_matrix))
-
-                losses = self.compute_loss(targets, head_outputs, anchors, matched_idxs)
         else:
-            detections = self.postprocess_detections(head_outputs, anchors, images.image_sizes)
-            detections = self.transform.postprocess(detections, images.image_sizes, original_image_sizes)
+            output = (loc.view(loc.size(0), -1, 4), conf.view(conf.size(0), -1, self.num_classes), self.priors)
+        return output
 
-        if torch.jit.is_scripting():
-            if not self._has_warned:
-                warnings.warn("SSD always returns a (Losses, Detections) tuple in scripting")
-                self._has_warned = True
-            return losses, detections
-        return self.eager_outputs(losses, detections)
+    def load_weights(self, base_file):
+        other, ext = os.path.splitext(base_file)
+        if ext == ".pkl" or ".pth":
+            print("Begin loading weights into state dict...")
+            self.load_state_dict(torch.load(base_file, map_location=lambda storage, loc: storage))
+            print("Finished!")
+        else:
+            print("Sorry only .pth and .pkl files supported.")
 
-    def postprocess_detections(
-        self,
-        head_outputs: Dict[str, Tensor],
-        image_anchors: List[Tensor],
-        image_shapes: List[Tuple[int, int]],
-    ) -> List[Dict[str, Tensor]]:
-        bbox_regression = head_outputs["bbox_regression"]
-        pred_scores = F.softmax(head_outputs["cls_logits"], dim=-1)
 
-        num_classes = pred_scores.size(-1)
-        device = pred_scores.device
+# This function is derived from torchvision VGG make_layers()
+# https://github.com/pytorch/vision/blob/master/torchvision/models/vgg.py
+def vgg(cfg, i=3, batch_norm=False):
+    layers = []
+    in_channels = i
+    for v in cfg:
+        if v == "M":
+            layers += [nn.MaxPool2d(kernel_size=2, stride=2)]
+        elif v == "C":
+            layers += [nn.MaxPool2d(kernel_size=2, stride=2, ceil_mode=True)]
+        else:
+            conv2d = nn.Conv2d(in_channels, v, kernel_size=3, padding=1)
+            if batch_norm:
+                layers += [conv2d, nn.BatchNorm2d(v), nn.ReLU(inplace=True)]
+            else:
+                layers += [conv2d, nn.ReLU(inplace=True)]
+            in_channels = v
+    pool5 = nn.MaxPool2d(kernel_size=3, stride=1, padding=1)
+    conv6 = nn.Conv2d(512, 1024, kernel_size=3, padding=6, dilation=6)
+    conv7 = nn.Conv2d(1024, 1024, kernel_size=1)
+    layers += [pool5, conv6, nn.ReLU(inplace=True), conv7, nn.ReLU(inplace=True)]
+    print("VGG base:", layers)
+    return layers
 
-        detections: List[Dict[str, Tensor]] = []
 
-        for boxes, scores, anchors, image_shape in zip(bbox_regression, pred_scores, image_anchors, image_shapes):
-            boxes = self.box_coder.decode_single(boxes, anchors)
-            boxes = clip_boxes_to_image(boxes, image_shape)
+def add_extras(cfg, i, batch_norm=False):
+    # Extra layers added to VGG for feature scaling
+    layers = []
+    in_channels = i
+    flag = False
+    for k, v in enumerate(cfg):
+        if in_channels != "S":
+            if v == "S":
+                layers += [nn.Conv2d(in_channels, cfg[k + 1], kernel_size=(1, 3)[flag], stride=2, padding=1)]
+            else:
+                layers += [nn.Conv2d(in_channels, v, kernel_size=(1, 3)[flag])]
+            flag = not flag
+        in_channels = v
+    if len(cfg) == 13:
+        print("input channels:", in_channels)
+        layers += [nn.Conv2d(in_channels, 256, kernel_size=4, padding=1)]  # Fix padding to match Caffe version (pad=1).
+    print("extras layers:", layers)
+    return layers
 
-            image_boxes = []
-            image_scores = []
-            image_labels = []
-            for label in range(1, num_classes):
-                score = scores[:, label]
 
-                keep_idxs = score > self.score_thresh
-                score = score[keep_idxs]
-                box = boxes[keep_idxs]
+def multibox(vgg, extra_layers, cfg, num_classes):
+    loc_layers = []
+    conf_layers = []
+    vgg_source = [21, -2]  # Conv4_3  Conv7
+    print("VGG16 output size:", len(vgg))
+    print("extra layer size:", len(extra_layers))
+    for i, layer in enumerate(extra_layers):
+        print("extra layer {} : {}".format(i, layer))
+    for k, v in enumerate(vgg_source):
+        loc_layers += [nn.Conv2d(vgg[v].out_channels, cfg[k] * 4, kernel_size=3, padding=1)]
+        conf_layers += [nn.Conv2d(vgg[v].out_channels, cfg[k] * num_classes, kernel_size=3, padding=1)]
+    for k, v in enumerate(extra_layers[1::2], 2):
+        loc_layers += [nn.Conv2d(v.out_channels, cfg[k] * 4, kernel_size=3, padding=1)]
+        conf_layers += [nn.Conv2d(v.out_channels, cfg[k] * num_classes, kernel_size=3, padding=1)]
+    return vgg, extra_layers, (loc_layers, conf_layers)
 
-                # keep only topk scoring predictions
-                num_topk = _topk_min(score, self.topk_candidates, 0)
-                score, idxs = score.topk(num_topk)
-                box = box[idxs]
 
-                image_boxes.append(box)
-                image_scores.append(score)
-                image_labels.append(torch.full_like(score, fill_value=label, dtype=torch.int64, device=device))
+base = {
+    "300": [64, 64, "M", 128, 128, "M", 256, 256, 256, "C", 512, 512, 512, "M", 512, 512, 512],
+    "512": [64, 64, "M", 128, 128, "M", 256, 256, 256, "C", 512, 512, 512, "M", 512, 512, 512],
+}
+extras = {
+    "300": [256, "S", 512, 128, "S", 256, 128, 256, 128, 256],
+    "512": [256, "S", 512, 128, "S", 256, 128, "S", 256, 128, "S", 256, 128],
+}
+mbox = {
+    "300": [4, 6, 6, 6, 4, 4],  # number of boxes per feature map location
+    "512": [4, 6, 6, 6, 4, 4, 4],
+}
 
-            image_boxes = torch.cat(image_boxes, dim=0)
-            image_scores = torch.cat(image_scores, dim=0)
-            image_labels = torch.cat(image_labels, dim=0)
 
-            # non-maximum suppression
-            keep = batched_nms(image_boxes, image_scores, image_labels, self.nms_thresh)
-            keep = keep[: self.detections_per_img]
-
-            detections.append(
-                {
-                    "boxes": image_boxes[keep],
-                    "scores": image_scores[keep],
-                    "labels": image_labels[keep],
-                }
-            )
-        return detections
+def build_ssd(phase, size=300, num_classes=21):
+    if phase != "test" and phase != "train":
+        print("ERROR: Phase: " + phase + " not recognized")
+        return
+    if size not in [300, 512]:
+        print(
+            "ERROR: You specified size " + repr(size) + ". However, " + "currently only SSD300 and SSD512 is supported!"
+        )
+        return
+    base_, extras_, head_ = multibox(
+        vgg(base[str(size)], 3), add_extras(extras[str(size)], 1024), mbox[str(size)], num_classes
+    )
+    print("Begin to build SSD-VGG...\n")
+    return SSD(phase, size, base_, extras_, head_, num_classes)
