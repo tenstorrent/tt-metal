@@ -18,7 +18,10 @@ Tensor _fast_reduce_nc(
     const std::optional<const ttnn::Tensor>& output,
     const MemoryConfig& output_mem_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-    TT_FATAL(input.storage_type() == StorageType::DEVICE, "Error");
+    TT_FATAL(
+        input.storage_type() == StorageType::DEVICE,
+        "Input tensor storage type must be DEVICE but got {}",
+        input.storage_type());
     auto kernel_config_val =
         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
 

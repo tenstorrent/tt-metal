@@ -279,40 +279,112 @@ async function run() {
         core.warning(`[TEST MODE] Failed to restore commits artifact: ${e.message}`);
       }
 
-      // Additionally download and index logs for failing gtest workflow runs referenced by this prior aggregate run (test mode)
+      // Additionally download and index logs for failing workflow runs referenced by this prior aggregate run (test mode)
       try {
         const owner = github.context.repo.owner;
         const repo = github.context.repo.repo;
         const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
-        const logsRoot = path.join(workspace, 'logs');
-        if (!fs.existsSync(logsRoot)) fs.mkdirSync(logsRoot, { recursive: true });
-        let logsIndexPath = path.join(logsRoot, 'logs-index.json');
-        const logsArtifact = artifacts.find(a => a && a.name === 'workflow-logs');
-        if (logsArtifact) {
-          const logsZipPath = path.join(tmpDir, `${logsArtifact.name}.zip`);
-          const respLogs = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: logsArtifact.id, archive_format: 'zip' });
+
+        // Restore gtest logs
+        const gtestLogsRoot = path.join(workspace, 'logs', 'gtest');
+        if (!fs.existsSync(gtestLogsRoot)) fs.mkdirSync(gtestLogsRoot, { recursive: true });
+        let gtestLogsIndexPath = path.join(gtestLogsRoot, 'gtest-logs-index.json');
+        const gtestLogsArtifact = artifacts.find(a => a && a.name === 'workflow-gtest-logs');
+        if (gtestLogsArtifact) {
+          const logsZipPath = path.join(tmpDir, `${gtestLogsArtifact.name}.zip`);
+          const respLogs = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: gtestLogsArtifact.id, archive_format: 'zip' });
           fs.writeFileSync(logsZipPath, Buffer.from(respLogs.data));
-          const extractLogsDir = path.join(tmpDir, `${logsArtifact.name}-extract`);
+          const extractLogsDir = path.join(tmpDir, `${gtestLogsArtifact.name}-extract`);
           if (!fs.existsSync(extractLogsDir)) fs.mkdirSync(extractLogsDir, { recursive: true });
           execFileSync('unzip', ['-o', logsZipPath, '-d', extractLogsDir], { stdio: 'ignore' });
-          // Copy the extracted logs tree into workspace logs/
-          fs.cpSync(extractLogsDir, logsRoot, { recursive: true });
-          // Ensure logs-index.json exists
-          const candidateIdx = path.join(logsRoot, 'logs-index.json');
+          // Copy the extracted logs tree into workspace logs/gtest/
+          fs.cpSync(extractLogsDir, gtestLogsRoot, { recursive: true });
+          const candidateIdx = path.join(gtestLogsRoot, 'gtest-logs-index.json');
           if (fs.existsSync(candidateIdx)) {
-            logsIndexPath = candidateIdx;
-          } else if (!fs.existsSync(logsIndexPath)) {
-            fs.writeFileSync(logsIndexPath, JSON.stringify({}));
+            gtestLogsIndexPath = candidateIdx;
+          } else if (!fs.existsSync(gtestLogsIndexPath)) {
+            fs.writeFileSync(gtestLogsIndexPath, JSON.stringify({}));
           }
-          core.info(`[TEST MODE] Restored logs to ${logsRoot}`);
+          core.info(`[TEST MODE] Restored gtest logs to ${gtestLogsRoot}`);
         } else {
-          core.info('[TEST MODE] No workflow-logs artifact found in selected run; creating empty index');
-          if (!fs.existsSync(logsIndexPath)) fs.writeFileSync(logsIndexPath, JSON.stringify({}));
+          core.info('[TEST MODE] No workflow-gtest-logs artifact found in selected run; creating empty index');
+          if (!fs.existsSync(gtestLogsIndexPath)) fs.writeFileSync(gtestLogsIndexPath, JSON.stringify({}));
         }
-        core.setOutput('logs-root', logsRoot);
-        core.setOutput('logs-index-path', logsIndexPath);
+
+        // Restore other logs
+        const otherLogsRoot = path.join(workspace, 'logs', 'other');
+        if (!fs.existsSync(otherLogsRoot)) fs.mkdirSync(otherLogsRoot, { recursive: true });
+        let otherLogsIndexPath = path.join(otherLogsRoot, 'other-logs-index.json');
+        const otherLogsArtifact = artifacts.find(a => a && a.name === 'workflow-other-logs');
+        if (otherLogsArtifact) {
+          const logsZipPath = path.join(tmpDir, `${otherLogsArtifact.name}.zip`);
+          const respLogs = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: otherLogsArtifact.id, archive_format: 'zip' });
+          fs.writeFileSync(logsZipPath, Buffer.from(respLogs.data));
+          const extractLogsDir = path.join(tmpDir, `${otherLogsArtifact.name}-extract`);
+          if (!fs.existsSync(extractLogsDir)) fs.mkdirSync(extractLogsDir, { recursive: true });
+          execFileSync('unzip', ['-o', logsZipPath, '-d', extractLogsDir], { stdio: 'ignore' });
+          // Copy the extracted logs tree into workspace logs/other/
+          fs.cpSync(extractLogsDir, otherLogsRoot, { recursive: true });
+          const candidateIdx = path.join(otherLogsRoot, 'other-logs-index.json');
+          if (fs.existsSync(candidateIdx)) {
+            otherLogsIndexPath = candidateIdx;
+          } else if (!fs.existsSync(otherLogsIndexPath)) {
+            fs.writeFileSync(otherLogsIndexPath, JSON.stringify({}));
+          }
+          core.info(`[TEST MODE] Restored other logs to ${otherLogsRoot}`);
+        } else {
+          core.info('[TEST MODE] No workflow-other-logs artifact found in selected run; creating empty index');
+          if (!fs.existsSync(otherLogsIndexPath)) fs.writeFileSync(otherLogsIndexPath, JSON.stringify({}));
+        }
+
+        core.setOutput('gtest-logs-root', gtestLogsRoot);
+        core.setOutput('gtest-logs-index-path', gtestLogsIndexPath);
+        core.setOutput('other-logs-root', otherLogsRoot);
+        core.setOutput('other-logs-index-path', otherLogsIndexPath);
       } catch (e) {
         core.warning(`[TEST MODE] Failed to restore logs artifact: ${e.message}`);
+      }
+
+      // Additionally fetch the last success timestamps artifact from the same run, if present
+      try {
+        const owner = github.context.repo.owner;
+        const repo = github.context.repo.repo;
+        const lastSuccessArtifact = artifacts.find(a => a && a.name === 'last-success-timestamps');
+        const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
+        let lastSuccessPath = path.join(workspace, 'last-success-timestamps.json');
+        if (lastSuccessArtifact) {
+          const timestampsZipPath = path.join(tmpDir, `${lastSuccessArtifact.name}.zip`);
+          const respTimestamps = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: lastSuccessArtifact.id, archive_format: 'zip' });
+          fs.writeFileSync(timestampsZipPath, Buffer.from(respTimestamps.data));
+          const extractTimestampsDir = path.join(tmpDir, `${lastSuccessArtifact.name}-extract`);
+          if (!fs.existsSync(extractTimestampsDir)) fs.mkdirSync(extractTimestampsDir, { recursive: true });
+          execFileSync('unzip', ['-o', timestampsZipPath, '-d', extractTimestampsDir], { stdio: 'ignore' });
+          // Find last-success-timestamps.json
+          const stack3 = [extractTimestampsDir];
+          let foundTimestampsPath;
+          while (stack3.length && !foundTimestampsPath) {
+            const dir = stack3.pop();
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const ent of entries) {
+              const p = path.join(dir, ent.name);
+              if (ent.isDirectory()) stack3.push(p);
+              else if (ent.isFile() && ent.name === 'last-success-timestamps.json') { foundTimestampsPath = p; break; }
+            }
+          }
+          if (foundTimestampsPath) {
+            fs.cpSync(foundTimestampsPath, lastSuccessPath, { recursive: false });
+            core.info(`[TEST MODE] Restored last success timestamps to ${lastSuccessPath}`);
+          } else {
+            core.info('[TEST MODE] No last-success-timestamps.json found; creating empty object');
+            if (!fs.existsSync(lastSuccessPath)) fs.writeFileSync(lastSuccessPath, JSON.stringify({}));
+          }
+        } else {
+          core.info('[TEST MODE] No last-success-timestamps artifact found in selected run; creating empty object');
+          if (!fs.existsSync(lastSuccessPath)) fs.writeFileSync(lastSuccessPath, JSON.stringify({}));
+        }
+        core.setOutput('last-success-timestamps-path', lastSuccessPath);
+      } catch (e) {
+        core.warning(`[TEST MODE] Failed to restore last success timestamps artifact: ${e.message}`);
       }
 
       // Exit early
@@ -364,20 +436,128 @@ async function run() {
     // Save grouped runs to artifact file
     fs.writeFileSync(outputPath, JSON.stringify(Array.from(grouped.entries())));
 
+    // For each workflow, find the last successful run (even if outside the window)
+    // This is used to calculate "days since last success" for failing workflows
+    const lastSuccessTimestamps = new Map();
+    const owner = github.context.repo.owner;
+    const repo = github.context.repo.repo;
+
+    for (const [name, runs] of grouped.entries()) {
+      try {
+        // Check if latest run on main is failing
+        const mainRuns = runs
+          .filter(r => r.head_branch === branch)
+          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+        const latestRun = mainRuns[0];
+        if (!latestRun || latestRun.conclusion === 'success') {
+          // Workflow is passing, store the success timestamp
+          if (latestRun && latestRun.conclusion === 'success') {
+            lastSuccessTimestamps.set(name, {
+              timestamp: latestRun.created_at,
+              sha: latestRun.head_sha,
+              run_id: latestRun.id,
+              in_window: true
+            });
+          }
+          continue;
+        }
+
+        // Workflow is currently failing - check if we already have a success in our window
+        const successInWindow = mainRuns.find(r => r.conclusion === 'success');
+        if (successInWindow) {
+          // We already have the info, no API call needed
+          lastSuccessTimestamps.set(name, {
+            timestamp: successInWindow.created_at,
+            sha: successInWindow.head_sha,
+            run_id: successInWindow.id,
+            in_window: true
+          });
+          continue;
+        }
+
+        // Workflow is failing and no success in window - make targeted API call to search all history
+        const workflowPath = runs[0]?.path;
+        if (!workflowPath) continue;
+
+        core.info(`Searching for last success in full history for failing workflow: ${name}`);
+
+        // Search through workflow history to find the last successful run
+        let foundSuccess = false;
+        const maxPagesToSearch = 10; // Limit search to up to 1000 most recent runs to avoid excessive API calls
+
+        for (let page = 1; page <= maxPagesToSearch; page++) {
+          const { data } = await octokit.rest.actions.listWorkflowRuns({
+            owner,
+            repo,
+            workflow_id: workflowPath,
+            branch,
+            status: 'completed',
+            per_page: 100,
+            page
+          });
+
+          if (!data.workflow_runs || data.workflow_runs.length === 0) {
+            break; // No more runs to check
+          }
+
+          // Find first successful run on this page
+          const successRun = data.workflow_runs.find(r => r.conclusion === 'success');
+          if (successRun) {
+            lastSuccessTimestamps.set(name, {
+              timestamp: successRun.created_at,
+              sha: successRun.head_sha,
+              run_id: successRun.id,
+              in_window: false
+            });
+            core.info(`Found last success for ${name}: ${successRun.created_at}`);
+            foundSuccess = true;
+            break;
+          }
+
+          // If we got fewer runs than requested, we've reached the end
+          if (data.workflow_runs.length < 100) {
+            break;
+          }
+        }
+
+        if (!foundSuccess) {
+          // Never succeeded in searchable history
+          core.info(`No successful run found in history for ${name} (never succeeded or very old)`);
+          lastSuccessTimestamps.set(name, { never_succeeded: true });
+        }
+
+        // Small delay to avoid rate limiting
+        await delay(500);
+      } catch (e) {
+        core.warning(`Failed to fetch last success timestamp for ${name}: ${e.message}`);
+      }
+    }
+
+    // Save the last success timestamps index
+    const lastSuccessPath = path.join(outputDir, 'last-success-timestamps.json');
+    fs.writeFileSync(lastSuccessPath, JSON.stringify(Object.fromEntries(lastSuccessTimestamps)));
+    core.setOutput('last-success-timestamps-path', lastSuccessPath);
+    core.info(`Saved last success timestamps for ${lastSuccessTimestamps.size} workflows to ${lastSuccessPath}`);
+
     // Download logs for the latest failing run per workflow and build an index
     // Constraint: Only fetch logs when the latest run for that workflow (on target branch)
     // is failing (i.e., conclusion neither success nor skipped/cancelled).
     // The logs will be extracted under a dedicated directory so downstream steps
     // can parse them without performing network calls again.
-    const owner = github.context.repo.owner;
-    const repo = github.context.repo.repo;
+    // Separate gtest logs from other logs (non-gtest failures with no annotations)
     const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
-    const logsRoot = path.join(workspace, 'logs');
-    if (!fs.existsSync(logsRoot)) {
-      fs.mkdirSync(logsRoot, { recursive: true });
+    const gtestLogsRoot = path.join(workspace, 'logs', 'gtest');
+    const otherLogsRoot = path.join(workspace, 'logs', 'other');
+    if (!fs.existsSync(gtestLogsRoot)) {
+      fs.mkdirSync(gtestLogsRoot, { recursive: true });
+    }
+    if (!fs.existsSync(otherLogsRoot)) {
+      fs.mkdirSync(otherLogsRoot, { recursive: true });
     }
     const annotationsIndex = {};
-    const logsIndex = {};
+    const gtestLogsIndex = {};
+    const otherLogsIndex = {};
     for (const [name, runs] of grouped.entries()) {
       try {
         // Consider only the target branch and sort newest first
@@ -405,12 +585,15 @@ async function run() {
         if (!targetRun) continue;
 
         // Fetch check-run annotations for this failing run
+        let sawGtestFailure = false;
+        let sawAnyFailureAnnotations = false;
+        let annotationsFetchFailed = false;
+        const gtestJobNames = new Set();
         try {
           // List jobs and extract check_run_ids
           const jobsResp = await octokit.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: targetRun.id, per_page: 100 });
           const jobs = Array.isArray(jobsResp.data.jobs) ? jobsResp.data.jobs : [];
           const checkRunIds = [];
-          const gtestAnnotationJobNames = new Set();
           for (const j of jobs) {
             const cru = j && j.check_run_url;
             if (typeof cru === 'string' && cru.includes('/check-runs/')) {
@@ -422,7 +605,6 @@ async function run() {
           const annRoot = path.join(workspace, 'annotations', String(targetRun.id));
           if (!fs.existsSync(annRoot)) fs.mkdirSync(annRoot, { recursive: true });
           const allAnnotations = [];
-          let sawFailingAnnotationForGtest = false;
           for (const { id: checkRunId, job_name } of checkRunIds) {
             let page = 1;
             const budget = 500; // safety cap per run
@@ -450,14 +632,15 @@ async function run() {
                   const isUnknownFileLead = msgLc.startsWith('unknown file');
                   // Primary heuristic: failing/error annotation whose message starts with 'unknown file' is a gtest indicator
                   if (levelLc === 'failure' || levelLc === 'error') {
+                    sawAnyFailureAnnotations = true;
                     if (isUnknownFileLead) {
-                      sawFailingAnnotationForGtest = true;
-                      if (job_name) gtestAnnotationJobNames.add(String(job_name));
+                      sawGtestFailure = true;
+                      if (job_name) gtestJobNames.add(String(job_name));
                     }
                     // Keep legacy job-name heuristic as a secondary signal
                     else if ((/gtest/i.test(String(job_name || '')) || /gtests/i.test(String(job_name || '')))) {
-                      sawFailingAnnotationForGtest = true;
-                      if (job_name) gtestAnnotationJobNames.add(String(job_name));
+                      sawGtestFailure = true;
+                      if (job_name) gtestJobNames.add(String(job_name));
                     }
                   }
                 } catch (_) { /* ignore */ }
@@ -471,65 +654,101 @@ async function run() {
           const relativeAnn = path.relative(workspace, annRoot) || annRoot;
           annotationsIndex[String(targetRun.id)] = relativeAnn;
           core.info(`Fetched annotations for failing run ${targetRun.id} → ${allAnnotations.length} items`);
+        } catch (e) {
+          core.warning(`Failed to fetch annotations for run ${targetRun.id}: ${e.message}`);
+          annotationsFetchFailed = true;
+        }
 
-          // If any failing gtest job detected, download and extract run logs once and index gtest job logs
-          try {
-            const shouldFetchGtestLogs = sawFailingAnnotationForGtest;
-            if (shouldFetchGtestLogs) {
-              const runLogsZip = await octokit.rest.actions.downloadWorkflowRunLogs({ owner, repo, run_id: targetRun.id });
-              const runDir = path.join(logsRoot, String(targetRun.id));
-              if (!fs.existsSync(runDir)) fs.mkdirSync(runDir, { recursive: true });
-              const zipPath = path.join(runDir, `logs-${targetRun.id}.zip`);
-              fs.writeFileSync(zipPath, Buffer.from(runLogsZip.data));
-              const extractDir = path.join(runDir, 'extract');
-              if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
-              // Extract quietly to avoid ENOBUFS
-              execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
+        // Download logs if: gtest failure detected OR no error/failure annotations found OR annotations fetch failed
+        // Separate gtest logs from other logs into different directories
+        try {
+          if (sawGtestFailure) {
+            // Download and index gtest logs
+            const runLogsZip = await octokit.rest.actions.downloadWorkflowRunLogs({ owner, repo, run_id: targetRun.id });
+            const runDir = path.join(gtestLogsRoot, String(targetRun.id));
+            if (!fs.existsSync(runDir)) fs.mkdirSync(runDir, { recursive: true });
+            const zipPath = path.join(runDir, `logs-${targetRun.id}.zip`);
+            fs.writeFileSync(zipPath, Buffer.from(runLogsZip.data));
+            const extractDir = path.join(runDir, 'extract');
+            if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
+            // Extract quietly to avoid ENOBUFS
+            execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
 
-              // Helper to sanitize strings for fuzzy file matching
-              const sanitize = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
-              const wanted = new Map();
-              // Add any job names discovered via 'unknown file' annotations
-              for (const jn of Array.from(gtestAnnotationJobNames.values())) {
-                const key = sanitize(jn);
-                if (!wanted.has(key)) wanted.set(key, { name: jn, files: [] });
-              }
-              if (shouldFetchGtestLogs && wanted.size === 0) {
-                // If we didn't identify explicit gtest jobs from jobs API, fall back to any file containing 'gtest'
-                wanted.set('gtest', { name: 'gtest', files: [] });
-              }
-              // Walk extracted tree and record .txt files that match wanted keys
-              const stack = [extractDir];
-              while (stack.length) {
-                const dir = stack.pop();
-                const entries = fs.readdirSync(dir, { withFileTypes: true });
-                for (const ent of entries) {
-                  const p = path.join(dir, ent.name);
-                  if (ent.isDirectory()) {
-                    stack.push(p);
-                  } else if (ent.isFile() && /\.txt$/i.test(ent.name)) {
-                    const fileKey = sanitize(p);
-                    for (const [k, rec] of wanted.entries()) {
-                      if (fileKey.includes(k)) {
-                        const rel = path.relative(runDir, p);
-                        if (!rec.files.includes(rel)) rec.files.push(rel);
-                      }
+            // Helper to sanitize strings for fuzzy file matching
+            const sanitize = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+            const wanted = new Map();
+            // Add any job names discovered via 'unknown file' annotations (gtest jobs)
+            for (const jn of Array.from(gtestJobNames.values())) {
+              const key = sanitize(jn);
+              if (!wanted.has(key)) wanted.set(key, { name: jn, files: [] });
+            }
+            if (wanted.size === 0) {
+              // If we didn't identify explicit gtest jobs from jobs API, fall back to any file containing 'gtest'
+              wanted.set('gtest', { name: 'gtest', files: [] });
+            }
+            // Walk extracted tree and record .txt files that match wanted keys
+            const stack = [extractDir];
+            while (stack.length) {
+              const dir = stack.pop();
+              const entries = fs.readdirSync(dir, { withFileTypes: true });
+              for (const ent of entries) {
+                const p = path.join(dir, ent.name);
+                if (ent.isDirectory()) {
+                  stack.push(p);
+                } else if (ent.isFile() && /\.txt$/i.test(ent.name)) {
+                  const fileKey = sanitize(p);
+                  for (const [k, rec] of wanted.entries()) {
+                    if (fileKey.includes(k)) {
+                      const rel = path.relative(runDir, p);
+                      if (!rec.files.includes(rel)) rec.files.push(rel);
                     }
                   }
                 }
               }
-              const gtestIndex = { jobs: Array.from(wanted.values()).filter(j => (j.files || []).length > 0) };
-              const gtestIndexPath = path.join(runDir, 'gtest-jobs.json');
-              fs.writeFileSync(gtestIndexPath, JSON.stringify(gtestIndex));
-              const relativeRunDir = path.relative(workspace, runDir) || runDir;
-              logsIndex[String(targetRun.id)] = relativeRunDir;
-              core.info(`Downloaded and indexed logs for failing gtest run ${targetRun.id} → ${gtestIndex.jobs.length} job(s)`);
             }
-          } catch (e) {
-            core.warning(`Failed to download/index logs for run ${targetRun.id}: ${e.message}`);
+            const jobsIndex = { jobs: Array.from(wanted.values()).filter(j => (j.files || []).length > 0) };
+            const jobsIndexPath = path.join(runDir, 'jobs.json');
+            fs.writeFileSync(jobsIndexPath, JSON.stringify(jobsIndex));
+            const relativeRunDir = path.relative(workspace, runDir) || runDir;
+            gtestLogsIndex[String(targetRun.id)] = relativeRunDir;
+            core.info(`Downloaded and indexed gtest logs for failing run ${targetRun.id} → ${jobsIndex.jobs.length} job(s)`);
+          } else if (!sawAnyFailureAnnotations || annotationsFetchFailed) {
+            // Download other logs (non-gtest failures with no annotations, or if annotation fetch failed entirely)
+            // Just download and list files, no detailed indexing
+            const runLogsZip = await octokit.rest.actions.downloadWorkflowRunLogs({ owner, repo, run_id: targetRun.id });
+            const runDir = path.join(otherLogsRoot, String(targetRun.id));
+            if (!fs.existsSync(runDir)) fs.mkdirSync(runDir, { recursive: true });
+            const zipPath = path.join(runDir, `logs-${targetRun.id}.zip`);
+            fs.writeFileSync(zipPath, Buffer.from(runLogsZip.data));
+            const extractDir = path.join(runDir, 'extract');
+            if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
+            // Extract quietly to avoid ENOBUFS
+            execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
+
+            // Build a simple index of all .txt log files (no parsing, just list files)
+            const logFiles = [];
+            const stack = [extractDir];
+            while (stack.length) {
+              const dir = stack.pop();
+              const entries = fs.readdirSync(dir, { withFileTypes: true });
+              for (const ent of entries) {
+                const p = path.join(dir, ent.name);
+                if (ent.isDirectory()) {
+                  stack.push(p);
+                } else if (ent.isFile() && /\.txt$/i.test(ent.name)) {
+                  const rel = path.relative(runDir, p);
+                  logFiles.push(rel);
+                }
+              }
+            }
+            const logsListPath = path.join(runDir, 'logs-list.json');
+            fs.writeFileSync(logsListPath, JSON.stringify({ files: logFiles }));
+            const relativeRunDir = path.relative(workspace, runDir) || runDir;
+            otherLogsIndex[String(targetRun.id)] = relativeRunDir;
+            core.info(`Downloaded other logs for failing run ${targetRun.id} → ${logFiles.length} file(s)`);
           }
         } catch (e) {
-          core.warning(`Failed to fetch annotations for run ${targetRun.id}: ${e.message}`);
+          core.warning(`Failed to download/index logs for run ${targetRun.id}: ${e.message}`);
         }
       } catch (e) {
         core.warning(`Failed to fetch logs for latest failing run in workflow '${name}': ${e.message}`);
@@ -541,12 +760,20 @@ async function run() {
     const annotationsIndexPath = path.join(annotationsRoot, 'annotations-index.json');
     fs.writeFileSync(annotationsIndexPath, JSON.stringify(annotationsIndex));
 
-    // Persist logs index
-    const logsIndexPath = path.join(logsRoot, 'logs-index.json');
+    // Persist gtest logs index
+    const gtestLogsIndexPath = path.join(gtestLogsRoot, 'gtest-logs-index.json');
     try {
-      fs.writeFileSync(logsIndexPath, JSON.stringify(logsIndex));
+      fs.writeFileSync(gtestLogsIndexPath, JSON.stringify(gtestLogsIndex));
     } catch (e) {
-      core.warning(`Failed to write logs index: ${e.message}`);
+      core.warning(`Failed to write gtest logs index: ${e.message}`);
+    }
+
+    // Persist other logs index
+    const otherLogsIndexPath = path.join(otherLogsRoot, 'other-logs-index.json');
+    try {
+      fs.writeFileSync(otherLogsIndexPath, JSON.stringify(otherLogsIndex));
+    } catch (e) {
+      core.warning(`Failed to write other logs index: ${e.message}`);
     }
 
     // Build a commits index for the main branch within the last N days
@@ -594,8 +821,10 @@ async function run() {
     core.setOutput('total-runs', mergedRuns.length);
     core.setOutput('workflow-count', grouped.size);
     core.setOutput('cache-path', outputPath);
-    core.setOutput('logs-root', logsRoot);
-    core.setOutput('logs-index-path', logsIndexPath);
+    core.setOutput('gtest-logs-root', gtestLogsRoot);
+    core.setOutput('gtest-logs-index-path', gtestLogsIndexPath);
+    core.setOutput('other-logs-root', otherLogsRoot);
+    core.setOutput('other-logs-index-path', otherLogsIndexPath);
     core.setOutput('annotations-root', annotationsRoot);
     core.setOutput('annotations-index-path', annotationsIndexPath);
     core.setOutput('commits-path', commitsPath);

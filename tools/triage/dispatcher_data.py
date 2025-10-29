@@ -20,9 +20,8 @@ from elfs_cache import run as get_elfs_cache, ElfsCache
 from triage import triage_singleton, ScriptConfig, run_script, log_check
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.firmware import ELF
-from ttexalens.parse_elf import mem_access
 from ttexalens.context import Context
-from triage import TTTriageError, collection_serializer, triage_field, hex_serializer
+from triage import TTTriageError, triage_field, hex_serializer
 from run_checks import run as get_run_checks
 from run_checks import RunChecks
 
@@ -143,11 +142,8 @@ class DispatcherData:
             )
 
         # Go message states are constant values in the firmware elf, so we cache them
-        def empty_mem_reader(addr: int, size_bytes: int, elements_to_read: int) -> list[int]:
-            return []
-
         def get_const_value(name) -> int:
-            value = mem_access(self._brisc_elf, name, empty_mem_reader)[3]
+            value = self._brisc_elf.get_constant(name)
             assert isinstance(value, int)
             return value
 
@@ -209,9 +205,10 @@ class DispatcherData:
         build_env = self._get_build_env_for_device(device_id)
         proc_name = risc_name.upper()
         proc_type = enum_values["ProcessorTypes"][proc_name]
+        mailboxes = fw_elf.read_global("mailboxes", loc_mem_reader)
 
         # Refer to tt_metal/api/tt-metalium/dev_msgs.h for struct kernel_config_msg_t
-        launch_msg_rd_ptr = mem_access(fw_elf, "mailboxes->launch_msg_rd_ptr", loc_mem_reader)[0][0]
+        launch_msg_rd_ptr = mailboxes.launch_msg_rd_ptr
 
         log_check(
             launch_msg_rd_ptr < self._launch_msg_buffer_num_entries,
@@ -233,43 +230,25 @@ class DispatcherData:
         host_assigned_id = None
         try:
             # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
-            kernel_config_base = mem_access(
-                fw_elf,
-                f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.kernel_config_base[{programmable_core_type}]",
-                loc_mem_reader,
-            )[0][0]
+            kernel_config_base = mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_config_base[
+                programmable_core_type
+            ]
         except:
             pass
         try:
             # Size 5 (NUM_PROCESSORS_PER_CORE_TYPE) - seems to be DM0,DM1,MATH0,MATH1,MATH2
-            kernel_text_offset = mem_access(
-                fw_elf,
-                f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.kernel_text_offset[{proc_type}]",
-                loc_mem_reader,
-            )[0][0]
+            kernel_text_offset = mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_text_offset[proc_type]
         except:
             pass
         try:
             # enum dispatch_core_processor_classes
-            watcher_kernel_id = (
-                mem_access(
-                    fw_elf,
-                    f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.watcher_kernel_ids[{proc_type}]",
-                    loc_mem_reader,
-                )[0][0]
-                & 0xFFFF
-            )
+            watcher_kernel_id = mailboxes.launch[launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[proc_type]
         except:
             pass
         try:
-            watcher_previous_kernel_id = (
-                mem_access(
-                    fw_elf,
-                    f"mailboxes->launch[{previous_launch_msg_rd_ptr}].kernel_config.watcher_kernel_ids[{proc_type}]",
-                    loc_mem_reader,
-                )[0][0]
-                & 0xFFFF
-            )
+            watcher_previous_kernel_id = mailboxes.launch[previous_launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[
+                proc_type
+            ]
         except:
             pass
         try:
@@ -281,28 +260,21 @@ class DispatcherData:
         except:
             pass
         try:
-            go_message_index = mem_access(fw_elf, f"mailboxes->go_message_index", loc_mem_reader)[0][0]
-            go_data = mem_access(fw_elf, f"mailboxes->go_messages[{go_message_index}]", loc_mem_reader)[0][0]
+            go_message_index = mailboxes.go_message_index
+            go_data = mailboxes.go_messages[go_message_index].signal
         except:
             pass
         try:
-            preload = (
-                mem_access(fw_elf, f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.preload", loc_mem_reader)[0][
-                    0
-                ]
-                != 0
-            )
+            preload = mailboxes.launch[launch_msg_rd_ptr].kernel_config.preload != 0
         except:
             pass
         try:
-            host_assigned_id = mem_access(
-                fw_elf, f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.host_assigned_id", loc_mem_reader
-            )[0][0]
+            host_assigned_id = mailboxes.launch[launch_msg_rd_ptr].kernel_config.host_assigned_id
         except:
             pass
         try:
-            waypoint_int = mem_access(fw_elf, f"mailboxes->watcher.debug_waypoint[{proc_type}]", loc_mem_reader)[0][0]
-            waypoint = waypoint_int.to_bytes(4, "little").rstrip(b"\x00").decode("utf-8", errors="replace")
+            waypoint_bytes = mailboxes.watcher.debug_waypoint[proc_type].waypoint.read_bytes()
+            waypoint = waypoint_bytes.rstrip(b"\x00").decode("utf-8", errors="replace")
         except:
             pass
 
@@ -361,7 +333,7 @@ class DispatcherData:
         else:
             kernel_path = None
             kernel_offset = None
-        go_state = (go_data >> 24) & 0xFF
+        go_state = go_data
         go_data_state = self._go_message_states.get(go_state, str(go_state))
 
         return DispatcherCoreData(

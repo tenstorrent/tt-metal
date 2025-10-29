@@ -116,7 +116,6 @@ void kernel_main() {
     uint32_t dram_read_offset_bytes = 0;
     uint32_t l1_write_addr_in1;
     uint32_t l1_read_addr_in1 = 0;
-    uint32_t in1_base_addr = 0;
 
     if constexpr (in1_is_dram_sharded) {
         in1_shard_width_offset_bytes = in1_shard_width_in_dram * in1_single_tile_size_bytes;
@@ -162,10 +161,10 @@ void kernel_main() {
                     for (uint32_t w = 0; w < in1_block_width_num_pages; ++w) {
                         uint32_t curr_page_size =
                             w == in1_block_width_num_pages - 1 ? in1_block_page_size_last : in1_block_page_size;
-                        in1_base_addr = noc_async_read_tile_dram_sharded_set_state<true>(
-                            in1_tensor_addr, curr_page_size, dram_bank_id, vc);
-                        noc_async_read_tile_dram_sharded_with_state(
-                            in1_base_addr, curr_l1_read_addr_in1, l1_write_addr_in1);
+                        uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, in1_tensor_addr);
+                        noc_async_read_one_packet_set_state<true>(in1_base_addr, curr_page_size, vc);
+                        noc_async_read_one_packet_with_state<true, true>(
+                            in1_base_addr + curr_l1_read_addr_in1, l1_write_addr_in1, vc);
                         curr_l1_read_addr_in1 += curr_page_size;
                         l1_write_addr_in1 += curr_page_size;
                     }
