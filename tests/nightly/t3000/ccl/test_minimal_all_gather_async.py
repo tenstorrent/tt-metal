@@ -1058,20 +1058,12 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
         mesh_device,
     )
 
-    compute_grid_size = mesh_device.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-    semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
-
     for i in range(NUM_ITERS):
-        tt_out_tensor = ttnn.experimental.all_gather_async(
+        tt_out_tensor = ttnn.all_gather(
             tt_input,
             dim,
             cluster_axis=cluster_axis,
-            mesh_device=mesh_device,
             topology=topology,
-            multi_device_global_semaphore=semaphores,
         )
 
         tt_output_tensor = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(tt_out_tensor)])

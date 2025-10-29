@@ -142,6 +142,70 @@ def test_ring_all_reduce_post_commit_2chip(
     )
 
 
+def _get_tensors(input_shape, cluster_axis, mesh_shape, dtype, layout, memory_config, device):
+    """
+    Generates a replicated input tensor for the mesh and computes the golden reference tensor.
+    """
+    num_devices = math.prod(mesh_shape)
+
+    torch_inputs = [torch.rand(input_shape).bfloat16() for _ in range(num_devices)]
+    torch_input = torch.concat(torch_inputs, dim=0)
+
+    torch_reference = torch.reshape(torch_input, tuple(list(mesh_shape) + input_shape))
+    torch_reference = torch.sum(torch_reference, dim=cluster_axis)
+
+    torch_reference_copies = []
+    for x in range(mesh_shape[0]):
+        for y in range(mesh_shape[1]):
+            i, j = (x, y) if cluster_axis == 1 else (y, x)
+            torch_reference_copies.append(torch_reference[i])
+
+    torch_reference = torch.concat(torch_reference_copies, dim=0)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=layout,
+        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),
+        memory_config=memory_config,
+        device=device,
+        dtype=dtype,
+    )
+
+    return tt_input, torch_reference
+
+
+MESH_SHAPE = (2, 4)
+LAYOUT = ttnn.TILE_LAYOUT
+NUM_ITERS = 2
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape", [[128, 128], [8, 8, 128, 128], [8, 128, 128], [8, 8, 8, 8, 128, 128], [8, 8, 8, 16, 16]]
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("cluster_axis", [0])
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+def test_nd(mesh_device, input_shape, cluster_axis, dtype, memory_config, topology):
+    tt_input, torch_reference = _get_tensors(
+        input_shape, cluster_axis, tuple(mesh_device.shape), dtype, LAYOUT, memory_config, mesh_device
+    )
+
+    for _ in range(NUM_ITERS):
+        tt_out_tensor = ttnn.all_reduce(
+            tt_input,
+            cluster_axis=cluster_axis,
+            memory_config=memory_config,
+            topology=topology,
+        )
+
+        tt_output_tensor = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(tt_out_tensor)])
+        eq, mess = comp_pcc(torch_reference, tt_output_tensor)
+        assert eq, mess
+
+
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("input_shape", [[2, 2, 32, 32]])

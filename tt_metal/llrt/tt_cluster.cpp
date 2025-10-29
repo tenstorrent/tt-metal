@@ -372,7 +372,6 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
                 .sdesc_path = sdesc_path,
-                .target_devices = mock_cluster_desc->get_all_chips(),
                 .cluster_descriptor = mock_cluster_desc.get(),
                 .simulator_directory = rtoptions_.get_simulator_path(),
             });
@@ -643,8 +642,8 @@ int Cluster::get_device_aiclk(const ChipId& chip_id) const { return this->driver
 uint16_t Cluster::get_bus_id(ChipId chip) const { return this->cluster_desc_->get_bus_id(chip); }
 
 std::optional<int> Cluster::get_physical_slot(ChipId chip) const {
-    if (this->target_type_ == tt::TargetDevice::Mock) {
-        log_warning(tt::LogDevice, "get_physical_slot is not supported for mock devices");
+    if (this->target_type_ != tt::TargetDevice::Silicon) {
+        log_warning(tt::LogDevice, "get_physical_slot is not supported for non-silicon devices");
         return std::nullopt;
     }
     return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().physical_slot;

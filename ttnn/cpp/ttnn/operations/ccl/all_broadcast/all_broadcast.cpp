@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_broadcast.hpp"
-#include <utility>
 #include "ttnn/operations/ccl/all_broadcast/device/all_broadcast_op.hpp"
-#include "ttnn/distributed/types.hpp"
-#include "ttnn/global_semaphore.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include <tt-metalium/fabric.hpp>
 #include <deque>
 
 namespace ttnn::operations::ccl {
@@ -44,8 +44,11 @@ std::vector<ttnn::Tensor> ExecuteAllBroadcast::invoke(
             return std::vector<ttnn::Tensor>(tensors.begin(), tensors.end());
         }
     }
-    uint32_t num_links_ = num_links.value_or(1);
-    ttnn::ccl::Topology topology_ = topology.value_or(ttnn::ccl::Topology::Linear);
+    auto mesh_device = input_tensor.device();
+    TT_FATAL(mesh_device != nullptr, "Mesh device is required for all_broadcast operation");
+    tt::tt_fabric::Topology topology_ = topology.value_or(
+        ::ttnn::ccl::get_usable_topology(input_tensor, tt::tt_fabric::get_fabric_topology(), cluster_axis));
+    uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, cluster_axis));
 
     return ttnn::operations::ccl::all_broadcast(
         input_tensor, cluster_axis, subdevice_id, memory_config, num_links_, topology_);
