@@ -80,21 +80,21 @@ inline void routing_init(volatile lite_fabric::FabricLiteConfig* config_struct) 
                     wait_val(handshake_addr, 1);
                     // Safe to modify config_struct now
                     config_struct->primary_local_handshake = 2;
-                    internal_::eth_send_packet(0, local_handshake_addr >> 4, handshake_addr >> 4, 1);
+                    internal_::eth_send_packet<false>(0, local_handshake_addr >> 4, handshake_addr >> 4, 1);
 
                     // Wait for ack
                     wait_val(handshake_addr, 3);
                 } else {
                     // Send first signal to mmio to indicate we have started
                     config_struct->primary_local_handshake = 1;
-                    internal_::eth_send_packet(0, local_handshake_addr >> 4, handshake_addr >> 4, 1);
+                    internal_::eth_send_packet<false>(0, local_handshake_addr >> 4, handshake_addr >> 4, 1);
 
                     // wait for signal from mmio
                     wait_val(handshake_addr, 2);
 
                     // send ack to mmio
                     config_struct->primary_local_handshake = 3;
-                    internal_::eth_send_packet(0, local_handshake_addr >> 4, handshake_addr >> 4, 1);
+                    internal_::eth_send_packet<false>(0, local_handshake_addr >> 4, handshake_addr >> 4, 1);
                 }
                 config_struct->current_state = lite_fabric::InitState::READY;
                 break;
@@ -111,6 +111,10 @@ inline void routing_init(volatile lite_fabric::FabricLiteConfig* config_struct) 
                 ConnectedRiscInterface::set_pc(LITE_FABRIC_TEXT_START);
                 eth_send_config();
                 eth_send_binary();
+#if defined(ARCH_WORMHOLE)
+                // Make the base firmware execute the lite fabric binary
+                internal_::eth_write_remote_reg<false>(0, 0x18000, 1);
+#endif
                 ConnectedRiscInterface::deassert_connected_dm1_reset();
                 break;
             }
@@ -119,8 +123,7 @@ inline void routing_init(volatile lite_fabric::FabricLiteConfig* config_struct) 
             }
             default: {
                 ASSERT(false);
-                while (true) {
-                };
+                break;
             }
         }
     }

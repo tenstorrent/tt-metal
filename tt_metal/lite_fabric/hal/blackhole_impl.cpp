@@ -14,7 +14,9 @@ constexpr uint32_t GetStateAddress() {
            offsetof(lite_fabric::FabricLiteConfig, current_state);
 }
 
-uint32_t GetConfigAddress() { return LITE_FABRIC_CONFIG_START + offsetof(lite_fabric::FabricLiteMemoryMap, config); }
+constexpr uint32_t GetConfigAddress() {
+    return LITE_FABRIC_CONFIG_START + offsetof(lite_fabric::FabricLiteMemoryMap, config);
+}
 
 lite_fabric::FabricLiteConfig GetInitFabricLiteConfig(const lite_fabric::SystemDescriptor& desc) {
     lite_fabric::FabricLiteConfig config{};
@@ -150,6 +152,10 @@ void BlackholeLiteFabricHal::wait_for_state(tt_cxy_pair virtual_core, lite_fabri
     }
 }
 
+std::vector<std::filesystem::path> BlackholeLiteFabricHal::build_srcs(const std::filesystem::path& root_dir) {
+    return {};
+}
+
 std::vector<std::filesystem::path> BlackholeLiteFabricHal::build_includes(const std::filesystem::path& root_dir) {
     return {
         root_dir / "tt_metal/hw/inc/tt-1xx/blackhole",
@@ -195,6 +201,10 @@ std::vector<std::filesystem::path> BlackholeLiteFabricHal::build_linker(const st
         root_dir / "runtime/hw/lib/blackhole/tmu-crt0.o",
         root_dir / "runtime/hw/lib/blackhole/substitutes.o",
     };
+}
+
+std::optional<std::filesystem::path> BlackholeLiteFabricHal::build_asm_startup(const std::filesystem::path& root_dir) {
+    return std::nullopt;
 }
 
 }  // namespace lite_fabric

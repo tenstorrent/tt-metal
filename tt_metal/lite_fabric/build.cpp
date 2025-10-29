@@ -63,20 +63,24 @@ std::string GetCommonOptions() {
 
 namespace lite_fabric {
 
+int CompileAssembly(
+    const std::filesystem::path& asm_src, const std::filesystem::path& out_path, const std::string& toolchain_path) {
+    std::ostringstream oss;
+    oss << toolchain_path << "riscv-tt-elf-g++ ";
+    oss << "-c -o " << out_path.string() << " ";
+    oss << asm_src.string();
+
+    std::string compile_cmd = oss.str();
+    log_info(tt::LogMetal, "Compile assembly:\n{}", compile_cmd);
+
+    return system(compile_cmd.c_str());
+}
+
 int CompileFabricLite(
     const std::shared_ptr<lite_fabric::LiteFabricHal>& lite_fabric_hal,
     const std::filesystem::path& root_dir,
     const std::filesystem::path& out_dir,
     const std::vector<std::string>& extra_defines) {
-    // Delete the output directory if it exists && contains the lite fabric elf
-    if (std::filesystem::exists(out_dir)) {
-        auto elf_path = out_dir / fmt::format("lite_fabric.{}.elf", lite_fabric_hal->build_target_name());
-        if (std::filesystem::exists(elf_path)) {
-            log_info(tt::LogMetal, "Removing existing output directory: {}", out_dir);
-            std::filesystem::remove_all(out_dir);
-        }
-    }
-
     const std::filesystem::path lite_fabric_src = root_dir / "tt_metal/lite_fabric/hw/src/lite_fabric.cpp";
 
     std::vector<std::filesystem::path> includes = {
@@ -110,6 +114,10 @@ int CompileFabricLite(
         oss << "-D" << defines[i] << " ";
     }
 
+    for (const auto& src : lite_fabric_hal->build_srcs(root_dir)) {
+        oss << src.string() << " ";
+    }
+
     oss << lite_fabric_src << " ";
 
     // Disable gp relaxations. We store various data in L1. We need functions to work when called directly from
@@ -124,7 +132,25 @@ int CompileFabricLite(
     std::filesystem::create_directories(out_dir);
     log_info(tt::LogMetal, "output directory: {}", out_dir);
 
-    return system(compile_cmd.c_str());
+    int compile_result = system(compile_cmd.c_str());
+    if (compile_result != 0) {
+        log_error(tt::LogMetal, "Failed to compile lite fabric C++ source");
+        return compile_result;
+    }
+
+    // Compile the assembly startup file if provided by the HAL
+    auto asm_startup = lite_fabric_hal->build_asm_startup(root_dir);
+    if (asm_startup.has_value()) {
+        std::filesystem::path asm_out =
+            out_dir / fmt::format("lite_fabric-crt0.{}.o", lite_fabric_hal->build_target_name());
+        int asm_result = CompileAssembly(asm_startup.value(), asm_out, GetToolchainPath(root_dir.string()));
+        if (asm_result != 0) {
+            log_error(tt::LogMetal, "Failed to compile assembly startup file");
+            return asm_result;
+        }
+    }
+
+    return 0;
 }
 
 std::optional<std::filesystem::path> LinkFabricLite(
@@ -164,6 +190,15 @@ std::optional<std::filesystem::path> LinkFabricLite(
     link_oss << "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
     link_oss << fmt::format("-T{} ", output_ld.string());  // Use preprocessed linker script
     link_oss << fmt::format("-Wl,-Map={}/lite_fabric.{}.map ", out_dir.string(), lite_fabric_hal->build_target_name());
+
+    // Add the compiled assembly startup file first (if it exists)
+    auto asm_startup = lite_fabric_hal->build_asm_startup(root_dir);
+    if (asm_startup.has_value()) {
+        std::filesystem::path asm_out =
+            out_dir / fmt::format("lite_fabric-crt0.{}.o", lite_fabric_hal->build_target_name());
+        link_oss << fmt::format("{} ", asm_out.string());
+    }
+
     link_oss << fmt::format("-save-temps {}/lite_fabric.{}.o ", out_dir.string(), lite_fabric_hal->build_target_name());
     link_oss << fmt::format("-o {} ", elf_out.string());
 

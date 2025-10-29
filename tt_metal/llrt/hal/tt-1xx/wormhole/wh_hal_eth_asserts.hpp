@@ -11,6 +11,7 @@
 #include "dev_msgs.h"
 #include "noc/noc_parameters.h"
 #include "eth_l1_address_map.h"
+#include "tt_metal/lite_fabric/hw/inc/wormhole/lf_dev_mem_map.hpp"
 
 // Validate assumptions on mailbox layout on host compile
 // Constexpr definitions allow for printing of breaking values at compile time
@@ -31,3 +32,4 @@ static_assert(
     (eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE + offsetof(mailboxes_t, go_message_index)) %
         TT_ARCH_MAX_NOC_WRITE_ALIGNMENT ==
     0);
+static_assert(MEM_L1_BARRIER == LITE_FABRIC_BARRIER);  // NOLINT(misc-redundant-expression)

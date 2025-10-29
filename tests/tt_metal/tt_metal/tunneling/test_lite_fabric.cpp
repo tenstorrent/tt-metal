@@ -149,3 +149,15 @@ TEST(FabricLiteBuild, BuildAllTargets) {
 TEST_P(FabricLite, Init) {
     EXPECT_GT(lite_fabric_hal_->get_system_descriptor().tunnels_from_mmio.size(), 0) << "No tunnels found";
 }
+
+TEST(FabricLiteInit, Wormhole) {
+    auto home_dir_string = std::getenv("TT_METAL_HOME");
+    if (home_dir_string == nullptr) {
+        GTEST_FAIL() << "TT_METAL_HOME not set";
+    }
+    auto home_directory = std::filesystem::path(std::getenv("TT_METAL_HOME"));
+    auto output_directory = home_directory / "lite_fabric";
+
+    auto lite_fabric_hal = lite_fabric::LiteFabricHal::create();
+    lite_fabric::InitializeLiteFabric(lite_fabric_hal);
+}

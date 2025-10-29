@@ -10,9 +10,8 @@
 
 #define LITE_FABRIC_BARRIER 12
 
-// NOTE: Base firmware data is starting at 0x70000.
-// We need to ensure that the Lite Fabric memory does not overlap with it or Metal
-#define MEM_LITE_FABRIC_MEMORY_BASE 0x6A000
+// NOTE: Wormhole prototype base firmware expects the _start to be at 0x18020
+#define MEM_LITE_FABRIC_MEMORY_BASE 0x18020
 #define MEM_LITE_FABRIC_MEMORY_SIZE (24 * 1024)
 #define MEM_LITE_FABRIC_MEMORY_END (MEM_LITE_FABRIC_MEMORY_BASE + MEM_LITE_FABRIC_MEMORY_SIZE)
 
@@ -33,12 +32,12 @@
 #define LITE_FABRIC_CONFIG_START (LITE_FABRIC_DATA_START + LITE_FABRIC_DATA_SIZE)
 #define LITE_FABRIC_CONFIG_SIZE 0x2400
 
-/* Stack configuration */
-#define LITE_FABRIC_STACK_START (MEM_LOCAL_BASE)
-#define LITE_FABRIC_STACK_SIZE 1024
+/* Stack configuration - Not used */
+#define LITE_FABRIC_STACK_START 0x0
+#define LITE_FABRIC_STACK_SIZE 0x0
 
-/* Reset PC for ERISC1 (running lite fabric) */
-#define LITE_FABRIC_RESET_PC (MEM_LOCAL_BASE | 0x14008)
+/* Reset PC - Not used */
+#define LITE_FABRIC_RESET_PC 0x0
 
-/* Static assert in bh_hal_eth_asserts.hpp */
+/* Static assert in wh_hal_eth_asserts.hpp */
 #define MEMORY_LAYOUT_END (LITE_FABRIC_CONFIG_START + LITE_FABRIC_CONFIG_SIZE)

@@ -5,9 +5,11 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
+#include <memory>
+#include <optional>
 #include "hw/inc/host_interface.hpp"
 #include "core_coord.hpp"
-#include <memory>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/cluster_types.hpp>
@@ -60,11 +62,15 @@ public:
 
     virtual void wait_for_state(tt_cxy_pair virtual_core, lite_fabric::InitState state) = 0;
 
+    virtual std::vector<std::filesystem::path> build_srcs(const std::filesystem::path& root_dir) = 0;
+
     virtual std::vector<std::filesystem::path> build_includes(const std::filesystem::path& root_dir) = 0;
 
     virtual std::vector<std::string> build_defines() = 0;
 
     virtual std::vector<std::filesystem::path> build_linker(const std::filesystem::path& root_dir) = 0;
+
+    virtual std::optional<std::filesystem::path> build_asm_startup(const std::filesystem::path& root_dir) = 0;
 
     virtual std::string build_target_name() = 0;
 
