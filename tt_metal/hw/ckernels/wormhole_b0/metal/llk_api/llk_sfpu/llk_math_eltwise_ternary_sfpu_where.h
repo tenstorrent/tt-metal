@@ -45,6 +45,18 @@ inline void llk_math_eltwise_ternary_sfpu_where_int32(
 }
 
 template <bool APPROXIMATE>
+inline void llk_math_eltwise_ternary_sfpu_where_uint32(
+    uint dst_index0, uint dst_index1, uint dst_index2, uint odst, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_ternary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::_calculate_where_<APPROXIMATE, DataFormat::UInt32, 8>,
+        dst_index0,
+        dst_index1,
+        dst_index2,
+        odst,
+        vector_mode);
+}
+
+template <bool APPROXIMATE>
 inline void llk_math_eltwise_ternary_sfpu_where_init() {
     _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();
 }
