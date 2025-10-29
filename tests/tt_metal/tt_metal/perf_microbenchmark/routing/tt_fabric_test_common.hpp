@@ -176,6 +176,10 @@ public:
     }
 
     void run_programs() {
+        if (mesh_workload_->get_programs().empty()) {
+            return;
+        }
+
         tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload_, false);
     }
 

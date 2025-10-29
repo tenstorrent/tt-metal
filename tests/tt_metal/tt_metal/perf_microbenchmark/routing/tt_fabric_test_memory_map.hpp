@@ -67,8 +67,8 @@ struct DynamicMemoryRegion {
 struct CommonMemoryMap {
     // Constants for memory region sizes
     static constexpr uint32_t RESULT_BUFFER_SIZE = 0x1000;  // 4KB
-    static constexpr uint32_t LOCAL_ARGS_BUFFER_SIZE = 0x1000;  // 4KB
-    static constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = 0x2000;  // 8KB
+    static constexpr uint32_t LOCAL_ARGS_BUFFER_SIZE = 0x4000;      // 16KB
+    static constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = 0x10000;  // 64KB (to accommodate big meshes)
     static constexpr uint32_t MUX_LOCAL_ADDRESSES_SIZE = 0x400;    // 1KB
     static constexpr uint32_t MUX_TERMINATION_SYNC_SIZE = 64;  // Single semaphore with padding
 
@@ -181,7 +181,7 @@ struct CommonMemoryMap {
 struct SenderMemoryMap {
     // Constants for memory region sizes
     static constexpr uint32_t CREDIT_ADDRESSES_SIZE = 0x1000;        // 4KB
-    static constexpr uint32_t PACKET_HEADER_BUFFER_SIZE = 0x1000;    // 4KB
+    static constexpr uint32_t PACKET_HEADER_BUFFER_SIZE = 0x8000;    // 32KB (sized for 256 mesh size)
     static constexpr uint32_t MAX_PAYLOAD_SIZE_PER_CONFIG = 0x2800;  // 10KB per config
 
     // Helper to compute individual receiver credit address from chunk
