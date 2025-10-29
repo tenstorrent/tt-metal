@@ -14,6 +14,9 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
     SDXL_TRACE_REGION_SIZE,
     SDXL_FABRIC_CONFIG,
+    MAX_SEQUENCE_LENGTH,
+    TEXT_ENCODER_2_PROJECTION_DIM,
+    CONCATENATED_TEXT_EMBEDINGS_SIZE,
 )
 import os
 from models.common.utility_functions import profiler
@@ -23,10 +26,6 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_img2img_pipeline im
     TtSDXLImg2ImgPipeline,
     TtSDXLImg2ImgPipelineConfig,
 )
-
-MAX_SEQUENCE_LENGTH = 77
-TEXT_ENCODER_2_PROJECTION_DIM = 1280
-CONCATENATED_TEXT_EMBEDINGS_SIZE = 2048  # text_encoder_1_hidden_size + text_encoder_2_hidden_size (768 + 1280)
 
 
 @torch.no_grad()
