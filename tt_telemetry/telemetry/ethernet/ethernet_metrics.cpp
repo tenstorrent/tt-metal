@@ -11,6 +11,7 @@
 
 #include <telemetry/ethernet/ethernet_metrics.hpp>
 #include <telemetry/ethernet/ethernet_helpers.hpp>
+#include <telemetry/ethernet/fabric_bandwidth_telemetry_reader.hpp>
 #include <topology/topology.hpp>
 
 /**************************************************************************************************
@@ -87,8 +88,14 @@ void create_ethernet_metrics(
             std::make_unique<EthernetEndpointUpMetric>(tray_id, asic_location, chip_id, channel, hal));
         uint_metrics.push_back(
             std::make_unique<EthernetRetrainCountMetric>(tray_id, asic_location, chip_id, channel, cluster, hal));
+        auto bandwidth_reader = std::make_shared<FabricBandwidthTelemetryReader>(
+            tray_id, asic_location, chip_id, channel, cluster, hal);
         double_metrics.push_back(
-            std::make_unique<EthernetBandwidthMetric>(tray_id, asic_location, chip_id, channel, cluster, hal));
+            std::make_unique<FabricBandwidthMetric>(tray_id, asic_location, chip_id, channel, bandwidth_reader));
+        uint_metrics.push_back(
+            std::make_unique<FabricWordsSentMetric>(tray_id, asic_location, chip_id, channel, bandwidth_reader));
+        uint_metrics.push_back(
+            std::make_unique<FabricPacketsSentMetric>(tray_id, asic_location, chip_id, channel, bandwidth_reader));
         if (hal->get_arch() == tt::ARCH::WORMHOLE_B0) {
             // These are available only on Wormhole
             uint_metrics.push_back(
@@ -296,75 +303,39 @@ void EthernetUncorrectedCodewordCountMetric::update(
 }
 
 /**************************************************************************************************
- EthernetBandwidthMetric
+ FabricBandwidthMetric
 
  Bandwidth telemetry.
 **************************************************************************************************/
-
-// Structure to read bandwidth telemetry from device
-// Must match LowResolutionBandwidthTelemetryResult on device
-struct RiscTimestamp {
-    union {
-        uint64_t full;
-        struct {
-            uint32_t lo;
-            uint32_t hi;
-        };
-    };
-};
-
-struct LowResolutionBandwidthTelemetryResult {
-    RiscTimestamp duration{};
-    uint64_t reserved{};
-    uint64_t num_words_sent{};
-    uint64_t num_packets_sent{};
-};
 
 static double calc_bw_bytes_per_cycle(uint32_t total_words, uint64_t cycles) {
     constexpr uint32_t bytes_per_eth_word = 16;
     return (total_words * bytes_per_eth_word) / static_cast<double>(cycles);
 }
 
-EthernetBandwidthMetric::EthernetBandwidthMetric(
+FabricBandwidthMetric::FabricBandwidthMetric(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
     tt::ChipId chip_id,
     uint32_t channel,
-    const std::unique_ptr<tt::umd::Cluster>& cluster,
-    const std::unique_ptr<tt::tt_metal::Hal>& hal) :
-    DoubleMetric(), tray_id_(tray_id), asic_location_(asic_location), chip_id_(chip_id), channel_(channel) {
+    std::shared_ptr<FabricBandwidthTelemetryReader> telemetry_reader) :
+    DoubleMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    chip_id_(chip_id),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader) {
     value_ = 0.0;
-    ethernet_core_ = cluster->get_soc_descriptor(chip_id).get_eth_core_for_channel(channel, tt::CoordSystem::LOGICAL);
-    bw_telemetry_addr_ = hal->get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
 }
 
-const std::vector<std::string> EthernetBandwidthMetric::telemetry_path() const {
-    return endpoint_telemetry_path(tray_id_, asic_location_, channel_, "bandwidth");
+const std::vector<std::string> FabricBandwidthMetric::telemetry_path() const {
+    return endpoint_telemetry_path(tray_id_, asic_location_, channel_, "fabricBandwidth");
 }
 
-void EthernetBandwidthMetric::update(
+void FabricBandwidthMetric::update(
     const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
-    // Read telemetry structure from device
-    constexpr size_t telemetry_size = sizeof(LowResolutionBandwidthTelemetryResult);
-    std::array<std::byte, telemetry_size> buffer{};
-    
-    cluster->read_from_device(buffer.data(), chip_id_, ethernet_core_, bw_telemetry_addr_, telemetry_size);
-    
-    // Convert buffer to telemetry structure
-    LowResolutionBandwidthTelemetryResult tel{};
-    if (reinterpret_cast<uintptr_t>(buffer.data()) % alignof(LowResolutionBandwidthTelemetryResult) == 0) {
-        // Buffer is properly aligned, can use bit_cast
-        constexpr size_t NUM_ELEMENTS = 
-            ((sizeof(LowResolutionBandwidthTelemetryResult) + sizeof(uint32_t) - 1) / sizeof(uint32_t));
-        const std::array<uint32_t, NUM_ELEMENTS>& data_array = 
-            *reinterpret_cast<const std::array<uint32_t, NUM_ELEMENTS>*>(buffer.data());
-        tel = std::bit_cast<LowResolutionBandwidthTelemetryResult>(data_array);
-    } else {
-        // Use memcpy for unaligned access
-        std::array<std::byte, sizeof(LowResolutionBandwidthTelemetryResult)> staging_buf{};
-        memcpy(staging_buf.data(), buffer.data(), sizeof(LowResolutionBandwidthTelemetryResult));
-        tel = std::bit_cast<LowResolutionBandwidthTelemetryResult>(staging_buf);
-    }
+    // Get telemetry data from the shared reader
+    const LowResolutionBandwidthTelemetryResult& tel = telemetry_reader_->get_telemetry(cluster, start_of_update_cycle);
     
     // Calculate bandwidth
     double old_value = value_;
@@ -379,6 +350,86 @@ void EthernetBandwidthMetric::update(
     } else {
         value_ = 0.0;
     }
+    
+    // Mark as changed if value differs from previous reading
+    changed_since_transmission_ = (value_ != old_value);
+    
+    timestamp_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+/**************************************************************************************************
+ FabricWordsSentMetric
+
+ Number of words sent over fabric.
+**************************************************************************************************/
+
+FabricWordsSentMetric::FabricWordsSentMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    tt::ChipId chip_id,
+    uint32_t channel,
+    std::shared_ptr<FabricBandwidthTelemetryReader> telemetry_reader) :
+    UIntMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    chip_id_(chip_id),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0;
+}
+
+const std::vector<std::string> FabricWordsSentMetric::telemetry_path() const {
+    return endpoint_telemetry_path(tray_id_, asic_location_, channel_, "fabricWordsSent");
+}
+
+void FabricWordsSentMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    // Get telemetry data from the shared reader
+    const LowResolutionBandwidthTelemetryResult& tel = telemetry_reader_->get_telemetry(cluster, start_of_update_cycle);
+    
+    uint64_t old_value = value_;
+    value_ = tel.num_words_sent;
+    
+    // Mark as changed if value differs from previous reading
+    changed_since_transmission_ = (value_ != old_value);
+    
+    timestamp_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+/**************************************************************************************************
+ FabricPacketsSentMetric
+
+ Number of packets sent over fabric.
+**************************************************************************************************/
+
+FabricPacketsSentMetric::FabricPacketsSentMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    tt::ChipId chip_id,
+    uint32_t channel,
+    std::shared_ptr<FabricBandwidthTelemetryReader> telemetry_reader) :
+    UIntMetric(),
+    tray_id_(tray_id),
+    asic_location_(asic_location),
+    chip_id_(chip_id),
+    channel_(channel),
+    telemetry_reader_(telemetry_reader) {
+    value_ = 0;
+}
+
+const std::vector<std::string> FabricPacketsSentMetric::telemetry_path() const {
+    return endpoint_telemetry_path(tray_id_, asic_location_, channel_, "fabricPacketsSent");
+}
+
+void FabricPacketsSentMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    // Get telemetry data from the shared reader
+    const LowResolutionBandwidthTelemetryResult& tel = telemetry_reader_->get_telemetry(cluster, start_of_update_cycle);
+    
+    uint64_t old_value = value_;
+    value_ = tel.num_packets_sent;
     
     // Mark as changed if value differs from previous reading
     changed_since_transmission_ = (value_ != old_value);

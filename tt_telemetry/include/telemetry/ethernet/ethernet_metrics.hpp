@@ -10,16 +10,18 @@
  * Ethernet endpoint (i.e., a core or channel) metrics.
  */
 
- #include <chrono>
- #include <optional>
- #include <string>
- #include <vector>
+#include <chrono>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
 
 #include <third_party/umd/device/api/umd/device/cluster.hpp>
 #include <llrt/hal.hpp>
 #include <tt_metal/fabric/physical_system_descriptor.hpp>
 
 #include <telemetry/metric.hpp>
+#include <telemetry/ethernet/fabric_bandwidth_telemetry_reader.hpp>
 
 namespace tt::scaleout_tools::fsd::proto {
 class FactorySystemDescriptor;
@@ -147,15 +149,14 @@ private:
     uint32_t uncorr_addr_;
 };
 
-class EthernetBandwidthMetric: public DoubleMetric {
+class FabricBandwidthMetric: public DoubleMetric {
 public:
-    EthernetBandwidthMetric(
+    FabricBandwidthMetric(
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         tt::ChipId chip_id,
         uint32_t channel,
-        const std::unique_ptr<tt::umd::Cluster>& cluster,
-        const std::unique_ptr<tt::tt_metal::Hal>& hal);
+        std::shared_ptr<FabricBandwidthTelemetryReader> telemetry_reader);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
@@ -167,8 +168,51 @@ private:
     tt::tt_metal::ASICLocation asic_location_;
     tt::ChipId chip_id_;
     uint32_t channel_;
-    tt::umd::CoreCoord ethernet_core_;
-    uint32_t bw_telemetry_addr_;
+    std::shared_ptr<FabricBandwidthTelemetryReader> telemetry_reader_;
+};
+
+class FabricWordsSentMetric: public UIntMetric {
+public:
+    FabricWordsSentMetric(
+        tt::tt_metal::TrayID tray_id,
+        tt::tt_metal::ASICLocation asic_location,
+        tt::ChipId chip_id,
+        uint32_t channel,
+        std::shared_ptr<FabricBandwidthTelemetryReader> telemetry_reader);
+
+    const std::vector<std::string> telemetry_path() const override;
+    void update(
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        std::chrono::steady_clock::time_point start_of_update_cycle) override;
+
+private:
+    tt::tt_metal::TrayID tray_id_;
+    tt::tt_metal::ASICLocation asic_location_;
+    tt::ChipId chip_id_;
+    uint32_t channel_;
+    std::shared_ptr<FabricBandwidthTelemetryReader> telemetry_reader_;
+};
+
+class FabricPacketsSentMetric: public UIntMetric {
+public:
+    FabricPacketsSentMetric(
+        tt::tt_metal::TrayID tray_id,
+        tt::tt_metal::ASICLocation asic_location,
+        tt::ChipId chip_id,
+        uint32_t channel,
+        std::shared_ptr<FabricBandwidthTelemetryReader> telemetry_reader);
+
+    const std::vector<std::string> telemetry_path() const override;
+    void update(
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        std::chrono::steady_clock::time_point start_of_update_cycle) override;
+
+private:
+    tt::tt_metal::TrayID tray_id_;
+    tt::tt_metal::ASICLocation asic_location_;
+    tt::ChipId chip_id_;
+    uint32_t channel_;
+    std::shared_ptr<FabricBandwidthTelemetryReader> telemetry_reader_;
 };
 
 class FabricHeartbeatMetric: public UIntMetric {
