@@ -11,6 +11,18 @@ namespace tt::scaleout_tools {
 
 constexpr uint32_t ETH_TRAINING_STATUS_REG = 0x1104;
 
+tt_xy_pair get_eth_core_coord(const tt::Cluster& cluster, ChipId chip_id, uint8_t channel) {
+    auto logical_coord = cluster.get_soc_desc(chip_id).get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
+    return cluster.get_virtual_coordinate_from_logical_coordinates(
+        chip_id, tt_xy_pair(logical_coord.x, logical_coord.y), CoreType::ETH);
+}
+
+void set_link_training_status(const tt::Cluster& cluster, ChipId chip_id, const tt_xy_pair& coord, uint32_t status) {
+    std::vector<uint32_t> status_vec(1, status);
+    cluster.write_core(chip_id, coord, status_vec, ETH_TRAINING_STATUS_REG);
+    cluster.l1_barrier(chip_id);
+}
+
 struct TestFixture {
     tt::tt_metal::MetalContext& context;
     const tt::Cluster& cluster;
@@ -34,19 +46,41 @@ struct TestFixture {
             asic_id_to_chip_id[asic_id] = chip_id;
         }
     }
+
+    ~TestFixture() {
+        try {
+            auto cluster_desc = driver->get_cluster_description();
+            // Attempt to restore all MMIO-accessible ethernet links to trained state
+            for (const auto& [asic_id, asic_connections] :
+                 physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name())) {
+                for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
+                    auto src_chip_id = asic_id_to_chip_id.at(*asic_id);
+                    auto dst_chip_id = asic_id_to_chip_id.at(*dst_asic_id);
+                    
+                    if (cluster_desc->is_chip_mmio_capable(src_chip_id) && 
+                        cluster_desc->is_chip_mmio_capable(dst_chip_id)) {
+                        for (const auto& eth_connection : eth_connections) {
+                            try {
+                                auto src_coord = get_eth_core_coord(cluster, src_chip_id, eth_connection.src_chan);
+                                auto dst_coord = get_eth_core_coord(cluster, dst_chip_id, eth_connection.dst_chan);
+                                set_link_training_status(cluster, src_chip_id, src_coord, 1);
+                                set_link_training_status(cluster, dst_chip_id, dst_coord, 1);
+                            } catch (...) {
+                                // Skip links that can't be accessed, we did all we could to recover them
+                            }
+                        }
+                    }
+                }
+            }
+
+            physical_system_descriptor.run_discovery(false);
+        } catch (const std::exception& e) {
+            log_error(tt::LogTest, "Device cleanup failed: {}. Reset with using tt-smi command", e.what());
+        } catch (...) {
+            log_error(tt::LogTest, "Device cleanup failed. Reset with using tt-smi command");
+        }
+    }
 };
-
-tt_xy_pair get_eth_core_coord(const tt::Cluster& cluster, ChipId chip_id, uint8_t channel) {
-    auto logical_coord = cluster.get_soc_desc(chip_id).get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
-    return cluster.get_virtual_coordinate_from_logical_coordinates(
-        chip_id, tt_xy_pair(logical_coord.x, logical_coord.y), CoreType::ETH);
-}
-
-void set_link_training_status(const tt::Cluster& cluster, ChipId chip_id, const tt_xy_pair& coord, uint32_t status) {
-    std::vector<uint32_t> status_vec(1, status);
-    cluster.write_core(chip_id, coord, status_vec, ETH_TRAINING_STATUS_REG);
-    cluster.l1_barrier(chip_id);
-}
 
 uint32_t get_link_training_status(const tt::Cluster& cluster, ChipId chip_id, const tt_xy_pair& coord) {
     std::vector<uint32_t> status(1);
@@ -54,6 +88,7 @@ uint32_t get_link_training_status(const tt::Cluster& cluster, ChipId chip_id, co
     return status[0];
 }
 
+// Helper function to process ethernet connections for a given operation
 template <typename Operation>
 void process_ethernet_connections(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
