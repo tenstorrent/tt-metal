@@ -231,22 +231,11 @@ void kernel_main() {
                             addrgen_base_address, addrgen_page_size, addrgen_num_pages);
 
                         if constexpr (with_state) {
-                            fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                                connections,
-                                route_id,
-                                source_l1_buffer_address,
-                                dram_addrgen,
-                                page_id + i,
-                                packet_payload_size_bytes);
+                            fabric_multicast_noc_unicast_write_with_state(
+                                connections, route_id, source_l1_buffer_address, dram_addrgen, page_id + i);
                         } else {
                             fabric_multicast_noc_unicast_write(
-                                connections,
-                                route_id,
-                                ranges,
-                                source_l1_buffer_address,
-                                dram_addrgen,
-                                page_id + i,
-                                packet_payload_size_bytes);
+                                connections, route_id, source_l1_buffer_address, dram_addrgen, page_id + i);
                         }
                     } else
 #endif
@@ -324,7 +313,7 @@ void kernel_main() {
                             addrgen_base_address, addrgen_page_size, addrgen_num_pages);
 
                         if constexpr (with_state) {
-                            fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                            fabric_unicast_noc_unicast_write_with_state(
                                 connections, route_id, source_l1_buffer_address, dram_addrgen, page_id + i);
                         } else {
                             fabric_unicast_noc_unicast_write(
