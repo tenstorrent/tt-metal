@@ -27,7 +27,10 @@ ttnn::Tensor ExecuteStridedAllGatherAsync::invoke(
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel) {
+    std::optional<uint32_t> num_buffers_per_channel,
+    std::optional<uint32_t> mm_cores_y,
+    std::optional<uint32_t> mm_block_h,
+    std::optional<uint32_t> mm_block_w) {
     return ttnn::operations::experimental::ccl::strided_all_gather_async(
         input_tensor,
         persistent_output_buffer,
@@ -41,6 +44,9 @@ ttnn::Tensor ExecuteStridedAllGatherAsync::invoke(
         barrier_semaphore,
         tiles_per_chunk,
         num_workers_per_link,
-        num_buffers_per_channel);
+        num_buffers_per_channel,
+        mm_cores_y,
+        mm_block_h,
+        mm_block_w);
 }
 }  // namespace ttnn::operations::experimental::ccl

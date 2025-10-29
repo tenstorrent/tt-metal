@@ -148,7 +148,10 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel) {
+    std::optional<uint32_t> num_buffers_per_channel,
+    std::optional<uint32_t> mm_cores_y,
+    std::optional<uint32_t> mm_block_h,
+    std::optional<uint32_t> mm_block_w) {
     tt::tt_metal::Program program{};
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
     return strided_all_gather_async_minimal_default_helper(
@@ -171,6 +174,9 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
         tiles_per_chunk,
         num_workers_per_link,
         num_buffers_per_channel,
+        mm_cores_y,
+        mm_block_h,
+        mm_block_w,
         CoreCoord(0, 0));
 }
 
@@ -194,6 +200,9 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
+    std::optional<uint32_t> mm_cores_y,
+    std::optional<uint32_t> mm_block_h,
+    std::optional<uint32_t> mm_block_w,
     const CoreCoord core_grid_offset) {
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
@@ -401,11 +410,17 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                 uint32_t tiles_per_core = base_pages_per_worker + ((global_worker_id < remainder) ? 1 : 0);
 
                 uint32_t tiles_per_chunk_val = tiles_per_chunk.value_or(0);
+                uint32_t mm_cores_y_val = mm_cores_y.value_or(0);
+                uint32_t mm_block_ht_val = mm_block_h.value_or(0) / TILE_WIDTH;
+                uint32_t mm_block_wt_val = mm_block_w.value_or(0) / TILE_WIDTH;
                 log_trace(tt::LogOp, "DEBUG: tiles_per_chunk__val: {}", tiles_per_chunk_val);
 
                 uint32_t self_write_done_semaphore;
                 if (fuse_op) {
                     self_write_done_semaphore = CreateSemaphore(program, {core}, 0);
+                    uint32_t tiles_per_chunk_across_cores = mm_cores_y_val * mm_block_ht_val * mm_block_wt_val;
+                    tiles_per_chunk_val =
+                        (tiles_per_chunk_across_cores + global_worker_count - 1) / global_worker_count;
                 }
 
                 // Reader
@@ -443,7 +458,9 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                     tiles_per_core,                     //
                     ring_size,                          // ring_size
                     semaphore.at(dir).address(),        // out_ready_semaphore_forward
-                };
+                    mm_block_wt_val,
+                    mm_block_ht_val,
+                    mm_cores_y_val};
                 if (fuse_op) {
                     reader_rt_args.push_back(self_write_done_semaphore);
                     if (dir) {
@@ -515,7 +532,8 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
 
                 std::vector<uint32_t> writer_rt_args = {
                     output_tensor.buffer()->address(),                           // output_tensor_address
-                    input_tensor_Wt,                                             // width in tiles of the output shard
+                    input_tensor_Wt,                                             // width in tiles of the input shard
+                    input_tensor_Ht,                                             // height in tiles of the input shard
                     output_tensor_Wt,                                            // width in tiles of entire output
                     output_tensor_Ht,                                            // height in tiles of entire output
                     batch_head_size,                                             // product of the first two dims
@@ -530,7 +548,10 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                         ? barrier_semaphore.value().address()
                         : 0,
                     opposite_core_coord.x,
-                    opposite_core_coord.y};
+                    opposite_core_coord.y,
+                    mm_block_wt_val,
+                    mm_block_ht_val,
+                    mm_cores_y_val};
                 strided_fabric_mux_connection_rt_args(
                     mux_connection_valid,
                     core,
@@ -591,10 +612,10 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                         // sender writer
                         auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
                         worker_writer_sender_runtime_args[0] = output.buffer()->address();
-                        worker_writer_sender_runtime_args[10] = out_ready_semaphore.address();
+                        worker_writer_sender_runtime_args[11] = out_ready_semaphore.address();
 
                         if (barrier_semaphore.has_value()) {
-                            worker_writer_sender_runtime_args[12] = barrier_semaphore.value().address();
+                            worker_writer_sender_runtime_args[13] = barrier_semaphore.value().address();
                         }
 
                         core_idx++;
