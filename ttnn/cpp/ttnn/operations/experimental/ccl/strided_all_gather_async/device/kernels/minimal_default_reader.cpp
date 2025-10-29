@@ -45,6 +45,9 @@ void kernel_main() {
     uint32_t input_tiles_per_core = get_arg_val<uint32_t>(arg_idx++);
     uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t mm_block_w = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t mm_block_h = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t mm_cores_y = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr uint32_t ct_idx = 11;
 
@@ -92,16 +95,23 @@ void kernel_main() {
     uint32_t global_tile_index = 0;
     uint32_t tiles_per_bh = input_tensor_Wt * input_tensor_Ht;
     uint32_t chunks_per_core = div_up(input_tiles_per_core, tiles_per_chunk);
+    uint32_t tiles_read = 0;
 
     for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
         global_tile_index = 0;
+        tiles_read = 0;
         for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_core; chunk_idx++) {
+            uint32_t chunk_start_tile_index = global_tile_index;
             read_chunk(
-                global_tile_index,
+                chunk_start_tile_index,
                 global_tile_id_start,
                 cb_output_id,
+                tiles_read,
                 input_tiles_per_core,
                 tiles_per_chunk,
+                mm_block_w,
+                mm_block_h,
+                input_tensor_Ht / mm_cores_y,
                 max_tiles_per_packet,
                 ag_worker_cores,
                 input_tensor_addrgen,
@@ -110,11 +120,12 @@ void kernel_main() {
                 input_tensor_Wt,
                 output_tensor_Wt,
                 my_chip_id,
-                false);
+                false,
+                fuse_op);
 
             // Receive this chunk from all other devices
             uint32_t slices_received = 0;
-            uint32_t next_tile_to_read = 0;
+            uint32_t local_tiles_read = 0;
             while (slices_received < slices_expected) {
                 uint32_t actual_sender_chip_id = get_sender_id(direction, my_chip_id, slices_received, ring_size);
 
@@ -125,12 +136,17 @@ void kernel_main() {
                 if ((topology == Topology::Linear && writes_expected > 0) ||
                     (topology == Topology::Ring && ((slices_received + 1) < (writes_expected + 1)))) {
                     // read the next chunk out of memory, and put it in CB
-                    next_tile_to_read = read_chunk(
-                        global_tile_index,
+                    chunk_start_tile_index = global_tile_index;
+                    local_tiles_read = read_chunk(
+                        chunk_start_tile_index,
                         global_tile_id_start,
                         cb_output_id,
+                        tiles_read,
                         input_tiles_per_core,
                         tiles_per_chunk,
+                        mm_block_w,
+                        mm_block_h,
+                        input_tensor_Ht / mm_cores_y,
                         max_tiles_per_packet,
                         ag_worker_cores,
                         input_tensor_addrgen,
@@ -139,11 +155,13 @@ void kernel_main() {
                         input_tensor_Wt,
                         output_tensor_Wt,
                         actual_sender_chip_id,
-                        true);
+                        true,
+                        fuse_op);
                 }
                 slices_received++;
             }
-            global_tile_index = next_tile_to_read;
+            global_tile_index = chunk_start_tile_index;
+            tiles_read += local_tiles_read;
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
         }
         global_tile_id_start += tiles_per_bh;

@@ -67,7 +67,10 @@ tt::tt_metal::operation::ProgramWithCallbacks StridedAllGatherAsync::create_prog
         this->sub_device_id,
         this->tiles_per_chunk,
         this->num_workers_per_link,
-        this->num_buffers_per_channel);
+        this->num_buffers_per_channel,
+        this->mm_cores_y,
+        this->mm_block_h,
+        this->mm_block_w);
 }
 
 tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
@@ -94,6 +97,9 @@ tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
         this->tiles_per_chunk,
         this->num_workers_per_link,
         this->num_buffers_per_channel,
+        this->mm_cores_y,
+        this->mm_block_h,
+        this->mm_block_w,
         input_shape,
         input_memory_layout,
         input_dtype,
@@ -119,7 +125,10 @@ Tensor strided_all_gather_async_impl(
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<uint32_t>& tiles_per_chunk,
     const std::optional<uint32_t>& num_workers_per_link,
-    const std::optional<uint32_t>& num_buffers_per_channel) {
+    const std::optional<uint32_t>& num_buffers_per_channel,
+    const std::optional<uint32_t>& mm_cores_y,
+    const std::optional<uint32_t>& mm_block_h,
+    const std::optional<uint32_t>& mm_block_w) {
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "strided_all_gather_async op is only supported for Fast Dispatch");
@@ -155,7 +164,10 @@ Tensor strided_all_gather_async_impl(
                    using_persistent_buffers,
                    tiles_per_chunk,
                    num_workers_per_link,
-                   num_buffers_per_channel),
+                   num_buffers_per_channel,
+                   mm_cores_y,
+                   mm_block_h,
+                   mm_block_w),
                {input_tensor},
                {},
                optional_output_tensors)
@@ -176,7 +188,10 @@ Tensor strided_all_gather_async(
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel) {
+    std::optional<uint32_t> num_buffers_per_channel,
+    std::optional<uint32_t> mm_cores_y,
+    std::optional<uint32_t> mm_block_h,
+    std::optional<uint32_t> mm_block_w) {
     return strided_all_gather_async_impl(
         input_tensor,
         persistent_output_buffer,
@@ -191,7 +206,10 @@ Tensor strided_all_gather_async(
         barrier_semaphore,
         tiles_per_chunk,
         num_workers_per_link,
-        num_buffers_per_channel);
+        num_buffers_per_channel,
+        mm_cores_y,
+        mm_block_h,
+        mm_block_w);
 }
 
 }  // namespace ccl

@@ -65,6 +65,7 @@ void kernel_main() {
     uint32_t arg_idx = 0;
     address_t output_address = get_arg_val<address_t>(arg_idx++);
     uint32_t input_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t input_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
     uint32_t output_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
     uint32_t output_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
     uint32_t input_batch_head_count = get_arg_val<uint32_t>(arg_idx++);
@@ -79,6 +80,10 @@ void kernel_main() {
     size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t opposite_core_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t opposite_core_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
+
+    uint32_t mm_block_w = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t mm_block_h = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t mm_cores_y = get_arg_val<uint32_t>(arg_idx++);
 
     bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
     uint32_t termination_sync_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
@@ -178,17 +183,24 @@ void kernel_main() {
     uint32_t output_tiles_per_bh = output_tensor_Wt * output_tensor_Ht;
     uint32_t tile_end_id = output_tensor_Wt * (output_tensor_Ht - 1) + input_tensor_Wt * (my_chip_id + 1);
     uint32_t chunks_per_core = div_up(input_tiles_per_core, tiles_per_chunk);
+    uint32_t tiles_written = 0;
 
     // Write out the local slice to both DRAM and forward and backward
     for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
         global_tile_index = 0;
+        tiles_written = 0;
         for (uint32_t chunk_idx = 0; chunk_idx < chunks_per_core; chunk_idx++) {
+            uint32_t chunk_start_tile_index = global_tile_index;
             write_chunk(
-                global_tile_index,
+                chunk_start_tile_index,
                 global_tile_id_start,
                 cb_output_id,
+                tiles_written,
                 input_tiles_per_core,
                 tiles_per_chunk,
+                mm_block_w,
+                mm_block_h,
+                input_tensor_Ht / mm_cores_y,
                 max_tiles_per_packet,
                 ag_worker_cores,
                 output_addrgen,
@@ -202,20 +214,25 @@ void kernel_main() {
                 pkt_hdr_sem_inc,
                 out_ready_sem_noc_addr_in_pkt,
                 direction,
-                true);
+                true,
+                fuse_op);
 
             // Forward chunks
             uint32_t slice_writes = 0;
-            uint32_t next_tile_to_write = 0;
+            uint32_t local_tiles_written = 0;
             while (slice_writes < writes_expected) {
                 uint32_t actual_sender_chip_id = get_sender_id(direction, my_chip_id, slice_writes, ring_size);
-
-                next_tile_to_write = write_chunk(
-                    global_tile_index,
+                chunk_start_tile_index = global_tile_index;
+                local_tiles_written = write_chunk(
+                    chunk_start_tile_index,
                     global_tile_id_start,
                     cb_output_id,
+                    tiles_written,
                     input_tiles_per_core,
                     tiles_per_chunk,
+                    mm_block_w,
+                    mm_block_h,
+                    input_tensor_Ht / mm_cores_y,
                     max_tiles_per_packet,
                     ag_worker_cores,
                     output_addrgen,
@@ -229,10 +246,12 @@ void kernel_main() {
                     pkt_hdr_sem_inc,
                     out_ready_sem_noc_addr_in_pkt,
                     direction,
-                    false);
+                    false,
+                    fuse_op);
                 slice_writes++;
             }
-            global_tile_index = next_tile_to_write;
+            global_tile_index = chunk_start_tile_index;
+            tiles_written += local_tiles_written;
         }
         global_tile_id_start += output_tiles_per_bh;
     }
