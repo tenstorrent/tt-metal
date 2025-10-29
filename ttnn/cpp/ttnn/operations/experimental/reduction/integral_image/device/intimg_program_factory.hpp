@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "intimg_work_split.hpp"
 #include "intimg_device_operation_types.hpp"
 
 #include <optional>
@@ -22,6 +23,8 @@ namespace ttnn::operations::experimental::reduction {
 
 using namespace tt::tt_metal;
 using namespace tt::stl;
+
+using namespace intimg::common;
 
 struct IntImgProgramFactory {
     static constexpr std::array<const char*, 3> KERNEL_PATHS{
@@ -52,7 +55,7 @@ struct IntImgProgramFactory {
     static CBHandle create_cb(
         Program& program,
         const DataType& dtype,
-        const IntImgCB& accumulation_cb,
+        const IntImgCB& intimg_cb,
         const CoreRangeSet& core_range_set,
         const uint32_t& tiles_num);
 
@@ -63,17 +66,15 @@ struct IntImgProgramFactory {
         const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
         const std::vector<uint32_t>& runtime_args = {});
 
-    static CoreRangeSet generate_core_range_set(const Shape& input_shape, uint32_t block_depth) {
-        CoreRangeSet core_range_set;
-        const uint32_t num_channels = input_shape[3];
-        const uint32_t input_height = input_shape[2];
-        const uint32_t input_depth = input_shape[1];
-        constexpr uint32_t num_slices_along_channels = block_depth_ceil(num_channels, block_depth);
-        constexpr uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
-        constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, ctas.block_depth);
-
-        return core_range_set;
-    }
+    static void set_runtime_args(
+        Program& program,
+        KernelHandle reader_kernel_id,
+        KernelHandle compute_kernel_id,
+        KernelHandle writer_kernel_id,
+        const IntImgPerCoreSetWorkSplit& per_core_set_work_split,
+        uint32_t input_buffer_address,
+        uint32_t zero_tile_buffer_address,
+        uint32_t output_buffer_address);
 };
 
 }  // namespace ttnn::operations::experimental::reduction

@@ -12,161 +12,107 @@
 
 namespace {
 
-// template <typename addr_gen_t>
-// FORCE_INLINE void write_to_dram(
-//     uint32_t cb, const addr_gen_t& addr_gtor, uint32_t write_tile_id, uint32_t num_tiles = ONE_TILE) {
-//     ReadCBGuard read_guard{cb, num_tiles};
-
-//     uint32_t l1_read_addr{get_read_ptr(cb)};
-//     noc_async_write_tile(write_tile_id, addr_gtor, l1_read_addr);
-//     noc_async_write_barrier();
-// }
-
-// template <typename addr_gen_type>
-// FORCE_INLINE void load_to_cb(
-//     uint32_t cb, const addr_gen_type& addr_gtor, uint32_t read_tile_id, uint32_t num_tiles = ONE_TILE) {
-//     WriteCBGuard write_guard{cb, num_tiles};
-
-//     uint32_t l1_write_addr{get_write_ptr(cb)};
-//     noc_async_read_tile(read_tile_id, addr_gtor, l1_write_addr);
-//     noc_async_read_barrier();
-// }
+constexpr uint32_t FIRST_ROW_ORD = 0;
+constexpr uint32_t LAST_ROW_ORD = 32 - 1;
 
 template <typename output_addr_gen_t>
-FORCE_INLINE void receive_upper_block(
-    const output_addr_gen_t& output_addr_gen,
-    uint32_t cb_axis_3_buffer_write,
-    uint32_t channels_slice_i,
-    uint32_t column_block_i,
-    uint32_t row_block_i,
-    uint32_t num_blocks_in_row,
-    uint32_t num_blocks_in_column,
-    uint32_t num_slices_along_channels,
-    uint32_t block_depth,
-    uint32_t generic_block_depth = 32) {
-    for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
-        const uint32_t read_tile_id = get_tile_id(
-            num_blocks_in_row,
-            num_blocks_in_column,
-            num_slices_along_channels,
-            tile_i,
-            channels_slice_i,
-            row_block_i,
-            column_block_i,
-            // block_depth,
-            generic_block_depth);
-        load_to_cb(cb_axis_3_buffer_write, output_addr_gen, read_tile_id, ONE_TILE);
-    }
-}
-
-template <typename output_addr_gen_t>
-FORCE_INLINE void output_block(
-    const output_addr_gen_t& output_addr_gen,
+FORCE_INLINE void receive_whole_row(
+    const input_addr_gen_t& output_addr_gen,
     uint32_t cb_output,
     uint32_t channels_slice_i,
-    uint32_t column_block_i,
-    uint32_t row_block_i,
-    uint32_t num_blocks_in_row,
-    uint32_t num_blocks_in_column,
-    uint32_t num_slices_along_channels,
-    uint32_t block_depth,
-    uint32_t generic_block_depth = 32) {
-    for (uint32_t inner_tile_stride = 0; inner_tile_stride < block_depth; ++inner_tile_stride) {
-        const uint32_t write_tile_id = get_tile_id(
-            num_blocks_in_row,
-            num_blocks_in_column,
-            num_slices_along_channels,
-            inner_tile_stride,
-            channels_slice_i,
-            row_block_i,
-            column_block_i,
-            // block_depth,
-            generic_block_depth);
+    // uint32_t column_block_i,
+    uint32_t row_chunk_i,
+    // uint32_t num_blocks_in_row,
+    uint32_t input_depth,
+    uint32_t num_tiles_in_column,
+    uint32_t num_tiles_along_channels) {
+    for (uint32_t row_tile_stride = 0; row_tile_stride < input_depth; ++row_tile_stride) {
+        const uint32_t write_tile_id =
+            get_tile_id(num_tiles_in_column, num_tiles_along_channels, row_tile_stride, channels_slice_i, row_chunk_i);
         write_to_dram(cb_output, output_addr_gen, write_tile_id);
     }
 }
 
-template <typename output_number_t, typename output_addr_gen_t>
-FORCE_INLINE void broadcast_last_row_to_all_rows_in_cube(
-    const output_addr_gen_t& output_addr_gen,
-    uint32_t axis_3_propagation_read_cb,
-    uint32_t axis_3_propagation_write_cb,
-    uint32_t block_depth = 32) {
-    // get the output after processing previous row (the block right above the currently processed block)
-    // make the axis 3 propagation tile
-    // push back to the compute
-    constexpr uint32_t LAST_ROW_ORD = 32 - 1;
-    for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
-        ReadCBGuard propagation_upper_read_guard{axis_3_propagation_read_cb, ONE_TILE};
-        WriteCBGuard propagation_upper_write_guard{axis_3_propagation_write_cb, ONE_TILE};
-        uint32_t propagation_read_addr = get_read_ptr(axis_3_propagation_read_cb);
-        uint32_t propagation_write_addr = get_write_ptr(axis_3_propagation_write_cb);
-        volatile tt_l1_ptr output_number_t* propagation_read_ptr =
-            reinterpret_cast<volatile tt_l1_ptr output_number_t*>(propagation_read_addr);
-        volatile tt_l1_ptr output_number_t* propagation_write_ptr =
-            reinterpret_cast<volatile tt_l1_ptr output_number_t*>(propagation_write_addr);
-        for (uint32_t column_read_i = 0; column_read_i < 32; ++column_read_i) {  // TODO(jbbieniekTT): no magic in code!
-            output_number_t value_to_broadcast =
+template <typename output_number_t>
+FORCE_INLINE void broadcast_last_row_of_upper_tile_to_all_rows_in_current_tile(
+    uint32_t axis_3_propagation_read_cb, uint32_t axis_3_propagation_write_cb) {
+    ReadCBGuard propagation_upper_read_guard{axis_3_propagation_read_cb, ONE_TILE};
+    WriteCBGuard propagation_upper_write_guard{axis_3_propagation_write_cb, ONE_TILE};
+    uint32_t propagation_read_addr = get_read_ptr(axis_3_propagation_read_cb);
+    uint32_t propagation_write_addr = get_write_ptr(axis_3_propagation_write_cb);
+    volatile tt_l1_ptr output_number_t* propagation_read_ptr =
+        reinterpret_cast<volatile tt_l1_ptr output_number_t*>(propagation_read_addr);
+    volatile tt_l1_ptr output_number_t* propagation_write_ptr =
+        reinterpret_cast<volatile tt_l1_ptr output_number_t*>(propagation_write_addr);
+    for (uint32_t column_read_i = 0; column_read_i < 32; ++column_read_i) {  // TODO(jbbieniekTT): no magic in code! ()
+        for (uint32_t row_write_i = 0; row_write_i < 32; ++row_write_i) {
+            propagation_write_ptr[get_coord_from_tile_xy(column_read_i, row_write_i)] =
                 propagation_read_ptr[get_coord_from_tile_xy(column_read_i, LAST_ROW_ORD)];
-            for (uint32_t row_write_i = 0; row_write_i < 32; ++row_write_i) {
-                propagation_write_ptr[get_coord_from_tile_xy(column_read_i, row_write_i)] = value_to_broadcast;
-            }
         }
     }
+}
+
+FORCE_INLINE void pass_tile_to_lower_core(
+    uint32_t lower_core_x,
+    uint32_t lower_core_y,
+    uint32_t my_bot_semaphore_id,
+    uint32_t their_top_semaphore_id,
+    uint32_t cb_local_data_in,
+    uint32_t cb_remote_data_out) {
+    const uint64_t their_top_semaphore_addr = get_noc_addr(lower_core_x, lower_core_y, their_top_semaphore_id);
+    volatile tt_l1_ptr uint32_t* my_bot_semaphore_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(my_bot_semaphore_id);
+
+    ReadCBGuard cb_local_data_in_guard{cb_local_data_in, ONE_TILE};
+
+    noc_semaphore_wait(my_bot_semaphore_ptr, SEMAPHORE_READY);
+    const auto cb_remote_data_out_ptr = get_write_ptr(cb_remote_data_out);
+    const uint64_t their_cb_write_addr = get_noc_addr(lower_core_x, lower_core_y, cb_remote_data_out_ptr);
+    const auto cb_local_data_in_ptr = get_read_ptr(cb_local_data_in);
+
+    noc_async_write(cb_local_data_in_ptr, their_cb_write_addr, get_tile_size(cb_remote_data_out));
+    noc_async_write_barrier();
+
+    noc_semaphore_inc(their_top_semaphore_addr, SEMAPHORE_READY) noc_async_atomic_barrier();
+    noc_semaphore_set(my_bot_semaphore_set, SEMAPHORE_BUSY);
 }
 
 }  // namespace
 
 void kernel_main() {
-    const uint32_t output_base_addr = get_arg_val<uint32_t>(0);
+    const auto rtas = get_rtas();
     constexpr auto ctas = get_ctas();
     using output_number_type = std_type_t<get_dataformat(ctas.output_cb)>;
-    const auto output_addr_gtor = TensorAccessor(ctas.output_args, output_base_addr, get_tile_size(ctas.output_cb));
-    constexpr uint32_t num_slices_along_channels = block_depth_ceil(
-        ctas.num_channels, ctas.block_depth);  // block_depth is expected to be a power of 2 (the default is the regular
-                                               // 32x32 tile's width/height size, that is, 32)
-    constexpr uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
-    constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, ctas.block_depth);
+    const auto output_addr_gtor = TensorAccessor(rtas.output_args, rtas.output_base_addr, get_tile_size(ctas.input_cb));
+    const uint32_t lower_tile_semaphore_id = get_semaphore<uint32_t>(ctas.lower_tile_semaphore);
 
-    for (uint32_t batch_i = 0; batch_i < ctas.num_batches;
-         ++batch_i) {  // only one batch expected, unit tests don't cover more, also not everything is implemented in
-                       // terms of num_batches > 1
-        for (uint32_t channels_slice_i = 0; channels_slice_i < num_slices_along_channels; ++channels_slice_i) {
-            for (uint32_t row_chunk_i = 0; row_chunk_i < num_blocks_in_column; ++row_chunk_i) {
-                for (uint32_t column_block_i = 0; column_block_i < num_blocks_in_row; ++column_block_i) {
-                    const uint32_t block_depth =
-                        std::min(ctas.input_depth - column_block_i * ctas.block_depth, ctas.block_depth);
-                    if (row_chunk_i > 0) {
-                        receive_upper_block(
-                            output_addr_gtor,
-                            ctas.axis_3_buffer_0_cb,
-                            channels_slice_i,
-                            column_block_i,
-                            row_chunk_i - 1,
-                            num_blocks_in_row,
-                            num_blocks_in_column,
-                            num_slices_along_channels,
-                            block_depth,
-                            ctas.block_depth);
-                        broadcast_last_row_to_all_rows_in_cube<output_number_type, decltype(output_addr_gtor)>(
-                            output_addr_gtor, ctas.axis_3_buffer_0_cb, ctas.axis_3_buffer_1_cb, block_depth);
-                        // DPRINT << "AFTER BROADCAST: channel/row/column/depth: " << channels_slice_i << "/"
-                        //        << row_chunk_i << "/" << column_block_i << "/" << block_depth << ENDL();
-                    }
-                    output_block(
-                        output_addr_gtor,
-                        ctas.output_cb,
-                        channels_slice_i,
-                        column_block_i,
-                        row_chunk_i,
-                        num_blocks_in_row,
-                        num_blocks_in_column,
-                        num_slices_along_channels,
-                        block_depth,
-                        ctas.block_depth);
-                    // DPRINT << "AFTER OUTPUTTING A BLOCK: channel/row/column/depth: " << channels_slice_i << "/"
-                    //        << row_chunk_i << "/" << column_block_i << "/" << block_depth << ENDL();
+    // 90 DEGREES FLIP!!!!!!!!!!!!111111ONEONEONEONEONEONEONEONOENONEONEON
+    constexpr uint32_t core_x = get_absolute_logical_x();  // from 0 up to 4 (5 cores) - treated as "vertical"!
+    constexpr uint32_t upper_core_x = core_x - 1;
+    constexpr uint32_t lower_core_x = core_x + 1;
+    constexpr uint32_t core_y = get_absolute_logical_y();  // from 0 up to 3 (4 cores) - treated as "horizontal"!
+    constexpr uint32_t upper_core_y = core_y;
+    constexpr uint32_t lower_core_y = core_y;
+    const uint32_t ending_tile_along_channels =
+        rtas.starting_tile_along_channels + rtas.num_tiles_along_channels_per_core;
+    const uint32_t ending_tile_along_height = rtas.starting_tile_along_height + rtas.num_tiles_along_height_per_core;
+    for (uint32_t channels_slice_i = rtas.starting_tile_along_channels; channels_slice_i < ending_tile_along_channels;
+         ++channels_slice_i) {
+        for (uint32_t column_tile_i = rtas.starting_tile_along_height; column_tile_i < ending_tile_along_height;
+             ++column_tile_i) {
+            for (uint32_t row_tile_i = 0; row_tile_i < ctas.input_depth; ++row_tile_i) {
+                const uint32_t write_tile_id = get_tile_id(
+                    ctas.num_tiles_in_column,
+                    ctas.num_tiles_along_channels,
+                    row_tile_i,
+                    channels_slice_i,
+                    column_tile_i);
+
+                if (row_chunk_i < ctas.num_tiles_along_height - 1) {
+                    pass_tile_to_lower_core(
+                        lower_core_x, lower_core_y, bot_semaphore_id, top_semaphore_id, ctas.to_bot_stage_tile);
                 }
+                write_tile_to_dram(output_addr_gtor, ctas.output_cb, write_tile_id, ONE_TILE);
             }
         }
     }

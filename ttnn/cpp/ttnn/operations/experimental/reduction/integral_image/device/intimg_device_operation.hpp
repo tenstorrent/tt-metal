@@ -6,9 +6,8 @@
 
 #include "intimg_device_operation_types.hpp"
 
-#include <cstdint>
-
 #include "intimg_program_factory.hpp"
+#include "intimg_work_split.hpp"
 
 #include <optional>
 #include <type_traits>
