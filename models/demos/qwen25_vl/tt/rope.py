@@ -222,6 +222,3 @@ class RotarySetup(LightweightModule):
         assert self.transformation_mat is not None, "Transformation matrix not initialized"
         assert self.transformation_mat_prefill is not None, "Prefill Transformation matrix not initialized"
         return {"decode": self.transformation_mat, "prefill": self.transformation_mat_prefill}
-
-    def rotary_embed(self, position_idxs):
-        pass
