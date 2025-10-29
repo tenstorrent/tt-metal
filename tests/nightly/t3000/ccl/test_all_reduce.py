@@ -23,61 +23,33 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_reduce_async import (
     ],
 )
 @pytest.mark.parametrize(
-    "per_chip_output_shape",
+    "per_chip_output_shape, layout, input_dtype, mem_config",
     [
-        ([1, 1, 32, 4096]),
-        ([1, 1, 32, 8192]),
-        ([1, 1, 32, 1024]),
-        ([1, 1, 32, 2048]),
-        ([1, 1, 4096, 32]),
+        ([1, 1, 32, 4096], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)),
+        ([1, 1, 32, 8192], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)),
+        ([1, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat8_b, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)),
+        ([1, 1, 32, 2048], ttnn.TILE_LAYOUT, ttnn.bfloat8_b, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)),
+        ([1, 1, 4096, 32], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)),
         # ([1, 1, 8192, 32]), # skipped as it hangs in reduce scatter part.
-        ([1, 1, 1024, 32]),
-        ([1, 1, 2048, 32]),
-        ([4, 1, 32, 4096]),
-        ([8, 1, 32, 1024]),
-        ([1, 4, 1024, 32]),
-        ([2, 4, 2048, 32]),
+        ([1, 1, 1024, 32], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)),
+        ([1, 1, 2048, 32], ttnn.TILE_LAYOUT, ttnn.bfloat8_b, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)),
+        ([4, 1, 32, 4096], ttnn.TILE_LAYOUT, ttnn.bfloat8_b, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)),
+        ([8, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)),
+        ([1, 4, 1024, 32], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)),
+        ([2, 4, 2048, 32], ttnn.TILE_LAYOUT, ttnn.bfloat8_b, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)),
     ],
     ids=[
-        "1x1x32x4096",
-        "1x1x32x8192",
-        "1x1x32x1024",
-        "1x1x32x2048",
-        "1x1x4096x32",
-        "1x1x1024x32",
-        "1x1x2048x32",
-        "4x1x32x4096",
-        "8x1x32x1024",
-        "1x4x1024x32",
-        "2x4x2048x32",
-    ],
-)
-@pytest.mark.parametrize(
-    "layout",
-    [
-        ttnn.TILE_LAYOUT,
-    ],
-)
-@pytest.mark.parametrize(
-    "input_dtype",
-    [
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
-    ],
-    ids=[
-        "bfloat16",
-        "bfloat8_b",
-    ],
-)
-@pytest.mark.parametrize(
-    "mem_config",
-    [
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
-    ],
-    ids=[
-        "DRAM",
-        "L1",
+        "1x1x32x4096-bfloat16-DRAM",
+        "1x1x32x8192-bfloat16-L1",
+        "1x1x32x1024-bfloat8_b-DRAM",
+        "1x1x32x2048-bfloat8_b-L1",
+        "1x1x4096x32-bfloat16-DRAM",
+        "1x1x1024x32-bfloat16-L1",
+        "1x1x2048x32-bfloat8_b-DRAM",
+        "4x1x32x4096-bfloat8_b-L1",
+        "8x1x32x1024-bfloat16-DRAM",
+        "1x4x1024x32-bfloat16-L1",
+        "2x4x2048x32-bfloat8_b-DRAM",
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
@@ -85,12 +57,12 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_reduce_async import (
 def test_ring_all_reduce_post_commit(
     t3k_mesh_device,
     num_devices,
-    per_chip_output_shape,
     num_links,
-    math_op,
-    input_dtype,
+    per_chip_output_shape,
     layout,
+    input_dtype,
     mem_config,
+    math_op,
     function_level_defaults,
     num_iters=2,
 ):

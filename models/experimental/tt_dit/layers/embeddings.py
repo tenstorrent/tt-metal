@@ -83,6 +83,80 @@ class SD35CombinedTimestepTextProjEmbeddings(Module):
         return timesteps_emb + text_emb
 
 
+class CombinedTimestepGuidanceTextProjEmbeddings(Module):
+    def __init__(
+        self,
+        *,
+        embedding_dim: int,
+        pooled_projection_dim: int,
+        mesh_device: ttnn.MeshDevice | None = None,
+        with_guidance: bool = True,
+    ) -> None:
+        super().__init__()
+
+        self.embedding_dim = embedding_dim
+        self.pooled_projection_dim = pooled_projection_dim
+        self.mesh_device = mesh_device
+        self.with_guidance = with_guidance
+
+        self.timestep_embedder = TimestepEmbedding(256, embedding_dim, mesh_device=mesh_device)
+        self.guidance_embedder = (
+            TimestepEmbedding(256, embedding_dim, mesh_device=mesh_device) if with_guidance else None
+        )
+        self.text_embedder = PixartAlphaTextProjection(pooled_projection_dim, embedding_dim, mesh_device=mesh_device)
+
+        self.time_proj_factor = self._create_time_proj_factor(256)
+
+    def _create_time_proj_factor(self, num_channels) -> ttnn.Tensor:
+        assert num_channels % 2 == 0
+        half_dim = num_channels // 2
+
+        max_period = 10000
+
+        exponent = -math.log(max_period) * torch.arange(start=0, end=half_dim, dtype=torch.float32)
+        exponent = exponent / half_dim
+        factor = torch.exp(exponent)
+
+        return ttnn.unsqueeze_to_4D(bf16_tensor(factor, device=self.mesh_device))
+
+    # In order to avoid calling `unsqueeze` in this function, we expect already unsqueezed rank two
+    # `timestep` and `guidance` tensors.
+    def forward(
+        self,
+        *,
+        timestep: ttnn.Tensor,
+        guidance: ttnn.Tensor | None = None,
+        pooled_projection: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        batch_size = pooled_projection.shape[0]
+
+        assert len(pooled_projection.shape) == 2
+        assert timestep.shape == [batch_size, 1]
+        assert timestep.dtype == ttnn.float32, "timesteps require float32 precision"
+
+        emb = timestep * self.time_proj_factor
+        c = ttnn.cos(emb)
+        s = ttnn.sin(emb)
+        timesteps_proj = ttnn.concat([c, s], dim=-1)
+        timesteps_emb = self.timestep_embedder(timesteps_proj)
+
+        text_emb = self.text_embedder(pooled_projection)
+
+        if not self.with_guidance:
+            return timesteps_emb + text_emb
+
+        assert guidance is not None
+        assert guidance.shape == [batch_size, 1]
+
+        emb = guidance * self.time_proj_factor
+        c = ttnn.cos(emb)
+        s = ttnn.sin(emb)
+        guidances_proj = ttnn.concat([c, s], dim=-1)
+        guidance_emb = self.guidance_embedder(guidances_proj)
+
+        return timesteps_emb + guidance_emb + text_emb
+
+
 class PatchEmbed(Module):
     """
     Patch embedding with unfolded conv2d implementation.

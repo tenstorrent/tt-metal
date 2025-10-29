@@ -173,7 +173,6 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-logical-op-parentheses>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-reorder-ctor>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-unknown-pragmas>"
     "$<$<CXX_COMPILER_ID:Clang>:SHELL:-Xclang -fno-pch-timestamp>" # ccache-friendly PCH flag
     "$<$<CXX_COMPILER_ID:GNU>:-fpch-preprocess>" # ccache-friendly PCH flag
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-array-bounds>"
