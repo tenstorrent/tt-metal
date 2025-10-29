@@ -49,6 +49,7 @@
 #include <ttnn/operations/eltwise/unary_backward/unary_backward.hpp>                                       // NOLINT
 #include <ttnn/operations/embedding/embedding.hpp>                                                         // NOLINT
 #include <ttnn/operations/embedding_backward/embedding_backward.hpp>                                       // NOLINT
+#include <ttnn/operations/ccl/common/host/moe_utils.hpp>                                                   // NOLINT
 #include <ttnn/operations/ccl/all_gather/all_gather.hpp>                                                   // NOLINT
 #include <ttnn/operations/ccl/all_reduce/all_reduce.hpp>                                                   // NOLINT
 #include <ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp>                                           // NOLINT
