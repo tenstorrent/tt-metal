@@ -13,7 +13,35 @@ on:
         default: '15'
 
 jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      workflow_configs: ${{ steps.config.outputs.workflow_configs }}
+    steps:
+      - name: Set workflow configs
+        id: config
+        run: |
+          echo 'workflow_configs<<EOF' >> $GITHUB_OUTPUT
+          cat >> $GITHUB_OUTPUT <<'CONFIG'
+          [
+            {"display": "All post-commit tests", "wkflw_name": "All post-commit tests"},
+            {"display": "Blackhole post-commit tests", "wkflw_name": "Blackhole post-commit tests"},
+            {"display": "(Blackhole) prefix", "wkflw_prefix": "(Blackhole)"},
+            {"display": "(TG) prefix", "wkflw_prefix": "(TG)"},
+            {"display": "Galaxy prefix", "wkflw_prefix": "Galaxy"},
+            {"display": "(T3K) prefix", "wkflw_prefix": "(T3K)"},
+            {"display": "(Single-card) prefix", "wkflw_prefix": "(Single-card)"},
+            {"display": "Nightly tt-metal L2 tests", "wkflw_name": "Nightly tt-metal L2 tests"},
+            {"display": "ttnn - Run sweeps", "wkflw_name": "ttnn - Run sweeps"},
+            {"display": "vLLM nightly tests", "wkflw_name": "vLLM nightly tests"},
+            {"display": "Metal microbenchmarks", "wkflw_name": "metal - Run microbenchmarks"},
+            {"display": "APC nightly debug run", "wkflw_name": "apc nightly debug run"}
+          ]
+          CONFIG
+          echo 'EOF' >> $GITHUB_OUTPUT
+
   fetch-data:
+    needs: setup
     runs-on: ubuntu-latest
     outputs:
       cache-path: ${{ steps.fetch.outputs.cache-path }}
@@ -38,6 +66,7 @@ jobs:
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           days: ${{ github.event.inputs.days || 15 }}
+          workflow_configs: ${{ needs.setup.outputs.workflow_configs }}
       - name: Upload workflow data
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
         with:
@@ -90,7 +119,7 @@ jobs:
         run: ls -l ${{ github.workspace }}/workflow-data.json || echo "File not found"
 
   analyze-data:
-    needs: fetch-data
+    needs: [setup, fetch-data]
     runs-on: ubuntu-latest
     outputs:
       failed_workflows: ${{ steps.analyze.outputs.failed_workflows }}
@@ -192,21 +221,7 @@ jobs:
           other-logs-index-path: ${{ github.workspace }}/logs/other/other-logs-index.json
           last-success-timestamps-path: ${{ github.workspace }}/last-success-timestamps.json
           alert-all: 'false'
-          workflow_configs: |
-            [
-              {"display": "All post-commit tests", "wkflw_name": "All post-commit tests"},
-              {"display": "Blackhole post-commit tests", "wkflw_name": "Blackhole post-commit tests"},
-              {"display": "(Blackhole) prefix", "wkflw_prefix": "(Blackhole)"},
-              {"display": "(TG) prefix", "wkflw_prefix": "(TG)"},
-              {"display": "Galaxy prefix", "wkflw_prefix": "Galaxy"},
-              {"display": "(T3K) prefix", "wkflw_prefix": "(T3K)"},
-              {"display": "(Single-card) prefix", "wkflw_prefix": "(Single-card)"},
-              {"display": "Nightly tt-metal L2 tests", "wkflw_name": "Nightly tt-metal L2 tests"},
-              {"display": "ttnn - Run sweeps", "wkflw_name": "ttnn - Run sweeps"},
-              {"display": "vLLM nightly tests", "wkflw_name": "vLLM nightly tests"},
-              {"display": "Metal microbenchmarks", "wkflw_name": "metal - Run microbenchmarks"},
-              {"display": "APC nightly debug run", "wkflw_name": "apc nightly debug run"}
-            ]
+          workflow_configs: ${{ needs.setup.outputs.workflow_configs }}
       - name: Upload status changes artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
         with:

@@ -259,6 +259,27 @@ function pruneCommits(commits, cutoffDate) {
 }
 
 /**
+ * Check if a workflow name matches any configuration in workflow_configs.
+ * @param {string} workflowName - Name of the workflow to check
+ * @param {Array} workflowConfigs - Array of config objects with wkflw_name or wkflw_prefix
+ * @returns {boolean} True if workflow matches any config
+ */
+function workflowMatchesConfig(workflowName, workflowConfigs) {
+  if (!Array.isArray(workflowConfigs) || workflowConfigs.length === 0) {
+    return true; // If no configs provided, match all workflows (backward compatibility)
+  }
+  for (const config of workflowConfigs) {
+    if (config.wkflw_name && workflowName === config.wkflw_name) {
+      return true;
+    }
+    if (config.wkflw_prefix && workflowName.startsWith(config.wkflw_prefix)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Main entrypoint for the action.
  * Loads previous cache, fetches new runs, merges/deduplicates, and saves updated cache.
  */
@@ -270,6 +291,22 @@ async function run() {
     const rawCachePath = core.getInput('cache-path', { required: false });
     const defaultOutputPath = path.join(process.env.GITHUB_WORKSPACE || process.cwd(), 'workflow-data.json');
     const outputPath = rawCachePath && rawCachePath.trim() ? rawCachePath : defaultOutputPath;
+    const workflowConfigsInput = core.getInput('workflow_configs', { required: false });
+    let workflowConfigs = [];
+    if (workflowConfigsInput) {
+      try {
+        workflowConfigs = JSON.parse(workflowConfigsInput);
+        if (!Array.isArray(workflowConfigs)) {
+          core.warning('[CONFIG] workflow_configs is not an array, ignoring');
+          workflowConfigs = [];
+        } else {
+          core.info(`[CONFIG] Loaded ${workflowConfigs.length} workflow configurations`);
+        }
+      } catch (e) {
+        core.warning(`[CONFIG] Failed to parse workflow_configs: ${e.message}`);
+        workflowConfigs = [];
+      }
+    }
     // Create authenticated Octokit client
     const octokit = github.getOctokit(core.getInput('GITHUB_TOKEN', { required: true }));
     const owner = github.context.repo.owner;
@@ -698,7 +735,24 @@ async function run() {
     const lastSuccessTimestamps = new Map(Object.entries(cachedLastSuccessTimestamps || {}));
     core.info(`[LAST_SUCCESS] Starting last success search (cached: ${lastSuccessTimestamps.size} workflows)`);
 
-    for (const [name, runs] of grouped.entries()) {
+    // Filter workflows to only those matching the configuration (if provided)
+    const workflowsToCheck = [];
+    if (workflowConfigs.length > 0) {
+      for (const [name, runs] of grouped.entries()) {
+        if (workflowMatchesConfig(name, workflowConfigs)) {
+          workflowsToCheck.push([name, runs]);
+        } else {
+          core.info(`[LAST_SUCCESS] Skipping workflow '${name}' (not in workflow_configs)`);
+        }
+      }
+      core.info(`[LAST_SUCCESS] Filtered to ${workflowsToCheck.length} workflows matching config (out of ${grouped.size} total)`);
+    } else {
+      // If no configs provided, check all workflows (backward compatibility)
+      workflowsToCheck.push(...grouped.entries());
+      core.info(`[LAST_SUCCESS] No workflow_configs provided, checking all ${workflowsToCheck.length} workflows`);
+    }
+
+    for (const [name, runs] of workflowsToCheck) {
       try {
         // Check if latest run on main is failing
         const mainRuns = runs
