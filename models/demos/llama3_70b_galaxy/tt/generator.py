@@ -403,12 +403,28 @@ class Generator:
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
+        bitmask=None,
     ):
         if sampling_params is None:
             return_logits = True
             reset_inputs = True
         else:
             return_logits = False
+
+        if bitmask is not None:
+            bitmask_tt = ttnn.from_torch(
+                bitmask,
+                device=None,
+                dtype=ttnn.int32,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, dims=(-1, None), mesh_shape=self.args.cluster_shape
+                ),
+            )
+            if model.bitmask is not None:
+                copy_host_to_device(bitmask_tt, self.model.bitmask)
+            else:
+                self.model.bitmask = copy_host_to_device(bitmask_tt, self.mesh_device)
 
         if self.prev_page_table is None:
             self.prev_page_table = (
