@@ -249,7 +249,7 @@ jobs:
   check-stable-for-new-commits:
     runs-on: ubuntu-latest
     #Only run on schedule or main branch pushes
-    # if: ${{ github.event_name == 'schedule' || github.ref == 'refs/heads/main' }}
+    if: ${{ github.event_name == 'schedule' || github.ref == 'refs/heads/main' }}
     steps:
       - name: Checkout stable branch
         uses: actions/checkout@v4
