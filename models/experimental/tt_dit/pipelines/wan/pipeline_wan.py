@@ -213,6 +213,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 model_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
                 subfolder="transformer",
                 parallel_config=self.parallel_config,
+                mesh_shape=tuple(self.mesh_device.shape),
                 dtype="bf16",
             )
             # create cache if it doesn't exist
@@ -254,6 +255,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 model_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
                 subfolder="transformer_2",
                 parallel_config=self.parallel_config,
+                mesh_shape=tuple(self.mesh_device.shape),
                 dtype="bf16",
             )
             # create cache if it doesn't exist
