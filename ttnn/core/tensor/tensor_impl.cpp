@@ -568,7 +568,9 @@ Tensor to_host(const Tensor& tensor, bool blocking, std::optional<ttnn::QueueId>
     mesh_cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
     HostStorage host_storage(std::move(distributed_host_buffer));
-    return Tensor(std::move(host_storage), tensor.tensor_spec(), tensor.tensor_topology());
+    auto output = Tensor(std::move(host_storage), tensor.tensor_spec(), tensor.tensor_topology());
+    output.set_producer_node(tensor.producer_node());
+    return output;
 }
 
 template Tensor to_host<bfloat16>(const Tensor& tensor, bool blocking, std::optional<ttnn::QueueId> cq_id);

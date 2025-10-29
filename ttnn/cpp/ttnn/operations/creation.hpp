@@ -18,7 +18,10 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/experimental/jit/lazy_tensor.hpp"
+#include "ttnn/experimental/jit/lazy_operation.hpp"
 
+#pragma optimize("", off)
 namespace ttnn {
 namespace operations {
 namespace creation {
@@ -242,15 +245,66 @@ struct OnesLike : FullLikeWith<1.0f> {};
 inline constexpr ZerosLike zeros_like{};
 inline constexpr OnesLike ones_like{};
 
-struct Empty {
+struct Empty : public ttnn::experimental::jit::LazyOperation {
+    ttnn::Shape shape;
+    DataType dtype;
+    Layout layout;
+    MeshDevice* device;
+    MemoryConfig memory_config;
+
+    virtual ~Empty() {}
+    // This is being called from the binding layer, ttnn::empty -> this invoke
+    // I return a lazy tensor
+    template <typename... Args>
+    static ttnn::experimental::jit::LazyTensor new_invoke(Args&&... args) {
+        // Create an instance of Empty
+        std::shared_ptr<Empty> operation_struct = std::make_shared<Empty>();
+
+        // Helper lambda to map arguments to properties
+        auto map_args = [&operation_struct](auto&&... vals) {
+            (
+                [&operation_struct](auto&& val) {
+                    using T = std::decay_t<decltype(val)>;
+                    if constexpr (std::is_same_v<T, ttnn::Shape>) {
+                        operation_struct->shape = val;
+                    } else if constexpr (
+                        std::is_same_v<T, DataType> || std::is_same_v<T, std::remove_reference_t<DataType>>) {
+                        operation_struct->dtype = val;
+                    } else if constexpr (std::is_same_v<T, Layout>) {
+                        operation_struct->layout = val;
+                    } else if constexpr (std::is_same_v<T, MeshDevice*> || std::is_pointer_v<T>) {
+                        operation_struct->device = val;
+                    } else if constexpr (
+                        std::is_same_v<T, MemoryConfig> || std::is_same_v<T, std::remove_reference_t<MemoryConfig>>) {
+                        operation_struct->memory_config = val;
+                    }
+                }(std::forward<decltype(vals)>(vals)),
+                ...);
+        };
+
+        map_args(std::forward<Args>(args)...);
+
+        ttnn::experimental::jit::LazyTensor lazy_tensor(
+            std::vector<ttnn::experimental::jit::LazyTensor>{}, std::move(operation_struct));
+        return lazy_tensor;
+    }
+
+    // this is also being called from the binding layer, but its going to happen if the previousw method does not exists
+    // just for the sake of compatibility
+    // This will also take care of executing the operation when I need to materialize it d
     static Tensor invoke(
         const ttnn::Shape& shape,
         const DataType& dtype,
         const Layout& layout,
         MeshDevice* device,
         const MemoryConfig& memory_config) {
-        return allocate_tensor_on_device(
-            TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device);
+        return {allocate_tensor_on_device(
+            TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device)};
+    }
+
+    // When the LazyTensor is evaluated, I actually return tensors in device
+    std::vector<Tensor> invoke(std::vector<ttnn::experimental::jit::LazyTensor> input_tensors) override {
+        return {Empty::invoke(shape, dtype, layout, device, memory_config)};
     }
 };
 

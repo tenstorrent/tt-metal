@@ -31,7 +31,7 @@
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 #include "ttnn/tensor/layout/layout.hpp"
 #include "types.hpp"
-
+#include "ttnn/experimental/jit/to_organize.hpp"
 namespace tt {
 
 namespace tt_metal {
@@ -262,9 +262,16 @@ public:
             this->tensor_attributes->get_storage(), this->tensor_attributes->get_tensor_spec());
     }
 
+    // ======================================================================================
+    //                                      Lazy evaluation
+    // ======================================================================================
+    ttnn::experimental::jit::NodeId producer_node() const { return producer_node_; }
+    void set_producer_node(ttnn::experimental::jit::NodeId node_id) { producer_node_ = node_id; }
+
 private:
     void init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     void deallocate_impl(bool force);
+    ttnn::experimental::jit::NodeId producer_node_;
 };
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);

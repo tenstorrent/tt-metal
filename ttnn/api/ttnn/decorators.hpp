@@ -62,6 +62,11 @@ concept HasInvoke = requires {
     { Op::invoke(std::declval<Args>()...) };
 };
 
+template <typename Op, typename... Args>
+concept HasNewInvoke = requires {
+    { Op::new_invoke(std::declval<Args>()...) };
+};
+
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 struct registered_operation_t {
     static constexpr auto is_primitive = PrimitiveOperationConcept<operation_t>;
@@ -113,6 +118,17 @@ private:
     }
 
     template <typename... args_t>
+        requires HasNewInvoke<operation_t, args_t&&...>
+    auto invoke_composite(args_t&&... args) const {
+        // JIT: This is ugly, but its a way to keep compatibility while testing new stuff
+        auto lazy_tensor = operation_t::new_invoke(std::forward<decltype(args)>(args)...);
+        lazy_tensor.execute();
+        auto results = lazy_tensor.get_output_tensors();
+        return results[0];
+    }
+
+    template <typename... args_t>
+        requires(!HasNewInvoke<operation_t, args_t && ...>)
     auto invoke_composite(args_t&&... args) const {
         return operation_t::invoke(std::forward<decltype(args)>(args)...);
     }
