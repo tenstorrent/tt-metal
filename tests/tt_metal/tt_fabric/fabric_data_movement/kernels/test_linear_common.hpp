@@ -4,15 +4,6 @@
 
 #pragma once
 
-#ifdef API_TYPE_Linear
-#include "tt_metal/fabric/hw/inc/linear/api.h"
-using namespace tt::tt_fabric::linear::experimental;
-#elif defined(API_TYPE_Mesh)
-#include "tt_metal/fabric/hw/inc/mesh/api.h"
-using namespace tt::tt_fabric::mesh::experimental;
-#else
-#error "API_TYPE_Linear or API_TYPE_Mesh must be defined"
-#endif
 #include "fabric/fabric_edm_packet_header.hpp"
 
 #ifdef USE_ADDRGEN
@@ -23,6 +14,16 @@ template <bool is_dram>
 InterleavedAddrGen<is_dram> create_interleaved_addrgen(uint32_t base_address, uint32_t page_size, uint32_t num_pages) {
     return InterleavedAddrGen<is_dram>{.bank_base_address = base_address, .page_size = page_size};
 }
+#endif
+
+#ifdef API_TYPE_Linear
+#include "tt_metal/fabric/hw/inc/linear/api.h"
+using namespace tt::tt_fabric::linear::experimental;
+#elif defined(API_TYPE_Mesh)
+#include "tt_metal/fabric/hw/inc/mesh/api.h"
+using namespace tt::tt_fabric::mesh::experimental;
+#else
+#error "API_TYPE_Linear or API_TYPE_Mesh must be defined"
 #endif
 
 template <uint8_t num_send_dir>

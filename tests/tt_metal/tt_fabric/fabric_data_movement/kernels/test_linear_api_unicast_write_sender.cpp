@@ -2,6 +2,31 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#ifdef USE_ADDRGEN
+#include "tt_metal/hw/inc/dataflow_api_addrgen.h"
+#include "tt_metal/fabric/hw/inc/addrgen_api_common.h"
+
+// Simple sequential addrgen for testing (no interleaving, sequential addresses on single core)
+// MUST be defined before mesh/api.h include so get_page_size overload is visible
+struct SequentialAddrGen {
+    uint32_t base_address;
+    uint32_t page_size;
+    uint32_t noc_x;
+    uint32_t noc_y;
+
+    FORCE_INLINE
+    uint64_t get_noc_addr(uint32_t id, uint32_t offset = 0, uint8_t noc = 0) const {
+        uint32_t addr = base_address + id * page_size + offset;
+        return ::get_noc_addr(noc_x, noc_y, addr, noc);
+    }
+};
+
+// Add get_page_size overload for SequentialAddrGen (MUST be before mesh/api.h include)
+namespace tt::tt_fabric::addrgen_detail {
+inline uint32_t get_page_size(const SequentialAddrGen& s) { return s.page_size; }
+}  // namespace tt::tt_fabric::addrgen_detail
+#endif
+
 #ifdef API_TYPE_Linear
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 using namespace tt::tt_fabric::linear::experimental;
@@ -227,17 +252,19 @@ void kernel_main() {
                 case NOC_UNICAST_WRITE: {
 #ifdef USE_ADDRGEN
                     if constexpr (use_addrgen) {
-                        // Compute sequential addresses manually (like base test increments target_address)
-                        uint32_t sequential_addr = addrgen_base_address + (page_id + i) * addrgen_page_size;
-                        tt::tt_fabric::NocUnicastCommandHeader noc_header{
-                            get_noc_addr(noc_x_start, noc_y_start, sequential_addr)};
+                        // Use SequentialAddrGen for sequential addressing (non-interleaved)
+                        SequentialAddrGen sequential_addrgen{
+                            .base_address = addrgen_base_address,
+                            .page_size = addrgen_page_size,
+                            .noc_x = noc_x_start,
+                            .noc_y = noc_y_start};
 
                         if constexpr (with_state) {
-                            fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                                connections, route_id, source_l1_buffer_address, noc_header, addrgen_page_size);
+                            fabric_multicast_noc_unicast_write_with_state(
+                                connections, route_id, source_l1_buffer_address, sequential_addrgen, page_id + i);
                         } else {
                             fabric_multicast_noc_unicast_write(
-                                connections, route_id, ranges, source_l1_buffer_address, addrgen_page_size, noc_header);
+                                connections, route_id, source_l1_buffer_address, sequential_addrgen, page_id + i);
                         }
                     } else
 #endif
@@ -311,17 +338,19 @@ void kernel_main() {
                 case NOC_UNICAST_WRITE: {
 #ifdef USE_ADDRGEN
                     if constexpr (use_addrgen) {
-                        // Compute sequential addresses manually (like base test increments target_address)
-                        uint32_t sequential_addr = addrgen_base_address + (page_id + i) * addrgen_page_size;
-                        tt::tt_fabric::NocUnicastCommandHeader noc_header{
-                            get_noc_addr(noc_x_start, noc_y_start, sequential_addr)};
+                        // Use SequentialAddrGen for sequential addressing (non-interleaved)
+                        SequentialAddrGen sequential_addrgen{
+                            .base_address = addrgen_base_address,
+                            .page_size = addrgen_page_size,
+                            .noc_x = noc_x_start,
+                            .noc_y = noc_y_start};
 
                         if constexpr (with_state) {
-                            fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                                connections, route_id, source_l1_buffer_address, noc_header, addrgen_page_size);
+                            fabric_unicast_noc_unicast_write_with_state(
+                                connections, route_id, source_l1_buffer_address, sequential_addrgen, page_id + i);
                         } else {
                             fabric_unicast_noc_unicast_write(
-                                connections, route_id, source_l1_buffer_address, addrgen_page_size, noc_header);
+                                connections, route_id, source_l1_buffer_address, sequential_addrgen, page_id + i);
                         }
                     } else
 #endif
