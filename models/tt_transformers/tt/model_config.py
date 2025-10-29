@@ -1826,7 +1826,7 @@ class ModelArgs:
     def is_llama_vision(self):
         return ("llama" in self.CKPT_DIR.lower()) and ("vision" in self.CKPT_DIR.lower())
 
-    def trace_supported_seq_len(self, prefill_seq_len):
+    def can_enable_trace(self, prefill_seq_len):
         """
         This function is used to determine if trace should be enabled for the prefill.
         Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
@@ -1835,25 +1835,17 @@ class ModelArgs:
         # TODO: Support sliding window attention - This PR disabled tracing if a model uses sliding window attention, because this PR mainly covers models without sliding window attention. (for example,Llama-8B).
         """
         # Define allowed sequence lengths based on device
+        if self.base_model_name != "Llama-3.1-8B":
+            return False
+        if hasattr(self, "sliding_window") and getattr(self, "sliding_window") != None:
+            return False
+
         if self.device_name == "N150":
             allowed_seq_lens = [128, 256, 512, 1024]
         else:
             allowed_seq_lens = [128, 256, 512, 1024, 2048, 4096, 8192]
 
         return prefill_seq_len in allowed_seq_lens and prefill_seq_len <= self.max_prefill_chunk_size
-
-    def model_supports_trace(self):
-        """
-        This function is used to determine if trace should be enabled for the model.
-        """
-        model_name_lower = self.model_name.lower()
-        if "mixtral" in model_name_lower:
-            return False
-        if "llama" in model_name_lower and "70b" in model_name_lower:
-            return False
-        if hasattr(self, "sliding_window") and getattr(self, "sliding_window") != None:
-            return False
-        return True
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
         text_prefix = self.state_dict_text_prefix

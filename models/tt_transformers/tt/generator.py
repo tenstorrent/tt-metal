@@ -177,8 +177,6 @@ class Generator:
             # Only paged attention is supported for prefill
             enable_trace = False
 
-        enable_trace = enable_trace and self.model_args[0].model_supports_trace()
-
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
 
@@ -206,9 +204,7 @@ class Generator:
                 [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
 
-            enable_trace_current_prompt = enable_trace and self.model_args[model_id].trace_supported_seq_len(
-                prefill_seq_len
-            )
+            enable_trace_current_prompt = enable_trace and self.model_args[model_id].can_enable_trace(prefill_seq_len)
 
             logger.info(
                 f"Prefill seq len: {prefill_seq_len}, max_prefill_chunk_size: {self.model_args[0].max_prefill_chunk_size}, trace: {enable_trace_current_prompt}"
