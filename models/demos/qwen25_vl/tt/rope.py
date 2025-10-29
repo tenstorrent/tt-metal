@@ -190,7 +190,6 @@ class RotarySetup(LightweightModule):
 
         cos = ttnn.to_layout(cos, ttnn.TILE_LAYOUT)
         sin = ttnn.to_layout(sin, ttnn.TILE_LAYOUT)
-        # } todo))
 
         cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch_size, head_dim]
         sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch_size, head_dim]
