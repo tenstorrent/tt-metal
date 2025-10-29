@@ -4,6 +4,7 @@
 
 import numpy as np
 import pytest
+
 # Try this order at the top of your test file
 import os
 import sys
@@ -34,6 +35,7 @@ from ttml.common.utils import round_up_to_tile
 
 from huggingface_hub import hf_hub_download
 
+
 @pytest.fixture(scope="session", autouse=True)
 def setup_environment():
     original_cwd = os.getcwd()
@@ -41,15 +43,17 @@ def setup_environment():
     yield
     os.chdir(original_cwd)
 
+
 @pytest.fixture
 def tinyllama_model(tokenizer):
     print("in tinyllama_model fixture")
     safetensors_path = hf_hub_download(
-        repo_id="TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T", filename="model.safetensors"
+        repo_id="TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T",
+        filename="model.safetensors",
     )
     safetensors_path = safetensors_path.replace("model.safetensors", "")
 
-    yaml_config = get_config('training_shakespeare_tinyllama.yaml')
+    yaml_config = get_config("training_shakespeare_tinyllama.yaml")
 
     orig_vocab_size = tokenizer.vocab_size
     tt_model_factory = TransformerModelFactory(yaml_config)
@@ -63,7 +67,9 @@ def tinyllama_model(tokenizer):
 
 @pytest.fixture
 def tokenizer():
-    return AutoTokenizer.from_pretrained("TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T")
+    return AutoTokenizer.from_pretrained(
+        "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
+    )
 
 
 @pytest.fixture
@@ -71,7 +77,9 @@ def causal_mask(tinyllama_model):
     # [1,1,T,T] float32 with 1s for allowed positions (i >= j), else 0\n",
     T = tinyllama_model[1].transformer_config.max_sequence_length
     m = np.tril(np.ones((T, T), dtype=np.float32))
-    return ttml.autograd.Tensor.from_numpy(m.reshape(1, 1, T, T), ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16)
+    return ttml.autograd.Tensor.from_numpy(
+        m.reshape(1, 1, T, T), ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16
+    )
 
 
 @pytest.fixture
@@ -81,7 +89,9 @@ def logits_mask_tensor(tokenizer):
 
     logits_mask = np.zeros((1, 1, 1, padded_vocab_size), dtype=np.float32)
     logits_mask[:, :, :, orig_vocab_size:] = 1e4
-    return ttml.autograd.Tensor.from_numpy(logits_mask, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16)   # [1,1,1,T], bfloat16
+    return ttml.autograd.Tensor.from_numpy(
+        logits_mask, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16
+    )  # [1,1,1,T], bfloat16
 
 
 @pytest.fixture
@@ -92,7 +102,8 @@ def output_size_128():
     with max_sequence_length=128"
     """
 
-    return '\na) a member of the family of the human race\nb) a member of the family of the animal race\nc) a member of the family of the plant race\nd) a member of the family of the mineral race\ne) a member of the family of the inorganic race\nf) a member of the family of the organic race\ng) a member of the family of the living race\nh) a member of the family of the non-living race\ni) a member of the family of the inanimate race\nj) a member of the family of the inorgan'
+    return "\na) a member of the family of the human race\nb) a member of the family of the animal race\nc) a member of the family of the plant race\nd) a member of the family of the mineral race\ne) a member of the family of the inorganic race\nf) a member of the family of the organic race\ng) a member of the family of the living race\nh) a member of the family of the non-living race\ni) a member of the family of the inanimate race\nj) a member of the family of the inorgan"
+
 
 @pytest.fixture
 def output_size_256():
@@ -101,8 +112,8 @@ def output_size_256():
     'The difference between cats and dogs is:'
     with max_sequence_length=256"
     """
- 
-    return ' 1. Cats are more intelligent than dogs. 2. Cats are more social than dogs. 3. Cats are more independent than dogs. 4. Cats are more active than dogs. 5. Cats are more intelligent than dogs. 6. Cats are more social than dogs. 7. Cats are more independent than dogs. 8. Cats are more active than dogs. 9. Cats are more intelligent than dogs. 10. Cats are more social than dogs. 11. Cats are more independent than dogs. 12. Cats are more active than dogs. 13. Cats are more intelligent than dogs. 14. Cats are more social than dogs. 15. Cats are more independent than dogs. 16. Cats are more active than dogs. 17. Cats are more intelligent than dogs. 18. Cats are more social than dogs. 19. Cats are more independent than dogs. 20. Cats are more active than dogs. 21. Cats are more intelligent than dogs. 22. Cats are'
+
+    return " 1. Cats are more intelligent than dogs. 2. Cats are more social than dogs. 3. Cats are more independent than dogs. 4. Cats are more active than dogs. 5. Cats are more intelligent than dogs. 6. Cats are more social than dogs. 7. Cats are more independent than dogs. 8. Cats are more active than dogs. 9. Cats are more intelligent than dogs. 10. Cats are more social than dogs. 11. Cats are more independent than dogs. 12. Cats are more active than dogs. 13. Cats are more intelligent than dogs. 14. Cats are more social than dogs. 15. Cats are more independent than dogs. 16. Cats are more active than dogs. 17. Cats are more intelligent than dogs. 18. Cats are more social than dogs. 19. Cats are more independent than dogs. 20. Cats are more active than dogs. 21. Cats are more intelligent than dogs. 22. Cats are"
 
 
 @pytest.fixture
@@ -113,7 +124,8 @@ def output_size_512():
     with max_sequence_length=512"
     """
 
-    return '\n\n\n*\n\n*Fine\n\n*Cloudy\n\n*Rainy\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are no clouds, then the weather is:\n\n\n*\n\n*Fine\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Cloudy\n\n*Rainy\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Rainy\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Cloudy\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Cloudy\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Cloudy\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n'
+    return "\n\n\n*\n\n*Fine\n\n*Cloudy\n\n*Rainy\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are no clouds, then the weather is:\n\n\n*\n\n*Fine\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Cloudy\n\n*Rainy\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Rainy\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Cloudy\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Cloudy\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Cloudy\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n"
+
 
 def generate_text_tt(
     model,
@@ -129,7 +141,9 @@ def generate_text_tt(
     Uses a sliding window if prompt exceeds max_sequence_length.
     """
     model.eval()
-    ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.DISABLED)
+    ttml.autograd.AutoContext.get_instance().set_gradient_mode(
+        ttml.autograd.GradMode.DISABLED
+    )
 
     # --- Tokenize once ---
     prompt_tokens = tokenizer.encode(prompt)
@@ -157,7 +171,9 @@ def generate_text_tt(
 
         # Refill buffer (fully) to avoid stale ids
         padded_prompt_tokens[...] = pad_token_id
-        padded_prompt_tokens[0, 0, 0, : len(window)] = np.asarray(window, dtype=np.uint32)
+        padded_prompt_tokens[0, 0, 0, : len(window)] = np.asarray(
+            window, dtype=np.uint32
+        )
 
         # [1,1,1,T] -> TT tensor
         padded_prompt_tensor = ttml.autograd.Tensor.from_numpy(
@@ -169,11 +185,17 @@ def generate_text_tt(
 
         # Sample: next tokens for all positions [1,1,T,1]
         # With temperature=0.0 this behaves like argmax/greedy.
-        next_token_tensor = ttml.ops.sample.sample_op(logits, 0.0, np.random.randint(low=1e7), logits_mask_tensor)
+        next_token_tensor = ttml.ops.sample.sample_op(
+            logits, 0.0, np.random.randint(low=1e7), logits_mask_tensor
+        )
 
         # Take the token at the last active position in the current window
         next_token_idx = 128 - 1 if len(prompt_tokens) > 128 else len(window) - 1
-        next_token = int(next_token_tensor.to_numpy(composer=composer).reshape(-1, 1)[next_token_idx][0])
+        next_token = int(
+            next_token_tensor.to_numpy(composer=composer).reshape(-1, 1)[
+                next_token_idx
+            ][0]
+        )
 
         if next_token == tokenizer.eos_token_id:
             break
@@ -182,11 +204,15 @@ def generate_text_tt(
         prompt_tokens.append(next_token)
 
     # Decode once at the end
-    ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.ENABLED)
+    ttml.autograd.AutoContext.get_instance().set_gradient_mode(
+        ttml.autograd.GradMode.ENABLED
+    )
     return tokenizer.decode(generated_tokens)
 
 
-def test_tinyllama_inference_128(tinyllama_model, tokenizer, causal_mask, logits_mask_tensor, output_size_128):
+def test_tinyllama_inference_128(
+    tinyllama_model, tokenizer, causal_mask, logits_mask_tensor, output_size_128
+):
     input_text = "A dog is:"
 
     generated_out = generate_text_tt(
@@ -202,7 +228,9 @@ def test_tinyllama_inference_128(tinyllama_model, tokenizer, causal_mask, logits
     assert generated_out == output_size_128
 
 
-def test_tinyllama_inference_256(tinyllama_model, tokenizer, causal_mask, logits_mask_tensor, output_size_256):
+def test_tinyllama_inference_256(
+    tinyllama_model, tokenizer, causal_mask, logits_mask_tensor, output_size_256
+):
     input_text = "The difference between cats and dogs is:"
 
     generated_out = generate_text_tt(
@@ -218,7 +246,9 @@ def test_tinyllama_inference_256(tinyllama_model, tokenizer, causal_mask, logits
     assert generated_out == output_size_256
 
 
-def test_tinyllama_inference_512(tinyllama_model, tokenizer, causal_mask, logits_mask_tensor, output_size_512):
+def test_tinyllama_inference_512(
+    tinyllama_model, tokenizer, causal_mask, logits_mask_tensor, output_size_512
+):
     input_text = "If the sky outside is blue, the grass is green, and there are no clouds, then the weather is:"
 
     generated_out = generate_text_tt(
