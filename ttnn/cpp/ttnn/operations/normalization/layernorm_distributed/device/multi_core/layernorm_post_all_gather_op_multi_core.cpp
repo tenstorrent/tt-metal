@@ -58,7 +58,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     float eps,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<bool> use_2d_core_grid,
-    LayerNormDistributedDefaultProgramConfig program_config) {
+    LayerNormDefaultProgramConfig program_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBHandle;
     using tt::tt_metal::CircularBuffer;
