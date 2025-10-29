@@ -85,6 +85,26 @@ inline void llk_unpack_AB(
     WAYPOINT("UABD");
 }
 
+/**
+ * Performs specialized unpack for reduce_row_max operation.
+ *
+ * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
+ * and should NOT be used as a substitute for native llk_unpack_AB LLK.
+ * Use the standard llk_unpack_AB for general-purpose reduction operations.
+ */
+inline void llk_unpack_AB_reduce_row_max(
+    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t tile_index_a) {
+    std::uint32_t operandA_id = get_operand_id(operandA);
+    std::uint32_t operandB_id = get_operand_id(operandB);
+    std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
+    std::uint32_t offset_address_a = get_local_cb_interface(operandA_id).fifo_page_size * tile_index_a;
+    std::uint32_t address_a = base_address_a + offset_address_a;
+    std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
+
+    // Always tile index 0 for operandB
+    _llk_unpack_AB_<BroadcastType::NONE>(address_a, base_address_b);
+}
+
 template <ReduceDim dim, BroadcastType BType = BroadcastType::NONE, bool enforce_fp32_accumulation = false>
 inline void llk_unpack_AB_reduce_init(
     const std::uint32_t operandA,
@@ -114,3 +134,83 @@ inline void llk_unpack_AB_reduce_init(
 
     _llk_unpack_AB_mop_config_<BType>(transpose > 0, num_faces, narrow_tile);  // transpose of faces 0,2,1,3
 }
+
+// OPTIMIZED, DO NOT CALL UNLESS REGULAR TILE SIZE
+/**
+ * Initializes specialized unpack for reduce_row_max operation.
+ *
+ * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
+ * and should NOT be used as a substitute for native llk_unpack_AB_reduce_init LLK.
+ * Use the standard llk_unpack_AB_reduce_init<ReduceDim::REDUCE_ROW> for general-purpose reduction.
+ */
+template <bool is_fp32_dest_acc_en = false>
+inline void llk_unpack_AB_reduce_row_max_init() {
+    if constexpr (is_fp32_dest_acc_en) {
+        // Set necessary config regs for MOVB2D hi16/lo16 to work
+        _llk_unpack_dbg_feature_disable_();
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+    }
+    // REDUCE_ROW requires transpose itself; additionaly, within_face_16x16_transpose flag could require transpose;
+    // if we have the flag set with REDUCE_ROW, we don't need to do anything
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(1);
+
+    TTI_SETADCXX(p_setadc::UNP_B, FACE_R_DIM * FACE_C_DIM - 1, 0x0);        // Unpack a single face of a scaler
+    TTI_SETADCXX(p_setadc::UNP_A, 4 * (FACE_R_DIM * FACE_C_DIM) - 1, 0x0);  // Unpack a whole tile of an operand
+    _llk_unpack_AB_reduce_row_max_mop_config_();                            // Unpack operand and scaler
+}
+
+// Block-based reduce row max functions
+/**
+ * Initializes specialized block-based unpack for reduce_block_max_row operation.
+ *
+ * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
+ * and should NOT be used as a substitute for native llk_unpack_AB_reduce_init LLK.
+ * Use the standard llk_unpack_AB_reduce_init<ReduceDim::REDUCE_ROW> with multiple llk_unpack_AB
+ * calls in a loop for general-purpose block reduction.
+ */
+template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
+inline void llk_unpack_AB_reduce_block_max_row_init() {
+    if constexpr (is_fp32_dest_acc_en) {
+        // Set necessary config regs for MOVB2D hi16/lo16 to work
+        _llk_unpack_dbg_feature_disable_();
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+    }
+    // REDUCE_ROW requires transpose itself; additionaly, within_face_16x16_transpose flag could require transpose;
+    // if we have the flag set with REDUCE_ROW, we don't need to do anything
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(1);
+
+    _llk_unpack_AB_reduce_block_max_row_init_();
+    _llk_unpack_AB_reduce_block_max_row_mop_config_<block_ct_dim>();  // Unpack operand and scaler
+}
+
+/**
+ * Performs specialized block-based unpack for reduce_block_max_row operation.
+ *
+ * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
+ * and should NOT be used as a substitute for native llk_unpack_AB LLK.
+ * Use the standard llk_unpack_AB in a loop for general-purpose block reduction across multiple tiles.
+ */
+template <uint32_t block_ct_dim>
+inline void llk_unpack_AB_reduce_block_max_row(
+    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t row_start_index) {
+    std::uint32_t operandA_id = get_operand_id(operandA);
+    std::uint32_t operandB_id = get_operand_id(operandB);
+    std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
+    std::uint32_t offset_address_a = get_local_cb_interface(operandA_id).fifo_page_size * row_start_index;
+    std::uint32_t address_a = base_address_a + offset_address_a;
+    std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
+
+    // Always tile index 0 for operandB
+    // TTI_UNPACR(SrcB, 0b00000000 /* Z_ch0_inc and Z_ch1_inc */, 0, 0, 0, 1, 1 /* Set Dvalid */,
+    // p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    _llk_unpack_AB_reduce_block_max_row_(address_a, base_address_b);
+}
+
+/**
+ * Uninitializes specialized block-based unpack for reduce_block_max_row operation.
+ *
+ * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
+ * and should NOT be used as a substitute for standard uninitialization.
+ * Use standard LLK cleanup procedures for general-purpose operations.
+ */
+inline void llk_unpack_AB_reduce_block_max_row_uninit() { _llk_unpack_AB_reduce_block_max_row_uninit_(); }

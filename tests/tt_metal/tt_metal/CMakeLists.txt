@@ -36,6 +36,7 @@ set(TT_METAL_TESTS_SRCS
     test_core_range_set.cpp
     test_compile_sets_kernel_binaries.cpp
     test_compile_program.cpp
+    test_sdpa_reduce_c.cpp
     test_clean_init.cpp
     test_single_dm_l1_write.cpp
 )

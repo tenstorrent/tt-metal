@@ -434,6 +434,13 @@ inline void llk_pack_reduce_mask_config() {
 }
 
 // OPTIMIZED, DO NOT CALL UNLESS REGULAR TILE SIZE
+/**
+ * Configures pack masking for specialized reduce_max_row operations.
+ *
+ * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
+ * and should NOT be used as a substitute for native reduce pack configuration.
+ * Use the standard llk_pack_reduce_mask_config for general-purpose reduction operations.
+ */
 inline void llk_pack_reduce_max_row_mask_config() { _llk_pack_reduce_max_row_mask_config_(); }
 
 inline void llk_pack_reduce_mask_clear() { _llk_pack_reduce_mask_clear_(); }
