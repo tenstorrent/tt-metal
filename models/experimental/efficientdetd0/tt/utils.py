@@ -121,9 +121,11 @@ class SeparableConvBlock:
         parameters,
         shard_layout,
         conv_params,
+        activation=False,
         batch=1,
         deallocate_activation=False,
     ):
+        self.activation = activation
         self.depthwise_conv = Conv2dDynamicSamePadding(
             device,
             parameters.depthwise_conv,
@@ -145,6 +147,7 @@ class SeparableConvBlock:
         x = self.depthwise_conv(x)
         x = self.pointwise_conv(x)
 
-        x = x * ttnn.sigmoid_accurate(x, True)
+        if self.activation:
+            x = x * ttnn.sigmoid_accurate(x, True)
 
         return x
