@@ -123,6 +123,8 @@ FORCE_INLINE uint32_t read_chunk(
     uint32_t new_chunk_row = new_chunk_start_tile / input_tensor_Wt;
     if (new_chunk_row != old_chunk_row) {
         chunk_start_tile = (old_chunk_row + subchunk_height) * input_tensor_Wt;
+    } else {
+        chunk_start_tile = new_chunk_start_tile;
     }
     return chunk_tile_idx;
 }
@@ -242,6 +244,8 @@ FORCE_INLINE uint32_t write_chunk(
     uint32_t new_chunk_row = new_chunk_start_tile / input_tensor_Wt;
     if (new_chunk_row != old_chunk_row) {
         chunk_start_tile = (old_chunk_row + subchunk_height) * input_tensor_Wt;
+    } else {
+        chunk_start_tile = new_chunk_start_tile;
     }
     return chunk_tile_idx;
 }
