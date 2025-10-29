@@ -16,7 +16,11 @@ def get_config(path: str):
     Returns:
         Dictionary containing configuration
     """
-    path = f'{os.environ["TT_METAL_HOME"]}/tt-train/configs/{path}' if not os.path.exists(path) else path
+    path = (
+        f'{os.environ["TT_METAL_HOME"]}/tt-train/configs/{path}'
+        if not os.path.exists(path)
+        else path
+    )
     with open(path, "r") as f:
         config = yaml.safe_load(f)
     return config
@@ -62,7 +66,9 @@ class TrainingConfig:
         """
         tc = yaml_config.get("training_config", {})
         self.batch_size = int(tc.get("batch_size", 64))
-        self.validation_batch_size = int(tc.get("validation_batch_size", max(self.batch_size // 2, 1)))
+        self.validation_batch_size = int(
+            tc.get("validation_batch_size", max(self.batch_size // 2, 1))
+        )
         self.steps = int(tc.get("max_steps", 1000))
         self.epochs = int(tc.get("num_epochs", 1))
         self.eval_every = int(tc.get("eval_every", 200))
@@ -85,7 +91,9 @@ class TrainingConfig:
         self.epochs = int(tc.get("num_epochs", self.epochs))
         self.eval_every = int(tc.get("eval_every", self.eval_every))
         self.save_every = int(tc.get("model_save_interval", self.save_every))
-        self.gradient_accumulation_steps = int(tc.get("gradient_accumulation_steps", self.gradient_accumulation_steps))
+        self.gradient_accumulation_steps = int(
+            tc.get("gradient_accumulation_steps", self.gradient_accumulation_steps)
+        )
         self.checkpoint_dir = tc.get("checkpoint_dir", self.checkpoint_dir)
 
         if "transformer_config" in tc:
@@ -145,7 +153,9 @@ class TransformerConfig:
         self.num_blocks = int(tc.get("num_blocks", self.num_blocks))
         self.vocab_size = int(tc.get("vocab_size", self.vocab_size))
         self.weight_tying = tc.get("weight_tying", self.weight_tying)
-        self.max_sequence_length = int(tc.get("max_sequence_length", self.max_sequence_length))
+        self.max_sequence_length = int(
+            tc.get("max_sequence_length", self.max_sequence_length)
+        )
 
         self.intermediate_dim = tc.get("intermediate_dim", self.intermediate_dim)
         self.theta = tc.get("theta", self.theta)
@@ -154,10 +164,18 @@ class TransformerConfig:
         if "rope_scaling" in tc:
             self.rope = tc.get("rope_scaling", self.rope)
             if self.rope:
-                self.scaling_factor = self.rope.get("scaling_factor", self.scaling_factor)
-                self.high_freq_factor = self.rope.get("high_freq_factor", self.high_freq_factor)
-                self.low_freq_factor = self.rope.get("low_freq_factor", self.low_freq_factor)
-                self.original_context_length = self.rope.get("original_context_length", self.original_context_length)
+                self.scaling_factor = self.rope.get(
+                    "scaling_factor", self.scaling_factor
+                )
+                self.high_freq_factor = self.rope.get(
+                    "high_freq_factor", self.high_freq_factor
+                )
+                self.low_freq_factor = self.rope.get(
+                    "low_freq_factor", self.low_freq_factor
+                )
+                self.original_context_length = self.rope.get(
+                    "original_context_length", self.original_context_length
+                )
 
 
 class SchedulerConfig:
@@ -197,7 +215,9 @@ class SchedulerConfig:
         # optional momentum warmup (beta1 ramp)
         self.beta1_start = float(sc.get("beta1_start", self.beta1_start))
         self.beta1_end = float(sc.get("beta1_end", self.beta1_end))
-        self.beta1_warmup_steps = int(sc.get("beta1_warmup_steps", self.beta1_warmup_steps))
+        self.beta1_warmup_steps = int(
+            sc.get("beta1_warmup_steps", self.beta1_warmup_steps)
+        )
 
 
 class PipelineParallelHostConfig:

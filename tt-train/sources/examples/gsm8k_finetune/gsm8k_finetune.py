@@ -61,7 +61,11 @@ class SpeedrunScheduler:
             return peak + (min_lr - peak) * frac
 
     def beta1_at(self, step: int) -> Optional[float]:
-        if self.cfg.beta1_start is None or self.cfg.beta1_end is None or self.cfg.beta1_warmup_steps <= 0:
+        if (
+            self.cfg.beta1_start is None
+            or self.cfg.beta1_end is None
+            or self.cfg.beta1_warmup_steps <= 0
+        ):
             return None
         s = min(step, self.cfg.beta1_warmup_steps)
         t = s / float(self.cfg.beta1_warmup_steps)
@@ -78,7 +82,9 @@ class OptimParamSetter:
         self.optim.set_lr(float(lr))
 
     def set_beta1(self, beta1: float):
-        raise NotImplementedError("set_beta1 is not implemented in TTML AdamW optimizer.")
+        raise NotImplementedError(
+            "set_beta1 is not implemented in TTML AdamW optimizer."
+        )
 
 
 def build_logits_mask(vocab_size: int, padded_vocab_size: int) -> ttml.autograd.Tensor:
@@ -101,7 +107,9 @@ class CollateFn:
 
         batch_size = len(X)
 
-        data_np = np.full((batch_size, self.max_sequence_length), self.eos_token_id, dtype=np.uint32)
+        data_np = np.full(
+            (batch_size, self.max_sequence_length), self.eos_token_id, dtype=np.uint32
+        )
         mask_lens = []
 
         for i in range(batch_size):
@@ -120,7 +128,9 @@ class CollateFn:
 
                 else:
                     # If answer is too long, just use the answer
-                    data_np[i, : self.max_sequence_length] = y_tokens[: self.max_sequence_length]
+                    data_np[i, : self.max_sequence_length] = y_tokens[
+                        : self.max_sequence_length
+                    ]
                     x_tokens = []
 
             else:
@@ -139,12 +149,16 @@ class CollateFn:
         )  # Shape: [batch, seq_len]
         y_np[:, 0:-1] = X_np[:, 0, 0, 1:]  # Shift left by 1
 
-        loss_scaler_np = np.full((batch_size, 1, self.max_sequence_length, 1), 1.0, dtype=np.float32)
+        loss_scaler_np = np.full(
+            (batch_size, 1, self.max_sequence_length, 1), 1.0, dtype=np.float32
+        )
         for i, mask_len in enumerate(mask_lens):
             loss_scaler_np[i, :, :mask_len, :] = 0.0
             pad_positions = X_np[i, 0, 0, :] == self.eos_token_id
             loss_scaler_np[i, :, pad_positions, :] = 0.0
-        loss_scaler_ratio = self.max_sequence_length * batch_size / np.sum(loss_scaler_np)
+        loss_scaler_ratio = (
+            self.max_sequence_length * batch_size / np.sum(loss_scaler_np)
+        )
         loss_scaler_np = loss_scaler_np * loss_scaler_ratio
 
         return X_np, y_np, loss_scaler_np
@@ -153,7 +167,14 @@ class CollateFn:
         return self.collate_fn(batch)
 
 
-def get_batch_generator(dataloader, batch_size, max_sequence_length, padded_vocab_size, tokenizer, device_config=None):
+def get_batch_generator(
+    dataloader,
+    batch_size,
+    max_sequence_length,
+    padded_vocab_size,
+    tokenizer,
+    device_config=None,
+):
     """Custom data generator for GSM8K dataset."""
     mapper = None
     if device_config is not None:
@@ -164,10 +185,17 @@ def get_batch_generator(dataloader, batch_size, max_sequence_length, padded_voca
         for batch in dataloader:
             X_np, y_np, loss_scaler_np = batch
 
-            X = ttml.autograd.Tensor.from_numpy(X_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32, mapper)
-            y = ttml.autograd.Tensor.from_numpy(y_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32, mapper)
+            X = ttml.autograd.Tensor.from_numpy(
+                X_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32, mapper
+            )
+            y = ttml.autograd.Tensor.from_numpy(
+                y_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32, mapper
+            )
             loss_scaler = ttml.autograd.Tensor.from_numpy(
-                loss_scaler_np, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16, mapper
+                loss_scaler_np,
+                ttml.Layout.TILE,
+                ttml.autograd.DataType.BFLOAT16,
+                mapper,
             )
 
             yield (X, y, loss_scaler)
@@ -190,7 +218,9 @@ def generate_text_tt(
     Uses a sliding window if prompt exceeds max_sequence_length.
     """
     model.eval()
-    ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.DISABLED)
+    ttml.autograd.AutoContext.get_instance().set_gradient_mode(
+        ttml.autograd.GradMode.DISABLED
+    )
 
     # --- Tokenize once ---
     prompt_tokens = tokenizer.encode(question)
@@ -206,7 +236,9 @@ def generate_text_tt(
     composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
 
     # Preallocate once
-    padded_prompt_tokens = np.full((1, 1, 1, max_sequence_length), pad_token_id, dtype=np.uint32)
+    padded_prompt_tokens = np.full(
+        (1, 1, 1, max_sequence_length), pad_token_id, dtype=np.uint32
+    )
     for _ in range(max_gen_tokens):
         # Sliding window for long prompts
         if len(prompt_tokens) > max_sequence_length:
@@ -218,7 +250,9 @@ def generate_text_tt(
 
         # Refill buffer (fully) to avoid stale ids
         padded_prompt_tokens[...] = pad_token_id
-        padded_prompt_tokens[0, 0, 0, : len(window)] = np.asarray(window, dtype=np.uint32)
+        padded_prompt_tokens[0, 0, 0, : len(window)] = np.asarray(
+            window, dtype=np.uint32
+        )
 
         # [1,1,1,T] -> TT tensor
         padded_prompt_tensor = ttml.autograd.Tensor.from_numpy(
@@ -230,11 +264,21 @@ def generate_text_tt(
 
         # Sample: next tokens for all positions [1,1,T,1]
         # With temperature=0.0 this behaves like argmax/greedy.
-        next_token_tensor = ttml.ops.sample.sample_op(logits, 0.0, np.random.randint(low=1e7), logits_mask_tensor)
+        next_token_tensor = ttml.ops.sample.sample_op(
+            logits, 0.0, np.random.randint(low=1e7), logits_mask_tensor
+        )
 
         # Take the token at the last active position in the current window
-        next_token_idx = max_sequence_length - 1 if len(prompt_tokens) > max_sequence_length else len(window) - 1
-        next_token = int(next_token_tensor.to_numpy(composer=composer).reshape(-1, 1)[next_token_idx][0])
+        next_token_idx = (
+            max_sequence_length - 1
+            if len(prompt_tokens) > max_sequence_length
+            else len(window) - 1
+        )
+        next_token = int(
+            next_token_tensor.to_numpy(composer=composer).reshape(-1, 1)[
+                next_token_idx
+            ][0]
+        )
 
         if next_token == tokenizer.eos_token_id:
             break
@@ -247,7 +291,9 @@ def generate_text_tt(
     if return_with_prompt:
         out = tokenizer.decode(prompt_tokens)
 
-    ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.ENABLED)
+    ttml.autograd.AutoContext.get_instance().set_gradient_mode(
+        ttml.autograd.GradMode.ENABLED
+    )
     return out
 
 
@@ -263,7 +309,9 @@ def validate(
     current_step,
 ):
     reduce = ttml.ops.ReduceType.NONE
-    ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.DISABLED)
+    ttml.autograd.AutoContext.get_instance().set_gradient_mode(
+        ttml.autograd.GradMode.DISABLED
+    )
     tt_model.eval()
     eval_batch_count = 4
     cur_val_losses = []
@@ -304,9 +352,13 @@ def validate(
             val_file.write(f"Generated Answer: {gen_text}\n")
             val_file.write("\n====================================\n")
 
-        val_file.write("Last validation loss: {:.4f}\n\n\n".format(np.mean(cur_val_losses)))
+        val_file.write(
+            "Last validation loss: {:.4f}\n\n\n".format(np.mean(cur_val_losses))
+        )
 
-    ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.ENABLED)
+    ttml.autograd.AutoContext.get_instance().set_gradient_mode(
+        ttml.autograd.GradMode.ENABLED
+    )
     tt_model.train()
     return np.mean(cur_val_losses)
 
@@ -351,10 +403,14 @@ def train():
     print("Loading tokenizer and config...")
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
     # Disable tokenizer parallelism to avoid conflicts with DataLoader multiprocessing
-    tokenizer = AutoTokenizer.from_pretrained("TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T")
+    tokenizer = AutoTokenizer.from_pretrained(
+        "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
+    )
     yaml_config = get_config(CONFIG)
 
-    override_config_path = f"{os.environ['TT_METAL_HOME']}/tt-train/configs/training_overrides.yaml"
+    override_config_path = (
+        f"{os.environ['TT_METAL_HOME']}/tt-train/configs/training_overrides.yaml"
+    )
     if os.path.isfile(override_config_path):
         print("Applying training overrides...")
         override_config = get_config(override_config_path)
@@ -390,7 +446,8 @@ def train():
     # Download safetensors
     print("Downloading safetensors...")
     safetensors_path = hf_hub_download(
-        repo_id="TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T", filename="model.safetensors"
+        repo_id="TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T",
+        filename="model.safetensors",
     )
     safetensors_path = safetensors_path.replace("model.safetensors", "")
     print(f"Safetensors path: {safetensors_path}")
@@ -427,7 +484,9 @@ def train():
         shuffle=True,  # Shuffle the dataset for each epoch
         drop_last=True,
         num_workers=0,
-        collate_fn=CollateFn(tokenizer.eos_token_id, max_sequence_length, padded_vocab_size),
+        collate_fn=CollateFn(
+            tokenizer.eos_token_id, max_sequence_length, padded_vocab_size
+        ),
     )
 
     num_devices = device_config.total_devices()
@@ -437,7 +496,9 @@ def train():
         shuffle=False,  # Disable shuffling for validation
         drop_last=True,
         num_workers=0,
-        collate_fn=CollateFn(tokenizer.eos_token_id, max_sequence_length, padded_vocab_size),
+        collate_fn=CollateFn(
+            tokenizer.eos_token_id, max_sequence_length, padded_vocab_size
+        ),
     )
 
     # Setup training
@@ -447,7 +508,9 @@ def train():
     optim = create_optimizer(tt_model, yaml_config)
     causal_mask = build_causal_mask(max_sequence_length)
 
-    causal_mask = ttml.autograd.Tensor.from_numpy(causal_mask, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.BFLOAT16)
+    causal_mask = ttml.autograd.Tensor.from_numpy(
+        causal_mask, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.BFLOAT16
+    )
 
     logits_mask_tensor = build_logits_mask(orig_vocab_size, padded_vocab_size)
 
@@ -464,7 +527,12 @@ def train():
         os.remove("output.txt")
 
     train_batch_generator = get_batch_generator(
-        training_dataloader, batch_size, max_sequence_length, padded_vocab_size, tokenizer, device_config
+        training_dataloader,
+        batch_size,
+        max_sequence_length,
+        padded_vocab_size,
+        tokenizer,
+        device_config,
     )
 
     val_batch_generator = get_batch_generator(
@@ -478,7 +546,10 @@ def train():
 
     tokens_per_batch = batch_size * max_sequence_length
     print("Tokens per micro-batch:", tokens_per_batch)
-    print("Tokens per accumulated batch:", tokens_per_batch * training_config.gradient_accumulation_steps)
+    print(
+        "Tokens per accumulated batch:",
+        tokens_per_batch * training_config.gradient_accumulation_steps,
+    )
 
     sched = SpeedrunScheduler(scheduler_config)
     setter = OptimParamSetter(optim)
@@ -488,7 +559,9 @@ def train():
     f.write("===============\n")
     f.close()
 
-    print(f"Starting training for {training_config.epochs} epochs, max {training_config.steps} steps...")
+    print(
+        f"Starting training for {training_config.epochs} epochs, max {training_config.steps} steps..."
+    )
     bar = tqdm(range(1, training_config.steps + 1))
 
     total_steps = 0
@@ -522,7 +595,9 @@ def train():
             micro_losses.append(get_loss_over_devices(loss))
 
             # Scale for accumulation and backward
-            scaled_loss = ttml.ops.binary.mul(loss, 1.0 / float(accum_steps))  # check if accum_steps > 1
+            scaled_loss = ttml.ops.binary.mul(
+                loss, 1.0 / float(accum_steps)
+            )  # check if accum_steps > 1
             scaled_loss.backward(False)
             ttml.autograd.AutoContext.get_instance().reset_graph()
 
@@ -544,7 +619,10 @@ def train():
         bar.set_postfix(postfix, refresh=False)
 
         # Validation every eval_every steps
-        if total_steps % training_config.eval_every == 0 or total_steps + 1 == training_config.steps:
+        if (
+            total_steps % training_config.eval_every == 0
+            or total_steps + 1 == training_config.steps
+        ):
             last_val_loss = validate(
                 tt_model,
                 tokenizer,
@@ -570,7 +648,12 @@ def train():
     print("Plotting training curves...")
     fig, axs = plt.subplots(1, 1, figsize=(10, 5))
     axs.plot(train_losses, color="blue", label="Train Loss")
-    axs.plot(np.arange(0, len(val_losses)) * training_config.eval_every, val_losses, color="orange", label="Val Loss")
+    axs.plot(
+        np.arange(0, len(val_losses)) * training_config.eval_every,
+        val_losses,
+        color="orange",
+        label="Val Loss",
+    )
     axs.set_title("Training Loss")
     axs.set_xlabel("Steps")
     axs.set_ylabel("Loss")
