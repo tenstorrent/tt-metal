@@ -129,7 +129,13 @@ inline void llk_unpack_AB_reduce_init(
 }
 
 // OPTIMIZED, DO NOT CALL UNLESS REGULAR TILE SIZE
+template <bool is_fp32_dest_acc_en = false>
 inline void llk_unpack_AB_reduce_row_max_init() {
+    if constexpr (is_fp32_dest_acc_en) {
+        // Set necessary config regs for MOVB2D hi16/lo16 to work
+        _llk_unpack_dbg_feature_disable_();
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+    }
     // REDUCE_ROW requires transpose itself; additionaly, within_face_16x16_transpose flag could require transpose;
     // if we have the flag set with REDUCE_ROW, we don't need to do anything
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(1);
@@ -140,56 +146,18 @@ inline void llk_unpack_AB_reduce_row_max_init() {
 }
 
 // Block-based reduce row max functions
-template <uint32_t block_ct_dim>
+template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
 inline void llk_unpack_AB_reduce_block_max_row_init() {
+    if constexpr (is_fp32_dest_acc_en) {
+        // Set necessary config regs for MOVB2D hi16/lo16 to work
+        _llk_unpack_dbg_feature_disable_();
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+    }
     // REDUCE_ROW requires transpose itself; additionaly, within_face_16x16_transpose flag could require transpose;
     // if we have the flag set with REDUCE_ROW, we don't need to do anything
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(1);
 
-    TTI_SETADCXX(p_setadc::UNP_B, FACE_R_DIM * FACE_C_DIM - 1, 0x0);        // Unpack a single face of a scaler
-    TTI_SETADCXX(p_setadc::UNP_A, 4 * (FACE_R_DIM * FACE_C_DIM) - 1, 0x0);  // Unpack a tile of an operand
-
-    // save the following state that is going to be modified:
-    // tile x, y, and z dims for both unpackers
-    // CH1 Z stride for both unpackers
-    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
-    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
-
-    TTI_SETDMAREG(
-        p_setdmareg::PAYLOAD_IMMEDIATE,
-        1 * FACE_C_DIM * FACE_R_DIM,
-        p_setdmareg::MODE_IMMEDIATE,
-        LO_16(p_gpr_unpack::TMP0));
-    TTI_SETDMAREG(
-        p_setdmareg::PAYLOAD_IMMEDIATE,
-        1 * FACE_C_DIM * FACE_R_DIM,
-        p_setdmareg::MODE_IMMEDIATE,
-        HI_16(p_gpr_unpack::TMP0));
-    TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
-    TTI_SETDMAREG(
-        p_setdmareg::PAYLOAD_IMMEDIATE, 4 /* y_dim */, p_setdmareg::MODE_IMMEDIATE, LO_16(p_gpr_unpack::TMP0));
-    TTI_SETDMAREG(
-        p_setdmareg::PAYLOAD_IMMEDIATE, 1 /* z_dim */, p_setdmareg::MODE_IMMEDIATE, HI_16(p_gpr_unpack::TMP0));
-    TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
-    // volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
-
-    // uint programmed_x_dim = cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32];
-    // uint unp0_tile_desc = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1];
-    // tensix_sync();
-    // DPRINT << "programmed_x_dim: " << HEX() << programmed_x_dim << DEC() << ENDL();
-    // DPRINT << "unp0_tile_desc: " << HEX() << unp0_tile_desc << DEC() << ENDL();
-
-    // uint new_x_dim = 4 * FACE_C_DIM * FACE_R_DIM;
-    // cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = new_x_dim | (new_x_dim << 16);
-    // // Set z_dim to 1
-    // uint new_unp0_tile_desc = (unp0_tile_desc & 0x0000ffff) | (0x001 << 16);
-    // cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1] = new_unp0_tile_desc;
-
-    // tensix_sync();
-    // uint unp0_tile_desc_written = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1];
-    // tensix_sync();
-    // DPRINT << "unp0_tile_desc_written: " << HEX() << unp0_tile_desc_written << DEC() << ENDL();
-
+    _llk_unpack_AB_reduce_block_max_row_init_();
     _llk_unpack_AB_reduce_block_max_row_mop_config_<block_ct_dim>();        // Unpack operand and scaler
 }
 

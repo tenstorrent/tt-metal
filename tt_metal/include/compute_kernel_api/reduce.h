@@ -54,25 +54,6 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
 
 // clang-format off
 /**
- * Specialized initialization for PoolType::MAX and ReduceDim::REDUCE_ROW operations.
- * Provides optimized performance by using specialized unpack and math functions.
- * Note: OPTIMIZED, DO NOT CALL UNLESS REGULAR TILE SIZE!
- *
- * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
- * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
- * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A                         | uint32_t  | 0 to 31                                        | True     |
- * | Function   | icb_scaler                | CB holding scaling factors                                                              | uint32_t  | 0 to 31                                        | True     |
- * | Function   | ocb                       | The identifier of the output circular buffer (CB)                                       | uint32_t  | 0 to 31                                        | True     |
- */
-// clang-format on
-ALWI void reduce_max_row_init() {
-    UNPACK((llk_unpack_AB_reduce_row_max_init()));
-    MATH((llk_math_reduce_max_row_init()));
-    PACK((llk_pack_reduce_max_row_mask_config()));
-}
-
-// clang-format off
-/**
  * Resets the packer edge mask configuration to its default state by clearing any previously set masks. Needs to be called after
  * reduce_tile if the next operation requires default packer state. In case that the next operation is reduce operation across the
  * same dimension, this call can be omitted. If this function is not called, the packer will continue to use the edge masks set
@@ -93,11 +74,6 @@ ALWI void reduce_uninit() {
         MATH((reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0)));
     }
     PACK((llk_pack_reduce_mask_clear()));
-}
-
-ALWI void reduce_max_row_uninit() {
-    PACK((llk_pack_reduce_mask_clear()));
-    UNPACK((llk_unpack_AB_reduce_block_max_row_uninit()));
 }
 
 // clang-format off
@@ -163,8 +139,57 @@ ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
 
 // clang-format off
 /**
+ * Specialized initialization for PoolType::MAX and ReduceDim::REDUCE_ROW operations.
+ * Provides optimized performance by using specialized unpack and math functions.
+ * NOTE: OPTIMIZED, DO NOT CALL UNLESS REGULAR TILE SIZE!
+ *
+ * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
+ * and should NOT be used as a substitute for the native reduce_init/reduce_tile APIs.
+ * Use the standard reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>() for general-purpose reduction.
+ *
+ * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
+ * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
+ * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A                         | uint32_t  | 0 to 31                                        | True     |
+ * | Function   | icb_scaler                | CB holding scaling factors                                                              | uint32_t  | 0 to 31                                        | True     |
+ * | Function   | ocb                       | The identifier of the output circular buffer (CB)                                       | uint32_t  | 0 to 31                                        | True     |
+ */
+// clang-format on
+ALWI void reduce_max_row_init() {
+    UNPACK((llk_unpack_AB_reduce_row_max_init<DST_ACCUM_MODE>()));
+    MATH((llk_math_reduce_max_row_init<DST_ACCUM_MODE>()));
+    PACK((llk_pack_reduce_max_row_mask_config()));
+}
+
+// clang-format off
+/**
+ * Initialization for reduce_block_max_row operation. Must be called before reduce_block_max_row.
+ * Processes a block of tiles in the width dimension, reducing each row across the block.
+ *
+ * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
+ * and should NOT be used as a substitute for the native reduce_init API.
+ * Use the standard reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>() with reduce_tile() in a loop
+ * for general-purpose reduction across multiple tiles.
+ *
+ * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
+ * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
+ * | Template   | block_ct_dim              | The number of tiles in the width dimension to process as a block                        | uint32_t  | 1 to 2^32-1                                   | True     |
+ */
+// clang-format on
+template <uint32_t block_ct_dim>
+ALWI void reduce_block_max_row_init() {
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE>()));
+    MATH((llk_math_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE>()));
+    PACK((llk_pack_reduce_max_row_mask_config()));
+}
+
+// clang-format off
+/**
  * Specialized version of reduce_tile for PoolType::MAX and ReduceDim::REDUCE_ROW operations.
  * Provides optimized performance by eliminating compile-time conditionals.
+ *
+ * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
+ * and should NOT be used as a substitute for the native reduce_tile API.
+ * Use the standard reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>() for general-purpose reduction.
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
@@ -184,6 +209,10 @@ ALWI void reduce_tile_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t itile,
  * Specialized math-only version of reduce_tile_math for PoolType::MAX and ReduceDim::REDUCE_ROW operations.
  * Provides optimized performance by eliminating compile-time conditionals.
  *
+ * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
+ * and should NOT be used as a substitute for the native reduce_tile_math API.
+ * Use the standard reduce_tile_math<PoolType::MAX, ReduceDim::REDUCE_ROW>() for general-purpose reduction.
+ *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
  * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t  | Must be less than the acquired size of DST REG | True     |
@@ -194,26 +223,14 @@ ALWI void reduce_tile_max_row_math(uint32_t idst) { MATH((llk_math_reduce_max_ro
 
 // clang-format off
 /**
- * Initialization for reduce_block_max_row operation. Must be called before reduce_block_max_row.
- * Processes a block of tiles in the width dimension, reducing each row across the block.
- *
- * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
- * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
- * | Template   | block_ct_dim              | The number of tiles in the width dimension to process as a block                        | uint32_t  | 1 to 2^32-1                                   | True     |
- */
-// clang-format on
-template <uint32_t block_ct_dim>
-ALWI void reduce_block_max_row_init() {
-    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim>()));
-    MATH((llk_math_reduce_block_max_row_init<block_ct_dim>()));
-    PACK((llk_pack_reduce_max_row_mask_config()));
-}
-
-// clang-format off
-/**
  * Performs block-based max row reduction operation on a block of tiles in the width dimension.
  * Reduces each row across the block of tiles and writes the result to DST register.
  * The DST register buffer must be in acquired state via acquire_dst call.
+ *
+ * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
+ * and should NOT be used as a substitute for the native reduce_tile API.
+ * Use the standard reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>() with reduce_tile() in a loop
+ * for general-purpose reduction across multiple tiles.
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
@@ -227,7 +244,30 @@ ALWI void reduce_block_max_row_init() {
 template <uint32_t block_ct_dim>
 ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_start_index, uint32_t idst) {
     UNPACK((llk_unpack_AB_reduce_block_max_row<block_ct_dim>(icb, icb_scaler, row_start_index)));
-    MATH((llk_math_reduce_block_max_row<block_ct_dim>(idst)));
+    MATH((llk_math_reduce_block_max_row<block_ct_dim, DST_ACCUM_MODE>(idst)));
 }
 
+// clang-format off
+/**
+ * Uninitializes the reduce_max_row operation. Needs to be called after the last call to `reduce_block_max_row` before initializing another operation.
+ *
+ * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
+ * and should NOT be used as a substitute for the native reduce_uninit API.
+ * Use the standard reduce_uninit() for general-purpose reduction cleanup.
+ *
+ * | Param Type | Name | Description                                      | Type | Valid Range | Required |
+ * |------------|------|--------------------------------------------------|------|-------------|----------|
+ * | Function   | —    | No parameters                                    |  —   |      —      |    —     |
+ */
+// clang-format on
+template <bool clear_fp32_accumulation = false>
+ALWI void reduce_max_row_uninit() {
+    if constexpr (clear_fp32_accumulation) {
+        // CAN BE OMITTED FOR SOME REASON?
+        MATH((tensix_sync()));
+        MATH((reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0)));
+    }
+    PACK((llk_pack_reduce_mask_clear()));
+    UNPACK((llk_unpack_AB_reduce_block_max_row_uninit()));
+}
 }  // namespace ckernel

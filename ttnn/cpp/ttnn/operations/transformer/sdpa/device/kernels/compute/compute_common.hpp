@@ -18,7 +18,6 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
-#include "tools/profiler/kernel_profiler.hpp"
 
 template <uint32_t num_tiles>
 void max_block_inplace(uint32_t in0, uint32_t in1) {
@@ -45,7 +44,6 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
 
 template <PoolType pool_type, ReduceDim reduce_dim, uint32_t in0_cb, uint32_t scale_cb, uint32_t rows, uint32_t cols>
 void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
-    DeviceZoneScopedN("reduce_c");
     // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
     // Precondition: out_cb has rows free
@@ -64,14 +62,11 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
 
     for (uint32_t i = 0; i < rows; i++) {
         acquire_dst();
-        // reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
-        reduce_block_max_row_init<cols>();
-        // for (uint32_t j = 0; j < cols; j++) {
-        //     reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
-        // }
-        reduce_block_max_row<cols>(in0_cb, scale_cb, i * cols, reduce_dst_idx);
-        // reduce_uninit();
-        reduce_max_row_uninit();
+        reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
+        for (uint32_t j = 0; j < cols; j++) {
+            reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
+        }
+        reduce_uninit();
         if (do_eltwise_max) {
             copy_tile_to_dst_init_short(prev_cb);
             copy_tile(prev_cb, i, prev_max_dst_idx);
@@ -86,7 +81,6 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
 }
 
 void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
-    DeviceZoneScopedN("recip_block_inplace");
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
     copy_tile_to_dst_init_short(in_cb);
@@ -109,7 +103,6 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
 
 template <uint32_t in0_cb, uint32_t rows, uint32_t cols, uint32_t scale_fp32, bool write_result_inplace = true>
 void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
-    DeviceZoneScopedN("sub_exp_block_bcast_cols_inplace");
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
@@ -166,71 +159,8 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
     cb_push_back(reduce_cb, rows);
 }
 
-template <uint32_t in0_cb, uint32_t rows, uint32_t cols, uint32_t scale_fp32>
-void sub_exp_rows_transposed(uint32_t in1_cb, uint32_t reduce_cb) {
-    DeviceZoneScopedN("sub_exp_rows_transposed");
-    /**
-     * in0_cb: rows*cols tiles, where each tile is transposed
-     * in1_cb: rows tiles, where each tile contains one row
-     *
-     * first computes in0[i, j] - in1[i] for i = 0..rows, j = 0..cols where in1 row is broadcasted
-     * then computes exp(dst)
-     * then packs the result into in0_cb and packs with accumulation into reduce_cb
-     */
-
-    // sub_bcast_rows_init_short(in0_cb, in1_cb);
-    init_bcast<ELWSUB, BroadcastType::ROW>(in0_cb, in1_cb, in0_cb);
-
-    exp_tile_init<true, true, scale_fp32>();
-    cb_wait_front(in0_cb, rows * cols);
-    cb_wait_front(in1_cb, rows);
-    cb_reserve_back(reduce_cb, rows);
-
-    constexpr uint32_t dst_tiles = SUB_EXP_GRANULARITY;
-    constexpr uint32_t granularity = cols >> LOG2_SUB_EXP_GRANULARITY;
-    uint32_t in0_index = 0;
-    for (uint32_t i = 0; i < rows; ++i) {
-        for (uint32_t u = 0; u < granularity; u++) {
-            tile_regs_acquire();
-            for (uint32_t j = 0; j < dst_tiles; ++j) {
-                // sub_tiles_bcast_rows(in0_cb, in1_cb, in0_index, i, j);
-                any_tiles_bcast<ELWSUB, BroadcastType::ROW>(in0_cb, in1_cb, in0_index, i, j);
-                exp_tile<true, true>(j);
-                in0_index++;
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-
-            for (uint32_t j = 0; j < dst_tiles; ++j) {
-                pack_tile(j, in0_cb);
-            }
-
-            // While we have results in DST, take advantage of L1 accumulation
-            // to reduce row x cols tiles to rows x 1 tiles.
-            if (u > 0) {
-                // If on the same row, keep accumulating
-                PACK((llk_pack_reconfig_l1_acc(1)));
-            }
-            for (uint32_t j = 0; j < dst_tiles; ++j) {
-                pack_tile<true>(j, reduce_cb, i);
-                if (u == 0 && j == 0) {
-                    // If this was the first tile of a row, start accumulating
-                    PACK((llk_pack_reconfig_l1_acc(1)));
-                }
-            }
-            tile_regs_release();
-            PACK((llk_pack_reconfig_l1_acc(0)));
-        }
-    }
-    cb_pop_front(in0_cb, rows * cols);
-    cb_reserve_back(in0_cb, rows * cols);
-    cb_push_back(in0_cb, rows * cols);
-    cb_push_back(reduce_cb, rows);
-}
-
 template <uint32_t rows, uint32_t cols>
 void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, bool pack_accumulate = false) {
-    DeviceZoneScopedN("mul_block_bcast_cols");
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Precondition: out_cb has rows*cols produced
@@ -278,7 +208,6 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, boo
 
 template <uint32_t rows, uint32_t cols>
 void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
-    DeviceZoneScopedN("mul_block_bcast_cols_inplace");
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
@@ -341,7 +270,6 @@ void mul_block_bcast_scalar_inplace(uint32_t in0_cb) {
 }
 
 void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
-    DeviceZoneScopedN("add_block_inplace");
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles consumed
@@ -363,7 +291,6 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
 }
 
 void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
-    DeviceZoneScopedN("mul_tiles_bcast_cols_inplace");
     /**
      * Given in0_cb and in1_cb, multiply each tile of in0_cb by the corresponding tile of in1_cb
      * and bcast cols of in1_cb.
@@ -388,7 +315,6 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num
 
 template <uint32_t scale_fp32>
 void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
-    DeviceZoneScopedN("sub_exp_block");
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: out_cb has num_tiles produced
     // Postcondition: in0_cb and in1_cb has num_tiles produced
@@ -541,7 +467,6 @@ void matmul_blocks(
     const uint32_t& subblock_h,
     const uint32_t& subblock_w,
     const bool& transpose) {
-    DeviceZoneScopedN("matmul_blocks");
     // precondition: in0_cb has M*K produced
     // preconditino: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
@@ -595,7 +520,6 @@ void matmul_blocks(
 
 template <uint32_t M>
 void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
-    DeviceZoneScopedN("matmul_reduce");
     // precondition: in0_cb has M*K produced
     // preconditino: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
