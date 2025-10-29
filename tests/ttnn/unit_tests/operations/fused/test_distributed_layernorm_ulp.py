@@ -170,13 +170,15 @@ def test_distributed_norm_comparison(
     2. Gather stats tensor across devices.
     3. Reduce stats tensor. Compute variance and mean. Do normalization.
     """
-    use_new = ttnn.LayerNormDistributedDefaultProgramConfig(
+    use_new = ttnn.LayerNormDefaultProgramConfig(
         legacy_reduction=False,
         legacy_rsqrt=False,
+        use_welford=False,
     )
-    use_old = ttnn.LayerNormDistributedDefaultProgramConfig(
+    use_old = ttnn.LayerNormDefaultProgramConfig(
         legacy_reduction=True,
         legacy_rsqrt=True,
+        use_welford=False,
     )
     if norm_type == "layer_norm":
         ttnn_stats = ttnn.layer_norm_pre_all_gather(
