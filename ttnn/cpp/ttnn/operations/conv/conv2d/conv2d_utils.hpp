@@ -13,7 +13,6 @@
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-
 namespace ttnn {
 
 namespace operations::conv {
