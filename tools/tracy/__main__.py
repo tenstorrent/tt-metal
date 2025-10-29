@@ -53,7 +53,7 @@ def main():
         "--process-logs-only",
         dest="processLogsOnly",
         action="store_true",
-        help="Only process the logs avaialble in the default logs folder",
+        help="Only process the logs available in the default logs folder",
         default=False,
     )
     parser.add_option(
@@ -61,6 +61,13 @@ def main():
         dest="profile_dispatch_cores",
         action="store_true",
         help="Collect dispatch cores profiling data",
+        default=False,
+    )
+    parser.add_option(
+        "--cpp-post-process",
+        dest="cpp_post_process",
+        action="store_true",
+        help="Use C++ to post-process profiling data",
         default=False,
     )
     parser.add_option(
@@ -176,6 +183,9 @@ def main():
         os.environ["TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH"] = str(
             generate_logs_folder(os.path.abspath(outputFolder))
         )
+
+    if options.cpp_post_process:
+        os.environ["TT_METAL_PROFILER_CPP_POST_PROCESS"] = "1"
 
     if len(args) > 0:
         doReport = False
