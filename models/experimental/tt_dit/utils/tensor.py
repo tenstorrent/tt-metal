@@ -168,7 +168,7 @@ def verify_tensor_mesh_axes(mesh_axes: Sequence[int | None], /, *, tensor_rank: 
 def canonicalize_tensor_mesh_axes(
     mesh_axes: Sequence[int | None | EllipsisType], /, *, tensor_rank: int, mesh_rank: int
 ) -> tuple[int | None, ...]:
-    """Cononicalizes mesh axes specification by expanding Ellipsis and validating."""
+    """Canonicalizes mesh axes specification by expanding Ellipsis and validating."""
     mesh_axes = list(mesh_axes)
 
     if Ellipsis in mesh_axes:
