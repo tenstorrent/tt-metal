@@ -87,6 +87,10 @@ class SD35CombinedTimestepTextProjEmbeddings(Module):
         if self.text_embedder is None:
             return timesteps_emb
 
+        if pooled_projection is None:
+            msg = "pooled_projection must be provided when text embedder is enabled"
+            raise ValueError(msg)
+
         text_emb = self.text_embedder(pooled_projection)
         return timesteps_emb + text_emb
 
