@@ -865,7 +865,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     std::vector<uint32_t> op_trace_metadata =
         ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
     std::vector<sliding_window::ShardBoundary> shard_boundaries =
-        ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
+        ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config);
     std::vector<std::vector<uint16_t>> top_left_indices =
         sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, stride_w);
     std::vector<uint16_t> core_starting_indices;
