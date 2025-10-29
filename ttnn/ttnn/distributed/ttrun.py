@@ -174,9 +174,9 @@ def build_mpi_command(
         if debug_gdbserver:
             port = 20000 + binding.rank
             echo_part = f'echo "Rank {binding.rank} on $(hostname) listening on :{port}";'
-            gdbserver_part = f'exec gdbserver :{port}'
+            gdbserver_part = f"exec gdbserver :{port}"
             quoted_program_args = " ".join(shlex.quote(arg) for arg in program)
-            cmd_str = f'{echo_part} {gdbserver_part} {quoted_program_args}'
+            cmd_str = f"{echo_part} {gdbserver_part} {quoted_program_args}"
             program_to_run = ["bash", "-c", cmd_str]
         cmd.extend(program_to_run)
 
