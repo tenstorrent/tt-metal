@@ -131,7 +131,7 @@ function getTimeSinceLastSuccess(workflowName) {
 
     const lastSuccessDate = new Date(info.timestamp);
     const now = new Date();
-    const daysSince = Math.round((now - lastSuccessDate) / (1000 * 60 * 60 * 24));
+    const daysSince = Math.floor((now - lastSuccessDate) / (1000 * 60 * 60 * 24));
 
     if (daysSince === 0) return 'Today';
     if (daysSince === 1) return '1 day ago';

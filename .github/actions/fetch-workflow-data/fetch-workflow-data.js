@@ -82,6 +82,14 @@ async function fetchAllWorkflowRuns(github, context, days, sinceDate, cachedRunI
         continue;
       }
 
+      // If sinceDate is provided and run is older/equal, stop (all future runs will be older)
+      // Check this BEFORE cached run check to ensure correct early termination
+      if (sinceDate && runDate <= sinceDate) {
+        core.info(`[FETCH] Early exit: found run at ${runDate.toISOString()} <= latest cached date ${sinceDate.toISOString()}`);
+        core.info(`[FETCH] Summary: added ${addedNewRuns} new runs, skipped ${skippedCachedRuns} cached, ${skippedOldRuns} old`);
+        return allRuns;
+      }
+
       // If we have cached run IDs, check if this run is already cached
       if (cachedIds.size > 0 && cachedIds.has(runIdStr)) {
         consecutiveCachedRuns++;
@@ -104,13 +112,6 @@ async function fetchAllWorkflowRuns(github, context, days, sinceDate, cachedRunI
         core.info(`[FETCH] Found new run after ${consecutiveCachedRuns} cached runs, resetting counter`);
       }
       consecutiveCachedRuns = 0;
-
-      // If sinceDate is provided and run is older/equal, stop (all future runs will be older)
-      if (sinceDate && runDate <= sinceDate) {
-        core.info(`[FETCH] Early exit: found run at ${runDate.toISOString()} <= latest cached date ${sinceDate.toISOString()}`);
-        core.info(`[FETCH] Summary: added ${addedNewRuns} new runs, skipped ${skippedCachedRuns} cached, ${skippedOldRuns} old`);
-        return allRuns;
-      }
 
       // This is a new run, add it
       addedNewRuns++;
@@ -1229,7 +1230,9 @@ async function run() {
     // Start with cached commits and merge with new ones
     core.info(`[COMMITS] Starting commits fetch (cached: ${cachedCommits.length})`);
     const cachedCommitsSet = new Map((cachedCommits || []).map(c => [c.sha, c]));
-    const commits = [...cachedCommits];
+    // Initialize commits as empty array to avoid keeping cached commits in memory twice
+    // We'll add cached commits back at the end if needed, or push them as we process
+    const commits = [];
     let newCommitsCount = 0;
     let skippedCachedCommits = 0;
     let consecutiveCachedCommits = 0;
@@ -1310,9 +1313,12 @@ async function run() {
       if (skippedCachedCommits > 5) {
         core.info(`[COMMITS] Skipped ${skippedCachedCommits} cached commits (showing first 5)`);
       }
+      // Add all cached commits to the array (they've already been pruned by date)
+      commits.push(...cachedCommits);
+
       // Sort oldest -> newest by date for deterministic slicing
       commits.sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
-      core.info(`[COMMITS] Total commits: ${commits.length} (${cachedCommits.length} cached + ${newCommitsCount} new)`);
+      core.info(`[COMMITS] Total commits: ${commits.length}; cached: ${cachedCommits.length}; new: ${newCommitsCount}`);
     } catch (e) {
       core.warning(`[COMMITS] Failed to build commits index: ${e.message}`);
     }
