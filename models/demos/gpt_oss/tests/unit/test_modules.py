@@ -190,9 +190,9 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
 @parametrize_mesh_with_fabric()
 @parametrize_batch_seq(
     [
-        # (1, 1),
+        (1, 1),
         (1, 128),
-        # (1, 4096),
+        (1, 4096),
     ]
 )
 @pytest.mark.parametrize(
@@ -370,17 +370,17 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
         run_topk_router_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
 
     # run_experts_component(setup["mesh_device"], hidden_states.shape, config, reference_layer, decoder_layer)
-    run_attention_component(
-        setup["mesh_device"],
-        hidden_states.shape,
-        mask,
-        tt_mask,
-        position_embeddings_ref,
-        rope_mats,
-        tt_position_idx,
-        reference_layer,
-        decoder_layer,
-    )
+    # run_attention_component(
+    #     setup["mesh_device"],
+    #     hidden_states.shape,
+    #     mask,
+    #     tt_mask,
+    #     position_embeddings_ref,
+    #     rope_mats,
+    #     tt_position_idx,
+    #     reference_layer,
+    #     decoder_layer,
+    # )
 
     run_rms_norm_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
 

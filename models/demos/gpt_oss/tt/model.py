@@ -4,10 +4,12 @@
 import torch
 
 import ttnn
+from models.common.utility_functions import nearest_32
 from models.demos.gpt_oss.config import MeshConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device, gather_cos_sin, precompute_freqs
+from ttnn import replicate_tensor_to_mesh_mapper
 
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
@@ -56,19 +58,48 @@ class Model:
         self.mesh_device = mesh_device
         self.vocab_size = hf_config.vocab_size
         self.hf_config = hf_config
+        self.core_grid = mesh_device.compute_with_storage_grid_size()
 
         # Use MeshConfig for clean parallelization
         self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
 
         # Precompute RoPE frequencies (Meta format for ttnn.experimental.rotary_embedding_llama)
         max_seq_len = getattr(hf_config, "max_position_embeddings", 131072)
-        self.cos_cached, self.sin_cached = precompute_freqs(
+        cos_cached_host, sin_cached_host = precompute_freqs(
             dim=hf_config.head_dim,
             end=max_seq_len * 2,
             theta=getattr(hf_config, "rope_theta", 10000.0),
             scale_factor=None,
             orig_context_len=131072,
         )
+
+        # Create cos/sin lookup tables on device (like tt-transformers RotarySetup)
+        # These are used with ttnn.embedding for efficient on-device RoPE indexing in decode mode
+        # gather_cos_sin returns shape [1, 1, max_seq_len*2, head_dim] which is what we need
+        cos_matrix = gather_cos_sin(torch.arange(max_seq_len * 2), cos_cached_host, sin_cached_host)[0]
+        sin_matrix = gather_cos_sin(torch.arange(max_seq_len * 2), cos_cached_host, sin_cached_host)[1]
+        # Keep 4D shape [1, 1, max_seq_len*2, head_dim] for ttnn.embedding (matches tt-transformers rope.py lines 351-356)
+
+        self.cos_matrix = ttnn.from_torch(
+            cos_matrix,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=replicate_tensor_to_mesh_mapper(mesh_device),
+        )
+        self.sin_matrix = ttnn.from_torch(
+            sin_matrix,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=replicate_tensor_to_mesh_mapper(mesh_device),
+        )
+
+        # Keep host versions for prefill mode
+        self.cos_cached = cos_cached_host
+        self.sin_cached = sin_cached_host
 
         # Create transformation matrices for ttnn.experimental.rotary_embedding_llama
         # Match tt-transformers RotarySetup (rope.py lines 415-456)
@@ -154,9 +185,6 @@ class Model:
             cache_file_name=get_cache_file_name(tensor_cache_path, "lm_head.weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
-        # Initialize attention masks and rope embeddings storage for decode
-        self._current_rope_mats = self._create_rope_embeddings(0, self.mesh_device)
 
     @classmethod
     def create_transformer_compatible(
@@ -269,10 +297,112 @@ class Model:
 
         return [tt_cos, tt_sin]
 
+    def get_rot_idxs(self, position_idxs, on_host=False):
+        """
+        Get rotation indices for RoPE embedding lookup.
+        Matches tt-transformers RotarySetup.get_rot_idxs (rope.py lines 463-493).
+
+        Args:
+            position_idxs: torch.Tensor of shape [batch] with position indices
+            on_host: If True, keep tensor on host; otherwise move to device
+
+        Returns:
+            ttnn.Tensor: Position indices ready for embedding lookup, shape [1, padded_batch]
+        """
+        assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
+        assert len(position_idxs.shape) == 1, "position idxs must be a [batch] tensor"
+
+        batch = position_idxs.shape[0]
+        position_idxs = position_idxs.reshape(1, batch)  # [1, batch]
+        assert position_idxs.shape == (1, batch), "position idxs must be a [1, batch] tensor"
+        assert torch.min(position_idxs) >= 0, "position idxs must be non-negative"
+
+        # Add padding if needed (matches tt-transformers line 473)
+        pad_size = nearest_32(batch) - batch
+        position_idxs = torch.nn.functional.pad(position_idxs, (0, pad_size), "constant", 0)
+
+        if on_host:  # If tensor is on host, don't pass device but include mesh mapper
+            rot_idxs = ttnn.as_tensor(
+                position_idxs,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
+            )
+        else:  # On device
+            rot_idxs = ttnn.as_tensor(
+                position_idxs,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
+            )
+
+        return rot_idxs
+
+    def get_rot_mats(self, position_idxs):
+        """
+        Get RoPE rotation matrices for given positions using on-device embedding lookup.
+        Matches tt-transformers RotarySetup.get_rot_mats (rope.py lines 495-538).
+
+        Args:
+            position_idxs: ttnn.Tensor of shape [1, padded_batch] with position indices (on device)
+
+        Returns:
+            List[ttnn.Tensor]: [cos, sin] tensors in HEIGHT_SHARDED format for decode
+        """
+        device = self.mesh_device
+
+        # Ensure position_idxs is on device
+        if not hasattr(position_idxs, "device") or position_idxs.device != device:
+            position_idxs = ttnn.to_device(position_idxs, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # Use embedding to index into cos/sin lookup tables
+        # ttnn.embedding expects [1, seq_len] and returns [1, seq_len, head_dim]
+        cos = ttnn.embedding(position_idxs, self.cos_matrix, layout=ttnn.TILE_LAYOUT)  # [1, padded_batch, head_dim]
+        sin = ttnn.embedding(position_idxs, self.sin_matrix, layout=ttnn.TILE_LAYOUT)  # [1, padded_batch, head_dim]
+
+        # Reshape to 4D: [1, 1, padded_batch, head_dim]
+        cos = ttnn.unsqueeze_to_4D(cos)
+        sin = ttnn.unsqueeze_to_4D(sin)
+
+        # Transpose to [1, padded_batch, 1, head_dim] (tt-transformers does this)
+        cos = ttnn.transpose(cos, 1, 2)
+        sin = ttnn.transpose(sin, 1, 2)
+
+        # Get actual batch size from args (set by create_transformer_compatible)
+        # Matches tt-transformers RotarySetup which uses self.batch_size_per_device_group
+        batch_size = 1  # self.args.max_batch_size if hasattr(self, 'args') else 1
+
+        # Slice to remove padding if batch_size is not a multiple of TILE_SIZE (matches tt-transformers lines 521-523)
+        if batch_size % ttnn.TILE_SIZE != 0:
+            cos = cos[:, :batch_size, :, :]
+            sin = sin[:, :batch_size, :, :]
+
+        # Create batch_grid based on batch_size (matches tt-transformers line 413)
+        # For batch_size=1, this creates 1 core which matches nlp_create_qkv_heads_decode output
+        batch_grid = ttnn.num_cores_to_corerangeset(batch_size, self.core_grid, row_wise=True)
+
+        mem_config = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, self.head_dim),
+            core_grid=batch_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        cos = ttnn.interleaved_to_sharded(cos, mem_config)
+        sin = ttnn.interleaved_to_sharded(sin, mem_config)
+
+        return [cos, sin]
+
     def ttnn_decode_forward(
         self, tokens, current_pos, rot_mat_idxs=None, page_table=None, kv_cache=None, argmax_on_device=False
     ):
-        """Decode forward pass - processes single tokens"""
+        """
+        Decode forward pass - processes single tokens.
+        Matches tt-transformers interface where rot_mat_idxs are used for on-device RoPE lookup.
+        """
         # Embed tokens
         input_embeds = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT)
 
@@ -282,8 +412,8 @@ class Model:
         else:
             hidden_states = input_embeds
 
-        # Use pre-prepared rope embeddings and attention masks
-        rope_mats = self._current_rope_mats
+        # Get RoPE embeddings via on-device embedding lookup (matches tt-transformers)
+        rope_mats = self.get_rot_mats(rot_mat_idxs)
 
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
@@ -373,7 +503,11 @@ class Model:
 
     def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
         """
-        Prepare inputs for decode mode - matches tt_transformers interface (4 values)
+        Prepare inputs for decode mode - matches tt_transformers interface (4 values).
+        Returns: tokens, current_pos, rope_idxs, page_table
+
+        Note: rope_idxs are position indices that will be used with get_rot_mats()
+        for on-device RoPE embedding lookup.
         """
         host_inputs = self.prepare_decode_inputs_host(tokens, current_pos, page_table)
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
@@ -382,40 +516,59 @@ class Model:
         return (
             device_inputs[0],  # tokens
             device_inputs[1],  # current_pos
-            device_inputs[2],  # rope_idxs (list of cos, sin)
+            device_inputs[2],  # rope_idxs - position indices for embedding lookup
             device_inputs[3],  # page_table
         )
 
     def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
-        """Prepare decode inputs on host before transferring to device"""
-        # Convert tokens to proper format
-        if tokens.dim() == 1:
-            tokens = tokens.unsqueeze(0)
+        """
+        Prepare decode inputs on host before transferring to device.
+        Matches tt-transformers Transformer.prepare_decode_inputs_host (model.py lines 204-252).
 
-        # Convert to TTNN tensors on host
+        Args:
+            tokens: torch.Tensor of shape [batch] with token ids
+            current_pos: torch.Tensor of shape [batch] with current positions
+            page_table: Optional page table for paged attention
+
+        Returns:
+            Tuple of (tokens, current_pos_tt, rope_idxs, page_table) all as ttnn tensors on host
+        """
+        B = tokens.shape[0]
+        if current_pos.dim() == 0:
+            current_pos = current_pos.unsqueeze(0)
+        assert current_pos.shape[0] == B, "Batch size mismatch"
+
+        # Pad tokens to be tile-sized (32)
+        # tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens)), "constant", 0)
         tokens = ttnn.from_torch(
-            tokens.unsqueeze(0).unsqueeze(0),  # Convert to 4D
-            device=None,  # Keep on host
+            tokens,
+            device=None,
             dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
         )
+        tokens = ttnn.unsqueeze_to_4D(tokens)
 
-        # Prepare current position
-        current_pos_tt = ttnn.from_torch(current_pos, device=None, dtype=ttnn.int32)
+        # Ensure position indices are non-negative (matches tt-transformers)
+        rot_current_pos = torch.maximum(current_pos, torch.tensor(0, dtype=torch.int64))
+        rope_idxs = self.get_rot_idxs(rot_current_pos, on_host=True)
+
+        # Prepare current position tensor
+        current_pos_tt = ttnn.from_torch(
+            current_pos,
+            device=None,
+            dtype=ttnn.int32,
+            mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
+        )
 
         # Prepare page table if provided
         if page_table is not None:
-            page_table = ttnn.from_torch(page_table, device=None, dtype=ttnn.int32)
+            page_table = ttnn.from_torch(
+                page_table,
+                device=None,
+                dtype=ttnn.int32,
+                mesh_mapper=replicate_tensor_to_mesh_mapper(self.mesh_device),
+            )
 
-        # Prepare attention masks
-        pos_idx = current_pos.item() if hasattr(current_pos, "item") else current_pos
-
-        # Create rope index tensor
-        rope_idxs = ttnn.from_torch(
-            torch.tensor([pos_idx], dtype=torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
         return tokens, current_pos_tt, rope_idxs, page_table
 
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
