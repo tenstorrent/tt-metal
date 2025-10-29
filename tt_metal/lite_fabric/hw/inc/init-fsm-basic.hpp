@@ -13,7 +13,7 @@
 
 #include <cstdint>
 #include <stddef.h>
-#include "blackhole/eth_chan_noc_mapping.h"
+#include "eth_chan_noc_mapping.h"
 #include "dataflow_api_addrgen.h"
 #include "ethernet/dataflow_api.h"
 #include "dataflow_api.h"
@@ -22,18 +22,19 @@
 #include "risc_common.h"
 #include "host_interface.hpp"
 #include "tt_metal/lite_fabric/hw/inc/risc_interface.hpp"
+#include "hw/inc/tt-1xx/risc_common.h"
 
 namespace lite_fabric {
 
 static_assert(sizeof(uint32_t) == sizeof(uintptr_t));
 
-void wait_val(uint32_t addr, uint32_t val) {
+inline void wait_val(uint32_t addr, uint32_t val) {
     do {
         invalidate_l1_cache();
     } while (reinterpret_cast<volatile uint32_t*>(addr)[0] != val);
 }
 
-void routing_init(volatile lite_fabric::FabricLiteConfig* config_struct) {
+inline void routing_init(volatile lite_fabric::FabricLiteConfig* config_struct) {
     invalidate_l1_cache();
     // This value should not be used. It comes from metal.
     // auto my_y = get_absolute_logical_y();
@@ -58,15 +59,12 @@ void routing_init(volatile lite_fabric::FabricLiteConfig* config_struct) {
 
     auto original_init_state = config_struct->initial_state;
     bool is_mmio = config_struct->is_mmio;
-    bool is_primary = config_struct->is_mmio;
+    bool is_primary = config_struct->is_primary;
     while (config_struct->current_state != lite_fabric::InitState::READY) {
         invalidate_l1_cache();
 
         switch (config_struct->current_state) {
             case lite_fabric::InitState::UNKNOWN: {
-                do {
-                    invalidate_l1_cache();
-                } while (config_struct->current_state == lite_fabric::InitState::UNKNOWN);
                 break;
             }
             case lite_fabric::InitState::ETH_INIT_FROM_HOST: {
@@ -107,7 +105,7 @@ void routing_init(volatile lite_fabric::FabricLiteConfig* config_struct) {
                 ASSERT(is_mmio);
                 config_struct->is_primary = false;
                 config_struct->is_mmio = false;
-                config_struct->routing_enabled = 1;
+                config_struct->routing_enabled = lite_fabric::RoutingEnabledState::ENABLED;
                 config_struct->current_state = lite_fabric::InitState::ETH_HANDSHAKE_NEIGHBOUR;
                 config_struct->initial_state = lite_fabric::InitState::ETH_HANDSHAKE_NEIGHBOUR;
                 ConnectedRisc1Interface::assert_connected_dm1_reset();
