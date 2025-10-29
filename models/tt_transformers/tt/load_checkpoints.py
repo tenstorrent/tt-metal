@@ -573,6 +573,8 @@ def invert_pre_compute_positional_embedding(precomputed_embeddings):
         max_aspect_ratio_id, max_num_tiles, num_patches, hidden_size = 9 - 1, 4, 1, 1280
     elif tuple(precomputed_embeddings.shape) == (9, 8197120):
         max_aspect_ratio_id, max_num_tiles, num_patches, hidden_size = 9 - 1, 4, 1601, 1280
+    elif tuple(precomputed_embeddings.shape) == (9, 5248000):  # For Llama-3.2-11B-Vision
+        max_aspect_ratio_id, max_num_tiles, num_patches, hidden_size = 9 - 1, 4, 1025, 1280
     else:
         raise ValueError(f"Unknown embedding shape: {precomputed_embeddings.shape}")
 
