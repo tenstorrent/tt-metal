@@ -137,22 +137,24 @@ auto map_nd_to_4d(const ttnn::Shape& shape, const uint32_t dim) {
 
     TT_FATAL(shape.rank() > 2, "Expected rank 3 or greater");
 
-    uint32_t input_tensor_B = std::accumulate(shape.cbegin(), shape.cend() - 3, 1, std::multiplies<uint32_t>());
-
     auto [normalized_dim, rank_diff] = composite_common::normalize_dim_4d(dim, shape.rank());
 
-    uint32_t c_includes_dim;
+    const uint32_t c_dims_end = shape.rank() - 2;
+    uint32_t b_dims_end;
     if (rank_diff >= 1 && dim <= rank_diff) {
         // gather dim to rank-3 accumulated into C
-        c_includes_dim = dim;
+        b_dims_end = dim;
         normalized_dim = 1;
     } else {
         // C will be 4D normalized dim 1
-        c_includes_dim = 1 + rank_diff;
+        b_dims_end = shape.rank() - 3;
     }
 
-    uint32_t input_tensor_C = std::accumulate(
-        shape.view().rbegin() + 2, shape.view().rend() - c_includes_dim, 1, std::multiplies<uint32_t>());
+    const uint32_t input_tensor_B =
+        std::accumulate(shape.cbegin(), shape.cbegin() + b_dims_end, 1, std::multiplies<uint32_t>());
+
+    const uint32_t input_tensor_C =
+        std::accumulate(shape.cbegin() + b_dims_end, shape.cbegin() + c_dims_end, 1, std::multiplies<uint32_t>());
 
     return std::make_tuple(normalized_dim, input_tensor_C, input_tensor_B);
 };
