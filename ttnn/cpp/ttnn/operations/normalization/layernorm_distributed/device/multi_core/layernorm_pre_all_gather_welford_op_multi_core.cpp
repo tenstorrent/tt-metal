@@ -62,7 +62,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_welford_multi_core(
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
 
     const uint32_t Wt = W / TILE_WIDTH;
-    program_config.legacy_reduction, program_config.legacy_rsqrt, const uint32_t Ht = H / TILE_HEIGHT;
+    const uint32_t Ht = H / TILE_HEIGHT;
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
     //////////////////////////////////////////////////////////////////////////
@@ -72,10 +72,6 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_welford_multi_core(
     bool use_2d_kernel = false;
     if (use_2d_core_grid.has_value()) {
         use_2d_kernel = *use_2d_core_grid;
-    }
-
-    if (use_2d_kernel) {
-        TT_THROW("2d kernel not supported for Welford at this moment");
     }
 
     uint32_t num_tile_rows = NC * Ht;
@@ -130,7 +126,27 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_welford_multi_core(
     const uint32_t in1_tiles = 1;  // reduce scalar
 
     const uint32_t intermed0_tiles = Wt * double_buffer_constant;  // xˆ2
-    uint32_t out0_tiles = 2;
+    uint32_t out0_tiles = 1;
+    if (!is_rmsnorm) {
+        out0_tiles = 2;
+    }
+
+    TT_FATAL(
+        W <= TILE_WIDTH * in0_tiles,
+        "W ({}) exceeds the maximum supported size of tile buffer ({} * {}, kernel limitation right now).",
+        W,
+        TILE_WIDTH,
+        in0_tiles);
+    TT_FATAL(
+        in0_tiles % block_size == 0,
+        "Size of buffer ({}) must be divisible by the size of block ({}) used by the reader and compute kernel.",
+        in0_tiles,
+        block_size);
+    TT_FATAL(
+        intermed0_tiles % block_size == 0,
+        "Size of buffer ({}) must be divisible by the size of block ({}) used by the reader and compute kernel.",
+        intermed0_tiles,
+        block_size);
 
     auto
         [num_cores,
@@ -185,7 +201,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_welford_multi_core(
     auto compute_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
-        "layernorm_pre_allgather_welfords.cpp",
+        "layernorm_pre_allgather_welford.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -200,6 +216,19 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_welford_multi_core(
         tt::tt_metal::CircularBufferConfig(in0_tiles * in_single_tile_size, {{tt::CBIndex::c_0, in_data_format}})
             .set_page_size(tt::CBIndex::c_0, in_single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_src0_config);
+    // c_in1 -> reduce scalar
+    auto cb_reduce_config =
+        tt::tt_metal::CircularBufferConfig(in1_tiles * bfloat16_tile_size, {{tt::CBIndex::c_1, cb_data_format}})
+            .set_page_size(tt::CBIndex::c_1, bfloat16_tile_size);
+    CreateCircularBuffer(program, all_cores, cb_reduce_config);
+
+    // LN and RMS shared intermediates //
+    // c_intermed0 -> xˆ2
+    auto cb_intermed0_config =
+        tt::tt_metal::CircularBufferConfig(intermed0_tiles * single_tile_size, {{tt::CBIndex::c_6, cb_data_format}})
+            .set_page_size(tt::CBIndex::c_6, single_tile_size);
+    CreateCircularBuffer(program, all_cores, cb_intermed0_config);
+
     auto cb_out0_config =
         tt::tt_metal::CircularBufferConfig(out0_tiles * out_single_tile_size, {{tt::CBIndex::c_14, out_data_format}})
             .set_page_size(tt::CBIndex::c_14, out_single_tile_size);
