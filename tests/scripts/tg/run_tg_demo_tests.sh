@@ -176,8 +176,8 @@ run_tg_wan22_demo_tests() {
   fail=0
 
   export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_model_caching -k "4x8sp0tp1"
-  TT_MM_THROTTLE_PERF=5 pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "4x8sp0tp1" --timeout 1500; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_model_caching -k "wh_4x8sp1tp0"
+  TT_MM_THROTTLE_PERF=5 pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "wh_4x8sp1tp0" --timeout 1500; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     echo "LOG_METAL: run_tg_wan22_demo_tests failed"
