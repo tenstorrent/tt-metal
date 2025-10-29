@@ -1140,7 +1140,7 @@ void reset_local_ethernet_links(
                 reset_cores[*dst_asic_id].insert(dst_chan);
                 const auto& asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(asic_id);
                 const auto& dst_asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(dst_asic_id);
-                log_output_all_ranks(
+                log_output_rank0(
                     "Host: " + asic_descriptor.host_name + " Resetting Link " + std::to_string(src_chan) + " on " +
                     " Tray: " + std::to_string(*asic_descriptor.tray_id) + " Location: " +
                     std::to_string(*asic_descriptor.asic_location) + " and Link: " + std::to_string(dst_chan) + " on " +
@@ -1236,7 +1236,7 @@ void reset_cross_node_ethernet_links(
         auto src_coord = cluster.get_virtual_coordinate_from_logical_coordinates(
             src_chip_id, tt_xy_pair(logical_src_coord.x, logical_src_coord.y), CoreType::ETH);
         const auto& asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(link.asic_id);
-        log_output_all_ranks(
+        log_output_rank0(
             "Resetting Cross-Node Link " + std::to_string(link.channel) + " on " + std::to_string(*link.asic_id) +
             " Host: " + asic_descriptor.host_name + " Tray: " + std::to_string(*asic_descriptor.tray_id) +
             " Location: " + std::to_string(*asic_descriptor.asic_location));
