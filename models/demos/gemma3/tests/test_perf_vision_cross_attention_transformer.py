@@ -17,7 +17,7 @@ from models.tt_transformers.tt.ccl import TT_CCL
 
 THRESHOLD_PERCENT = 5
 
-SAVE_NEW_PERF_TARGETS = False
+SAVE_NEW_PERF_TARGETS = True
 TARGETS_JSON_FILENAME = (
     "models/demos/gemma3/tests/perf_targets/targets_test_perf_vision_cross_attention_transformer.json"
 )
