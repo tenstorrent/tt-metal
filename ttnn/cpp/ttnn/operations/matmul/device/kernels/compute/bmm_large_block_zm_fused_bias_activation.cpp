@@ -117,10 +117,6 @@ void MAIN {
     constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
     constexpr uint32_t out_cb_id = tt::CBIndex::c_4;
     constexpr uint32_t mm_partials_cb_id = tt::CBIndex::c_5;
-    // Reader will use this CB to pass the number of non-zero (nnz) entries in the sparsity tensor.
-    constexpr uint32_t nnz_cb_id = tt::CBIndex::c_25;
-    volatile uint32_t* nnz_addr_ptr;
-
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
 
 #ifdef FUSE_BIAS
@@ -147,16 +143,11 @@ void MAIN {
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
-            cb_wait_front(nnz_cb_id, 1);
-            tensix_sync();
-            cb_get_tile(nnz_cb_id, 0, &nnz_addr_ptr);
-            // The first 4 entries have metadata, so we look at the 5th entry
-            // for our value pushed from the reader.
-            uint32_t nnz = nnz_addr_ptr[4];
-            cb_release_tile(nnz_cb_id);
-            cb_pop_front(nnz_cb_id, 1);
-
-            if (nnz == 0) {
+            bool is_batch_valid = false;
+            UNPACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
+            MATH(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
+            PACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
+            if (!is_batch_valid) {
                 continue;
             }
         }
