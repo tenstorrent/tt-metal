@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ax_plus_b_device_operation.hpp"
+#include "tt_stl/assert.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -117,6 +118,7 @@ void AX_plus_B_DeviceOperation::SingleCore::override_runtime_arguments(
     auto& num_cores_y = cached_program.shared_variables.num_cores_y;
 
     // todo: assert num_cores is 1 and num_cores_y is 1, as this is a single-core version.
+    TT_ASSERT(num_cores == 1 && num_cores_y == 1);
 
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
