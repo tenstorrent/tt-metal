@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "all_broadcast_async_op.hpp"
+#include "all_broadcast_op.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/global_semaphore.hpp"
@@ -12,7 +12,7 @@
 
 namespace ttnn {
 
-void AllBroadcastAsync::validate_with_output_tensors(
+void AllBroadcast::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
@@ -33,7 +33,7 @@ void AllBroadcastAsync::validate_with_output_tensors(
         input_tensor.memory_config().memory_layout());
 }
 
-std::vector<ttnn::TensorSpec> AllBroadcastAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::TensorSpec> AllBroadcast::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
     const auto& shape = input_tensor.logical_shape();
     std::vector<TensorSpec> output_specs;
@@ -45,7 +45,7 @@ std::vector<ttnn::TensorSpec> AllBroadcastAsync::compute_output_specs(const std:
     return output_specs;
 }
 
-tt::tt_metal::operation::MeshWorkloadWithCallbacks AllBroadcastAsync::create_mesh_workload(
+tt::tt_metal::operation::MeshWorkloadWithCallbacks AllBroadcast::create_mesh_workload(
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
@@ -69,7 +69,7 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks AllBroadcastAsync::create_mes
         });
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_at(
+tt::tt_metal::operation::ProgramWithCallbacks AllBroadcast::create_program_at(
     const MeshCoordinate& coord,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors,
@@ -90,7 +90,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_
         ccl::get_physical_neighbor_from_physical_coord(input_tensor, coord, -1, this->topology, this->cluster_axis);
     TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
 
-    return all_broadcast_async_multicore(
+    return all_broadcast_multicore(
         input_tensor,
         coord,
         forward_coord,
@@ -105,13 +105,13 @@ tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_
         this->sub_device_id);
 }
 
-tt::tt_metal::operation::Hash AllBroadcastAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
+tt::tt_metal::operation::Hash AllBroadcast::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     log_trace(tt::LogOp, "compute_program_hash is called");
     auto input_shape = input_tensors[0].padded_shape();
     auto input_memory_layout = input_tensors[0].layout();
     auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
-    return tt::tt_metal::operation::hash_operation<AllBroadcastAsync>(
+    return tt::tt_metal::operation::hash_operation<AllBroadcast>(
         this->num_links,
         this->ring_size,
         this->output_mem_config,
@@ -128,29 +128,29 @@ tt::tt_metal::operation::Hash AllBroadcastAsync::compute_program_hash(const std:
         input_memory_config);
 }
 
-namespace operations::experimental::ccl {
+namespace operations::ccl {
 
-std::vector<Tensor> all_broadcast_async_impl(
+std::vector<Tensor> all_broadcast_impl(
     const Tensor& input_tensor,
-    const uint32_t num_links,
-    const std::optional<MemoryConfig>& memory_config,
-    const ttnn::ccl::Topology topology,
     std::optional<uint32_t> cluster_axis,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    const std::optional<MemoryConfig>& memory_config,
+    const uint32_t num_links,
+    const ttnn::ccl::Topology topology) {
     const auto& tensor_topology = input_tensor.tensor_topology();
     const auto& tensor_topology_shape = tensor_topology.distribution_shape();
 
     if (!cluster_axis.has_value()) {
         TT_FATAL(
             tensor_topology_shape.is_line_topology(),
-            "all_broadcast_async op is only supported for a linear tensor topology shape");
+            "all_broadcast op is only supported for a linear tensor topology shape");
     }
 
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
 
     TT_FATAL(
         num_devices > 1,
-        "all_broadcast_async op will only work for num_devices > 1, but has {}, shape: {}",
+        "all_broadcast op will only work for num_devices > 1, but has {}, shape: {}",
         num_devices,
         tensor_topology_shape);
 
@@ -162,7 +162,7 @@ std::vector<Tensor> all_broadcast_async_impl(
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
     return tt::tt_metal::operation::run(
-        ttnn::AllBroadcastAsync(
+        ttnn::AllBroadcast(
             num_links,
             num_devices,
             memory_config.value_or(input_tensor.memory_config()),
@@ -172,16 +172,16 @@ std::vector<Tensor> all_broadcast_async_impl(
         {input_tensor});
 }
 
-std::vector<Tensor> all_broadcast_async(
+std::vector<Tensor> all_broadcast(
     const Tensor& input_tensor,
-    const uint32_t num_links,
-    const std::optional<MemoryConfig>& memory_config,
-    const ttnn::ccl::Topology topology,
     std::optional<uint32_t> cluster_axis,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
-    return all_broadcast_async_impl(input_tensor, num_links, memory_config, topology, cluster_axis, sub_device_id);
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    const std::optional<MemoryConfig>& memory_config,
+    const uint32_t num_links,
+    const ttnn::ccl::Topology topology) {
+    return all_broadcast_impl(input_tensor, cluster_axis, sub_device_id, memory_config, num_links, topology);
 }
 
-}  // namespace operations::experimental::ccl
+}  // namespace operations::ccl
 
 }  // namespace ttnn
