@@ -210,9 +210,6 @@ void add_reader_writer_kernels(
             std::vector<uint32_t> writer_compile_args = {};
             tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_args);
 
-            std::vector<uint32_t> writer_compile_args = {};
-            tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_args);
-
             auto unary_writer_kernel = tt_metal::CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
@@ -410,7 +407,7 @@ void run_single_core_reduce_program(
     vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         dram_buffer_size, test_config.data_gen_rand_max, test_config.data_gen_seed, test_config.data_gen_offset);
 
-    tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
+    distributed::WriteShard(cq, src_dram_buffer, src_vec, zero_coord);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
