@@ -90,8 +90,9 @@ void create_ethernet_metrics(
             std::make_unique<EthernetRetrainCountMetric>(tray_id, asic_location, chip_id, channel, cluster, hal));
         auto bandwidth_reader = std::make_shared<FabricBandwidthTelemetryReader>(
             tray_id, asic_location, chip_id, channel, cluster, hal);
-        double_metrics.push_back(
-            std::make_unique<FabricBandwidthMetric>(tray_id, asic_location, chip_id, channel, bandwidth_reader));
+        // TODO: does not work as expected, disable for now
+        // double_metrics.push_back(
+        //     std::make_unique<FabricBandwidthMetric>(tray_id, asic_location, chip_id, channel, bandwidth_reader));
         uint_metrics.push_back(
             std::make_unique<FabricWordsSentMetric>(tray_id, asic_location, chip_id, channel, bandwidth_reader));
         uint_metrics.push_back(
@@ -105,9 +106,8 @@ void create_ethernet_metrics(
             uint_metrics.push_back(std::make_unique<EthernetUncorrectedCodewordCountMetric>(
                 tray_id, asic_location, chip_id, channel, cluster, hal));
         }
-        //TODO: this does not appear to be working as expected, needs more debugging and development work
-        // uint_metrics.push_back(
-        //     std::make_unique<FabricHeartbeatMetric>(tray_id, asic_location, chip_id, channel, cluster, hal));
+        uint_metrics.push_back(
+            std::make_unique<FabricHeartbeatMetric>(tray_id, asic_location, chip_id, channel, cluster, hal));
     }
 
     log_info(tt::LogAlways, "Created Ethernet metrics");
