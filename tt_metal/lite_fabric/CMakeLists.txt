@@ -28,7 +28,9 @@ target_sources(
     PRIVATE
         build.cpp
         host_util.cpp
-        host_interface.cpp
+        hal/lite_fabric_hal.cpp
+        hal/blackhole_impl.cpp
+        hal/wormhole_impl.cpp
 )
 
 target_include_directories(lite_fabric PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
