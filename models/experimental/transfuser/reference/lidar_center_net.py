@@ -651,4 +651,4 @@ class LidarCenterNet(nn.Module):
         self.i += 1
 
         # return preds, pred_wp, rotated_bboxes, results
-        return features[0], pred_wp, preds, results, rotated_bboxes
+        return fused_features, features[0], pred_wp, preds, results, rotated_bboxes
